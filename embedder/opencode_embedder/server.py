@@ -289,6 +289,11 @@ class ModelServer:
         self._shutdown = asyncio.Event()
         self._last_activity = time.monotonic()
         self._embed_sem = asyncio.Semaphore(embed_workers)
+        # Limit concurrent chunking to avoid CPU oversubscription.
+        # Chunking is CPU-intensive (tree-sitter + tokenizers) and each thread
+        # spawns OMP_NUM_THREADS internal threads, so unbounded concurrency
+        # causes total_threads = pool_size × OMP_threads >> cpu_count.
+        self._chunk_sem = asyncio.Semaphore(max(2, embed_workers))
         self._embed_workers = embed_workers
         self._idle_shutdown_secs = idle_shutdown_secs
 
@@ -324,8 +329,9 @@ class ModelServer:
 
     async def _handle_chunk(self, params: dict) -> dict:
         """Chunk a file without embedding."""
-        # Offload blocking _chunk call to thread pool
-        return {"chunks": await asyncio.to_thread(self._chunk, params)}
+        # Offload blocking _chunk call to thread pool (gated by chunk semaphore)
+        async with self._chunk_sem:
+            return {"chunks": await asyncio.to_thread(self._chunk, params)}
 
     def _chunk(self, params: dict) -> list[dict]:
         """Chunk content without embedding. Used by batch coalescing."""
@@ -362,8 +368,9 @@ class ModelServer:
 
     async def _handle_chunk_and_embed(self, params: dict) -> dict:
         """Chunk a file and embed all chunks (single request path)."""
-        # Offload blocking _chunk call to thread pool
-        chunks = await asyncio.to_thread(self._chunk, params)
+        # Offload blocking _chunk call to thread pool (gated by chunk semaphore)
+        async with self._chunk_sem:
+            chunks = await asyncio.to_thread(self._chunk, params)
         if not chunks:
             return {"chunks": []}
 
@@ -384,8 +391,9 @@ class ModelServer:
 
     async def _handle_chunk_and_embed_f32(self, params: dict) -> dict:
         """Chunk a file and return f32 bytes for vectors."""
-        # Offload blocking _chunk call to thread pool
-        chunks = await asyncio.to_thread(self._chunk, params)
+        # Offload blocking _chunk call to thread pool (gated by chunk semaphore)
+        async with self._chunk_sem:
+            chunks = await asyncio.to_thread(self._chunk, params)
         if not chunks:
             return {
                 "chunks": [],
@@ -502,10 +510,14 @@ class ModelServer:
         return {"results": [{"index": idx, "score": score} for idx, score in ranked]}
 
     def _handle_health(self) -> dict:
-        """Health check — returns server status with GPU info."""
+        """Health check — returns server status with GPU info.
+
+        Reports 'degraded' status when GPU was expected but ONNX fell back to CPU.
+        """
         gpu_stats = get_gpu_stats()
-        return {
-            "status": "ok",
+        is_degraded = gpu_stats.get("degraded", False)
+        result = {
+            "status": "degraded" if is_degraded else "ok",
             "pid": os.getpid(),
             "embed_workers": self._embed_workers,
             "gpu": {
@@ -515,6 +527,10 @@ class ModelServer:
                 "cpu_ops": gpu_stats["cpu_ops"],
             },
         }
+        if is_degraded:
+            result["gpu"]["degraded"] = True
+            result["gpu"]["degraded_reason"] = gpu_stats.get("degraded_reason", "")
+        return result
 
     def _handle_shutdown(self) -> dict:
         """Graceful shutdown."""
@@ -958,13 +974,23 @@ def run_server(
 
     loop = asyncio.new_event_loop()
 
-    # Limit default ThreadPoolExecutor used by asyncio.to_thread()
-    # Use 1x CPU count, capped at 16 to prevent oversubscription with ONNX threads
-    # (each ONNX session uses OMP_NUM_THREADS internally, so total threads = workers × OMP threads)
-    max_workers = min(16, os.cpu_count() or 4)
+    # Limit default ThreadPoolExecutor used by asyncio.to_thread().
+    # Each thread pool worker can spawn OMP_NUM_THREADS internal ONNX threads,
+    # so total_threads = pool_size × OMP_threads. To avoid oversubscription:
+    #   pool_size = cpu_count / OMP_threads, capped to a reasonable maximum.
+    # On a 24-core machine with OMP=4: pool = 24/4 = 6 (not 16!).
+    cpus = os.cpu_count() or 4
+    omp_threads = int(os.environ.get("OMP_NUM_THREADS", "2"))
+    max_pool = max(4, cpus // max(1, omp_threads))
+    max_workers = min(max_pool, embed_workers + 4)  # embed + chunk + overhead
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
     loop.set_default_executor(executor)
-    log.info("thread pool executor configured: max_workers=%d", max_workers)
+    log.info(
+        "thread pool executor configured: max_workers=%d (cpus=%d, omp=%d)",
+        max_workers,
+        cpus,
+        omp_threads,
+    )
 
     def handle_signal(sig: int) -> None:
         log.info("received signal %d", sig)

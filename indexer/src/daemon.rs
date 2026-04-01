@@ -2283,7 +2283,7 @@ async fn run_index_impl(
     let include_paths: Vec<PathBuf> = include.iter().map(PathBuf::from).collect();
 
     let start = std::time::Instant::now();
-    let stats = crate::cli::run_indexing_pub(
+    let result = crate::cli::run_indexing_pub(
         &root,
         &storage_path,
         tier,
@@ -2299,7 +2299,55 @@ async fn run_index_impl(
         false, // quiet
         false, // json_lines
     )
-    .await?;
+    .await;
+
+    // If indexing failed with a LanceDB IO/corruption error, delete the corrupted
+    // database and retry once.  Storage::open creates chunks.lance even with 0 rows,
+    // so a partially-written or power-interrupted index can leave empty lance data
+    // files that permanently break subsequent reads.
+    let stats = match result {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("{e:#}");
+            let is_lance = msg.contains("LanceError") || msg.contains("lance error");
+            if is_lance && storage_path.exists() {
+                tracing::warn!(
+                    "run_index: lance corruption detected at {}, removing and retrying: {msg}",
+                    storage_path.display()
+                );
+                // Evict any cached Storage handle for this path so the retry
+                // opens a fresh connection.
+                invalidate_storage_cache(&storage_path).await;
+                if let Err(rm_err) = tokio::fs::remove_dir_all(&storage_path).await {
+                    tracing::error!(
+                        "run_index: failed to remove corrupted db at {}: {rm_err}",
+                        storage_path.display()
+                    );
+                    return Err(e);
+                }
+                // Retry once with a clean slate
+                crate::cli::run_indexing_pub(
+                    &root,
+                    &storage_path,
+                    tier,
+                    dims,
+                    "int8",
+                    force,
+                    None,
+                    false,
+                    exclude,
+                    &include_paths,
+                    5,
+                    None,
+                    false,
+                    false,
+                )
+                .await?
+            } else {
+                return Err(e);
+            }
+        }
+    };
 
     let elapsed = start.elapsed();
     Ok(serde_json::json!({
@@ -3203,7 +3251,9 @@ fn watcher_start_internal<'a>(
     // === Check if project is indexed ===
     // Watcher should NOT auto-trigger full indexing. If the project is not indexed,
     // reject the request. Users must explicitly run /index first.
-    // We check for the chunks.lance directory as a quick heuristic without opening storage.
+    // Check both directory existence AND actual data — Storage::open() creates
+    // the chunks.lance directory even with 0 rows, so a directory-only check
+    // can falsely report an index as present after a failed initial run.
     let chunks_dir = db_path.join("chunks.lance");
     let index_exists = tokio::fs::try_exists(&db_path).await.unwrap_or(false);
     let chunks_exist = tokio::fs::try_exists(&chunks_dir).await.unwrap_or(false) 
@@ -3219,6 +3269,29 @@ fn watcher_start_internal<'a>(
             "started": false,
             "error": "project is not indexed - run /index first"
         }));
+    }
+    
+    // Even if chunks.lance dir exists, verify it actually has data.
+    // Storage::open creates the directory structure even when 0 files are indexed.
+    {
+        let probe = crate::storage::Storage::open(&db_path, 1024).await;
+        if let Ok(store) = probe {
+            let count = store.count_chunks().await.unwrap_or(0);
+            if count == 0 {
+                let files = store.get_indexed_files().await.unwrap_or_default().len();
+                if files == 0 {
+                    tracing::info!(
+                        "watcher_start rejected: index exists but has 0 files/chunks at {}",
+                        db_path.display()
+                    );
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "started": false,
+                        "error": "project index is empty (0 files) - run /index first"
+                    }));
+                }
+            }
+        }
     }
     
     tracing::info!(
