@@ -51,6 +51,10 @@ _ops_lock = threading.Lock()
 _gpu_ops_count = 0
 _cpu_ops_count = 0
 
+# Track GPU degradation: True when GPU provider was expected but model fell back to CPU
+_gpu_degraded = False
+_gpu_degraded_reason: str = ""
+
 
 def _increment_gpu_ops():
     global _gpu_ops_count
@@ -385,7 +389,7 @@ def _get_gpu_capabilities() -> dict:
 def get_gpu_stats() -> dict:
     """Get GPU usage statistics for debugging."""
     caps = _get_gpu_capabilities() if (_caps_done or is_gpu_available()) else {}
-    return {
+    stats = {
         "gpu_ops": _gpu_ops_count,
         "cpu_ops": _cpu_ops_count,
         "provider": get_active_provider(),
@@ -396,6 +400,10 @@ def get_gpu_stats() -> dict:
         "vendor": caps.get("vendor", "unknown"),
         "gpu_name": caps.get("gpu_name"),
     }
+    if _gpu_degraded:
+        stats["degraded"] = True
+        stats["degraded_reason"] = _gpu_degraded_reason
+    return stats
 
 
 def _resize(vec: list[float], dim: int) -> list[float]:
@@ -643,18 +651,26 @@ def _detect_and_test_providers() -> list[str] | None:
         # ("CoreMLExecutionProvider", "Apple CoreML"),
     ]
 
+    # Build a cascading GPU provider chain: if TensorRT is primary, include CUDA
+    # as an intermediate fallback before CPU. This prevents silent CPU fallback
+    # when TensorRT fails on specific model shapes but CUDA would work.
+    working_gpu: list[str] = []
     for provider, name in gpu_providers:
         if provider not in available:
             continue
 
-        # Test if the provider actually works
         if _test_provider(provider):
-            log.info("Using GPU provider: %s (%s)", provider, name)
-            # Log GPU capabilities now that we know a GPU provider is active
+            log.info("GPU provider passed test: %s (%s)", provider, name)
             _log_gpu_capabilities()
-            return [provider, "CPUExecutionProvider"]
+            working_gpu.append(provider)
         else:
             log.warning("%s available but failed runtime test, skipping", provider)
+
+    if working_gpu:
+        # Return all working GPU providers in priority order, with CPU as final fallback
+        result = working_gpu + ["CPUExecutionProvider"]
+        log.info("Using GPU provider chain: %s", result)
+        return result
 
     log.info("No working GPU provider found, using CPU")
     return None
@@ -739,13 +755,17 @@ def _test_provider(provider: str) -> bool:
 
         input_data = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
 
-        # Test IOBinding for CUDA/ROCm/TensorRT providers
-        if provider in (
+        # Test IOBinding for GPU providers (eliminates CPU-GPU memory copies)
+        _io_binding_providers = {
             "TensorrtExecutionProvider",
             "CUDAExecutionProvider",
             "ROCMExecutionProvider",
-        ):
-            binding = _create_io_binding(session, {"X": input_data})
+            "MIGraphXExecutionProvider",
+            "DirectMLExecutionProvider",
+        }
+        if provider in _io_binding_providers:
+            device = _device_for_provider(provider)
+            binding = _create_io_binding(session, {"X": input_data}, device=device)
             if binding is not None:
                 try:
                     session.run_with_iobinding(binding)
@@ -771,7 +791,8 @@ def _test_provider(provider: str) -> bool:
                 try:
                     fp16_result = session.run(None, {"X": fp16_data})
                     if fp16_result:
-                        log.debug("%s FP16 inference test passed", provider)
+                        _set_fp16_confirmed(True)
+                        log.info("%s FP16 inference test passed — enabled", provider)
                 except Exception as e:
                     log.debug("%s FP16 test skipped: %s", provider, e)
 
@@ -894,8 +915,15 @@ def _verify_onnx_session_provider(model_obj, name: str) -> None:
             gpu_name = next(p for p in active_providers if p in gpu_providers)
             log.info("[%s] GPU ACTIVE: Using %s for inference", name, gpu_name)
         else:
-            log.warning(
-                "[%s] CPU ONLY: No GPU provider active. Providers: %s",
+            global _gpu_degraded, _gpu_degraded_reason
+            _gpu_degraded = True
+            _gpu_degraded_reason = (
+                f"[{name}] GPU provider requested but ONNX session fell back to CPU. "
+                f"Active providers: {active_providers}"
+            )
+            log.error(
+                "[%s] GPU DEGRADED: No GPU provider active! Providers: %s. "
+                "This violates the GPU requirement.",
                 name,
                 active_providers,
             )
@@ -1126,6 +1154,15 @@ def _get_gpu_vram_mb() -> int | None:
     return None
 
 
+# Track whether FP16 inference was confirmed working at runtime
+_fp16_runtime_confirmed = False
+
+
+def _set_fp16_confirmed(val: bool) -> None:
+    global _fp16_runtime_confirmed
+    _fp16_runtime_confirmed = val
+
+
 def _fp16_active() -> bool:
     """Return True if FP16 inference is currently active."""
     if not is_gpu_available():
@@ -1138,7 +1175,9 @@ def _fp16_active() -> bool:
         return False
     if env in ("1", "true", "on"):
         return True
-    # auto: enable when tensor cores are present
+    # auto: trust runtime test result if available, else check tensor cores
+    if _fp16_runtime_confirmed:
+        return True
     return caps.get("has_tensor_cores", False)
 
 
@@ -1179,7 +1218,9 @@ def _gpu_provider_options(provider: str) -> list[dict]:
         base["gpu_mem_limit"] = str(int(vram_mb * 0.8 * 1024 * 1024))
 
     if provider == "TensorrtExecutionProvider":
-        opts = {
+        # TensorRT manages its own memory via trt_max_workspace_size;
+        # arena_extend_strategy / gpu_mem_limit are CUDA EP options.
+        opts: dict = {
             "trt_fp16_enable": "1" if caps.get("supports_fp16") else "0",
             "trt_engine_cache_enable": "1",
             "trt_engine_cache_path": "/tmp/trt_cache",
@@ -1231,16 +1272,31 @@ def _gpu_provider_options(provider: str) -> list[dict]:
     return [{}, {}]
 
 
+def _device_for_provider(provider: str) -> str:
+    """Map ONNX provider name to IOBinding device string."""
+    # CUDA, TensorRT, ROCm, and MIGraphX all use "cuda" device in ORT
+    if provider in (
+        "CUDAExecutionProvider",
+        "TensorrtExecutionProvider",
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+    ):
+        return "cuda"
+    if provider == "DirectMLExecutionProvider":
+        return "dml"
+    return "cpu"
+
+
 def _create_io_binding(session, inputs: dict, device: str = "cuda", device_id: int = 0):
     """Create IOBinding to keep tensors on GPU memory.
 
     Binds input/output tensors directly to GPU memory to avoid CPU-GPU transfers.
-    Only works with CUDA/ROCm providers.
+    Works with CUDA, ROCm, MIGraphX, TensorRT, and DirectML providers.
 
     Args:
         session: ONNX InferenceSession
         inputs: dict mapping input name -> numpy array
-        device: "cuda" for NVIDIA/ROCm
+        device: device string ("cuda" for NVIDIA/ROCm/MIGraphX, "dml" for DirectML)
         device_id: GPU device index
 
     Returns:
@@ -1337,23 +1393,35 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
     avg_chars = total_chars // len(texts) if texts else 0
 
     t_prefix = time.perf_counter()
+    # Accumulate all ONNX outputs first, then normalize in a single pass
+    all_items: list = []
     for start in range(0, len(texts), _EMBED_SUB_BATCH):
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]
         t_embed_start = time.perf_counter()
-        # Materialize all embeddings at once (more efficient than iterating)
         items = list(embedder.embed(prefixed, batch_size=get_onnx_batch_size()))
         t_embed_done = time.perf_counter()
-        for item in items:
-            # Hot path optimization: keep as numpy array, use vectorized ops
-            vec_np = _resize_np(item, dimensions)
-            vec_np = _normalize_np(vec_np)
-            out.append(
-                vec_np.tolist()
-                if _HAS_NUMPY
-                else _normalize(_resize([float(x) for x in item.tolist()], dimensions))
-            )
-        t_postprocess = time.perf_counter()
+        all_items.extend(items)
+
+    # Single-pass vectorized normalize across the full result matrix
+    if _HAS_NUMPY and all_items:
+        mat = np.asarray(all_items, dtype=np.float32)
+        if mat.ndim == 1:
+            mat = mat.reshape(1, -1)
+        if dimensions > 0:
+            if mat.shape[1] > dimensions:
+                mat = mat[:, :dimensions]
+            elif mat.shape[1] < dimensions:
+                tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
+                tmp[:, : mat.shape[1]] = mat
+                mat = tmp
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        np.divide(mat, norms, out=mat, where=norms > 0)
+        out = mat.tolist()
+    else:
+        for item in all_items:
+            out.append(_normalize(_resize([float(x) for x in item.tolist()], dimensions)))
+    t_postprocess = time.perf_counter()
 
     t_end = time.perf_counter()
     if log.isEnabledFor(logging.INFO):
@@ -1435,11 +1503,11 @@ def embed_passages_f32_bytes(
         _increment_cpu_ops()
 
     t_start = time.perf_counter()
-    out = bytearray()
     dim_out = dimensions
     t_embed_total = 0.0
-    t_post_total = 0.0
 
+    # Accumulate all ONNX outputs across sub-batches, then normalize once
+    all_items: list = []
     for start in range(0, len(texts), _EMBED_SUB_BATCH):
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]
@@ -1448,52 +1516,44 @@ def embed_passages_f32_bytes(
         items = list(embedder.embed(prefixed, batch_size=get_onnx_batch_size()))
         t_embed_done = time.perf_counter()
         t_embed_total += t_embed_done - t_embed_start
+        all_items.extend(items)
 
-        t_post_start = time.perf_counter()
-        if not items:
-            continue
+    # Single-pass vectorized normalize + serialize
+    t_post_start = time.perf_counter()
+    if _HAS_NUMPY and all_items:
+        mat = np.asarray(all_items, dtype=np.float32)
+        if getattr(mat, "ndim", 0) == 1:
+            mat = mat.reshape(1, -1)
 
-        # Hot path optimization: check numpy once at module load, not here
-        if _HAS_NUMPY:
-            mat = np.asarray(items, dtype=np.float32)
-            if getattr(mat, "ndim", 0) == 1:
-                mat = mat.reshape(1, -1)
+        if dimensions > 0:
+            if mat.shape[1] > dimensions:
+                mat = mat[:, :dimensions]
+            elif mat.shape[1] < dimensions:
+                tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
+                tmp[:, : mat.shape[1]] = mat
+                mat = tmp
 
-            if dimensions > 0:
-                if mat.shape[1] > dimensions:
-                    mat = mat[:, :dimensions]
-                elif mat.shape[1] < dimensions:
-                    tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
-                    tmp[:, : mat.shape[1]] = mat
-                    mat = tmp
+        dim_out = int(mat.shape[1]) if mat.size else dimensions
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        np.divide(mat, norms, out=mat, where=norms > 0)
 
-            dim_out = int(mat.shape[1]) if mat.size else dimensions
-            norms = np.linalg.norm(mat, axis=1, keepdims=True)
-            np.divide(mat, norms, out=mat, where=norms > 0)
+        mat = np.asarray(mat, dtype="<f4")
+        out_bytes = mat.tobytes()
+    elif all_items:
+        import array
 
-            mat = np.asarray(mat, dtype="<f4")
-            out.extend(mat.tobytes())
-        else:
-            # Fallback when numpy not available (should rarely happen)
-            import array
+        buf = array.array("f")
+        for item in all_items:
+            vec = _normalize(_resize([float(x) for x in item.tolist()], dimensions))
+            buf.fromlist(vec)  # type: ignore[arg-type]
+        if sys.byteorder != "little":
+            buf.byteswap()
+        dim_out = dimensions
+        out_bytes = buf.tobytes()
+    else:
+        out_bytes = b""
 
-            buf = array.array("f")
-            for item in items:
-                # Hot path optimization: use vectorized ops when available
-                vec_np = _resize_np(item, dimensions)
-                vec_np = _normalize_np(vec_np)
-                vec = (
-                    vec_np.tolist()
-                    if _HAS_NUMPY
-                    else _normalize(_resize([float(x) for x in item.tolist()], dimensions))
-                )
-                buf.fromlist(vec)  # type: ignore[arg-type]
-            if sys.byteorder != "little":
-                buf.byteswap()
-            dim_out = dimensions
-            out.extend(buf.tobytes())
-
-        t_post_total += time.perf_counter() - t_post_start
+    t_post_total = time.perf_counter() - t_post_start
 
     t_end = time.perf_counter()
     if log.isEnabledFor(logging.INFO):
@@ -1505,7 +1565,7 @@ def embed_passages_f32_bytes(
             t_post_total * 1000,
             (t_end - t_start) * 1000,
         )
-    return bytes(out), dim_out, len(texts)
+    return out_bytes, dim_out, len(texts)
 
 
 def embed_query_f32_bytes(text: str, *, model: str, dimensions: int) -> tuple[bytes, int]:
