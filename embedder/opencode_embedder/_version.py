@@ -1,2 +1,2 @@
 # Auto-generated at build time - do not edit
-__version__ = "2026-03-20-db546e2"
+__version__ = "2026-04-02-b134151"
