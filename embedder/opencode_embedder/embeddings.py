@@ -1224,11 +1224,11 @@ def _gpu_provider_options(provider: str) -> list[dict]:
         cache = os.path.join(os.path.expanduser("~"), ".cache", "opencode", "trt_cache")
         os.makedirs(cache, exist_ok=True)
         opts: dict = {
-            "trt_fp16_enable": "1" if caps.get("supports_fp16") else "0",
-            "trt_engine_cache_enable": "1",
+            "trt_fp16_enable": "True" if caps.get("supports_fp16") else "False",
+            "trt_engine_cache_enable": "True",
             "trt_engine_cache_path": cache,
             # Timing cache persists kernel autotuning results across engine builds
-            "trt_timing_cache_enable": "1",
+            "trt_timing_cache_enable": "True",
             "trt_timing_cache_path": cache,
             "trt_max_workspace_size": str(2 * 1024 * 1024 * 1024),  # 2GB
         }
