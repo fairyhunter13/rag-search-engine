@@ -441,7 +441,7 @@ def test_gpu_provider_options_tensorrt():
     assert isinstance(gpu_opts, dict)
     # Engine cache options
     assert "trt_engine_cache_enable" in gpu_opts
-    assert gpu_opts["trt_engine_cache_enable"] == "1"
+    assert gpu_opts["trt_engine_cache_enable"] == "True"
     assert "trt_engine_cache_path" in gpu_opts
     # Workspace size
     assert "trt_max_workspace_size" in gpu_opts
@@ -458,8 +458,8 @@ def test_gpu_provider_options_tensorrt_has_fp16():
     gpu_opts = opts[0]
 
     assert "trt_fp16_enable" in gpu_opts
-    # Value must be "0" or "1" (string)
-    assert gpu_opts["trt_fp16_enable"] in ("0", "1")
+    # Value must be "True" or "False" (Python-style string for TensorRT)
+    assert gpu_opts["trt_fp16_enable"] in ("True", "False")
 
 
 def test_gpu_provider_options_tensorrt_fp16_when_supported(monkeypatch):
@@ -483,7 +483,7 @@ def test_gpu_provider_options_tensorrt_fp16_when_supported(monkeypatch):
     embeddings._caps = None
     embeddings._caps_done = False
 
-    assert gpu_opts["trt_fp16_enable"] == "1"
+    assert gpu_opts["trt_fp16_enable"] == "True"
 
 
 def test_gpu_provider_options_tensorrt_fp16_when_unsupported(monkeypatch):
@@ -507,7 +507,7 @@ def test_gpu_provider_options_tensorrt_fp16_when_unsupported(monkeypatch):
     embeddings._caps = None
     embeddings._caps_done = False
 
-    assert gpu_opts["trt_fp16_enable"] == "0"
+    assert gpu_opts["trt_fp16_enable"] == "False"
 
 
 def test_gpu_provider_options_tensorrt_workspace_size():

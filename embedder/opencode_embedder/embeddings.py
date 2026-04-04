@@ -827,7 +827,7 @@ def _embedder(model: str):
 
         # Release old embedder first
         if _cached_embedder is not None:
-            del _cached_embedder
+            _cached_embedder = None
             import gc
 
             gc.collect()
