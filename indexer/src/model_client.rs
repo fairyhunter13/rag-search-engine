@@ -367,11 +367,19 @@ fn reset_embedder() {
 
 /// Return `true` when `e` is a connection-level failure that likely means the
 /// embedder process died (ECONNREFUSED, connection reset, or timeout).
-fn is_connection_error(e: &anyhow::Error) -> bool {
+fn is_retryable_error(e: &anyhow::Error) -> bool {
     for cause in e.chain() {
         if let Some(req) = cause.downcast_ref::<reqwest::Error>() {
             if req.is_connect() || req.is_timeout() {
                 return true;
+            }
+            // Retry on server errors (5xx) — the embedder may still be loading models
+            if req.is_status() {
+                if let Some(status) = req.status() {
+                    if status.is_server_error() {
+                        return true;
+                    }
+                }
             }
         }
     }
@@ -393,7 +401,7 @@ where
     loop {
         match op().await {
             Ok(v) => return Ok(v),
-            Err(e) if failures < MAX_RETRIES && is_connection_error(&e) => {
+            Err(e) if failures < MAX_RETRIES && is_retryable_error(&e) => {
                 failures += 1;
                 tracing::warn!(
                     "embedder unreachable, resetting and retrying (attempt {}): {}",
@@ -1210,7 +1218,7 @@ mod tests {
     // ==================== Embedder Recovery Tests ====================
 
     #[tokio::test]
-    async fn test_is_connection_error_detects_connect_error() {
+    async fn test_is_retryable_error_detects_connect_error() {
         // Create a reqwest connection error by trying to connect to an invalid address
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(100))
@@ -1218,17 +1226,17 @@ mod tests {
             .unwrap();
         let err = client.get("http://127.0.0.1:1").send().await.unwrap_err();
         let anyhow_err: anyhow::Error = err.into();
-        assert!(is_connection_error(&anyhow_err), "should detect connection refused");
+        assert!(is_retryable_error(&anyhow_err), "should detect connection refused");
     }
 
     #[test]
-    fn test_is_connection_error_ignores_other_errors() {
+    fn test_is_retryable_error_ignores_other_errors() {
         let err = anyhow::anyhow!("some random error");
-        assert!(!is_connection_error(&err), "should not detect non-connection error");
+        assert!(!is_retryable_error(&err), "should not detect non-connection error");
     }
 
     #[tokio::test]
-    async fn test_is_connection_error_traverses_chain() {
+    async fn test_is_retryable_error_traverses_chain() {
         // Wrap a connection error in context
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(100))
@@ -1236,10 +1244,33 @@ mod tests {
             .unwrap();
         let inner = client.get("http://127.0.0.1:1").send().await.unwrap_err();
         let wrapped: anyhow::Error = anyhow::Error::from(inner).context("outer context");
-        assert!(is_connection_error(&wrapped), "should find connection error in chain");
+        assert!(is_retryable_error(&wrapped), "should find connection error in chain");
     }
 
-    #[test]
+    #[tokio::test]
+    async fn test_is_retryable_error_detects_server_error() {
+        use tokio::io::AsyncWriteExt;
+        // Spawn a minimal HTTP server that returns 500
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 500 Internal Server Error
+Content-Length: 0
+
+")
+                .await
+                .unwrap();
+        });
+        let client = reqwest::Client::new();
+        let resp = client.get(format!("http://{addr}")).send().await.unwrap();
+        let err = resp.error_for_status().unwrap_err();
+        let anyhow_err: anyhow::Error = err.into();
+        assert!(is_retryable_error(&anyhow_err), "should detect HTTP 500 server error");
+        server.await.unwrap();
+    }
+
     fn test_reset_embedder_clears_state() {
         // Set up some state
         EMBEDDER_CHECKED.store(true, Ordering::SeqCst);
