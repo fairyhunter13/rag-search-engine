@@ -451,11 +451,9 @@ fn compaction_shutdown_timeout() -> Duration {
 async fn perform_compaction(db_path: &Path, dims: u32) -> Result<()> {
     let storage = crate::storage::Storage::open(db_path, dims).await?;
     let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
-        handle.block_on(storage.compact())
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("compaction thread panicked: {e}"))??;
+    tokio::task::spawn_blocking(move || handle.block_on(storage.compact()))
+        .await
+        .map_err(|e| anyhow::anyhow!("compaction thread panicked: {e}"))??;
     Ok(())
 }
 
@@ -2505,8 +2503,9 @@ fn embed_concurrency() -> usize {
 /// Session-level set of DB paths where FTS index has been confirmed present.
 /// Avoids calling list_indices() on every watcher batch.
 fn fts_ensured() -> &'static tokio::sync::Mutex<std::collections::HashSet<std::path::PathBuf>> {
-    static S: std::sync::OnceLock<tokio::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>> =
-        std::sync::OnceLock::new();
+    static S: std::sync::OnceLock<
+        tokio::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    > = std::sync::OnceLock::new();
     S.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
@@ -2565,10 +2564,10 @@ async fn run_index_impl(
         false, // verbose
         exclude,
         &include_paths,
-        embed_concurrency(),     // concurrency
-        None,  // scan_concurrency
-        false, // quiet
-        false, // json_lines
+        embed_concurrency(), // concurrency
+        None,                // scan_concurrency
+        false,               // quiet
+        false,               // json_lines
     )
     .await;
 
@@ -2860,7 +2859,11 @@ async fn status_impl(root: Option<&str>, db: Option<&str>, dims: u32) -> Result<
         if !already_indexing {
             if let Some(project_root) = root {
                 let root_owned = project_root.to_string();
-                let tier_str = storage.get_tier().await.unwrap_or(None).unwrap_or_else(|| "budget".to_string());
+                let tier_str = storage
+                    .get_tier()
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "budget".to_string());
                 tracing::warn!("status_impl: auto-recovering corrupted index for {root_owned}");
                 if let Ok(true) = crate::storage::clear_corrupted_index(&sp) {
                     invalidate_storage_cache(&sp).await;
@@ -3210,7 +3213,6 @@ async fn startup_check_impl(
     let db_path = db
         .map(PathBuf::from)
         .unwrap_or_else(|| storage::storage_path(&root_path));
-    let tier = tier.unwrap_or("budget");
 
     // Check if db exists
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -3222,6 +3224,8 @@ async fn startup_check_impl(
             "watching": false,
         });
     }
+
+    let tier = tier.unwrap_or("budget");
 
     // Get status to check for corruption
     let status = match status_impl(Some(root), Some(db_path.to_str().unwrap_or("")), dims).await {
@@ -3272,15 +3276,15 @@ async fn startup_check_impl(
                         &tier_str,
                         dims,
                         "int8",
-                        true,  // force
-                        None,  // daily_cost_limit
-                        false, // verbose
-                        &[],   // exclude
-                        &[],   // include
-                        embed_concurrency(),     // concurrency
-                        None,  // scan_concurrency
-                        true,  // quiet
-                        false, // json_lines
+                        true,                // force
+                        None,                // daily_cost_limit
+                        false,               // verbose
+                        &[],                 // exclude
+                        &[],                 // include
+                        embed_concurrency(), // concurrency
+                        None,                // scan_concurrency
+                        true,                // quiet
+                        false,               // json_lines
                     )
                     .await
                     {
@@ -3393,15 +3397,15 @@ async fn startup_check_impl(
                 &tier_str,
                 dims,
                 "int8",
-                true,  // force
-                None,  // daily_cost_limit
-                false, // verbose
-                &[],   // exclude
-                &[],   // include
-                embed_concurrency(),     // concurrency
-                None,  // scan_concurrency
-                true,  // quiet
-                false, // json_lines
+                true,                // force
+                None,                // daily_cost_limit
+                false,               // verbose
+                &[],                 // exclude
+                &[],                 // include
+                embed_concurrency(), // concurrency
+                None,                // scan_concurrency
+                true,                // quiet
+                false,               // json_lines
             )
             .await
             {
@@ -3767,8 +3771,8 @@ fn watcher_start_internal<'a>(
             crate::storage::storage_path(&root_path)
         };
 
-        let tier = tier.unwrap_or("budget");
-
+        // tier resolution is deferred until after storage is opened below (to avoid
+        // a second open here); keep the Option for now.
         // === Check if project is indexed ===
         // Watcher should NOT auto-trigger full indexing. If the project is not indexed,
         // reject the request. Users must explicitly run /index first.
@@ -3822,9 +3826,10 @@ fn watcher_start_internal<'a>(
         tracing::info!("index exists at {}, starting watcher", db_path.display());
 
         // === PHASE 2: Start incremental watcher ===
-        // Read dimensions from index metadata (open with default, then read stored value)
+        // Read dimensions from index metadata.
         let temp_storage = crate::storage::Storage::open(&db_path, 1024).await?;
         let dimensions = temp_storage.get_dimensions().await?.unwrap_or(1024);
+        let tier = tier.unwrap_or("budget");
         drop(temp_storage);
 
         // Open storage with correct dimensions
@@ -4030,8 +4035,7 @@ fn watcher_start_internal<'a>(
                     stale.len()
                 );
                 for link in stale {
-                    ensure_link_index(link, &tier_for_links, dims_for_links, &root_for_links)
-                        .await;
+                    ensure_link_index(link, &tier_for_links, dims_for_links, &root_for_links).await;
                 }
             });
         }
@@ -4547,14 +4551,18 @@ async fn dispatch_unified(
 
     if method == "compact_status" {
         let s = state.lock().await;
-        let statuses: Vec<serde_json::Value> = s.compaction.iter().map(|(key, cs)| {
-            serde_json::json!({
-                "db": key,
-                "operations": cs.operations_since_compact,
-                "inProgress": cs.compact_in_progress,
-                "lastCompactSecs": cs.last_compact_time.map(|t| t.elapsed().as_secs()),
+        let statuses: Vec<serde_json::Value> = s
+            .compaction
+            .iter()
+            .map(|(key, cs)| {
+                serde_json::json!({
+                    "db": key,
+                    "operations": cs.operations_since_compact,
+                    "inProgress": cs.compact_in_progress,
+                    "lastCompactSecs": cs.last_compact_time.map(|t| t.elapsed().as_secs()),
+                })
             })
-        }).collect();
+            .collect();
         return serde_json::json!({"compaction": statuses});
     }
 
@@ -4832,8 +4840,8 @@ pub async fn run(port: u16) -> Result<()> {
     {
         let shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            use notify::{EventKind, Watcher as _};
             use notify::event::{ModifyKind, RemoveKind};
+            use notify::{EventKind, Watcher as _};
 
             let cfg = crate::cleaner::config();
             let base = crate::storage::shared_data_dir();
@@ -4865,8 +4873,8 @@ pub async fn run(port: u16) -> Result<()> {
                         let relevant = matches!(
                             evt.kind,
                             EventKind::Remove(RemoveKind::Folder)
-                            | EventKind::Remove(RemoveKind::Any)
-                            | EventKind::Modify(ModifyKind::Name(_))
+                                | EventKind::Remove(RemoveKind::Any)
+                                | EventKind::Modify(ModifyKind::Name(_))
                         );
                         if relevant {
                             let _ = tx.send(());
@@ -4961,7 +4969,9 @@ pub async fn run(port: u16) -> Result<()> {
                     tracing::info!("running project cleanup (full 24h pass)");
                     let c = cfg.clone();
                     let b = base.clone();
-                    match tokio::task::spawn_blocking(move || crate::cleaner::run(&b, &c, false)).await {
+                    match tokio::task::spawn_blocking(move || crate::cleaner::run(&b, &c, false))
+                        .await
+                    {
                         Ok(report) => {
                             if report.orphans > 0 || report.stale > 0 || report.aux_dirs > 0 {
                                 tracing::info!(
@@ -4980,12 +4990,17 @@ pub async fn run(port: u16) -> Result<()> {
                     tracing::debug!("running project cleanup (batched event pass)");
                     let c = cfg.clone();
                     let b = base.clone();
-                    match tokio::task::spawn_blocking(move || crate::cleaner::run_batch(&b, &c, false)).await {
+                    match tokio::task::spawn_blocking(move || {
+                        crate::cleaner::run_batch(&b, &c, false)
+                    })
+                    .await
+                    {
                         Ok((report, complete)) => {
                             if report.orphans > 0 || report.stale > 0 {
                                 tracing::info!(
                                     "cleanup batch: {} orphans, {} stale removed",
-                                    report.orphans, report.stale
+                                    report.orphans,
+                                    report.stale
                                 );
                             }
                             for err in &report.errors {
