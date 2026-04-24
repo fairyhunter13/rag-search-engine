@@ -133,6 +133,8 @@ struct DaemonState {
     watchers: HashMap<String, WatcherState>,
     /// Memory watchers keyed by scope (e.g., "global", "project:abc123")
     memory_watchers: HashMap<String, MemoryWatcherState>,
+    /// Last activity timestamp for idle shutdown tracking
+    last_activity: Arc<RwLock<Instant>>,
 }
 
 /// Pending file changes buffer with separate changed/deleted tracking
@@ -813,6 +815,17 @@ fn tui_cleanup_interval() -> Duration {
     static INTERVAL: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
     *INTERVAL.get_or_init(|| {
         env_duration_ms("OPENCODE_TUI_CLEANUP_INTERVAL_MS", Duration::from_secs(300))
+    })
+}
+
+/// Get idle shutdown timeout from environment or CLI arg.
+/// Default: 600 seconds (10 minutes). Set to 0 to disable.
+fn idle_shutdown_timeout(cli_arg: Option<u64>) -> u64 {
+    cli_arg.unwrap_or_else(|| {
+        std::env::var("OPENCODE_INDEXER_IDLE_SHUTDOWN")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600)
     })
 }
 
@@ -4863,7 +4876,14 @@ async fn dispatch_unified(
 fn make_dispatcher(state: Arc<Mutex<DaemonState>>) -> Dispatcher {
     Arc::new(move |method, params| {
         let state = state.clone();
-        Box::pin(dispatch_unified(state, method, params))
+        Box::pin(async move {
+            // Update last activity timestamp on every request
+            {
+                let s = state.lock().await;
+                *s.last_activity.write().await = Instant::now();
+            }
+            dispatch_unified(state, method, params).await
+        })
     })
 }
 
@@ -4906,7 +4926,7 @@ async fn check_existing_daemon() -> Option<u16> {
 ///
 /// Pass `port = 0` to let the OS pick a free port; the actual port is
 /// written to `~/.opencode/indexer.port`.
-pub async fn run(port: u16) -> Result<()> {
+pub async fn run(port: u16, idle_shutdown_arg: Option<u64>) -> Result<()> {
     // --- Strict singleton enforcement via OS-level flock ---
     // Acquire an exclusive lock on ~/.opencode/indexer.lock.
     // This prevents TOCTOU races where two daemons start simultaneously.
@@ -4983,6 +5003,7 @@ pub async fn run(port: u16) -> Result<()> {
         compaction_tx: None,
         watchers: HashMap::new(),
         memory_watchers: HashMap::new(),
+        last_activity: Arc::new(RwLock::new(Instant::now())),
     }));
 
     // Create compaction queue and spawn worker
@@ -6115,15 +6136,47 @@ pub async fn run(port: u16) -> Result<()> {
     // to avoid races in tests and callers that send signals immediately.
     println!("{}", serde_json::json!({"type": "daemon_ready"}));
 
-    // Wait for a termination signal
-    tokio::select! {
-        _ = sigterm.recv() => { tracing::info!("received SIGTERM, shutting down"); }
-        _ = sigint.recv() => { tracing::info!("received SIGINT, shutting down"); }
-        _ = sighup.recv() => { tracing::info!("received SIGHUP, shutting down"); }
+    // Idle shutdown monitor setup
+    let idle_shutdown_secs = idle_shutdown_timeout(idle_shutdown_arg);
+    if idle_shutdown_secs > 0 {
+        tracing::info!("idle shutdown enabled (timeout={}s)", idle_shutdown_secs);
+    } else {
+        tracing::info!("idle shutdown disabled");
     }
 
-    // Signal received — drain WriteQueues, compact, and clean up
-    tracing::info!("signal received, performing graceful shutdown");
+    // Wait for a termination signal or idle timeout
+    let shutdown_reason = if idle_shutdown_secs > 0 {
+        let state_for_idle = state.clone();
+        tokio::select! {
+            _ = sigterm.recv() => { "SIGTERM" }
+            _ = sigint.recv() => { "SIGINT" }
+            _ = sighup.recv() => { "SIGHUP" }
+            _ = async {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    let last_activity = {
+                        let s = state_for_idle.lock().await;
+                        *s.last_activity.read().await
+                    };
+                    let idle = last_activity.elapsed().as_secs();
+                    if idle >= idle_shutdown_secs {
+                        tracing::info!("idle shutdown triggered (idle for {}s)", idle);
+                        break;
+                    }
+                }
+            } => { "idle timeout" }
+        }
+    } else {
+        tokio::select! {
+            _ = sigterm.recv() => { "SIGTERM" }
+            _ = sigint.recv() => { "SIGINT" }
+            _ = sighup.recv() => { "SIGHUP" }
+        }
+    };
+
+    tracing::info!("shutting down (reason: {})", shutdown_reason);
+
+    // Signal received or idle timeout — drain WriteQueues, compact, and clean up
     {
         let s = state.lock().await;
         let _ = s.shutdown.send(true);
@@ -6436,6 +6489,7 @@ mod compaction_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
+            last_activity: Arc::new(RwLock::new(Instant::now())),
         };
 
         let db_path = PathBuf::from("/tmp/test.lancedb");
@@ -6460,6 +6514,7 @@ mod compaction_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
+            last_activity: Arc::new(RwLock::new(Instant::now())),
         };
 
         let db_path = PathBuf::from("/tmp/test.lancedb");
@@ -6484,6 +6539,7 @@ mod compaction_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
+            last_activity: Arc::new(RwLock::new(Instant::now())),
         };
 
         let db1 = PathBuf::from("/tmp/db1.lancedb");
@@ -6869,6 +6925,7 @@ mod http_dispatch_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
+            last_activity: Arc::new(RwLock::new(Instant::now())),
         }))
     }
 
