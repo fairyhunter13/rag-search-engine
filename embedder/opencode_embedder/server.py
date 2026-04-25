@@ -1089,6 +1089,63 @@ class ModelServer:
                 log.debug("VRAM watchdog error: %s", e)
                 await asyncio.sleep(check_interval)
 
+    # ---- RSS watchdog ----
+
+    async def _rss_watchdog(self) -> None:
+        """Monitor process RSS and trigger GC or worker pool restart under memory pressure.
+
+        Checks every 30 seconds. If RSS exceeds OPENCODE_SEARCH_EMBEDDER_MAX_RSS_MB
+        (default 1024 MB), triggers gc.collect() and logs a warning. If RSS remains
+        above 1.5x the limit after GC, shuts down so the supervisor can restart.
+        Requires psutil; disables itself silently if not installed.
+        """
+        try:
+            import psutil
+        except ImportError:
+            log.debug("rss watchdog disabled: psutil not installed")
+            return
+
+        max_rss_mb = int(os.environ.get("OPENCODE_SEARCH_EMBEDDER_MAX_RSS_MB", "1024"))
+        check_interval = 30  # seconds
+        hard_limit_mb = int(max_rss_mb * 1.5)  # restart threshold
+        proc = psutil.Process()
+
+        log.info(
+            "rss watchdog started (soft=%dMB, hard=%dMB, interval=%ds)",
+            max_rss_mb, hard_limit_mb, check_interval,
+        )
+
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.sleep(check_interval)
+                rss_mb = proc.memory_info().rss // (1024 * 1024)
+
+                if rss_mb > hard_limit_mb:
+                    import gc
+                    gc.collect()
+                    rss_after = proc.memory_info().rss // (1024 * 1024)
+                    log.warning(
+                        "rss watchdog: RSS %dMB > hard limit %dMB after GC (%dMB); "
+                        "initiating restart",
+                        rss_mb, hard_limit_mb, rss_after,
+                    )
+                    # Trigger graceful shutdown; supervisor/Rust daemon will restart
+                    self._shutdown.set()
+                    break
+                elif rss_mb > max_rss_mb:
+                    import gc
+                    collected = gc.collect()
+                    rss_after = proc.memory_info().rss // (1024 * 1024)
+                    log.warning(
+                        "rss watchdog: RSS %dMB > soft limit %dMB; gc collected %d objects, "
+                        "RSS now %dMB",
+                        rss_mb, max_rss_mb, collected, rss_after,
+                    )
+            except Exception as e:
+                log.debug("rss watchdog error: %s", e)
+
+        log.info("rss watchdog stopped")
+
     # ---- Lifecycle ----
 
     async def serve(self) -> None:
@@ -1100,6 +1157,9 @@ class ModelServer:
 
         # REC-8: Start VRAM pressure watchdog
         vram_watchdog_task = asyncio.create_task(self._vram_watchdog())
+
+        # RSS watchdog: triggers GC at soft limit, restart at hard limit (1.5x)
+        rss_watchdog_task = asyncio.create_task(self._rss_watchdog())
 
         # Start parent process monitor if OPENCODE_EMBEDDER_PARENT_PID is set
         parent_monitor_task = None
@@ -1156,6 +1216,7 @@ class ModelServer:
             await http_runner.cleanup()
             idle_monitor_task.cancel()
             vram_watchdog_task.cancel()
+            rss_watchdog_task.cancel()
             if parent_monitor_task:
                 parent_monitor_task.cancel()
             cleanup_models()

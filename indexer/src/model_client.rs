@@ -353,6 +353,13 @@ pub async fn ensure_embedder() {
         Ok(child) => {
             let pid = child.id();
             EMBEDDER_PID.store(pid, Ordering::Relaxed);
+            // Tell Linux OOM-killer to prefer killing the embedder child (score 600)
+            // over the indexer (500) and user processes (~0-200). Fails silently.
+            #[cfg(target_os = "linux")]
+            {
+                let path = format!("/proc/{}/oom_score_adj", pid);
+                let _ = std::fs::write(path, "600");
+            }
             *EMBEDDER_CHILD.lock().unwrap() = Some(child);
             tracing::info!("embedder spawned with PID {}", pid);
 

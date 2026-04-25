@@ -278,7 +278,7 @@ mod tests {
         let candidates = vec![
             vec![1.0, 0.0, 0.0],
             vec![0.0, 1.0, 0.0],
-            vec![0.7071, 0.7071, 0.0],
+            vec![std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0],
         ];
 
         let scores = batch_cosine_similarity(&query, &candidates);
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(scores.len(), 3);
         assert!((scores[0] - 1.0).abs() < 1e-6);
         assert!(scores[1].abs() < 1e-6);
-        assert!((scores[2] - 0.7071).abs() < 0.01);
+        assert!((scores[2] - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01);
     }
 
     #[test]

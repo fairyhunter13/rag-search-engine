@@ -19,12 +19,35 @@ use crate::config;
 const MAX_CACHE_SIZE: usize = 1000;
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
-/// Maximum file size limits by category.
+/// Maximum file size limits by category (compile-time defaults).
 /// Source code files get generous limits since large generated files are common.
 /// Non-code text files get stricter limits.
-const MAX_SOURCE_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB - covers large generated Go/Rust/Java files
-const MAX_TEXT_FILE_SIZE: u64 = 2 * 1024 * 1024;     // 2 MB - markdown, yaml, config, etc.
-const MAX_UNKNOWN_FILE_SIZE: u64 = 1 * 1024 * 1024;  // 1 MB - unknown extensions
+/// All limits configurable via OPENCODE_SEARCH_MAX_FILE_SIZE_KB env var (applies to all categories).
+const DEFAULT_SOURCE_FILE_SIZE_KB: u64 = 10 * 1024; // 10 MB
+const DEFAULT_TEXT_FILE_SIZE_KB: u64 = 2 * 1024;    // 2 MB
+const DEFAULT_UNKNOWN_FILE_SIZE_KB: u64 = 1 * 1024; // 1 MB
+
+/// Read configurable file size limit from env (in KB). Returns None if not set.
+/// OPENCODE_SEARCH_MAX_FILE_SIZE_KB overrides all per-category limits uniformly.
+fn env_max_file_size_bytes() -> Option<u64> {
+    std::env::var("OPENCODE_SEARCH_MAX_FILE_SIZE_KB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .map(|kb| kb * 1024)
+}
+
+fn max_source_file_size() -> u64 {
+    env_max_file_size_bytes().unwrap_or(DEFAULT_SOURCE_FILE_SIZE_KB * 1024)
+}
+
+fn max_text_file_size() -> u64 {
+    env_max_file_size_bytes().unwrap_or(DEFAULT_TEXT_FILE_SIZE_KB * 1024)
+}
+
+fn max_unknown_file_size() -> u64 {
+    env_max_file_size_bytes().unwrap_or(DEFAULT_UNKNOWN_FILE_SIZE_KB * 1024)
+}
 
 /// Generic cache entry with TTL support
 #[derive(Clone)]
@@ -224,6 +247,7 @@ pub fn detect_language(path: &Path) -> &'static str {
 }
 
 /// Returns the maximum file size limit for the given path, based on its detected language.
+/// Override all limits uniformly with OPENCODE_SEARCH_MAX_FILE_SIZE_KB env var.
 pub fn file_size_limit(path: &Path) -> u64 {
     match detect_language(path) {
         // Programming languages
@@ -233,13 +257,13 @@ pub fn file_size_limit(path: &Path) -> u64 {
         | "lua" | "r" | "perl" | "elixir" | "erlang" | "haskell" | "elm"
         | "lisp" | "scheme" | "racket" | "ocaml" | "nim" | "zig" | "v" | "d"
         | "dart" | "julia" | "vue" | "svelte" | "astro" | "latex"
-        | "protobuf" | "graphql" | "cmake" | "gradle" | "makefile" => MAX_SOURCE_FILE_SIZE,
+        | "protobuf" | "graphql" | "cmake" | "gradle" | "makefile" => max_source_file_size(),
         // Text / config / markup
         "markdown" | "rst" | "text" | "yaml" | "json" | "toml" | "xml"
         | "html" | "css" | "scss" | "less" | "bash" | "zsh" | "fish"
-        | "powershell" | "batch" | "sql" | "dockerfile" => MAX_TEXT_FILE_SIZE,
+        | "powershell" | "batch" | "sql" | "dockerfile" => max_text_file_size(),
         // Unknown
-        _ => MAX_UNKNOWN_FILE_SIZE,
+        _ => max_unknown_file_size(),
     }
 }
 
@@ -1000,23 +1024,23 @@ mod config_discovery_tests {
 
     #[test]
     fn file_size_limit_source_code() {
-        assert_eq!(file_size_limit(Path::new("main.go")), MAX_SOURCE_FILE_SIZE);
-        assert_eq!(file_size_limit(Path::new("lib.rs")), MAX_SOURCE_FILE_SIZE);
-        assert_eq!(file_size_limit(Path::new("app.tsx")), MAX_SOURCE_FILE_SIZE);
-        assert_eq!(file_size_limit(Path::new("Main.java")), MAX_SOURCE_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("main.go")), max_source_file_size());
+        assert_eq!(file_size_limit(Path::new("lib.rs")), max_source_file_size());
+        assert_eq!(file_size_limit(Path::new("app.tsx")), max_source_file_size());
+        assert_eq!(file_size_limit(Path::new("Main.java")), max_source_file_size());
     }
 
     #[test]
     fn file_size_limit_text_files() {
-        assert_eq!(file_size_limit(Path::new("README.md")), MAX_TEXT_FILE_SIZE);
-        assert_eq!(file_size_limit(Path::new("config.yaml")), MAX_TEXT_FILE_SIZE);
-        assert_eq!(file_size_limit(Path::new("schema.json")), MAX_TEXT_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("README.md")), max_text_file_size());
+        assert_eq!(file_size_limit(Path::new("config.yaml")), max_text_file_size());
+        assert_eq!(file_size_limit(Path::new("schema.json")), max_text_file_size());
     }
 
     #[test]
     fn file_size_limit_unknown() {
-        assert_eq!(file_size_limit(Path::new("data.xyz")), MAX_UNKNOWN_FILE_SIZE);
-        assert_eq!(file_size_limit(Path::new("noext")), MAX_UNKNOWN_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("data.xyz")), max_unknown_file_size());
+        assert_eq!(file_size_limit(Path::new("noext")), max_unknown_file_size());
     }
 
     #[test]
@@ -1031,7 +1055,7 @@ mod config_discovery_tests {
     fn is_within_size_limit_rejects_oversized_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("huge.xyz");
-        let data = vec![b'x'; (MAX_UNKNOWN_FILE_SIZE + 1) as usize];
+        let data = vec![b'x'; (max_unknown_file_size() + 1) as usize];
         std::fs::write(&path, &data).unwrap();
         assert!(!is_within_size_limit(&path));
     }
@@ -1049,7 +1073,7 @@ mod config_discovery_tests {
 
         // Oversized unknown file: should be rejected
         let big = root.join("huge.xyz");
-        let data = vec![b'x'; (MAX_UNKNOWN_FILE_SIZE + 1) as usize];
+        let data = vec![b'x'; (max_unknown_file_size() + 1) as usize];
         std::fs::write(&big, &data).unwrap();
         assert!(!should_index(&big, root, &cfg));
     }

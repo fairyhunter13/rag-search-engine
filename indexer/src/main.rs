@@ -27,7 +27,17 @@ fn limit_thread_pools() {
             std::env::set_var("TOKIO_WORKER_THREADS", "4");
         }
         if std::env::var("RAYON_NUM_THREADS").is_err() {
-            std::env::set_var("RAYON_NUM_THREADS", "4");
+            // Dynamic rayon threads: max(2, available_cpus / 2) so a laptop with 8 cores
+            // uses 4 rayon threads, 4-core uses 2. Override via OPENCODE_SEARCH_RAYON_THREADS.
+            let num_cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
+            let rayon_threads = std::env::var("OPENCODE_SEARCH_RAYON_THREADS")
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or_else(|| (num_cpus / 2).max(2));
+            std::env::set_var("RAYON_NUM_THREADS", rayon_threads.to_string());
         }
         if std::env::var("OMP_NUM_THREADS").is_err() {
             std::env::set_var("OMP_NUM_THREADS", "2");
