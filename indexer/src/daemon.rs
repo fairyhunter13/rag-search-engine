@@ -1662,6 +1662,33 @@ async fn handle_request(method: &str, params: &serde_json::Value) -> serde_json:
             }
         }
 
+        // Batch variant: index multiple files in one call.
+        // Returns {results: [{success, file, ...}]} matching IndexFileResult[] in TS.
+        "index_files" => {
+            let root = params["root"].as_str().unwrap_or(".");
+            let db = params["db"].as_str();
+            let tier = params["tier"].as_str().unwrap_or("budget");
+            let dims: u32 = params["dimensions"].as_u64().unwrap_or(1024) as u32;
+            let files: Vec<String> = params["files"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut results = Vec::with_capacity(files.len());
+            for file in &files {
+                let r = match index_file_impl(root, db, file, tier, dims).await {
+                    Ok(v) => v,
+                    Err(e) => serde_json::json!({"success": false, "file": file, "error": e.to_string()}),
+                };
+                results.push(r);
+            }
+            serde_json::json!({"results": results})
+        }
+
         "remove_file" => {
             let root = params["root"].as_str().unwrap_or(".");
             let db = params["db"].as_str();
@@ -2022,6 +2049,12 @@ async fn handle_request(method: &str, params: &serde_json::Value) -> serde_json:
                 Err(e) => serde_json::json!({"success": false, "error": e.to_string()}),
             }
         }
+
+        // Stubs for methods defined in the TS client but not yet implemented
+        // in the Rust daemon. Return a structured response instead of the
+        // "unknown method" error that triggers restartDaemon() in the TS layer.
+        "db_execute" => serde_json::json!({"success": false, "error": "db_execute not implemented"}),
+        "db_maintenance" => serde_json::json!({"success": false, "error": "db_maintenance not implemented"}),
 
         _ => serde_json::json!({"error": format!("unknown method: {method}")}),
     }
