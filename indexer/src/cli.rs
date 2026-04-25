@@ -4015,7 +4015,7 @@ async fn show_health(
             }
 
             let chunks = storage.count_chunks().await.unwrap_or(0);
-            let files = storage.get_indexed_files().await.unwrap_or_default().len();
+            let files = storage.get_file_count().await.unwrap_or(0);
             let tier = storage.get_tier().await.unwrap_or(None);
             let dims = storage.get_dimensions().await.unwrap_or(None);
             let in_progress = storage

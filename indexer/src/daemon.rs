@@ -2141,6 +2141,9 @@ async fn index_file_impl(
             // Update last_update_timestamp after successful indexing
             let now = chrono::Utc::now().to_rfc3339();
             let _ = storage.set_last_update_timestamp(&now).await;
+            
+            // Invalidate query cache for this DB
+            invalidate_query_cache(&storage_path).await;
 
             Ok(serde_json::json!({
                 "success": true,
@@ -2186,6 +2189,9 @@ async fn remove_file_impl(
 
     // Wait for deletion to complete
     let _ = write_queue.shutdown().await;
+    
+    // Invalidate query cache for this DB
+    invalidate_query_cache(&storage_path).await;
 
     Ok(serde_json::json!({"success": true, "removed": removed, "path": rel}))
 }
@@ -2210,15 +2216,107 @@ const FINAL_TOP_K: u32 = 10;
 const SKIP_STAGE1_RERANK_THRESHOLD: usize = 5;
 /// Results per project when skipping stage 1 rerank (use vector score only)
 const VECTOR_ONLY_TOP_K: usize = 10;
-/// Maximum concurrent federated search tasks (prevents CPU/memory spikes)
-const MAX_FEDERATED_SEARCH_CONCURRENCY: usize = 8;
 /// Warning threshold for too many federated DBs
 const FEDERATED_DB_WARNING_THRESHOLD: usize = 50;
 
-/// Semaphore for limiting concurrent federated searches
+/// Semaphore for limiting concurrent federated searches.
+/// Configurable via OPENCODE_FEDERATED_CONCURRENCY environment variable.
+/// Defaults to min(num_cpus, 8) to balance parallelism with resource usage.
 fn federated_search_semaphore() -> &'static tokio::sync::Semaphore {
     static SEM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
-    SEM.get_or_init(|| tokio::sync::Semaphore::new(MAX_FEDERATED_SEARCH_CONCURRENCY))
+    SEM.get_or_init(|| {
+        let limit = std::env::var("OPENCODE_FEDERATED_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or_else(|| num_cpus::get().min(8));
+        
+        tracing::debug!("federated search concurrency limit: {}", limit);
+        tokio::sync::Semaphore::new(limit)
+    })
+}
+
+// ============================================================================
+// Query Cache - LRU cache for repeated search queries
+// ============================================================================
+
+/// Cached search result with metadata
+#[derive(Clone)]
+struct QueryCacheEntry {
+    results: serde_json::Value,
+    timestamp: Instant,
+}
+
+/// Cache key for a search query
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct QueryCacheKey {
+    query: String,
+    db_path: String,
+    tier: String,
+    dims: u32,
+    federated: Vec<String>,
+}
+
+impl QueryCacheKey {
+    fn new(
+        query: &str,
+        db_path: &str,
+        tier: &str,
+        dims: u32,
+        federated: &[String],
+    ) -> Self {
+        Self {
+            query: query.to_lowercase().trim().to_string(), // normalize query
+            db_path: db_path.to_string(),
+            tier: tier.to_string(),
+            dims,
+            federated: federated.to_vec(),
+        }
+    }
+}
+
+/// Global LRU cache for query results
+fn query_cache() -> &'static RwLock<lru::LruCache<QueryCacheKey, QueryCacheEntry>> {
+    static CACHE: OnceLock<RwLock<lru::LruCache<QueryCacheKey, QueryCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let capacity = std::env::var("OPENCODE_QUERY_CACHE_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(100);
+        
+        let cap = std::num::NonZeroUsize::new(capacity).unwrap_or(std::num::NonZeroUsize::new(100).unwrap());
+        tracing::debug!("query cache size: {}", capacity);
+        RwLock::new(lru::LruCache::new(cap))
+    })
+}
+
+/// Get TTL for cached query results (default 60 seconds)
+fn query_cache_ttl() -> Duration {
+    let ttl_secs = std::env::var("OPENCODE_QUERY_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60);
+    Duration::from_secs(ttl_secs)
+}
+
+/// Invalidate all cache entries for a specific DB path
+async fn invalidate_query_cache(db_path: &Path) {
+    let db_str = db_path.to_string_lossy().to_string();
+    let mut cache = query_cache().write().await;
+    
+    // Collect keys to remove (can't modify while iterating)
+    let keys_to_remove: Vec<QueryCacheKey> = cache
+        .iter()
+        .filter(|(k, _)| k.db_path == db_str)
+        .map(|(k, _)| k.clone())
+        .collect();
+    
+    for key in keys_to_remove {
+        cache.pop(&key);
+    }
+    
+    if !cache.is_empty() {
+        tracing::debug!("invalidated query cache for: {}", db_str);
+    }
 }
 
 async fn search_impl(
@@ -2239,7 +2337,35 @@ async fn search_impl(
         .map(PathBuf::from)
         .unwrap_or_else(|| storage::storage_path(&root));
 
-    let mut all_paths: Vec<PathBuf> = vec![storage_path];
+    // Check cache before expensive search
+    let cache_key = QueryCacheKey::new(
+        query,
+        &storage_path.to_string_lossy(),
+        tier,
+        dims,
+        federated,
+    );
+    
+    {
+        let mut cache = query_cache().write().await;
+        if let Some(entry) = cache.get(&cache_key) {
+            let age = entry.timestamp.elapsed();
+            if age < query_cache_ttl() {
+                tracing::debug!(
+                    "query cache hit: query='{}' age={:.2}s",
+                    query,
+                    age.as_secs_f64()
+                );
+                return Ok(entry.results.clone());
+            } else {
+                // Expired - remove it
+                cache.pop(&cache_key);
+                tracing::debug!("query cache expired: query='{}'", query);
+            }
+        }
+    }
+
+    let mut all_paths: Vec<PathBuf> = vec![storage_path.clone()];
     all_paths.extend(federated.iter().map(PathBuf::from));
 
     let num_projects = all_paths.len();
@@ -2363,7 +2489,22 @@ async fn search_impl(
         serde_json::json!({"rank": i+1, "score": score, "path": path, "content": content})
     }).collect();
 
-    Ok(serde_json::json!({"results": results}))
+    let result_json = serde_json::json!({"results": results});
+    
+    // Cache successful results
+    {
+        let mut cache = query_cache().write().await;
+        cache.put(
+            cache_key,
+            QueryCacheEntry {
+                results: result_json.clone(),
+                timestamp: Instant::now(),
+            },
+        );
+        tracing::debug!("query cache stored: query='{}'", query);
+    }
+
+    Ok(result_json)
 }
 
 /// Stage 1: Search a single database with first-pass rerank.
@@ -2924,21 +3065,35 @@ async fn status_impl(root: Option<&str>, db: Option<&str>, dims: u32) -> Result<
             }
         }
     }
-    let (chunks, chunks_corrupted) = match storage.count_chunks().await {
-        Ok(c) => (c, false),
-        Err(e) if crate::storage::is_corruption_error(&e) => {
-            tracing::warn!("status: corruption detected in count_chunks: {e:#}");
-            (0, true)
+    // Try cached counts first (< 1ms) — eliminates 2-20s table scans
+    let (chunks, files, chunks_corrupted, files_corrupted) = if let Some((cached_files, cached_chunks)) = storage.get_cached_counts().await {
+        // Cache hit — instant response
+        (cached_chunks, cached_files, false, false)
+    } else {
+        // Cache miss or stale — do full scan and update cache
+        let (chunks_val, chunks_corrupted_val) = match storage.count_chunks().await {
+            Ok(c) => (c, false),
+            Err(e) if crate::storage::is_corruption_error(&e) => {
+                tracing::warn!("status: corruption detected in count_chunks: {e:#}");
+                (0, true)
+            }
+            Err(_) => (0, false),
+        };
+        let (files_val, files_corrupted_val) = match storage.get_indexed_files().await {
+            Ok(f) => (f.len(), false),
+            Err(e) if crate::storage::is_corruption_error(&e) => {
+                tracing::warn!("status: corruption detected in get_indexed_files: {e:#}");
+                (0, true)
+            }
+            Err(_) => (0, false),
+        };
+        
+        // Update cache with fresh counts (if no corruption)
+        if !chunks_corrupted_val && !files_corrupted_val {
+            storage.update_cached_counts(files_val, chunks_val).await;
         }
-        Err(_) => (0, false),
-    };
-    let (files, files_corrupted) = match storage.get_indexed_files().await {
-        Ok(f) => (f.len(), false),
-        Err(e) if crate::storage::is_corruption_error(&e) => {
-            tracing::warn!("status: corruption detected in get_indexed_files: {e:#}");
-            (0, true)
-        }
-        Err(_) => (0, false),
+        
+        (chunks_val, files_val, chunks_corrupted_val, files_corrupted_val)
     };
     let tier = storage.get_tier().await.unwrap_or(None);
 
@@ -3250,7 +3405,7 @@ async fn health_impl(
             }
 
             let chunks = storage.count_chunks().await.unwrap_or(0);
-            let files = storage.get_indexed_files().await.unwrap_or_default().len();
+            let files = storage.get_file_count().await.unwrap_or(0);
             let tier = storage.get_tier().await.unwrap_or(None);
             result["files"] = serde_json::json!(files);
             result["chunks"] = serde_json::json!(chunks);
@@ -3317,7 +3472,7 @@ async fn health_impl(
                 let link_path = PathBuf::from(link_db);
                 if tokio::fs::try_exists(&link_path).await.unwrap_or(false) {
                     if let Ok(s) = cached_storage(&link_path, dims).await {
-                        let files = s.get_indexed_files().await.unwrap_or_default().len();
+                        let files = s.get_file_count().await.unwrap_or(0);
                         let chunks = s.count_chunks().await.unwrap_or(0);
                         entry["indexed"] = serde_json::json!(files > 0 || chunks > 0);
                         entry["files"] = serde_json::json!(files);
@@ -4042,7 +4197,7 @@ fn watcher_start_internal<'a>(
             if let Ok(store) = probe {
                 let count = store.count_chunks().await.unwrap_or(0);
                 if count == 0 {
-                    let files = store.get_indexed_files().await.unwrap_or_default().len();
+                    let files = store.get_file_count().await.unwrap_or(0);
                     if files == 0 {
                         tracing::info!(
                             "watcher_start rejected: index exists but has 0 files/chunks at {}",
@@ -6343,6 +6498,14 @@ pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Opti
     // to avoid races in tests and callers that send signals immediately.
     println!("{}", serde_json::json!({"type": "daemon_ready"}));
 
+    // Log configuration
+    {
+        // Initialize the semaphore to log the configured concurrency
+        let _ = federated_search_semaphore();
+        // Initialize the query cache to log the configured size
+        let _ = query_cache();
+    }
+
     // Idle shutdown monitor setup
     let idle_shutdown_secs = idle_shutdown_timeout(idle_shutdown_arg);
     if idle_shutdown_secs > 0 {
@@ -7562,7 +7725,7 @@ mod watcher_lifecycle_tests {
 
     #[tokio::test]
     async fn drain_respects_timeout() {
-        use tokio::time::{sleep, timeout};
+        use tokio::time::timeout;
 
         let drain_timeout = Duration::from_secs(TUI_CLEANUP_DRAIN_TIMEOUT_SECS);
         // A simulated drain that completes instantly

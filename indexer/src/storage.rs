@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::sync::mpsc;
@@ -71,6 +72,7 @@ const COST_PER_MILLION_BALANCED: f64 = 0.06;
 const COST_PER_MILLION_PREMIUM: f64 = 0.12;
 
 const SCHEMA_VERSION: &str = "2";
+const CONFIG_FILE_COUNT: &str = "file_count";
 
 /// Get IVF nprobes from environment or default
 fn get_ivf_nprobes() -> usize {
@@ -412,10 +414,22 @@ pub struct BackupInfo {
 }
 
 /// LanceDB storage handle.
+/// Cached file/chunk counts for fast status queries.
+/// Eliminates 2-20s table scans on every status RPC.
+#[derive(Clone)]
+struct CachedCounts {
+    files: usize,
+    chunks: usize,
+    last_updated: Instant,
+}
+
+const CACHE_TTL_SECS: u64 = 60;
+
 pub struct Storage {
     db: lancedb::Connection,
     path: PathBuf,
     dimensions: u32,
+    cached_counts: Arc<tokio::sync::RwLock<Option<CachedCounts>>>,
 }
 
 impl Clone for Storage {
@@ -424,6 +438,7 @@ impl Clone for Storage {
             db: self.db.clone(),
             path: self.path.clone(),
             dimensions: self.dimensions,
+            cached_counts: self.cached_counts.clone(),
         }
     }
 }
@@ -472,6 +487,7 @@ impl Storage {
                 db,
                 path: path.to_path_buf(),
                 dimensions,
+                cached_counts: Arc::new(tokio::sync::RwLock::new(None)),
             };
 
             // Check and migrate schema — with iterative corruption recovery
@@ -535,6 +551,8 @@ impl Storage {
         if names.contains(&"chunks".to_string()) {
             self.db.drop_table("chunks").await?;
         }
+        // Reset file count
+        let _ = self.set_file_count(0).await;
         Ok(())
     }
 
@@ -836,6 +854,34 @@ impl Storage {
 
     pub async fn set_indexing_phase(&self, phase: &str) -> Result<()> {
         self.set_config("indexing_phase", phase).await
+    }
+
+    pub async fn get_file_count(&self) -> Result<usize> {
+        // Try cached config first
+        if let Some(count_str) = self.get_config(CONFIG_FILE_COUNT).await? {
+            if let Ok(count) = count_str.parse::<usize>() {
+                return Ok(count);
+            }
+        }
+        
+        // Fallback: count from table and cache result
+        let count = self.get_file_hashes(None).await?.len();
+        let _ = self.set_file_count(count).await;
+        Ok(count)
+    }
+
+    pub async fn set_file_count(&self, count: usize) -> Result<()> {
+        self.set_config(CONFIG_FILE_COUNT, &count.to_string()).await
+    }
+
+    pub async fn increment_file_count(&self, delta: i32) -> Result<()> {
+        let current = self.get_file_count().await?;
+        let new_count = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            current.saturating_add(delta as usize)
+        };
+        self.set_file_count(new_count).await
     }
 
     /// Backfill missing metadata for legacy indexes.
@@ -1222,6 +1268,32 @@ impl Storage {
         Ok(map)
     }
 
+    /// Get cached file/chunk counts if available and not stale (< 60s old).
+    /// Returns None on cache miss or stale data → caller should do full scan.
+    pub async fn get_cached_counts(&self) -> Option<(usize, usize)> {
+        let cache = self.cached_counts.read().await;
+        cache.as_ref()
+            .filter(|c| c.last_updated.elapsed().as_secs() < CACHE_TTL_SECS)
+            .map(|c| (c.files, c.chunks))
+    }
+
+    /// Invalidate cached counts (called on any write operation).
+    /// Better to re-scan occasionally than show stale counts.
+    pub async fn invalidate_cached_counts(&self) {
+        let mut cache = self.cached_counts.write().await;
+        *cache = None;
+    }
+
+    /// Update cached counts after fresh scan (called after batch ops complete).
+    pub async fn update_cached_counts(&self, files: usize, chunks: usize) {
+        let mut cache = self.cached_counts.write().await;
+        *cache = Some(CachedCounts {
+            files,
+            chunks,
+            last_updated: Instant::now(),
+        });
+    }
+
     /// Delete all chunks for a file path.
     pub async fn delete_file(&self, path: &str) -> Result<usize> {
         let table = self.ensure_chunks().await?;
@@ -1237,9 +1309,17 @@ impl Storage {
         let batches: Vec<RecordBatch> = results.try_collect().await?;
         let count: usize = batches.iter().map(|b| b.num_rows()).sum();
 
-        table
-            .delete(&format!("path = '{}'", escape_sql(path)))
-            .await?;
+        if count > 0 {
+            table
+                .delete(&format!("path = '{}'", escape_sql(path)))
+                .await?;
+            
+            // Decrement file count
+            let _ = self.increment_file_count(-1).await;
+            
+            // Invalidate cache on write
+            self.invalidate_cached_counts().await;
+        }
 
         Ok(count)
     }
@@ -1490,6 +1570,11 @@ impl Storage {
     }
 
     /// Add chunks for a file (after chunking + embedding by Python server).
+    /// 
+    /// Note: This method does NOT update file_count automatically because in typical
+    /// workflows, files are first deleted then re-added (update pattern). The caller
+    /// should track whether this is a new file vs update and call increment_file_count
+    /// explicitly if needed. Use via WriteQueue which handles this correctly.
     pub async fn add_chunks(
         &self,
         path: &str,
@@ -1568,11 +1653,16 @@ impl Storage {
         let schema = chunks_schema(self.dimensions);
         let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
         table.add(reader).execute().await?;
+        
         Ok(())
     }
 
     /// Add chunks for multiple files in a single batch operation.
     /// This is more efficient than calling add_chunks repeatedly.
+    /// 
+    /// Note: This method does NOT update file_count automatically. The caller
+    /// should track new vs updated files and update the count separately.
+    /// Use via WriteQueue which handles this correctly.
     pub async fn add_chunks_batch(&self, files: Vec<FileChunks>) -> Result<usize> {
         let t_start = std::time::Instant::now();
         let total_chunks: usize = files.iter().map(|f| f.chunks.len()).sum();
@@ -1653,6 +1743,10 @@ impl Storage {
             file_count, total_chunks,
             t_build.as_millis(), (t_total - t_build).as_millis(), t_total.as_millis(),
         );
+        
+        // Invalidate cache on write
+        self.invalidate_cached_counts().await;
+        
         Ok(total_chunks)
     }
 
@@ -1670,6 +1764,15 @@ impl Storage {
             "delete_files_batch: {} files, {}ms",
             paths.len(), t_start.elapsed().as_millis(),
         );
+        
+        // Decrement file count
+        if !paths.is_empty() {
+            let _ = self.increment_file_count(-(paths.len() as i32)).await;
+            
+            // Invalidate cache on write
+            self.invalidate_cached_counts().await;
+        }
+        
         Ok(paths.len())
     }
 
@@ -2133,8 +2236,7 @@ impl Storage {
 
     /// Count unique indexed files.
     pub async fn count_files(&self) -> Result<usize> {
-        let hashes = self.get_file_hashes(None).await?;
-        Ok(hashes.len())
+        self.get_file_count().await
     }
 
     pub async fn count_embeddings(&self) -> Result<usize> {
@@ -2783,11 +2885,19 @@ impl WriteQueue {
                         }
                         WriteOp::AddSingle { path, file_hash, language, chunks } => {
                             let chunk_count = chunks.len();
+                            // Check if file is new before adding
+                            let is_new = storage.get_file_hash(&path).await.ok().and_then(|h| h).is_none();
+                            
                             if let Err(e) = storage.add_chunks(&path, &file_hash, &language, chunks).await {
                                 tracing::error!("WriteQueue: failed to add chunks for {}: {}", path, e);
                                 stats.errors.fetch_add(1, Ordering::Relaxed);
                             } else {
                                 stats.chunks_written.fetch_add(chunk_count as u64, Ordering::Relaxed);
+                                
+                                // Increment file count if new
+                                if is_new {
+                                    let _ = storage.increment_file_count(1).await;
+                                }
                             }
                         }
                         WriteOp::DeleteFile(path) => {

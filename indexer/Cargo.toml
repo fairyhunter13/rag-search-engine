@@ -73,6 +73,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 walkdir = "2"
 fs2 = "0.4"             # File locking
 num_cpus = "1"          # CPU count for parallel processing
+lru = "0.12"            # LRU cache for search query results
 
 [build-dependencies]
 # No build dependencies needed - version is derived from git commands

@@ -3917,6 +3917,7 @@ dependencies = [
  "hex",
  "lancedb",
  "libc",
+ "lru",
  "notify",
  "num_cpus",
  "predicates",
