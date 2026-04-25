@@ -4,11 +4,38 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{OnceLock, RwLock};
 
 use regex::Regex;
 use serde::Deserialize;
 
 const CONFIG_FILENAMES: [&str; 2] = [".opencode-index.yaml", ".opencode-index.yml"];
+
+/// Cached compiled regex patterns. Avoids recompiling the same glob->regex on every file match.
+fn regex_cache() -> &'static RwLock<HashMap<String, Option<Regex>>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, Option<Regex>>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Get or compile a regex pattern, returning None if the pattern is invalid.
+fn cached_regex(pattern: &str) -> Option<Regex> {
+    // Fast path: check read lock
+    if let Ok(cache) = regex_cache().read() {
+        if let Some(cached) = cache.get(pattern) {
+            return cached.clone();
+        }
+    }
+
+    // Slow path: compile and cache
+    let compiled = Regex::new(pattern).ok();
+    if let Ok(mut cache) = regex_cache().write() {
+        if cache.len() >= 10_000 {
+            cache.clear();
+        }
+        cache.insert(pattern.to_string(), compiled.clone());
+    }
+    compiled
+}
 
 fn default_true() -> bool {
     true
@@ -227,14 +254,14 @@ fn match_glob(path: &str, pattern: &str) -> bool {
     let path = path.replace('\\', "/");
     let pattern = pattern.replace('\\', "/");
 
-    let regex = if pattern.contains("**") {
+    let regex_str = if pattern.contains("**") {
         glob_to_regex(&pattern)
     } else {
         fnmatch_to_regex(&pattern)
     };
 
     // Pattern comes from user config; treat invalid regex as non-match.
-    let Ok(re) = Regex::new(&regex) else {
+    let Some(re) = cached_regex(&regex_str) else {
         return false;
     };
     re.is_match(&path)
@@ -410,6 +437,29 @@ watcher: {}
 "#;
         let cfg: ProjectConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.watcher.max_pending_files, 10000);
+    }
+
+    #[test]
+    fn regex_cache_returns_same_result() {
+        let pattern = "^.*\\.ts$";
+        let re1 = cached_regex(pattern);
+        let re2 = cached_regex(pattern);
+        assert!(re1.is_some());
+        assert!(re2.is_some());
+        assert!(re1.unwrap().is_match("file.ts"));
+        assert!(re2.unwrap().is_match("file.ts"));
+    }
+
+    #[test]
+    fn regex_cache_handles_invalid_pattern() {
+        assert!(cached_regex("[").is_none());
+    }
+
+    #[test]
+    fn match_glob_uses_cache_correctly() {
+        assert!(match_glob("file.ts", "*.ts"));
+        assert!(match_glob("other.ts", "*.ts"));
+        assert!(!match_glob("file.rs", "*.ts"));
     }
 
     #[test]

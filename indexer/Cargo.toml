@@ -75,6 +75,10 @@ fs2 = "0.4"             # File locking
 num_cpus = "1"          # CPU count for parallel processing
 lru = "0.12"            # LRU cache for search query results
 
+# Memory allocator — reduces fragmentation under sustained indexing workloads
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
+
 [build-dependencies]
 # No build dependencies needed - version is derived from git commands
 

@@ -4,7 +4,7 @@
 //! channel recv() when idle, achieving ~0% CPU usage.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 use anyhow::Result;
@@ -38,6 +38,20 @@ pub struct WorkItem {
     pub dimensions: u32,
     pub index_cfg: Arc<IndexConfig>,
     pub operation: WorkOperation,
+}
+
+/// Global concurrency limit across all workers.
+/// Prevents total file operations from exceeding this cap regardless of worker count.
+/// Default: 16 concurrent file operations (configurable via OPENCODE_INDEXER_MAX_CONCURRENT_FILES)
+pub(crate) fn global_file_semaphore() -> &'static Arc<Semaphore> {
+    static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SEM.get_or_init(|| {
+        let max = std::env::var("OPENCODE_INDEXER_MAX_CONCURRENT_FILES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(16);
+        Arc::new(Semaphore::new(max))
+    })
 }
 
 /// Channel capacity for work items
@@ -174,27 +188,29 @@ async fn process_work_item(
     match item.operation {
         WorkOperation::IndexFiles { changed } => {
             tracing::debug!("indexing {} files for {}", changed.len(), item.project_key);
-            
-            // Process files in parallel with semaphore limit
+
+            let global_sem = global_file_semaphore();
+
+            // Process files in parallel with both global and per-worker semaphore limits
             let futures: Vec<_> = changed.into_iter().map(|path| {
                 let sem = Arc::clone(file_semaphore);
+                let global = Arc::clone(global_sem);
                 let _storage = Arc::clone(&item.storage);
                 let _write_queue = Arc::clone(&item.write_queue);
                 let _root = Arc::clone(&item.root);
                 let _include_dirs = Arc::clone(&item.include_dirs);
-                
+
                 async move {
+                    // Acquire global limit first, then per-worker limit
+                    let _global_permit = global.acquire().await.ok()?;
                     let _permit = sem.acquire().await.ok()?;
-                    
-                    // Check if file needs indexing (hash comparison)
-                    // This would call the existing update_file_partial logic
-                    // For now, placeholder
+
                     tracing::trace!("would index: {:?}", path);
-                    
+
                     Some(())
                 }
             }).collect();
-            
+
             futures::future::join_all(futures).await;
         }
         

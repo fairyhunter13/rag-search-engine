@@ -471,50 +471,38 @@ impl CompactionState {
 }
 
 /// Compaction configuration (can be overridden via environment variables).
+/// Reads env vars on every call — no OnceLock caching — so tests and runtime
+/// overrides work correctly without cache poisoning.
 fn compaction_idle_threshold() -> Duration {
-    static THRESHOLD: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *THRESHOLD
-        .get_or_init(|| env_duration_ms("OPENCODE_COMPACTION_IDLE_MS", Duration::from_secs(30)))
+    env_duration_ms("OPENCODE_COMPACTION_IDLE_MS", Duration::from_secs(30))
 }
 
 fn compaction_ops_threshold() -> u64 {
-    static THRESHOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *THRESHOLD.get_or_init(|| {
-        std::env::var("OPENCODE_COMPACTION_OPS_THRESHOLD")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(50)
-    })
+    std::env::var("OPENCODE_COMPACTION_OPS_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
 }
 
 fn compaction_force_threshold() -> u64 {
-    static THRESHOLD: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *THRESHOLD.get_or_init(|| {
-        std::env::var("OPENCODE_COMPACTION_FORCE_THRESHOLD")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(200)
-    })
+    std::env::var("OPENCODE_COMPACTION_FORCE_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
 }
 
 fn compaction_check_interval() -> Duration {
-    static INTERVAL: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *INTERVAL.get_or_init(|| {
-        env_duration_ms(
-            "OPENCODE_COMPACTION_CHECK_INTERVAL_MS",
-            Duration::from_secs(300),
-        )
-    })
+    env_duration_ms(
+        "OPENCODE_COMPACTION_CHECK_INTERVAL_MS",
+        Duration::from_secs(300),
+    )
 }
 
 fn compaction_shutdown_timeout() -> Duration {
-    static TIMEOUT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *TIMEOUT.get_or_init(|| {
-        env_duration_ms(
-            "OPENCODE_COMPACTION_SHUTDOWN_TIMEOUT_MS",
-            Duration::from_secs(60),
-        )
-    })
+    env_duration_ms(
+        "OPENCODE_COMPACTION_SHUTDOWN_TIMEOUT_MS",
+        Duration::from_secs(60),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -7018,7 +7006,23 @@ mod compaction_tests {
 
     #[test]
     fn compaction_config_defaults() {
-        // Test that configuration functions return reasonable defaults
+        // Temporarily unset env vars that override defaults so this test is
+        // hermetic regardless of what the caller's shell has set.
+        let saved_force = std::env::var("OPENCODE_COMPACTION_FORCE_THRESHOLD").ok();
+        let saved_ops = std::env::var("OPENCODE_COMPACTION_OPS_THRESHOLD").ok();
+        let saved_idle = std::env::var("OPENCODE_COMPACTION_IDLE_MS").ok();
+        let saved_interval = std::env::var("OPENCODE_COMPACTION_CHECK_INTERVAL_MS").ok();
+        let saved_timeout = std::env::var("OPENCODE_COMPACTION_SHUTDOWN_TIMEOUT_MS").ok();
+
+        // SAFETY: test binary is single-threaded at this point
+        unsafe {
+            std::env::remove_var("OPENCODE_COMPACTION_FORCE_THRESHOLD");
+            std::env::remove_var("OPENCODE_COMPACTION_OPS_THRESHOLD");
+            std::env::remove_var("OPENCODE_COMPACTION_IDLE_MS");
+            std::env::remove_var("OPENCODE_COMPACTION_CHECK_INTERVAL_MS");
+            std::env::remove_var("OPENCODE_COMPACTION_SHUTDOWN_TIMEOUT_MS");
+        }
+
         let idle = compaction_idle_threshold();
         assert_eq!(idle, Duration::from_secs(30));
 
@@ -7033,6 +7037,15 @@ mod compaction_tests {
 
         let timeout = compaction_shutdown_timeout();
         assert_eq!(timeout, Duration::from_secs(60));
+
+        // Restore original env vars
+        unsafe {
+            if let Some(v) = saved_force { std::env::set_var("OPENCODE_COMPACTION_FORCE_THRESHOLD", v); }
+            if let Some(v) = saved_ops { std::env::set_var("OPENCODE_COMPACTION_OPS_THRESHOLD", v); }
+            if let Some(v) = saved_idle { std::env::set_var("OPENCODE_COMPACTION_IDLE_MS", v); }
+            if let Some(v) = saved_interval { std::env::set_var("OPENCODE_COMPACTION_CHECK_INTERVAL_MS", v); }
+            if let Some(v) = saved_timeout { std::env::set_var("OPENCODE_COMPACTION_SHUTDOWN_TIMEOUT_MS", v); }
+        }
     }
 
     #[test]

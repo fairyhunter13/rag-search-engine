@@ -19,6 +19,13 @@ use crate::config;
 const MAX_CACHE_SIZE: usize = 1000;
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
+/// Maximum file size limits by category.
+/// Source code files get generous limits since large generated files are common.
+/// Non-code text files get stricter limits.
+const MAX_SOURCE_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB - covers large generated Go/Rust/Java files
+const MAX_TEXT_FILE_SIZE: u64 = 2 * 1024 * 1024;     // 2 MB - markdown, yaml, config, etc.
+const MAX_UNKNOWN_FILE_SIZE: u64 = 1 * 1024 * 1024;  // 1 MB - unknown extensions
+
 /// Generic cache entry with TTL support
 #[derive(Clone)]
 struct CacheEntry<T> {
@@ -216,6 +223,46 @@ pub fn detect_language(path: &Path) -> &'static str {
     }
 }
 
+/// Returns the maximum file size limit for the given path, based on its detected language.
+pub fn file_size_limit(path: &Path) -> u64 {
+    match detect_language(path) {
+        // Programming languages
+        "rust" | "go" | "typescript" | "tsx" | "javascript" | "jsx" | "python"
+        | "java" | "kotlin" | "scala" | "clojure" | "c" | "cpp" | "csharp"
+        | "fsharp" | "ruby" | "php" | "swift" | "objective-c" | "objective-cpp"
+        | "lua" | "r" | "perl" | "elixir" | "erlang" | "haskell" | "elm"
+        | "lisp" | "scheme" | "racket" | "ocaml" | "nim" | "zig" | "v" | "d"
+        | "dart" | "julia" | "vue" | "svelte" | "astro" | "latex"
+        | "protobuf" | "graphql" | "cmake" | "gradle" | "makefile" => MAX_SOURCE_FILE_SIZE,
+        // Text / config / markup
+        "markdown" | "rst" | "text" | "yaml" | "json" | "toml" | "xml"
+        | "html" | "css" | "scss" | "less" | "bash" | "zsh" | "fish"
+        | "powershell" | "batch" | "sql" | "dockerfile" => MAX_TEXT_FILE_SIZE,
+        // Unknown
+        _ => MAX_UNKNOWN_FILE_SIZE,
+    }
+}
+
+/// Returns true if the file at `path` is within the extension-aware size limit.
+/// Returns true when metadata cannot be obtained (let downstream handle errors).
+pub fn is_within_size_limit(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return true;
+    };
+    let size = meta.len();
+    let limit = file_size_limit(path);
+    if size > limit {
+        tracing::warn!(
+            "skipping oversized file: {} ({} bytes > {} byte limit)",
+            path.display(),
+            size,
+            limit
+        );
+        return false;
+    }
+    true
+}
+
 /// Result of file discovery.
 #[derive(Clone)]
 pub struct DiscoveryResult {
@@ -386,6 +433,11 @@ pub fn should_index(path: &Path, root: &Path, cfg: &config::IndexConfig) -> bool
     }
 
     if !cfg.exclude.is_empty() && config::matches_any_pattern(path, &cfg.exclude, root) {
+        return false;
+    }
+
+    // File size limit check (extension-aware)
+    if !is_within_size_limit(path) {
         return false;
     }
 
@@ -755,6 +807,10 @@ pub fn discover_additional_files(
                 }
             }
 
+            if !is_within_size_limit(path) {
+                continue;
+            }
+
             out.push(path.to_path_buf());
         }
     }
@@ -941,6 +997,62 @@ pub fn discover_nested_git_repos(root: &Path) -> Vec<(PathBuf, String)> {
 #[cfg(test)]
 mod config_discovery_tests {
     use super::*;
+
+    #[test]
+    fn file_size_limit_source_code() {
+        assert_eq!(file_size_limit(Path::new("main.go")), MAX_SOURCE_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("lib.rs")), MAX_SOURCE_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("app.tsx")), MAX_SOURCE_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("Main.java")), MAX_SOURCE_FILE_SIZE);
+    }
+
+    #[test]
+    fn file_size_limit_text_files() {
+        assert_eq!(file_size_limit(Path::new("README.md")), MAX_TEXT_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("config.yaml")), MAX_TEXT_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("schema.json")), MAX_TEXT_FILE_SIZE);
+    }
+
+    #[test]
+    fn file_size_limit_unknown() {
+        assert_eq!(file_size_limit(Path::new("data.xyz")), MAX_UNKNOWN_FILE_SIZE);
+        assert_eq!(file_size_limit(Path::new("noext")), MAX_UNKNOWN_FILE_SIZE);
+    }
+
+    #[test]
+    fn is_within_size_limit_accepts_small_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("small.rs");
+        std::fs::write(&path, "fn main() {}").unwrap();
+        assert!(is_within_size_limit(&path));
+    }
+
+    #[test]
+    fn is_within_size_limit_rejects_oversized_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("huge.xyz");
+        let data = vec![b'x'; (MAX_UNKNOWN_FILE_SIZE + 1) as usize];
+        std::fs::write(&path, &data).unwrap();
+        assert!(!is_within_size_limit(&path));
+    }
+
+    #[test]
+    fn should_index_respects_file_size_limit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let cfg = config::IndexConfig::default();
+
+        // Small source file: should be indexed
+        let small = root.join("main.go");
+        std::fs::write(&small, "package main").unwrap();
+        assert!(should_index(&small, root, &cfg));
+
+        // Oversized unknown file: should be rejected
+        let big = root.join("huge.xyz");
+        let data = vec![b'x'; (MAX_UNKNOWN_FILE_SIZE + 1) as usize];
+        std::fs::write(&big, &data).unwrap();
+        assert!(!should_index(&big, root, &cfg));
+    }
 
     #[test]
     fn include_overrides_default_ignores() {
@@ -1498,6 +1610,7 @@ mod config_discovery_tests {
             "Should NOT contain new.rs (cached result is stale)"
         );
     }
+
 }
 
 #[cfg(test)]
