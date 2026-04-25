@@ -1,0 +1,42 @@
+#!/bin/bash
+# Auto-deploy opencode-indexer after commit.
+# Builds release binary and copies to ~/.opencode/bin/, then restarts daemon.
+#
+# Setup: git config core.hooksPath .githooks
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+INDEXER_DIR="$REPO_ROOT/indexer"
+DEPLOY_DIR="$HOME/.opencode/bin"
+BINARY_NAME="opencode-indexer"
+
+# Only build if indexer source files changed in this commit
+CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD -- indexer/src/ indexer/Cargo.toml 2>/dev/null)
+if [ -z "$CHANGED" ]; then
+    echo "[post-commit] No indexer source changes, skipping deploy."
+    exit 0
+fi
+
+echo "[post-commit] Indexer source changed, building release..."
+cd "$INDEXER_DIR"
+
+# Build release binary
+if cargo build --release 2>&1 | tail -3; then
+    echo "[post-commit] Build succeeded."
+else
+    echo "[post-commit] Build FAILED, skipping deploy."
+    exit 0
+fi
+
+# Deploy atomically (avoids "Text file busy" if daemon is running)
+if [ -d "$DEPLOY_DIR" ]; then
+    cp "target/release/$BINARY_NAME" "$DEPLOY_DIR/$BINARY_NAME.new"
+    mv -f "$DEPLOY_DIR/$BINARY_NAME.new" "$DEPLOY_DIR/$BINARY_NAME"
+    echo "[post-commit] Deployed to $DEPLOY_DIR/$BINARY_NAME"
+
+    # Kill old daemon u2014 opencode will respawn it automatically
+    pkill -f "$BINARY_NAME" 2>/dev/null && echo "[post-commit] Restarting daemon..." || true
+else
+    echo "[post-commit] Deploy dir $DEPLOY_DIR not found, skipping."
+fi
