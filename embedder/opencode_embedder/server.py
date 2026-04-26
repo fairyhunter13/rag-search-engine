@@ -434,6 +434,39 @@ class ModelServer:
 
         log.info("idle shutdown monitor stopped")
 
+    # ---- GPU health watchdog ----
+
+    async def _gpu_health_watchdog(self) -> None:
+        """Monitor GPU health and restart if inference falls back to CPU.
+
+        Prevents CPU/memory hogging that causes device crash and kernel panic.
+        Checks every 60s that GPU is still the active provider.
+        """
+        if not is_gpu_available():
+            return  # CPU-only mode, no watchdog needed
+
+        log.info("GPU health watchdog started")
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=60.0)
+                break
+            except asyncio.TimeoutError:
+                pass
+
+            stats = await asyncio.to_thread(get_gpu_stats)
+            if stats.get("is_gpu") and stats.get("cpu_ops", 0) > 0:
+                gpu_ops = stats.get("gpu_ops", 0)
+                cpu_ops = stats.get("cpu_ops", 0)
+                ratio = cpu_ops / max(1, gpu_ops + cpu_ops)
+                if ratio > 0.1:  # >10% CPU fallback
+                    log.error(
+                        "GPU ENFORCEMENT VIOLATION: %.1f%% ops on CPU (gpu=%d, cpu=%d). "
+                        "Shutting down to force respawn with correct GPU config.",
+                        ratio * 100, gpu_ops, cpu_ops,
+                    )
+                    self._shutdown.set()
+                    return
+
     # ---- Parent process monitor ----
 
     async def _parent_monitor(self, parent_pid: int) -> None:
@@ -712,7 +745,8 @@ class ModelServer:
         return v
 
     async def _http_health(self, req: web.Request) -> web.Response:
-        return web.json_response({"result": self._handle_health()})
+        result = await asyncio.to_thread(self._handle_health)
+        return web.json_response({"result": result})
 
     async def _http_shutdown(self, req: web.Request) -> web.Response:
         return web.json_response({"result": self._handle_shutdown()})
@@ -1155,6 +1189,9 @@ class ModelServer:
         # Start idle shutdown monitor (for on-demand spawning support)
         idle_monitor_task = asyncio.create_task(self._idle_shutdown_monitor())
 
+        # GPU health watchdog: shuts down if inference falls back to CPU
+        gpu_watchdog_task = asyncio.create_task(self._gpu_health_watchdog())
+
         # REC-8: Start VRAM pressure watchdog
         vram_watchdog_task = asyncio.create_task(self._vram_watchdog())
 
@@ -1215,6 +1252,7 @@ class ModelServer:
             log.info("shutting down model server")
             await http_runner.cleanup()
             idle_monitor_task.cancel()
+            gpu_watchdog_task.cancel()
             vram_watchdog_task.cancel()
             rss_watchdog_task.cancel()
             if parent_monitor_task:

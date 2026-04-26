@@ -751,7 +751,11 @@ def _detect_and_test_providers() -> list[str] | None:
         log.info("Using GPU provider chain: %s", result)
         return result
 
-    log.info("No working GPU provider found, using CPU")
+    log.warning(
+        "GPU ENFORCEMENT VIOLATION: No working GPU provider found. "
+        "All ONNX inference MUST run on GPU to avoid CPU/memory hogging. "
+        "Falling back to CPU as last resort — investigate GPU driver/runtime."
+    )
     return None
 
 
@@ -920,26 +924,27 @@ def _embedder(model: str):
             providers or "default (CPU)",
         )
 
-        # Build GPU provider options when a GPU provider is active
-        opts: list[dict] | None = None
-        if providers and len(providers) >= 2:
+        # Build GPU provider options and embed them as ORT provider tuples.
+        # fastembed 0.8.0 does not accept provider_options kwarg — it passes
+        # providers straight to ort.InferenceSession.  The correct way to
+        # inject options is via (provider_name, options_dict) tuples in the
+        # providers list itself, which ORT has always supported.
+        gpu_set = {
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "ROCMExecutionProvider",
+            "MIGraphXExecutionProvider",
+            "DirectMLExecutionProvider",
+        }
+        if providers and len(providers) >= 2 and providers[0] in gpu_set:
             gpu = providers[0]
-            gpu_set = {
-                "TensorrtExecutionProvider",
-                "CUDAExecutionProvider",
-                "ROCMExecutionProvider",
-                "MIGraphXExecutionProvider",
-                "DirectMLExecutionProvider",
-            }
-            if gpu in gpu_set:
-                opts = _gpu_provider_options(gpu)
-                log.debug("Embedding provider options for %s: %s", gpu, opts[0])
+            opts = _gpu_provider_options(gpu)
+            log.debug("Embedding provider options for %s: %s", gpu, opts[0])
+            # Rebuild providers list with options embedded as tuples so ORT
+            # honours them regardless of fastembed version.
+            providers = [(gpu, opts[0]), "CPUExecutionProvider"]
 
-        try:
-            embedder = TextEmbedding(model_name=model, providers=providers, provider_options=opts)
-        except TypeError:
-            # Older fastembed versions don't accept provider_options
-            embedder = TextEmbedding(model_name=model, providers=providers)
+        embedder = TextEmbedding(model_name=model, providers=providers)
 
         # Verify which provider is actually being used by the ONNX session
         _verify_onnx_session_provider(embedder, "embedder")
@@ -1036,28 +1041,22 @@ def _reranker(model: str):
             providers or "default (CPU)",
         )
 
-        # Build GPU provider options when a GPU provider is active
-        opts: list[dict] | None = None
-        if providers and len(providers) >= 2:
+        # Build GPU provider options and embed as ORT provider tuples.
+        # Same pattern as _load_embedder — fastembed 0.8.0 ignores provider_options kwarg.
+        gpu_set = {
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "ROCMExecutionProvider",
+            "MIGraphXExecutionProvider",
+            "DirectMLExecutionProvider",
+        }
+        if providers and len(providers) >= 2 and providers[0] in gpu_set:
             gpu = providers[0]
-            gpu_set = {
-                "TensorrtExecutionProvider",
-                "CUDAExecutionProvider",
-                "ROCMExecutionProvider",
-                "MIGraphXExecutionProvider",
-                "DirectMLExecutionProvider",
-            }
-            if gpu in gpu_set:
-                opts = _gpu_provider_options(gpu)
-                log.debug("Reranker provider options for %s: %s", gpu, opts[0])
+            opts = _gpu_provider_options(gpu)
+            log.debug("Reranker provider options for %s: %s", gpu, opts[0])
+            providers = [(gpu, opts[0]), "CPUExecutionProvider"]
 
-        try:
-            reranker = TextCrossEncoder(
-                model_name=model, providers=providers, provider_options=opts
-            )
-        except TypeError:
-            # Older fastembed versions don't accept provider_options
-            reranker = TextCrossEncoder(model_name=model, providers=providers)
+        reranker = TextCrossEncoder(model_name=model, providers=providers)
 
         # Verify which provider is actually being used
         _verify_onnx_session_provider(reranker, "reranker")
@@ -1334,12 +1333,18 @@ def _gpu_provider_options(provider: str) -> list[dict]:
             # eliminating kernel launch overhead (~10-20% latency reduction)
             "enable_cuda_graph": "1",
         }
-        # Blackwell (SM 12.0+) benefits from NHWC layout for better tensor core utilization
         cc = caps.get("compute_capability")
         if cc:
             try:
-                if float(cc) >= 12.0:
+                cc_float = float(cc)
+                if cc_float >= 12.0:
+                    # Blackwell (SM 12.0+): NHWC layout for better tensor core utilization
                     opts["prefer_nhwc"] = "1"
+                    # Disable CUDA Graphs on Blackwell — ORT 1.25 + CUDA 13 deadlocks
+                    # when mixing IOBinding with standard session.run() after graph capture.
+                    # Re-enable when ORT ships Blackwell-validated CUDA Graph support.
+                    del opts["enable_cuda_graph"]
+                    log.info("Blackwell GPU (SM %.1f): disabled CUDA Graphs (ORT compat)", cc_float)
             except ValueError:
                 pass
         log.debug("CUDA provider options: %s", opts)
