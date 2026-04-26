@@ -1,3 +1,20 @@
+# CRITICAL: GPU Enforcement Rule
+
+**ALL operations that CAN run on GPU MUST be offloaded to GPU.** This is non-negotiable.
+
+- FORBIDDEN to use CPU for GPU-capable workloads (embedding, reranking, inference)
+- FORBIDDEN to hog CPU and memory — causes device crash, kernel panic, and lagging
+- ONNX Runtime MUST use GPU providers: CUDA > TensorRT > other GPU > CPU (absolute last resort)
+- Minimize CPU and memory footprint for all Python services
+- CPU is acceptable ONLY for inherently CPU-bound tasks:
+  - tree-sitter AST parsing (single-threaded C library, no GPU path)
+  - Text splitting (pure Python text processing)
+  - Tokenizer counting (HuggingFace tokenizers, Rust CPU)
+  - File I/O and magika detection (I/O bound)
+  - SemanticChunker potion-base-32M (static lookup, sub-ms, faster than GPU launch)
+
+Violating this rule risks device crash and kernel panic.
+
 # opencode-embedder
 
 ## Requirements

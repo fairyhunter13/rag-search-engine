@@ -20,6 +20,14 @@ multiprocessing.freeze_support()
 # This must be set before importing any module that uses tokenizers
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+# Limit CPU thread usage to prevent CPU/memory hogging.
+# ONNX Runtime, MKL, and OpenBLAS each spawn OMP_NUM_THREADS internal threads.
+# Default to 2 to keep total thread count bounded.
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("ORT_NUM_THREADS", "2")
+
 # HuggingFace Hub: disable XetHub-backed downloads by default.
 # This improves reliability on some networks and avoids CAS/Xet-specific failures.
 # Users can override by explicitly setting HF_HUB_DISABLE_XET=0.
