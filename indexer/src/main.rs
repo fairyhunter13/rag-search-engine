@@ -14,39 +14,39 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// which is too late when set via std::env::set_var.
 #[cfg(not(target_env = "msvc"))]
 #[unsafe(export_name = "_rjem_malloc_conf")]
-pub static JEMALLOC_CONF: &[u8] = b"background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:5000\0";
+pub static JEMALLOC_CONF: &[u8] = b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:500\0";
 
 // Limit thread pools to prevent excessive thread creation.
 // LanceDB creates its own multi-threaded tokio runtime, so we need to cap all thread pools
 // BEFORE any runtime starts (env vars only work if set before runtime initialization).
 fn limit_thread_pools() {
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     // SAFETY: Setting env vars is safe when done before spawning threads.
     // We call this at program start before any async runtime is created.
     unsafe {
         if std::env::var("TOKIO_WORKER_THREADS").is_err() {
-            std::env::set_var("TOKIO_WORKER_THREADS", "4");
+            let workers = (num_cpus / 4).max(2);
+            std::env::set_var("TOKIO_WORKER_THREADS", workers.to_string());
         }
         if std::env::var("RAYON_NUM_THREADS").is_err() {
-            // Dynamic rayon threads: max(2, available_cpus / 2) so a laptop with 8 cores
-            // uses 4 rayon threads, 4-core uses 2. Override via OPENCODE_SEARCH_RAYON_THREADS.
-            let num_cpus = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4);
+            // Dynamic rayon threads: max(1, available_cpus / 4). Override via OPENCODE_SEARCH_RAYON_THREADS.
             let rayon_threads = std::env::var("OPENCODE_SEARCH_RAYON_THREADS")
                 .ok()
                 .and_then(|v| v.trim().parse::<usize>().ok())
                 .filter(|&n| n > 0)
-                .unwrap_or_else(|| (num_cpus / 2).max(2));
+                .unwrap_or_else(|| (num_cpus / 4).max(1));
             std::env::set_var("RAYON_NUM_THREADS", rayon_threads.to_string());
         }
         if std::env::var("OMP_NUM_THREADS").is_err() {
-            std::env::set_var("OMP_NUM_THREADS", "2");
+            std::env::set_var("OMP_NUM_THREADS", (num_cpus / 4).max(1).to_string());
         }
         if std::env::var("MKL_NUM_THREADS").is_err() {
-            std::env::set_var("MKL_NUM_THREADS", "2");
+            std::env::set_var("MKL_NUM_THREADS", (num_cpus / 4).max(1).to_string());
         }
         if std::env::var("OPENBLAS_NUM_THREADS").is_err() {
-            std::env::set_var("OPENBLAS_NUM_THREADS", "2");
+            std::env::set_var("OPENBLAS_NUM_THREADS", (num_cpus / 4).max(1).to_string());
         }
     }
 }

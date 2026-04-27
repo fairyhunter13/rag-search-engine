@@ -21,7 +21,7 @@
 /// Cosine similarity score in range [-1.0, 1.0]
 #[inline]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len(), "vectors must have same length");
+    assert_eq!(a.len(), b.len(), "vectors must have same length");
 
     // Runtime CPU feature detection for x86_64
     #[cfg(target_arch = "x86_64")]

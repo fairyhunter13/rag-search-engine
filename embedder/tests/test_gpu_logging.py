@@ -205,8 +205,8 @@ def test_onnx_providers_detection():
     if providers is not None:
         assert isinstance(providers, list)
         assert all(isinstance(p, str) for p in providers)
-        # Should always include CPU as fallback if list is returned
-        assert "CPUExecutionProvider" in providers or len(providers) == 0
+        # GPU-only: no CPUExecutionProvider in provider list
+        assert "CPUExecutionProvider" not in providers
 
 
 def test_provider_env_override(monkeypatch):
@@ -217,12 +217,18 @@ def test_provider_env_override(monkeypatch):
     embeddings._detected_providers = None
     embeddings._provider_detection_done = False
 
-    # Set env var to force CPU
+    # "cpu" is no longer in the provider_map (GPU-only enforcement).
+    # Unknown shortcuts fall through to auto-detection.
     monkeypatch.setenv("OPENCODE_ONNX_PROVIDER", "cpu")
+    monkeypatch.delenv("OPENCODE_GPU_REQUIRED", raising=False)
 
-    providers = embeddings._get_onnx_providers()
+    try:
+        providers = embeddings._get_onnx_providers()
+    except RuntimeError:
+        providers = None  # no GPU in test env
 
-    assert providers == ["CPUExecutionProvider"]
+    # Falls through to auto-detection: returns GPU providers (not CPU)
+    assert providers is None or "CPUExecutionProvider" not in (providers or [])
 
     # Clean up
     embeddings._detected_providers = None
@@ -230,18 +236,22 @@ def test_provider_env_override(monkeypatch):
 
 
 def test_provider_env_override_invalid(monkeypatch, caplog):
-    """Test that invalid OPENCODE_ONNX_PROVIDER logs warning."""
+    """Test that invalid OPENCODE_ONNX_PROVIDER logs warning and falls through to detection."""
     from opencode_embedder import embeddings
 
     # Reset cached detection
     embeddings._detected_providers = None
     embeddings._provider_detection_done = False
 
-    # Set invalid env var
+    # Set invalid env var; disable GPU_REQUIRED so auto-detection can proceed without raising
     monkeypatch.setenv("OPENCODE_ONNX_PROVIDER", "invalid_provider")
+    monkeypatch.delenv("OPENCODE_GPU_REQUIRED", raising=False)
 
     with caplog.at_level(logging.WARNING, logger="opencode_embedder.embeddings"):
-        embeddings._get_onnx_providers()
+        try:
+            embeddings._get_onnx_providers()
+        except RuntimeError:
+            pass  # GPU enforcement may raise on CI without GPU
 
     assert "unknown" in caplog.text.lower() or "invalid" in caplog.text.lower()
 
@@ -279,7 +289,7 @@ def test_tensorrt_provider_env_override(monkeypatch):
     assert providers is not None
     assert "TensorrtExecutionProvider" in providers
     assert "CUDAExecutionProvider" in providers
-    assert "CPUExecutionProvider" in providers
+    assert "CPUExecutionProvider" not in providers  # GPU-only: no CPU fallback
     # TensorRT must be first (highest priority)
     assert providers[0] == "TensorrtExecutionProvider"
 
@@ -313,7 +323,6 @@ def test_tensorrt_is_gpu_provider():
     embeddings._get_onnx_providers = lambda: [
         "TensorrtExecutionProvider",
         "CUDAExecutionProvider",
-        "CPUExecutionProvider",
     ]
 
     result = embeddings.is_gpu_available()

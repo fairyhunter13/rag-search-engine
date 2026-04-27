@@ -33,6 +33,28 @@ os.environ.setdefault("ORT_NUM_THREADS", "2")
 # Users can override by explicitly setting HF_HUB_DISABLE_XET=0.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
+# Load GPU configuration from ~/.config/opencode/gpu.conf if it exists.
+# This allows persistent GPU provider selection across restarts.
+# Format: bash-style exports (e.g., export OPENCODE_ONNX_PROVIDER=cuda)
+_gpu_conf_path = os.path.expanduser("~/.config/opencode/gpu.conf")
+if os.path.exists(_gpu_conf_path):
+    try:
+        with open(_gpu_conf_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Parse "export KEY=VALUE" format
+                if line.startswith("export "):
+                    line = line[7:]  # Remove "export " prefix
+                if "=" in line:
+                    key, val = line.split("=", 1)
+                    key = key.strip()
+                    val = val.strip().strip("'\"")
+                    os.environ.setdefault(key, val)
+    except Exception:
+        pass  # Silently ignore if file is malformed or unreadable
+
 
 def _version() -> str:
     try:
@@ -50,24 +72,34 @@ if __name__ == "__main__":
 
     if "--check-gpu" in sys.argv:
         # Check GPU provider availability and test if it actually works
-        from opencode_embedder.embeddings import _get_onnx_providers
-        import onnxruntime as ort
+        from opencode_embedder.embeddings import _get_onnx_providers, _onnx_available_providers
 
-        available = ort.get_available_providers()
-        print(f"Available ONNX providers: {available}")
+        available = _onnx_available_providers()
+        print(f"Available ONNX providers : {available}")
 
         providers = _get_onnx_providers()
         if providers:
-            print(f"Selected providers: {providers}")
-            if "ROCMExecutionProvider" in providers:
-                print("ROCMExecutionProvider: working")
-            elif "CUDAExecutionProvider" in providers:
-                print("CUDAExecutionProvider: working")
+            gpu_set = {
+                "TensorrtExecutionProvider", "CUDAExecutionProvider",
+                "ROCMExecutionProvider", "MIGraphXExecutionProvider",
+                "DirectMLExecutionProvider", "CoreMLExecutionProvider",
+            }
+            active_gpu = [p for p in providers if p in gpu_set]
+            print(f"Selected providers       : {providers}")
+            print(f"Active GPU providers     : {active_gpu or ['(none u2014 CPU only)']}")  
+            if active_gpu:
+                print(f"Status                   : GPU OK u2014 {active_gpu[0]}")
             else:
-                print(f"Using: {providers[0]}")
+                print("Status                   : WARNING u2014 CPU only (no GPU provider active)")
         else:
-            print("No GPU provider available, using CPU")
-        raise SystemExit(0)
+            print("Selected providers       : (none u2014 ONNX defaults)")
+            print("Status                   : WARNING u2014 CPU only")
+        raise SystemExit(0 if (providers and any(
+            p in {"TensorrtExecutionProvider","CUDAExecutionProvider",
+                  "ROCMExecutionProvider","MIGraphXExecutionProvider",
+                  "DirectMLExecutionProvider","CoreMLExecutionProvider"}
+            for p in providers
+        )) else 1)
 
     if "--help" in sys.argv or "-h" in sys.argv:
         print(
@@ -87,6 +119,14 @@ Options:
 Environment variables:
     OPENCODE_EMBED_WORKERS=N            Set number of embed workers (same as --workers)
     OPENCODE_EMBED_IDLE_SHUTDOWN=N      Set idle shutdown timeout (same as --idle-shutdown)
+    OPENCODE_GPU_REQUIRED=1             Fail fast at startup if no GPU provider works; no CPU fallback
+    OPENCODE_ONNX_PROVIDER=cuda         Force a specific provider (cuda, rocm, cpu, ...)
+    OPENCODE_DISABLE_TENSORRT=1         Skip TensorRT (use for RTX 5080 / Blackwell)
+    CUDA_VISIBLE_DEVICES=0              Which GPU to use (default: 0)
+
+Exit codes (--check-gpu):
+    0  GPU provider found and working
+    1  No GPU provider available
 """
         )
         raise SystemExit(0)
@@ -125,6 +165,12 @@ Environment variables:
         else:
             print("Error: --idle-shutdown requires a number argument", file=sys.stderr)
             raise SystemExit(1)
+
+    # Fail fast: assert GPU is available before spawning workers.
+    # When OPENCODE_GPU_REQUIRED=1 this raises GPUNotAvailableError immediately
+    # with a clear diagnostic instead of silently degrading to CPU.
+    from opencode_embedder.embeddings import assert_gpu_available
+    assert_gpu_available()
 
     from opencode_embedder.server import run_server
 

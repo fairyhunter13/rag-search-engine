@@ -119,6 +119,10 @@ async def test_server_chunk_file_roundtrip(monkeypatch: pytest.MonkeyPatch):
         file = Path(tmp) / "hello.txt"
         file.write_text("hello\nworld\n", encoding="utf-8")
 
+        # CWD must include the file's directory so path validation passes
+        original_cwd = os.getcwd()
+        os.chdir(tmp)
+
         srv = ModelServer(embed_workers=1)
         task = asyncio.create_task(srv.serve())
 
@@ -137,6 +141,7 @@ async def test_server_chunk_file_roundtrip(monkeypatch: pytest.MonkeyPatch):
             assert "chunks" in data["result"]
             assert isinstance(data["result"]["chunks"], list)
         finally:
+            os.chdir(original_cwd)
             srv._shutdown.set()
             await task
 
@@ -432,3 +437,120 @@ async def test_concurrent_http_requests(monkeypatch: pytest.MonkeyPatch):
     finally:
         srv._shutdown.set()
         await task
+
+
+# ---------------------------------------------------------------------------
+# Path traversal rejection tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chunk_path_traversal_rejected(monkeypatch: pytest.MonkeyPatch):
+    """Path traversal via 'file' param must be rejected, not silently succeed."""
+    port = free_port()
+    monkeypatch.setenv("OPENCODE_EMBED_HTTP_PORT", str(port))
+
+    srv = ModelServer(embed_workers=1)
+    task = asyncio.create_task(srv.serve())
+
+    base = f"http://127.0.0.1:{port}"
+    assert await _wait_ready(f"{base}/health"), "Server should start within 20 seconds"
+
+    traversal_paths = [
+        "/etc/passwd",
+        "/etc/shadow",
+        "/root/.ssh/id_rsa",
+        "/../../../etc/passwd",
+    ]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            for evil_path in traversal_paths:
+                async with session.post(
+                    f"{base}/embed/chunk",
+                    json={"file": evil_path, "path": "evil.txt", "tier": "budget"},
+                ) as resp:
+                    # Must NOT return 200 with empty content u2014 must be an error status
+                    assert resp.status in (400, 403, 500), (
+                        f"Path traversal '{evil_path}' returned {resp.status}, "
+                        f"expected 4xx/5xx error"
+                    )
+                    data = await resp.json()
+                    # Must contain error key, not a result with empty chunks
+                    assert "error" in data, (
+                        f"Path traversal '{evil_path}' returned result instead of error: {data}"
+                    )
+    finally:
+        srv._shutdown.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_chunk_path_traversal_prefix_attack_rejected(monkeypatch: pytest.MonkeyPatch):
+    """Prefix-adjacent paths (e.g. ~/.opencode_evil) must not match ~/.opencode."""
+    port = free_port()
+    monkeypatch.setenv("OPENCODE_EMBED_HTTP_PORT", str(port))
+
+    srv = ModelServer(embed_workers=1)
+    task = asyncio.create_task(srv.serve())
+
+    base = f"http://127.0.0.1:{port}"
+    assert await _wait_ready(f"{base}/health"), "Server should start within 20 seconds"
+
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as tmp:
+        evil_file = Path(tmp) / "secret.txt"
+        evil_file.write_text("secret")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base}/embed/chunk",
+                    json={"file": str(evil_file), "path": "evil.txt", "tier": "budget"},
+                ) as resp:
+                    assert resp.status in (400, 403, 500), (
+                        f"Path outside allowed dirs returned {resp.status}, expected error"
+                    )
+                    data = await resp.json()
+                    assert "error" in data
+        finally:
+            srv._shutdown.set()
+            await task
+
+
+@pytest.mark.asyncio
+async def test_chunk_file_within_cwd_allowed(monkeypatch: pytest.MonkeyPatch):
+    """Files within CWD must still be readable (regression guard)."""
+    port = free_port()
+    monkeypatch.setenv("OPENCODE_EMBED_HTTP_PORT", str(port))
+
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as tmp:
+        original_cwd = os.getcwd()
+        os.chdir(tmp)
+
+        file = Path(tmp) / "hello.txt"
+        file.write_text("hello world", encoding="utf-8")
+
+        srv = ModelServer(embed_workers=1)
+        task = asyncio.create_task(srv.serve())
+
+        base = f"http://127.0.0.1:{port}"
+        assert await _wait_ready(f"{base}/health"), "Server should start within 20 seconds"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base}/embed/chunk",
+                    json={"file": str(file), "path": "hello.txt", "tier": "budget"},
+                ) as resp:
+                    assert resp.status == 200, (
+                        f"File within CWD should be readable, got {resp.status}"
+                    )
+                    data = await resp.json()
+                    assert "result" in data
+                    assert "chunks" in data["result"]
+        finally:
+            os.chdir(original_cwd)
+            srv._shutdown.set()
+            await task

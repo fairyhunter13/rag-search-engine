@@ -49,7 +49,7 @@ pub(crate) fn global_file_semaphore() -> &'static Arc<Semaphore> {
         let max = std::env::var("OPENCODE_INDEXER_MAX_CONCURRENT_FILES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(16);
+            .unwrap_or(8);
         Arc::new(Semaphore::new(max))
     })
 }
@@ -106,7 +106,7 @@ impl WorkerPool {
             
             let handle = tokio::spawn(async move {
                 // Per-worker concurrency limit for file processing
-                let file_semaphore = Arc::new(Semaphore::new(4));
+                let file_semaphore = Arc::new(Semaphore::new(2));
                 
                 loop {
                     // Wait for work or shutdown

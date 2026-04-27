@@ -992,12 +992,14 @@ async fn update_file_partial(
         }));
     }
 
-    let mut new_chunks: Vec<(String, i32, String, i32, i32)> = Vec::new();
+    // Fix 2: use Arc<String> so content is shared across new_chunks / to_add / to_embed
+    // without triple-cloning the full string bytes.
+    let mut new_chunks: Vec<(String, i32, std::sync::Arc<String>, i32, i32)> = Vec::new();
     for (i, chunk) in chunks.iter().enumerate() {
         new_chunks.push((
             storage::hash_content(&chunk.content),
             i as i32,
-            chunk.content.clone(),
+            std::sync::Arc::new(chunk.content.clone()),
             chunk.start_line,
             chunk.end_line,
         ));
@@ -1014,7 +1016,8 @@ async fn update_file_partial(
         }
     }
 
-    let mut hash_to_new: HashMap<String, (i32, i32, i32)> = HashMap::new();
+    // Fix 1: pre-allocate HashMap to avoid rehashing as entries are inserted.
+    let mut hash_to_new: HashMap<String, (i32, i32, i32)> = HashMap::with_capacity(new_chunks.len());
     for (h, pos, _content, start, end) in &new_chunks {
         hash_to_new.insert(h.clone(), (*pos, *start, *end));
     }
@@ -1042,9 +1045,11 @@ async fn update_file_partial(
         }
     }
 
-    let mut to_add = Vec::new();
-    let mut to_embed = Vec::new();
-    let mut embed_targets = Vec::new();
+    // Fix 3: pre-allocate with capacity; store Arc<String> in to_add so the
+    // string bytes are shared rather than cloned a second time into the slot.
+    let mut to_add = Vec::with_capacity(hashes_to_insert.len());
+    let mut to_embed: Vec<String> = Vec::with_capacity(hashes_to_insert.len());
+    let mut embed_targets: Vec<usize> = Vec::with_capacity(hashes_to_insert.len());
 
     for (hash, position, content, start, end) in &new_chunks {
         if !hashes_to_insert.contains(hash) {
@@ -1053,16 +1058,18 @@ async fn update_file_partial(
 
         let existing = storage.find_by_content_hash(hash).await?;
         let idx = to_add.len();
+        // Arc::clone is a cheap reference-count increment, not a string copy.
         to_add.push((
             hash.clone(),
             *position,
-            content.clone(),
+            std::sync::Arc::clone(content),
             *start,
             *end,
             existing,
         ));
         if to_add[idx].5.is_none() {
-            to_embed.push(content.clone());
+            // One String clone here is unavoidable: embed_batched takes &[String].
+            to_embed.push((**content).clone());
             embed_targets.push(idx);
         }
     }
@@ -1095,9 +1102,14 @@ async fn update_file_partial(
         let Some(vector) = vector else {
             continue;
         };
+        // Arc::try_unwrap returns the inner String for free when this is the
+        // last reference (common case); falls back to a clone only if another
+        // Arc reference still exists.
+        let content_str = std::sync::Arc::try_unwrap(content)
+            .unwrap_or_else(|arc| (*arc).clone());
         data.push(ChunkData {
             position,
-            content,
+            content: content_str,
             start_line: start,
             end_line: end,
             vector,
@@ -1315,14 +1327,16 @@ async fn run_indexing(
     let stored = std::sync::Arc::new(stored_hashes);
     let files = discovery.files.clone();
     let root = root.to_path_buf();
-    let include_dirs = include_dirs.clone();
+    // Fix 4: wrap include_dirs in Arc before the loop so each task clones a
+    // cheap pointer (8 bytes) instead of the full Vec<PathBuf> on every iteration.
+    let include_dirs = std::sync::Arc::new(include_dirs);
     let mut futs = FuturesUnordered::new();
 
     for file in files {
         let sem = sem.clone();
         let stored = stored.clone();
         let root = root.clone();
-        let include_dirs = include_dirs.clone();
+        let include_dirs = std::sync::Arc::clone(&include_dirs);
         futs.push(async move {
             let _permit = sem.acquire_owned().await.ok();
             tokio::task::spawn_blocking(move || {
