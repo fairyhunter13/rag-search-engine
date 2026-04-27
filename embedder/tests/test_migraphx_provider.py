@@ -63,7 +63,7 @@ def test_migraphx_provider_env_override(monkeypatch):
 
     providers = embeddings._get_onnx_providers()
 
-    assert providers == ["MIGraphXExecutionProvider", "CPUExecutionProvider"]
+    assert providers == ["MIGraphXExecutionProvider"]  # GPU-only: no CPU fallback
 
     # Clean up
     embeddings._detected_providers = None

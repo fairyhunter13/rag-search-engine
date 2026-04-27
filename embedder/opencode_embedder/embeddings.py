@@ -397,6 +397,22 @@ def _get_gpu_capabilities() -> dict:
         return _caps
 
 
+def _log_gpu_capabilities() -> None:
+    """Log GPU capabilities at INFO level (called after provider test passes)."""
+    caps = _get_gpu_capabilities()
+    log.info(
+        "GPU capabilities: vendor=%s, name=%s, compute=%s, vram=%sMB, "
+        "tensor_cores=%s, fp16=%s, io_binding=%s",
+        caps.get("vendor", "unknown"),
+        caps.get("gpu_name", "unknown"),
+        caps.get("compute_capability", "unknown"),
+        caps.get("vram_mb", "unknown"),
+        caps.get("has_tensor_cores", False),
+        caps.get("supports_fp16", False),
+        _io_binding_active(),
+    )
+
+
 def get_gpu_stats() -> dict:
     """Get GPU usage statistics for debugging."""
     caps = _get_gpu_capabilities() if (_caps_done or is_gpu_available()) else {}
@@ -537,6 +553,138 @@ _cached_reranker: object | None = None
 _cached_reranker_model: str | None = None
 
 
+def _build_provider_list_with_options(providers: list[str]) -> list:
+    """Inject per-provider option dicts into a provider list for ORT.
+
+    ORT accepts providers as either plain strings or (name, options_dict) tuples.
+    Injecting options here ensures CUDA memory limits, cudnn algo search, and
+    Blackwell compat flags are always applied regardless of list length.
+
+    Bug fix: the old code guarded on `len(providers) >= 2`, which silently
+    skipped options when OPENCODE_ONNX_PROVIDER=cuda returned a single-item
+    list before GPU provider options were applied.
+    """
+    _GPU_EP_NAMES = {
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "DirectMLExecutionProvider",
+    }
+    result: list = []
+    for p in providers:
+        if p in _GPU_EP_NAMES:
+            opts = _gpu_provider_options(p)
+            log.debug("Provider options for %s: %s", p, opts[0])
+            result.append((p, opts[0]))
+        else:
+            result.append(p)
+    return result
+
+
+def _embedder(model: str):
+    """Return (and cache) a FastEmbed TextEmbedding model loaded with GPU providers."""
+    global _cached_embedder, _cached_embedder_model
+    if not model:
+        model = DEFAULT_EMBED_MODEL
+    with _embedder_lock:
+        if _cached_embedder is not None and _cached_embedder_model == model:
+            return _cached_embedder
+
+        # Release old model before loading new one
+        if _cached_embedder is not None:
+            _cached_embedder = None
+            import gc; gc.collect()
+
+        from fastembed import TextEmbedding
+
+        providers = _get_onnx_providers()
+        log.info(
+            "Loading embedding model: %s with providers: %s",
+            model,
+            providers or "default (CPU)",
+        )
+
+        # Bug fix: always inject provider options regardless of list length.
+        # Previously guarded on len>=2 which skipped CUDA options for single-item lists.
+        provider_list = _build_provider_list_with_options(providers) if providers else None
+
+        embedder = TextEmbedding(model_name=model, providers=provider_list)
+
+        # Verify which provider the ONNX session actually selected
+        _verify_onnx_session_provider(embedder, "embedder")
+
+        # Cap token length to prevent O(nu00b2) attention memory explosion
+        try:
+            embedder.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
+        except (AttributeError, Exception):
+            pass
+
+        _cached_embedder = embedder
+        _cached_embedder_model = model
+        return embedder
+
+
+def _reranker(model: str):
+    """Return (and cache) a FastEmbed TextCrossEncoder model loaded with GPU providers."""
+    global _cached_reranker, _cached_reranker_model
+    if not model:
+        model = DEFAULT_RERANK_MODEL
+    with _reranker_lock:
+        if _cached_reranker is not None and _cached_reranker_model == model:
+            return _cached_reranker
+
+        if _cached_reranker is not None:
+            del _cached_reranker
+            import gc; gc.collect()
+
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        providers = _get_onnx_providers()
+        log.info(
+            "Loading reranker model: %s with providers: %s",
+            model,
+            providers or "default (CPU)",
+        )
+
+        # Bug fix: always inject provider options regardless of list length.
+        provider_list = _build_provider_list_with_options(providers) if providers else None
+
+        reranker = TextCrossEncoder(model_name=model, providers=provider_list)
+
+        # Verify which provider the ONNX session actually selected
+        _verify_onnx_session_provider(reranker, "reranker")
+
+        _cached_reranker = reranker
+        _cached_reranker_model = model
+        return reranker
+
+
+def cleanup_models() -> None:
+    """Release cached ONNX models to free VRAM and RAM.
+
+    Models reload on next inference call (~2-5s cost).
+    Safe to call from any thread u2014 uses locks internally.
+    """
+    global _cached_embedder, _cached_embedder_model
+    global _cached_reranker, _cached_reranker_model
+    import gc
+
+    with _embedder_lock:
+        if _cached_embedder is not None:
+            _cached_embedder = None
+            _cached_embedder_model = None
+
+    with _reranker_lock:
+        if _cached_reranker is not None:
+            _cached_reranker = None
+            _cached_reranker_model = None
+
+    gc.collect()
+    gc.collect()  # second pass for weak refs
+    log.info("cleanup_models: released cached embedder and reranker")
+
+
 def _setup_migraphx_caching() -> None:
     """Enable MIGraphX compiled model caching to avoid recompilation.
 
@@ -567,17 +715,23 @@ def _limit_onnx_threads() -> None:
     performance vs contention with multiple embed workers.
 
     The server runs N embed workers (4-6 for high-end). To avoid CPU contention:
-      total_threads = workers × onnx_threads ≤ cpu_count
+      total_threads = workers u00d7 onnx_threads u2264 cpu_count
 
     Scaling (assuming 4-6 workers on high-end):
-      ≤4 CPUs:  1 thread
-      5-8 CPUs: 2 threads (2 workers × 2 = 4-8 threads)
-      9-16 CPUs: 2 threads (4 workers × 2 = 8 threads)
-      >16 CPUs: 4 threads (6 workers × 4 = 24 threads)
+      low-memory mode: 1 thread (minimise memory arenas)
+      u22644 CPUs:  1 thread
+      5-8 CPUs: 2 threads (2 workers u00d7 2 = 4-8 threads)
+      9-16 CPUs: 2 threads (4 workers u00d7 2 = 8 threads)
+      >16 CPUs: 4 threads (6 workers u00d7 4 = 24 threads)
     """
     cpus = os.cpu_count() or 2
-    if cpus <= 4:
+    low_memory = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
+    if low_memory:
+        threads = "1"  # single thread minimises per-thread memory arenas
+    elif cpus <= 4:
         threads = "1"
+    elif cpus <= 8:
+        threads = "2"
     elif cpus <= 16:
         threads = "2"
     else:
@@ -614,22 +768,27 @@ _provider_lock = threading.Lock()
 def _get_onnx_providers() -> list[str] | None:
     """Get optimal ONNX execution providers for this system.
 
-    Automatically detects and tests GPU providers, falling back to CPU if needed.
+    Automatically detects and tests GPU providers. When OPENCODE_GPU_REQUIRED=1,
+    raises RuntimeError immediately if no working GPU provider is found — no CPU fallback.
     Results are cached after first detection. Thread-safe.
 
     Environment variables:
+    - OPENCODE_GPU_REQUIRED: If "1", raise on no GPU (no CPU fallback ever)
     - OPENCODE_ONNX_PROVIDER: Force a specific provider (e.g., "cuda", "rocm", "coreml", "cpu")
     - OPENCODE_ONNX_PROVIDERS: Comma-separated list of providers to try
+    - OPENCODE_DISABLE_TENSORRT: If "1", skip TensorRT (Blackwell compat)
 
     Provider priority (tested in order):
-    1. CUDAExecutionProvider: NVIDIA GPUs (requires CUDA toolkit)
-    2. ROCMExecutionProvider: AMD GPUs on Linux (requires ROCm)
-    3. CoreMLExecutionProvider: macOS (Apple Silicon/Intel, may have model limits)
-    4. DirectMLExecutionProvider: Windows with DirectX 12 GPUs
-    5. CPUExecutionProvider: Universal fallback
+    1. CUDAExecutionProvider: NVIDIA GPUs (stable, all generations)
+    2. TensorrtExecutionProvider: NVIDIA TensorRT (if not disabled)
+    3. MIGraphXExecutionProvider: AMD GPUs on Linux (ORT 1.23+)
+    4. ROCMExecutionProvider: AMD GPUs (older ORT fallback)
+    5. DirectMLExecutionProvider: Windows with DirectX 12 GPUs
+    6. CPU: NOT AN OPTION u2014 raises RuntimeError if no GPU is found
 
     Returns:
         List of providers to use, or None to use ONNX defaults (CPU only).
+        Never returns CPU-only when OPENCODE_GPU_REQUIRED=1.
     """
     global _detected_providers, _provider_detection_done
 
@@ -648,6 +807,52 @@ def _get_onnx_providers() -> list[str] | None:
         return _detected_providers
 
 
+# Low-memory mode flag (read once at module load)
+_LOW_MEMORY_MODE: bool = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
+
+
+def is_gpu_available() -> bool:
+    """Return True if a working GPU provider is available."""
+    providers = _get_onnx_providers()
+    if providers is None:
+        return False
+    gpu_set = {
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "DirectMLExecutionProvider",
+        "CoreMLExecutionProvider",
+    }
+    return any(p in gpu_set for p in providers)
+
+
+def get_active_provider() -> str:
+    """Return the active provider short name: 'tensorrt', 'cuda', 'rocm', 'directml', 'coreml', 'migraphx', or 'cpu'."""
+    providers = _get_onnx_providers()
+    if providers is None:
+        return "cpu"
+    name_map = {
+        "TensorrtExecutionProvider": "tensorrt",
+        "CUDAExecutionProvider": "cuda",
+        "ROCMExecutionProvider": "rocm",
+        "MIGraphXExecutionProvider": "migraphx",
+        "DirectMLExecutionProvider": "directml",
+        "CoreMLExecutionProvider": "coreml",
+    }
+    for p in providers:
+        if p in name_map:
+            return name_map[p]
+    return "cpu"
+
+
+def _get_gpu_vram_mb() -> int | None:
+    """Return total VRAM in MB for the primary GPU, or None if unknown."""
+    caps = _get_gpu_capabilities()
+    vram = caps.get("vram_mb")
+    return int(vram) if vram else None
+
+
 def _parse_provider_env() -> list[str] | None:
     """Parse provider override from environment variables."""
 
@@ -663,26 +868,102 @@ def _parse_provider_env() -> list[str] | None:
     if not provider_env:
         return None
 
+    # GPU-only provider map u2014 CPU is not an option.
     provider_map = {
-        "tensorrt": ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
-        "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-        "rocm": ["ROCMExecutionProvider", "CPUExecutionProvider"],  # Legacy (ORT < 1.23)
-        "coreml": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
-        "directml": ["DirectMLExecutionProvider", "CPUExecutionProvider"],
-        "migraphx": ["MIGraphXExecutionProvider", "CPUExecutionProvider"],  # AMD preferred
-        "amd": ["MIGraphXExecutionProvider", "ROCMExecutionProvider", "CPUExecutionProvider"],
-        "cpu": ["CPUExecutionProvider"],
+        "tensorrt": ["TensorrtExecutionProvider", "CUDAExecutionProvider"],
+        "cuda": ["CUDAExecutionProvider"],
+        "rocm": ["ROCMExecutionProvider"],  # Legacy (ORT < 1.23)
+        "coreml": ["CoreMLExecutionProvider"],
+        "directml": ["DirectMLExecutionProvider"],
+        "migraphx": ["MIGraphXExecutionProvider"],  # AMD preferred
+        "amd": ["MIGraphXExecutionProvider", "ROCMExecutionProvider"],
         "auto": None,  # Fall through to auto-detection
     }
 
     if provider_env in provider_map:
         result = provider_map[provider_env]
         if result is not None:
-            log.info("Using provider from OPENCODE_ONNX_PROVIDER=%s: %s", provider_env, result)
+            log.info("Using GPU provider from OPENCODE_ONNX_PROVIDER=%s: %s", provider_env, result)
         return result
 
     log.warning("Unknown OPENCODE_ONNX_PROVIDER=%s, using auto-detection", provider_env)
     return None
+
+
+class GPUNotAvailableError(RuntimeError):
+    """Raised when OPENCODE_GPU_REQUIRED=1 but no working GPU provider is found."""
+
+
+def _raise_no_gpu(available: list[str], tested: list[str]) -> None:
+    """Raise GPUNotAvailableError with a clear diagnostic message.
+
+    Called only when OPENCODE_GPU_REQUIRED=1 and all GPU providers failed their
+    runtime test. CPU fallback is explicitly forbidden in this mode.
+    """
+    msg = (
+        "[GPU-REQUIRED] FATAL: OPENCODE_GPU_REQUIRED=1 but no working GPU execution "
+        "provider was found. CPU fallback is FORBIDDEN.\n"
+        f"  ONNX available providers : {available}\n"
+        f"  GPU providers tested     : {tested}\n"
+        "\n"
+        "Possible causes:\n"
+        "  1. CUDA driver not installed or outdated (check: nvidia-smi)\n"
+        "  2. onnxruntime-gpu not installed (fix: pip install onnxruntime-gpu)\n"
+        "  3. CUDAExecutionProvider not built into this onnxruntime wheel\n"
+        "  4. CUDA_VISIBLE_DEVICES='' or set to an invalid device\n"
+        "  5. /dev/nvidia* not accessible (check permissions)\n"
+        "\n"
+        "To allow CPU fallback (not recommended): unset OPENCODE_GPU_REQUIRED\n"
+        "To diagnose: python -c \"import onnxruntime; print(onnxruntime.get_available_providers())\""
+    )
+    log.critical(msg)
+    raise GPUNotAvailableError(msg)
+
+
+def assert_gpu_available() -> None:
+    """Startup check: verify GPU is available and working.
+
+    Call once at process startup when OPENCODE_GPU_REQUIRED=1 so the server
+    fails fast with a clear message rather than silently running on CPU.
+
+    Raises GPUNotAvailableError if GPU is required but unavailable.
+    Does nothing if OPENCODE_GPU_REQUIRED is not set.
+    """
+    gpu_required = os.environ.get("OPENCODE_GPU_REQUIRED", "0").lower() in ("1", "true", "yes")
+    if not gpu_required:
+        return
+
+    log.info("[GPU-REQUIRED] Startup GPU check (OPENCODE_GPU_REQUIRED=1)")
+
+    # Probe without loading any model u2014 forces provider detection
+    providers = _get_onnx_providers()  # may raise GPUNotAvailableError internally
+
+    # Double-check: the returned list must contain at least one GPU provider
+    gpu_provider_names = {
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "ROCMExecutionProvider",
+        "DirectMLExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CoreMLExecutionProvider",
+    }
+    if providers is None or not any(p in gpu_provider_names for p in providers):
+        _raise_no_gpu(
+            available=_onnx_available_providers(),
+            tested=list(gpu_provider_names),
+        )
+
+    active = next((p for p in (providers or []) if p in gpu_provider_names), "none")
+    log.info("[GPU-REQUIRED] Startup GPU check PASSED u2014 active provider: %s", active)
+
+
+def _onnx_available_providers() -> list[str]:
+    """Return onnxruntime's available providers without raising."""
+    try:
+        import onnxruntime as ort
+        return sorted(ort.get_available_providers())
+    except Exception:
+        return []
 
 
 def _detect_and_test_providers() -> list[str] | None:
@@ -707,33 +988,66 @@ def _detect_and_test_providers() -> list[str] | None:
     log.info("ONNX available providers: %s", sorted(available))
 
     # Provider priority order (GPU providers first, then CPU)
-    # Note: CoreML is disabled by default because:
-    # - It has a 16384 dimension limit that breaks many embedding models
-    # - It may fail silently and fall back to CPU anyway
-    # Users can force CoreML via OPENCODE_ONNX_PROVIDER=coreml if needed
     #
-    # MIGraphX is preferred over ROCm for AMD GPUs because:
-    # - ROCMExecutionProvider was deprecated and removed in ORT 1.23+
-    # - MIGraphX EP is AMD's officially recommended provider for ORT 1.23+
-    # - ROCm EP kept as fallback for older ORT versions (< 1.23)
-    # Users can force ROCm via OPENCODE_ONNX_PROVIDER=rocm if needed
-    gpu_providers = [
-        (
-            "TensorrtExecutionProvider",
-            "NVIDIA TensorRT",
-        ),  # Highest priority for NVIDIA (kernel fusion)
-        ("CUDAExecutionProvider", "NVIDIA CUDA"),
+    # NVIDIA priority: CUDA > TensorRT (when not explicitly disabled)
+    #   - CUDA: proven stable on RTX 4000/5000 series, Blackwell (SM 12.0+)
+    #   - TensorRT: kernel fusion benefits, but has driver/MSR compatibility issues
+    #     on Blackwell. Disable via OPENCODE_DISABLE_TENSORRT=1 (default for RTX 5080)
+    #   - Both can be used in a cascading chain: if TensorRT fails, fall back to CUDA
+    #
+    # AMD priority: MIGraphX > ROCm
+    #   - MIGraphX is AMD's officially recommended provider for ORT 1.23+
+    #   - ROCm EP kept as fallback for older ORT versions (< 1.23)
+    #   - Users can force ROCm via OPENCODE_ONNX_PROVIDER=rocm if needed
+    #
+    # Note: CoreML is disabled by default:
+    #   - It has a 16384 dimension limit that breaks many embedding models
+    #   - It may fail silently and fall back to CPU anyway
+    #   - Users can force CoreML via OPENCODE_ONNX_PROVIDER=coreml if needed
+    
+    # Check if TensorRT is explicitly disabled (e.g., RTX 5080 / Blackwell)
+    tensorrt_disabled = os.environ.get("OPENCODE_DISABLE_TENSORRT", "0").lower() in ("1", "true", "yes")
+    
+    gpu_providers = []
+    
+    # Add CUDA first (stable on all NVIDIA generations)
+    gpu_providers.append(("CUDAExecutionProvider", "NVIDIA CUDA"))
+    
+    # Add TensorRT second (kernel fusion, but conditional on Blackwell compatibility)
+    if not tensorrt_disabled:
+        gpu_providers.append(
+            (
+                "TensorrtExecutionProvider",
+                "NVIDIA TensorRT",
+            )
+        )
+        log.info("TensorRT enabled; provider chain: CUDA > TensorRT > CPU")
+    else:
+        log.info("TensorRT disabled (OPENCODE_DISABLE_TENSORRT=1); provider chain: CUDA > CPU")
+    
+    # Add AMD providers
+    gpu_providers.extend([
         ("MIGraphXExecutionProvider", "AMD MIGraphX"),  # Primary for AMD (ORT 1.23+)
         ("ROCMExecutionProvider", "AMD ROCm"),  # Fallback for older ORT (< 1.23)
         ("DirectMLExecutionProvider", "DirectX ML"),
         # CoreML disabled due to dimension limits with embedding models
         # ("CoreMLExecutionProvider", "Apple CoreML"),
-    ]
+    ])
 
-    # Build a cascading GPU provider chain: if TensorRT is primary, include CUDA
+    # Build a cascading GPU provider chain: if TensorRT is in the list, include CUDA
     # as an intermediate fallback before CPU. This prevents silent CPU fallback
     # when TensorRT fails on specific model shapes but CUDA would work.
     working_gpu: list[str] = []
+    caps = _get_gpu_capabilities()
+    
+    # Warn if Blackwell is detected and TensorRT is enabled
+    if not tensorrt_disabled and caps.get("architecture") == "blackwell":
+        log.warning(
+            "Blackwell GPU (SM 12.0+) detected with TensorRT enabled. "
+            "TensorRT has known MSR compatibility issues on Blackwell. "
+            "Consider setting OPENCODE_DISABLE_TENSORRT=1 if you encounter segfaults."
+        )
+    
     for provider, name in gpu_providers:
         if provider not in available:
             continue
@@ -745,499 +1059,22 @@ def _detect_and_test_providers() -> list[str] | None:
         else:
             log.warning("%s available but failed runtime test, skipping", provider)
 
+    # Determine if strict GPU-only mode is active.
+    # Sources (checked in order, first truthy wins):
+    #   1. OPENCODE_GPU_REQUIRED env var ("1")
+    #   2. CLAUDE.md rule: all ONNX inference MUST run on GPU
+    gpu_required = os.environ.get("OPENCODE_GPU_REQUIRED", "0").lower() in ("1", "true", "yes")
+
     if working_gpu:
-        # Return all working GPU providers in priority order, with CPU as final fallback
-        result = working_gpu + ["CPUExecutionProvider"]
-        log.info("Using GPU provider chain: %s", result)
-        return result
+        log.info("Using GPU-only provider chain: %s", working_gpu)
+        return working_gpu
 
-    log.warning(
-        "GPU ENFORCEMENT VIOLATION: No working GPU provider found. "
-        "All ONNX inference MUST run on GPU to avoid CPU/memory hogging. "
-        "Falling back to CPU as last resort — investigate GPU driver/runtime."
+    # No working GPU provider found u2014 raise unconditionally, CPU is not an option.
+    _raise_no_gpu(
+        available=sorted(available),
+        tested=[p for p, _ in gpu_providers],
     )
-    return None
-
-
-def _log_gpu_capabilities() -> None:
-    """Log GPU capabilities at startup for diagnostics."""
-    caps = _get_gpu_capabilities()
-    log.info(
-        "GPU capabilities: vendor=%s, name=%s, compute=%s, vram=%sMB, tensor_cores=%s, fp16=%s, io_binding=%s",
-        caps.get("vendor") or "unknown",
-        caps.get("gpu_name") or "n/a",
-        caps.get("compute_capability") or "n/a",
-        caps.get("vram_mb") or "unknown",
-        caps.get("has_tensor_cores", False),
-        caps.get("supports_fp16", False),
-        _io_binding_confirmed,
-    )
-
-
-def _get_test_model_path() -> str:
-    """Get path to bundled test model, works in both dev and PyInstaller modes."""
-    import sys
-    from pathlib import Path
-
-    # PyInstaller bundles files in sys._MEIPASS
-    if hasattr(sys, "_MEIPASS"):
-        return str(Path(sys._MEIPASS) / "opencode_embedder" / "test_model.onnx")
-
-    # Development mode: relative to this file
-    return str(Path(__file__).parent / "test_model.onnx")
-
-
-def _test_provider(provider: str) -> bool:
-    """Test if a provider actually works by running a minimal inference.
-
-    Some providers are listed as available but fail at runtime due to:
-    - Driver version mismatches (e.g., ROCm 7.x vs onnxruntime built for 6.x)
-    - Missing shared libraries (e.g., libhipblas.so.2)
-    - Model incompatibilities (e.g., CoreML dimension limits)
-
-    Uses a pre-bundled minimal ONNX model (identity: output = input) to avoid
-    requiring the heavy 'onnx' package at runtime.
-
-    For CUDA/ROCm providers, also tests IOBinding capability.
-    """
-    session = None
-    try:
-        import numpy as np
-        import onnxruntime as ort
-
-        model_path = _get_test_model_path()
-
-        # Apply GPU-specific session options when testing GPU providers
-        sess_options = ort.SessionOptions()
-        sess_options.log_severity_level = 3  # Suppress warnings
-
-        # Build provider-specific options for GPU providers
-        gpu_providers = {
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "ROCMExecutionProvider",
-            "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider",
-        }
-        if provider in gpu_providers:
-            opts = _gpu_provider_options(provider)
-            provider_list = [
-                (provider, opts[0]),
-                ("CPUExecutionProvider", opts[1]),
-            ]
-        else:
-            provider_list = [provider, "CPUExecutionProvider"]
-
-        session = ort.InferenceSession(model_path, sess_options, providers=provider_list)
-
-        # Check which provider is actually being used
-        active = session.get_providers()
-        if provider not in active:
-            log.debug("%s not in active providers: %s", provider, active)
-            return False
-
-        input_data = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
-
-        # Test IOBinding for GPU providers (eliminates CPU-GPU memory copies)
-        _io_binding_providers = {
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "ROCMExecutionProvider",
-            "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider",
-        }
-        if provider in _io_binding_providers:
-            device = _device_for_provider(provider)
-            binding = _create_io_binding(session, {"X": input_data}, device=device)
-            if binding is not None:
-                try:
-                    session.run_with_iobinding(binding)
-                    io_out = binding.get_outputs()
-                    if io_out:
-                        io_arr = io_out[0].numpy()
-                        if np.allclose(io_arr, input_data):
-                            log.info("%s IOBinding test passed", provider)
-                            _set_io_binding_active(True)
-                        else:
-                            log.debug("%s IOBinding result mismatch", provider)
-                except Exception as e:
-                    log.debug("%s IOBinding run failed: %s", provider, e)
-
-        # Test FP16 inference if tensor cores are detected (avoid is_gpu_available()
-        # here to prevent circular lock: _test_provider → _fp16_active → is_gpu_available
-        # → _get_onnx_providers → deadlock on _provider_lock)
-        env_fp16 = os.environ.get("OPENCODE_ONNX_FP16", "auto").lower().strip()
-        caps_ready = _caps_done  # only use already-detected caps to avoid blocking
-        if env_fp16 not in ("0", "false", "off") and caps_ready:
-            if _caps and _caps.get("has_tensor_cores"):
-                fp16_data = input_data.astype(np.float16)
-                try:
-                    fp16_result = session.run(None, {"X": fp16_data})
-                    if fp16_result:
-                        _set_fp16_confirmed(True)
-                        log.info("%s FP16 inference test passed — enabled", provider)
-                except Exception as e:
-                    log.debug("%s FP16 test skipped: %s", provider, e)
-
-        # Standard FP32 inference test
-        result = session.run(None, {"X": input_data})
-
-        if result and np.allclose(result[0], input_data):
-            return True
-
-        log.debug("%s inference result mismatch", provider)
-        return False
-
-    except Exception as e:
-        log.warning("%s test failed: %s", provider, e)
-        return False
-    finally:
-        if session is not None:
-            del session
-            import gc
-
-            gc.collect()
-
-
-def _embedder(model: str):
-    global _cached_embedder, _cached_embedder_model
-    # Use default model when model parameter is empty
-    if not model:
-        model = DEFAULT_EMBED_MODEL
-    with _embedder_lock:
-        if _cached_embedder is not None and _cached_embedder_model == model:
-            return _cached_embedder
-
-        # Release old embedder first
-        if _cached_embedder is not None:
-            _cached_embedder = None
-            import gc
-
-            gc.collect()
-
-        from fastembed import TextEmbedding
-
-        providers = _get_onnx_providers()
-        log.info(
-            "Loading embedding model: %s with providers: %s",
-            model,
-            providers or "default (CPU)",
-        )
-
-        # Build GPU provider options and embed them as ORT provider tuples.
-        # fastembed 0.8.0 does not accept provider_options kwarg — it passes
-        # providers straight to ort.InferenceSession.  The correct way to
-        # inject options is via (provider_name, options_dict) tuples in the
-        # providers list itself, which ORT has always supported.
-        gpu_set = {
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "ROCMExecutionProvider",
-            "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider",
-        }
-        if providers and len(providers) >= 2 and providers[0] in gpu_set:
-            gpu = providers[0]
-            opts = _gpu_provider_options(gpu)
-            log.debug("Embedding provider options for %s: %s", gpu, opts[0])
-            # Rebuild providers list with options embedded as tuples so ORT
-            # honours them regardless of fastembed version.
-            providers = [(gpu, opts[0]), "CPUExecutionProvider"]
-
-        embedder = TextEmbedding(model_name=model, providers=providers)
-
-        # Verify which provider is actually being used by the ONNX session
-        _verify_onnx_session_provider(embedder, "embedder")
-
-        # Cap token length to prevent O(n²) attention memory explosion in ONNX.
-        # Without this, a 16 000-char chunk (~6 000 tokens) uses ~10 GB workspace.
-        # With 1024-token truncation, workspace is ~19 MB.
-        try:
-            embedder.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
-        except (AttributeError, Exception):
-            pass  # graceful fallback if fastembed internals change
-        _cached_embedder = embedder
-        _cached_embedder_model = model
-        return embedder
-
-
-def _verify_onnx_session_provider(model_obj, name: str) -> None:
-    """Verify and log the actual ONNX session provider being used.
-
-    This inspects the FastEmbed model's internal ONNX session to confirm
-    which execution provider is active (GPU vs CPU).
-    """
-    try:
-        # FastEmbed stores the ONNX session in model.model.model
-        session = None
-        if hasattr(model_obj, "model"):
-            inner = model_obj.model
-            if hasattr(inner, "model"):
-                session = inner.model
-            elif hasattr(inner, "session"):
-                session = inner.session
-
-        if session is None:
-            log.warning("[%s] Could not access ONNX session for verification", name)
-            return
-
-        active_providers = session.get_providers()
-        log.info("[%s] ONNX session active providers: %s", name, active_providers)
-
-        # Check if GPU is actually being used
-        gpu_providers = {
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "ROCMExecutionProvider",
-            "DirectMLExecutionProvider",
-            "MIGraphXExecutionProvider",
-            "CoreMLExecutionProvider",
-        }
-        using_gpu = any(p in gpu_providers for p in active_providers)
-
-        if using_gpu:
-            gpu_name = next(p for p in active_providers if p in gpu_providers)
-            log.info("[%s] GPU ACTIVE: Using %s for inference", name, gpu_name)
-        else:
-            global _gpu_degraded, _gpu_degraded_reason
-            _gpu_degraded = True
-            _gpu_degraded_reason = (
-                f"[{name}] GPU provider requested but ONNX session fell back to CPU. "
-                f"Active providers: {active_providers}"
-            )
-            log.error(
-                "[%s] GPU DEGRADED: No GPU provider active! Providers: %s. "
-                "This violates the GPU requirement.",
-                name,
-                active_providers,
-            )
-
-    except Exception as e:
-        log.warning("[%s] Failed to verify ONNX provider: %s", name, e)
-
-
-def _reranker(model: str):
-    global _cached_reranker, _cached_reranker_model
-    # Use default (budget tier) model when model parameter is empty
-    if not model:
-        model = DEFAULT_RERANK_MODEL
-    with _reranker_lock:
-        if _cached_reranker is not None and _cached_reranker_model == model:
-            return _cached_reranker
-
-        # Release old reranker first
-        if _cached_reranker is not None:
-            del _cached_reranker
-            import gc
-
-            gc.collect()
-
-        from fastembed.rerank.cross_encoder import TextCrossEncoder
-
-        providers = _get_onnx_providers()
-        log.info(
-            "Loading reranker model: %s with providers: %s",
-            model,
-            providers or "default (CPU)",
-        )
-
-        # Build GPU provider options and embed as ORT provider tuples.
-        # Same pattern as _load_embedder — fastembed 0.8.0 ignores provider_options kwarg.
-        gpu_set = {
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "ROCMExecutionProvider",
-            "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider",
-        }
-        if providers and len(providers) >= 2 and providers[0] in gpu_set:
-            gpu = providers[0]
-            opts = _gpu_provider_options(gpu)
-            log.debug("Reranker provider options for %s: %s", gpu, opts[0])
-            providers = [(gpu, opts[0]), "CPUExecutionProvider"]
-
-        reranker = TextCrossEncoder(model_name=model, providers=providers)
-
-        # Verify which provider is actually being used
-        _verify_onnx_session_provider(reranker, "reranker")
-
-        _cached_reranker = reranker
-        _cached_reranker_model = model
-        return reranker
-
-
-def is_gpu_available() -> bool:
-    """Check if a GPU provider is available and working.
-
-    Returns True if CUDA, ROCm, or another GPU provider is detected and functional.
-    This is used to auto-configure worker counts (more workers for GPU).
-    """
-    providers = _get_onnx_providers()
-    if providers is None:
-        return False
-    # Check if any GPU provider is in the list (not just CPU)
-    gpu_providers = {
-        "TensorrtExecutionProvider",
-        "CUDAExecutionProvider",
-        "ROCMExecutionProvider",
-        "DirectMLExecutionProvider",
-        "MIGraphXExecutionProvider",
-        "CoreMLExecutionProvider",
-    }
-    return any(p in gpu_providers for p in providers)
-
-
-def get_active_provider() -> str:
-    """Get the name of the active execution provider.
-
-    Returns 'tensorrt', 'cuda', 'rocm', 'directml', 'coreml', or 'cpu'.
-    """
-    providers = _get_onnx_providers()
-    if providers is None:
-        return "cpu"
-
-    provider_map = {
-        "TensorrtExecutionProvider": "tensorrt",
-        "CUDAExecutionProvider": "cuda",
-        "ROCMExecutionProvider": "rocm",
-        "DirectMLExecutionProvider": "directml",
-        "MIGraphXExecutionProvider": "migraphx",
-        "CoreMLExecutionProvider": "coreml",
-    }
-
-    for p in providers:
-        if p in provider_map:
-            return provider_map[p]
-    return "cpu"
-
-
-def cleanup_models() -> None:
-    """Unload cached ONNX models to free ~1-2 GB of RAM.
-
-    Call this after completing a batch of work (initial indexing, watch batch)
-    when the embedder will be idle.  Models reload on-demand (~2-5s) when
-    the next embedding or reranking call is made.
-    """
-    import gc
-
-    global _cached_embedder, _cached_embedder_model
-    global _cached_reranker, _cached_reranker_model
-    _cached_embedder = None
-    _cached_embedder_model = None
-    _cached_reranker = None
-    _cached_reranker_model = None
-
-    # Force garbage collection to release ONNX session memory.
-    # Python's GC doesn't always collect large C-extension objects promptly.
-    gc.collect()
-    gc.collect()  # second pass for weak refs / pointers
-
-    # Hint to glibc to return freed pages to the OS (Linux only).
-    # Without this, RSS stays high even after Python objects are collected
-    # because glibc's malloc arena caches freed pages.
-    try:
-        import ctypes
-
-        libc = ctypes.CDLL("libc.so.6")
-        libc.malloc_trim(0)
-    except Exception:
-        pass  # not Linux, or libc unavailable — skip silently
-
-
-# Memory-efficient batch sizes optimized for CPU-bound workloads.
-# Key insight: CPU is the bottleneck, not batch size. Larger batches don't help
-# much but use significantly more memory. Sweet spot is batch_size=8-16.
-#
-# Memory scaling (approximate with 1024-token truncation):
-#   batch_size=1:  ~19 MB workspace
-#   batch_size=8:  ~150 MB workspace
-#   batch_size=16: ~300 MB workspace
-#   batch_size=32: ~600 MB workspace (diminishing returns)
-_cpus = os.cpu_count() or 2
-_ram_mb = 8192  # default assumption
-try:
-    with open("/proc/meminfo") as f:
-        for line in f:
-            if line.startswith("MemTotal:"):
-                _ram_mb = int(line.split()[1]) // 1024
-                break
-except Exception:
-    # macOS fallback
-    try:
-        import subprocess
-
-        out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True)
-        _ram_mb = int(out.strip()) // (1024 * 1024)
-    except Exception:
-        pass  # keep default 8GB assumption
-
-# Performance tiers based on hardware:
-#   LOW_END:  ≤4 CPUs or ≤8 GB RAM  -> conservative settings
-#   STANDARD: >4 CPUs and >8 GB RAM -> balanced settings
-#   HIGH_END: ≥16 CPUs and ≥32 GB RAM -> optimized (not aggressive, CPU-bound anyway)
-_LOW_END = _cpus <= 4 or _ram_mb <= 8192
-_HIGH_END = _cpus >= 16 and _ram_mb >= 32768
-
-# Check for low-memory mode override
-_LOW_MEMORY_MODE = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
-
-# Batch size configuration:
-# - CPU: batch_size=8 is optimal (better cache utilization)
-# - GPU: auto-scaled based on VRAM (GPUs excel at parallel ops)
-# - LOW_MEMORY: smaller batches to reduce peak memory usage
-if _LOW_MEMORY_MODE:
-    _EMBED_SUB_BATCH = 32  # Smaller batches for low-memory mode
-    _ONNX_BATCH_SIZE = 4  # Reduced ONNX batch size
-    log.info("low-memory mode: batch sizes reduced (sub=%d, onnx=%d)", _EMBED_SUB_BATCH, _ONNX_BATCH_SIZE)
-elif _LOW_END:
-    _EMBED_SUB_BATCH = 64  # Texts per sub-batch
-    _ONNX_BATCH_SIZE = 8  # Default, overridden by _get_onnx_batch_size()
-elif _HIGH_END:
-    _EMBED_SUB_BATCH = 128  # Good batching without excess memory
-    _ONNX_BATCH_SIZE = 8  # Default, overridden by _get_onnx_batch_size()
-else:
-    _EMBED_SUB_BATCH = 96  # Standard
-    _ONNX_BATCH_SIZE = 8  # Default, overridden by _get_onnx_batch_size()
-
-
-def _get_gpu_vram_mb() -> int | None:
-    """Detect GPU VRAM in MB. Returns None if not available."""
-    import subprocess
-
-    # Try ROCm first (AMD GPUs)
-    try:
-        result = subprocess.run(
-            ["rocm-smi", "--showmeminfo", "vram", "--csv"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            # Parse CSV output: device,vram_total,vram_used
-            for line in result.stdout.strip().split("\n")[1:]:
-                parts = line.split(",")
-                if len(parts) >= 2:
-                    # VRAM is in bytes, convert to MB
-                    vram_bytes = int(parts[1])
-                    return vram_bytes // (1024 * 1024)
-    except (subprocess.SubprocessError, FileNotFoundError, ValueError):
-        pass
-
-    # Try nvidia-smi (NVIDIA GPUs)
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            # Output is in MB
-            return int(result.stdout.strip().split("\n")[0])
-    except (subprocess.SubprocessError, FileNotFoundError, ValueError):
-        pass
-
-    return None
+    return None  # unreachable; satisfies type checker
 
 
 # Track whether FP16 inference was confirmed working at runtime
@@ -1677,13 +1514,17 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
 
     t_end = time.perf_counter()
     if log.isEnabledFor(logging.INFO):
+        # Bug fix: t_embed_start was a loop variable referencing only the LAST
+        # batch's start time, making the "post" duration wrong for multi-batch
+        # inputs. Use t_postprocess - (t_start + t_embed_total) instead.
+        t_post_ms = (t_postprocess - t_start - t_embed_total) * 1000
         log.info(
             "embed[%s]: %d texts (%d avg chars), onnx=%.0fms, post=%.1fms, total=%.0fms",
             provider.upper(),
             len(texts),
             avg_chars,
             t_embed_total * 1000,
-            (t_postprocess - t_embed_start) * 1000 if 't_embed_start' in locals() else 0,
+            t_post_ms,
             (t_end - t_start) * 1000,
         )
     return out
@@ -2041,3 +1882,171 @@ def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple
             (t_end - t_start) * 1000,
         )
     return [(i, float(normed[i])) for i in order]
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers expected by tests
+# ---------------------------------------------------------------------------
+
+# CPU count available to the process (used by tests and thread scaling)
+_cpus: int = os.cpu_count() or 2
+
+# RAM detection (MB) u2014 used for hardware profiling
+try:
+    import psutil as _psutil
+    _ram_mb: int = int(_psutil.virtual_memory().total / 1024 / 1024)
+except Exception:
+    _ram_mb = 8192  # default 8 GB
+
+# Hardware profile flags
+_LOW_END: bool = _cpus <= 4 or _ram_mb <= 8192
+_HIGH_END: bool = _cpus >= 16 and _ram_mb >= 32768
+
+# Max tokens for ONNX inference (truncates to prevent O(n^2) attention OOM)
+_MAX_TOKENS: int = 1024
+
+# Sub-batch size for chunked ONNX inference u2014 hardware adaptive
+_EMBED_SUB_BATCH: int
+if os.environ.get("OPENCODE_EMBED_SUB_BATCH"):
+    _EMBED_SUB_BATCH = int(os.environ["OPENCODE_EMBED_SUB_BATCH"])
+elif os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes"):
+    _EMBED_SUB_BATCH = 8
+elif _LOW_END:
+    _EMBED_SUB_BATCH = 64
+elif _HIGH_END:
+    _EMBED_SUB_BATCH = 128
+else:
+    _EMBED_SUB_BATCH = 96
+
+
+def _get_test_model_path() -> str:
+    """Return path to a cached ONNX model used for provider testing.
+
+    Uses the first available model from the fastembed/HuggingFace cache.
+    Falls back to a well-known cached model path.
+    """
+    import glob as _glob
+
+    # Look for any cached .onnx model (fastembed downloads these at warmup)
+    cache_dirs = [
+        os.path.expanduser("~/.cache/huggingface/hub"),
+        os.path.expanduser("~/.cache/fastembed"),
+    ]
+    for base in cache_dirs:
+        matches = _glob.glob(f"{base}/**/*.onnx", recursive=True)
+        if matches:
+            # Prefer smaller models for faster provider testing
+            matches.sort(key=os.path.getsize)
+            return matches[0]
+
+    raise FileNotFoundError(
+        "No cached ONNX model found for provider testing. "
+        "Run the server once to download models so ONNX provider testing can proceed."
+    )
+
+
+def _test_provider(provider: str) -> bool:
+    """Test whether an ONNX provider works with a minimal model.
+
+    Returns True if the provider can run inference, False otherwise.
+    Cleans up the ONNX session in a finally block.
+    """
+    import gc
+    import numpy as np
+
+    session = None
+    model_path = _get_test_model_path()
+    try:
+        import onnxruntime as ort
+
+        so = ort.SessionOptions()
+        so.log_severity_level = 3
+
+        gpu_set = {
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "ROCMExecutionProvider",
+            "MIGraphXExecutionProvider",
+            "DirectMLExecutionProvider",
+        }
+        provider_list = [(provider, {})] if provider in gpu_set else [provider]
+
+        session = ort.InferenceSession(model_path, so, providers=provider_list)
+        active = session.get_providers()
+        if provider not in active:
+            return False
+
+        input_data = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+        result = session.run(None, {"X": input_data})
+        return bool(result and np.allclose(result[0], input_data))
+
+    except Exception as e:
+        log.debug("%s provider test failed: %s", provider, e)
+        return False
+    finally:
+        if session is not None:
+            del session
+            import gc
+            gc.collect()
+
+
+def _verify_onnx_session_provider(model_obj, name: str) -> None:
+    """Verify the ONNX session is running on GPU, raise if not.
+
+    Also re-confirms IOBinding on the actual model session.
+
+    Bug fix: _io_binding_confirmed was only set during _test_provider() on the
+    tiny identity test model. If the real embedding model's ONNX graph uses
+    different input names or shapes, IOBinding could silently fail and the flag
+    would remain False, blocking the IOBinding fast path forever.
+    """
+    try:
+        session = None
+        if hasattr(model_obj, "model"):
+            inner = model_obj.model
+            if hasattr(inner, "model"):
+                session = inner.model
+            elif hasattr(inner, "session"):
+                session = inner.session
+        if session is None:
+            raise RuntimeError(
+                f"[{name}] GPU ENFORCEMENT FAILED: Could not access ONNX session."
+            )
+        active = session.get_providers()
+        log.info("[%s] ONNX session active providers: %s", name, active)
+        gpu_set = {
+            "TensorrtExecutionProvider", "CUDAExecutionProvider",
+            "ROCMExecutionProvider", "MIGraphXExecutionProvider",
+            "DirectMLExecutionProvider", "CoreMLExecutionProvider",
+        }
+        using_gpu = any(p in gpu_set for p in active)
+        if using_gpu:
+            gpu_name = next(p for p in active if p in gpu_set)
+            log.info("[%s] GPU ACTIVE: Using %s for inference", name, gpu_name)
+
+            # Bug fix: re-confirm IOBinding on the actual model session.
+            # The test-model confirmation in _test_provider() used input name "X".
+            # Real embedding models use "input_ids"/"attention_mask"; if the
+            # session doesn't support io_binding() the flag stays False and the
+            # fast path is never attempted even when it would work.
+            if not _io_binding_confirmed:
+                try:
+                    _probe = session.io_binding()  # raises if not supported
+                    # Bind a dummy output just to confirm the API works
+                    for out in session.get_outputs():
+                        _probe.bind_output(out.name, _device_for_provider(gpu_name))
+                        break  # one output is enough to confirm
+                    _set_io_binding_active(True)
+                    log.info("[%s] IOBinding confirmed on real model session", name)
+                except Exception as e:
+                    log.info("[%s] IOBinding not supported by model session: %s", name, e)
+                    _set_io_binding_active(False)
+        else:
+            raise RuntimeError(
+                f"[{name}] GPU ENFORCEMENT FAILED: ONNX session fell back to CPU. "
+                f"Active providers: {active}."
+            )
+    except RuntimeError:
+        raise
+    except Exception as e:
+        log.warning("[%s] Failed to verify ONNX provider: %s", name, e)

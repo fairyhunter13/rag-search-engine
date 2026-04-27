@@ -37,6 +37,7 @@ import concurrent.futures
 import fcntl
 import logging
 import os
+import secrets
 import signal
 import sys
 import time
@@ -45,8 +46,35 @@ from typing import Any
 
 from aiohttp import web
 
+# ---------------------------------------------------------------------------
+# Shared-secret authentication
+# ---------------------------------------------------------------------------
+_AUTH_TOKEN: str | None = None
+
+
+def _init_auth_token() -> str:
+    """Read shared auth token from ~/.opencode/embedder.token, or generate if missing."""
+    global _AUTH_TOKEN
+    token_path = Path.home() / ".opencode" / "embedder.token"
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Try to read existing token (shared with indexer)
+    if token_path.exists():
+        try:
+            _AUTH_TOKEN = token_path.read_text().strip()
+            if _AUTH_TOKEN:  # Only use if non-empty
+                return _AUTH_TOKEN
+        except Exception:
+            pass  # Fall through to generate new token
+    
+    # Generate new token only if file doesn't exist or is empty
+    _AUTH_TOKEN = secrets.token_urlsafe(32)
+    token_path.write_text(_AUTH_TOKEN)
+    token_path.chmod(0o600)  # owner-only read/write
+    return _AUTH_TOKEN
+
 # Debug file logging (since stdout/stderr go to /dev/null when spawned)
-_DEBUG_LOG_PATH = os.environ.get("OPENCODE_EMBED_DEBUG", "/tmp/embedder-debug.log")
+_DEBUG_LOG_PATH = os.environ.get("OPENCODE_EMBED_DEBUG", str(Path.home() / ".opencode" / "embedder-debug.log"))
 _DEBUG_LOG = None
 
 
@@ -56,14 +84,14 @@ def _debug_log(msg: str):
     if _DEBUG_LOG is None:
         try:
             _DEBUG_LOG = open(_DEBUG_LOG_PATH, "a", buffering=1)  # Line buffered
-        except:
+        except Exception:
             return
     try:
         import time as time_mod
 
         _DEBUG_LOG.write(f"[{time_mod.strftime('%H:%M:%S')}] {msg}\n")
         _DEBUG_LOG.flush()
-    except:
+    except Exception:
         pass
 
 
@@ -310,11 +338,11 @@ def _detect_embed_workers() -> int:
         except ValueError:
             pass
 
-    # Check for low-memory mode
+    # Check for low-memory mode — cap at 2 workers to reduce GPU/RAM contention
     low_mem = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
     if low_mem:
-        log.info("low-memory mode enabled (OPENCODE_EMBED_LOW_MEMORY=1)")
-        return 1
+        log.info("low-memory mode enabled (OPENCODE_EMBED_LOW_MEMORY=1): capping embed workers at 2")
+        return 2
 
     # Auto-detect based on GPU availability
     if is_gpu_available():
@@ -405,6 +433,8 @@ class ModelServer:
         # REC-3: Active request counter for circuit breaker
         self._active_requests = 0
         self._max_active_requests = int(os.environ.get("OPENCODE_EMBED_MAX_ACTIVE", "32"))
+        # Track last embed activity for idle model cleanup
+        self._last_embed_time: float = time.monotonic()
 
     # ---- Idle shutdown monitor ----
 
@@ -433,6 +463,41 @@ class ModelServer:
                 break
 
         log.info("idle shutdown monitor stopped")
+
+    def _touch_embed_time(self) -> None:
+        """Record embed activity timestamp for idle model cleanup."""
+        self._last_embed_time = time.monotonic()
+
+    async def _idle_model_cleanup(self) -> None:
+        """Unload models after idle period to free VRAM/RAM.
+
+        Configurable via OPENCODE_EMBED_MODEL_IDLE_TIMEOUT (seconds).
+        Default: 300s (5 minutes). Set to 0 to disable.
+        """
+        idle_timeout = int(os.environ.get("OPENCODE_EMBED_MODEL_IDLE_TIMEOUT", "300"))
+        if idle_timeout <= 0:
+            log.info("idle model cleanup disabled (OPENCODE_EMBED_MODEL_IDLE_TIMEOUT=0)")
+            return
+
+        log.info("idle model cleanup started (timeout=%ds)", idle_timeout)
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=60.0)
+                break  # shutdown signalled
+            except asyncio.TimeoutError:
+                pass
+
+            idle = time.monotonic() - self._last_embed_time
+            if idle >= idle_timeout:
+                try:
+                    await asyncio.to_thread(cleanup_models)
+                    log.info("idle model cleanup: unloaded models after %.0fs idle", idle)
+                    # Reset timer so we don't immediately unload again
+                    self._last_embed_time = time.monotonic()
+                except Exception as e:
+                    log.debug("idle model cleanup error: %s", e)
+
+        log.info("idle model cleanup stopped")
 
     # ---- GPU health watchdog ----
 
@@ -502,14 +567,27 @@ class ModelServer:
         """Chunk content without embedding. Used by batch coalescing."""
         file = params.get("file")
         if file:
+            resolved = Path(file).resolve()
+            cwd = Path.cwd().resolve()
+            opencode_dir = (Path.home() / ".opencode").resolve()
+            # Validate path BEFORE any I/O — ValueError propagates to 500 handler
+            # which returns HTTP 500, preventing silent bypass.
+            # Use os.sep suffix to block prefix attacks (e.g. ~/.opencode_evil).
+            if not (
+                str(resolved).startswith(str(cwd) + os.sep)
+                or str(resolved).startswith(str(opencode_dir) + os.sep)
+                or resolved == cwd
+                or resolved == opencode_dir
+            ):
+                raise ValueError(f"Path '{file}' outside allowed directories")
             try:
-                data = Path(file).read_bytes()
+                data = resolved.read_bytes()
                 if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
                     content = data.decode("utf-16", errors="ignore")
                 else:
                     # utf-8-sig strips BOM if present
                     content = data.decode("utf-8-sig", errors="ignore")
-            except Exception:
+            except (OSError, UnicodeDecodeError):
                 content = ""
         else:
             content = params.get("content", "")
@@ -591,6 +669,7 @@ class ModelServer:
         model = params.get("model", "")
         dimensions = params.get("dimensions", 1024)
 
+        self._touch_embed_time()
         async with self._embed_sem:
             vector = await asyncio.to_thread(embed_query, text, model=model, dimensions=dimensions)
         return {"vector": vector}
@@ -602,6 +681,7 @@ class ModelServer:
         model = params.get("model", "")
         dimensions = int(params.get("dimensions", 1024))
 
+        self._touch_embed_time()
         async with self._embed_sem:
             buf, dims = await asyncio.to_thread(
                 embed_query_f32_bytes, text, model=model, dimensions=dimensions
@@ -622,6 +702,7 @@ class ModelServer:
         t0 = time.monotonic()
         
         # Use batch coalescer if available (better GPU throughput)
+        self._touch_embed_time()
         if self._embed_coalescer is not None:
             # Note: coalescer uses default model/dimensions from environment
             # Individual request params are ignored for now to maintain batch consistency
@@ -656,6 +737,7 @@ class ModelServer:
         dimensions = int(params.get("dimensions", 1024))
 
         t0 = time.monotonic()
+        self._touch_embed_time()
         async with self._embed_sem:
             t_sem = time.monotonic()
             buf, dims, count = await asyncio.to_thread(
@@ -842,6 +924,18 @@ class ModelServer:
         timeout_secs = int(os.environ.get("OPENCODE_EMBED_REQUEST_TIMEOUT", "120"))
 
         @web.middleware
+        async def auth_middleware(request: web.Request, handler):
+            """Check X-Embedder-Token on all non-health endpoints (case-insensitive)."""
+            if request.path in ("/", "/health"):
+                return await handler(request)
+            if _AUTH_TOKEN is not None:
+                # Try both capitalized and lowercase variants for HTTP header compatibility
+                token = request.headers.get("X-Embedder-Token") or request.headers.get("x-embedder-token") or ""
+                if token != _AUTH_TOKEN:
+                    return web.json_response({"error": "Unauthorized"}, status=401)
+            return await handler(request)
+
+        @web.middleware
         async def circuit_breaker(request: web.Request, handler):
             """REC-3: Reject requests when server is overloaded."""
             # Health checks always pass through
@@ -874,7 +968,10 @@ class ModelServer:
                     status=504
                 )
 
-        app = web.Application(middlewares=[circuit_breaker, timeout_middleware])
+        app = web.Application(
+            middlewares=[auth_middleware, circuit_breaker, timeout_middleware],
+            client_max_size=10 * 1024 * 1024,  # 10 MB request body limit
+        )
         app.router.add_get("/health", self._http_health)
         app.router.add_post("/shutdown", self._http_shutdown)
         app.router.add_post("/embed/passages", self._http_embed_passages)
@@ -1192,6 +1289,9 @@ class ModelServer:
         # GPU health watchdog: shuts down if inference falls back to CPU
         gpu_watchdog_task = asyncio.create_task(self._gpu_health_watchdog())
 
+        # Idle model cleanup: unload ONNX models after inactivity to free VRAM/RAM
+        idle_model_cleanup_task = asyncio.create_task(self._idle_model_cleanup())
+
         # REC-8: Start VRAM pressure watchdog
         vram_watchdog_task = asyncio.create_task(self._vram_watchdog())
 
@@ -1253,6 +1353,7 @@ class ModelServer:
             await http_runner.cleanup()
             idle_monitor_task.cancel()
             gpu_watchdog_task.cancel()
+            idle_model_cleanup_task.cancel()
             vram_watchdog_task.cancel()
             rss_watchdog_task.cancel()
             if parent_monitor_task:
@@ -1356,6 +1457,10 @@ def run_server(
     # Acquire OS-level singleton lock before anything else.
     # Two simultaneous starts are serialized by the kernel; second one exits.
     _lock = _acquire_singleton_lock()
+
+    # Initialize auth token (write to ~/.opencode/embedder.token)
+    token = _init_auth_token()
+    log.info("auth token initialized (written to ~/.opencode/embedder.token), length=%d", len(token))
 
     # Set up process group for clean child termination (prevents orphaned PIDs)
     _setup_process_group()

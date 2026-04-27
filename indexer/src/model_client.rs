@@ -54,7 +54,8 @@ fn decode_f32le_vec(bytes: &[u8], dimensions: usize) -> Result<Vec<f32>> {
 
     let mut out = vec![0f32; dimensions];
     for (i, chunk) in bytes.chunks_exact(4).enumerate() {
-        out[i] = f32::from_le_bytes(chunk.try_into().unwrap());
+        let arr: [u8; 4] = chunk.try_into().map_err(|_| anyhow::anyhow!("internal: f32 decode chunk size mismatch at index {}", i))?;
+        out[i] = f32::from_le_bytes(arr);
     }
     Ok(out)
 }
@@ -89,7 +90,8 @@ fn decode_f32le_mat(bytes: &[u8], dimensions: usize, count: usize) -> Result<Vec
         let slice = &bytes[start..start + step];
         let mut vec = vec![0f32; dimensions];
         for (j, chunk) in slice.chunks_exact(4).enumerate() {
-            vec[j] = f32::from_le_bytes(chunk.try_into().unwrap());
+            let arr: [u8; 4] = chunk.try_into().map_err(|_| anyhow::anyhow!("internal: f32 decode chunk size mismatch at vec={}, index={}", i, j))?;
+            vec[j] = f32::from_le_bytes(arr);
         }
         out.push(vec);
     }
@@ -199,14 +201,43 @@ fn http_base_url() -> String {
     format!("http://127.0.0.1:{}", port)
 }
 
+/// Read the shared embedder auth token from ~/.opencode/embedder.token.
+/// Returns None when the file is missing (embedder auth disabled).
+fn read_embedder_token() -> Option<String> {
+    let path = dirs::home_dir()?.join(".opencode").join("embedder.token");
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
 /// Singleton reqwest client (shared across all HTTP calls).
+/// Automatically attaches X-Embedder-Token when ~/.opencode/embedder.token exists.
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .build()
-            .expect("failed to build HTTP client")
+        // Create client WITHOUT default token header.
+        // Token is injected per-request to catch token file updates (e.g., from embedder startup).
+        match reqwest::Client::builder().build() {
+            Ok(client) => client,
+            Err(e) => {
+                eprintln!("FATAL: Failed to build HTTP client: {}", e);
+                std::process::exit(1);
+            }
+        }
     })
+}
+
+/// Inject fresh embedder token into request headers (called before each request).
+fn inject_embedder_token(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let Some(token) = read_embedder_token() {
+        match reqwest::header::HeaderValue::from_str(&token) {
+            Ok(val) => req.header("x-embedder-token", val),
+            Err(e) => {
+                eprintln!("WARNING: embedder token contains invalid header chars: {}", e);
+                req
+            }
+        }
+    } else {
+        req
+    }
 }
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -360,7 +391,13 @@ pub async fn ensure_embedder() {
                 let path = format!("/proc/{}/oom_score_adj", pid);
                 let _ = std::fs::write(path, "600");
             }
-            *EMBEDDER_CHILD.lock().unwrap() = Some(child);
+            match EMBEDDER_CHILD.lock() {
+                Ok(mut guard) => *guard = Some(child),
+                Err(e) => {
+                    tracing::error!("EMBEDDER_CHILD mutex poisoned: {}", e);
+                    std::process::exit(1);
+                }
+            }
             tracing::info!("embedder spawned with PID {}", pid);
 
             // Write PID file
@@ -668,8 +705,10 @@ struct HttpRerankResp {
 
 /// Health-check the HTTP embedder.  Returns `true` when the server is up.
 pub async fn http_health() -> Result<bool> {
-    let resp = http_client()
-        .get(format!("{}/health", http_base_url()))
+    let resp = inject_embedder_token(
+        http_client()
+            .get(format!("{}/health", http_base_url()))
+    )
         .timeout(HEALTH_TIMEOUT)
         .send()
         .await
@@ -678,8 +717,10 @@ pub async fn http_health() -> Result<bool> {
 }
 
 async fn http_embed_passages_inner(texts: &[String], model: &str, dimensions: u32) -> Result<Vec<Vec<f32>>> {
-    let wrapper: HttpResultWrapper<HttpPassagesF32Resp> = http_client()
-        .post(format!("{}/embed/passages_f32", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpPassagesF32Resp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/passages_f32", http_base_url()))
+    )
         .json(&json!({"passages": texts, "model": model, "dimensions": dimensions}))
         .timeout(EMBED_TIMEOUT)
         .send()
@@ -711,8 +752,10 @@ async fn http_embed_passages(texts: &[String], model: &str, dimensions: u32) -> 
 }
 
 async fn http_embed_query_inner(text: &str, model: &str, dimensions: u32) -> Result<Vec<f32>> {
-    let wrapper: HttpResultWrapper<HttpQueryF32Resp> = http_client()
-        .post(format!("{}/embed/query_f32", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpQueryF32Resp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/query_f32", http_base_url()))
+    )
         .json(&json!({"query": text, "model": model, "dimensions": dimensions}))
         .timeout(QUERY_TIMEOUT)
         .send()
@@ -738,8 +781,10 @@ async fn http_embed_query(text: &str, model: &str, dimensions: u32) -> Result<Ve
 }
 
 async fn http_chunk_inner(content: &str, path: &str, tier: &str) -> Result<Vec<ChunkMeta>> {
-    let wrapper: HttpResultWrapper<HttpChunkResp> = http_client()
-        .post(format!("{}/embed/chunk", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpChunkResp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/chunk", http_base_url()))
+    )
         .json(&json!({"content": content, "path": path, "tier": tier}))
         .timeout(CHUNK_TIMEOUT)
         .send()
@@ -765,8 +810,10 @@ async fn http_chunk(content: &str, path: &str, tier: &str) -> Result<Vec<ChunkMe
 }
 
 async fn http_chunk_file_inner(file: &str, path: &str, tier: &str) -> Result<Vec<ChunkMeta>> {
-    let wrapper: HttpResultWrapper<HttpChunkResp> = http_client()
-        .post(format!("{}/embed/chunk_file", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpChunkResp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/chunk_file", http_base_url()))
+    )
         .json(&json!({"path": file, "display_path": path, "tier": tier}))
         .timeout(CHUNK_TIMEOUT)
         .send()
@@ -798,8 +845,10 @@ async fn http_chunk_and_embed_inner(
     model: &str,
     dimensions: u32,
 ) -> Result<Vec<ChunkWithVector>> {
-    let wrapper: HttpResultWrapper<HttpChunkAndEmbedResp> = http_client()
-        .post(format!("{}/embed/chunk_and_embed", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpChunkAndEmbedResp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/chunk_and_embed", http_base_url()))
+    )
         .json(&json!({
             "content": content,
             "path": path,
@@ -857,8 +906,10 @@ async fn http_chunk_and_embed_file_inner(
     model: &str,
     dimensions: u32,
 ) -> Result<Vec<ChunkWithVector>> {
-    let wrapper: HttpResultWrapper<HttpChunkAndEmbedResp> = http_client()
-        .post(format!("{}/embed/chunk_and_embed", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpChunkAndEmbedResp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/chunk_and_embed", http_base_url()))
+    )
         .json(&json!({
             "path": file,
             "display_path": path,
@@ -910,8 +961,10 @@ async fn http_chunk_and_embed_file(
 }
 
 async fn http_rerank_inner(query: &str, docs: &[&str], model: &str, top_k: u32) -> Result<Vec<(usize, f32)>> {
-    let wrapper: HttpResultWrapper<HttpRerankResp> = http_client()
-        .post(format!("{}/embed/rerank", http_base_url()))
+    let wrapper: HttpResultWrapper<HttpRerankResp> = inject_embedder_token(
+        http_client()
+            .post(format!("{}/embed/rerank", http_base_url()))
+    )
         .json(&json!({"query": query, "passages": docs, "model": model, "top_k": top_k}))
         .timeout(RERANK_TIMEOUT)
         .send()
