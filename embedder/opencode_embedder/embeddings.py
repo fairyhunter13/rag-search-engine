@@ -1005,26 +1005,37 @@ def _detect_and_test_providers() -> list[str] | None:
     #   - It may fail silently and fall back to CPU anyway
     #   - Users can force CoreML via OPENCODE_ONNX_PROVIDER=coreml if needed
     
-    # Check if TensorRT is explicitly disabled (e.g., RTX 5080 / Blackwell)
-    tensorrt_disabled = os.environ.get("OPENCODE_DISABLE_TENSORRT", "0").lower() in ("1", "true", "yes")
-    
+    caps = _get_gpu_capabilities()
+
+    # --- TensorRT disable policy ---
+    # TensorRT has known MSR/kernel compatibility issues on Blackwell (SM 12.0+).
+    # Auto-disable on Blackwell; honour explicit OPENCODE_DISABLE_TENSORRT override.
+    tensorrt_disabled_env = os.environ.get("OPENCODE_DISABLE_TENSORRT", "").strip().lower()
+    if tensorrt_disabled_env in ("1", "true", "yes"):
+        tensorrt_disabled = True
+    elif tensorrt_disabled_env in ("0", "false", "no"):
+        tensorrt_disabled = False  # explicit opt-in overrides auto-detect
+    else:
+        # Auto-detect: disable on Blackwell by default
+        tensorrt_disabled = caps.get("architecture") == "blackwell"
+        if tensorrt_disabled:
+            log.info(
+                "Blackwell GPU (SM 12.0+) detected: auto-disabled TensorRT "
+                "(use OPENCODE_DISABLE_TENSORRT=0 to force-enable)."
+            )
+
     gpu_providers = []
-    
+
     # Add CUDA first (stable on all NVIDIA generations)
     gpu_providers.append(("CUDAExecutionProvider", "NVIDIA CUDA"))
-    
+
     # Add TensorRT second (kernel fusion, but conditional on Blackwell compatibility)
     if not tensorrt_disabled:
-        gpu_providers.append(
-            (
-                "TensorrtExecutionProvider",
-                "NVIDIA TensorRT",
-            )
-        )
-        log.info("TensorRT enabled; provider chain: CUDA > TensorRT > CPU")
+        gpu_providers.append(("TensorrtExecutionProvider", "NVIDIA TensorRT"))
+        log.info("TensorRT enabled; provider chain: CUDA > TensorRT")
     else:
-        log.info("TensorRT disabled (OPENCODE_DISABLE_TENSORRT=1); provider chain: CUDA > CPU")
-    
+        log.info("TensorRT disabled; provider chain: CUDA-only")
+
     # Add AMD providers
     gpu_providers.extend([
         ("MIGraphXExecutionProvider", "AMD MIGraphX"),  # Primary for AMD (ORT 1.23+)
@@ -1034,25 +1045,37 @@ def _detect_and_test_providers() -> list[str] | None:
         # ("CoreMLExecutionProvider", "Apple CoreML"),
     ])
 
-    # Build a cascading GPU provider chain: if TensorRT is in the list, include CUDA
-    # as an intermediate fallback before CPU. This prevents silent CPU fallback
-    # when TensorRT fails on specific model shapes but CUDA would work.
-    working_gpu: list[str] = []
-    caps = _get_gpu_capabilities()
-    
-    # Warn if Blackwell is detected and TensorRT is enabled
-    if not tensorrt_disabled and caps.get("architecture") == "blackwell":
-        log.warning(
-            "Blackwell GPU (SM 12.0+) detected with TensorRT enabled. "
-            "TensorRT has known MSR compatibility issues on Blackwell. "
-            "Consider setting OPENCODE_DISABLE_TENSORRT=1 if you encounter segfaults."
+    # --- Runtime test skip policy ---
+    # _test_provider() uses a 129 MB cached model which can fail on Blackwell due to
+    # ORT session configuration differences.  For CUDA on SM 8.0+ (Ampere and newer)
+    # we can confirm availability more cheaply: if ORT lists CUDAExecutionProvider
+    # and nvidia-smi shows a healthy GPU, the provider will work for real workloads.
+    # The full verification is deferred to _verify_onnx_session_provider() at model load.
+    cc_str = caps.get("compute_capability") or "0"
+    try:
+        cc_float = float(cc_str)
+    except ValueError:
+        cc_float = 0.0
+    skip_cuda_test = cc_float >= 8.0  # Ampere (SM 8.0) and newer
+    if skip_cuda_test:
+        log.info(
+            "SM %.1f (>= 8.0): skipping CUDA runtime pre-test "
+            "(verification deferred to model load)",
+            cc_float,
         )
-    
+
+    working_gpu: list[str] = []
+
     for provider, name in gpu_providers:
         if provider not in available:
             continue
 
-        if _test_provider(provider):
+        # CUDA on Ampere/Ada/Blackwell: trust ORT availability, skip slow pre-test
+        if provider == "CUDAExecutionProvider" and skip_cuda_test:
+            log.info("GPU provider accepted (no pre-test on SM %.1f): %s", cc_float, name)
+            _log_gpu_capabilities()
+            working_gpu.append(provider)
+        elif _test_provider(provider):
             log.info("GPU provider passed test: %s (%s)", provider, name)
             _log_gpu_capabilities()
             working_gpu.append(provider)
