@@ -30,6 +30,10 @@ Environment variables:
 
 from __future__ import annotations
 
+# Configure CUDA/cuDNN library paths before any CUDA-linked import.
+from opencode_embedder.cuda_setup import configure_cuda_paths as _configure_cuda_paths
+_configure_cuda_paths()
+
 import asyncio
 import atexit
 import base64
