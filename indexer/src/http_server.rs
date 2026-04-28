@@ -4,8 +4,9 @@
 //!   POST /rpc   — {"method": "...", "params": {...}} → {"result": ...}
 //!   GET  /ping  — health check, returns "pong"
 //!
-//! The bound port is written to ~/.opencode/indexer.port so clients can
-//! discover it without knowing the port in advance.
+//! Communication uses Unix domain sockets:
+//!   Linux: abstract socket "@opencode-indexer" (kernel auto-cleans on death)
+//!   macOS: file socket at ~/.opencode/indexer.sock
 //!
 //! Authentication: POST /rpc requires the `X-Indexer-Token` header to match
 //! the shared secret written to ~/.opencode/embedder.token by the Python embedder.
@@ -34,36 +35,70 @@ fn read_auth_token() -> Option<String> {
     std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
-/// Start the HTTP server on `127.0.0.1:{port}` (pass 0 for a random port).
-///
-/// Writes the actual bound port to `~/.opencode/indexer.port` then blocks
-/// serving requests until the process exits.
-pub async fn serve(dispatch: Dispatcher, port: u16) -> anyhow::Result<()> {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let actual = listener.local_addr()?.port();
-
-    write_port(actual).await;
-
-    println!(
-        "{}",
-        serde_json::json!({"type": "http_ready", "port": actual})
-    );
-
+fn build_router(dispatch: Dispatcher) -> Router {
     let auth_token = read_auth_token();
     if auth_token.is_some() {
         tracing::info!("RPC auth enabled (token loaded from ~/.opencode/embedder.token)");
     } else {
         tracing::warn!("RPC auth disabled: ~/.opencode/embedder.token not found");
     }
-
     let state = AppState { dispatch, auth_token };
-
-    let app = Router::new()
+    Router::new()
         .route("/rpc", post(handle_rpc))
         .route("/ping", get(ping))
-        .with_state(state);
+        .with_state(state)
+}
 
+/// Returns the Unix socket file path used on macOS.
+pub fn socket_file_path() -> std::path::PathBuf {
+    dirs::home_dir().unwrap_or_default().join(".opencode").join("indexer.sock")
+}
+
+/// Start the HTTP server on an abstract Unix domain socket (Linux).
+///
+/// The abstract socket "@opencode-indexer" is automatically cleaned up by the
+/// kernel when the process exits — no stale file cleanup needed.
+#[cfg(target_os = "linux")]
+pub async fn serve(dispatch: Dispatcher) -> anyhow::Result<()> {
+    use std::os::linux::net::SocketAddrExt;
+
+    let app = build_router(dispatch);
+    let socket_name = b"opencode-indexer";
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name)?;
+    let std_listener = std::os::unix::net::UnixListener::bind_addr(&addr)?;
+    std_listener.set_nonblocking(true)?;
+    let listener = tokio::net::UnixListener::from_std(std_listener)?;
+
+    println!("{}", serde_json::json!({"type": "unix_ready", "socket": "@opencode-indexer"}));
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Start the HTTP server on a file-based Unix domain socket (macOS).
+///
+/// Removes any stale socket file from a previous crash before binding.
+#[cfg(target_os = "macos")]
+pub async fn serve(dispatch: Dispatcher) -> anyhow::Result<()> {
+    let app = build_router(dispatch);
+    let socket_path = socket_file_path();
+    // Remove stale socket file (from previous crash)
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+
+    println!("{}", serde_json::json!({"type": "unix_ready", "socket": socket_path.display().to_string()}));
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Start the HTTP server (fallback for non-Linux/macOS Unix platforms).
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub async fn serve(dispatch: Dispatcher) -> anyhow::Result<()> {
+    let app = build_router(dispatch);
+    let socket_path = socket_file_path();
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+
+    println!("{}", serde_json::json!({"type": "unix_ready", "socket": socket_path.display().to_string()}));
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -95,11 +130,4 @@ async fn handle_rpc(
     let params = body.get("params").cloned().unwrap_or(Value::Null);
     let result = (state.dispatch)(method, params).await;
     Ok(Json(serde_json::json!({"result": result})))
-}
-
-async fn write_port(port: u16) {
-    let Some(home) = dirs::home_dir() else { return };
-    let dir = home.join(".opencode");
-    let _ = tokio::fs::create_dir_all(&dir).await;
-    let _ = tokio::fs::write(dir.join("indexer.port"), port.to_string()).await;
 }
