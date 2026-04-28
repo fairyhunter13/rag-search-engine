@@ -5034,8 +5034,9 @@ async fn dispatch_unified(
         shutdown_drain_write_queues(state.clone()).await;
         shutdown_compaction(state.clone()).await;
         crate::model_client::shutdown_embedder();
-        if let Some(home) = dirs::home_dir() {
-            let _ = tokio::fs::remove_file(home.join(".opencode").join("indexer.port")).await;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = tokio::fs::remove_file(crate::http_server::socket_file_path()).await;
         }
         kill_process_group();
         std::process::exit(0);
@@ -5249,46 +5250,35 @@ fn make_dispatcher(state: Arc<Mutex<DaemonState>>) -> Dispatcher {
     })
 }
 
-/// Check if another daemon instance is already running.
-/// Reads ~/.opencode/indexer.port, pings it, returns the port if alive.
-async fn check_existing_daemon() -> Option<u16> {
-    let home = dirs::home_dir()?;
-    let port_file = home.join(".opencode").join("indexer.port");
-    let content = tokio::fs::read_to_string(&port_file).await.ok()?;
-    let port: u16 = content.trim().parse().ok()?;
-
-    // Try to ping the existing daemon with a short timeout
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .ok()?;
-    let resp = client
-        .get(format!("http://127.0.0.1:{}/ping", port))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            if let Ok(body) = r.text().await {
-                if body.trim() == "pong" {
-                    return Some(port);
-                }
-            }
-        }
-        _ => {}
-    }
-
-    // Daemon not responsive — clean stale port file
-    let _ = tokio::fs::remove_file(&port_file).await;
-    tracing::debug!("removed stale indexer.port (port {} not responsive)", port);
-    None
+/// Check if another daemon instance is already running by probing the Unix socket.
+/// Returns true if a responsive daemon is found.
+#[cfg(target_os = "linux")]
+async fn check_existing_daemon() -> bool {
+    use std::os::linux::net::SocketAddrExt;
+    let addr = match std::os::unix::net::SocketAddr::from_abstract_name(b"opencode-indexer") {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    std::os::unix::net::UnixStream::connect_addr(&addr).is_ok()
 }
 
-/// Start the daemon, serving HTTP requests on `127.0.0.1:{port}`.
+#[cfg(target_os = "macos")]
+async fn check_existing_daemon() -> bool {
+    let socket_path = crate::http_server::socket_file_path();
+    std::os::unix::net::UnixStream::connect(&socket_path).is_ok()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+async fn check_existing_daemon() -> bool {
+    let socket_path = crate::http_server::socket_file_path();
+    std::os::unix::net::UnixStream::connect(&socket_path).is_ok()
+}
+
+/// Start the daemon, serving HTTP requests on a Unix domain socket.
 ///
-/// Pass `port = 0` to let the OS pick a free port; the actual port is
-/// written to `~/.opencode/indexer.port`.
-pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) -> Result<()> {
+/// Linux: abstract socket "@opencode-indexer" (kernel auto-cleans on exit).
+/// macOS: file socket at ~/.opencode/indexer.sock.
+pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) -> Result<()> {
     // Initialize parent PID global if provided
     if let Some(ppid) = parent_pid_arg {
         parent_pid().set(Some(ppid)).ok();
@@ -5321,7 +5311,19 @@ pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Opti
     .await
     .context("lock file creation task panicked")??;
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, the abstract socket bind IS the singleton lock — no flock needed.
+        // Just do a quick pre-check before heavy initialization.
+        if check_existing_daemon().await {
+            tracing::info!("daemon already running, exiting");
+            println!("{}", serde_json::json!({"type": "already_running"}));
+            return Ok(());
+        }
+        // Drop lock_file — not needed on Linux (abstract socket is the singleton)
+        drop(lock_file);
+    }
+    #[cfg(not(target_os = "linux"))]
     {
         use std::os::unix::io::AsRawFd;
         let fd = lock_file.as_raw_fd();
@@ -5329,12 +5331,9 @@ pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Opti
         let locked = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
         if locked != 0 {
             // Another daemon holds the lock — check if it's responsive
-            if let Some(existing) = check_existing_daemon().await {
-                tracing::info!("daemon already running on port {}, exiting", existing);
-                println!(
-                    "{}",
-                    serde_json::json!({"type": "already_running", "port": existing})
-                );
+            if check_existing_daemon().await {
+                tracing::info!("daemon already running, exiting");
+                println!("{}", serde_json::json!({"type": "already_running"}));
                 return Ok(());
             }
             // Lock held but daemon not responsive — stale lock, try blocking acquire
@@ -5347,25 +5346,16 @@ pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Opti
                 );
             }
         }
-    }
-    // Lock acquired — we are the singleton daemon.
-    // Keep lock_file alive for the daemon's lifetime (dropped on function return).
-    let _lock = lock_file;
+        // Lock acquired — we are the singleton daemon.
+        // Keep lock_file alive for the daemon's lifetime (dropped on function return).
+        let _lock = lock_file;
 
-    // --- Secondary check: HTTP probe ---
-    if let Some(existing) = check_existing_daemon().await {
-        tracing::info!("daemon already running on port {}, exiting", existing);
-        println!(
-            "{}",
-            serde_json::json!({"type": "already_running", "port": existing})
-        );
-        return Ok(());
-    }
-
-    // Clean any stale port/PID files before we start — new values written after bind
-    {
-        let _ = tokio::fs::remove_file(home.join(".opencode").join("indexer.port")).await;
-        let _ = tokio::fs::remove_file(home.join(".opencode").join("indexer.pid")).await;
+        // --- Secondary check: socket probe ---
+        if check_existing_daemon().await {
+            tracing::info!("daemon already running, exiting");
+            println!("{}", serde_json::json!({"type": "already_running"}));
+            return Ok(());
+        }
     }
 
     // Set up process group for clean child termination (prevents orphaned PIDs)
@@ -6564,8 +6554,17 @@ pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Opti
     // Start HTTP server
     let dispatcher = make_dispatcher(state.clone());
     tokio::spawn(async move {
-        if let Err(e) = crate::http_server::serve(dispatcher, port).await {
-            tracing::error!("HTTP server error: {}", e);
+        match crate::http_server::serve(dispatcher).await {
+            Ok(()) => {}
+            Err(e) => {
+                if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                    if io_err.kind() == std::io::ErrorKind::AddrInUse {
+                        println!("{}", serde_json::json!({"type": "already_running"}));
+                        std::process::exit(0);
+                    }
+                }
+                tracing::error!("HTTP server error: {}", e);
+            }
         }
     });
 
@@ -6636,8 +6635,9 @@ pub async fn run(port: u16, idle_shutdown_arg: Option<u64>, parent_pid_arg: Opti
     shutdown_drain_write_queues(state.clone()).await;
     shutdown_compaction(state.clone()).await;
     crate::model_client::shutdown_embedder();
-    if let Some(home) = dirs::home_dir() {
-        let _ = tokio::fs::remove_file(home.join(".opencode").join("indexer.port")).await;
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tokio::fs::remove_file(crate::http_server::socket_file_path()).await;
     }
     kill_process_group();
     tracing::info!("daemon shutdown complete");

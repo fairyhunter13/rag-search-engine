@@ -262,7 +262,10 @@ pub async fn update_file_partial_pub(
 pub async fn run(args: Args) -> Result<()> {
     // Daemon mode: start HTTP server.
     if args.daemon {
-        return crate::daemon::run(args.port, args.idle_shutdown, args.parent_pid).await;
+        if args.port != 0 {
+            tracing::warn!("--port flag is deprecated and ignored; daemon now uses Unix domain sockets");
+        }
+        return crate::daemon::run(args.idle_shutdown, args.parent_pid).await;
     }
 
     let root = args.root.canonicalize().context("invalid root path")?;
