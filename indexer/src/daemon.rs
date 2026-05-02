@@ -37,6 +37,8 @@ const COMPACTION_QUEUE_SIZE: usize = 32; // Max pending compaction requests
 const WATCHER_START_RETRY_DELAYS: [u64; 3] = [100, 200, 400]; // ms, exponential backoff
 const PROJECT_INACTIVE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 const MAX_FILE_RETRIES: u32 = 3; // Max retries for failed files in memory watchers
+const TUI_CLEANUP_SETTLE_MS: u64 = 100; // ms to wait after shutdown signal before draining
+const TUI_CLEANUP_DRAIN_TIMEOUT_SECS: u64 = 30; // seconds to wait for WriteQueue drain
 
 // ---------------------------------------------------------------------------
 // Path canonicalization cache (prevents blocking I/O in async context)
