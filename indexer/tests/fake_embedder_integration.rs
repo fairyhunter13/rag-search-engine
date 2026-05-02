@@ -69,21 +69,28 @@ fn acquire_test_lock() -> Result<std::fs::File> {
 // RPC helper
 // ---------------------------------------------------------------------------
 
+fn read_auth_token() -> Option<String> {
+    let path = dirs::home_dir()?.join(".opencode").join("embedder.token");
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
 async fn rpc(port: u16, method: &str, params: Value) -> Result<Value> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
+    let token = read_auth_token();
     // Retry once with backoff: the daemon may be briefly busy after run_index.
     for attempt in 0..2 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        match client
+        let mut req = client
             .post(format!("http://127.0.0.1:{port}/rpc"))
-            .json(&json!({"method": method, "params": params}))
-            .send()
-            .await
-        {
+            .json(&json!({"method": method, "params": params}));
+        if let Some(ref t) = token {
+            req = req.header("x-indexer-token", t.as_str());
+        }
+        match req.send().await {
             Ok(resp) => return resp.json::<Value>().await.context("parse rpc response"),
             Err(e) if attempt == 0 => {
                 tracing::warn!("rpc attempt {} failed: {}", attempt + 1, e);

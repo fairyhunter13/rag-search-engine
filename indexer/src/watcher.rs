@@ -32,8 +32,8 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{debug, info, warn};
 
-const DEBOUNCE_DELAY: Duration = Duration::from_millis(500);
-const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+const DEBOUNCE_DELAY: Duration = Duration::from_millis(1000);
+const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Events emitted by the file watcher.
 #[derive(Debug)]
@@ -118,16 +118,16 @@ pub fn watch(
     filter: Arc<dyn Fn(&Path) -> bool + Send + Sync>,
 ) -> Result<tokio::sync::mpsc::Receiver<WatchEvent>> {
     // Bounded channels prevent memory exhaustion from event buildup
-    // output: 1024 slots for batched WatchEvents (small, high-level events)
-    let (output_tx, output_rx) = tokio::sync::mpsc::channel(1024);
+    // output: 512 slots for batched WatchEvents (small, high-level events)
+    let (output_tx, output_rx) = tokio::sync::mpsc::channel(512);
     let root = root.to_path_buf();
 
     // Channel from notify's callback thread to our bridge thread
     let (notify_tx, notify_rx) = std::sync::mpsc::channel::<Event>();
 
     // Channel from bridge thread to async debounce task
-    // bridge: 4096 slots for raw filesystem events (large volume before debouncing)
-    let (bridge_tx, bridge_rx) = tokio::sync::mpsc::channel::<Event>(4096);
+    // bridge: 2048 slots for raw filesystem events (large volume before debouncing)
+    let (bridge_tx, bridge_rx) = tokio::sync::mpsc::channel::<Event>(2048);
 
     // Create the filesystem watcher
     let mut watcher = RecommendedWatcher::new(
@@ -455,8 +455,8 @@ mod tests {
     fn documents_native_watcher_intent() {
         // RecommendedWatcher selects the best native backend per platform:
         //   Linux: inotify, macOS: FSEvents, Windows: ReadDirectoryChangesW
-        assert_eq!(DEBOUNCE_DELAY, Duration::from_millis(500));
-        assert_eq!(MIN_FLUSH_INTERVAL, Duration::from_secs(2));
+        assert_eq!(DEBOUNCE_DELAY, Duration::from_millis(1000));
+        assert_eq!(MIN_FLUSH_INTERVAL, Duration::from_secs(5));
         assert!(MIN_FLUSH_INTERVAL > DEBOUNCE_DELAY,
             "flush interval must exceed debounce to prevent burst processing");
     }
@@ -664,8 +664,8 @@ mod tests {
             attrs: Default::default(),
         }).await.unwrap();
 
-        // Wait for second flush
-        let _ = tokio::time::timeout(Duration::from_secs(5), out_rx.recv())
+        // Wait for second flush — must wait up to DEBOUNCE_DELAY + MIN_FLUSH_INTERVAL
+        let _ = tokio::time::timeout(Duration::from_secs(8), out_rx.recv())
             .await
             .expect("timeout on batch 2")
             .expect("closed");

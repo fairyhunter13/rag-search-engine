@@ -204,8 +204,23 @@ fn http_base_url() -> String {
 /// Read the shared embedder auth token from ~/.opencode/embedder.token.
 /// Returns None when the file is missing (embedder auth disabled).
 fn read_embedder_token() -> Option<String> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+    const TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((ref token, ts)) = *guard {
+            if ts.elapsed() < TTL {
+                return Some(token.clone());
+            }
+        }
+    }
     let path = dirs::home_dir()?.join(".opencode").join("embedder.token");
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    let token = std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())?;
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((token.clone(), std::time::Instant::now()));
+    }
+    Some(token)
 }
 
 /// Singleton reqwest client (shared across all HTTP calls).
@@ -262,7 +277,7 @@ fn inflight_semaphore() -> &'static tokio::sync::Semaphore {
         let limit = std::env::var("OPENCODE_INDEXER_INFLIGHT_LIMIT")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(8);
+            .unwrap_or(4);
         tracing::info!("in-flight request limit: {}", limit);
         tokio::sync::Semaphore::new(limit)
     })
@@ -291,6 +306,16 @@ fn embedder_binary() -> Option<std::path::PathBuf> {
 /// This is a singleton check — if already running (by us or externally), returns immediately.
 pub async fn ensure_embedder() {
     // Fast path: already checked this session
+    if EMBEDDER_CHECKED.load(Ordering::Relaxed) {
+        return;
+    }
+
+    // Serialize the spawn path — prevents duplicate embedder processes when
+    // multiple concurrent requests all see EMBEDDER_CHECKED=false simultaneously.
+    static SPAWN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = SPAWN_LOCK.lock().await;
+
+    // Re-check after acquiring lock (another caller may have already spawned)
     if EMBEDDER_CHECKED.load(Ordering::Relaxed) {
         return;
     }
@@ -355,25 +380,25 @@ pub async fn ensure_embedder() {
     cmd.env("OPENCODE_EMBED_HTTP_PORT", port.to_string())
         .env("OPENCODE_EMBEDDER_PARENT_PID", our_pid.to_string())
         // Cap thread counts in the embedder subprocess to reduce CPU pressure.
-        .env("OMP_NUM_THREADS", "2")
-        .env("MKL_NUM_THREADS", "2")
+        .env("OMP_NUM_THREADS", "1")
+        .env("MKL_NUM_THREADS", "1")
         .env("ORT_NUM_THREADS", "2")
-        .env("OPENBLAS_NUM_THREADS", "2")
+        .env("OPENBLAS_NUM_THREADS", "1")
         .env("TOKENIZERS_PARALLELISM", "false")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
     // REC-5+6: Set resource limits and priority on embedder child process.
-    // - RLIMIT_AS=20GB prevents runaway memory allocation
-    // - nice(10) matches parent indexer's CPU priority
+    // - RLIMIT_AS=8GB prevents runaway memory allocation
+    // - nice(15) lowers CPU priority further to reduce contention
     // - ioprio idle class prevents I/O starvation of interactive processes
     unsafe {
         cmd.pre_exec(|| {
-            let mem_limit: u64 = 20 * 1024 * 1024 * 1024;
+            let mem_limit: u64 = 8 * 1024 * 1024 * 1024; // 8 GB virtual memory limit
             let rl = libc::rlimit { rlim_cur: mem_limit, rlim_max: mem_limit };
             libc::setrlimit(libc::RLIMIT_AS, &rl);
-            libc::nice(10);
+            libc::nice(15);
             libc::syscall(libc::SYS_ioprio_set, 1i64, 0i64, (3i64 << 13) | 7);
             Ok(())
         });
@@ -454,7 +479,7 @@ fn spawn_idle_monitor() {
                 .unwrap_or(300);
             let threshold = Duration::from_secs(idle_secs);
             loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                tokio::time::sleep(Duration::from_secs(120)).await;
                 let last = EMBEDDER_LAST_USED.load(Ordering::Relaxed);
                 // last == 0 means embedder was never used for actual work — skip
                 if last == 0 {
@@ -1014,14 +1039,13 @@ pub struct ChunkWithVector {
 
 /// Returns recommended concurrency for HTTP embedding workloads.
 ///
-/// Defaults to 4 — high enough for pipeline overlap but low enough to avoid
-/// overwhelming the Python embedder's semaphore-gated embed workers.
+/// Defaults to 1 — conservative default to avoid overwhelming the Python embedder.
 /// Override with `OPENCODE_INDEXER_EMBED_CONCURRENCY`.
 pub fn recommended_concurrency() -> usize {
     std::env::var("OPENCODE_INDEXER_EMBED_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(4)
+        .unwrap_or(1)
 }
 
 /// Returns true when running against a remote (non-local) embedding server.

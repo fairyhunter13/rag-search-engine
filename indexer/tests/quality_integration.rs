@@ -25,9 +25,13 @@ use tokio::process::Command;
 
 async fn rpc(port: u16, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(format!("http://127.0.0.1:{port}/rpc"))
-        .json(&serde_json::json!({"method": method, "params": params}))
+        .json(&serde_json::json!({"method": method, "params": params}));
+    if let Some(token) = read_auth_token() {
+        req = req.header("x-indexer-token", token);
+    }
+    let resp = req
         .send()
         .await
         .context("send rpc")?
@@ -35,6 +39,11 @@ async fn rpc(port: u16, method: &str, params: serde_json::Value) -> Result<serde
         .await
         .context("parse rpc response")?;
     Ok(resp)
+}
+
+fn read_auth_token() -> Option<String> {
+    let path = dirs::home_dir()?.join(".opencode").join("embedder.token");
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
 // ---------------------------------------------------------------------------

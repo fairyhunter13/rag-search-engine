@@ -134,9 +134,9 @@ impl HardwareInfo {
     /// Get recommended write batch size for LanceDB.
     pub fn write_batch_size(&self) -> usize {
         if self.gpu.available {
-            64 // Larger batches for GPU systems
+            32 // Larger batches for GPU systems
         } else {
-            32 // Smaller batches for CPU systems
+            16 // Smaller batches for CPU systems
         }
     }
 
@@ -365,10 +365,10 @@ impl MemoryUsage {
 /// Default memory pressure threshold: if system memory usage exceeds this,
 /// the pipeline applies backpressure (blocks non-blocking writes, reduces buffers).
 /// 80% leaves headroom for OS caches, other processes, and LanceDB internals.
-pub const MEMORY_PRESSURE_THRESHOLD: f64 = 0.80;
+pub const MEMORY_PRESSURE_THRESHOLD: f64 = 0.75;
 
 /// Critical memory threshold: if exceeded, the pipeline aggressively flushes.
-pub const MEMORY_CRITICAL_THRESHOLD: f64 = 0.90;
+pub const MEMORY_CRITICAL_THRESHOLD: f64 = 0.85;
 
 /// Check if system is under memory pressure.
 /// Returns true if memory usage exceeds MEMORY_PRESSURE_THRESHOLD.

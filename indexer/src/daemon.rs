@@ -28,14 +28,12 @@ fn max_storage_cache_size() -> usize {
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
-        .unwrap_or(10)
+        .unwrap_or(4)
 }
-const TUI_CLEANUP_SETTLE_MS: u64 = 100; // ms wait after shutdown signal before drain
-const TUI_CLEANUP_DRAIN_TIMEOUT_SECS: u64 = 30; // drain timeout for TUI cleanup
-const MAX_CANONICALIZED_CACHE_SIZE: usize = 1000;
-const MAX_LINK_CACHE_SIZE: usize = 500;
+const MAX_CANONICALIZED_CACHE_SIZE: usize = 200;
+const MAX_LINK_CACHE_SIZE: usize = 50;
 const COMPACTION_STATE_TTL: Duration = Duration::from_secs(86400); // 24 hours
-const COMPACTION_QUEUE_SIZE: usize = 100; // Max pending compaction requests
+const COMPACTION_QUEUE_SIZE: usize = 32; // Max pending compaction requests
 const WATCHER_START_RETRY_DELAYS: [u64; 3] = [100, 200, 400]; // ms, exponential backoff
 const PROJECT_INACTIVE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 const MAX_FILE_RETRIES: u32 = 3; // Max retries for failed files in memory watchers
@@ -197,7 +195,7 @@ struct DaemonState {
     /// Memory watchers keyed by scope (e.g., "global", "project:abc123")
     memory_watchers: HashMap<String, MemoryWatcherState>,
     /// Last activity timestamp for idle shutdown tracking
-    last_activity: Arc<RwLock<Instant>>,
+    last_activity: Instant,
 }
 
 impl DaemonState {
@@ -232,15 +230,27 @@ impl DaemonState {
             now.duration_since(state.last_activity) < COMPACTION_STATE_TTL
         });
 
+        // Clean up tui_connections with no entries
+        self.tui_connections.retain(|_, connections| !connections.is_empty());
+
+        // Clean up tui_projects that have no active watchers or connections
+        let before_tui = self.tui_projects.len();
+        self.tui_projects.retain(|key| {
+            // Keep if there's an active watcher or TUI connection
+            self.watchers.contains_key(key)
+                || self.tui_connections.get(key).map(|c| !c.is_empty()).unwrap_or(false)
+        });
+        let cleaned_tui = before_tui.saturating_sub(self.tui_projects.len());
+
         let cleaned_projects = before_projects.saturating_sub(self.projects.len());
         let cleaned_watchers = before_watchers.saturating_sub(self.watchers.len());
         let cleaned_memory = before_memory_watchers.saturating_sub(self.memory_watchers.len());
         let cleaned_compaction = before_compaction.saturating_sub(self.compaction.len());
 
-        if cleaned_projects > 0 || cleaned_watchers > 0 || cleaned_memory > 0 || cleaned_compaction > 0 {
+        if cleaned_projects > 0 || cleaned_watchers > 0 || cleaned_memory > 0 || cleaned_compaction > 0 || cleaned_tui > 0 {
             tracing::info!(
-                "TTL cleanup: removed {} projects, {} watchers, {} memory watchers, {} compaction states",
-                cleaned_projects, cleaned_watchers, cleaned_memory, cleaned_compaction
+                "TTL cleanup: removed {} projects, {} watchers, {} memory watchers, {} compaction states, {} tui_projects",
+                cleaned_projects, cleaned_watchers, cleaned_memory, cleaned_compaction, cleaned_tui
             );
         }
     }
@@ -308,7 +318,7 @@ impl PendingChanges {
 }
 
 /// Default backpressure limit for pending file changes (configurable via .opencode-index.yaml)
-const DEFAULT_MAX_PENDING_FILES: usize = 10000;
+const DEFAULT_MAX_PENDING_FILES: usize = 2000;
 
 /// Statistics for dropped watcher events (for monitoring/diagnostics)
 #[derive(Debug, Default)]
@@ -504,27 +514,27 @@ impl CompactionState {
 /// Reads env vars on every call — no OnceLock caching — so tests and runtime
 /// overrides work correctly without cache poisoning.
 fn compaction_idle_threshold() -> Duration {
-    env_duration_ms("OPENCODE_COMPACTION_IDLE_MS", Duration::from_secs(30))
+    env_duration_ms("OPENCODE_COMPACTION_IDLE_MS", Duration::from_secs(300))
 }
 
 fn compaction_ops_threshold() -> u64 {
     std::env::var("OPENCODE_COMPACTION_OPS_THRESHOLD")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
+        .unwrap_or(100)
 }
 
 fn compaction_force_threshold() -> u64 {
     std::env::var("OPENCODE_COMPACTION_FORCE_THRESHOLD")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(200)
+        .unwrap_or(500)
 }
 
 fn compaction_check_interval() -> Duration {
     env_duration_ms(
         "OPENCODE_COMPACTION_CHECK_INTERVAL_MS",
-        Duration::from_secs(300),
+        Duration::from_secs(600),
     )
 }
 
@@ -548,7 +558,52 @@ async fn perform_compaction(db_path: &Path, dims: u32) -> Result<()> {
     tokio::task::spawn_blocking(move || handle.block_on(storage.compact()))
         .await
         .map_err(|e| anyhow::anyhow!("compaction thread panicked: {e}"))??;
+    release_all_memory_pressure().await;
     Ok(())
+}
+
+fn purge_jemalloc() {
+    #[cfg(not(target_env = "msvc"))]
+    {
+        if let Err(e) = tikv_jemalloc_ctl::epoch::advance() {
+            tracing::debug!("jemalloc epoch advance failed: {}", e);
+            return;
+        }
+        // MALLCTL_ARENAS_ALL = u32::MAX — purge all arenas
+        let purge_key = b"arena.4294967295.purge\0";
+        unsafe {
+            let _ = tikv_jemalloc_ctl::raw::write(purge_key, 0u64);
+        }
+        tracing::debug!("jemalloc: forced purge complete");
+    }
+}
+
+async fn release_all_memory_pressure() {
+    let cache = storage_cache();
+    {
+        let r = cache.read().await;
+        for entry in r.values() {
+            let _ = entry.storage.release_memory_pressure().await;
+        }
+    }
+    // Evict LRU half of storage cache to free LanceDB connections
+    {
+        let mut w = cache.write().await;
+        let keep = (w.len() + 1) / 2;
+        if w.len() > keep {
+            let to_evict = w.len() - keep;
+            let mut keys_by_age: Vec<_> = w
+                .iter()
+                .map(|(k, v)| (k.clone(), v.last_access))
+                .collect();
+            keys_by_age.sort_by_key(|(_, t)| *t);
+            for (k, _) in keys_by_age.into_iter().take(to_evict) {
+                w.remove(&k);
+            }
+        }
+    }
+    purge_jemalloc();
+    tracing::info!("memory pressure release complete");
 }
 
 /// Compaction worker: processes compaction requests one at a time.
@@ -590,7 +645,7 @@ async fn compaction_worker(
                     let cooldown = std::env::var("OPENCODE_INDEXER_COMPACTION_COOLDOWN_SECS")
                         .ok()
                         .and_then(|v| v.parse::<u64>().ok())
-                        .unwrap_or(3600);
+                        .unwrap_or(7200);
                     let s = state.lock().await;
                     if let Some(cs) = s.compaction.get(&req.key) {
                         if let Some(last) = cs.last_compact_time {
@@ -660,7 +715,7 @@ async fn compaction_worker(
                 let spacing = std::env::var("OPENCODE_INDEXER_COMPACTION_SPACING_SECS")
                     .ok()
                     .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(5);
+                    .unwrap_or(30);
                 tokio::time::sleep(Duration::from_secs(spacing)).await;
             }
         }
@@ -745,25 +800,27 @@ async fn shutdown_drain_write_queues(state: Arc<Mutex<DaemonState>>) {
             break;
         }
 
-        // Signal shutdown and drain
-        let mut s = state.lock().await;
-        if let Some(watcher) = s.watchers.get_mut(&key) {
-            // Signal shutdown to watcher
-            let _ = watcher.shutdown_tx.send(true);
+        // Signal shutdown and extract write queue handle (drop lock before await)
+        let write_queue = {
+            let mut s = state.lock().await;
+            if let Some(watcher) = s.watchers.get_mut(&key) {
+                let _ = watcher.shutdown_tx.send(true);
+                watcher.write_queue.take()
+            } else {
+                None
+            }
+        }; // lock dropped
 
-            // Drain WriteQueue
+        if let Some(wq) = write_queue {
             let remaining = DRAIN_TIMEOUT.saturating_sub(start.elapsed());
-            match tokio::time::timeout(remaining, watcher.drain_write_queue()).await {
-                Ok(Some(stats)) => {
+            match tokio::time::timeout(remaining, wq.shutdown_shared()).await {
+                Ok(stats) => {
                     tracing::info!(
                         "Shutdown: drained LanceDB WriteQueue for {} ({} batches, {} chunks)",
                         key,
                         stats.batches_written,
                         stats.chunks_written
                     );
-                }
-                Ok(None) => {
-                    tracing::warn!("Shutdown: LanceDB WriteQueue for {} already drained or has other references", key);
                 }
                 Err(_) => {
                     tracing::warn!("Shutdown: LanceDB WriteQueue drain timed out for {}", key);
@@ -910,13 +967,13 @@ fn env_duration_ms(key: &str, default: Duration) -> Duration {
 }
 
 /// Get idle shutdown timeout from environment or CLI arg.
-/// Default: 600 seconds (10 minutes). Set to 0 to disable.
+/// Default: 300 seconds (5 minutes). Set to 0 to disable.
 fn idle_shutdown_timeout(cli_arg: Option<u64>) -> u64 {
     cli_arg.unwrap_or_else(|| {
         std::env::var("OPENCODE_INDEXER_IDLE_SHUTDOWN")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(600)
+            .unwrap_or(300)
     })
 }
 
@@ -2265,14 +2322,14 @@ const FEDERATED_DB_WARNING_THRESHOLD: usize = 50;
 
 /// Semaphore for limiting concurrent federated searches.
 /// Configurable via OPENCODE_FEDERATED_CONCURRENCY environment variable.
-/// Defaults to min(num_cpus, 8) to balance parallelism with resource usage.
+/// Defaults to min(num_cpus, 4) to balance parallelism with resource usage.
 fn federated_search_semaphore() -> &'static tokio::sync::Semaphore {
     static SEM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
     SEM.get_or_init(|| {
         let limit = std::env::var("OPENCODE_FEDERATED_CONCURRENCY")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or_else(|| num_cpus::get().min(8));
+            .unwrap_or_else(|| num_cpus::get().min(4));
         
         tracing::debug!("federated search concurrency limit: {}", limit);
         tokio::sync::Semaphore::new(limit)
@@ -2325,9 +2382,9 @@ fn query_cache() -> &'static RwLock<lru::LruCache<QueryCacheKey, QueryCacheEntry
         let capacity = std::env::var("OPENCODE_QUERY_CACHE_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(100);
-        
-        let cap = std::num::NonZeroUsize::new(capacity).unwrap_or(std::num::NonZeroUsize::new(100).unwrap());
+            .unwrap_or(50);
+
+        let cap = std::num::NonZeroUsize::new(capacity).unwrap_or(std::num::NonZeroUsize::new(50).unwrap());
         tracing::debug!("query cache size: {}", capacity);
         RwLock::new(lru::LruCache::new(cap))
     })
@@ -2338,7 +2395,7 @@ fn query_cache_ttl() -> Duration {
     let ttl_secs = std::env::var("OPENCODE_QUERY_CACHE_TTL_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(60);
+        .unwrap_or(30);
     Duration::from_secs(ttl_secs)
 }
 
@@ -2433,11 +2490,13 @@ async fn search_impl(
     // - Concurrency limited by semaphore to prevent CPU/memory spikes
     // ========================================================================
     let sem = federated_search_semaphore();
+    let query_arc: Arc<str> = Arc::from(query);
+    let tier_arc: Arc<str> = Arc::from(tier);
     let search_tasks: Vec<_> = all_paths
         .into_iter()
         .map(|sp| {
-            let query = query.to_string();
-            let tier = tier.to_string();
+            let query = Arc::clone(&query_arc);
+            let tier = Arc::clone(&tier_arc);
             let key = sp.to_string_lossy().to_string();
             let prefix = mounts
                 .get(&key)
@@ -2449,10 +2508,10 @@ async fn search_impl(
 
                 if use_vector_only {
                     // Fast path: vector search only, no per-project rerank
-                    search_single_db_vector_only(sp, &query, &tier, dims, prefix).await
+                    search_single_db_vector_only(sp, &*query, &*tier, dims, prefix).await
                 } else {
                     // Quality path: vector search + per-project rerank
-                    search_single_db_stage1(sp, &query, &tier, dims, prefix).await
+                    search_single_db_stage1(sp, &*query, &*tier, dims, prefix).await
                 }
             })
         })
@@ -4962,21 +5021,19 @@ fn spawn_project_processor(key: String, state: Arc<Mutex<DaemonState>>) {
                 }
             };
 
-            let method = item.method.clone();
-            let params = item.params.clone();
-            let result = handle_request(&method, &params).await;
+            let result = handle_request(&item.method, &item.params).await;
 
             // Track write operations for compaction
-            if matches!(method.as_str(), "index_file" | "remove_file") {
+            if matches!(item.method.as_str(), "index_file" | "remove_file") {
                 // Check if the operation was successful (not skipped)
                 let was_write = result["success"].as_bool() == Some(true)
                     && result["skipped"].as_bool() != Some(true);
 
                 if was_write {
                     // Extract db path and dimensions from params
-                    let root = params["root"].as_str().unwrap_or(".");
-                    let db = params["db"].as_str();
-                    let dims = params["dimensions"].as_u64().unwrap_or(1024) as u32;
+                    let root = item.params["root"].as_str().unwrap_or(".");
+                    let db = item.params["db"].as_str();
+                    let dims = item.params["dimensions"].as_u64().unwrap_or(1024) as u32;
 
                     let root_path = tokio::fs::canonicalize(root)
                         .await
@@ -5141,19 +5198,28 @@ async fn dispatch_unified(
         };
     }
 
-    if matches!(
-        method.as_str(),
-        "tui_connect" | "tui_disconnect" | "tui_connections"
-    ) {
+    if method == "tui_disconnect" {
+        let root = params["root"].as_str().unwrap_or(".");
+        let key = canonicalize_project_key(root).await;
+        let result = {
+            let mut s = state.lock().await;
+            tui_disconnect_impl(&mut s, &key, params["connectionId"].as_str().unwrap_or(""))
+        };
+        // Lock dropped — watcher_stop_internal acquires its own lock
+        if result["shouldStopWatcher"].as_bool() == Some(true) {
+            tracing::info!("all TUI connections gone for {} — stopping watcher", key);
+            let _ = watcher_stop_internal(&state, root).await;
+        }
+        return result;
+    }
+
+    if matches!(method.as_str(), "tui_connect" | "tui_connections") {
         let root = params["root"].as_str().unwrap_or(".");
         let key = canonicalize_project_key(root).await;
         let mut s = state.lock().await;
         return match method.as_str() {
             "tui_connect" => {
                 tui_connect_impl(&mut s, &key, params["connectionId"].as_str().unwrap_or(""))
-            }
-            "tui_disconnect" => {
-                tui_disconnect_impl(&mut s, &key, params["connectionId"].as_str().unwrap_or(""))
             }
             "tui_connections" => tui_connections_impl(&mut s, &key),
             _ => unreachable!(),
@@ -5177,8 +5243,8 @@ async fn dispatch_unified(
             pq.last_activity = Instant::now(); // Touch on every operation
             pq.queue.push_back(QueueItem {
                 id: 0,
-                method: method.clone(),
-                params: params.clone(),
+                method,
+                params,
                 tx,
             });
             if !pq.processing {
@@ -5228,9 +5294,47 @@ async fn dispatch_unified(
         return serde_json::json!({"compaction": statuses});
     }
 
+    if method == "memory_release" {
+        release_all_memory_pressure().await;
+        return serde_json::json!({"ok": true, "message": "memory pressure released"});
+    }
+
+    if method == "memory_stats" {
+        let mut stats = serde_json::json!({});
+        {
+            let _ = tikv_jemalloc_ctl::epoch::advance();
+            if let Ok(allocated) = tikv_jemalloc_ctl::stats::allocated::read() {
+                stats["jemalloc_allocated_bytes"] = serde_json::Value::from(allocated as u64);
+            }
+            if let Ok(resident) = tikv_jemalloc_ctl::stats::resident::read() {
+                stats["jemalloc_resident_bytes"] = serde_json::Value::from(resident as u64);
+            }
+        }
+        if let Ok(status) = tokio::fs::read_to_string("/proc/self/status").await {
+            for line in status.lines() {
+                if line.starts_with("VmRSS:") || line.starts_with("RssAnon:") || line.starts_with("RssFile:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        stats[parts[0].trim_end_matches(':')] = parts[1].into();
+                    }
+                }
+            }
+        }
+        return stats;
+    }
+
     // All read-only stateless operations.
     handle_request(&method, &params).await
 }
+
+/// RPC methods that should NOT reset the idle-shutdown timer.
+/// These are read-only status/health checks — 13+ bun servers sending periodic
+/// pings should not prevent the daemon from shutting down when truly idle.
+const PASSIVE_METHODS: &[&str] = &[
+    "ping", "health", "status", "watcher_status", "tui_connections",
+    "compact_status", "resolve_paths", "get_file_count", "get_status",
+    "startup_check", "memory_stats",
+];
 
 /// Create a type-erased dispatcher that the HTTP server can call.
 ///
@@ -5240,10 +5344,10 @@ fn make_dispatcher(state: Arc<Mutex<DaemonState>>) -> Dispatcher {
     Arc::new(move |method, params| {
         let state = state.clone();
         Box::pin(async move {
-            // Update last activity timestamp on every request
-            {
-                let s = state.lock().await;
-                *s.last_activity.write().await = Instant::now();
+            // Only reset idle timer for non-passive (mutating/active) methods
+            if !PASSIVE_METHODS.contains(&method.as_str()) {
+                let mut s = state.lock().await;
+                s.last_activity = Instant::now();
             }
             dispatch_unified(state, method, params).await
         })
@@ -5274,26 +5378,32 @@ async fn check_existing_daemon() -> bool {
     std::os::unix::net::UnixStream::connect(&socket_path).is_ok()
 }
 
-/// Start the daemon, serving HTTP requests on a Unix domain socket.
+/// Start the daemon, serving HTTP requests on a Unix domain socket (or TCP when tcp_port > 0).
 ///
 /// Linux: abstract socket "@opencode-indexer" (kernel auto-cleans on exit).
 /// macOS: file socket at ~/.opencode/indexer.sock.
-pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) -> Result<()> {
-    // Initialize parent PID global if provided
-    if let Some(ppid) = parent_pid_arg {
-        parent_pid().set(Some(ppid)).ok();
-        tracing::info!("Will monitor parent PID {}", ppid);
+/// When tcp_port is Some(n), binds TCP on 127.0.0.1:n (0 = OS-assigned) instead of Unix socket.
+pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tcp_port: Option<u16>) -> Result<()> {
+    // Initialize parent PID global — CLI arg > env var > getppid()
+    let ppid = if let Some(ppid) = parent_pid_arg {
+        tracing::info!("will monitor parent PID {} (CLI arg)", ppid);
+        Some(ppid)
+    } else if let Ok(ppid_str) = std::env::var("OPENCODE_PARENT_PID") {
+        ppid_str.parse::<i32>().ok().map(|ppid| {
+            tracing::info!("will monitor parent PID {} (env)", ppid);
+            ppid
+        })
     } else {
-        // Try env var fallback
-        if let Ok(ppid_str) = std::env::var("OPENCODE_PARENT_PID") {
-            if let Ok(ppid) = ppid_str.parse::<i32>() {
-                parent_pid().set(Some(ppid)).ok();
-                tracing::info!("Will monitor parent PID {} (from env)", ppid);
-            }
+        let detected = unsafe { libc::getppid() };
+        if detected > 1 {
+            tracing::info!("parent PID auto-detected: {} (getppid)", detected);
+            Some(detected)
         } else {
-            parent_pid().set(None).ok();
+            tracing::warn!("getppid()={} (init/container?), skip parent monitor", detected);
+            None
         }
-    }
+    };
+    parent_pid().set(ppid).ok();
     // --- Strict singleton enforcement via OS-level flock ---
     // Acquire an exclusive lock on ~/.opencode/indexer.lock.
     // This prevents TOCTOU races where two daemons start simultaneously.
@@ -5311,51 +5421,57 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
     .await
     .context("lock file creation task panicked")??;
 
-    #[cfg(target_os = "linux")]
-    {
-        // On Linux, the abstract socket bind IS the singleton lock — no flock needed.
-        // Just do a quick pre-check before heavy initialization.
-        if check_existing_daemon().await {
-            tracing::info!("daemon already running, exiting");
-            println!("{}", serde_json::json!({"type": "already_running"}));
-            return Ok(());
-        }
-        // Drop lock_file — not needed on Linux (abstract socket is the singleton)
-        drop(lock_file);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        use std::os::unix::io::AsRawFd;
-        let fd = lock_file.as_raw_fd();
-        // Try non-blocking exclusive lock
-        let locked = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-        if locked != 0 {
-            // Another daemon holds the lock — check if it's responsive
+    // In TCP mode (tests) skip Unix-socket singleton enforcement entirely —
+    // each test daemon binds its own random TCP port so there's no conflict.
+    if tcp_port.is_none() {
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, the abstract socket bind IS the singleton lock — no flock needed.
+            // Just do a quick pre-check before heavy initialization.
             if check_existing_daemon().await {
                 tracing::info!("daemon already running, exiting");
                 println!("{}", serde_json::json!({"type": "already_running"}));
                 return Ok(());
             }
-            // Lock held but daemon not responsive — stale lock, try blocking acquire
-            tracing::warn!("stale lock detected, waiting to acquire...");
-            let locked = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            // Drop lock_file — not needed on Linux (abstract socket is the singleton)
+            drop(lock_file);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = lock_file.as_raw_fd();
+            // Try non-blocking exclusive lock
+            let locked = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
             if locked != 0 {
-                anyhow::bail!(
-                    "failed to acquire indexer lock: {}",
-                    std::io::Error::last_os_error()
-                );
+                // Another daemon holds the lock — check if it's responsive
+                if check_existing_daemon().await {
+                    tracing::info!("daemon already running, exiting");
+                    println!("{}", serde_json::json!({"type": "already_running"}));
+                    return Ok(());
+                }
+                // Lock held but daemon not responsive — stale lock, try blocking acquire
+                tracing::warn!("stale lock detected, waiting to acquire...");
+                let locked = unsafe { libc::flock(fd, libc::LOCK_EX) };
+                if locked != 0 {
+                    anyhow::bail!(
+                        "failed to acquire indexer lock: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+            }
+            // Lock acquired — we are the singleton daemon.
+            // Keep lock_file alive for the daemon's lifetime (dropped on function return).
+            let _lock = lock_file;
+
+            // --- Secondary check: socket probe ---
+            if check_existing_daemon().await {
+                tracing::info!("daemon already running, exiting");
+                println!("{}", serde_json::json!({"type": "already_running"}));
+                return Ok(());
             }
         }
-        // Lock acquired — we are the singleton daemon.
-        // Keep lock_file alive for the daemon's lifetime (dropped on function return).
-        let _lock = lock_file;
-
-        // --- Secondary check: socket probe ---
-        if check_existing_daemon().await {
-            tracing::info!("daemon already running, exiting");
-            println!("{}", serde_json::json!({"type": "already_running"}));
-            return Ok(());
-        }
+    } else {
+        drop(lock_file);
     }
 
     // Set up process group for clean child termination (prevents orphaned PIDs)
@@ -5363,7 +5479,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
 
     // Tell Linux OOM-killer to prefer killing the indexer (score 500) over user
     // processes (score ~0-200) during memory pressure. Fails silently.
-    set_oom_score(500);
+    set_oom_score(300);
 
     // Auto-start the Python embedder if needed (non-blocking background task)
     tokio::spawn(async {
@@ -5386,7 +5502,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
         compaction_tx: None,
         watchers: HashMap::new(),
         memory_watchers: HashMap::new(),
-        last_activity: Arc::new(RwLock::new(Instant::now())),
+        last_activity: Instant::now(),
     }));
 
     // Create compaction queue and spawn worker
@@ -5409,12 +5525,15 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
         let cleanup_state = state.clone();
         let mut cleanup_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300)); // Every 5 minutes
+            let mut interval = tokio::time::interval(Duration::from_secs(600)); // Every 10 minutes
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let mut s = cleanup_state.lock().await;
-                        s.cleanup_inactive();
+                        {
+                            let mut s = cleanup_state.lock().await;
+                            s.cleanup_inactive();
+                        }
+                        release_all_memory_pressure().await;
                     }
                     _ = cleanup_shutdown.changed() => {
                         if *cleanup_shutdown.borrow() {
@@ -5768,7 +5887,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
                 // Wait for any watcher to have pending changes OR timeout for periodic check
                 // Use 60s timeout to minimize idle wakeups while still allowing periodic checks
                 let had_pending = tokio::time::timeout(
-                    Duration::from_secs(300), // 5-minute timeout - watcher events wake us immediately
+                    Duration::from_secs(600), // 10-minute timeout - watcher events wake us immediately
                     wait_for_any_pending(&state),
                 )
                 .await
@@ -6551,27 +6670,36 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
         signal(SignalKind::interrupt()).context("failed to register SIGINT handler")?;
     let mut sighup = signal(SignalKind::hangup()).context("failed to register SIGHUP handler")?;
 
-    // Start HTTP server
+    // Start HTTP server (TCP when tcp_port is Some, Unix socket otherwise)
     let dispatcher = make_dispatcher(state.clone());
-    tokio::spawn(async move {
-        match crate::http_server::serve(dispatcher).await {
-            Ok(()) => {}
-            Err(e) => {
-                if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
-                    if io_err.kind() == std::io::ErrorKind::AddrInUse {
-                        println!("{}", serde_json::json!({"type": "already_running"}));
-                        std::process::exit(0);
-                    }
-                }
-                tracing::error!("HTTP server error: {}", e);
+    if let Some(port) = tcp_port {
+        // TCP mode: used for integration tests where each daemon gets its own port.
+        // serve_tcp() emits {"type":"http_ready","port":N} itself before axum::serve.
+        tokio::spawn(async move {
+            if let Err(e) = crate::http_server::serve_tcp(port, dispatcher).await {
+                tracing::error!("HTTP server (TCP) error: {}", e);
             }
-        }
-    });
-
-    // Print ready line so the TS side knows when to connect.
-    // Emit only after the daemon is fully initialized (including signal handlers)
-    // to avoid races in tests and callers that send signals immediately.
-    println!("{}", serde_json::json!({"type": "daemon_ready"}));
+        });
+    } else {
+        tokio::spawn(async move {
+            match crate::http_server::serve(dispatcher).await {
+                Ok(()) => {}
+                Err(e) => {
+                    if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                        if io_err.kind() == std::io::ErrorKind::AddrInUse {
+                            println!("{}", serde_json::json!({"type": "already_running"}));
+                            std::process::exit(0);
+                        }
+                    }
+                    tracing::error!("HTTP server error: {}", e);
+                }
+            }
+        });
+        // Print ready line so the TS side knows when to connect.
+        // Emit only after the daemon is fully initialized (including signal handlers)
+        // to avoid races in tests and callers that send signals immediately.
+        println!("{}", serde_json::json!({"type": "daemon_ready"}));
+    }
 
     // Log configuration
     {
@@ -6600,7 +6728,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>) ->
                 loop {
                     let last_activity = {
                         let s = state_for_idle.lock().await;
-                        *s.last_activity.read().await
+                        s.last_activity
                     };
                     let idle = last_activity.elapsed().as_secs();
                     tracing::debug!("idle check: idle={}s, threshold={}s", idle, idle_shutdown_secs);
@@ -6940,7 +7068,7 @@ mod compaction_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
-            last_activity: Arc::new(RwLock::new(Instant::now())),
+            last_activity: Instant::now(),
         };
 
         let db_path = PathBuf::from("/tmp/test.lancedb");
@@ -6965,7 +7093,7 @@ mod compaction_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
-            last_activity: Arc::new(RwLock::new(Instant::now())),
+            last_activity: Instant::now(),
         };
 
         let db_path = PathBuf::from("/tmp/test.lancedb");
@@ -6990,7 +7118,7 @@ mod compaction_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
-            last_activity: Arc::new(RwLock::new(Instant::now())),
+            last_activity: Instant::now(),
         };
 
         let db1 = PathBuf::from("/tmp/db1.lancedb");
@@ -7112,16 +7240,16 @@ mod compaction_tests {
         }
 
         let idle = compaction_idle_threshold();
-        assert_eq!(idle, Duration::from_secs(30));
+        assert_eq!(idle, Duration::from_secs(300));
 
         let ops = compaction_ops_threshold();
-        assert_eq!(ops, 50);
+        assert_eq!(ops, 100);
 
         let force = compaction_force_threshold();
-        assert_eq!(force, 200);
+        assert_eq!(force, 500);
 
         let interval = compaction_check_interval();
-        assert_eq!(interval, Duration::from_secs(300));
+        assert_eq!(interval, Duration::from_secs(600));
 
         let timeout = compaction_shutdown_timeout();
         assert_eq!(timeout, Duration::from_secs(60));
@@ -7382,7 +7510,7 @@ mod dropped_event_stats_tests {
     #[test]
     fn default_max_pending_files_constant() {
         // Verify the constant exists and has expected value
-        assert_eq!(DEFAULT_MAX_PENDING_FILES, 10000);
+        assert_eq!(DEFAULT_MAX_PENDING_FILES, 2000);
     }
 }
 
@@ -7401,7 +7529,7 @@ mod http_dispatch_tests {
             compaction_tx: None,
             watchers: HashMap::new(),
             memory_watchers: HashMap::new(),
-            last_activity: Arc::new(RwLock::new(Instant::now())),
+            last_activity: Instant::now(),
         }))
     }
 

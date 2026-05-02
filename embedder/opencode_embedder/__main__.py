@@ -16,17 +16,25 @@ import sys
 # Must be called before any multiprocessing operations.
 multiprocessing.freeze_support()
 
+# Tune glibc malloc BEFORE any significant allocation.
+# MALLOC_ARENA_MAX=2: limit per-thread arenas (default is 8×cores = 192 on 24-core)
+# MALLOC_TRIM_THRESHOLD_=0: auto-trim freed pages to OS
+# MALLOC_MMAP_THRESHOLD_=65536: use mmap for allocs >64K (auto-returned on free)
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "0")
+os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "65536")
+
+# CUDA: defer kernel loading until first use (saves ~30-50MB pinned memory at startup)
+os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+
 # Disable tokenizers parallelism to prevent deadlock on macOS
 # This must be set before importing any module that uses tokenizers
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-# Limit CPU thread usage to prevent CPU/memory hogging.
-# ONNX Runtime, MKL, and OpenBLAS each spawn OMP_NUM_THREADS internal threads.
-# Default to 2 to keep total thread count bounded.
-os.environ.setdefault("OMP_NUM_THREADS", "2")
-os.environ.setdefault("MKL_NUM_THREADS", "2")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
-os.environ.setdefault("ORT_NUM_THREADS", "2")
+# CPU thread limits are set by embeddings._limit_onnx_threads() which detects
+# GPU availability and scales appropriately (1 thread for GPU mode, 2-4 for CPU).
+# Do NOT hardcode OMP_NUM_THREADS here — it prevents GPU-aware optimization.
+os.environ.setdefault("ORT_NUM_THREADS", "1")
 
 # HuggingFace Hub: disable XetHub-backed downloads by default.
 # This improves reliability on some networks and avoids CAS/Xet-specific failures.
@@ -111,7 +119,7 @@ Usage:
 
 Options:
     --workers N          Number of parallel embed workers (default: auto-detected)
-    --idle-shutdown N    Seconds of idle time before auto-shutdown (default: 600, 0 to disable)
+    --idle-shutdown N    Seconds of idle time before auto-shutdown (default: 300, 0 to disable)
     --check-gpu          Check GPU provider availability and exit
     --version            Print version and exit
     --help, -h           Show this help message

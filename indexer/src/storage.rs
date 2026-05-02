@@ -9,11 +9,10 @@
 //!
 //! Compatible with indexes created by the Python embedder.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -37,8 +36,8 @@ use tracing::info;
 
 use crate::simd::rerank_by_cosine;
 
-pub const FTS_THRESHOLD: usize = 10; // Create FTS index after this many chunks
-pub const IVF_PQ_THRESHOLD: usize = 256; // Create IVF-PQ index after this many vectors
+pub const FTS_THRESHOLD: usize = 50; // Create FTS index after this many chunks
+pub const IVF_PQ_THRESHOLD: usize = 512; // Create IVF-PQ index after this many vectors
 
 // IVF-PQ Index Tuning Parameters
 // Trade-off: Higher values = better recall but slower search/build
@@ -93,9 +92,10 @@ fn get_ivf_refine_factor() -> usize {
 // Lock-free chunk ID counter using per-database AtomicI64.
 // The outer mutex is only held briefly to get/create the entry.
 // The actual increment uses AtomicI64 — no lock contention during inserts.
-fn chunk_ids() -> &'static std::sync::Mutex<HashMap<String, Arc<std::sync::atomic::AtomicI64>>> {
-    static IDS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Arc<std::sync::atomic::AtomicI64>>>> = std::sync::OnceLock::new();
-    IDS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+// LruCache cap=100 gives O(1) memory guarantee (100 concurrent projects max).
+fn chunk_ids() -> &'static std::sync::Mutex<lru::LruCache<String, Arc<std::sync::atomic::AtomicI64>>> {
+    static IDS: std::sync::OnceLock<std::sync::Mutex<lru::LruCache<String, Arc<std::sync::atomic::AtomicI64>>>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(100).unwrap())))
 }
 
 fn estimate_cost(tokens: i64, tier: &str) -> f64 {
@@ -285,26 +285,29 @@ pub fn hash_file(path: &Path) -> Result<String> {
 
 /// Get the git project ID (first 16 chars of the root commit hash).
 /// Caches results to avoid spawning git subprocess on every call.
+/// LruCache cap=100 gives O(1) memory guarantee.
 pub fn git_project_id(root: &Path) -> String {
-    static CACHE: OnceLock<RwLock<HashMap<PathBuf, String>>> = OnceLock::new();
-    
-    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    static CACHE: OnceLock<std::sync::Mutex<lru::LruCache<PathBuf, String>>> = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| {
+        std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(100).unwrap()))
+    });
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    
+
     // Check cache first
-    if let Ok(read) = cache.read() {
-        if let Some(id) = read.get(&key) {
+    if let Ok(mut guard) = cache.lock() {
+        if let Some(id) = guard.get(&key) {
             return id.clone();
         }
     }
-    
+
     // Helper for fallback: hash the path
     let fallback = || {
         let mut hasher = Sha256::new();
         hasher.update(root.to_string_lossy().as_bytes());
         hex::encode(hasher.finalize())[..16].to_string()
     };
-    
+
     // Compute the value
     let result = Command::new("git")
         .args(["rev-list", "--max-parents=0", "HEAD"])
@@ -330,12 +333,12 @@ pub fn git_project_id(root: &Path) -> String {
     } else {
         fallback()
     };
-    
-    // Store in cache
-    if let Ok(mut write) = cache.write() {
-        write.insert(key, id.clone());
+
+    // Store in cache (LRU auto-evicts if at cap)
+    if let Ok(mut guard) = cache.lock() {
+        guard.put(key, id.clone());
     }
-    
+
     id
 }
 
@@ -423,13 +426,14 @@ struct CachedCounts {
     last_updated: Instant,
 }
 
-const CACHE_TTL_SECS: u64 = 60;
+const CACHE_TTL_SECS: u64 = 120;
 
 pub struct Storage {
     db: lancedb::Connection,
     path: PathBuf,
     dimensions: u32,
     cached_counts: Arc<tokio::sync::RwLock<Option<CachedCounts>>>,
+    cached_table: Arc<tokio::sync::RwLock<Option<lancedb::Table>>>,
 }
 
 impl Clone for Storage {
@@ -439,6 +443,7 @@ impl Clone for Storage {
             path: self.path.clone(),
             dimensions: self.dimensions,
             cached_counts: self.cached_counts.clone(),
+            cached_table: self.cached_table.clone(),
         }
     }
 }
@@ -488,6 +493,7 @@ impl Storage {
                 path: path.to_path_buf(),
                 dimensions,
                 cached_counts: Arc::new(tokio::sync::RwLock::new(None)),
+                cached_table: Arc::new(tokio::sync::RwLock::new(None)),
             };
 
             // Check and migrate schema — with iterative corruption recovery
@@ -534,19 +540,32 @@ impl Storage {
 
     /// Ensure the chunks table exists.
     async fn ensure_chunks(&self) -> Result<lancedb::Table> {
-        let names = self.db.table_names().execute().await?;
-        if names.contains(&"chunks".to_string()) {
-            Ok(self.db.open_table("chunks").execute().await?)
-        } else {
-            Ok(self
-                .db
-                .create_empty_table("chunks", chunks_schema(self.dimensions))
-                .execute()
-                .await?)
+        // Fast path: cached
+        if let Some(table) = self.cached_table.read().await.as_ref() {
+            return Ok(table.clone());
         }
+        // Slow path: check + open/create, then cache
+        let mut w = self.cached_table.write().await;
+        if let Some(table) = w.as_ref() {
+            return Ok(table.clone());
+        }
+        let names = self.db.table_names().execute().await?;
+        let table = if names.iter().any(|n| n == "chunks") {
+            self.db.open_table("chunks").execute().await?
+        } else {
+            self.db.create_empty_table("chunks", chunks_schema(self.dimensions)).execute().await?
+        };
+        *w = Some(table.clone());
+        Ok(table)
+    }
+
+    /// Invalidate the cached table handle (call after clear_all/compact/schema changes).
+    async fn invalidate_table_cache(&self) {
+        *self.cached_table.write().await = None;
     }
 
     pub async fn clear_all(&self) -> Result<()> {
+        self.invalidate_table_cache().await;
         let names = self.db.table_names().execute().await?;
         if names.contains(&"chunks".to_string()) {
             self.db.drop_table("chunks").await?;
@@ -557,6 +576,7 @@ impl Storage {
     }
 
     pub async fn drop_all_tables(&self) -> Result<()> {
+        self.invalidate_table_cache().await;
         self.db.drop_all_tables().await?;
         Ok(())
     }
@@ -863,8 +883,14 @@ impl Storage {
                 return Ok(count);
             }
         }
-        
+
+        // Try in-memory cached counts before expensive full scan
+        if let Some((files, _)) = self.get_cached_counts().await {
+            return Ok(files);
+        }
+
         // Fallback: count from table and cache result
+        tracing::warn!("get_file_count: no cached count for {}, full scan fallback", self.path.display());
         let count = self.get_file_hashes(None).await?.len();
         let _ = self.set_file_count(count).await;
         Ok(count)
@@ -1186,7 +1212,7 @@ impl Storage {
         let mut map = std::collections::HashMap::new();
 
         // Paginate through results to avoid streaming issues with large tables
-        let page_size = 10000;
+        let page_size = 5000;
         let mut offset = 0;
 
         loop {
@@ -1834,16 +1860,17 @@ impl Storage {
         let key = self.path.to_string_lossy().to_string();
         let needs_seed = {
             let ids = chunk_ids().lock().unwrap();
-            !ids.contains_key(&key)
+            !ids.contains(&key)
         };
         if needs_seed {
             let max_id = self.get_max_chunk_id(table).await.unwrap_or(0);
             let mut ids = chunk_ids().lock().unwrap();
-            ids.entry(key.clone())
-                .or_insert_with(|| Arc::new(std::sync::atomic::AtomicI64::new(max_id)));
+            if !ids.contains(&key) {
+                ids.put(key.clone(), Arc::new(std::sync::atomic::AtomicI64::new(max_id)));
+            }
         }
         let counter = {
-            let ids = chunk_ids().lock().unwrap();
+            let mut ids = chunk_ids().lock().unwrap();
             ids.get(&key).unwrap().clone()
         };
         Ok(counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1)
@@ -2245,7 +2272,7 @@ impl Storage {
         let dims = self.dimensions as usize;
 
         // Paginate through results to avoid streaming issues with large tables
-        let page_size = 10000;
+        let page_size = 5000;
         let mut offset = 0;
 
         loop {
@@ -2322,14 +2349,20 @@ impl Storage {
             remap_options: None,
         }).await?;
         
-        // Step 2: Prune - delete old versions older than 1 hour (low memory, saves storage)
-        // This cleans up the version history that accumulates with each write operation
+        // Step 2: Prune - delete old versions (default 15min, configurable via env)
+        let prune_mins = std::env::var("OPENCODE_INDEXER_PRUNE_AGE_MINS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(15);
         table.optimize(lancedb::table::OptimizeAction::Prune {
-            older_than: Some(chrono::TimeDelta::hours(1)), // 1 hour
-            delete_unverified: Some(false), // Safe: don't delete potentially in-progress transactions
-            error_if_tagged_old_versions: Some(false), // Don't error on tagged versions
+            older_than: Some(chrono::TimeDelta::minutes(prune_mins)),
+            delete_unverified: Some(false),
+            error_if_tagged_old_versions: Some(false),
         }).await?;
-        
+        self.invalidate_cached_counts().await;
+        self.invalidate_table_cache().await;
+
         info!("compacted and pruned storage at {}", self.path.display());
         Ok(())
     }
@@ -2341,10 +2374,7 @@ impl Storage {
     /// on next access, so this is safe to call without affecting correctness.
     pub async fn release_memory_pressure(&self) -> Result<()> {
         tracing::debug!("releasing memory pressure for storage at {}", self.path.display());
-        // Note: LanceDB manages its own memory internally. The main memory pressure
-        // comes from table handles and query result caches. By ensuring we don't
-        // hold references longer than needed and relying on periodic compaction,
-        // we help LanceDB's internal garbage collection.
+        self.invalidate_cached_counts().await;
         Ok(())
     }
 
@@ -2365,7 +2395,7 @@ impl Storage {
         // Check if FTS index already exists
         let indices = table.list_indices().await?;
         let has_fts = indices.iter().any(|i| {
-            i.columns.contains(&"content".to_string())
+            i.columns.iter().any(|c| c == "content")
                 && matches!(i.index_type, lancedb::index::IndexType::FTS)
         });
 
@@ -2382,6 +2412,7 @@ impl Storage {
             .context("failed to create FTS index")?;
 
         info!("FTS index created");
+        self.invalidate_table_cache().await;
         Ok(())
     }
 
@@ -2412,7 +2443,7 @@ impl Storage {
         {
             let indices = table.list_indices().await.unwrap_or_default();
             let has_fts = indices.iter().any(|i| {
-                i.columns.contains(&"content".to_string())
+                i.columns.iter().any(|c| c == "content")
                     && matches!(i.index_type, lancedb::index::IndexType::FTS)
             });
             if !has_fts {
@@ -2592,6 +2623,7 @@ impl Storage {
             .await;
 
         info!("IVF-PQ index created successfully");
+        self.invalidate_table_cache().await;
         Ok(())
     }
 
@@ -3065,7 +3097,9 @@ impl WriteQueue {
         // Try to get exclusive ownership to properly await the handle
         match Arc::try_unwrap(self) {
             Ok(mut queue) => {
-                // We have exclusive ownership now, can await the handle
+                // We have exclusive ownership now. Drop tx first to signal writer to stop,
+                // then await the handle (mirrors shutdown()).
+                drop(queue.tx);
                 if let Some(handle) = queue.handle.take() {
                     if let Err(e) = handle.await {
                         tracing::error!("WriteQueue: writer task panicked during shutdown: {}", e);
@@ -4308,7 +4342,7 @@ mod tests {
         // Clear any existing counter for this key
         {
             let mut ids = chunk_ids().lock().unwrap();
-            ids.remove(key);
+            ids.pop(key);
         }
 
         // Concurrent increments should all be unique
@@ -4318,9 +4352,10 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let counter = {
                     let mut ids = chunk_ids().lock().unwrap();
-                    ids.entry(k)
-                        .or_insert_with(|| Arc::new(std::sync::atomic::AtomicI64::new(0)))
-                        .clone()
+                    if !ids.contains(&k) {
+                        ids.put(k.clone(), Arc::new(std::sync::atomic::AtomicI64::new(0)));
+                    }
+                    ids.get(&k).unwrap().clone()
                 };
                 counter.fetch_add(1, Ordering::Relaxed) + 1
             }));
@@ -4339,7 +4374,7 @@ mod tests {
 
         // Verify the counter is at 10
         {
-            let ids = chunk_ids().lock().unwrap();
+            let mut ids = chunk_ids().lock().unwrap();
             assert_eq!(
                 ids.get(key).unwrap().load(Ordering::Relaxed),
                 10

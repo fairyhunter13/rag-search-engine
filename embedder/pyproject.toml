@@ -22,12 +22,12 @@ dependencies = [
     "lxml>=5.0.0",
     # YAML parsing
     "pyyaml>=6.0.0",
-    # IPC: msgpack serialization for model server protocol
-    "msgpack>=1.0.0",
     # HTTP server for REST API (runs alongside socket server)
     "aiohttp>=3.9.0",
     # Required by chonkie's embedding registry (imports openai eagerly)
     "openai>=1.0.0",
+    # RSS watchdog: monitors process memory to trigger GC or restart under pressure
+    "psutil>=5.9.0",
 ]
 
 [project.optional-dependencies]

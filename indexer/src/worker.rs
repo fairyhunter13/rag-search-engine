@@ -42,20 +42,20 @@ pub struct WorkItem {
 
 /// Global concurrency limit across all workers.
 /// Prevents total file operations from exceeding this cap regardless of worker count.
-/// Default: 16 concurrent file operations (configurable via OPENCODE_INDEXER_MAX_CONCURRENT_FILES)
+/// Default: 4 concurrent file operations (configurable via OPENCODE_INDEXER_MAX_CONCURRENT_FILES)
 pub(crate) fn global_file_semaphore() -> &'static Arc<Semaphore> {
     static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
     SEM.get_or_init(|| {
         let max = std::env::var("OPENCODE_INDEXER_MAX_CONCURRENT_FILES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(8);
+            .unwrap_or(4);
         Arc::new(Semaphore::new(max))
     })
 }
 
 /// Channel capacity for work items
-pub const WORK_CHANNEL_CAPACITY: usize = 256;
+pub const WORK_CHANNEL_CAPACITY: usize = 64;
 
 /// Create a work channel
 pub fn work_channel() -> (WorkSender, WorkReceiver) {

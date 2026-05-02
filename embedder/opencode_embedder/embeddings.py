@@ -587,6 +587,38 @@ def _build_provider_list_with_options(providers: list[str]) -> list:
     return result
 
 
+# Monkey-patch FastEmbed to accept additional ORT SessionOptions not in default
+# EXPOSED_SESSION_OPTIONS. Reduces CPU memory when inference runs on GPU.
+try:
+    from fastembed.common.onnx_model import OnnxModel as _OnnxModel
+    if "enable_mem_pattern" not in _OnnxModel.EXPOSED_SESSION_OPTIONS:
+        _OnnxModel.EXPOSED_SESSION_OPTIONS = (
+            *_OnnxModel.EXPOSED_SESSION_OPTIONS,
+            "enable_mem_pattern", "execution_mode", "graph_optimization_level",
+        )
+        _orig_add_extra = _OnnxModel.add_extra_session_options.__func__
+        @classmethod
+        def _patched_add_extra(cls, session_options, extra_options):
+            _orig_add_extra(cls, session_options, extra_options)
+            if "enable_mem_pattern" in extra_options:
+                session_options.enable_mem_pattern = extra_options["enable_mem_pattern"]
+            if "execution_mode" in extra_options:
+                session_options.execution_mode = extra_options["execution_mode"]
+            if "graph_optimization_level" in extra_options:
+                session_options.graph_optimization_level = extra_options["graph_optimization_level"]
+            # Disable weight prepacking: ORT pre-packs MatMul weights into CPU-optimized
+            # layouts even when GPU handles inference. Disabling saves ~30-60MB CPU RSS.
+            if extra_options.get("enable_cpu_mem_arena") is False:
+                try:
+                    session_options.add_session_config_entry("session.disable_prepacking", "1")
+                except Exception:
+                    pass
+        _OnnxModel.add_extra_session_options = _patched_add_extra
+        del _patched_add_extra
+except ImportError:
+    pass
+
+
 def _embedder(model: str):
     """Return (and cache) a FastEmbed TextEmbedding model loaded with GPU providers."""
     global _cached_embedder, _cached_embedder_model
@@ -614,7 +646,13 @@ def _embedder(model: str):
         # Previously guarded on len>=2 which skipped CUDA options for single-item lists.
         provider_list = _build_provider_list_with_options(providers) if providers else None
 
-        embedder = TextEmbedding(model_name=model, providers=provider_list)
+        import onnxruntime as _ort_ref
+        embedder = TextEmbedding(
+            model_name=model, providers=provider_list,
+            enable_cpu_mem_arena=False, enable_mem_pattern=False,
+            execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
+            graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+        )
 
         # Verify which provider the ONNX session actually selected
         _verify_onnx_session_provider(embedder, "embedder")
@@ -655,7 +693,13 @@ def _reranker(model: str):
         # Bug fix: always inject provider options regardless of list length.
         provider_list = _build_provider_list_with_options(providers) if providers else None
 
-        reranker = TextCrossEncoder(model_name=model, providers=provider_list)
+        import onnxruntime as _ort_ref
+        reranker = TextCrossEncoder(
+            model_name=model, providers=provider_list,
+            enable_cpu_mem_arena=False, enable_mem_pattern=False,
+            execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
+            graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+        )
 
         # Verify which provider the ONNX session actually selected
         _verify_onnx_session_provider(reranker, "reranker")
@@ -720,6 +764,7 @@ def _limit_onnx_threads() -> None:
     performance vs contention with multiple embed workers.
 
     The server runs N embed workers (4-6 for high-end). To avoid CPU contention:
+    When GPU is active, OMP defaults to 1 (CPU threads only tokenize).
       total_threads = workers u00d7 onnx_threads u2264 cpu_count
 
     Scaling (assuming 4-6 workers on high-end):
@@ -731,8 +776,18 @@ def _limit_onnx_threads() -> None:
     """
     cpus = os.cpu_count() or 2
     low_memory = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
-    if low_memory:
-        threads = "1"  # single thread minimises per-thread memory arenas
+    # When GPU handles inference, CPU threads are only for tokenization/pre-processing.
+    # 1 OMP thread is sufficient — reduces per-thread stack memory (~8MB each).
+    gpu_mode = os.environ.get("OPENCODE_ONNX_PROVIDER", "").lower() not in ("cpu", "")
+    if not gpu_mode:
+        # Auto-detect: check if any GPU provider is available
+        try:
+            import onnxruntime as _ort
+            gpu_mode = any(p != "CPUExecutionProvider" for p in _ort.get_available_providers())
+        except Exception:
+            pass
+    if low_memory or gpu_mode:
+        threads = "1"  # GPU mode: CPU threads only for tokenization, 1 is enough
     elif cpus <= 4:
         threads = "1"
     elif cpus <= 8:
@@ -742,7 +797,10 @@ def _limit_onnx_threads() -> None:
     else:
         threads = "4"
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
-        os.environ.setdefault(var, threads)
+        if gpu_mode:
+            os.environ[var] = threads  # Force override: GPU mode needs minimal CPU threads
+        else:
+            os.environ.setdefault(var, threads)
 
     # Limit Rust parallelism (if any Rust libraries are used)
     os.environ.setdefault("RAYON_NUM_THREADS", "4")

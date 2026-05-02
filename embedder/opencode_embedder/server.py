@@ -19,13 +19,13 @@ Embed workers:
 
 On-demand spawning support:
     The server supports auto-shutdown after idle time, enabling on-demand spawning
-    via SSH from remote clients. Set OPENCODE_EMBED_IDLE_SHUTDOWN=600 (10 min default)
+    via SSH from remote clients. Set OPENCODE_EMBED_IDLE_SHUTDOWN=300 (5 min default)
     or 0 to disable. When idle for the timeout period, the server shuts down gracefully.
 
 Environment variables:
     OPENCODE_EMBED_HTTP_PORT:     HTTP port (default: 9998)
     OPENCODE_EMBED_WORKERS:       Number of embed workers (auto-detected by default)
-    OPENCODE_EMBED_IDLE_SHUTDOWN: Idle timeout before auto-shutdown (default: 600s, 0=disable)
+    OPENCODE_EMBED_IDLE_SHUTDOWN: Idle timeout before auto-shutdown (default: 300s, 0=disable)
 """
 
 from __future__ import annotations
@@ -38,15 +38,21 @@ import asyncio
 import atexit
 import base64
 import concurrent.futures
-import fcntl
 import logging
 import os
 import secrets
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+# Tune glibc malloc to minimize RSS: limit arena count and auto-trim freed pages.
+# Must be set before any allocation (i.e., at module load).
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "0")
+os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "65536")
 
 from aiohttp import web
 
@@ -76,27 +82,6 @@ def _init_auth_token() -> str:
     token_path.write_text(_AUTH_TOKEN)
     token_path.chmod(0o600)  # owner-only read/write
     return _AUTH_TOKEN
-
-# Debug file logging (since stdout/stderr go to /dev/null when spawned)
-_DEBUG_LOG_PATH = os.environ.get("OPENCODE_EMBED_DEBUG", str(Path.home() / ".opencode" / "embedder-debug.log"))
-_DEBUG_LOG = None
-
-
-def _debug_log(msg: str):
-    """Write debug message to file (bypasses null stdout/stderr)."""
-    global _DEBUG_LOG
-    if _DEBUG_LOG is None:
-        try:
-            _DEBUG_LOG = open(_DEBUG_LOG_PATH, "a", buffering=1)  # Line buffered
-        except Exception:
-            return
-    try:
-        import time as time_mod
-
-        _DEBUG_LOG.write(f"[{time_mod.strftime('%H:%M:%S')}] {msg}\n")
-        _DEBUG_LOG.flush()
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +131,6 @@ def _kill_process_group() -> None:
         pass  # Process group may already be gone
 
 
-# Set up cleanup on normal exit
-atexit.register(_kill_process_group)
-
 from opencode_embedder import chunker, tokenizer as tok
 from opencode_embedder.embeddings import (
     cleanup_models,
@@ -187,8 +169,8 @@ class BatchCoalescer:
     for better GPU utilization.
     
     Environment variables:
-        OPENCODE_COALESCE_BATCH: Max texts per GPU batch (default: 384)
-        OPENCODE_COALESCE_WAIT_MS: Max wait before flush (default: 10ms)
+        OPENCODE_COALESCE_BATCH: Max texts per GPU batch (default: 64)
+        OPENCODE_COALESCE_WAIT_MS: Max wait before flush (default: 20ms)
     """
     
     def __init__(
@@ -330,6 +312,7 @@ def _detect_embed_workers() -> int:
     that wait on the embed semaphore. Only `workers` ONNX sessions run at once.
 
     Can be overridden via OPENCODE_EMBED_WORKERS environment variable.
+    Set OPENCODE_EMBED_WORKERS=auto to enable auto-detection based on GPU/RAM.
     Low-memory mode: OPENCODE_EMBED_LOW_MEMORY=1 forces 1 worker.
     """
     # Check for manual override first
@@ -340,7 +323,12 @@ def _detect_embed_workers() -> int:
             if workers > 0:
                 return workers
         except ValueError:
+            # Non-integer value (e.g. "auto") falls through to auto-detection below
             pass
+    else:
+        # No env var set: default to 1 worker to minimize resource usage.
+        # Set OPENCODE_EMBED_WORKERS=auto to enable auto-detection.
+        return 1
 
     # Check for low-memory mode — cap at 2 workers to reduce GPU/RAM contention
     low_mem = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
@@ -348,7 +336,7 @@ def _detect_embed_workers() -> int:
         log.info("low-memory mode enabled (OPENCODE_EMBED_LOW_MEMORY=1): capping embed workers at 2")
         return 2
 
-    # Auto-detect based on GPU availability
+    # Auto-detect based on GPU availability (reached when OPENCODE_EMBED_WORKERS=auto)
     if is_gpu_available():
         # GPU mode: default to 1 worker to reduce memory copies
         # High VRAM GPUs can handle parallelism internally via batch processing
@@ -394,20 +382,23 @@ IDLE_CLEANUP_SECS = 120 if _RAM_MB <= 16384 else 300
 
 
 # Idle shutdown: auto-shutdown server after no activity (for on-demand spawning)
-# Default: 10 minutes. Set OPENCODE_EMBED_IDLE_SHUTDOWN=0 to disable.
+# Default: 5 minutes. Set OPENCODE_EMBED_IDLE_SHUTDOWN=0 to disable.
 # This is useful when the embedder is spawned on-demand via SSH from a remote client.
 def _get_idle_shutdown_secs() -> int:
-    """Get idle shutdown timeout from environment, or default to 600 (10 min)."""
+    """Get idle shutdown timeout from environment, or default to 300 (5 min)."""
     val = os.environ.get("OPENCODE_EMBED_IDLE_SHUTDOWN", "").strip()
     if not val:
-        return 600  # Default: 10 minutes
+        return 300  # Default: 5 minutes
     try:
         return int(val)
     except ValueError:
-        return 600
+        return 300
 
 
 IDLE_SHUTDOWN_SECS = _get_idle_shutdown_secs()
+
+# Maximum texts per single embed request to prevent memory spikes
+MAX_TEXTS_PER_REQUEST = int(os.environ.get("OPENCODE_EMBED_MAX_TEXTS", "512"))
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +427,7 @@ class ModelServer:
         self._embed_coalescer: BatchCoalescer | None = None
         # REC-3: Active request counter for circuit breaker
         self._active_requests = 0
-        self._max_active_requests = int(os.environ.get("OPENCODE_EMBED_MAX_ACTIVE", "32"))
+        self._max_active_requests = int(os.environ.get("OPENCODE_EMBED_MAX_ACTIVE", "8"))
         # Track last embed activity for idle model cleanup
         self._last_embed_time: float = time.monotonic()
 
@@ -476,9 +467,9 @@ class ModelServer:
         """Unload models after idle period to free VRAM/RAM.
 
         Configurable via OPENCODE_EMBED_MODEL_IDLE_TIMEOUT (seconds).
-        Default: 300s (5 minutes). Set to 0 to disable.
+        Default: 120s (2 minutes). Set to 0 to disable.
         """
-        idle_timeout = int(os.environ.get("OPENCODE_EMBED_MODEL_IDLE_TIMEOUT", "300"))
+        idle_timeout = int(os.environ.get("OPENCODE_EMBED_MODEL_IDLE_TIMEOUT", "120"))
         if idle_timeout <= 0:
             log.info("idle model cleanup disabled (OPENCODE_EMBED_MODEL_IDLE_TIMEOUT=0)")
             return
@@ -495,7 +486,8 @@ class ModelServer:
             if idle >= idle_timeout:
                 try:
                     await asyncio.to_thread(cleanup_models)
-                    log.info("idle model cleanup: unloaded models after %.0fs idle", idle)
+                    chunker.cleanup_chunkers()  # Also release tree-sitter + semantic chunker
+                    log.info("idle model cleanup: unloaded models + chunkers after %.0fs idle", idle)
                     # Reset timer so we don't immediately unload again
                     self._last_embed_time = time.monotonic()
                 except Exception as e:
@@ -830,18 +822,31 @@ class ModelServer:
             return [self._jsonify(i) for i in v]
         return v
 
-    async def _http_health(self, req: web.Request) -> web.Response:
+    async def _http_health(self, _req: web.Request) -> web.Response:
         result = await asyncio.to_thread(self._handle_health)
         return web.json_response({"result": result})
 
-    async def _http_shutdown(self, req: web.Request) -> web.Response:
+    async def _http_shutdown(self, _req: web.Request) -> web.Response:
         return web.json_response({"result": self._handle_shutdown()})
 
     async def _http_embed_passages(self, req: web.Request) -> web.Response:
         try:
             params = await req.json()
+            texts = params.get("texts", [])
+            if not isinstance(texts, list):
+                return web.json_response(
+                    {"error": "texts must be a list"},
+                    status=400,
+                )
+            if len(texts) > MAX_TEXTS_PER_REQUEST:
+                return web.json_response(
+                    {"error": f"too many texts: {len(texts)} > {MAX_TEXTS_PER_REQUEST}"},
+                    status=413,
+                )
             result = await self._handle_embed_passages(params)
             return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http embed_passages error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -849,8 +854,21 @@ class ModelServer:
     async def _http_embed_passages_f32(self, req: web.Request) -> web.Response:
         try:
             params = await req.json()
+            texts = params.get("passages", params.get("texts", []))
+            if not isinstance(texts, list):
+                return web.json_response(
+                    {"error": "texts/passages must be a list"},
+                    status=400,
+                )
+            if len(texts) > MAX_TEXTS_PER_REQUEST:
+                return web.json_response(
+                    {"error": f"too many texts: {len(texts)} > {MAX_TEXTS_PER_REQUEST}"},
+                    status=413,
+                )
             result = await self._handle_embed_passages_f32(params)
             return web.json_response({"result": self._jsonify(result)})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http embed_passages_f32 error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -860,6 +878,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_embed_query(params)
             return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http embed_query error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -869,6 +889,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_embed_query_f32(params)
             return web.json_response({"result": self._jsonify(result)})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http embed_query_f32 error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -878,6 +900,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_chunk(params)
             return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http chunk error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -887,6 +911,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_chunk(params)
             return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http chunk_file error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -896,6 +922,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_chunk_and_embed(params)
             return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http chunk_and_embed error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -905,6 +933,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_chunk_and_embed_f32(params)
             return web.json_response({"result": self._jsonify(result)})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http chunk_and_embed_f32 error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -914,6 +944,8 @@ class ModelServer:
             params = await req.json()
             result = await self._handle_rerank(params)
             return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
         except Exception as exc:
             log.exception("http rerank error: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
@@ -972,8 +1004,18 @@ class ModelServer:
                     status=504
                 )
 
+        @web.middleware
+        async def payload_too_large_middleware(request: web.Request, handler):
+            try:
+                return await handler(request)
+            except web.HTTPRequestEntityTooLarge:
+                return web.json_response(
+                    {"error": f"request body too large (limit: {10 * 1024 * 1024} bytes)"},
+                    status=413,
+                )
+
         app = web.Application(
-            middlewares=[auth_middleware, circuit_breaker, timeout_middleware],
+            middlewares=[auth_middleware, circuit_breaker, timeout_middleware, payload_too_large_middleware],
             client_max_size=10 * 1024 * 1024,  # 10 MB request body limit
         )
         app.router.add_get("/health", self._http_health)
@@ -1018,6 +1060,18 @@ class ModelServer:
 
         elapsed = time.monotonic() - t_start
         log.info("models pre-warmed in %.1fs", elapsed)
+
+        # Return freed memory to OS after warmup allocations.
+        # gc.collect() releases Python objects; malloc_trim returns freed pages to OS.
+        import gc
+        gc.collect()
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6")
+            libc.malloc_trim(0)
+            log.info("malloc_trim(0): released freed memory to OS")
+        except Exception:
+            pass  # Non-Linux or libc not available
 
         # Log final GPU status after models are loaded
         # Use asyncio.to_thread for consistency with other sync helpers
@@ -1108,42 +1162,18 @@ class ModelServer:
             log.warning("failed to pre-warm embedder %s: %s", model, e)
 
     def _warmup_chunkers(self) -> None:
-        """Pre-load chunkers to avoid first-request latency."""
-        # Pre-warm tree-sitter CodeChunkers for common languages
-        languages = [
-            "typescript",
-            "javascript",
-            "python",
-            "rust",
-            "go",
-            "java",
-            "cpp",
-            "c",
-            "ruby",
-            "tsx",
-        ]
-        loaded = 0
-        for lang in languages:
-            ts_lang = chunker._LANG_TO_TREESITTER.get(lang)
-            if ts_lang:
-                try:
-                    chunker._get_code_chunker(ts_lang)
-                    loaded += 1
-                except Exception:
-                    pass  # grammar not available
-        log.info("tree-sitter chunkers loaded: %d/%d languages", loaded, len(languages))
+        """Chunkers load on-demand to minimize startup RSS.
 
-        # Pre-warm SemanticChunker (loads potion-base-32M model for prose/text files)
-        try:
-            chunker._get_semantic_chunker()
-            log.info("semantic chunker loaded (potion-base-32M)")
-        except Exception as e:
-            log.warning("failed to pre-warm semantic chunker: %s", e)
+        Tree-sitter grammars (~30-50MB for 10 langs) and SemanticChunker
+        (~150MB potion-base-32M) load on first use. First-request latency
+        is ~1-2s per grammar, acceptable for background indexing.
+        """
+        log.info("chunkers configured for on-demand loading (tree-sitter + semantic)")
     
     async def _init_coalescer(self) -> None:
         """Initialize batch coalescer for improved GPU throughput."""
-        max_batch = int(os.environ.get("OPENCODE_COALESCE_BATCH", "384"))
-        max_wait = float(os.environ.get("OPENCODE_COALESCE_WAIT_MS", "10"))
+        max_batch = int(os.environ.get("OPENCODE_COALESCE_BATCH", "64"))
+        max_wait = float(os.environ.get("OPENCODE_COALESCE_WAIT_MS", "20"))
         embed_sem = self._embed_sem  # capture for closure
 
         async def process_batch(texts: list[str]) -> list:
@@ -1230,7 +1260,7 @@ class ModelServer:
         """Monitor process RSS and trigger GC or worker pool restart under memory pressure.
 
         Checks every 30 seconds. If RSS exceeds OPENCODE_SEARCH_EMBEDDER_MAX_RSS_MB
-        (default 1024 MB), triggers gc.collect() and logs a warning. If RSS remains
+        (default 512 MB), triggers gc.collect() and logs a warning. If RSS remains
         above 1.5x the limit after GC, shuts down so the supervisor can restart.
         Requires psutil; disables itself silently if not installed.
         """
@@ -1368,41 +1398,6 @@ class ModelServer:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _split_sub_batches(texts: list[str], size: int) -> list[list[str]]:
-    """Split a list of texts into sub-batches of at most `size` items."""
-    return [texts[i : i + size] for i in range(0, len(texts), size)]
-
-
-def _pack_f32_vectors(vectors: list[list[float]]) -> tuple[bytes, int]:
-    """Pack vectors into little-endian float32 bytes."""
-    if not vectors:
-        return b"", 0
-
-    try:
-        import numpy as np
-
-        mat = np.asarray(vectors, dtype="<f4")
-        if getattr(mat, "ndim", 0) == 2:
-            dims = int(mat.shape[1]) if mat.shape[0] else 0
-            return mat.tobytes(), dims
-    except Exception:
-        pass
-
-    import array
-
-    buf = array.array("f")
-    for vec in vectors:
-        buf.fromlist([float(x) for x in vec])
-    if sys.byteorder != "little":
-        buf.byteswap()
-    return buf.tobytes(), len(vectors[0])
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1422,23 +1417,70 @@ def _http_port() -> int:
 
 
 def _acquire_singleton_lock():
-    """Acquire exclusive flock on ~/.opencode/embedder.lock.
+    """Acquire OS-level singleton lock — prevents multiple embedder instances.
 
-    Prevents multiple embedder instances from running simultaneously.
-    The lock is held for the process lifetime and released on exit.
-    Returns the lock file object (must be kept alive).
+    Linux: binds abstract socket @opencode-embedder (kernel-enforced, auto-cleaned).
+    macOS/other: falls back to flock on ~/.opencode/embedder.lock.
+
+    Returns the lock handle (socket or file — must be kept alive).
     """
+    if sys.platform == "linux":
+        return _acquire_singleton_abstract_socket()
+    return _acquire_singleton_flock()
+
+
+def _acquire_singleton_abstract_socket():
+    """Linux: bind abstract socket @opencode-embedder as singleton lock.
+
+    Abstract sockets are kernel-managed: auto-released on process death
+    (including SIGKILL and power loss), no stale files possible.
+    Same pattern as the Rust indexer daemon (@opencode-indexer).
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        # Abstract socket: \0 prefix, kernel namespace, no filesystem path
+        sock.bind("\0opencode-embedder")
+        log.info("singleton lock acquired (abstract socket @opencode-embedder)")
+        return sock  # must stay alive — closing releases the lock
+    except OSError:
+        _probe_and_exit("abstract socket @opencode-embedder already bound")
+
+
+def _acquire_singleton_flock():
+    """macOS/other: flock on ~/.opencode/embedder.lock as singleton lock.
+
+    Fallback for platforms without abstract socket support.
+    flock is kernel-enforced and auto-released on process death.
+    """
+    import fcntl
+
     lock_dir = Path.home() / ".opencode"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_dir / "embedder.lock", "w")
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        log.info("singleton lock acquired (flock on embedder.lock)")
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        return lock_file  # must stay alive — closing releases the lock
     except OSError:
-        log.error("another embedder instance is already running (flock held)")
-        sys.exit(1)
-    lock_file.write(str(os.getpid()))
-    lock_file.flush()
-    return lock_file  # must be kept alive
+        _probe_and_exit("flock on embedder.lock already held")
+
+
+def _probe_and_exit(reason: str):
+    """Log singleton conflict with health probe, then exit."""
+    import urllib.request
+
+    port = int(os.environ.get("OPENCODE_EMBED_HTTP_PORT", "9998"))
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3):
+            log.info("another embedder instance is already running and healthy (port %d)", port)
+    except Exception:
+        log.warning(
+            "another embedder holds the lock but is not responding on port %d "
+            "(zombie or starting up) — %s", port, reason
+        )
+    sys.exit(1)
 
 
 def run_server(
@@ -1448,9 +1490,9 @@ def run_server(
     """Run the HTTP model server (blocking). Called from CLI or standalone.
 
     Args:
-        workers: Number of embed workers (default: auto-detected based on GPU/CPU)
+        workers: Number of embed workers (default: 1; set OPENCODE_EMBED_WORKERS=auto for auto-detect)
                  Can also be set via OPENCODE_EMBED_WORKERS environment variable.
-        idle_shutdown: Seconds of idle time before auto-shutdown (default: 600)
+        idle_shutdown: Seconds of idle time before auto-shutdown (default: 300)
                        Set to 0 to disable. Can also be set via OPENCODE_EMBED_IDLE_SHUTDOWN.
     """
     logging.basicConfig(
@@ -1460,7 +1502,11 @@ def run_server(
 
     # Acquire OS-level singleton lock before anything else.
     # Two simultaneous starts are serialized by the kernel; second one exits.
-    _lock = _acquire_singleton_lock()
+    _singleton_lock = _acquire_singleton_lock()  # noqa: F841 — must stay alive (flock)
+    # Register process group cleanup ONLY after acquiring singleton lock.
+    # Must not fire for duplicate instances that exit on flock conflict —
+    # their atexit would kill the daemon's process group.
+    atexit.register(_kill_process_group)
 
     # Initialize auth token (write to ~/.opencode/embedder.token)
     token = _init_auth_token()
@@ -1495,8 +1541,8 @@ def run_server(
     # On a 24-core machine with OMP=4: pool = 24/4 = 6 (not 16!).
     cpus = os.cpu_count() or 4
     omp_threads = int(os.environ.get("OMP_NUM_THREADS", "2"))
-    max_pool = max(4, cpus // max(1, omp_threads))
-    max_workers = min(max_pool, embed_workers + 4)  # embed + chunk + overhead
+    max_pool = max(2, cpus // max(1, omp_threads))
+    max_workers = min(max_pool, embed_workers + 2)  # embed + chunk + minimal overhead
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
     loop.set_default_executor(executor)
     log.info(

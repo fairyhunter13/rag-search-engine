@@ -41,11 +41,20 @@ use fs2::FileExt;
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-async fn rpc(port: u16, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+async fn rpc(
+    port: u16,
+    token: Option<&str>,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(format!("http://127.0.0.1:{port}/rpc"))
-        .json(&serde_json::json!({"method": method, "params": params}))
+        .json(&serde_json::json!({"method": method, "params": params}));
+    if let Some(t) = token {
+        req = req.header("x-indexer-token", t);
+    }
+    let resp = req
         .send()
         .await
         .context("send rpc")?
@@ -55,6 +64,11 @@ async fn rpc(port: u16, method: &str, params: serde_json::Value) -> Result<serde
     Ok(resp)
 }
 
+fn read_auth_token_from(home: &std::path::Path) -> Option<String> {
+    let path = home.join(".opencode").join("embedder.token");
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Daemon lifecycle
 // ---------------------------------------------------------------------------
@@ -62,6 +76,7 @@ async fn rpc(port: u16, method: &str, params: serde_json::Value) -> Result<serde
 struct DaemonHandle {
     child: tokio::process::Child,
     port: u16,
+    auth_token: Option<String>,
     // Prevent tests in this file from racing by serializing daemon lifecycle.
     _lock: std::fs::File,
 }
@@ -150,15 +165,22 @@ impl DaemonHandle {
             }
         });
 
-        Ok(Self { child, port, _lock: lock })
+        let auth_token = read_auth_token_from(home);
+
+        Ok(Self { child, port, auth_token, _lock: lock })
     }
 
     fn port(&self) -> u16 {
         self.port
     }
 
+    fn token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
+
     async fn shutdown(mut self) {
-        let _ = rpc(self.port, "shutdown", serde_json::json!({})).await;
+        let token = self.auth_token.as_deref().map(String::from);
+        let _ = rpc(self.port, token.as_deref(), "shutdown", serde_json::json!({})).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.child.kill().await.ok();
     }
@@ -193,7 +215,7 @@ async fn setup_with_daemon_env(extra: &[(&str, String)]) -> Result<(python_serve
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ping_returns_pong() {
     let (_server, daemon) = setup().await.expect("setup");
-    let resp = rpc(daemon.port(), "ping", serde_json::json!({}))
+    let resp = rpc(daemon.port(), daemon.token(), "ping", serde_json::json!({}))
         .await
         .expect("rpc");
 
@@ -205,7 +227,7 @@ async fn ping_returns_pong() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unknown_method_returns_error_in_result() {
     let (_server, daemon) = setup().await.expect("setup");
-    let resp = rpc(daemon.port(), "nonexistent_method", serde_json::json!({}))
+    let resp = rpc(daemon.port(), daemon.token(), "nonexistent_method", serde_json::json!({}))
         .await
         .expect("rpc");
 
@@ -222,9 +244,7 @@ async fn wire_protocol_handles_large_payload() {
     let (_server, daemon) = setup().await.expect("setup");
 
     let big = "x".repeat(100_000);
-    let resp = rpc(
-        daemon.port(),
-        "ping",
+    let resp = rpc(daemon.port(), daemon.token(), "ping",
         serde_json::json!({"large_field": big}),
     )
     .await
@@ -238,11 +258,13 @@ async fn wire_protocol_handles_large_payload() {
 async fn concurrent_connections_all_succeed() {
     let (_server, daemon) = setup().await.expect("setup");
     let port = daemon.port();
+    let token = daemon.token().map(String::from);
 
     let mut handles = Vec::new();
     for _ in 0u64..5 {
+        let token = token.clone();
         handles.push(tokio::spawn(async move {
-            rpc(port, "ping", serde_json::json!({})).await
+            rpc(port, token.as_deref(), "ping", serde_json::json!({})).await
         }));
     }
 
@@ -261,9 +283,7 @@ async fn resolve_paths_derives_all_paths() {
     let shared = server.home_path().join("shared");
     std::fs::create_dir_all(&shared).unwrap();
 
-    let resp = rpc(
-        daemon.port(),
-        "resolve_paths",
+    let resp = rpc(daemon.port(), daemon.token(), "resolve_paths",
         serde_json::json!({
             "root": server.home_path().to_str().unwrap(),
             "sharedPath": shared.to_str().unwrap(),
@@ -292,9 +312,7 @@ async fn resolve_paths_derives_all_paths() {
 async fn status_on_nonexistent_db_returns_exists_false() {
     let (_server, daemon) = setup().await.expect("setup");
 
-    let resp = rpc(
-        daemon.port(),
-        "status",
+    let resp = rpc(daemon.port(), daemon.token(), "status",
         serde_json::json!({
             "db": "/tmp/does-not-exist-test-db/.lancedb",
             "dimensions": 256
@@ -327,9 +345,7 @@ async fn discover_files_returns_file_list() {
         .output()
         .ok();
 
-    let resp = rpc(
-        daemon.port(),
-        "discover_files",
+    let resp = rpc(daemon.port(), daemon.token(), "discover_files",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "exclude": [],
@@ -366,9 +382,7 @@ async fn index_file_and_status_round_trip() {
     let db = root.path().join(".lancedb-daemon-test");
 
     // index_file → daemon → model server (chunk + embed_passages)
-    let resp = rpc(
-        daemon.port(),
-        "index_file",
+    let resp = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -386,9 +400,7 @@ async fn index_file_and_status_round_trip() {
     assert!(r["path"].as_str().is_some(), "should return relative path");
 
     // status (reads from real LanceDB on disk)
-    let resp = rpc(
-        daemon.port(),
-        "status",
+    let resp = rpc(daemon.port(), daemon.token(), "status",
         serde_json::json!({"db": db.to_str().unwrap(), "dimensions": 256}),
     )
     .await
@@ -413,9 +425,7 @@ async fn index_then_remove_file() {
     let db = root.path().join(".lancedb-remove-test");
 
     // Index
-    let resp = rpc(
-        daemon.port(),
-        "index_file",
+    let resp = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -429,9 +439,7 @@ async fn index_then_remove_file() {
     assert_eq!(resp["result"]["success"], true);
 
     // Confirm exists
-    let resp = rpc(
-        daemon.port(),
-        "status",
+    let resp = rpc(daemon.port(), daemon.token(), "status",
         serde_json::json!({"db": db.to_str().unwrap(), "dimensions": 256}),
     )
     .await
@@ -439,9 +447,7 @@ async fn index_then_remove_file() {
     assert!(resp["result"]["files"].as_u64().unwrap_or(0) >= 1);
 
     // Remove
-    let resp = rpc(
-        daemon.port(),
-        "remove_file",
+    let resp = rpc(daemon.port(), daemon.token(), "remove_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -455,9 +461,7 @@ async fn index_then_remove_file() {
     assert!(resp["result"]["removed"].as_u64().unwrap_or(0) > 0);
 
     // Confirm gone
-    let resp = rpc(
-        daemon.port(),
-        "status",
+    let resp = rpc(daemon.port(), daemon.token(), "status",
         serde_json::json!({"db": db.to_str().unwrap(), "dimensions": 256}),
     )
     .await
@@ -477,9 +481,7 @@ async fn index_file_skips_unchanged_content() {
     let db = root.path().join(".lancedb-skip-test");
 
     // First index — should not be skipped
-    let resp = rpc(
-        daemon.port(),
-        "index_file",
+    let resp = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -494,9 +496,7 @@ async fn index_file_skips_unchanged_content() {
     assert!(!resp["result"]["skipped"].as_bool().unwrap_or(false));
 
     // Second index (identical content) — should be skipped
-    let resp = rpc(
-        daemon.port(),
-        "index_file",
+    let resp = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -527,9 +527,7 @@ async fn index_then_search_returns_ranked_results() {
     let db = root.path().join(".lancedb-search-test");
 
     // Index (daemon → model server: chunk + embed_passages)
-    rpc(
-        daemon.port(),
-        "index_file",
+    rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -542,9 +540,7 @@ async fn index_then_search_returns_ranked_results() {
     .expect("rpc");
 
     // Search (daemon → model server: embed_query + rerank)
-    let resp = rpc(
-        daemon.port(),
-        "search",
+    let resp = rpc(daemon.port(), daemon.token(), "search",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -588,9 +584,7 @@ async fn federated_search_merges_results_from_multiple_dbs() {
         (&root1, &db1, "proj1.txt"),
         (&root2, &db2, "proj2.txt"),
     ] {
-        rpc(
-            daemon.port(),
-            "index_file",
+        rpc(daemon.port(), daemon.token(), "index_file",
             serde_json::json!({
                 "root": root.path().to_str().unwrap(),
                 "db": db.to_str().unwrap(),
@@ -604,9 +598,7 @@ async fn federated_search_merges_results_from_multiple_dbs() {
     }
 
     // Federated search: primary = db1, federated = [db2]
-    let resp = rpc(
-        daemon.port(),
-        "search",
+    let resp = rpc(daemon.port(), daemon.token(), "search",
         serde_json::json!({
             "root": root1.path().to_str().unwrap(),
             "db": db1.to_str().unwrap(),
@@ -638,9 +630,7 @@ async fn health_returns_structured_status() {
     let shared = server.home_path().join("shared-health");
     std::fs::create_dir_all(&shared).unwrap();
 
-    let resp = rpc(
-        daemon.port(),
-        "health",
+    let resp = rpc(daemon.port(), daemon.token(), "health",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "dimensions": 256,
@@ -697,9 +687,7 @@ async fn run_index_on_small_project() {
 
     let db = root.path().join(".lancedb-run-test");
 
-    let resp = rpc(
-        daemon.port(),
-        "run_index",
+    let resp = rpc(daemon.port(), daemon.token(), "run_index",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "db": db.to_str().unwrap(),
@@ -737,9 +725,7 @@ async fn search_memories_returns_structured_results() {
     let mem_db = mem_dir.join(".lancedb");
 
     // Index the memory file (daemon → model server)
-    rpc(
-        daemon.port(),
-        "index_file",
+    rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": mem_dir.to_str().unwrap(),
             "db": mem_db.to_str().unwrap(),
@@ -752,9 +738,7 @@ async fn search_memories_returns_structured_results() {
     .expect("rpc");
 
     // Search memories
-    let resp = rpc(
-        daemon.port(),
-        "search_memories",
+    let resp = rpc(daemon.port(), daemon.token(), "search_memories",
         serde_json::json!({
             "sharedPath": shared.to_str().unwrap(),
             "projectId": "memtest",
@@ -803,9 +787,7 @@ async fn search_activity_returns_structured_results() {
     let act_db = act_dir.join(".lancedb");
 
     // Index (daemon → model server)
-    rpc(
-        daemon.port(),
-        "index_file",
+    rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": act_dir.to_str().unwrap(),
             "db": act_db.to_str().unwrap(),
@@ -818,9 +800,7 @@ async fn search_activity_returns_structured_results() {
     .expect("rpc");
 
     // Search activity
-    let resp = rpc(
-        daemon.port(),
-        "search_activity",
+    let resp = rpc(daemon.port(), daemon.token(), "search_activity",
         serde_json::json!({
             "sharedPath": shared.to_str().unwrap(),
             "projectId": "acttest",
@@ -865,9 +845,7 @@ async fn discover_links_on_plain_project() {
         .output()
         .ok();
 
-    let resp = rpc(
-        daemon.port(),
-        "discover_links",
+    let resp = rpc(daemon.port(), daemon.token(), "discover_links",
         serde_json::json!({"root": root.path().to_str().unwrap()}),
     )
     .await
@@ -893,6 +871,7 @@ async fn write_ops_serialised_through_queue() {
     let db = root.path().join(".lancedb-queue-test");
 
     let port = daemon.port();
+    let token = daemon.token().map(String::from);
 
     // Fire 3 index_file requests concurrently — they all go through the queue
     let mut handles = Vec::new();
@@ -900,10 +879,9 @@ async fn write_ops_serialised_through_queue() {
         let root_str = root.path().to_str().unwrap().to_string();
         let db_str = db.to_str().unwrap().to_string();
         let file = name.to_string();
+        let token = token.clone();
         handles.push(tokio::spawn(async move {
-            rpc(
-                port,
-                "index_file",
+            rpc(port, token.as_deref(), "index_file",
                 serde_json::json!({
                     "root": root_str,
                     "db": db_str,
@@ -923,9 +901,7 @@ async fn write_ops_serialised_through_queue() {
     }
 
     // Verify all 3 files indexed
-    let resp = rpc(
-        port,
-        "status",
+    let resp = rpc(port, token.as_deref(), "status",
         serde_json::json!({"db": db.to_str().unwrap(), "dimensions": 256}),
     )
     .await
@@ -969,9 +945,7 @@ async fn index_file_operations_tracked_for_compaction() {
 
     // Index multiple files
     for file in ["file1.txt", "file2.txt", "file3.txt"] {
-        let resp = rpc(
-            daemon.port(),
-            "index_file",
+        let resp = rpc(daemon.port(), daemon.token(), "index_file",
             serde_json::json!({
                 "root": root.path().to_str().unwrap(),
                 "file": file,
@@ -1015,9 +989,7 @@ async fn remove_file_operations_tracked_for_compaction() {
         .output();
 
     // Index the file
-    let resp = rpc(
-        daemon.port(),
-        "index_file",
+    let resp = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "file": "test.txt",
@@ -1031,9 +1003,7 @@ async fn remove_file_operations_tracked_for_compaction() {
     assert_eq!(resp["result"]["success"], true, "index_file should succeed: {resp}");
 
     // Remove the file
-    let resp = rpc(
-        daemon.port(),
-        "remove_file",
+    let resp = rpc(daemon.port(), daemon.token(), "remove_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "file": "test.txt",
@@ -1086,9 +1056,7 @@ async fn idle_time_compaction_trigger() {
 
     // Index files to accumulate operations
     for file in ["file1.txt", "file2.txt"] {
-        let resp = rpc(
-            daemon.port(),
-            "index_file",
+        let resp = rpc(daemon.port(), daemon.token(), "index_file",
             serde_json::json!({
                 "root": root.path().to_str().unwrap(),
                 "file": file,
@@ -1106,7 +1074,7 @@ async fn idle_time_compaction_trigger() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // The compaction should have run by now. Verify daemon is still responsive.
-    let resp = rpc(daemon.port(), "ping", serde_json::json!({}))
+    let resp = rpc(daemon.port(), daemon.token(), "ping", serde_json::json!({}))
         .await
         .expect("rpc");
 
@@ -1154,9 +1122,7 @@ async fn threshold_compaction_trigger() {
 
     // Index files to exceed the force threshold
     for i in 0..5 {
-        let resp = rpc(
-            daemon.port(),
-            "index_file",
+        let resp = rpc(daemon.port(), daemon.token(), "index_file",
             serde_json::json!({
                 "root": root.path().to_str().unwrap(),
                 "file": format!("file{}.txt", i),
@@ -1174,7 +1140,7 @@ async fn threshold_compaction_trigger() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // The compaction should have run. Verify daemon is still responsive.
-    let resp = rpc(daemon.port(), "ping", serde_json::json!({}))
+    let resp = rpc(daemon.port(), daemon.token(), "ping", serde_json::json!({}))
         .await
         .expect("rpc");
 
@@ -1219,9 +1185,7 @@ async fn shutdown_compaction_runs() {
         .output();
 
     // Index a file to create pending operations
-    let resp = rpc(
-        daemon.port(),
-        "index_file",
+    let resp = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "file": "shutdown_test.txt",
@@ -1236,7 +1200,7 @@ async fn shutdown_compaction_runs() {
 
     // Shutdown the daemon - this should trigger shutdown compaction
     // The shutdown RPC will run compaction before responding
-    let resp = rpc(daemon.port(), "shutdown", serde_json::json!({})).await;
+    let resp = rpc(daemon.port(), daemon.token(), "shutdown", serde_json::json!({})).await;
 
     // The shutdown response might fail if the daemon exits quickly,
     // but that's okay - we just want to verify it attempts compaction
@@ -1276,9 +1240,7 @@ async fn multiple_databases_tracked_independently() {
     }
 
     // Index files in both projects
-    let resp1 = rpc(
-        daemon.port(),
-        "index_file",
+    let resp1 = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root1.path().to_str().unwrap(),
             "file": "test.txt",
@@ -1289,9 +1251,7 @@ async fn multiple_databases_tracked_independently() {
     .await
     .expect("rpc");
 
-    let resp2 = rpc(
-        daemon.port(),
-        "index_file",
+    let resp2 = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root2.path().to_str().unwrap(),
             "file": "test.txt",
@@ -1334,9 +1294,7 @@ async fn skipped_operations_not_counted() {
         .output();
 
     // Index the file first time
-    let resp1 = rpc(
-        daemon.port(),
-        "index_file",
+    let resp1 = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "file": "test.txt",
@@ -1352,9 +1310,7 @@ async fn skipped_operations_not_counted() {
     let skipped1 = resp1["result"]["skipped"].as_bool().unwrap_or(false);
 
     // Index the same unchanged file again
-    let resp2 = rpc(
-        daemon.port(),
-        "index_file",
+    let resp2 = rpc(daemon.port(), daemon.token(), "index_file",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "file": "test.txt",
@@ -1411,9 +1367,7 @@ index:
 
     // Index the project first (required before watcher can start)
     // Use default db path (same as what watcher_start will use)
-    let index_resp = rpc(
-        daemon.port(),
-        "run_index",
+    let index_resp = rpc(daemon.port(), daemon.token(), "run_index",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "tier": "budget",
@@ -1428,9 +1382,7 @@ index:
     assert_eq!(index_resp["result"]["success"], true, "run_index should succeed: {index_resp}");
 
     // Start the watcher
-    let start_resp = rpc(
-        daemon.port(),
-        "watcher_start",
+    let start_resp = rpc(daemon.port(), daemon.token(), "watcher_start",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "tier": "budget"
@@ -1446,9 +1398,7 @@ index:
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Get watcher status - should include metrics
-    let status_resp = rpc(
-        daemon.port(),
-        "watcher_status",
+    let status_resp = rpc(daemon.port(), daemon.token(), "watcher_status",
         serde_json::json!({
             "root": root.path().to_str().unwrap()
         }),
@@ -1486,9 +1436,7 @@ index:
     assert_eq!(metrics["backpressureEvents"].as_u64().unwrap(), 0, "no backpressure events initially");
 
     // Stop the watcher
-    let stop_resp = rpc(
-        daemon.port(),
-        "watcher_stop",
+    let stop_resp = rpc(daemon.port(), daemon.token(), "watcher_stop",
         serde_json::json!({
             "root": root.path().to_str().unwrap()
         }),
@@ -1530,9 +1478,7 @@ async fn watcher_uses_default_max_pending_files() {
 
     // Index the project first (required before watcher can start)
     // Use default db path (same as what watcher_start will use)
-    let index_resp = rpc(
-        daemon.port(),
-        "run_index",
+    let index_resp = rpc(daemon.port(), daemon.token(), "run_index",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "tier": "budget",
@@ -1547,9 +1493,7 @@ async fn watcher_uses_default_max_pending_files() {
     assert_eq!(index_resp["result"]["success"], true, "run_index should succeed: {index_resp}");
 
     // Start the watcher
-    let start_resp = rpc(
-        daemon.port(),
-        "watcher_start",
+    let start_resp = rpc(daemon.port(), daemon.token(), "watcher_start",
         serde_json::json!({
             "root": root.path().to_str().unwrap(),
             "tier": "budget"
@@ -1564,9 +1508,7 @@ async fn watcher_uses_default_max_pending_files() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Get watcher status
-    let status_resp = rpc(
-        daemon.port(),
-        "watcher_status",
+    let status_resp = rpc(daemon.port(), daemon.token(), "watcher_status",
         serde_json::json!({
             "root": root.path().to_str().unwrap()
         }),
@@ -1584,9 +1526,7 @@ async fn watcher_uses_default_max_pending_files() {
     );
 
     // Stop the watcher
-    let _ = rpc(
-        daemon.port(),
-        "watcher_stop",
+    let _ = rpc(daemon.port(), daemon.token(), "watcher_stop",
         serde_json::json!({
             "root": root.path().to_str().unwrap()
         }),

@@ -47,6 +47,13 @@ impl PythonServer {
             .is_ok()
         {
             tracing::info!("reusing existing HTTP embedder at port {port}");
+            // Copy the real-home token into the temp home so the daemon (which
+            // runs with HOME=<temp>) can find it and authenticate with the embedder.
+            if let Some(real_home) = dirs::home_dir() {
+                let src = real_home.join(".opencode").join("embedder.token");
+                let dst = opencode_dir.join("embedder.token");
+                let _ = std::fs::copy(&src, &dst);
+            }
             return Ok(Self {
                 home,
                 port,

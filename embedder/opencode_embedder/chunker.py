@@ -20,6 +20,7 @@ Recommendations:
 import contextvars
 import json
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -230,22 +231,29 @@ _DOC_LANGUAGES = frozenset(
 # ---------------------------------------------------------------------------
 # Cached chunker singletons (lazy-loaded)
 # ---------------------------------------------------------------------------
-_code_chunkers: dict[str, object] = {}
+_MAX_CODE_CHUNKERS = 10
+_code_chunkers: OrderedDict[str, object] = OrderedDict()
 _semantic_chunker: object = None
 _token_chunker: object = None
 
 
 def _get_code_chunker(ts_lang: str):
-    """Get or create a CodeChunker for the given tree-sitter language."""
-    if ts_lang not in _code_chunkers:
-        from chonkie import CodeChunker
+    """Get or create a CodeChunker for the given tree-sitter language (LRU, cap=10)."""
+    if ts_lang in _code_chunkers:
+        _code_chunkers.move_to_end(ts_lang)
+        return _code_chunkers[ts_lang]
 
-        _code_chunkers[ts_lang] = CodeChunker(
-            language=ts_lang,
-            tokenizer="character",
-            chunk_size=TARGET_CHARS,
-        )
-    return _code_chunkers[ts_lang]
+    from chonkie import CodeChunker
+
+    chunker = CodeChunker(
+        language=ts_lang,
+        tokenizer="character",
+        chunk_size=TARGET_CHARS,
+    )
+    _code_chunkers[ts_lang] = chunker
+    if len(_code_chunkers) > _MAX_CODE_CHUNKERS:
+        _code_chunkers.popitem(last=False)  # evict oldest
+    return chunker
 
 
 def _get_semantic_chunker():

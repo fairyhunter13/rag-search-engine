@@ -182,9 +182,9 @@ pub struct Args {
     #[arg(long)]
     pub daemon: bool,
 
-    /// HTTP port for --http mode (0 = pick a random free port).
-    #[arg(long, default_value = "0")]
-    pub port: u16,
+    /// TCP port for daemon mode (0 = pick a random free port). If omitted, Unix socket is used.
+    #[arg(long)]
+    pub port: Option<u16>,
 
     /// Idle timeout before auto-shutdown (seconds, 0=disabled, default: 600)
     #[arg(long)]
@@ -262,10 +262,7 @@ pub async fn update_file_partial_pub(
 pub async fn run(args: Args) -> Result<()> {
     // Daemon mode: start HTTP server.
     if args.daemon {
-        if args.port != 0 {
-            tracing::warn!("--port flag is deprecated and ignored; daemon now uses Unix domain sockets");
-        }
-        return crate::daemon::run(args.idle_shutdown, args.parent_pid).await;
+        return crate::daemon::run(args.idle_shutdown, args.parent_pid, args.port).await;
     }
 
     let root = args.root.canonicalize().context("invalid root path")?;
@@ -2181,6 +2178,11 @@ async fn run_indexing(
         );
     }
 
+    // Persist authoritative file count. The WriteQueue batch-add path does not
+    // track per-file new/existing state, so we set it once after all writes
+    // complete. `processed` = unchanged + successfully indexed = total files now.
+    let _ = storage.set_file_count(processed).await;
+
     // Build FTS index (fast, blocks briefly)
     if let Err(e) = storage.create_indexes(false).await {
         tracing::warn!("failed to create indexes: {e}");
@@ -3237,7 +3239,7 @@ mod tests {
             (50, 0.75),  // still normal
             (100, 0.85), // pressure kicks in
             (150, 0.92), // critical
-            (200, 0.88), // back to pressure (not critical)
+            (200, 0.82), // back to pressure (not critical, between 0.75 and 0.85)
             (250, 0.70), // recovered
         ];
 

@@ -14,7 +14,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// which is too late when set via std::env::set_var.
 #[cfg(not(target_env = "msvc"))]
 #[unsafe(export_name = "_rjem_malloc_conf")]
-pub static JEMALLOC_CONF: &[u8] = b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:500\0";
+pub static JEMALLOC_CONF: &[u8] = b"background_thread:true,dirty_decay_ms:500,muzzy_decay_ms:250\0";
 
 // Limit thread pools to prevent excessive thread creation.
 // LanceDB creates its own multi-threaded tokio runtime, so we need to cap all thread pools
@@ -23,48 +23,48 @@ fn limit_thread_pools() {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    // SAFETY: Setting env vars is safe when done before spawning threads.
-    // We call this at program start before any async runtime is created.
+    // Conservative defaults: background service shouldn't compete with user workload.
+    // All caps at 2 threads max. Override via env vars for power users.
     unsafe {
         if std::env::var("TOKIO_WORKER_THREADS").is_err() {
-            let workers = (num_cpus / 4).max(2);
+            let workers = (num_cpus / 4).clamp(1, 2);
             std::env::set_var("TOKIO_WORKER_THREADS", workers.to_string());
         }
         if std::env::var("RAYON_NUM_THREADS").is_err() {
-            // Dynamic rayon threads: max(1, available_cpus / 4). Override via OPENCODE_SEARCH_RAYON_THREADS.
             let rayon_threads = std::env::var("OPENCODE_SEARCH_RAYON_THREADS")
                 .ok()
                 .and_then(|v| v.trim().parse::<usize>().ok())
                 .filter(|&n| n > 0)
-                .unwrap_or_else(|| (num_cpus / 4).max(1));
+                .unwrap_or_else(|| (num_cpus / 4).clamp(1, 2));
             std::env::set_var("RAYON_NUM_THREADS", rayon_threads.to_string());
         }
+        // BLAS/LAPACK threads: always 1 for background service
         if std::env::var("OMP_NUM_THREADS").is_err() {
-            std::env::set_var("OMP_NUM_THREADS", (num_cpus / 4).max(1).to_string());
+            std::env::set_var("OMP_NUM_THREADS", "1");
         }
         if std::env::var("MKL_NUM_THREADS").is_err() {
-            std::env::set_var("MKL_NUM_THREADS", (num_cpus / 4).max(1).to_string());
+            std::env::set_var("MKL_NUM_THREADS", "1");
         }
         if std::env::var("OPENBLAS_NUM_THREADS").is_err() {
-            std::env::set_var("OPENBLAS_NUM_THREADS", (num_cpus / 4).max(1).to_string());
+            std::env::set_var("OPENBLAS_NUM_THREADS", "1");
         }
     }
 }
 
 /// Lower process priority so indexer doesn't compete with user workload.
-/// nice(10) = lower CPU priority, ioprio IDLE = only use I/O when nothing else needs it.
+/// nice(15) = minimal CPU priority, ioprio IDLE = only use I/O when nothing else needs it.
 #[cfg(unix)]
 fn deprioritize_process() {
     if std::env::var("OPENCODE_INDEXER_NO_DEPRIORITIZE").is_ok() {
         return;
     }
 
-    // Lower CPU scheduling priority (nice value 10)
-    let ret = unsafe { libc::nice(10) };
+    // Lower CPU scheduling priority (nice 15 = minimal competition with user apps)
+    let ret = unsafe { libc::nice(15) };
     if ret == -1 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() != Some(0) {
-            eprintln!("warning: failed to set nice(10): {}", err);
+            eprintln!("warning: failed to set nice(15): {}", err);
         }
     }
 

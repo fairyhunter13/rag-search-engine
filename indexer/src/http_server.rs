@@ -54,6 +54,19 @@ pub fn socket_file_path() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_default().join(".opencode").join("indexer.sock")
 }
 
+/// Start the HTTP server on a TCP socket (for testing / --port mode).
+///
+/// Binds to 127.0.0.1:{port} (port 0 = OS assigns a free port).
+/// Emits `{"type":"http_ready","port":N}` on stdout when ready.
+pub async fn serve_tcp(port: u16, dispatch: Dispatcher) -> anyhow::Result<()> {
+    let app = build_router(dispatch);
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
+    let bound_port = listener.local_addr()?.port();
+    println!("{}", serde_json::json!({"type": "http_ready", "port": bound_port}));
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
 /// Start the HTTP server on an abstract Unix domain socket (Linux).
 ///
 /// The abstract socket "@opencode-indexer" is automatically cleaned up by the
