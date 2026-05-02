@@ -390,12 +390,15 @@ pub async fn ensure_embedder() {
         .stderr(std::process::Stdio::null());
 
     // REC-5+6: Set resource limits and priority on embedder child process.
-    // - RLIMIT_AS=8GB prevents runaway memory allocation
+    // - RLIMIT_AS: GPU mode needs large virtual address space for CUDA memory mapping.
+    //   CUDA maps GPU VRAM into the process address space; 8 GB was too small and caused
+    //   ONNX Runtime to silently fall back to CPU. Use 32 GB to accommodate 16 GB VRAM
+    //   + ORT internal buffers while still bounding runaway CPU-only allocations.
     // - nice(15) lowers CPU priority further to reduce contention
     // - ioprio idle class prevents I/O starvation of interactive processes
     unsafe {
         cmd.pre_exec(|| {
-            let mem_limit: u64 = 8 * 1024 * 1024 * 1024; // 8 GB virtual memory limit
+            let mem_limit: u64 = 32 * 1024 * 1024 * 1024; // 32 GB virtual memory limit (GPU needs VRAM mapping)
             let rl = libc::rlimit { rlim_cur: mem_limit, rlim_max: mem_limit };
             libc::setrlimit(libc::RLIMIT_AS, &rl);
             libc::nice(15);

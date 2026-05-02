@@ -783,7 +783,10 @@ def _limit_onnx_threads() -> None:
         # Auto-detect: check if any GPU provider is available
         try:
             import onnxruntime as _ort
-            gpu_mode = any(p != "CPUExecutionProvider" for p in _ort.get_available_providers())
+            _GPU_PROVIDERS = {"CUDAExecutionProvider", "TensorrtExecutionProvider",
+                              "MIGraphXExecutionProvider", "ROCMExecutionProvider",
+                              "DmlExecutionProvider", "OpenVINOExecutionProvider"}
+            gpu_mode = any(p in _GPU_PROVIDERS for p in _ort.get_available_providers())
         except Exception:
             pass
     if low_memory or gpu_mode:

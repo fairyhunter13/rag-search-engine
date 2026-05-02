@@ -1,4 +1,4 @@
-"""Pytest fixtures for E2E resource efficiency tests.
+"""Pytest fixtures for E2E resource efficiency and performance tests.
 
 Service discovery:
   - Embedder: EMBEDDER_URL env var (default: http://127.0.0.1:9998)
