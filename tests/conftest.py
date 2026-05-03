@@ -17,7 +17,9 @@ To run live HTTP tests:
 """
 from __future__ import annotations
 
+import json
 import os
+import socket
 import time
 from pathlib import Path
 
@@ -41,6 +43,51 @@ def _read_indexer_port() -> int | None:
         return int(INDEXER_PORT_FILE.read_text().strip())
     except (FileNotFoundError, ValueError):
         return None
+
+
+_ABSTRACT_SOCKET_NAME = "\0opencode-indexer"
+
+
+def _check_abstract_socket() -> bool:
+    """Return True if the Linux abstract socket \\0opencode-indexer responds to GET /ping."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(3.0)
+            s.connect(_ABSTRACT_SOCKET_NAME)
+            s.sendall(b"GET /ping HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            data = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+        return data.startswith(b"HTTP/") and b" 200 " in data.split(b"\r\n")[0]
+    except Exception:
+        return False
+
+
+def _rpc_call_abstract_socket(method: str, params=None):
+    """Send a JSON-RPC HTTP POST to the abstract socket; return parsed JSON response body."""
+    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+    request = (
+        b"POST /rpc HTTP/1.0\r\n"
+        b"Host: localhost\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: " + str(len(payload)).encode() + b"\r\n"
+        b"\r\n" + payload
+    )
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(10.0)
+        s.connect(_ABSTRACT_SOCKET_NAME)
+        s.sendall(request)
+        data = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    header, _, body = data.partition(b"\r\n\r\n")
+    return json.loads(body)
 
 
 def _check_url(url: str, token: str | None = None, timeout: float = 3.0) -> bool:
@@ -70,7 +117,11 @@ def embedder_url() -> str:
 @pytest.fixture(scope="session")
 def indexer_url() -> str | None:
     port = _read_indexer_port()
-    return f"http://127.0.0.1:{port}" if port else None
+    if port:
+        return f"http://127.0.0.1:{port}"
+    if _check_abstract_socket():
+        return "abstract://@opencode-indexer"
+    return None
 
 
 @pytest.fixture(scope="session")
@@ -85,10 +136,34 @@ def embedder_alive(embedder_url, embedder_token):
 def indexer_alive(indexer_url):
     """Skip if indexer not running."""
     if indexer_url is None:
-        pytest.skip("~/.opencode/indexer.port not found; indexer not running")
+        pytest.skip("~/.opencode/indexer.port not found and abstract socket unreachable; indexer not running")
+    if indexer_url.startswith("abstract://"):
+        return True
     if not _check_url(f"{indexer_url}/ping"):
         pytest.skip(f"Indexer not reachable at {indexer_url}/ping")
     return True
+
+
+@pytest.fixture(scope="session")
+def indexer_rpc(indexer_url, indexer_alive):
+    """Return a callable rpc(method, params=None) that talks to the indexer."""
+    if indexer_url.startswith("abstract://"):
+        return _rpc_call_abstract_socket
+
+    import urllib.request
+
+    def _http_rpc(method: str, params=None):
+        payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+        req = urllib.request.Request(
+            f"{indexer_url}/rpc",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            return json.loads(resp.read())
+
+    return _http_rpc
 
 
 @pytest.fixture(scope="session")
@@ -122,7 +197,6 @@ def indexer_pid(indexer_alive) -> int:
 # ---------------------------------------------------------------------------
 
 import asyncio
-import socket
 import sys
 import threading
 

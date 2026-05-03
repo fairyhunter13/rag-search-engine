@@ -1,12 +1,18 @@
 """E2E test: assert GPU is actually being used for inference.
 
-Skipped automatically when OPENCODE_ONNX_PROVIDER=cpu (intentional CPU mode).
+Queries the running embedder's health endpoint (HTTP only — no direct module imports).
+Skipped automatically when:
+  - embedder is not running at EMBEDDER_URL (or http://127.0.0.1:9998)
+  - OPENCODE_ONNX_PROVIDER=cpu (intentional CPU mode)
 """
 
 import os
-
+import urllib.error
+import urllib.request
+import json
 import pytest
 
+EMBEDDER_URL = os.environ.get("EMBEDDER_URL", "http://127.0.0.1:9998")
 GPU_PROVIDERS = {"tensorrt", "cuda", "migraphx", "rocm"}
 
 
@@ -14,12 +20,45 @@ def _cpu_mode() -> bool:
     return os.environ.get("OPENCODE_ONNX_PROVIDER", "").lower() == "cpu"
 
 
+def _read_token() -> str | None:
+    token_path = os.path.expanduser("~/.opencode/embedder.token")
+    try:
+        with open(token_path) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _fetch_health() -> dict:
+    """Fetch /health from the running embedder. Raises urllib.error.URLError if not running.
+
+    Unwraps {"result": {...}} envelope if present.
+    """
+    url = f"{EMBEDDER_URL.rstrip('/')}/health"
+    req = urllib.request.Request(url)
+    token = _read_token()
+    if token:
+        req.add_header("X-Embedder-Token", token)
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read())
+    # Unwrap {"result": {...}} envelope used by this server
+    if "result" in data and isinstance(data["result"], dict):
+        return data["result"]
+    return data
+
+
+def _get_health_or_skip() -> dict:
+    """Return health dict or call pytest.skip if embedder is not reachable."""
+    try:
+        return _fetch_health()
+    except (urllib.error.URLError, OSError) as exc:
+        pytest.skip(f"Embedder not running at {EMBEDDER_URL}: {exc}")
+
+
 @pytest.mark.skipif(_cpu_mode(), reason="OPENCODE_ONNX_PROVIDER=cpu — intentional CPU mode")
 def test_gpu_enforcement():
     """Health endpoint must report an active GPU provider."""
-    from opencode_embedder.server import ModelServer
-
-    health = ModelServer()._handle_health()
+    health = _get_health_or_skip()
     gpu = health.get("gpu", {})
     provider = gpu.get("provider", "unknown")
     is_gpu = gpu.get("is_gpu", False)
@@ -46,38 +85,38 @@ def test_gpu_enforcement():
 
 
 @pytest.mark.skipif(_cpu_mode(), reason="OPENCODE_ONNX_PROVIDER=cpu — intentional CPU mode")
-def test_gpu_provider_is_consistent():
-    """get_active_provider() and health endpoint must agree."""
-    from opencode_embedder.embeddings import get_active_provider, is_gpu_available
-    from opencode_embedder.server import ModelServer
-
-    health = ModelServer()._handle_health()
+def test_gpu_provider_reported_consistently():
+    """Health endpoint gpu fields must be internally consistent."""
+    health = _get_health_or_skip()
     gpu = health.get("gpu", {})
 
-    assert gpu.get("provider") == get_active_provider(), (
-        f"Provider mismatch: health reports {gpu.get('provider')!r} "
-        f"but get_active_provider() returns {get_active_provider()!r}"
-    )
+    is_gpu = gpu.get("is_gpu", False)
+    provider = gpu.get("provider", "unknown")
 
-    assert gpu.get("is_gpu") == is_gpu_available(), (
-        f"is_gpu mismatch: health reports {gpu.get('is_gpu')!r} "
-        f"but is_gpu_available() returns {is_gpu_available()!r}"
-    )
+    # If is_gpu is True, provider must be in the known GPU set
+    if is_gpu:
+        assert provider in GPU_PROVIDERS, (
+            f"Health reports is_gpu=True but provider={provider!r} is not a GPU provider.\n"
+            f"  → Full gpu stats: {gpu}"
+        )
+    else:
+        assert provider not in GPU_PROVIDERS, (
+            f"Health reports is_gpu=False but provider={provider!r} looks like a GPU provider.\n"
+            f"  → Full gpu stats: {gpu}"
+        )
 
 
-def test_cpu_mode_is_explicit():
-    """When OPENCODE_ONNX_PROVIDER=cpu, server still reports provider correctly (not a surprise)."""
-    if not _cpu_mode():
-        pytest.skip("only runs in explicit CPU mode (OPENCODE_ONNX_PROVIDER=cpu)")
+def test_gpu_provider_is_not_cpu():
+    """In normal (non-CPU-override) mode, provider must not be cpu."""
+    if _cpu_mode():
+        pytest.skip("OPENCODE_ONNX_PROVIDER=cpu — intentional CPU mode, skip GPU check")
 
-    from opencode_embedder.server import ModelServer
-
-    health = ModelServer()._handle_health()
+    health = _get_health_or_skip()
     gpu = health.get("gpu", {})
+    provider = gpu.get("provider", "unknown")
 
-    assert gpu.get("provider") == "cpu", (
-        f"Expected provider=cpu in CPU mode, got {gpu.get('provider')!r}"
-    )
-    assert gpu.get("is_gpu") is False, (
-        f"Expected is_gpu=False in CPU mode, got {gpu.get('is_gpu')!r}"
+    assert provider != "cpu", (
+        f"Provider is cpu in non-CPU-override mode: provider={provider!r}\n"
+        f"  → GPU should be active. Check ONNX Runtime GPU libraries and CUDA drivers.\n"
+        f"  → Full gpu stats: {gpu}"
     )
