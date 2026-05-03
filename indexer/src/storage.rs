@@ -2582,7 +2582,7 @@ impl Storage {
         let table = self.ensure_chunks().await?;
         let indices = table.list_indices().await.unwrap_or_default();
         let has_vector = indices.iter().any(|i| {
-            i.columns.contains(&"vector".to_string())
+            i.columns.iter().any(|c| c == "vector")
                 && matches!(
                     i.index_type,
                     lancedb::index::IndexType::IvfPq
