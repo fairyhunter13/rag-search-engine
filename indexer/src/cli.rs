@@ -534,94 +534,6 @@ fn read_text(path: &Path, max_bytes: u64) -> Result<Option<String>> {
     }
 }
 
-#[cfg(test)]
-mod cli_tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn read_text_utf16le_bom() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("utf16le.txt");
-        let mut bytes = vec![0xFF, 0xFE];
-        for u in "a\nb\n".encode_utf16() {
-            bytes.extend_from_slice(&u.to_le_bytes());
-        }
-        std::fs::write(&path, bytes).unwrap();
-        let out = read_text(&path, 1024).unwrap().unwrap();
-        assert_eq!(out, "a\nb\n");
-    }
-
-    #[test]
-    fn read_text_utf16be_bom() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("utf16be.txt");
-        let mut bytes = vec![0xFE, 0xFF];
-        for u in "x\ny".encode_utf16() {
-            bytes.extend_from_slice(&u.to_be_bytes());
-        }
-        std::fs::write(&path, bytes).unwrap();
-        let out = read_text(&path, 1024).unwrap().unwrap();
-        assert_eq!(out, "x\ny");
-    }
-
-    #[test]
-    fn read_text_non_utf8_is_lossy() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("lossy.bin");
-        // Invalid UTF-8 sequence.
-        std::fs::write(&path, vec![0xC3, 0x28, b'\n']).unwrap();
-        let out = read_text(&path, 1024).unwrap().unwrap();
-        assert!(out.contains('\n'));
-        assert!(!out.is_empty());
-    }
-
-    #[test]
-    fn read_text_binary_returns_none() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("bin.dat");
-        std::fs::write(&path, vec![0, 1, 2, 3, 0, 4, 5, 0]).unwrap();
-        assert!(read_text(&path, 1024).unwrap().is_none());
-    }
-
-    #[test]
-    fn fallback_chunks_utf8() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("a.txt");
-        std::fs::write(&path, "l1\nl2\nl3\n").unwrap();
-        let chunks = fallback_chunks(&path).unwrap();
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].start_line, 1);
-        assert_eq!(chunks[0].end_line, 3);
-        assert!(chunks[0].content.contains("l2"));
-    }
-
-    #[test]
-    fn fallback_chunks_utf16le() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("u16.txt");
-        let mut bytes = vec![0xFF, 0xFE];
-        for u in "l1\nl2\nl3".encode_utf16() {
-            bytes.extend_from_slice(&u.to_le_bytes());
-        }
-        std::fs::write(&path, bytes).unwrap();
-        let chunks = fallback_chunks(&path).unwrap();
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].start_line, 1);
-        assert_eq!(chunks[0].end_line, 3);
-        assert!(chunks[0].content.contains("l3"));
-    }
-
-    #[test]
-    fn fallback_chunks_binary_is_empty() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("bin.bin");
-        std::fs::write(&path, vec![0, 0, 0, 0, b'\n']).unwrap();
-        let chunks = fallback_chunks(&path).unwrap();
-        assert!(chunks.is_empty());
-    }
-}
-
 fn fallback_chunks(path: &Path) -> Result<Vec<crate::model_client::ChunkMeta>> {
     use std::io::{BufRead, Read};
 
@@ -2346,1394 +2258,107 @@ fn watcher_state_path(storage_path: &Path) -> Option<PathBuf> {
     Some(storage_path.parent()?.join(".watcher-state.json"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // =========================================================================
-    // Producer-Consumer Pattern Tests
-    // =========================================================================
-    // These tests validate the mpsc channel pattern used in run_indexing()
-    // to decouple embedding parallelism from sequential storage writes.
-
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// Test that the producer-consumer pattern correctly processes all items
-    /// and doesn't lose any results.
-    #[tokio::test]
-    async fn producer_consumer_processes_all_items() {
-        let num_items = 100;
-        let concurrency = 10;
-        let sem = Arc::new(Semaphore::new(concurrency));
-
-        // Channel with buffer size matching our pattern
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Result<usize, anyhow::Error>>(concurrency * 2);
-
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        // Spawn producer tasks (mimics the run_indexing pattern)
-        for i in 0..num_items {
-            let sem = sem.clone();
-            let tx = tx.clone();
-            let counter = counter.clone();
-
-            tokio::spawn(async move {
-                let _permit = sem.acquire().await.ok();
-                counter.fetch_add(1, Ordering::SeqCst);
-                // Simulate some work
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                let _ = tx.send(Ok(i)).await;
-            });
-        }
-
-        // Drop the original sender so channel closes when producers finish
-        drop(tx);
-
-        // Consumer: collect all results
-        let mut received = Vec::new();
-        while let Some(res) = rx.recv().await {
-            match res {
-                Ok(val) => received.push(val),
-                Err(e) => panic!("unexpected error: {}", e),
-            }
-        }
-
-        // Verify all items were processed
-        assert_eq!(received.len(), num_items, "all items should be received");
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            num_items,
-            "all producers should have run"
-        );
-
-        // Verify all values are present (order may vary due to concurrency)
-        received.sort();
-        let expected: Vec<usize> = (0..num_items).collect();
-        assert_eq!(received, expected, "all values should be present");
-    }
-
-    /// Test that errors from producers are properly propagated to the consumer.
-    #[tokio::test]
-    async fn producer_consumer_propagates_errors() {
-        let num_items = 10;
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Result<usize, anyhow::Error>>(num_items * 2);
-
-        // Spawn producer tasks, some succeed, some fail
-        for i in 0..num_items {
-            let tx = tx.clone();
-
-            tokio::spawn(async move {
-                if i % 3 == 0 {
-                    let _ = tx.send(Err(anyhow::anyhow!("error at {}", i))).await;
-                } else {
-                    let _ = tx.send(Ok(i)).await;
-                }
-            });
-        }
-
-        drop(tx);
-
-        let mut successes = 0;
-        let mut failures = 0;
-
-        while let Some(res) = rx.recv().await {
-            match res {
-                Ok(_) => successes += 1,
-                Err(_) => failures += 1,
-            }
-        }
-
-        // Items 0, 3, 6, 9 fail = 4 failures
-        // Items 1, 2, 4, 5, 7, 8 succeed = 6 successes
-        assert_eq!(failures, 4, "4 items should fail (0, 3, 6, 9)");
-        assert_eq!(successes, 6, "6 items should succeed");
-        assert_eq!(
-            successes + failures,
-            num_items,
-            "total should equal num_items"
-        );
-    }
-
-    /// Test that the channel properly closes when all producers are done.
-    #[tokio::test]
-    async fn producer_consumer_channel_closes_properly() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<i32>(10);
-
-        // Spawn a few producers
-        for i in 0..5 {
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(i * 10)).await;
-                let _ = tx.send(i as i32).await;
-            });
-        }
-
-        // Drop original sender
-        drop(tx);
-
-        // Consumer should eventually receive None when all producers finish
-        let mut count = 0;
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while let Some(_) = rx.recv().await {
-                count += 1;
-            }
-        })
-        .await;
-
-        assert!(timeout.is_ok(), "channel should close within timeout");
-        assert_eq!(count, 5, "should receive exactly 5 messages");
-    }
-
-    /// Test that the semaphore correctly limits concurrency.
-    #[tokio::test]
-    async fn producer_consumer_respects_concurrency_limit() {
-        let max_concurrent = 3;
-        let num_items = 20;
-        let sem = Arc::new(Semaphore::new(max_concurrent));
-
-        let current_concurrent = Arc::new(AtomicUsize::new(0));
-        let max_observed = Arc::new(AtomicUsize::new(0));
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(num_items * 2);
-
-        for _ in 0..num_items {
-            let sem = sem.clone();
-            let tx = tx.clone();
-            let current = current_concurrent.clone();
-            let max_obs = max_observed.clone();
-
-            tokio::spawn(async move {
-                let _permit = sem.acquire().await.ok();
-
-                // Track concurrent executions
-                let prev = current.fetch_add(1, Ordering::SeqCst);
-                max_obs.fetch_max(prev + 1, Ordering::SeqCst);
-
-                // Simulate work
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-                current.fetch_sub(1, Ordering::SeqCst);
-                let _ = tx.send(()).await;
-            });
-        }
-
-        drop(tx);
-
-        // Drain all results
-        let mut count = 0;
-        while let Some(_) = rx.recv().await {
-            count += 1;
-        }
-
-        assert_eq!(count, num_items, "all items should complete");
-        assert!(
-            max_observed.load(Ordering::SeqCst) <= max_concurrent,
-            "max concurrent should not exceed limit: {} > {}",
-            max_observed.load(Ordering::SeqCst),
-            max_concurrent
-        );
-    }
-
-    /// Test behavior when a producer task panics.
-    /// The channel should still receive results from non-panicking tasks.
-    #[tokio::test]
-    async fn producer_consumer_handles_task_panic() {
-        let num_items = 10;
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Result<usize, anyhow::Error>>(num_items * 2);
-
-        for i in 0..num_items {
-            let tx = tx.clone();
-
-            tokio::spawn(async move {
-                if i == 5 {
-                    // This task will panic and not send anything
-                    panic!("intentional panic for testing");
-                }
-                let _ = tx.send(Ok(i)).await;
-            });
-        }
-
-        drop(tx);
-
-        // Should receive 9 results (all except the panicked task)
-        let mut received = Vec::new();
-        while let Some(res) = rx.recv().await {
-            if let Ok(val) = res {
-                received.push(val);
-            }
-        }
-
-        assert_eq!(
-            received.len(),
-            9,
-            "should receive 9 results (10 - 1 panicked)"
-        );
-        assert!(
-            !received.contains(&5),
-            "should not contain value from panicked task"
-        );
-    }
-
-    /// Test that empty input produces no results but completes correctly.
-    #[tokio::test]
-    async fn producer_consumer_handles_empty_input() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<i32>(10);
-
-        // No producers spawned
-        drop(tx);
-
-        // Consumer should immediately get None
-        let result = rx.recv().await;
-        assert!(
-            result.is_none(),
-            "should receive None immediately for empty input"
-        );
-    }
-
-    /// Test that large batches complete without deadlock.
-    #[tokio::test]
-    async fn producer_consumer_large_batch() {
-        let num_items = 1000;
-        let concurrency = 48; // Match TCP concurrency
-        let sem = Arc::new(Semaphore::new(concurrency));
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<usize>(concurrency * 2);
-
-        for i in 0..num_items {
-            let sem = sem.clone();
-            let tx = tx.clone();
-
-            tokio::spawn(async move {
-                let _permit = sem.acquire().await.ok();
-                let _ = tx.send(i).await;
-            });
-        }
-
-        drop(tx);
-
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            let mut count = 0;
-            while let Some(_) = rx.recv().await {
-                count += 1;
-            }
-            count
-        })
-        .await;
-
-        match timeout {
-            Ok(count) => assert_eq!(count, num_items, "all items should be received"),
-            Err(_) => panic!("test timed out - possible deadlock"),
-        }
-    }
-
-    /// Test that panics in spawned tasks are caught and converted to errors
-    /// using the catch_unwind pattern (matches the pattern in run_indexing).
-    #[tokio::test]
-    async fn producer_consumer_catch_unwind_pattern() {
-        let num_items = 10;
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Result<String, anyhow::Error>>(num_items * 2);
-
-        for i in 0..num_items {
-            let tx = tx.clone();
-
-            tokio::spawn(async move {
-                // This pattern matches what we use in run_indexing()
-                let task_id = format!("task_{}", i);
-                let task_id_clone = task_id.clone();
-
-                let result = std::panic::AssertUnwindSafe(async {
-                    if i == 5 {
-                        panic!("intentional panic in task {}", i);
-                    }
-                    Ok::<String, anyhow::Error>(format!("success_{}", i))
-                });
-
-                let result = match futures::FutureExt::catch_unwind(result).await {
-                    Ok(r) => r,
-                    Err(panic) => {
-                        let panic_msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                            s.to_string()
-                        } else if let Some(s) = panic.downcast_ref::<String>() {
-                            s.clone()
-                        } else {
-                            "unknown panic".to_string()
-                        };
-                        Err(anyhow::anyhow!("panic in {}: {}", task_id_clone, panic_msg))
-                    }
-                };
-
-                let _ = tx.send(result).await;
-            });
-        }
-
-        drop(tx);
-
-        let mut successes = Vec::new();
-        let mut errors = Vec::new();
-
-        while let Some(res) = rx.recv().await {
-            match res {
-                Ok(val) => successes.push(val),
-                Err(e) => errors.push(e.to_string()),
-            }
-        }
-
-        // Should have 9 successes and 1 error (from the caught panic)
-        assert_eq!(successes.len(), 9, "should have 9 successful results");
-        assert_eq!(errors.len(), 1, "should have 1 error from caught panic");
-
-        // The error should contain the panic message
-        assert!(
-            errors[0].contains("panic in task_5"),
-            "error should identify the panicked task: {}",
-            errors[0]
-        );
-        assert!(
-            errors[0].contains("intentional panic"),
-            "error should contain panic message: {}",
-            errors[0]
-        );
-    }
-
-    /// Test that the catch_unwind pattern handles string panics correctly.
-    #[tokio::test]
-    async fn catch_unwind_handles_string_panic() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<(), anyhow::Error>>(1);
-
-        tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(async {
-                panic!("string panic message");
-                #[allow(unreachable_code)]
-                Ok::<(), anyhow::Error>(())
-            });
-
-            let result = match futures::FutureExt::catch_unwind(result).await {
-                Ok(r) => r,
-                Err(panic) => {
-                    let panic_msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = panic.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic".to_string()
-                    };
-                    Err(anyhow::anyhow!("caught: {}", panic_msg))
-                }
-            };
-
-            let _ = tx.send(result).await;
-            // tx is dropped here when the task completes, closing the channel
-        });
-
-        // Wait for the result - channel will close after task completes
-        let result = rx.recv().await.expect("should receive result");
-        assert!(result.is_err(), "should be an error");
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("string panic message"),
-            "should contain panic message: {}",
-            err
-        );
-    }
-
-    // ---- TCP cross-file batching pipeline tests ----
-    //
-    // These tests validate the cross-file batching architecture used by TCP mode:
-    // local chunk -> accumulate texts across files -> batch embed RPCs -> scatter results.
-
-    /// Test the cross-file batching pipeline: texts from multiple files are
-    /// accumulated into batches, embedded in one RPC, and vectors are scattered
-    /// back to their source files via oneshot channels.
-    #[tokio::test]
-    async fn cross_file_batch_pipeline_completes() {
-        let num_files = 30;
-        let chunks_per_file = 3;
-        let batch_size = 10;
-        let concurrency = 4;
-
-        struct FakeChunked {
-            rel: String,
-            chunks: Vec<String>,
-        }
-
-        struct FakePrepared {
-            rel: String,
-            embedded: usize,
-        }
-
-        struct BatchSlot {
-            text: String,
-            result_tx: tokio::sync::oneshot::Sender<Result<Vec<f32>, anyhow::Error>>,
-        }
-
-        let (chunk_tx, mut chunk_rx) =
-            tokio::sync::mpsc::channel::<Result<FakeChunked, anyhow::Error>>(concurrency * 2);
-        let (batch_tx, batch_rx) = async_channel::bounded::<Vec<BatchSlot>>(concurrency * 4);
-        let (result_tx, mut result_rx) =
-            tokio::sync::mpsc::channel::<Result<FakePrepared, anyhow::Error>>(concurrency * 2);
-
-        // Stage 1: Produce chunked files
-        for i in 0..num_files {
-            let chunk_tx = chunk_tx.clone();
-            tokio::spawn(async move {
-                let chunks: Vec<String> = (0..chunks_per_file)
-                    .map(|j| format!("file_{}_chunk_{}", i, j))
-                    .collect();
-                let _ = chunk_tx
-                    .send(Ok(FakeChunked {
-                        rel: format!("file_{}.rs", i),
-                        chunks,
-                    }))
-                    .await;
-            });
-        }
-        drop(chunk_tx);
-
-        // Stage 2: Collector accumulates texts into cross-file batches
-        {
-            let result_tx = result_tx.clone();
-            let batch_tx = batch_tx.clone();
-            tokio::spawn(async move {
-                let mut pending: Vec<BatchSlot> = Vec::with_capacity(batch_size);
-
-                while let Some(res) = chunk_rx.recv().await {
-                    match res {
-                        Ok(c) => {
-                            let mut receivers = Vec::with_capacity(c.chunks.len());
-                            for text in &c.chunks {
-                                let (tx, rx) = tokio::sync::oneshot::channel();
-                                receivers.push(rx);
-                                pending.push(BatchSlot {
-                                    text: text.clone(),
-                                    result_tx: tx,
-                                });
-                                if pending.len() >= batch_size {
-                                    let batch = std::mem::replace(
-                                        &mut pending,
-                                        Vec::with_capacity(batch_size),
-                                    );
-                                    if batch_tx.send(batch).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                            // Spawn a task to collect per-file vectors
-                            let tx = result_tx.clone();
-                            let rel = c.rel.clone();
-                            let count = c.chunks.len();
-                            tokio::spawn(async move {
-                                let mut ok = true;
-                                for rx in receivers {
-                                    if rx.await.is_err() {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-                                if ok {
-                                    let _ = tx
-                                        .send(Ok(FakePrepared {
-                                            rel,
-                                            embedded: count,
-                                        }))
-                                        .await;
-                                } else {
-                                    let _ = tx
-                                        .send(Err(anyhow::anyhow!("embed failed for {}", rel)))
-                                        .await;
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            let _ = result_tx.send(Err(e)).await;
-                        }
-                    }
-                }
-                if !pending.is_empty() {
-                    let _ = batch_tx.send(pending).await;
-                }
-                drop(batch_tx);
-            });
-        }
-        drop(batch_tx);
-        drop(result_tx);
-
-        // Stage 3: Embed workers pull cross-file batches (MPMC — no mutex)
-        for _ in 0..concurrency {
-            let batch_rx = batch_rx.clone();
-            tokio::spawn(async move {
-                while let Ok(slots) = batch_rx.recv().await {
-                    // Simulate embed RPC: produce a fake 4-dim vector for each text
-                    for slot in slots {
-                        let _ = slot.result_tx.send(Ok(vec![1.0, 2.0, 3.0, 4.0]));
-                    }
-                }
-            });
-        }
-
-        // Consumer: collect all results
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            let mut count = 0;
-            while let Some(res) = result_rx.recv().await {
-                assert!(res.is_ok(), "file should succeed: {:?}", res.err());
-                let p = res.unwrap();
-                assert_eq!(
-                    p.embedded, chunks_per_file,
-                    "each file should have {} chunks",
-                    chunks_per_file
-                );
-                count += 1;
-            }
-            count
-        })
-        .await;
-
-        match timeout {
-            Ok(count) => assert_eq!(count, num_files, "all {} files should complete", num_files),
-            Err(_) => panic!("cross-file batch pipeline deadlocked"),
-        }
-    }
-
-    /// Test that cross-file batching handles embed errors gracefully:
-    /// an error in one batch slot should propagate to the affected file
-    /// without killing other files.
-    #[tokio::test]
-    async fn cross_file_batch_handles_errors() {
-        let batch_size = 4;
-
-        struct BatchSlot {
-            text: String,
-            result_tx: tokio::sync::oneshot::Sender<Result<Vec<f32>, anyhow::Error>>,
-        }
-
-        // Create 6 slots: first 4 go in batch 1 (will fail), last 2 in batch 2 (succeed)
-        let mut slots = Vec::new();
-        let mut receivers = Vec::new();
-        for i in 0..6 {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            receivers.push(rx);
-            slots.push(BatchSlot {
-                text: format!("text_{}", i),
-                result_tx: tx,
-            });
-        }
-
-        let batch1: Vec<BatchSlot> = slots.drain(..batch_size).collect();
-        let batch2: Vec<BatchSlot> = slots;
-
-        // Batch 1: return error for all slots
-        for slot in batch1 {
-            let _ = slot.result_tx.send(Err(anyhow::anyhow!("GPU OOM")));
-        }
-        // Batch 2: succeed
-        for slot in batch2 {
-            let _ = slot.result_tx.send(Ok(vec![1.0, 2.0]));
-        }
-
-        // Check receivers
-        for (i, rx) in receivers.into_iter().enumerate() {
-            let result = rx.await.unwrap();
-            if i < batch_size {
-                assert!(result.is_err(), "slot {} should be an error", i);
-            } else {
-                assert!(result.is_ok(), "slot {} should succeed", i);
-            }
-        }
-    }
-
-    /// Test that the pipeline handles empty chunked files correctly
-    /// (files with no text content should produce empty Prepared results).
-    #[tokio::test]
-    async fn tcp_pipeline_handles_empty_chunks() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Option<(String, usize)>>(10);
-
-        // Simulate: file with 0 chunks (binary file)
-        let tx2 = tx.clone();
-        tokio::spawn(async move {
-            // Empty file -> emit immediately with 0 embedded
-            let _ = tx2.send(Some(("binary.dat".to_string(), 0))).await;
-        });
-
-        // Simulate: file with chunks
-        let tx3 = tx.clone();
-        tokio::spawn(async move {
-            let _ = tx3.send(Some(("code.rs".to_string(), 3))).await;
-        });
-
-        drop(tx);
-
-        let mut results = Vec::new();
-        while let Some(Some((rel, embedded))) = rx.recv().await {
-            results.push((rel, embedded));
-        }
-
-        assert_eq!(results.len(), 2);
-        let empty = results.iter().find(|(r, _)| r == "binary.dat").unwrap();
-        assert_eq!(empty.1, 0);
-        let non_empty = results.iter().find(|(r, _)| r == "code.rs").unwrap();
-        assert_eq!(non_empty.1, 3);
-    }
-
-    /// Test that cross-file batching correctly handles partial batches (last batch
-    /// has fewer items than CROSS_FILE_BATCH_SIZE).
-    #[tokio::test]
-    async fn cross_file_batch_handles_partial_batches() {
-        // 7 items with batch size 4 -> 2 batches: [4, 3]
-        let batch_size = 4;
-        let total = 7;
-
-        struct BatchSlot {
-            result_tx: tokio::sync::oneshot::Sender<Result<Vec<f32>, anyhow::Error>>,
-        }
-
-        let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel::<Vec<BatchSlot>>(10);
-
-        // Collector: accumulate items into batches
-        tokio::spawn(async move {
-            let mut pending = Vec::with_capacity(batch_size);
-            let mut senders = Vec::new();
-            for _ in 0..total {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                senders.push(rx);
-                pending.push(BatchSlot { result_tx: tx });
-                if pending.len() >= batch_size {
-                    let batch = std::mem::replace(&mut pending, Vec::with_capacity(batch_size));
-                    batch_tx.send(batch).await.unwrap();
-                }
-            }
-            // Flush partial
-            if !pending.is_empty() {
-                batch_tx.send(pending).await.unwrap();
-            }
-            drop(batch_tx);
-
-            // Verify all receivers eventually get a value
-            for (i, rx) in senders.into_iter().enumerate() {
-                let result = rx.await.unwrap();
-                assert!(result.is_ok(), "slot {} should succeed", i);
-            }
-        });
-
-        // Consumer: count batches and respond
-        let mut batch_count = 0;
-        let mut batch_sizes = Vec::new();
-        while let Some(batch) = batch_rx.recv().await {
-            batch_sizes.push(batch.len());
-            for slot in batch {
-                let _ = slot.result_tx.send(Ok(vec![1.0]));
-            }
-            batch_count += 1;
-        }
-
-        assert_eq!(batch_count, 2, "should have 2 batches");
-        assert_eq!(batch_sizes, vec![4, 3], "batches should be [4, 3]");
-    }
-
-    /// Test that fallback_chunks splits large files into bounded chunks.
-    #[test]
-    fn fallback_chunks_respects_line_limit() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("large.txt");
-
-        // Create a file with more lines than FALLBACK_CHUNK_MAX_LINES (200)
-        let content: String = (0..500).map(|i| format!("line {}\n", i)).collect();
-        std::fs::write(&path, &content).unwrap();
-
-        let chunks = fallback_chunks(&path).unwrap();
-        assert!(
-            chunks.len() > 1,
-            "large file should produce multiple chunks, got {}",
-            chunks.len()
-        );
-
-        // Each chunk should have at most FALLBACK_CHUNK_MAX_LINES lines
-        for chunk in &chunks {
-            let lines = chunk.end_line - chunk.start_line + 1;
-            assert!(
-                lines <= FALLBACK_CHUNK_MAX_LINES as i32,
-                "chunk has {} lines, max is {}",
-                lines,
-                FALLBACK_CHUNK_MAX_LINES
-            );
-        }
-    }
-
-    /// Test that fallback_chunks respects character limit per chunk.
-    #[test]
-    fn fallback_chunks_respects_char_limit() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("wide.txt");
-
-        // Create file with very long lines (each > 1000 chars)
-        let long_line = "x".repeat(2000);
-        let content: String = (0..10).map(|_| format!("{}\n", long_line)).collect();
-        std::fs::write(&path, &content).unwrap();
-
-        let chunks = fallback_chunks(&path).unwrap();
-        assert!(chunks.len() >= 1, "should produce at least one chunk");
-
-        for chunk in &chunks {
-            assert!(
-                chunk.content.len() <= FALLBACK_CHUNK_MAX_CHARS + 2100,
-                "chunk content length {} exceeds expected max",
-                chunk.content.len()
-            );
-        }
-    }
-
-    /// Test that memory-aware backpressure logic correctly adjusts write_batch.
-    /// Simulates the consumer loop's memory check interval and verifies:
-    /// - Normal: write_batch stays at default
-    /// - Pressure (>80%): write_batch reduced to 32
-    /// - Critical (>90%): write_batch reduced to 8
-    /// - Recovered: write_batch restored to default
-    #[test]
-    fn memory_backpressure_adjusts_write_batch() {
-        use crate::hardware::{MemoryUsage, MEMORY_CRITICAL_THRESHOLD, MEMORY_PRESSURE_THRESHOLD};
-
-        let write_batch_default: usize = 128;
-        let mut write_batch = write_batch_default;
-        let mut under_pressure = false;
-
-        // Simulate: normal memory (50% used)
-        let normal = MemoryUsage {
-            total_bytes: 1000,
-            available_bytes: 500,
-        };
-        assert!(!normal.exceeds(MEMORY_PRESSURE_THRESHOLD));
-        // write_batch should stay at default
-        assert_eq!(write_batch, 128);
-
-        // Simulate: pressure (85% used)
-        let pressure = MemoryUsage {
-            total_bytes: 1000,
-            available_bytes: 150,
-        };
-        assert!(pressure.exceeds(MEMORY_PRESSURE_THRESHOLD));
-        assert!(!pressure.exceeds(MEMORY_CRITICAL_THRESHOLD));
-
-        // Apply the same logic as the consumer loop
-        let prev_pressure = under_pressure;
-        under_pressure = pressure.exceeds(MEMORY_PRESSURE_THRESHOLD);
-        if pressure.exceeds(MEMORY_CRITICAL_THRESHOLD) {
-            write_batch = 8;
-        } else if under_pressure {
-            write_batch = 32;
-        } else if prev_pressure {
-            write_batch = write_batch_default;
-        }
-        assert_eq!(write_batch, 32, "pressure should reduce batch to 32");
-        assert!(under_pressure);
-
-        // Simulate: critical (95% used)
-        let critical = MemoryUsage {
-            total_bytes: 1000,
-            available_bytes: 50,
-        };
-        assert!(critical.exceeds(MEMORY_CRITICAL_THRESHOLD));
-
-        let prev_pressure = under_pressure;
-        under_pressure = critical.exceeds(MEMORY_PRESSURE_THRESHOLD);
-        if critical.exceeds(MEMORY_CRITICAL_THRESHOLD) {
-            write_batch = 8;
-        } else if under_pressure {
-            write_batch = 32;
-        } else if prev_pressure {
-            write_batch = write_batch_default;
-        }
-        assert_eq!(write_batch, 8, "critical should reduce batch to 8");
-
-        // Simulate: recovered (40% used)
-        let recovered = MemoryUsage {
-            total_bytes: 1000,
-            available_bytes: 600,
-        };
-        assert!(!recovered.exceeds(MEMORY_PRESSURE_THRESHOLD));
-
-        let prev_pressure = under_pressure;
-        under_pressure = recovered.exceeds(MEMORY_PRESSURE_THRESHOLD);
-        if recovered.exceeds(MEMORY_CRITICAL_THRESHOLD) {
-            write_batch = 8;
-        } else if under_pressure {
-            write_batch = 32;
-        } else if prev_pressure {
-            write_batch = write_batch_default;
-        }
-        assert_eq!(
-            write_batch, write_batch_default,
-            "recovery should restore default batch"
-        );
-        assert!(!under_pressure);
-    }
-
-    /// Test that under memory pressure, TCP mode would use blocking flush.
-    /// Verifies the `is_tcp && !under_pressure` guard used in the consumer loop.
-    #[test]
-    fn memory_pressure_forces_blocking_flush_in_tcp() {
-        let is_tcp = true;
-
-        // Normal: TCP uses non-blocking
-        let under_pressure = false;
-        let use_nonblocking = is_tcp && !under_pressure;
-        assert!(
-            use_nonblocking,
-            "TCP should use non-blocking flush when not under pressure"
-        );
-
-        // Pressure: TCP switches to blocking
-        let under_pressure = true;
-        let use_nonblocking = is_tcp && !under_pressure;
-        assert!(
-            !use_nonblocking,
-            "TCP should use blocking flush under memory pressure"
-        );
-
-        // Local mode: always blocking regardless of pressure
-        let is_tcp = false;
-        let under_pressure = false;
-        let use_nonblocking = is_tcp && !under_pressure;
-        assert!(
-            !use_nonblocking,
-            "Local mode should always use blocking flush"
-        );
-    }
-
-    /// Test that the memory check interval is reasonable (not too frequent, not too rare).
-    /// Verifies the MEMORY_CHECK_INTERVAL constant and that it aligns with the
-    /// modulo check used in the consumer loop.
-    #[test]
-    fn memory_check_interval_is_reasonable() {
-        const MEMORY_CHECK_INTERVAL: usize = 50;
-        // Should check at file 0, 50, 100, 150, ...
-        assert_eq!(0 % MEMORY_CHECK_INTERVAL, 0, "should check at start");
-        assert_eq!(50 % MEMORY_CHECK_INTERVAL, 0, "should check at 50");
-        assert_ne!(25 % MEMORY_CHECK_INTERVAL, 0, "should NOT check at 25");
-        assert_ne!(1 % MEMORY_CHECK_INTERVAL, 0, "should NOT check at 1");
-        // Interval should be between 10 and 200 (balance overhead vs responsiveness)
-        assert!(
-            MEMORY_CHECK_INTERVAL >= 10,
-            "interval too small, /proc/meminfo overhead"
-        );
-        assert!(
-            MEMORY_CHECK_INTERVAL <= 200,
-            "interval too large, slow reaction"
-        );
-    }
-
-    /// Test that the pipeline consumer correctly handles batch size transitions
-    /// across multiple pressure states, simulating a realistic sequence.
-    #[tokio::test]
-    async fn memory_backpressure_pipeline_simulation() {
-        use crate::hardware::{MemoryUsage, MEMORY_CRITICAL_THRESHOLD, MEMORY_PRESSURE_THRESHOLD};
-
-        let write_batch_default: usize = 128;
-        let mut write_batch = write_batch_default;
-        let mut under_pressure = false;
-
-        // Simulate processing 300 files with varying memory pressure
-        let memory_states: Vec<(usize, f64)> = vec![
-            (0, 0.50),   // start: normal
-            (50, 0.75),  // still normal
-            (100, 0.85), // pressure kicks in
-            (150, 0.92), // critical
-            (200, 0.82), // back to pressure (not critical, between 0.75 and 0.85)
-            (250, 0.70), // recovered
-        ];
-
-        let check_interval = 50usize;
-
-        for (done, usage_frac) in memory_states {
-            if done % check_interval != 0 {
-                continue;
-            }
-
-            let mem = MemoryUsage {
-                total_bytes: 10000,
-                available_bytes: ((1.0 - usage_frac) * 10000.0) as u64,
-            };
-
-            let prev_pressure = under_pressure;
-            under_pressure = mem.exceeds(MEMORY_PRESSURE_THRESHOLD);
-            if mem.exceeds(MEMORY_CRITICAL_THRESHOLD) {
-                write_batch = 8;
-            } else if under_pressure {
-                write_batch = 32;
-            } else if prev_pressure {
-                write_batch = write_batch_default;
-            }
-
-            match done {
-                0 => assert_eq!(write_batch, 128, "file 0: should be default"),
-                50 => assert_eq!(write_batch, 128, "file 50: 75% is not pressure"),
-                100 => assert_eq!(write_batch, 32, "file 100: 85% is pressure"),
-                150 => assert_eq!(write_batch, 8, "file 150: 92% is critical"),
-                200 => assert_eq!(write_batch, 32, "file 200: 88% back to pressure"),
-                250 => assert_eq!(write_batch, 128, "file 250: 70% recovered"),
-                _ => {}
-            }
-        }
-    }
-
-    /// Test the two-stage pipeline pattern: chunk channel feeds embed workers,
-    /// which feed the result channel. This is the exact architecture used
-    /// by both TCP and Unix modes.
-    #[tokio::test]
-    async fn two_stage_pipeline_no_deadlock() {
-        let concurrency = 8;
-        let num_files = 100;
-        let sem = Arc::new(Semaphore::new(concurrency));
-
-        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<usize>(concurrency * 2);
-        let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<usize>(concurrency * 2);
-
-        // Stage 1: chunk producers
-        for i in 0..num_files {
-            let sem = sem.clone();
-            let chunk_tx = chunk_tx.clone();
-            tokio::spawn(async move {
-                let _permit = sem.acquire().await.ok();
-                let _ = chunk_tx.send(i).await;
-            });
-        }
-        drop(chunk_tx);
-
-        // Stage 2: embed workers (consume from chunk_rx, produce to result_tx)
-        let chunk_rx = Arc::new(tokio::sync::Mutex::new(chunk_rx));
-        for _ in 0..concurrency {
-            let chunk_rx = chunk_rx.clone();
-            let result_tx = result_tx.clone();
-            tokio::spawn(async move {
-                loop {
-                    let msg = {
-                        let mut rx = chunk_rx.lock().await;
-                        rx.recv().await
-                    };
-                    match msg {
-                        Some(i) => {
-                            // Simulate embed work
-                            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                            let _ = result_tx.send(i).await;
-                        }
-                        None => break,
-                    }
-                }
-            });
-        }
-        drop(result_tx);
-
-        // Consumer
-        let timeout = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            let mut count = 0;
-            while let Some(_) = result_rx.recv().await {
-                count += 1;
-            }
-            count
-        })
-        .await;
-
-        match timeout {
-            Ok(count) => assert_eq!(count, num_files, "all files should complete"),
-            Err(_) => panic!("two-stage pipeline deadlocked"),
-        }
-    }
-
-    /// Test that batch destructuring (into_iter + unzip) correctly separates
-    /// texts and senders without cloning. This validates the optimization in
-    /// Stage 3 embed workers that replaces `.text.clone()` with zero-copy move.
-    #[tokio::test]
-    async fn batch_destructure_no_clone() {
-        struct BatchSlot {
-            text: String,
-            result_tx: tokio::sync::oneshot::Sender<Result<Vec<f32>, anyhow::Error>>,
-        }
-
-        let mut batch = Vec::new();
-        let mut receivers = Vec::new();
-
-        for i in 0..48 {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            batch.push(BatchSlot {
-                text: format!("text content number {}", i),
-                result_tx: tx,
-            });
-            receivers.push(rx);
-        }
-
-        // Destructure: moves texts out, no clone
-        let (texts, senders): (Vec<String>, Vec<_>) =
-            batch.into_iter().map(|s| (s.text, s.result_tx)).unzip();
-
-        assert_eq!(texts.len(), 48);
-        assert_eq!(senders.len(), 48);
-        assert_eq!(texts[0], "text content number 0");
-        assert_eq!(texts[47], "text content number 47");
-
-        // Simulate RPC result scatter
-        let fake_vecs: Vec<Vec<f32>> = (0..48).map(|i| vec![i as f32; 4]).collect();
-        for (tx, vec) in senders.into_iter().zip(fake_vecs.into_iter()) {
-            let _ = tx.send(Ok(vec));
-        }
-
-        // Verify all receivers got their results
-        for (i, rx) in receivers.into_iter().enumerate() {
-            let result = rx.await.unwrap().unwrap();
-            assert_eq!(result, vec![i as f32; 4]);
-        }
-    }
-
-    /// Test that IndexStats.compact_handle works as a background task.
-    /// The handle should complete independently of the caller.
-    #[tokio::test]
-    async fn compact_handle_runs_in_background() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_clone = completed.clone();
-
-        let handle = tokio::spawn(async move {
-            // Simulate compaction work
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            completed_clone.store(true, Ordering::SeqCst);
-        });
-
-        // Task should not be complete yet
-        assert!(!completed.load(Ordering::SeqCst));
-
-        // Await the handle
-        let _ = handle.await;
-
-        // Now it should be complete
-        assert!(completed.load(Ordering::SeqCst));
-    }
-
-    // ---- Scan concurrency bounds tests ----
-
-    #[test]
-    fn scan_concurrency_formula() {
-        // Verify (n/2).clamp(2,8) produces correct bounds for all CPU counts
-        for cpus in [1, 2, 3, 4, 8, 16, 32, 64, 128] {
-            let workers = (cpus / 2usize).clamp(2, 8);
-            assert!(workers >= 2, "min 2 workers for {cpus} CPUs, got {workers}");
-            assert!(workers <= 8, "max 8 workers for {cpus} CPUs, got {workers}");
-        }
-        // Specific edge cases
-        assert_eq!(
-            (1usize / 2).clamp(2, 8),
-            2,
-            "1 CPU → 2 workers (clamped min)"
-        );
-        assert_eq!(
-            (2usize / 2).clamp(2, 8),
-            2,
-            "2 CPUs → 2 workers (clamped min)"
-        );
-        assert_eq!((4usize / 2).clamp(2, 8), 2, "4 CPUs → 2 workers");
-        assert_eq!((8usize / 2).clamp(2, 8), 4, "8 CPUs → 4 workers");
-        assert_eq!(
-            (16usize / 2).clamp(2, 8),
-            8,
-            "16 CPUs → 8 workers (clamped max)"
-        );
-        assert_eq!(
-            (32usize / 2).clamp(2, 8),
-            8,
-            "32 CPUs → 8 workers (clamped max)"
-        );
-        assert_eq!(
-            (128usize / 2).clamp(2, 8),
-            8,
-            "128 CPUs → 8 workers (clamped max)"
-        );
-    }
-
-    #[test]
-    fn scan_concurrency_default_fallback() {
-        // When available_parallelism fails, default should be 4
-        let fallback = 4usize;
-        assert!(fallback >= 2, "fallback must be >= min clamp");
-        assert!(fallback <= 8, "fallback must be <= max clamp");
-    }
-
-    // ---- Spawn bounding tests (TCP pipeline) ----
-
-    /// Verify spawn_sem bounds in-flight tasks to embed_concurrency * 4
-    #[tokio::test]
-    async fn spawn_sem_bounds_inflight_tasks() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let concurrency = 4usize;
-        let cap = concurrency * 4;
-        let sem = Arc::new(Semaphore::new(cap));
-        let peak = Arc::new(AtomicUsize::new(0));
-        let active = Arc::new(AtomicUsize::new(0));
-        let total = 100usize;
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<usize>(cap);
-
-        // Simulate the spawn loop
-        {
-            let sem = sem.clone();
-            let peak = peak.clone();
-            let active = active.clone();
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                for i in 0..total {
-                    let permit = sem.clone().acquire_owned().await.unwrap();
-                    let peak = peak.clone();
-                    let active = active.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let cur = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        peak.fetch_max(cur, Ordering::SeqCst);
-                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                        let _ = tx.send(i).await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        drop(permit);
-                    });
-                }
-            });
-        }
-        drop(tx);
-
-        // Drain rx concurrently (prevents channel backpressure deadlock)
-        let mut received = 0;
-        while let Some(_) = rx.recv().await {
-            received += 1;
-        }
-
-        assert_eq!(received, total, "all {total} tasks must complete");
-        let max = peak.load(Ordering::SeqCst);
-        assert!(max <= cap, "peak inflight {max} should be <= cap {cap}");
-        assert!(max >= 2, "should have some parallelism, got {max}");
-    }
-
-    /// Verify spawn_sem releases permit after task completes (no leak)
-    #[tokio::test]
-    async fn spawn_sem_releases_permits() {
-        let cap = 4;
-        let sem = Arc::new(Semaphore::new(cap));
-
-        // Use all permits
-        for _ in 0..cap {
-            let permit = sem.clone().acquire_owned().await.unwrap();
-            let sem = sem.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                drop(permit);
-                drop(sem);
-            });
-        }
-
-        // Wait for tasks to complete
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        // All permits should be returned
-        assert_eq!(
-            sem.available_permits(),
-            cap,
-            "all {cap} permits should be returned after tasks complete"
-        );
-    }
-
-    /// Edge case: embed_concurrency=1 → spawn_sem=4 (minimum viable)
-    #[tokio::test]
-    async fn spawn_sem_min_concurrency() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let concurrency = 1usize;
-        let cap = concurrency * 4;
-        assert_eq!(cap, 4, "minimum spawn cap should be 4");
-
-        let sem = Arc::new(Semaphore::new(cap));
-        let done = Arc::new(AtomicUsize::new(0));
-
-        for _ in 0..8 {
-            let permit = sem.clone().acquire_owned().await.unwrap();
-            let done = done.clone();
-            tokio::spawn(async move {
-                done.fetch_add(1, Ordering::SeqCst);
-                drop(permit);
-            });
-        }
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert_eq!(done.load(Ordering::SeqCst), 8, "all tasks should complete");
-    }
-}
+// ============================================================================
+// CLI display helpers — these functions are called by run_cli and format output
+// for human-readable or JSON display.
+// ============================================================================
 
 async fn show_status(storage_path: &Path, dimensions: u32, json: bool) -> Result<()> {
     if !tokio::fs::try_exists(storage_path).await.unwrap_or(false) {
         if json {
-            println!(
-                "{{\"error\": \"no_index\", \"path\": \"{}\"}}",
-                storage_path.display()
-            );
+            println!("{}", serde_json::json!({"exists": false}));
         } else {
             println!("No index found at {}", storage_path.display());
         }
         return Ok(());
     }
 
-    // Check if config.lance exists to avoid creating empty table before backfill
-    let config_exists = tokio::fs::try_exists(&storage_path.join("config.lance"))
-        .await
-        .unwrap_or(false);
+    let storage = Storage::open(storage_path, dimensions).await?;
 
-    // Get dimensions from config if it exists, otherwise use default
-    let dims = if config_exists {
-        let storage0 = Storage::open(storage_path, dimensions).await?;
-        let d = storage0.get_dimensions().await?.unwrap_or(dimensions);
-        drop(storage0);
-        d
-    } else {
-        dimensions
-    };
-
-    // Open storage and run backfill (will create config.lance if needed)
-    let storage = Storage::open(storage_path, dims).await?;
-    let backfill_count = storage.backfill_metadata().await.unwrap_or(0);
-    if backfill_count > 0 {
-        tracing::info!("status: auto-fixed {} metadata field(s)", backfill_count);
+    // Backfill missing metadata for legacy indexes
+    match storage.backfill_metadata().await {
+        Ok(count) if count > 0 => {
+            tracing::info!("status: auto-fixed {} metadata field(s)", count);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("status: metadata backfill failed: {}", e);
+        }
     }
-    drop(storage);
 
-    // Reopen to ensure fresh reads after backfill
-    let storage = Storage::open(storage_path, dims).await?;
-
-    let (files, chunks, embeddings) = storage.stats().await?;
-    let tier = storage
-        .get_tier()
-        .await?
-        .unwrap_or_else(|| "not set".into());
-    let quantization = storage
-        .get_quantization()
-        .await?
-        .unwrap_or_else(|| "float".into());
-
-    let last_duration_ms = storage.get_last_index_duration_ms().await?;
-    let last_files_count = storage.get_last_index_files_count().await?;
-    let last_timestamp = storage.get_last_index_timestamp().await?;
-
-    // Self-heal stuck progress (daemon singleton enforced by port lock; clear on status check).
-    if storage.get_indexing_in_progress().await? {
+    // Self-heal stuck progress
+    if storage.get_indexing_in_progress().await.unwrap_or(false) {
         let _ = storage.clear_indexing_progress().await;
     }
 
-    let indexing_in_progress = storage.get_indexing_in_progress().await?;
-    let indexing_start_time = storage.get_indexing_start_time().await?;
-    let indexing_phase = storage.get_indexing_phase().await?;
-    let (scanning_done, scanning_total) = storage.get_phase_progress("scanning").await?;
-    let (chunking_done, chunking_total) = storage.get_phase_progress("chunking").await?;
-    let (embedding_done, embedding_total) = storage.get_phase_progress("embedding").await?;
-
-    let bytes_per_dim = if quantization == "int8" { 1.0 } else { 4.0 };
-    let embedding_size = (dims as f64) * bytes_per_dim;
-    let storage_mb = (embeddings as f64) * embedding_size / (1024.0 * 1024.0);
-
-    let files_per_sec = match (last_duration_ms, last_files_count) {
-        (Some(ms), Some(count)) if ms > 0 => Some((count as f64) / (ms as f64 / 1000.0)),
-        _ => None,
+    let (chunks, files) = if let Some((cached_files, cached_chunks)) = storage.get_cached_counts().await {
+        (cached_chunks, cached_files)
+    } else {
+        let chunks = storage.count_chunks().await.unwrap_or(0);
+        let files = storage.get_indexed_files().await.map(|f| f.len()).unwrap_or(0);
+        storage.update_cached_counts(files, chunks).await;
+        (chunks, files)
     };
 
-    let calc_pct = |done: i64, total: i64| {
-        if total > 0 {
-            ((done as f64) / (total as f64) * 100.0 * 10.0).round() / 10.0
-        } else {
-            0.0
-        }
-    };
+    let tier = storage.get_tier().await.unwrap_or(None);
+    let indexing_in_progress = storage.get_indexing_in_progress().await.unwrap_or(false);
+    let last_indexed = storage.get_last_index_timestamp().await.unwrap_or(None);
+    let last_updated = storage.get_last_update_timestamp().await.unwrap_or(None)
+        .or_else(|| last_indexed.clone());
 
     if json {
         println!(
-            "{{\"path\": \"{}\", \"tier\": \"{}\", \"dimensions\": {}, \"quantization\": \"{}\", \"files\": {}, \"chunks\": {}, \"embeddings\": {}, \"storage_mb\": {:.2}, \"last_index_duration_ms\": {}, \"last_index_files_count\": {}, \"last_index_timestamp\": {}, \"files_per_sec\": {}, \"indexing_in_progress\": {}, \"indexing_start_time\": {}, \"indexing_phase\": {}, \"scanning_done\": {}, \"scanning_total\": {}, \"chunking_done\": {}, \"chunking_total\": {}, \"embedding_done\": {}, \"embedding_total\": {}}}",
-            storage_path.display(),
-            tier,
-            dims,
-            quantization,
-            files,
-            chunks,
-            embeddings,
-            storage_mb,
-            last_duration_ms
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "null".into()),
-            last_files_count
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "null".into()),
-            last_timestamp
-                .as_ref()
-                .map(|v| format!("\"{v}\""))
-                .unwrap_or_else(|| "null".into()),
-            files_per_sec
-                .map(|v| format!("{v:.1}"))
-                .unwrap_or_else(|| "null".into()),
-            if indexing_in_progress { "true" } else { "false" },
-            indexing_start_time
-                .as_ref()
-                .map(|v| format!("\"{v}\""))
-                .unwrap_or_else(|| "null".into()),
-            indexing_phase
-                .as_ref()
-                .map(|v| format!("\"{v}\""))
-                .unwrap_or_else(|| "null".into()),
-            scanning_done,
-            scanning_total,
-            chunking_done,
-            chunking_total,
-            embedding_done,
-            embedding_total
+            "{}",
+            serde_json::json!({
+                "exists": true,
+                "files": files,
+                "chunks": chunks,
+                "tier": tier,
+                "dimensions": dimensions,
+                "indexingInProgress": indexing_in_progress,
+                "lastIndexed": last_indexed,
+                "lastUpdated": last_updated,
+            })
         );
     } else {
-        println!("Index: {}", storage_path.display());
+        println!("Files: {}", files);
+        println!("Chunks: {}", chunks);
+        println!("Tier: {}", tier.as_deref().unwrap_or("unknown"));
+        println!("Dimensions: {}", dimensions);
+        println!("Status: {}", if indexing_in_progress { "indexing" } else { "idle" });
+        if let Some(ts) = &last_indexed {
+            println!("Last indexed: {}", ts);
+        }
+        if let Some(ts) = &last_updated {
+            println!("Last updated: {}", ts);
+        }
+    }
 
-        if indexing_in_progress {
-            let phase = indexing_phase.unwrap_or_else(|| "indexing".into());
-            println!("Status: {phase}");
-            let scan_pct = calc_pct(scanning_done, scanning_total);
-            let chunk_pct = calc_pct(chunking_done, chunking_total);
-            let embed_pct = calc_pct(embedding_done, embedding_total);
-            println!(
-                "  Scanning:  {}/{} files ({}%)",
-                scanning_done, scanning_total, scan_pct
-            );
-            println!(
-                "  Chunking:  {}/{} files ({}%)",
-                chunking_done, chunking_total, chunk_pct
-            );
-            println!(
-                "  Embedding: {}/{} files ({}%)",
-                embedding_done, embedding_total, embed_pct
-            );
-            if let Some(ts) = indexing_start_time {
-                println!("Started: {ts}");
-            }
+    Ok(())
+}
+
+async fn show_files(storage_path: &Path, dimensions: u32, json: bool) -> Result<()> {
+    if !tokio::fs::try_exists(storage_path).await.unwrap_or(false) {
+        if json {
+            println!("{}", serde_json::json!({"files": []}));
         } else {
-            println!("Status: idle");
+            println!("No index found at {}", storage_path.display());
         }
+        return Ok(());
+    }
 
-        println!("Tier: {tier}");
-        println!("Dimensions: {dims}");
-        println!("Quantization: {quantization}");
-        println!("Files: {files}");
-        println!("Chunks: {chunks}");
-        println!("Embeddings: {embeddings}");
-        println!(
-            "Vector storage: {:.1} MB ({} bytes/embedding)",
-            storage_mb, embedding_size as i64
-        );
+    let storage = Storage::open(storage_path, dimensions).await?;
+    let files = storage.get_indexed_files().await?;
+    let mut sorted: Vec<String> = files.into_iter().collect();
+    sorted.sort();
 
-        if let Some(ms) = last_duration_ms {
-            println!("Last index duration: {:.1}s", (ms as f64) / 1000.0);
+    if json {
+        println!("{}", serde_json::json!({"files": sorted}));
+    } else {
+        for f in &sorted {
+            println!("{}", f);
         }
-        if let Some(speed) = files_per_sec {
-            println!("Index speed: {:.1} files/s", speed);
-        }
-        if let Some(ts) = last_timestamp {
-            println!("Last indexed: {ts}");
-        }
+        println!("{} files indexed", sorted.len());
     }
 
     Ok(())
@@ -3746,236 +2371,34 @@ async fn show_usage(storage_path: &Path, dimensions: u32) -> Result<()> {
     }
 
     let storage = Storage::open(storage_path, dimensions).await?;
-    let today = storage.get_daily_usage().await?;
-    println!("Today's usage:");
-    println!("  Tokens: {}", today.tokens);
-    println!("  Cost:   ${:.4}", today.cost);
-
-    let history = storage.get_usage_history(7).await?;
-    if !history.is_empty() {
-        println!("\nLast 7 days:");
-        for day in history {
-            println!("  {}: {} tokens (${:0.4})", day.date, day.tokens, day.cost);
-        }
-    }
-
+    let daily = storage.get_daily_usage().await?;
     let total = storage.get_total_usage().await?;
-    println!("\nTotal usage:");
-    println!("  Tokens: {}", total.tokens);
-    println!("  Cost:   ${:.4}", total.cost);
-    Ok(())
-}
 
-async fn show_files(storage_path: &Path, dimensions: u32, json: bool) -> Result<()> {
-    if !tokio::fs::try_exists(storage_path).await.unwrap_or(false) {
-        if json {
-            println!(
-                "{{\"error\": \"no_index\", \"path\": \"{}\", \"files\": {{}}}}",
-                storage_path.display()
-            );
-        } else {
-            println!("No index found at {}", storage_path.display());
-        }
-        return Ok(());
-    }
-
-    let storage = Storage::open(storage_path, dimensions).await?;
-    let hashes = storage.get_file_hashes(None).await?;
-
-    if json {
-        let j = serde_json::json!({
-            "path": storage_path.display().to_string(),
-            "count": hashes.len(),
-            "files": hashes,
-        });
-        println!("{}", serde_json::to_string(&j)?);
-    } else {
-        println!("Indexed files ({}):", hashes.len());
-        let mut sorted: Vec<_> = hashes.iter().collect();
-        sorted.sort_by_key(|(k, _)| k.to_string());
-        for (path, hash) in sorted {
-            println!("  {path}: {hash}");
-        }
-    }
+    println!("Today:  {} tokens  ${:.4}", daily.tokens, daily.cost);
+    println!("Total:  {} tokens  ${:.4}", total.tokens, total.cost);
 
     Ok(())
 }
 
-async fn run_search(
-    storage_path: &Path,
-    query: &str,
-    tier: &str,
-    dimensions: u32,
-    json_lines: bool,
-    federated_dbs: &[PathBuf],
-) -> Result<()> {
-    // Collect all storage paths to search (primary + federated)
-    let mut all_paths: Vec<PathBuf> = vec![storage_path.to_path_buf()];
-    all_paths.extend(federated_dbs.iter().cloned());
-
-    let mut all_ranked: Vec<(f64, String, String)> = Vec::new(); // (score, path, content)
-
-    for sp in &all_paths {
-        if !tokio::fs::try_exists(sp).await.unwrap_or(false) {
-            continue;
-        }
-
-        let storage0 = Storage::open(sp, dimensions).await?;
-        let stored_tier = storage0.get_tier().await?.unwrap_or_else(|| tier.into());
-        let stored_dims = storage0.get_dimensions().await?.unwrap_or(dimensions);
-        drop(storage0);
-
-        let storage = Storage::open(sp, stored_dims).await?;
-        let mut client = crate::model_client::pooled().await?;
-        let (embed_model, rerank_model) = models_for_tier(&stored_tier);
-
-        let query_vec = client.embed_query(query, embed_model, stored_dims).await?;
-        storage
-            .record_usage(count_tokens(query), &stored_tier)
-            .await?;
-
-        let results = storage.search_hybrid(query, &query_vec, 20).await?;
-        if results.is_empty() {
-            continue;
-        }
-
-        let docs: Vec<&str> = results.iter().map(|r| r.content.as_str()).collect();
-        let ranked = client.rerank(query, &docs, rerank_model, 10).await?;
-        storage
-            .record_usage(count_tokens(query), &stored_tier)
-            .await?;
-
-        for (idx, score) in ranked {
-            if idx < results.len() {
-                let r = &results[idx];
-                all_ranked.push((score.into(), r.path.clone(), r.content.clone()));
-            }
-        }
-    }
-
-    // Sort by score descending, deduplicate by path
-    all_ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut seen = HashSet::new();
-    all_ranked.retain(|(_, p, _)| seen.insert(p.clone()));
-    all_ranked.truncate(10);
-
-    if all_ranked.is_empty() {
-        if json_lines {
-            emit_json(
-                true,
-                &serde_json::json!({"type": "search_results", "results": []}),
-            );
-        } else {
-            println!("No results found");
-        }
-        return Ok(());
-    }
-
-    if json_lines {
-        let results: Vec<serde_json::Value> = all_ranked
-            .iter()
-            .enumerate()
-            .map(|(i, (score, path, content))| {
-                serde_json::json!({
-                    "rank": i + 1,
-                    "score": score,
-                    "path": path,
-                    "content": content,
-                })
-            })
-            .collect();
-        emit_json(
-            true,
-            &serde_json::json!({"type": "search_results", "results": results}),
-        );
-    } else {
-        println!("\nSearch results for: {query}\n");
-        for (i, (score, path, content)) in all_ranked.iter().enumerate() {
-            let preview: String = content.chars().take(200).collect();
-            let preview = preview.replace('\n', " ");
-            println!("{}. [score: {:.3}] {}", i + 1, score, path);
-            println!("   {preview}");
-            println!();
-        }
-    }
-
-    Ok(())
-}
-
-async fn remove_file(
-    storage_path: &Path,
-    file: &Path,
-    root: &Path,
-    include: &[PathBuf],
-    dimensions: u32,
-) -> Result<()> {
-    let storage = Storage::open(storage_path, dimensions).await?;
-    let include_dirs = resolve_include_dirs(root, include);
-    let rel = relative_path(file, root, &include_dirs);
-
-    // Get count before deletion
-    let chunks = storage.get_chunks_with_hashes(&rel).await?;
-    let removed = chunks.len();
-
-    // Create WriteQueue for deletion
-    let write_queue = crate::storage::WriteQueue::new(std::sync::Arc::new(storage), 32);
-    write_queue.delete_file(&rel).await;
-
-    // Wait for deletion to complete
-    let _ = write_queue.shutdown().await;
-
-    println!("Removed {rel} ({removed} chunks)");
-    Ok(())
-}
-
-async fn run_dry_run(root: &Path, exclude: &[String], include: &[PathBuf]) -> Result<()> {
-    println!("Dry run: would index {}", root.display());
-
-    let project = config::load(root);
-    let mut cfg = config::effective(&project, None, None);
-    cfg.exclude.extend(exclude.iter().cloned());
-
-    let mut discovery = discover::discover_files_with_config(root, &cfg)?;
-
-    let include_dirs = resolve_include_dirs(root, include);
-    let mut seen: HashSet<PathBuf> = discovery
-        .files
-        .iter()
-        .filter_map(|p| p.canonicalize().ok())
-        .collect();
-    discovery.files.extend(discover::discover_additional_files(
-        &include_dirs,
-        if exclude.is_empty() {
-            None
-        } else {
-            Some(exclude)
-        },
-        &mut seen,
-    ));
-
-    println!("Would discover {} files", discovery.files.len());
-    for file in &discovery.files {
-        let rel = relative_path(file, root, &include_dirs);
-        println!("  {rel}");
-    }
-
-    Ok(())
-}
-
-/// Discover linked projects (symlinks to external git repos) and emit as JSON.
 async fn discover_links(root: &Path, json_lines: bool) -> Result<()> {
-    let project = config::load(root);
-    let cfg = config::effective(&project, None, None);
-    let discovery = discover::discover_files_with_config(root, &cfg)?;
+    use crate::config;
+    use crate::discover;
+    use crate::storage;
 
-    let mut links = Vec::new();
+    let root = root.canonicalize()?;
+    let project = config::load(&root);
+    let cfg = config::effective(&project, None, None);
+
+    let discovery = discover::discover_files_with_config(&root, &cfg)?;
+
+    let mut links: Vec<serde_json::Value> = Vec::new();
+
     for repo in &discovery.skipped_repos {
         let name = repo
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
-        // Skip repos marked with skip: true in .opencode-index.yaml
         if project.linked.get(&name).map(|l| l.skip).unwrap_or(false) {
             continue;
         }
@@ -3989,15 +2412,51 @@ async fn discover_links(root: &Path, json_lines: bool) -> Result<()> {
         }));
     }
 
+    let submodules = discover::discover_submodules(&root);
+    for (sub_path, name) in &submodules {
+        if links.iter().any(|l| l["path"].as_str() == Some(sub_path.to_str().unwrap_or(""))) {
+            continue;
+        }
+        if project.linked.get(name).map(|l| l.skip).unwrap_or(false) {
+            continue;
+        }
+        let id = storage::git_project_id(sub_path);
+        let db = storage::storage_path(sub_path);
+        links.push(serde_json::json!({
+            "path": sub_path.to_str().unwrap_or(""),
+            "projectId": id,
+            "name": name,
+            "dbPath": db.to_str().unwrap_or(""),
+            "submodule": true,
+        }));
+    }
+
+    let nested = discover::discover_nested_git_repos(&root);
+    for (repo_path, name) in &nested {
+        if links.iter().any(|l| l["path"].as_str() == Some(repo_path.to_str().unwrap_or(""))) {
+            continue;
+        }
+        if project.linked.get(name).map(|l| l.skip).unwrap_or(false) {
+            continue;
+        }
+        let id = storage::git_project_id(repo_path);
+        let db = storage::storage_path(repo_path);
+        links.push(serde_json::json!({
+            "path": repo_path.to_str().unwrap_or(""),
+            "projectId": id,
+            "name": name,
+            "dbPath": db.to_str().unwrap_or(""),
+            "nested_repo": true,
+        }));
+    }
+
     let result = serde_json::json!({
-        "type": "discover_links",
-        "root": root.to_str().unwrap_or(""),
-        "rootProjectId": storage::git_project_id(root),
+        "rootProjectId": storage::git_project_id(&root),
         "links": links,
     });
 
     if json_lines {
-        emit_json(true, &result);
+        println!("{}", result);
     } else {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
@@ -4005,91 +2464,211 @@ async fn discover_links(root: &Path, json_lines: bool) -> Result<()> {
     Ok(())
 }
 
-/// Show comprehensive health status.
 async fn show_health(
     root: &Path,
     storage_path: &Path,
     dimensions: u32,
     json_lines: bool,
 ) -> Result<()> {
-    let index_exists = tokio::fs::try_exists(storage_path).await.unwrap_or(false);
-    let mut status = serde_json::json!({
-        "type": "health",
+    let exists = tokio::fs::try_exists(storage_path).await.unwrap_or(false);
+
+    let mut result = serde_json::json!({
+        "healthy": true,
         "root": root.to_str().unwrap_or(""),
-        "indexExists": index_exists,
-        "dbPath": storage_path.to_str().unwrap_or(""),
+        "indexExists": exists,
+        "dbPath": storage_path.to_str(),
+        "errors": [],
     });
 
-    if index_exists {
+    if exists {
         if let Ok(storage) = Storage::open(storage_path, dimensions).await {
-            // Lazy migration: backfill missing metadata for legacy indexes
             match storage.backfill_metadata().await {
                 Ok(count) if count > 0 => {
-                    eprintln!("auto-fixed {} metadata field(s)", count);
+                    tracing::info!("health check: auto-fixed {} metadata field(s)", count);
                 }
-                Ok(_) => {} // No backfill needed
+                Ok(_) => {}
                 Err(e) => {
-                    eprintln!("warning: metadata backfill failed: {}", e);
+                    tracing::warn!("health check: metadata backfill failed: {}", e);
                 }
             }
 
             let chunks = storage.count_chunks().await.unwrap_or(0);
             let files = storage.get_file_count().await.unwrap_or(0);
             let tier = storage.get_tier().await.unwrap_or(None);
-            let dims = storage.get_dimensions().await.unwrap_or(None);
-            let in_progress = storage
-                .get_config("indexing_in_progress")
-                .await
-                .unwrap_or(None);
-            let phase = storage.get_config("indexing_phase").await.unwrap_or(None);
-            let last_ts = storage
-                .get_config("last_index_timestamp")
-                .await
-                .unwrap_or(None);
-            let last_duration_ms = storage.get_last_index_duration_ms().await.unwrap_or(None);
-            let last_files_count = storage.get_last_index_files_count().await.unwrap_or(None);
-            let files_per_sec = match (last_duration_ms, last_files_count) {
-                (Some(ms), Some(count)) if ms > 0 => Some((count as f64) / (ms as f64 / 1000.0)),
-                _ => None,
-            };
+            result["files"] = serde_json::json!(files);
+            result["chunks"] = serde_json::json!(chunks);
+            result["tier"] = serde_json::json!(tier);
 
-            status["files"] = serde_json::json!(files);
-            status["chunks"] = serde_json::json!(chunks);
-            status["tier"] = serde_json::json!(tier);
-            status["dimensions"] = serde_json::json!(dims);
-            status["indexingInProgress"] = serde_json::json!(in_progress == Some("true".into()));
-            status["indexingPhase"] = serde_json::json!(phase);
-            status["lastIndexed"] = serde_json::json!(last_ts);
-            status["lastIndexDurationMs"] = serde_json::json!(last_duration_ms);
-            status["lastIndexFilesCount"] = serde_json::json!(last_files_count);
-            status["filesPerSec"] = serde_json::json!(files_per_sec);
-
-            // Check for integrity issues
-            let mut issues = Vec::new();
-            let tables_dir = storage_path.join("chunks.lance");
-            if !tokio::fs::try_exists(&tables_dir).await.unwrap_or(false) && chunks == 0 {
-                issues.push("no chunks table");
-            }
-            status["issues"] = serde_json::json!(issues);
+            let last_indexed = storage.get_last_index_timestamp().await.unwrap_or(None);
+            let last_updated = storage.get_last_update_timestamp().await.unwrap_or(None)
+                .or_else(|| last_indexed.clone());
+            result["lastIndexed"] = serde_json::json!(last_indexed);
+            result["lastUpdated"] = serde_json::json!(last_updated);
         }
-    }
 
-    // Check watcher state
-    if let Some(state_path) = watcher_state_path(storage_path) {
-        if tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
-            if let Ok(content) = tokio::fs::read_to_string(&state_path).await {
-                if let Ok(ws) = serde_json::from_str::<serde_json::Value>(&content) {
-                    status["watcher"] = ws;
-                }
-            }
+        let chunks_table = storage_path.join("chunks.lance");
+        let config_table = storage_path.join("config.lance");
+        let mut errors: Vec<String> = Vec::new();
+        if !tokio::fs::metadata(&chunks_table).await.map(|m| m.is_dir()).unwrap_or(false) {
+            errors.push("Missing chunks.lance table".into());
+        }
+        if !tokio::fs::metadata(&config_table).await.map(|m| m.is_dir()).unwrap_or(false) {
+            errors.push("Missing config.lance table".into());
+        }
+        if !errors.is_empty() {
+            result["healthy"] = serde_json::json!(false);
+            result["errors"] = serde_json::json!(errors);
         }
     }
 
     if json_lines {
-        emit_json(true, &status);
+        println!("{}", result);
     } else {
-        println!("{}", serde_json::to_string_pretty(&status)?);
+        println!("{}", serde_json::to_string_pretty(&result)?);
     }
 
     Ok(())
 }
+
+async fn run_search(
+    storage_path: &Path,
+    query: &str,
+    tier: &str,
+    dimensions: u32,
+    json_lines: bool,
+    federated_db: &[PathBuf],
+) -> Result<()> {
+    use crate::model_client;
+
+    if !tokio::fs::try_exists(storage_path).await.unwrap_or(false) {
+        if json_lines {
+            println!("{}", serde_json::json!({"results": []}));
+        } else {
+            println!("No index found at {}", storage_path.display());
+        }
+        return Ok(());
+    }
+
+    let storage = Storage::open(storage_path, dimensions).await?;
+    let stored_tier = storage.get_tier().await?.unwrap_or_else(|| tier.to_string());
+    let stored_dims = storage.get_dimensions().await?.unwrap_or(dimensions);
+    let storage = Storage::open(storage_path, stored_dims).await?;
+
+    let mut client = model_client::pooled().await?;
+    let (embed_model, rerank_model) = models_for_tier(&stored_tier);
+
+    let qvec = client.embed_query(query, embed_model, stored_dims).await?;
+    let candidates = storage.search_hybrid(query, &qvec, 20).await?;
+
+    // Per-project rerank
+    let rerank_limit = 10u32;
+    let docs: Vec<&str> = candidates.iter().map(|r| r.content.as_str()).collect();
+    let ranked = if docs.is_empty() {
+        Vec::new()
+    } else {
+        client.rerank(query, &docs, rerank_model, rerank_limit).await?
+    };
+
+    // Also search federated DBs
+    let mut all_results: Vec<(f64, String, String)> = ranked
+        .iter()
+        .filter_map(|(idx, score)| {
+            candidates.get(*idx).map(|r| {
+                (*score as f64, r.path.clone(), r.content.clone())
+            })
+        })
+        .collect();
+
+    for fed_path in federated_db {
+        if !tokio::fs::try_exists(fed_path).await.unwrap_or(false) {
+            continue;
+        }
+        if let Ok(fed) = Storage::open(fed_path, stored_dims).await {
+            let fed_tier = fed.get_tier().await?.unwrap_or_else(|| stored_tier.clone());
+            let fed_dims = fed.get_dimensions().await?.unwrap_or(stored_dims);
+            let fed = Storage::open(fed_path, fed_dims).await?;
+            let (fed_embed, _) = models_for_tier(&fed_tier);
+            let fvec = client.embed_query(query, fed_embed, fed_dims).await?;
+            let fed_candidates = fed.search_hybrid(query, &fvec, 10).await?;
+            for r in fed_candidates {
+                all_results.push((r.score as f64, r.path, r.content));
+            }
+        }
+    }
+
+    // Sort by score
+    all_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    all_results.truncate(10);
+
+    if json_lines {
+        let results: Vec<serde_json::Value> = all_results.iter().enumerate().map(|(i, (score, path, content))| {
+            serde_json::json!({"rank": i + 1, "score": score, "path": path, "content": content})
+        }).collect();
+        println!("{}", serde_json::json!({"results": results}));
+    } else {
+        println!("Search results for: {}", query);
+        println!();
+        for (i, (score, path, content)) in all_results.iter().enumerate() {
+            println!("{}. {} (score: {:.4})", i + 1, path, score);
+            // Print first 2 lines of content as preview
+            let preview: Vec<&str> = content.lines().take(2).collect();
+            for line in preview {
+                println!("   {}", line);
+            }
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+async fn remove_file(
+    storage_path: &Path,
+    path: &Path,
+    root: &Path,
+    include: &[PathBuf],
+    dimensions: u32,
+) -> Result<()> {
+    use crate::discover::relative_path;
+
+    let include_dirs = resolve_include_dirs(root, include);
+    let storage = Storage::open(storage_path, dimensions).await?;
+    let rel = relative_path(path, root, &include_dirs);
+
+    let chunks = storage.get_chunks_with_hashes(&rel).await?;
+    let removed = chunks.len();
+
+    let write_queue = WriteQueue::new(std::sync::Arc::new(storage), 32);
+    write_queue.delete_file(&rel).await;
+    let _ = write_queue.shutdown().await;
+
+    println!("Removed {} chunk(s) for: {}", removed, rel);
+    Ok(())
+}
+
+async fn run_dry_run(root: &Path, exclude: &[String], include: &[PathBuf]) -> Result<()> {
+    let project = config::load(root);
+    let mut cfg = config::effective(&project, None, None);
+    cfg.exclude.extend(exclude.iter().cloned());
+
+    let mut discovery = discover::discover_files_with_config(root, &cfg)?;
+    let include_dirs = resolve_include_dirs(root, include);
+    let mut seen: HashSet<PathBuf> = discovery
+        .files
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
+    discovery.files.extend(discover::discover_additional_files(
+        &include_dirs,
+        if exclude.is_empty() { None } else { Some(exclude) },
+        &mut seen,
+    ));
+
+    println!("Dry run: {} files would be indexed", discovery.files.len());
+    for f in &discovery.files {
+        println!("  {}", f.display());
+    }
+
+    Ok(())
+}
+

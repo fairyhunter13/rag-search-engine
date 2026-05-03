@@ -26,7 +26,6 @@ import json
 import os
 import statistics
 import subprocess
-import sys
 import threading
 import time
 import urllib.request
@@ -138,12 +137,6 @@ def embed_passages(
 class TestGPUOnlyEnforcement:
     """Verify CPU provider is fully removed from the embedder's provider chain."""
 
-    def _load_embeddings_module(self):
-        if str(EMBEDDER_DIR) not in sys.path:
-            sys.path.insert(0, str(EMBEDDER_DIR))
-        from opencode_embedder import embeddings  # noqa: PLC0415
-        return embeddings
-
     def test_no_cpu_provider_in_source(self):
         """embeddings.py must contain 0 occurrences of CPUExecutionProvider."""
         src = (EMBEDDER_DIR / "opencode_embedder" / "embeddings.py").read_text()
@@ -159,33 +152,50 @@ class TestGPUOnlyEnforcement:
         count = src.count("ALLOW_CPU")
         assert count == 0, f"ALLOW_CPU found {count} time(s) — escape hatch must be removed."
 
-    def test_provider_detection_gpu_only(self):
-        """_get_onnx_providers() must return GPU providers with no CPU entry."""
-        embeddings = self._load_embeddings_module()
-        providers = embeddings._get_onnx_providers()
-        assert providers is not None, "providers is None — no GPU detected"
-        assert "CPUExecutionProvider" not in providers, (
-            f"CPUExecutionProvider still in provider list: {providers}"
+    def test_provider_detection_gpu_only(self, embedder_url, embedder_alive, embedder_token):
+        """Health endpoint must report a GPU provider with no CPU entry."""
+        req = urllib.request.Request(f"{embedder_url}/health")
+        if embedder_token:
+            req.add_header("X-Embedder-Token", embedder_token)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read())
+        gpu_info = body.get("result", body).get("gpu", {})
+        provider = gpu_info.get("provider", "")
+        assert provider != "cpu", (
+            f"Health endpoint reports provider='{provider}' — GPU enforcement failed. "
+            f"Full gpu: {gpu_info}"
         )
-        gpu_names = {
-            "TensorrtExecutionProvider", "CUDAExecutionProvider",
-            "ROCMExecutionProvider", "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider",
-        }
-        assert any(p in gpu_names for p in providers), (
-            f"No GPU provider in list: {providers}"
+        gpu_names = {"cuda", "tensorrt", "rocm", "migraphx", "directml"}
+        assert provider.lower() in gpu_names or gpu_info.get("is_gpu", False), (
+            f"No GPU provider reported by health endpoint. provider='{provider}', "
+            f"gpu={gpu_info}"
         )
 
-    def test_is_gpu_available_true(self):
-        """is_gpu_available() must return True on this machine."""
-        embeddings = self._load_embeddings_module()
-        assert embeddings.is_gpu_available(), "GPU must be available"
+    def test_is_gpu_available_true(self, embedder_url, embedder_alive, embedder_token):
+        """Health endpoint must report is_gpu=True."""
+        req = urllib.request.Request(f"{embedder_url}/health")
+        if embedder_token:
+            req.add_header("X-Embedder-Token", embedder_token)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read())
+        gpu_info = body.get("result", body).get("gpu", {})
+        assert gpu_info.get("is_gpu", False), (
+            f"Health endpoint reports is_gpu=False — GPU must be available. "
+            f"gpu={gpu_info}"
+        )
 
-    def test_get_active_provider_not_cpu(self):
-        """get_active_provider() must not return 'cpu'."""
-        embeddings = self._load_embeddings_module()
-        provider = embeddings.get_active_provider()
-        assert provider != "cpu", f"Active provider is 'cpu' — GPU enforcement failed"
+    def test_get_active_provider_not_cpu(self, embedder_url, embedder_alive, embedder_token):
+        """Health endpoint must not report provider='cpu'."""
+        req = urllib.request.Request(f"{embedder_url}/health")
+        if embedder_token:
+            req.add_header("X-Embedder-Token", embedder_token)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read())
+        gpu_info = body.get("result", body).get("gpu", {})
+        provider = gpu_info.get("provider", "unknown")
+        assert provider != "cpu", (
+            f"Active provider is 'cpu' — GPU enforcement failed. gpu={gpu_info}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -197,10 +207,9 @@ class TestGPUMemoryAllocation:
     """Verify model loads to VRAM, not CPU RAM."""
 
     @pytest.fixture(autouse=True)
-    def _url(self, request, inprocess_embedder_url):
-        # Use live embedder_url if available, else in-process
-        self._embedder_url = inprocess_embedder_url
-        self._token = None
+    def _url(self, embedder_url, embedder_alive, embedder_token):
+        self._embedder_url = embedder_url
+        self._token = embedder_token
 
     def test_vram_allocated_after_inference(self):
         before = gpu_stats()
@@ -241,9 +250,9 @@ class TestGPUUtilisation:
     """Verify GPU executes the computation (util > 0 during inference)."""
 
     @pytest.fixture(autouse=True)
-    def _url(self, inprocess_embedder_url):
-        self._embedder_url = inprocess_embedder_url
-        self._token = None
+    def _url(self, embedder_url, embedder_alive, embedder_token):
+        self._embedder_url = embedder_url
+        self._token = embedder_token
 
     def test_gpu_utilisation_spikes_during_inference(self):
         texts = [f"GPU utilisation test text number {i}" for i in range(80)]
@@ -290,11 +299,10 @@ class TestEmbedderCPUUsage:
     """Idle and active CPU consumption."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, inprocess_embedder_url):
-        self._embedder_url = inprocess_embedder_url
-        self._token = None
-        # Get embedder PID from the in-process server's process
-        self._pid = os.getpid()
+    def _setup(self, embedder_url, embedder_alive, embedder_token, embedder_pid):
+        self._embedder_url = embedder_url
+        self._token = embedder_token
+        self._pid = embedder_pid
 
     def test_idle_cpu_below_threshold(self):
         """Idle CPU must be < 5 %."""
@@ -337,10 +345,10 @@ class TestEmbedderRAMUsage:
     """RAM stays under 2 GB and does not grow unboundedly."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, inprocess_embedder_url):
-        self._embedder_url = inprocess_embedder_url
-        self._token = None
-        self._pid = os.getpid()
+    def _setup(self, embedder_url, embedder_alive, embedder_token, embedder_pid):
+        self._embedder_url = embedder_url
+        self._token = embedder_token
+        self._pid = embedder_pid
 
     def test_ram_under_2gb(self):
         monitor = ResourceMonitor(self._pid)
@@ -398,9 +406,29 @@ class TestIndexerResources:
         assert rss < 500, f"Indexer RSS={rss:.0f} MiB exceeds 500 MiB limit"
 
     def test_ping_responds(self, indexer_url):
-        req = urllib.request.Request(f"{indexer_url}/ping")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            assert resp.status == 200
+        if indexer_url.startswith("abstract://"):
+            import socket as _socket
+            _ABSTRACT = "\0opencode-indexer"
+            try:
+                with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+                    s.settimeout(5.0)
+                    s.connect(_ABSTRACT)
+                    s.sendall(b"GET /ping HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                    data = b""
+                    while True:
+                        chunk = s.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                assert b" 200 " in data.split(b"\r\n")[0], (
+                    f"Abstract socket ping did not return 200: {data[:200]}"
+                )
+            except Exception as exc:
+                pytest.fail(f"Abstract socket ping failed: {exc}")
+        else:
+            req = urllib.request.Request(f"{indexer_url}/ping")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                assert resp.status == 200
 
 
 # ---------------------------------------------------------------------------
@@ -412,9 +440,9 @@ class TestThroughput:
     """Embeddings per second and latency percentiles."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, inprocess_embedder_url):
-        self._url = inprocess_embedder_url
-        self._token = None
+    def _setup(self, embedder_url, embedder_alive, embedder_token):
+        self._url = embedder_url
+        self._token = embedder_token
 
     def test_throughput_exceeds_minimum(self):
         """Must achieve > 10 embeddings / second on GPU."""
@@ -497,17 +525,19 @@ class TestIdleModelCleanup:
 class TestHealthEndpoint:
     """Embedder health endpoint returns expected fields."""
 
-    def test_health_ok(self, inprocess_embedder_url):
-        req = urllib.request.Request(f"{inprocess_embedder_url}/health")
+    def test_health_ok(self, embedder_url, embedder_alive, embedder_token):
+        req = urllib.request.Request(f"{embedder_url}/health")
+        if embedder_token:
+            req.add_header("X-Embedder-Token", embedder_token)
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = json.loads(resp.read())
         assert resp.status == 200
-        # is_gpu field must be True (or absent with gpu_stats.is_gpu=True)
-        # In-process server with mocked warmup may not have gpu_stats
-        if "gpu_stats" in body:
-            gpu = body["gpu_stats"]
+        # Check gpu provider if reported
+        result = body.get("result", body)
+        if "gpu" in result:
+            gpu = result["gpu"]
             assert gpu.get("provider") != "cpu", (
-                f"health.gpu_stats.provider must not be 'cpu'; got: {gpu.get('provider')}"
+                f"health.gpu.provider must not be 'cpu'; got: {gpu.get('provider')}"
             )
 
 
