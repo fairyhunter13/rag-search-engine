@@ -712,6 +712,12 @@ class TestEmbedderThroughput:
                         counts[idx] += 1
                     else:
                         errors[idx] += 1
+                        # Back off on 503 (circuit breaker) to let active_requests drain.
+                        if status == 503:
+                            time.sleep(0.1)
+                        # Back off on connection error (server may be restarting).
+                        elif status == 0:
+                            time.sleep(1.0)
 
             threads = [
                 threading.Thread(target=worker, args=(i,), daemon=True)
@@ -792,6 +798,10 @@ class TestEmbedderThroughput:
                         results["embed"] += 1
                     else:
                         results["errors"] += 1
+                if s == 503:
+                    time.sleep(0.1)
+                elif s == 0:
+                    time.sleep(1.0)
 
         def chunk_worker() -> None:
             while not stop_event.is_set():
@@ -801,6 +811,10 @@ class TestEmbedderThroughput:
                         results["chunk"] += 1
                     else:
                         results["errors"] += 1
+                if s == 503:
+                    time.sleep(0.1)
+                elif s == 0:
+                    time.sleep(1.0)
 
         def rerank_worker() -> None:
             while not stop_event.is_set():
@@ -810,6 +824,10 @@ class TestEmbedderThroughput:
                         results["rerank"] += 1
                     else:
                         results["errors"] += 1
+                if s == 503:
+                    time.sleep(0.1)
+                elif s == 0:
+                    time.sleep(1.0)
 
         threads = [
             threading.Thread(target=embed_worker, daemon=True),
