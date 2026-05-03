@@ -101,9 +101,16 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    // Create single-threaded runtime manually
-    // Benefits: event-loop style, ~0% CPU when idle, simpler debugging
-    let rt = tokio::runtime::Builder::new_current_thread()
+    // Multi-threaded runtime with a small worker pool.
+    // Required to serve concurrent RPC requests (search, status, etc.) without
+    // queuing delays that cause socket timeouts under parallel clients.
+    // Worker count is capped to stay conservative: min(num_cpus/2, 4), floor 2.
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let rt_workers = (num_cpus / 2).clamp(2, 4);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(rt_workers)
         .enable_all()
         .build()?;
 

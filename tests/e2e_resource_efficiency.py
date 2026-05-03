@@ -385,11 +385,19 @@ class TestIndexerResources:
     """Rust indexer idle CPU and RSS."""
 
     def test_idle_cpu_below_threshold(self, indexer_pid):
-        # Allow indexer to finish any initial scan/index work (may take up to 30s)
-        time.sleep(5.0)
+        # Wait for indexer to finish any initial scan/index work (may take up to 60s).
+        # Poll every 2s and stop waiting once CPU drops below 20% (actively idle).
         monitor = ResourceMonitor(indexer_pid)
-        monitor.collect(duration_s=5.0, interval_s=0.1)
-        stats = monitor.stats
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            sample = monitor.sample()
+            if sample["cpu"] < 20.0:
+                break
+            time.sleep(2.0)
+        # Now measure for 5s to get a stable idle reading.
+        monitor2 = ResourceMonitor(indexer_pid)
+        monitor2.collect(duration_s=5.0, interval_s=0.1)
+        stats = monitor2.stats
         # Use a generous threshold since the indexer may be running an active index scan.
         # True idle CPU (after scan) is < 1%, but during scan can reach 20-30%.
         # We test the structural guarantee (inotify, not polling) via source checks.
