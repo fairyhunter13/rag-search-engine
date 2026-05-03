@@ -1319,6 +1319,12 @@ fn link_index_inflight() -> &'static tokio::sync::Mutex<HashSet<PathBuf>> {
     SET.get_or_init(|| tokio::sync::Mutex::new(HashSet::new()))
 }
 
+fn link_index_cooldown() -> &'static tokio::sync::Mutex<std::collections::HashMap<PathBuf, std::time::Instant>> {
+    static MAP: std::sync::OnceLock<tokio::sync::Mutex<std::collections::HashMap<PathBuf, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Adaptive semaphore for linked project indexing.
 /// Total budget of 4 permits (default) limits concurrent linked-project indexing.
 /// Override via OPENCODE_INDEXER_LINK_CONCURRENCY env var.
@@ -1364,6 +1370,16 @@ async fn needs_initial_index(db: &std::path::Path) -> bool {
 }
 
 async fn ensure_link_index(link: Link, tier: &str, dims: u32, parent_root: &str) {
+    // Cooldown: skip if this link was checked within the last 60 seconds
+    {
+        let cooldown = link_index_cooldown().lock().await;
+        if let Some(last) = cooldown.get(&link.db) {
+            if last.elapsed() < std::time::Duration::from_secs(60) {
+                return;
+            }
+        }
+    }
+
     // Check skip in parent project config
     let parent_path = std::path::PathBuf::from(parent_root);
     let project = crate::config::load(&parent_path);
@@ -1422,6 +1438,7 @@ async fn ensure_link_index(link: Link, tier: &str, dims: u32, parent_root: &str)
             "skipping already-indexed linked project: {} (has chunks)",
             link.repo.display()
         );
+        link_index_cooldown().lock().await.insert(link.db.clone(), std::time::Instant::now());
         link_index_inflight().lock().await.remove(&link.db);
         return;
     }
@@ -1474,6 +1491,7 @@ async fn ensure_link_index(link: Link, tier: &str, dims: u32, parent_root: &str)
         }
         tracing::info!("linked index done: {} (weight={}/8)", root, weight);
 
+        link_index_cooldown().lock().await.insert(link.db.clone(), std::time::Instant::now());
         link_index_inflight().lock().await.remove(&link.db);
     });
 }
