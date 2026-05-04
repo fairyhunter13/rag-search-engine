@@ -150,8 +150,8 @@ async fn cli_status_self_heals_stuck_progress() -> Result<()> {
 
     anyhow::ensure!(out.status.success(), "status command failed");
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).context("parse json")?;
-    assert_eq!(json["indexing_in_progress"], serde_json::Value::Bool(false));
-    assert!(json["indexing_phase"].is_null());
+    assert_eq!(json["indexingInProgress"], serde_json::Value::Bool(false));
+    assert!(json["indexingPhase"].is_null());
     Ok(())
 }
 

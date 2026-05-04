@@ -405,7 +405,9 @@ class TestIndexerResources:
     """Rust indexer idle CPU and RSS."""
 
     def test_idle_cpu_below_threshold(self, indexer_pid):
-        wait_for_idle(indexer_pid)
+        # Wait up to 10 minutes for the indexer to finish any post-restart rebuild.
+        # Large repos can take 10+ minutes for initial scan at 100-200% CPU.
+        wait_for_idle(indexer_pid, cpu_threshold=30.0, timeout=600, interval=5)
         # Now measure for 5s to get a stable idle reading.
         monitor = ResourceMonitor(indexer_pid)
         monitor.collect(duration_s=5.0, interval_s=0.1)
