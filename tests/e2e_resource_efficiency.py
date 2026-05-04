@@ -28,6 +28,7 @@ import statistics
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,25 @@ def gpu_stats() -> dict[str, int]:
         return {"vram_mb": int(mem_s.strip()), "gpu_util": int(util_s.strip())}
     except Exception:
         return {"vram_mb": 0, "gpu_util": 0}
+
+
+def wait_for_idle(pid, cpu_threshold=5.0, timeout=60, interval=3):
+    """Wait until indexer CPU drops below threshold, indicating idle state."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            proc = psutil.Process(pid)
+            cpu = proc.cpu_percent(interval=1)
+            if cpu < cpu_threshold:
+                return cpu
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            break
+        time.sleep(interval)
+    # Return current CPU even if not idle (test will handle threshold assertion)
+    try:
+        return psutil.Process(pid).cpu_percent(interval=1)
+    except:
+        return -1
 
 
 def http_post(url: str, body: dict, token: str | None = None,
@@ -385,19 +405,11 @@ class TestIndexerResources:
     """Rust indexer idle CPU and RSS."""
 
     def test_idle_cpu_below_threshold(self, indexer_pid):
-        # Wait for indexer to finish any initial scan/index work (may take up to 60s).
-        # Poll every 2s and stop waiting once CPU drops below 20% (actively idle).
-        monitor = ResourceMonitor(indexer_pid)
-        deadline = time.monotonic() + 60.0
-        while time.monotonic() < deadline:
-            sample = monitor.sample()
-            if sample["cpu"] < 20.0:
-                break
-            time.sleep(2.0)
+        wait_for_idle(indexer_pid)
         # Now measure for 5s to get a stable idle reading.
-        monitor2 = ResourceMonitor(indexer_pid)
-        monitor2.collect(duration_s=5.0, interval_s=0.1)
-        stats = monitor2.stats
+        monitor = ResourceMonitor(indexer_pid)
+        monitor.collect(duration_s=5.0, interval_s=0.1)
+        stats = monitor.stats
         # Use a generous threshold since the indexer may be running an active index scan.
         # True idle CPU (after scan) is < 1%, but during scan can reach 20-30%.
         # We test the structural guarantee (inotify, not polling) via source checks.
@@ -409,6 +421,7 @@ class TestIndexerResources:
         print(f"\nIndexer CPU avg={stats['cpu_avg']:.1f}% (during/after index scan)")
 
     def test_idle_ram_under_500mb(self, indexer_pid):
+        wait_for_idle(indexer_pid)
         monitor = ResourceMonitor(indexer_pid)
         rss = monitor.sample()["mem_mb"]
         assert rss < 500, f"Indexer RSS={rss:.0f} MiB exceeds 500 MiB limit"

@@ -36,6 +36,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+import psutil
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -405,6 +406,41 @@ pytestmark = pytest.mark.perf
 
 
 # ---------------------------------------------------------------------------
+# Indexer readiness helper
+# ---------------------------------------------------------------------------
+
+
+def wait_for_indexer_ready(cpu_threshold=5.0, timeout=120, interval=3):
+    """Wait for indexer to finish rebuilding and become idle.
+
+    After a daemon restart the indexer rebuilds its index at 30-50% CPU for
+    ~60s.  Running performance tests during that window produces spurious
+    failures (high latency, low throughput, high error rates).  This function
+    blocks until CPU drops below *cpu_threshold* percent or *timeout* seconds
+    elapse.  If no indexer process is found it returns immediately so that the
+    normal skip logic in require_indexer can fire.
+    """
+    pids = [
+        p.pid
+        for p in psutil.process_iter(["name", "cmdline"])
+        if "opencode-indexer" in " ".join(p.info.get("cmdline") or [])
+        or "opencode-indexer" in (p.info.get("name") or "")
+    ]
+    if not pids:
+        return  # No indexer running — require_indexer will handle the skip
+    pid = pids[0]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            cpu = psutil.Process(pid).cpu_percent(interval=1)
+            if cpu < cpu_threshold:
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
+        time.sleep(interval)
+
+
+# ---------------------------------------------------------------------------
 # Session-scoped fixtures
 # ---------------------------------------------------------------------------
 
@@ -420,13 +456,18 @@ def require_embedder():
 
 @pytest.fixture(scope="session")
 def require_indexer():
-    """Skip the entire test if no indexer socket is reachable."""
+    """Skip the entire test if no indexer socket is reachable.
+
+    Also waits for the indexer to finish any post-restart index rebuild before
+    returning, so performance assertions are not contaminated by rebuild CPU.
+    """
     if not indexer_alive():
         pytest.skip(
             "Indexer not reachable. "
             "Expected abstract socket @opencode-indexer (Linux) or "
             f"file socket in {INDEXER_FILE_SOCKETS or '~/.opencode/indexer-*.sock'}"
         )
+    wait_for_indexer_ready()
 
 
 @pytest.fixture(scope="session")
