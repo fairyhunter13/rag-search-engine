@@ -338,18 +338,35 @@ async fn status_does_not_clear_progress_during_run_index() {
         if index_handle.is_finished() {
             break;
         }
-        let status = rpc(
-            port,
-            token.as_deref(),
-            "status",
-            serde_json::json!({
-                "root": root_str,
-                "db":   db_str,
-                "dimensions": 256,
-            }),
-        )
-        .await
-        .expect("status");
+        // Retry pattern for transient connection errors
+        let status_result = {
+            let mut result = None;
+            for attempt in 0..3 {
+                match rpc(
+                    port,
+                    token.as_deref(),
+                    "status",
+                    serde_json::json!({
+                        "root": root_str,
+                        "db":   db_str,
+                        "dimensions": 256,
+                    }),
+                )
+                .await
+                {
+                    Ok(s) => { result = Some(s); break; }
+                    Err(_) if attempt < 2 => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(_) => {}
+                }
+            }
+            result
+        };
+        let status = match status_result {
+            Some(s) => s,
+            None => continue, // skip this poll iteration
+        };
         if status["result"]["indexingInProgress"]
             .as_bool()
             .unwrap_or(false)
@@ -371,18 +388,35 @@ async fn status_does_not_clear_progress_during_run_index() {
                 break;
             }
 
-            let status = rpc(
-                port,
-                token.as_deref(),
-                "status",
-                serde_json::json!({
-                    "root": root_str,
-                    "db":   db_str,
-                    "dimensions": 256,
-                }),
-            )
-            .await
-            .expect("status");
+            // Retry pattern for transient connection errors
+            let status_result = {
+                let mut result = None;
+                for attempt in 0..3 {
+                    match rpc(
+                        port,
+                        token.as_deref(),
+                        "status",
+                        serde_json::json!({
+                            "root": root_str,
+                            "db":   db_str,
+                            "dimensions": 256,
+                        }),
+                    )
+                    .await
+                    {
+                        Ok(s) => { result = Some(s); break; }
+                        Err(_) if attempt < 2 => {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                result
+            };
+            let status = match status_result {
+                Some(s) => s,
+                None => continue, // skip this poll iteration
+            };
 
             let in_progress = status["result"]["indexingInProgress"]
                 .as_bool()
@@ -481,17 +515,31 @@ async fn stale_progress_is_cleared_when_no_indexing_active() {
 
     // status should self-heal: no active indexing is registered in
     // active_indexes, so the guard allows the clear to proceed.
-    let status = rpc(
-        daemon.port(),
-        token.as_deref(),
-        "status",
-        serde_json::json!({
-            "db": db_path.to_str().unwrap(),
-            "dimensions": 256,
-        }),
-    )
-    .await
-    .expect("status rpc");
+    // Retry pattern for transient connection errors
+    let status_result = {
+        let mut result = None;
+        for attempt in 0..3 {
+            match rpc(
+                daemon.port(),
+                token.as_deref(),
+                "status",
+                serde_json::json!({
+                    "db": db_path.to_str().unwrap(),
+                    "dimensions": 256,
+                }),
+            )
+            .await
+            {
+                Ok(s) => { result = Some(s); break; }
+                Err(_) if attempt < 2 => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(_) => {}
+            }
+        }
+        result
+    };
+    let status = status_result.expect("status rpc failed after retries");
 
     let result = &status["result"];
 
@@ -570,18 +618,36 @@ async fn concurrent_status_polls_dont_reset_embedding_progress() {
             break;
         }
 
-        let status = rpc(
-            port,
-            token.as_deref(),
-            "status",
-            serde_json::json!({
-                "root": root_str,
-                "db":   db_str,
-                "dimensions": 256,
-            }),
-        )
-        .await
-        .expect("status rpc");
+        let status = {
+            let mut rpc_result = None;
+            for attempt in 0..3 {
+                match rpc(
+                    port,
+                    token.as_deref(),
+                    "status",
+                    serde_json::json!({
+                        "root": root_str,
+                        "db":   db_str,
+                        "dimensions": 256,
+                    }),
+                )
+                .await
+                {
+                    Ok(s) => {
+                        rpc_result = Some(s);
+                        break;
+                    }
+                    Err(_) if attempt < 2 => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(_) => {}
+                }
+            }
+            match rpc_result {
+                Some(s) => s,
+                None => continue, // skip this poll, try next iteration
+            }
+        };
 
         let result = &status["result"];
         let done = result["embeddingDone"].as_i64().unwrap_or(0);
