@@ -40,7 +40,6 @@ import base64
 import concurrent.futures
 import logging
 import os
-import secrets
 import signal
 import socket
 import sys
@@ -55,34 +54,6 @@ os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "0")
 os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "65536")
 
 from aiohttp import web
-
-# ---------------------------------------------------------------------------
-# Shared-secret authentication
-# ---------------------------------------------------------------------------
-_AUTH_TOKEN: str | None = None
-
-
-def _init_auth_token() -> str:
-    """Read shared auth token from ~/.opencode/embedder.token, or generate if missing."""
-    global _AUTH_TOKEN
-    token_path = Path.home() / ".opencode" / "embedder.token"
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Try to read existing token (shared with indexer)
-    if token_path.exists():
-        try:
-            _AUTH_TOKEN = token_path.read_text().strip()
-            if _AUTH_TOKEN:  # Only use if non-empty
-                return _AUTH_TOKEN
-        except Exception:
-            pass  # Fall through to generate new token
-    
-    # Generate new token only if file doesn't exist or is empty
-    _AUTH_TOKEN = secrets.token_urlsafe(32)
-    token_path.write_text(_AUTH_TOKEN)
-    token_path.chmod(0o600)  # owner-only read/write
-    return _AUTH_TOKEN
-
 
 # ---------------------------------------------------------------------------
 # Process group cleanup utilities
@@ -960,18 +931,6 @@ class ModelServer:
         timeout_secs = int(os.environ.get("OPENCODE_EMBED_REQUEST_TIMEOUT", "120"))
 
         @web.middleware
-        async def auth_middleware(request: web.Request, handler):
-            """Check X-Embedder-Token on all non-health endpoints (case-insensitive)."""
-            if request.path in ("/", "/health"):
-                return await handler(request)
-            if _AUTH_TOKEN is not None:
-                # Try both capitalized and lowercase variants for HTTP header compatibility
-                token = request.headers.get("X-Embedder-Token") or request.headers.get("x-embedder-token") or ""
-                if token != _AUTH_TOKEN:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-            return await handler(request)
-
-        @web.middleware
         async def circuit_breaker(request: web.Request, handler):
             """REC-3: Reject requests when server is overloaded."""
             # Health checks always pass through
@@ -1015,7 +974,7 @@ class ModelServer:
                 )
 
         app = web.Application(
-            middlewares=[auth_middleware, circuit_breaker, timeout_middleware, payload_too_large_middleware],
+            middlewares=[circuit_breaker, timeout_middleware, payload_too_large_middleware],
             client_max_size=10 * 1024 * 1024,  # 10 MB request body limit
         )
         app.router.add_get("/health", self._http_health)
@@ -1507,10 +1466,6 @@ def run_server(
     # Must not fire for duplicate instances that exit on flock conflict —
     # their atexit would kill the daemon's process group.
     atexit.register(_kill_process_group)
-
-    # Initialize auth token (write to ~/.opencode/embedder.token)
-    token = _init_auth_token()
-    log.info("auth token initialized (written to ~/.opencode/embedder.token), length=%d", len(token))
 
     # Set up process group for clean child termination (prevents orphaned PIDs)
     _setup_process_group()

@@ -30,24 +30,12 @@ ALL_VALID_PROVIDERS = GPU_PROVIDERS | {"cpu"}
 # ---------------------------------------------------------------------------
 
 
-def _read_token() -> str | None:
-    token_path = os.path.expanduser("~/.opencode/embedder.token")
-    try:
-        with open(token_path) as f:
-            return f.read().strip() or None
-    except OSError:
-        return None
-
-
 def _request(method: str, path: str, body: dict | None = None, timeout: int = 30) -> dict:
     url = f"{EMBEDDER_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers: dict[str, str] = {}
     if data:
         headers["Content-Type"] = "application/json"
-    token = _read_token()
-    if token:
-        headers["X-Embedder-Token"] = token
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
@@ -475,10 +463,7 @@ def test_server_path_traversal_rejected():
     for evil_path in traversal_paths:
         url = f"{EMBEDDER_URL}/embed/chunk"
         data = json.dumps({"file": evil_path, "path": "evil.txt", "tier": "budget"}).encode()
-        token = _read_token()
         headers = {"Content-Type": "application/json"}
-        if token:
-            headers["X-Embedder-Token"] = token
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:

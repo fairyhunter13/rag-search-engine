@@ -7,7 +7,6 @@ set -euo pipefail
 
 INDEXER_BIN="/home/user/git/github.com/fairyhunter13/opencode/cmd/opencode-search-engine/indexer/target/release/opencode-indexer"
 PROJECT_ROOT="$HOME/git/github.com/fairyhunter13/redacted-name-3"
-TOKEN=$(cat ~/.opencode/embedder.token 2>/dev/null || echo "")
 LOG_DIR="/tmp/indexer-stress-test-$(date +%Y%m%d-%H%M%S)"
 DAEMON_PID=""
 PORT=""
@@ -27,7 +26,6 @@ cleanup() {
         if [ -n "$PORT" ]; then
             curl -s -X POST "http://127.0.0.1:$PORT/rpc" \
                 -H "Content-Type: application/json" \
-                -H "X-Indexer-Token: $TOKEN" \
                 -d '{"method":"shutdown","params":{}}' 2>/dev/null || true
             sleep 1
         fi
@@ -46,7 +44,6 @@ rpc() {
     local params="${2:-{}}"
     curl -s -X POST "http://127.0.0.1:$PORT/rpc" \
         -H "Content-Type: application/json" \
-        -H "X-Indexer-Token: $TOKEN" \
         -d "{\"method\":\"$method\",\"params\":$params}" 2>/dev/null
 }
 

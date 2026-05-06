@@ -82,18 +82,13 @@ async fn set_config(db: &std::path::Path, key: &str, value: &str) -> Result<()> 
 
 async fn rpc(
     port: u16,
-    token: Option<&str>,
     method: &str,
     params: serde_json::Value,
 ) -> Result<serde_json::Value> {
     let client = reqwest::Client::new();
-    let mut req = client
+    let resp = client
         .post(format!("http://127.0.0.1:{port}/rpc"))
-        .json(&serde_json::json!({"method": method, "params": params}));
-    if let Some(t) = token {
-        req = req.header("x-indexer-token", t);
-    }
-    let resp = req
+        .json(&serde_json::json!({"method": method, "params": params}))
         .send()
         .await
         .context("send rpc")?
@@ -103,11 +98,6 @@ async fn rpc(
     Ok(resp)
 }
 
-fn read_auth_token_from(home: &std::path::Path) -> Option<String> {
-    let path = home.join(".opencode").join("embedder.token");
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
-}
-
 // ---------------------------------------------------------------------------
 // Daemon lifecycle
 // ---------------------------------------------------------------------------
@@ -115,7 +105,6 @@ fn read_auth_token_from(home: &std::path::Path) -> Option<String> {
 struct DaemonHandle {
     child: tokio::process::Child,
     port: u16,
-    auth_token: Option<String>,
     // Prevent tests in this file from racing by serialising daemon lifecycle.
     _lock: std::fs::File,
 }
@@ -187,12 +176,9 @@ impl DaemonHandle {
             }
         });
 
-        let auth_token = read_auth_token_from(home);
-
         Ok(Self {
             child,
             port,
-            auth_token,
             _lock: lock,
         })
     }
@@ -201,13 +187,8 @@ impl DaemonHandle {
         self.port
     }
 
-    fn token(&self) -> Option<&str> {
-        self.auth_token.as_deref()
-    }
-
     async fn shutdown(mut self) {
-        let token = self.auth_token.as_deref().map(String::from);
-        let _ = rpc(self.port, token.as_deref(), "shutdown", serde_json::json!({})).await;
+        let _ = rpc(self.port, "shutdown", serde_json::json!({})).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         self.child.kill().await.ok();
     }
@@ -298,7 +279,6 @@ fn create_git_repo_with_files(n: usize) -> Result<tempfile::TempDir> {
 async fn status_does_not_clear_progress_during_run_index() {
     let (_server, daemon) = setup().await.expect("setup");
     let port = daemon.port();
-    let token = daemon.token().map(String::from);
 
     let root = create_git_repo_with_files(50).expect("create git repo");
     let db = root.path().join(".lancedb-active-test");
@@ -310,11 +290,9 @@ async fn status_does_not_clear_progress_during_run_index() {
     let index_handle = tokio::spawn({
         let root_str = root_str.clone();
         let db_str = db_str.clone();
-        let token = token.clone();
         async move {
             rpc(
                 port,
-                token.as_deref(),
                 "run_index",
                 serde_json::json!({
                     "root": root_str,
@@ -344,7 +322,6 @@ async fn status_does_not_clear_progress_during_run_index() {
             for attempt in 0..3 {
                 match rpc(
                     port,
-                    token.as_deref(),
                     "status",
                     serde_json::json!({
                         "root": root_str,
@@ -394,7 +371,6 @@ async fn status_does_not_clear_progress_during_run_index() {
                 for attempt in 0..3 {
                     match rpc(
                         port,
-                        token.as_deref(),
                         "status",
                         serde_json::json!({
                             "root": root_str,
@@ -458,7 +434,6 @@ async fn status_does_not_clear_progress_during_run_index() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     let final_status = rpc(
         port,
-        token.as_deref(),
         "status",
         serde_json::json!({
             "root": root_str,
@@ -494,7 +469,6 @@ async fn status_does_not_clear_progress_during_run_index() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_progress_is_cleared_when_no_indexing_active() {
     let (_server, daemon) = setup().await.expect("setup");
-    let token = daemon.token().map(String::from);
 
     let db_dir = tempfile::TempDir::new().expect("create temp db dir");
     let db_path = db_dir.path().join(".lancedb-stale-test");
@@ -521,7 +495,6 @@ async fn stale_progress_is_cleared_when_no_indexing_active() {
         for attempt in 0..3 {
             match rpc(
                 daemon.port(),
-                token.as_deref(),
                 "status",
                 serde_json::json!({
                     "db": db_path.to_str().unwrap(),
@@ -576,7 +549,6 @@ async fn stale_progress_is_cleared_when_no_indexing_active() {
 async fn concurrent_status_polls_dont_reset_embedding_progress() {
     let (_server, daemon) = setup().await.expect("setup");
     let port = daemon.port();
-    let token = daemon.token().map(String::from);
 
     let root = create_git_repo_with_files(50).expect("create git repo");
     let db = root.path().join(".lancedb-monotonic-test");
@@ -587,11 +559,9 @@ async fn concurrent_status_polls_dont_reset_embedding_progress() {
     let index_handle = tokio::spawn({
         let root_str = root_str.clone();
         let db_str = db_str.clone();
-        let token = token.clone();
         async move {
             rpc(
                 port,
-                token.as_deref(),
                 "run_index",
                 serde_json::json!({
                     "root": root_str,
@@ -623,7 +593,6 @@ async fn concurrent_status_polls_dont_reset_embedding_progress() {
             for attempt in 0..3 {
                 match rpc(
                     port,
-                    token.as_deref(),
                     "status",
                     serde_json::json!({
                         "root": root_str,

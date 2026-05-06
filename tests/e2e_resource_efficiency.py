@@ -113,7 +113,7 @@ def wait_for_idle(pid, cpu_threshold=5.0, timeout=60, interval=3):
         return -1
 
 
-def http_post(url: str, body: dict, token: str | None = None,
+def http_post(url: str, body: dict,
               timeout: int = 120) -> tuple[int, Any]:
     """POST JSON to url, return (status_code, parsed_body)."""
     data = json.dumps(body).encode()
@@ -121,8 +121,6 @@ def http_post(url: str, body: dict, token: str | None = None,
         url, data=data,
         headers={"Content-Type": "application/json"},
     )
-    if token:
-        req.add_header("X-Embedder-Token", token)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read())
@@ -133,7 +131,6 @@ def http_post(url: str, body: dict, token: str | None = None,
 def embed_passages(
     texts: list[str],
     url: str,
-    token: str | None = None,
     model: str = DEFAULT_MODEL,
     dimensions: int = DEFAULT_DIMS,
     timeout: int = 120,
@@ -142,7 +139,6 @@ def embed_passages(
     status, body = http_post(
         f"{url}/embed/passages",
         {"texts": texts, "model": model, "dimensions": dimensions},
-        token=token,
         timeout=timeout,
     )
     vectors = body.get("result", {}).get("vectors", []) if status == 200 else []
@@ -172,11 +168,9 @@ class TestGPUOnlyEnforcement:
         count = src.count("ALLOW_CPU")
         assert count == 0, f"ALLOW_CPU found {count} time(s) — escape hatch must be removed."
 
-    def test_provider_detection_gpu_only(self, embedder_url, embedder_alive, embedder_token):
+    def test_provider_detection_gpu_only(self, embedder_url, embedder_alive):
         """Health endpoint must report a GPU provider with no CPU entry."""
         req = urllib.request.Request(f"{embedder_url}/health")
-        if embedder_token:
-            req.add_header("X-Embedder-Token", embedder_token)
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = json.loads(resp.read())
         gpu_info = body.get("result", body).get("gpu", {})
@@ -191,11 +185,9 @@ class TestGPUOnlyEnforcement:
             f"gpu={gpu_info}"
         )
 
-    def test_is_gpu_available_true(self, embedder_url, embedder_alive, embedder_token):
+    def test_is_gpu_available_true(self, embedder_url, embedder_alive):
         """Health endpoint must report is_gpu=True."""
         req = urllib.request.Request(f"{embedder_url}/health")
-        if embedder_token:
-            req.add_header("X-Embedder-Token", embedder_token)
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = json.loads(resp.read())
         gpu_info = body.get("result", body).get("gpu", {})
@@ -204,11 +196,9 @@ class TestGPUOnlyEnforcement:
             f"gpu={gpu_info}"
         )
 
-    def test_get_active_provider_not_cpu(self, embedder_url, embedder_alive, embedder_token):
+    def test_get_active_provider_not_cpu(self, embedder_url, embedder_alive):
         """Health endpoint must not report provider='cpu'."""
         req = urllib.request.Request(f"{embedder_url}/health")
-        if embedder_token:
-            req.add_header("X-Embedder-Token", embedder_token)
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = json.loads(resp.read())
         gpu_info = body.get("result", body).get("gpu", {})
@@ -227,15 +217,14 @@ class TestGPUMemoryAllocation:
     """Verify model loads to VRAM, not CPU RAM."""
 
     @pytest.fixture(autouse=True)
-    def _url(self, embedder_url, embedder_alive, embedder_token):
+    def _url(self, embedder_url, embedder_alive):
         self._embedder_url = embedder_url
-        self._token = embedder_token
 
     def test_vram_allocated_after_inference(self):
         before = gpu_stats()
         status, vectors = embed_passages(
             ["GPU memory allocation test"],
-            self._embedder_url, self._token,
+            self._embedder_url,
         )
         assert status == 200, f"Embed request failed: {status}"
         after = gpu_stats()
@@ -252,7 +241,7 @@ class TestGPUMemoryAllocation:
     def test_vram_exceeds_minimum(self):
         """After a warm inference, VRAM usage should exceed 300 MiB."""
         try:
-            embed_passages(["warmup"], self._embedder_url, self._token)
+            embed_passages(["warmup"], self._embedder_url)
         except Exception:
             pass  # connection error tolerated; VRAM check is still valid
         stats = gpu_stats()
@@ -270,9 +259,8 @@ class TestGPUUtilisation:
     """Verify GPU executes the computation (util > 0 during inference)."""
 
     @pytest.fixture(autouse=True)
-    def _url(self, embedder_url, embedder_alive, embedder_token):
+    def _url(self, embedder_url, embedder_alive):
         self._embedder_url = embedder_url
-        self._token = embedder_token
 
     def test_gpu_utilisation_spikes_during_inference(self):
         texts = [f"GPU utilisation test text number {i}" for i in range(80)]
@@ -281,7 +269,7 @@ class TestGPUUtilisation:
 
         def run_inference():
             try:
-                embed_passages(texts, self._embedder_url, self._token, timeout=120)
+                embed_passages(texts, self._embedder_url, timeout=120)
             except Exception as exc:
                 error.append(exc)
 
@@ -319,9 +307,8 @@ class TestEmbedderCPUUsage:
     """Idle and active CPU consumption."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, embedder_url, embedder_alive, embedder_token, embedder_pid):
+    def _setup(self, embedder_url, embedder_alive, embedder_pid):
         self._embedder_url = embedder_url
-        self._token = embedder_token
         self._pid = embedder_pid
 
     def test_idle_cpu_below_threshold(self):
@@ -341,7 +328,7 @@ class TestEmbedderCPUUsage:
         results: list[int] = []
 
         def run():
-            s, _ = embed_passages(texts, self._embedder_url, self._token)
+            s, _ = embed_passages(texts, self._embedder_url)
             results.append(s)
 
         thread = threading.Thread(target=run, daemon=True)
@@ -365,9 +352,8 @@ class TestEmbedderRAMUsage:
     """RAM stays under 2 GB and does not grow unboundedly."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, embedder_url, embedder_alive, embedder_token, embedder_pid):
+    def _setup(self, embedder_url, embedder_alive, embedder_pid):
         self._embedder_url = embedder_url
-        self._token = embedder_token
         self._pid = embedder_pid
 
     def test_ram_under_2gb(self):
@@ -382,7 +368,7 @@ class TestEmbedderRAMUsage:
 
         for i in range(5):
             texts = [f"leak test batch {i} item {j}" for j in range(30)]
-            status, _ = embed_passages(texts, self._embedder_url, self._token)
+            status, _ = embed_passages(texts, self._embedder_url)
             assert status == 200, f"Batch {i} failed"
             time.sleep(0.3)
 
@@ -463,17 +449,16 @@ class TestThroughput:
     """Embeddings per second and latency percentiles."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, embedder_url, embedder_alive, embedder_token):
+    def _setup(self, embedder_url, embedder_alive):
         self._url = embedder_url
-        self._token = embedder_token
 
     def test_throughput_exceeds_minimum(self):
         """Must achieve > 10 embeddings / second on GPU."""
         # Warm up first
-        embed_passages(["warmup"], self._url, self._token)
+        embed_passages(["warmup"], self._url)
         texts = [f"throughput benchmark {i}" for i in range(100)]
         t0 = time.monotonic()
-        status, vectors = embed_passages(texts, self._url, self._token)
+        status, vectors = embed_passages(texts, self._url)
         elapsed = time.monotonic() - t0
         assert status == 200, f"Request failed: {status}"
         throughput = len(texts) / elapsed
@@ -485,11 +470,11 @@ class TestThroughput:
 
     def test_latency_single_text(self):
         """Single-text p95 latency must be < 2 s (model already loaded)."""
-        embed_passages(["warmup"], self._url, self._token)  # warm up
+        embed_passages(["warmup"], self._url)  # warm up
         latencies: list[float] = []
         for _ in range(20):
             t0 = time.monotonic()
-            status, _ = embed_passages(["latency test"], self._url, self._token)
+            status, _ = embed_passages(["latency test"], self._url)
             latencies.append(time.monotonic() - t0)
             assert status == 200
         p95 = sorted(latencies)[int(0.95 * len(latencies))]
@@ -499,11 +484,11 @@ class TestThroughput:
 
     def test_latency_percentiles_logged(self, capsys):
         """Collect and print p50/p95/p99 for observability."""
-        embed_passages(["warmup"], self._url, self._token)
+        embed_passages(["warmup"], self._url)
         latencies: list[float] = []
         for _ in range(30):
             t0 = time.monotonic()
-            embed_passages(["perf test"], self._url, self._token)
+            embed_passages(["perf test"], self._url)
             latencies.append(time.monotonic() - t0)
         s = sorted(latencies)
         p50 = s[int(0.50 * len(s))]
@@ -548,10 +533,8 @@ class TestIdleModelCleanup:
 class TestHealthEndpoint:
     """Embedder health endpoint returns expected fields."""
 
-    def test_health_ok(self, embedder_url, embedder_alive, embedder_token):
+    def test_health_ok(self, embedder_url, embedder_alive):
         req = urllib.request.Request(f"{embedder_url}/health")
-        if embedder_token:
-            req.add_header("X-Embedder-Token", embedder_token)
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = json.loads(resp.read())
         assert resp.status == 200

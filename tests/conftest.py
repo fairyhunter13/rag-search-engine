@@ -28,14 +28,6 @@ import pytest
 
 EMBEDDER_URL = os.environ.get("EMBEDDER_URL", "http://127.0.0.1:9998")
 INDEXER_PORT_FILE = Path.home() / ".opencode" / "indexer.port"
-EMBEDDER_TOKEN_FILE = Path.home() / ".opencode" / "embedder.token"
-
-
-def _read_embedder_token() -> str | None:
-    try:
-        return EMBEDDER_TOKEN_FILE.read_text().strip()
-    except FileNotFoundError:
-        return None
 
 
 def _read_indexer_port() -> int | None:
@@ -90,22 +82,15 @@ def _rpc_call_abstract_socket(method: str, params=None):
     return json.loads(body)
 
 
-def _check_url(url: str, token: str | None = None, timeout: float = 3.0) -> bool:
+def _check_url(url: str, timeout: float = 3.0) -> bool:
     """Return True if the URL responds with HTTP 200."""
     import urllib.request
     try:
         req = urllib.request.Request(url)
-        if token:
-            req.add_header("X-Embedder-Token", token)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status == 200
     except Exception:
         return False
-
-
-@pytest.fixture(scope="session")
-def embedder_token() -> str | None:
-    return _read_embedder_token()
 
 
 @pytest.fixture(scope="session")
@@ -125,9 +110,9 @@ def indexer_url() -> str | None:
 
 
 @pytest.fixture(scope="session")
-def embedder_alive(embedder_url, embedder_token):
+def embedder_alive(embedder_url):
     """Skip if embedder not running."""
-    if not _check_url(f"{embedder_url}/health", token=embedder_token):
+    if not _check_url(f"{embedder_url}/health"):
         pytest.skip(f"Embedder not reachable at {embedder_url}/health")
     return True
 

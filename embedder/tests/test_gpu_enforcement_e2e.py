@@ -20,15 +20,6 @@ def _cpu_mode() -> bool:
     return os.environ.get("OPENCODE_ONNX_PROVIDER", "").lower() == "cpu"
 
 
-def _read_token() -> str | None:
-    token_path = os.path.expanduser("~/.opencode/embedder.token")
-    try:
-        with open(token_path) as f:
-            return f.read().strip() or None
-    except OSError:
-        return None
-
-
 def _fetch_health() -> dict:
     """Fetch /health from the running embedder. Raises urllib.error.URLError if not running.
 
@@ -36,9 +27,6 @@ def _fetch_health() -> dict:
     """
     url = f"{EMBEDDER_URL.rstrip('/')}/health"
     req = urllib.request.Request(url)
-    token = _read_token()
-    if token:
-        req.add_header("X-Embedder-Token", token)
     with urllib.request.urlopen(req, timeout=5) as resp:
         data = json.loads(resp.read())
     # Unwrap {"result": {...}} envelope used by this server
