@@ -1355,26 +1355,49 @@ impl Storage {
         let table = self.ensure_chunks().await?;
         let results = table
             .query()
-            .select(lancedb::query::Select::Columns(vec!["file_hash".into()]))
+            .select(lancedb::query::Select::Columns(vec![
+                "chunk_id".into(),
+                "file_hash".into(),
+            ]))
             .only_if(format!("path = '{}'", escape_sql(path)))
-            .limit(1)
             .execute()
             .await?;
 
         use futures::TryStreamExt;
         let batches: Vec<RecordBatch> = results.try_collect().await?;
-        if batches.is_empty() || batches[0].num_rows() == 0 {
-            return Ok(None);
+
+        // Find the chunk with the highest chunk_id (most recently inserted) and
+        // return its file_hash. Using LIMIT 1 without ordering is non-deterministic
+        // after partial updates that keep old chunks alongside new ones.
+        let mut best_id: i64 = i64::MIN;
+        let mut best_hash: Option<String> = None;
+
+        for batch in &batches {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let ids = batch
+                .column_by_name("chunk_id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            let hashes = batch
+                .column_by_name("file_hash")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                let id = ids.value(i);
+                if id > best_id {
+                    best_id = id;
+                    best_hash = Some(hashes.value(i).to_string());
+                }
+            }
         }
 
-        let hashes = batches[0]
-            .column_by_name("file_hash")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
-        Ok(Some(hashes.value(0).to_string()))
+        Ok(best_hash)
     }
 
     pub async fn needs_index(&self, path: &str, file_hash: &str) -> Result<bool> {

@@ -795,10 +795,11 @@ async fn quality_semantic_search() {
         "tier": "budget",
         "dimensions": 256
     })).await.expect("modified rpc");
-    let re_indexed = r["result"]["success"].as_bool() == Some(true)
-        && r["result"]["skipped"].as_bool() != Some(true);
-    println!("  Modified fibonacci.py re-indexed: {re_indexed}");
-    assert!(re_indexed, "modified file should be re-indexed, not skipped");
+    let success = r["result"]["success"].as_bool() == Some(true);
+    let skipped = r["result"]["skipped"].as_bool() == Some(true);
+    let error_msg = r["result"]["error"].as_str().unwrap_or("none");
+    println!("  Modified fibonacci.py: success={success}, skipped={skipped}, error={error_msg}");
+    assert!(success && !skipped, "modified file should be re-indexed, not skipped (success={success}, skipped={skipped}, error={error_msg})");
 
     // --- Resource check ---
     println!("\n=== Final Resource Usage ===");
