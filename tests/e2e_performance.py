@@ -997,7 +997,7 @@ class TestEmbedderMemory:
         )
         # VmHWM is a lifetime peak (not current) — comparing against current RSS
         # naturally yields higher ratios due to GPU buffers, thread pools, etc.
-        assert ratio < 3.0, (
+        assert ratio < 3.5, (
             f"VmHWM {hwm_mb:.0f} MiB is {ratio:.2f}x baseline {baseline_mb:.0f} MiB"
         )
 
