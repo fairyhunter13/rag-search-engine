@@ -74,6 +74,10 @@ impl PythonServer {
             .env("HF_HUB_CACHE", hf_home.join("hub"))
             .env("HF_HUB_DISABLE_XET", "1")
             .env("OPENCODE_EMBED_HTTP_PORT", port.to_string())
+            .env("OPENCODE_GPU_REQUIRED", "1")
+            .env("OPENCODE_DISABLE_TENSORRT", "1")
+            .env("CUDA_VISIBLE_DEVICES", "0")
+            .env("OPENCODE_ONNX_PROVIDER", "cuda")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -107,7 +111,14 @@ impl PythonServer {
 
     /// Get environment variables to configure the Rust daemon to connect to this embedder.
     pub fn env_vars(&self) -> Vec<(&'static str, String)> {
-        vec![("OPENCODE_EMBED_HTTP_PORT", self.port.to_string())]
+        let mut vars = vec![
+            ("OPENCODE_EMBED_HTTP_PORT", self.port.to_string()),
+            ("OPENCODE_GPU_REQUIRED", "1".to_string()),
+            ("OPENCODE_DISABLE_TENSORRT", "1".to_string()),
+            ("CUDA_VISIBLE_DEVICES", "0".to_string()),
+            ("OPENCODE_ONNX_PROVIDER", "cuda".to_string()),
+        ];
+        vars
     }
 }
 
