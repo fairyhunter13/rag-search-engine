@@ -1229,7 +1229,7 @@ class ModelServer:
             log.debug("rss watchdog disabled: psutil not installed")
             return
 
-        max_rss_mb = int(os.environ.get("OPENCODE_SEARCH_EMBEDDER_MAX_RSS_MB", "1024"))
+        max_rss_mb = int(os.environ.get("OPENCODE_SEARCH_EMBEDDER_MAX_RSS_MB", "4096"))
         check_interval = 30  # seconds
         hard_limit_mb = int(max_rss_mb * 1.5)  # restart threshold
         proc = psutil.Process()

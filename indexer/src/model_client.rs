@@ -349,21 +349,6 @@ pub async fn ensure_embedder() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
-    // GPU-only defaults for embedder (RTX 5080 Blackwell). Only set if caller
-    // has not already exported these — explicit env always wins.
-    if std::env::var("OPENCODE_GPU_REQUIRED").is_err() {
-        cmd.env("OPENCODE_GPU_REQUIRED", "1");
-    }
-    if std::env::var("OPENCODE_DISABLE_TENSORRT").is_err() {
-        cmd.env("OPENCODE_DISABLE_TENSORRT", "1");
-    }
-    if std::env::var("CUDA_VISIBLE_DEVICES").is_err() {
-        cmd.env("CUDA_VISIBLE_DEVICES", "0");
-    }
-    if std::env::var("OPENCODE_ONNX_PROVIDER").is_err() {
-        cmd.env("OPENCODE_ONNX_PROVIDER", "cuda");
-    }
-
     // REC-5+6: Set resource limits and priority on embedder child process.
     // - RLIMIT_AS: GPU mode needs large virtual address space for CUDA memory mapping.
     //   CUDA maps GPU VRAM into the process address space; 8 GB was too small and caused

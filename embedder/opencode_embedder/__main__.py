@@ -12,6 +12,37 @@ import multiprocessing
 import os
 import sys
 
+
+def _detect_gpu_defaults():
+    """Auto-detect GPU hardware and set env defaults. Explicit env vars always win."""
+    import shutil
+    import platform
+
+    # NVIDIA GPU
+    if shutil.which("nvidia-smi"):
+        os.environ.setdefault("OPENCODE_ONNX_PROVIDER", "cuda")
+        os.environ.setdefault("OPENCODE_GPU_REQUIRED", "1")
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+        return
+
+    # AMD ROCm GPU
+    if shutil.which("rocm-smi"):
+        os.environ.setdefault("OPENCODE_ONNX_PROVIDER", "rocm")
+        os.environ.setdefault("OPENCODE_GPU_REQUIRED", "1")
+        return
+
+    # Apple Silicon (CoreML)
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        os.environ.setdefault("OPENCODE_ONNX_PROVIDER", "coreml")
+        os.environ.setdefault("OPENCODE_GPU_REQUIRED", "0")
+        return
+
+    # No GPU — CPU fallback
+    os.environ.setdefault("OPENCODE_ONNX_PROVIDER", "cpu")
+    os.environ.setdefault("OPENCODE_GPU_REQUIRED", "0")
+
+_detect_gpu_defaults()
+
 # Required for PyInstaller-bundled apps on macOS/Windows.
 # Must be called before any multiprocessing operations.
 multiprocessing.freeze_support()
