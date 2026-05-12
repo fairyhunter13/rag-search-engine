@@ -5374,9 +5374,8 @@ fn make_dispatcher(state: Arc<Mutex<DaemonState>>) -> Dispatcher {
     })
 }
 
-/// Check if another daemon instance is already running by probing the Unix socket.
+/// Check if another daemon instance is already running by probing the abstract Unix socket.
 /// Returns true if a responsive daemon is found.
-#[cfg(target_os = "linux")]
 async fn check_existing_daemon() -> bool {
     use std::os::linux::net::SocketAddrExt;
     let addr = match std::os::unix::net::SocketAddr::from_abstract_name(b"opencode-indexer") {
@@ -5386,22 +5385,9 @@ async fn check_existing_daemon() -> bool {
     std::os::unix::net::UnixStream::connect_addr(&addr).is_ok()
 }
 
-#[cfg(target_os = "macos")]
-async fn check_existing_daemon() -> bool {
-    let socket_path = crate::http_server::socket_file_path();
-    std::os::unix::net::UnixStream::connect(&socket_path).is_ok()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-async fn check_existing_daemon() -> bool {
-    let socket_path = crate::http_server::socket_file_path();
-    std::os::unix::net::UnixStream::connect(&socket_path).is_ok()
-}
-
-/// Start the daemon, serving HTTP requests on a Unix domain socket (or TCP when tcp_port > 0).
+/// Start the daemon, serving HTTP requests on an abstract Unix socket (or TCP when tcp_port > 0).
 ///
-/// Linux: abstract socket "@opencode-indexer" (kernel auto-cleans on exit).
-/// macOS: file socket at ~/.opencode/indexer.sock.
+/// Uses abstract socket "@opencode-indexer" (kernel auto-cleans on exit).
 /// When tcp_port is Some(n), binds TCP on 127.0.0.1:n (0 = OS-assigned) instead of Unix socket.
 pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tcp_port: Option<u16>) -> Result<()> {
     // Initialize parent PID global — CLI arg > env var > getppid()
@@ -5424,74 +5410,15 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
         }
     };
     parent_pid().set(ppid).ok();
-    // --- Strict singleton enforcement via OS-level flock ---
-    // Acquire an exclusive lock on ~/.opencode/indexer.lock.
-    // This prevents TOCTOU races where two daemons start simultaneously.
-    // The lock is held for the daemon's entire lifetime and released on exit.
-    let home = dirs::home_dir().context("no home directory")?;
-    let lock_dir = home.join(".opencode");
-    tokio::fs::create_dir_all(&lock_dir).await.ok();
-    let lock_path = lock_dir.join("indexer.lock");
-    
-    // Create lock file using tokio::fs, then convert to std::fs::File for flock
-    let lock_file = tokio::task::spawn_blocking({
-        let lock_path = lock_path.clone();
-        move || std::fs::File::create(&lock_path)
-    })
-    .await
-    .context("lock file creation task panicked")??;
 
-    // In TCP mode (tests) skip Unix-socket singleton enforcement entirely —
-    // each test daemon binds its own random TCP port so there's no conflict.
+    // In TCP mode (tests) skip singleton enforcement — each test daemon binds its own random TCP port.
+    // The abstract socket bind IS the singleton lock — kernel-enforced, auto-released on death.
     if tcp_port.is_none() {
-        #[cfg(target_os = "linux")]
-        {
-            // On Linux, the abstract socket bind IS the singleton lock — no flock needed.
-            // Just do a quick pre-check before heavy initialization.
-            if check_existing_daemon().await {
-                tracing::info!("daemon already running, exiting");
-                println!("{}", serde_json::json!({"type": "already_running"}));
-                return Ok(());
-            }
-            // Drop lock_file — not needed on Linux (abstract socket is the singleton)
-            drop(lock_file);
+        if check_existing_daemon().await {
+            tracing::info!("daemon already running, exiting");
+            println!("{}", serde_json::json!({"type": "already_running"}));
+            return Ok(());
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            use std::os::unix::io::AsRawFd;
-            let fd = lock_file.as_raw_fd();
-            // Try non-blocking exclusive lock
-            let locked = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-            if locked != 0 {
-                // Another daemon holds the lock — check if it's responsive
-                if check_existing_daemon().await {
-                    tracing::info!("daemon already running, exiting");
-                    println!("{}", serde_json::json!({"type": "already_running"}));
-                    return Ok(());
-                }
-                // Lock held but daemon not responsive — stale lock, try blocking acquire
-                tracing::warn!("stale lock detected, waiting to acquire...");
-                let locked = unsafe { libc::flock(fd, libc::LOCK_EX) };
-                if locked != 0 {
-                    anyhow::bail!(
-                        "failed to acquire indexer lock: {}",
-                        std::io::Error::last_os_error()
-                    );
-                }
-            }
-            // Lock acquired — we are the singleton daemon.
-            // Keep lock_file alive for the daemon's lifetime (dropped on function return).
-            let _lock = lock_file;
-
-            // --- Secondary check: socket probe ---
-            if check_existing_daemon().await {
-                tracing::info!("daemon already running, exiting");
-                println!("{}", serde_json::json!({"type": "already_running"}));
-                return Ok(());
-            }
-        }
-    } else {
-        drop(lock_file);
     }
 
     // Set up process group for clean child termination (prevents orphaned PIDs)

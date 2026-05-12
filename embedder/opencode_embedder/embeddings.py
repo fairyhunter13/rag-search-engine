@@ -834,12 +834,12 @@ _provider_lock = threading.Lock()
 def _get_onnx_providers() -> list[str] | None:
     """Get optimal ONNX execution providers for this system.
 
-    Automatically detects and tests GPU providers. When OPENCODE_GPU_REQUIRED=1,
-    raises RuntimeError immediately if no working GPU provider is found — no CPU fallback.
+    Automatically detects and tests GPU providers. Raises RuntimeError if no
+    working GPU provider is found — CPU fallback is always forbidden.
     Results are cached after first detection. Thread-safe.
 
     Environment variables:
-    - OPENCODE_GPU_REQUIRED: If "1", raise on no GPU (no CPU fallback ever)
+    - OPENCODE_GPU_REQUIRED: Kept for compatibility; GPU is always required regardless.
     - OPENCODE_ONNX_PROVIDER: Force a specific provider (e.g., "cuda", "rocm", "coreml", "cpu")
     - OPENCODE_ONNX_PROVIDERS: Comma-separated list of providers to try
     - OPENCODE_DISABLE_TENSORRT: If "1", skip TensorRT (Blackwell compat)
@@ -850,11 +850,10 @@ def _get_onnx_providers() -> list[str] | None:
     3. MIGraphXExecutionProvider: AMD GPUs on Linux (ORT 1.23+)
     4. ROCMExecutionProvider: AMD GPUs (older ORT fallback)
     5. DirectMLExecutionProvider: Windows with DirectX 12 GPUs
-    6. CPU: NOT AN OPTION u2014 raises RuntimeError if no GPU is found
+    6. CPU: NOT AN OPTION — raises RuntimeError if no GPU is found
 
     Returns:
-        List of providers to use, or None to use ONNX defaults (CPU only).
-        Never returns CPU-only when OPENCODE_GPU_REQUIRED=1.
+        List of GPU providers to use. Never returns CPU-only.
     """
     global _detected_providers, _provider_detection_done
 
@@ -957,18 +956,18 @@ def _parse_provider_env() -> list[str] | None:
 
 
 class GPUNotAvailableError(RuntimeError):
-    """Raised when OPENCODE_GPU_REQUIRED=1 but no working GPU provider is found."""
+    """Raised when no working GPU provider is found. CPU fallback is always forbidden."""
 
 
 def _raise_no_gpu(available: list[str], tested: list[str]) -> None:
     """Raise GPUNotAvailableError with a clear diagnostic message.
 
-    Called only when OPENCODE_GPU_REQUIRED=1 and all GPU providers failed their
-    runtime test. CPU fallback is explicitly forbidden in this mode.
+    Called when all GPU providers failed their runtime test.
+    CPU fallback is always forbidden.
     """
     msg = (
-        "[GPU-REQUIRED] FATAL: OPENCODE_GPU_REQUIRED=1 but no working GPU execution "
-        "provider was found. CPU fallback is FORBIDDEN.\n"
+        "[GPU-REQUIRED] FATAL: No working GPU execution provider was found. "
+        "CPU fallback is FORBIDDEN.\n"
         f"  ONNX available providers : {available}\n"
         f"  GPU providers tested     : {tested}\n"
         "\n"
@@ -979,7 +978,7 @@ def _raise_no_gpu(available: list[str], tested: list[str]) -> None:
         "  4. CUDA_VISIBLE_DEVICES='' or set to an invalid device\n"
         "  5. /dev/nvidia* not accessible (check permissions)\n"
         "\n"
-        "To allow CPU fallback (not recommended): unset OPENCODE_GPU_REQUIRED\n"
+        "CPU fallback is not allowed. Fix the GPU driver/library issue.\n"
         "To diagnose: python -c \"import onnxruntime; print(onnxruntime.get_available_providers())\""
     )
     log.critical(msg)
@@ -989,17 +988,12 @@ def _raise_no_gpu(available: list[str], tested: list[str]) -> None:
 def assert_gpu_available() -> None:
     """Startup check: verify GPU is available and working.
 
-    Call once at process startup when OPENCODE_GPU_REQUIRED=1 so the server
-    fails fast with a clear message rather than silently running on CPU.
+    Call once at process startup so the server fails fast with a clear message
+    rather than silently running on CPU. GPU is always required.
 
-    Raises GPUNotAvailableError if GPU is required but unavailable.
-    Does nothing if OPENCODE_GPU_REQUIRED is not set.
+    Raises GPUNotAvailableError if no working GPU provider is found.
     """
-    gpu_required = os.environ.get("OPENCODE_GPU_REQUIRED", "0").lower() in ("1", "true", "yes")
-    if not gpu_required:
-        return
-
-    log.info("[GPU-REQUIRED] Startup GPU check (OPENCODE_GPU_REQUIRED=1)")
+    log.info("[GPU-REQUIRED] Startup GPU check")
 
     # Probe without loading any model u2014 forces provider detection
     providers = _get_onnx_providers()  # may raise GPUNotAvailableError internally
@@ -1147,12 +1141,6 @@ def _detect_and_test_providers() -> list[str] | None:
             working_gpu.append(provider)
         else:
             log.warning("%s available but failed runtime test, skipping", provider)
-
-    # Determine if strict GPU-only mode is active.
-    # Sources (checked in order, first truthy wins):
-    #   1. OPENCODE_GPU_REQUIRED env var ("1")
-    #   2. CLAUDE.md rule: all ONNX inference MUST run on GPU
-    gpu_required = os.environ.get("OPENCODE_GPU_REQUIRED", "0").lower() in ("1", "true", "yes")
 
     if working_gpu:
         log.info("Using GPU-only provider chain: %s", working_gpu)
