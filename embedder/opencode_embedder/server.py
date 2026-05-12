@@ -1378,22 +1378,8 @@ def _http_port() -> int:
 def _acquire_singleton_lock():
     """Acquire OS-level singleton lock — prevents multiple embedder instances.
 
-    Linux: binds abstract socket @opencode-embedder (kernel-enforced, auto-cleaned).
-    macOS/other: falls back to flock on ~/.opencode/embedder.lock.
-
-    Returns the lock handle (socket or file — must be kept alive).
-    """
-    if sys.platform == "linux":
-        return _acquire_singleton_abstract_socket()
-    return _acquire_singleton_flock()
-
-
-def _acquire_singleton_abstract_socket():
-    """Linux: bind abstract socket @opencode-embedder as singleton lock.
-
-    Abstract sockets are kernel-managed: auto-released on process death
-    (including SIGKILL and power loss), no stale files possible.
-    Same pattern as the Rust indexer daemon (@opencode-indexer).
+    Binds abstract socket @opencode-embedder (kernel-enforced, auto-cleaned on death).
+    Returns the socket (must be kept alive — closing releases the lock).
     """
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -1403,27 +1389,6 @@ def _acquire_singleton_abstract_socket():
         return sock  # must stay alive — closing releases the lock
     except OSError:
         _probe_and_exit("abstract socket @opencode-embedder already bound")
-
-
-def _acquire_singleton_flock():
-    """macOS/other: flock on ~/.opencode/embedder.lock as singleton lock.
-
-    Fallback for platforms without abstract socket support.
-    flock is kernel-enforced and auto-released on process death.
-    """
-    import fcntl
-
-    lock_dir = Path.home() / ".opencode"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_file = open(lock_dir / "embedder.lock", "w")
-    try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        log.info("singleton lock acquired (flock on embedder.lock)")
-        lock_file.write(str(os.getpid()))
-        lock_file.flush()
-        return lock_file  # must stay alive — closing releases the lock
-    except OSError:
-        _probe_and_exit("flock on embedder.lock already held")
 
 
 def _probe_and_exit(reason: str):
@@ -1461,9 +1426,9 @@ def run_server(
 
     # Acquire OS-level singleton lock before anything else.
     # Two simultaneous starts are serialized by the kernel; second one exits.
-    _singleton_lock = _acquire_singleton_lock()  # noqa: F841 — must stay alive (flock)
+    _singleton_lock = _acquire_singleton_lock()  # noqa: F841 — must stay alive (socket)
     # Register process group cleanup ONLY after acquiring singleton lock.
-    # Must not fire for duplicate instances that exit on flock conflict —
+    # Must not fire for duplicate instances that exit on socket conflict —
     # their atexit would kill the daemon's process group.
     atexit.register(_kill_process_group)
 

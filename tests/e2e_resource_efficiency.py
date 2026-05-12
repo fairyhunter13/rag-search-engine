@@ -390,6 +390,7 @@ class TestEmbedderRAMUsage:
 class TestIndexerResources:
     """Rust indexer idle CPU and RSS."""
 
+    @pytest.mark.timeout(660)
     def test_idle_cpu_below_threshold(self, indexer_pid):
         # Wait up to 10 minutes for the indexer to finish any post-restart rebuild.
         # Large repos can take 10+ minutes for initial scan at 100-200% CPU.
