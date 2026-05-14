@@ -237,7 +237,7 @@ fn inflight_semaphore() -> &'static tokio::sync::Semaphore {
         let limit = std::env::var("OPENCODE_INDEXER_INFLIGHT_LIMIT")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(4);
+            .unwrap_or(2);
         tracing::info!("in-flight request limit: {}", limit);
         tokio::sync::Semaphore::new(limit)
     })
@@ -580,9 +580,22 @@ where
         tracing::warn!("embed semaphore wait={:.1}s (server may be overloaded)", wait_ms as f64 / 1000.0);
     }
 
+    // Gradual ramp-up tracking: after an embedder restart, ease into full
+    // concurrency to avoid a thundering herd that overwhelms the fresh
+    // embedder and causes cascading failures.
+    let mut ramp_up_remaining: u32 = 10; // first N requests after restart get delayed
     let mut failures = 0u32;
     let mut backoff_failures = 0u32;
     loop {
+        // Gradual ramp-up: after a restart, introduce a small delay for the
+        // first few requests so the embedder can initialize its model caches
+        // and GPU memory allocators before receiving the full load.
+        if ramp_up_remaining > 0 && failures == 0 && backoff_failures == 0 {
+            ramp_up_remaining -= 1;
+            let ramp_wait = Duration::from_millis(50 * (11 - ramp_up_remaining) as u64);
+            tokio::time::sleep(ramp_wait).await;
+        }
+
         match op().await {
             Ok(v) => {
                 touch_last_used();
@@ -608,6 +621,9 @@ where
                 reset_embedder();
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 ensure_embedder().await;
+                // Reset ramp-up counter after restart — the fresh embedder
+                // needs gentle warmup to avoid cascading crashes.
+                ramp_up_remaining = 10;
             }
             Err(e) => return Err(e),
         }
@@ -986,13 +1002,14 @@ pub struct ChunkWithVector {
 
 /// Returns recommended concurrency for HTTP embedding workloads.
 ///
-/// Defaults to 1 — conservative default to avoid overwhelming the Python embedder.
-/// Override with `OPENCODE_INDEXER_EMBED_CONCURRENCY`.
+/// Defaults to 2 — matches the embedder's default worker count (1-2) and
+/// the reduced in-flight semaphore limit (2). Override with
+/// `OPENCODE_INDEXER_EMBED_CONCURRENCY`.
 pub fn recommended_concurrency() -> usize {
     std::env::var("OPENCODE_INDEXER_EMBED_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(1)
+        .unwrap_or(2)
 }
 
 /// Returns true when running against a remote (non-local) embedding server.
