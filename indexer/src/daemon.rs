@@ -3725,105 +3725,32 @@ async fn startup_check_impl(
     let status = match status_impl(Some(root), Some(db_path.to_str().unwrap_or("")), dims).await {
         Ok(s) => s,
         Err(e) => {
-            // Check if this is a corruption error that we can auto-fix
-            if storage::is_corruption_error(&e) {
+            // Any error reading the index when the database directory exists means
+            // the index can't be used — treat it as recoverable corruption.
+            // This catches LanceDB version incompatibilities, IO errors during
+            // table scans, and other patterns that `is_corruption_error()` does
+            // not recognise but are still unrecoverable without a rebuild.
+            let is_known_corruption = storage::is_corruption_error(&e);
+            if is_known_corruption {
                 tracing::warn!(
                     "startup_check: status check failed due to corruption for {}: {}",
                     root_path.display(),
                     e
                 );
+            } else {
+                tracing::warn!(
+                    "startup_check: status check failed (not a recognised corruption \
+                     pattern — treating as recoverable) for {}: {}",
+                    root_path.display(),
+                    e
+                );
+            }
 
-                // Clear the corrupted index
-                if let Err(clear_err) = storage::clear_corrupted_index(&db_path) {
-                    return serde_json::json!({
-                        "action": "error",
-                        "message": format!("Failed to clear corrupted index: {}", clear_err),
-                        "corrupted": true,
-                        "indexed": false,
-                        "watching": false,
-                        "corruptionErrors": [e.to_string()],
-                    });
-                }
-
-                // Invalidate storage cache
-                invalidate_storage_cache(&db_path).await;
-
-                // Spawn background rebuild: run full index then start watcher (non-blocking)
-                let state_clone = state.clone();
-                let root_str = root.to_string();
-                let db_str = db.map(|s| s.to_string());
-                let tier_str = tier.to_string();
-
-                tokio::spawn(async move {
-                    // First run full index
-                    let db_path = db_str
-                        .clone()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| storage::storage_path(&PathBuf::from(&root_str)));
-                    // Register as active to prevent status self-heal from clearing progress
-                    let active_key = db_path.to_string_lossy().to_string();
-                    active_indexes().lock().await.insert(active_key.clone());
-                    struct StartupGuard(String);
-                    impl Drop for StartupGuard {
-                        fn drop(&mut self) {
-                            let k = self.0.clone();
-                            tokio::spawn(async move {
-                                active_indexes().lock().await.remove(&k);
-                            });
-                        }
-                    }
-                    let _guard = StartupGuard(active_key);
-                    tracing::info!(
-                        "startup_check: starting background rebuild for {}",
-                        root_str
-                    );
-                    if let Err(e) = crate::cli::run_indexing_pub(
-                        &PathBuf::from(&root_str),
-                        &db_path,
-                        &tier_str,
-                        dims,
-                        "int8",
-                        true,                // force
-                        None,                // daily_cost_limit
-                        false,               // verbose
-                        &[],                 // exclude
-                        &[],                 // include
-                        embed_concurrency(), // concurrency
-                        None,                // scan_concurrency
-                        true,                // quiet
-                        false,               // json_lines
-                    )
-                    .await
-                    {
-                        tracing::warn!("startup_check: background indexing failed: {}", e);
-                        return;
-                    }
-                    tracing::info!(
-                        "startup_check: background indexing completed for {}",
-                        root_str
-                    );
-
-                    // Then start watcher
-                    let db_ref = db_str.as_deref();
-                    if let Err(rebuild_err) = watcher_start_internal(
-                        &state_clone,
-                        &root_str,
-                        db_ref,
-                        Some(&tier_str),
-                        false,
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            "startup_check: background watcher start failed: {}",
-                            rebuild_err
-                        );
-                    }
-                });
-
+            // Clear the corrupted/unreadable index
+            if let Err(clear_err) = storage::clear_corrupted_index(&db_path) {
                 return serde_json::json!({
-                    "action": "rebuilding",
-                    "message": format!("Detected corruption ({}), cleared index and started rebuild in background", e),
+                    "action": "error",
+                    "message": format!("Failed to clear corrupted index: {}", clear_err),
                     "corrupted": true,
                     "indexed": false,
                     "watching": false,
@@ -3831,13 +3758,92 @@ async fn startup_check_impl(
                 });
             }
 
-            // Non-corruption error, return as-is
+            // Invalidate storage cache
+            invalidate_storage_cache(&db_path).await;
+
+            // Spawn background rebuild: run full index then start watcher (non-blocking)
+            let state_clone = state.clone();
+            let root_str = root.to_string();
+            let db_str = db.map(|s| s.to_string());
+            let tier_str = tier.to_string();
+
+            tokio::spawn(async move {
+                // First run full index
+                let db_path = db_str
+                    .clone()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| storage::storage_path(&PathBuf::from(&root_str)));
+                // Register as active to prevent status self-heal from clearing progress
+                let active_key = db_path.to_string_lossy().to_string();
+                active_indexes().lock().await.insert(active_key.clone());
+                struct StartupGuard(String);
+                impl Drop for StartupGuard {
+                    fn drop(&mut self) {
+                        let k = self.0.clone();
+                        tokio::spawn(async move {
+                            active_indexes().lock().await.remove(&k);
+                        });
+                    }
+                }
+                let _guard = StartupGuard(active_key);
+                tracing::info!(
+                    "startup_check: starting background rebuild for {}",
+                    root_str
+                );
+                if let Err(e) = crate::cli::run_indexing_pub(
+                    &PathBuf::from(&root_str),
+                    &db_path,
+                    &tier_str,
+                    dims,
+                    "int8",
+                    true,                // force
+                    None,                // daily_cost_limit
+                    false,               // verbose
+                    &[],                 // exclude
+                    &[],                 // include
+                    embed_concurrency(), // concurrency
+                    None,                // scan_concurrency
+                    true,                // quiet
+                    false,               // json_lines
+                )
+                .await
+                {
+                    tracing::warn!("startup_check: background indexing failed: {}", e);
+                    return;
+                }
+                tracing::info!(
+                    "startup_check: background indexing completed for {}",
+                    root_str
+                );
+
+                // Then start watcher
+                let db_ref = db_str.as_deref();
+                if let Err(rebuild_err) = watcher_start_internal(
+                    &state_clone,
+                    &root_str,
+                    db_ref,
+                    Some(&tier_str),
+                    false,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "startup_check: background watcher start failed: {}",
+                        rebuild_err
+                    );
+                }
+            });
+
             return serde_json::json!({
-                "action": "error",
-                "message": format!("Failed to check status: {}", e),
-                "corrupted": false,
+                "action": "rebuilding",
+                "message": format!(
+                    "Detected unreadable index ({}), cleared and started rebuild in background",
+                    e
+                ),
+                "corrupted": is_known_corruption,
                 "indexed": false,
                 "watching": false,
+                "corruptionErrors": [e.to_string()],
             });
         }
     };
