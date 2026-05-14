@@ -319,8 +319,11 @@ impl PendingChanges {
     }
 }
 
-/// Default backpressure limit for pending file changes (configurable via .opencode-index.yaml)
-const DEFAULT_MAX_PENDING_FILES: usize = 2000;
+/// Default backpressure limit for pending file changes (configurable via .opencode-index.yaml).
+/// Reduced from 2000 to 500 to limit backlog accumulation — a smaller buffer means
+/// less of a re-index storm after an embedder restart, at the cost of more frequent
+/// full re-scans for events that were dropped under pressure.
+const DEFAULT_MAX_PENDING_FILES: usize = 500;
 
 /// Statistics for dropped watcher events (for monitoring/diagnostics)
 #[derive(Debug, Default)]
@@ -2963,12 +2966,14 @@ async fn search_single_index(
     Ok(out)
 }
 
-/// Returns embed concurrency from env var OPENCODE_INDEXER_EMBED_CONCURRENCY (default 3).
+/// Returns embed concurrency from env var OPENCODE_INDEXER_EMBED_CONCURRENCY (default 2).
+/// Reduced from 3 to 2 to match the embedder's default worker capacity (1-2 workers),
+/// preventing excessive queuing at the Python server.
 fn embed_concurrency() -> usize {
     std::env::var("OPENCODE_INDEXER_EMBED_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(3)
+        .unwrap_or(2)
 }
 
 /// Session-level set of DB paths where FTS index has been confirmed present.
@@ -5959,13 +5964,16 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                         }
                     }
 
-                    // Process changes in parallel with concurrency limit
+                    // Process changes in parallel with conservative concurrency limit.
+                    // Daemon mode uses 2 concurrent file processors — enough to saturate
+                    // the embedder's 2 concurrent request capacity without overloading it.
                     if !changed.is_empty() {
                         let ops = changed.len() as u64;
-                        let concurrency = std::cmp::min(4, num_cpus::get() / 2).max(1);
+                        let concurrency: usize = 2;
                         let sema = Arc::new(tokio::sync::Semaphore::new(concurrency));
-                        // Shared embed semaphore matching embedder worker capacity
-                        let embed = Arc::new(tokio::sync::Semaphore::new(4));
+                        // Shared embed semaphore matching embedder worker capacity (2).
+                        // Reduced from 4 to 2 to prevent overwhelming the Python embedder.
+                        let embed = Arc::new(tokio::sync::Semaphore::new(2));
 
                         let mut futs: futures::stream::FuturesUnordered<_> = changed
                             .into_iter()

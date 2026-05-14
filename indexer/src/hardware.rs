@@ -64,12 +64,15 @@ impl HardwareInfo {
     /// Lower concurrency for CPU-only systems to avoid overloading.
     pub fn embedding_concurrency(&self) -> usize {
         if self.gpu.available {
-            // GPU systems: higher concurrency since GPU handles the heavy lifting
-            // The Python embedder batches requests, so more concurrency = better throughput
+            // Conservative GPU concurrency: the Python embedder has at most 1-2 workers,
+            // and each worker uses ONNX Runtime with GPU acceleration. Sending more than
+            // 2-3 concurrent requests just queues them in the HTTP layer, adding memory
+            // pressure without throughput benefit. The embedder's own batch coalescer
+            // already handles request aggregation.
             match self.gpu.provider {
-                GpuProvider::MIGraphX | GpuProvider::Rocm => 16,
-                GpuProvider::Cuda => 16,
-                GpuProvider::Metal | GpuProvider::CoreML => 8,
+                GpuProvider::MIGraphX | GpuProvider::Rocm => 3,
+                GpuProvider::Cuda => 3,
+                GpuProvider::Metal | GpuProvider::CoreML => 2,
                 GpuProvider::None => self.cpu_embedding_concurrency(),
             }
         } else {
@@ -87,10 +90,11 @@ impl HardwareInfo {
 
     /// Get recommended scan concurrency (file hashing).
     ///
-    /// This is I/O bound, so we can use more parallelism.
+    /// Scan concurrency for file hashing.
+    /// This is I/O bound but excessive parallelism causes CPU contention.
+    /// Capped at 4 to keep background scanning lightweight.
     pub fn scan_concurrency(&self) -> usize {
-        let base = self.cpu_cores * 2;
-        base.min(16).max(4) // Between 4 and 16
+        4
     }
 
     /// Get recommended concurrency for linked project background indexing.
@@ -104,17 +108,12 @@ impl HardwareInfo {
     /// - Too much parallelism can cause memory pressure
     pub fn link_index_concurrency(&self) -> usize {
         if self.gpu.available {
-            // GPU systems: embedding is GPU-bound, can handle more parallelism
-            // But still limit to avoid memory pressure from LanceDB connections
+            // Conservative: each linked project opens a new LanceDB connection
+            // (~10-15 MB per connection). Background indexing should not compete
+            // with user workload. Cap at 2 regardless of GPU type.
             match self.gpu.provider {
-                GpuProvider::MIGraphX | GpuProvider::Rocm | GpuProvider::Cuda => {
-                    // High-end GPU: allow up to 6 concurrent link indexing
-                    (self.cpu_cores / 4).clamp(2, 6)
-                }
-                GpuProvider::Metal | GpuProvider::CoreML => {
-                    // Apple Silicon: moderate parallelism
-                    (self.cpu_cores / 4).clamp(2, 4)
-                }
+                GpuProvider::MIGraphX | GpuProvider::Rocm | GpuProvider::Cuda => 2,
+                GpuProvider::Metal | GpuProvider::CoreML => 2,
                 GpuProvider::None => self.cpu_link_index_concurrency(),
             }
         } else {

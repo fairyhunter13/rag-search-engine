@@ -1,0 +1,122 @@
+#!/bin/bash
+# GPU-aware wrapper for opencode-embedder
+# - Linux with ROCm or CUDA: uses Python venv directly for GPU acceleration
+# - Other systems: uses PyInstaller binary (CPU only)
+#
+# When OPENCODE_EMBEDDER_FORCE_GPU=1 (set by the opencode TUI) or
+# OPENCODE_GPU_REQUIRED=1, this wrapper will FAIL HARD if GPU is not
+# available — it will NEVER silently fall back to CPU.
+
+DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")"
+REPO_VENV="$HOME/git/github.com/fairyhunter13/opencode/cmd/opencode-search-engine/embedder/.venv"
+
+# Fix LD_LIBRARY_PATH: strip stale site-packages/nvidia paths from other venvs
+# (e.g. cuda-test-venv) and prepend this venv's nvidia libs.
+# Must be done in the shell BEFORE exec so the OS dynamic linker picks up the
+# correct cuDNN/cuBLAS versions when libonnxruntime_providers_cuda.so loads.
+fix_cuda_ld_path() {
+  local venv="$1"
+  local py_ver
+  py_ver="$("$venv/bin/python" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)"
+  [ -z "$py_ver" ] && return
+
+  local nvidia_base="$venv/lib/$py_ver/site-packages/nvidia"
+  [ -d "$nvidia_base" ] || return
+
+  # Build prepend list from this venv's nvidia sub-libraries
+  local prepend=""
+  for sub in cudnn/lib cublas/lib cuda_runtime/lib curand/lib cusparse/lib cufft/lib nvjitlink/lib cuda_nvrtc/lib nvtx/lib; do
+    local libdir="$nvidia_base/$sub"
+    [ -d "$libdir" ] && prepend="$libdir${prepend:+:$prepend}"
+  done
+
+  # Strip all stale site-packages/nvidia paths from existing LD_LIBRARY_PATH
+  local filtered=""
+  IFS=: read -ra parts <<< "${LD_LIBRARY_PATH:-}"
+  for p in "${parts[@]}"; do
+    [[ "$p" == *"site-packages/nvidia"* ]] && continue
+    [ -z "$p" ] && continue
+    filtered="${filtered:+$filtered:}$p"
+  done
+
+  export LD_LIBRARY_PATH="${prepend:+$prepend:}${filtered}"
+}
+
+# GPU mode check: returns 0 if GPU is available, 1 otherwise.
+# Prints diagnostic info to stderr so failures are visible.
+use_gpu_mode() {
+  # Only on Linux
+  [ "$(uname -s)" != "Linux" ] && echo "[embedder-warn] Not Linux, cannot use GPU mode" >&2 && return 1
+
+  # Check if venv exists
+  if [ ! -f "$REPO_VENV/bin/python" ]; then
+    echo "[embedder-warn] GPU venv not found at $REPO_VENV" >&2
+    return 1
+  fi
+
+  # Check if ROCm is available (AMD GPU)
+  if command -v rocm-smi &> /dev/null && rocm-smi --showid &> /dev/null 2>&1; then
+    local rocm_out
+    rocm_out=$("$REPO_VENV/bin/python" -c "
+import onnxruntime as ort
+providers = ort.get_available_providers()
+exit(0 if 'ROCMExecutionProvider' in providers or 'MIGraphXExecutionProvider' in providers else 1)
+" 2>&1)
+    local rc=$?
+    if [ $rc -eq 0 ]; then
+      return 0
+    fi
+    echo "[embedder-warn] ROCm GPU detected but ONNX Runtime ROCm provider not available: $rocm_out" >&2
+    return 1
+  fi
+
+  # Check if NVIDIA/CUDA is available
+  if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null 2>&1; then
+    local cuda_out
+    cuda_out=$("$REPO_VENV/bin/python" -c "
+import onnxruntime as ort
+providers = ort.get_available_providers()
+exit(0 if 'CUDAExecutionProvider' in providers else 1)
+" 2>&1)
+    local rc=$?
+    if [ $rc -eq 0 ]; then
+      return 0
+    fi
+    echo "[embedder-warn] NVIDIA GPU detected but ONNX Runtime CUDA provider not available: $cuda_out" >&2
+    echo "[embedder-warn] Try running: cd $REPO_VENV/.. && make sync-gpu" >&2
+    return 1
+  fi
+
+  echo "[embedder-warn] No GPU detected (nvidia-smi or rocm-smi not found)" >&2
+  return 1
+}
+
+# ---- Main logic ----
+
+# Determine if GPU is forced (should never fall back to CPU)
+FORCE_GPU=false
+if [ "${OPENCODE_EMBEDDER_FORCE_GPU:-0}" = "1" ] || [ "${OPENCODE_GPU_REQUIRED:-0}" = "1" ]; then
+  FORCE_GPU=true
+fi
+
+if use_gpu_mode; then
+  # GPU mode: fix LD_LIBRARY_PATH so the OS linker loads this venv's cuDNN/cuBLAS
+  # BEFORE any other cuda libs leak in from the parent process environment.
+  fix_cuda_ld_path "$REPO_VENV"
+  # GPU mode: use Python module directly
+  exec "$REPO_VENV/bin/python" -m opencode_embedder "$@"
+else
+  if $FORCE_GPU; then
+    echo "[embedder-fatal] OPENCODE_EMBEDDER_FORCE_GPU=1 but GPU mode is unavailable." >&2
+    echo "[embedder-fatal] The embedder MUST use GPU. Falling back to CPU would cause" >&2
+    echo "[embedder-fatal] excessive CPU load and degrade system performance." >&2
+    echo "[embedder-fatal] Fix the GPU setup (check onnxruntime-gpu, CUDA libs, driver) and retry." >&2
+    exit 1
+  fi
+
+  # CPU mode: print warning and use PyInstaller binary
+  echo "[embedder-warn] GPU mode unavailable, falling back to CPU-only PyInstaller binary." >&2
+  echo "[embedder-warn] This will use significantly more CPU and memory." >&2
+  echo "[embedder-warn] Set OPENCODE_EMBEDDER_FORCE_GPU=1 to crash instead of degrading." >&2
+  exec "$DIR/opencode-embedder-dir/opencode-embedder" "$@"
+fi

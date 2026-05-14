@@ -105,8 +105,10 @@ impl WorkerPool {
             let factory = Arc::clone(&factory);
             
             let handle = tokio::spawn(async move {
-                // Per-worker concurrency limit for file processing
-                let file_semaphore = Arc::new(Semaphore::new(2));
+                // Per-worker concurrency limit for file processing.
+                // With only 2 workers total and a global semaphore of 4,
+                // 1 permit per worker is sufficient to keep the pipeline busy.
+                let file_semaphore = Arc::new(Semaphore::new(1));
                 
                 loop {
                     // Wait for work or shutdown
@@ -239,10 +241,9 @@ async fn process_work_item(
 
 /// Calculate the default number of workers based on CPU count
 pub fn default_num_workers() -> usize {
-    let cpus = std::thread::available_parallelism()
-        .map(|p| p.get())
-        .unwrap_or(4);
-    
-    // Use half the CPUs, clamped to 2..8
-    (cpus / 2).clamp(2, 8)
+    // Daemon mode: background service should use minimal resources.
+    // With embed concurrency of 2 and in-flight limit of 2, only 2 workers
+    // are needed to saturate the pipeline. More workers just add context
+    // switching overhead and CPU waste.
+    2
 }
