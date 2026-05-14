@@ -48,13 +48,33 @@ pub enum WatchEvent {
 /// using `RecursiveMode::NonRecursive`. This avoids exhausting inotify limits
 /// by skipping well-known heavy directories like `target/`, `node_modules/`, etc.
 ///
-/// Returns the number of directories successfully watched.
+/// `depth` is the current recursion depth (0 for the initial call). Directories
+/// deeper than `max_depth` are skipped. `total_watches` tracks the cumulative
+/// count across all recursive calls; when it reaches `max_watches` no further
+/// watches are added and a warning is logged.
+///
+/// Returns the number of directories successfully watched in this subtree.
 fn add_watches(
     watcher: &mut RecommendedWatcher,
     dir: &Path,
     root: &Path,
     excludes: &[String],
+    depth: usize,
+    max_depth: usize,
+    max_watches: usize,
+    total_watches: &mut usize,
 ) -> usize {
+    // Enforce depth limit — skip directories deeper than max_depth
+    if depth > max_depth {
+        debug!(
+            "skipping dir (depth {} > max {}): {}",
+            depth,
+            max_depth,
+            dir.display()
+        );
+        return 0;
+    }
+
     // Skip directories whose name is in the well-known ignore list
     if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
         if crate::discover::is_ignored_dir(name) {
@@ -69,12 +89,33 @@ fn add_watches(
         return 0;
     }
 
+    // Stop adding watches once the cap is reached
+    if *total_watches >= max_watches {
+        warn!(
+            "max watches ({}) reached — not watching {}",
+            max_watches,
+            dir.display()
+        );
+        return 0;
+    }
+
     if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
         warn!("failed to watch {}: {}", dir.display(), e);
         return 0;
     }
 
+    *total_watches += 1;
     let mut count = 1;
+
+    // Don't recurse further if we've already hit the cap
+    if *total_watches >= max_watches {
+        warn!(
+            "max watches ({}) reached — not recursing into subdirs of {}",
+            max_watches,
+            dir.display()
+        );
+        return count;
+    }
 
     let Ok(entries) = std::fs::read_dir(dir) else {
         return count;
@@ -83,7 +124,16 @@ fn add_watches(
     for entry in entries.flatten() {
         // Use file_type() to avoid following symlinks into external trees
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            count += add_watches(watcher, &entry.path(), root, excludes);
+            count += add_watches(
+                watcher,
+                &entry.path(),
+                root,
+                excludes,
+                depth + 1,
+                max_depth,
+                max_watches,
+                total_watches,
+            );
         }
     }
 
@@ -142,14 +192,44 @@ pub fn watch(
 
     // Walk the root directory tree, skipping excluded dirs, and add NonRecursive watches.
     // This prevents exhausting the inotify watch limit (default 65536) on large repos.
-    let watched = add_watches(&mut watcher, &root, &root, excludes);
+    //
+    // Read depth and max-watch limits from environment, falling back to sensible defaults.
+    let max_depth: usize = std::env::var("OPENCODE_INDEXER_MAX_WATCH_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
+    let max_watches: usize = std::env::var("OPENCODE_INDEXER_MAX_FS_WATCHERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024);
+
+    let mut total_watches = 0;
+    let watched = add_watches(
+        &mut watcher,
+        &root,
+        &root,
+        excludes,
+        0,
+        max_depth,
+        max_watches,
+        &mut total_watches,
+    );
 
     // Watch each included directory tree with the same exclusion logic
     let mut inc_watched = 0;
     for dir in include_dirs {
         if dir.exists() {
             // Use the include dir itself as root for pattern matching
-            inc_watched += add_watches(&mut watcher, dir, dir, excludes);
+            inc_watched += add_watches(
+                &mut watcher,
+                dir,
+                dir,
+                excludes,
+                0,
+                max_depth,
+                max_watches,
+                &mut total_watches,
+            );
         }
     }
 
