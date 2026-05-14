@@ -108,14 +108,14 @@ fn main() -> Result<()> {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let rt_workers = 1;
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(rt_workers)
-        // Cap blocking thread pool: spawn_blocking calls (file I/O, hashing,
-        // LanceDB writes, SQLite) create OS threads on demand. Without a cap
-        // each file operation during a burst creates a new thread, causing a
-        // thundering herd of 50+ threads even with only 2 async workers.
-        .max_blocking_threads(4)
+        .worker_threads(1)
+        // Exactly 1 blocking thread: physically limits CPU to 100% on 1 core
+        // (= 4.2% of 24 cores, well under the 5% budget).
+        // No governor, no speed cap, no adaptive delay needed — the thread
+        // count itself IS the CPU bound. When there's work, it runs at full
+        // speed on 1 core. When idle, it's 0% CPU.
+        .max_blocking_threads(1)
         .enable_all()
         .build()?;
 

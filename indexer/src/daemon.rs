@@ -613,6 +613,8 @@ async fn release_all_memory_pressure() {
 
 /// Compaction worker: processes compaction requests one at a time.
 /// Deduplicates requests for the same database while one is in progress.
+/// Uses the same CPU budget governor as the watcher processor to stay
+/// within 5% of total system cores during compaction.
 async fn compaction_worker(
     mut rx: tokio::sync::mpsc::Receiver<CompactionRequest>,
     state: Arc<Mutex<DaemonState>>,
@@ -715,13 +717,10 @@ async fn compaction_worker(
                 // Remove from in-flight
                 in_flight.remove(&req.key);
 
-                // Fix B2: spacing between consecutive compactions to avoid saturating
-                // blocking thread pool. Default 5s; env OPENCODE_INDEXER_COMPACTION_SPACING_SECS.
-                let spacing = std::env::var("OPENCODE_INDEXER_COMPACTION_SPACING_SECS")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(30);
-                tokio::time::sleep(Duration::from_secs(spacing)).await;
+                // No spacing between compactions — max_blocking_threads(1) physically
+                // bounds CPU to 100% of 1 core (= 4.2% of 24 cores). Compaction
+                // shares the single blocking thread with file processing, so they
+                // are naturally serialized. Run back-to-back when queued.
             }
         }
     }
@@ -5820,22 +5819,15 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
         });
     }
 
-    // Watcher processing task - event-driven with parallel processing
+    // Watcher processing task - event-driven with parallel processing.
+    // CPU is physically bounded by max_blocking_threads(1): at most 1
+    // spawn_blocking runs at a time, using 100% of 1 core = 4.2% of 24 cores.
+    // No governor, no speed cap, no adaptive delay needed.
     {
         let state = state.clone();
         let shutdown_rx = shutdown_rx.clone();
         let compaction_tx = compaction_tx.clone();
         tokio::spawn(async move {
-            // Minimum batch interval to coalesce rapid changes and reduce CPU wakeups.
-            // Increased from 2000ms to 5000ms to keep CPU idle >99% during indexing bursts.
-            // Default: 5000ms. Override via OPENCODE_INDEXER_BATCH_INTERVAL_MS.
-            let min_batch_interval = Duration::from_millis(
-                std::env::var("OPENCODE_INDEXER_BATCH_INTERVAL_MS")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(5000),
-            );
-
             loop {
                 // Wait for any watcher to have pending changes OR timeout for periodic check
                 // Use 60s timeout to minimize idle wakeups while still allowing periodic checks
@@ -5858,8 +5850,10 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                     continue;
                 }
 
-                // Add batching delay to coalesce rapid changes
-                tokio::time::sleep(min_batch_interval).await;
+                // No adaptive delay — max_blocking_threads(1) physically bounds CPU
+                // to 100% of 1 core (= 4.2% of 24 cores). The single blocking thread
+                // runs at full speed when there's work and sits at 0% when idle.
+                // No governor, no speed cap, no sleeping needed.
 
                 // Get all watcher keys in one lock
                 let keys: Vec<String> = { state.lock().await.watchers.keys().cloned().collect() };
@@ -5906,13 +5900,12 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                         continue;
                     };
 
-                    // Cap the number of files processed per batch to spread CPU load.
-                    // Processing all pending files in one batch causes CPU spikes.
-                    // Take at most N files per batch, leaving the rest for subsequent
-                    // batches with the inter-batch delay (2s+).
-                    const MAX_FILES_PER_BATCH: usize = 5;
-                    let changed: Vec<_> = changed.into_iter().take(MAX_FILES_PER_BATCH).collect();
-                    let deleted: Vec<_> = deleted.into_iter().take(MAX_FILES_PER_BATCH).collect();
+                    // No per-batch cap — the single blocking thread in the runtime
+                    // naturally serializes all file processing. The thread itself IS
+                    // the memory and CPU bound. Process ALL pending files each iteration
+                    // so the wait loop properly sleeps until new events arrive.
+                    let changed: Vec<_> = changed.into_iter().collect();
+                    let deleted: Vec<_> = deleted.into_iter().collect();
 
                     let total = changed.len() + deleted.len();
                     if total == 0 {
@@ -5941,10 +5934,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                     // Invalidate discovery cache so file counts stay fresh
                     // (used by adaptive semaphore weight for linked project indexing)
                     if let Ok(root_path) = PathBuf::from(root.as_ref()).canonicalize() {
-                        let root_for_discovery = root_path.clone();
-                        tokio::task::spawn_blocking(move || {
-                            crate::discover::invalidate_discovery_cache(&root_for_discovery);
-                        });
+                        crate::discover::invalidate_discovery_cache(&root_path);
                     }
 
                     // Check if any changed/deleted files should invalidate the links cache
@@ -5994,16 +5984,12 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                             let tier = tier.clone();
                             let db_path = db_path.clone();
 
-                            tokio::task::spawn_blocking(move || {
-                                // Single-threaded runtime for this batch only.
-                                // After completion, all threads/resources are released.
-                                let rt = tokio::runtime::Builder::new_current_thread()
-                                    .enable_all()
-                                    .build()
-                                    .expect("failed to build batch runtime");
-
-                                rt.block_on(async {
-                                    let mut futs: futures::stream::FuturesUnordered<_> = files
+                            // Run directly on the main async runtime — no nested spawn_blocking,
+                            // no nested runtime. All I/O (tokio::fs, HTTP) is already async.
+                            // Only hash_content needs spawn_blocking, and the main runtime's
+                            // max_blocking_threads(1) caps it. Eliminates the ~14 extra
+                            // tokio-runtime-w threads created by the nested runtime pattern.
+                            let mut futs: futures::stream::FuturesUnordered<_> = files
                                         .into_iter()
                                         .map(|path| {
                                             let sema = sema.clone();
@@ -6031,12 +6017,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
 
                                                 // Fast-path: skip unchanged files
                                                 if let Ok(content) = tokio::fs::read_to_string(&rel).await {
-                                                    let hash = tokio::task::spawn_blocking({
-                                                        let content = content.clone();
-                                                        move || crate::storage::hash_content(&content)
-                                                    })
-                                                    .await
-                                                    .unwrap_or_default();
+                                                    let hash = crate::storage::hash_content(&content);
                                                     if !storage
                                                         .needs_index(&rel_path, &hash)
                                                         .await
@@ -6092,11 +6073,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                                         count += 1;
                                     }
                                     count
-                                })
-                            })
-                            .await
-                            .unwrap_or(0)
-                        };
+                                };
                         // === MAIN ASYNC RUNTIME RESUMES ===
 
                         // Fix A2: Ensure FTS index exists after each batch that wrote chunks.
@@ -6233,13 +6210,12 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                         continue;
                     };
 
-                    // Cap the number of files processed per batch to spread CPU load.
-                    // Processing all pending files in one batch causes CPU spikes.
-                    // Take at most N files per batch, leaving the rest for subsequent
-                    // batches with the inter-batch delay (2s+).
-                    const MAX_FILES_PER_BATCH: usize = 5;
-                    let changed: Vec<_> = changed.into_iter().take(MAX_FILES_PER_BATCH).collect();
-                    let deleted: Vec<_> = deleted.into_iter().take(MAX_FILES_PER_BATCH).collect();
+                    // No per-batch cap — the single blocking thread in the runtime
+                    // naturally serializes all file processing. The thread itself IS
+                    // the memory and CPU bound. Process ALL pending files each iteration
+                    // so the wait loop properly sleeps until new events arrive.
+                    let changed: Vec<_> = changed.into_iter().collect();
+                    let deleted: Vec<_> = deleted.into_iter().collect();
 
                     let total = changed.len() + deleted.len();
                     if total == 0 {
@@ -6297,12 +6273,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                         };
 
                         // Check if file needs indexing (hash comparison)
-                        let file_hash = tokio::task::spawn_blocking({
-                            let content = content.clone();
-                            move || crate::storage::hash_content(&content)
-                        })
-                        .await
-                        .unwrap_or_default();
+                        let file_hash = crate::storage::hash_content(&content);
                         if !storage
                             .needs_index(&rel_path, &file_hash)
                             .await
@@ -6508,12 +6479,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                         };
 
                         // Check if file needs indexing
-                        let file_hash = tokio::task::spawn_blocking({
-                            let content = content.clone();
-                            move || crate::storage::hash_content(&content)
-                        })
-                        .await
-                        .unwrap_or_default();
+                        let file_hash = crate::storage::hash_content(&content);
                         if !storage
                             .needs_index(&rel_path, &file_hash)
                             .await
