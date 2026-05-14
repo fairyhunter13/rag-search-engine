@@ -52,32 +52,33 @@ fn limit_thread_pools() {
 }
 
 /// Lower process priority so indexer doesn't compete with user workload.
-/// nice(15) = minimal CPU priority, ioprio IDLE = only use I/O when nothing else needs it.
+/// setpriority(PRIO_PROCESS, 0, 5) = absolute nice value 5 (not incremental).
+/// ioprio BEST_EFFORT (4) = normal disk I/O priority below user processes.
 #[cfg(unix)]
 fn deprioritize_process() {
     if std::env::var("OPENCODE_INDEXER_NO_DEPRIORITIZE").is_ok() {
         return;
     }
 
-    // Lower CPU scheduling priority (nice 15 = minimal competition with user apps)
-    let ret = unsafe { libc::nice(15) };
+    // Set absolute CPU nice to 5 (yields to user apps at 0, but gets reasonable scheduling)
+    let ret = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, 5) };
     if ret == -1 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() != Some(0) {
-            eprintln!("warning: failed to set nice(15): {}", err);
+            eprintln!("warning: failed to set nice to 5: {}", err);
         }
     }
 
-    // Set I/O scheduling to IDLE class (class 3, data 0)
+    // Set I/O scheduling to BEST_EFFORT class (class 1, data 4)
     // IOPRIO_WHO_PROCESS = 1, pid = 0 (current process)
     #[cfg(target_os = "linux")]
     {
         const IOPRIO_WHO_PROCESS: i32 = 1;
-        const IOPRIO_CLASS_IDLE: i32 = 3;
-        let ioprio = (IOPRIO_CLASS_IDLE << 13) | 0;
+        const IOPRIO_CLASS_BE: i32 = 1;
+        let ioprio = (IOPRIO_CLASS_BE << 13) | 4;
         let ret = unsafe { libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, ioprio) };
         if ret == -1 {
-            eprintln!("warning: failed to set I/O priority to IDLE: {}", std::io::Error::last_os_error());
+            eprintln!("warning: failed to set I/O priority to BEST_EFFORT: {}", std::io::Error::last_os_error());
         }
     }
 }

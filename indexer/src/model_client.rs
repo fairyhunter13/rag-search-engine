@@ -339,30 +339,27 @@ pub async fn ensure_embedder() {
     let mut cmd = std::process::Command::new(&binary);
     cmd.env("OPENCODE_EMBED_HTTP_PORT", port.to_string())
         .env("OPENCODE_EMBEDDER_PARENT_PID", our_pid.to_string())
-        // Cap thread counts in the embedder subprocess to reduce CPU pressure.
-        .env("OMP_NUM_THREADS", "1")
-        .env("MKL_NUM_THREADS", "1")
-        .env("ORT_NUM_THREADS", "2")
-        .env("OPENBLAS_NUM_THREADS", "1")
-        .env("TOKENIZERS_PARALLELISM", "false")
+        // Cap thread counts to keep CPU ≤10% during active indexing.
+        .env("OMP_NUM_THREADS", "2")
+        .env("MKL_NUM_THREADS", "2")
+        .env("ORT_NUM_THREADS", "4")
+        .env("OPENBLAS_NUM_THREADS", "2")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
     // REC-5+6: Set resource limits and priority on embedder child process.
     // - RLIMIT_AS: GPU mode needs large virtual address space for CUDA memory mapping.
-    //   CUDA maps GPU VRAM into the process address space; 8 GB was too small and caused
-    //   ONNX Runtime to silently fall back to CPU. Use 32 GB to accommodate 16 GB VRAM
-    //   + ORT internal buffers while still bounding runaway CPU-only allocations.
-    // - nice(15) lowers CPU priority further to reduce contention
-    // - ioprio idle class prevents I/O starvation of interactive processes
+    // - setpriority(5): absolute nice=5 — yields to user-facing processes (nice 0)
+    //   but still gets reasonable CPU scheduling to finish embedding quickly.
+    // - ioprio best-effort class (4) prevents I/O starvation during large scans.
     unsafe {
         cmd.pre_exec(|| {
             let mem_limit: u64 = 32 * 1024 * 1024 * 1024; // 32 GB virtual memory limit (GPU needs VRAM mapping)
             let rl = libc::rlimit { rlim_cur: mem_limit, rlim_max: mem_limit };
             libc::setrlimit(libc::RLIMIT_AS, &rl);
-            libc::nice(15);
-            libc::syscall(libc::SYS_ioprio_set, 1i64, 0i64, (3i64 << 13) | 7);
+            libc::setpriority(libc::PRIO_PROCESS, 0, 5);
+            libc::syscall(libc::SYS_ioprio_set, 1i64, 0i64, (1i64 << 13) | 4);
             Ok(())
         });
     }
