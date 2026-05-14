@@ -108,7 +108,7 @@ fn main() -> Result<()> {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let rt_workers = (num_cpus / 2).clamp(2, 4);
+    let rt_workers = 1;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(rt_workers)
         // Cap blocking thread pool: spawn_blocking calls (file I/O, hashing,
