@@ -111,6 +111,11 @@ fn main() -> Result<()> {
     let rt_workers = (num_cpus / 2).clamp(2, 4);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(rt_workers)
+        // Cap blocking thread pool: spawn_blocking calls (file I/O, hashing,
+        // LanceDB writes, SQLite) create OS threads on demand. Without a cap
+        // each file operation during a burst creates a new thread, causing a
+        // thundering herd of 50+ threads even with only 2 async workers.
+        .max_blocking_threads(4)
         .enable_all()
         .build()?;
 
