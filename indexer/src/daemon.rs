@@ -558,7 +558,7 @@ fn compaction_shutdown_timeout() -> Duration {
 /// Fix B1: compact() runs on a blocking thread pool worker via spawn_blocking+block_on
 /// so Parquet I/O can't starve the tokio async runtime.
 async fn perform_compaction(db_path: &Path, dims: u32) -> Result<()> {
-    let storage = crate::storage::Storage::open(db_path, dims).await?;
+    let storage = cached_storage(db_path, dims).await?;
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || handle.block_on(storage.compact()))
         .await

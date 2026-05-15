@@ -434,6 +434,9 @@ pub struct Storage {
     dimensions: u32,
     cached_counts: Arc<tokio::sync::RwLock<Option<CachedCounts>>>,
     cached_table: Arc<tokio::sync::RwLock<Option<lancedb::Table>>>,
+    /// Guards concurrent reads from racing with compaction.
+    /// Read methods acquire a read lock; compact() acquires a write lock.
+    compaction_guard: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl Clone for Storage {
@@ -444,6 +447,7 @@ impl Clone for Storage {
             dimensions: self.dimensions,
             cached_counts: self.cached_counts.clone(),
             cached_table: self.cached_table.clone(),
+            compaction_guard: self.compaction_guard.clone(),
         }
     }
 }
@@ -494,6 +498,7 @@ impl Storage {
                 dimensions,
                 cached_counts: Arc::new(tokio::sync::RwLock::new(None)),
                 cached_table: Arc::new(tokio::sync::RwLock::new(None)),
+                compaction_guard: Arc::new(tokio::sync::RwLock::new(())),
             };
 
             // Check and migrate schema — with iterative corruption recovery
@@ -877,6 +882,7 @@ impl Storage {
     }
 
     pub async fn get_file_count(&self) -> Result<usize> {
+        let _guard = self.read_guard().await;
         // Try cached config first
         if let Some(count_str) = self.get_config(CONFIG_FILE_COUNT).await? {
             if let Ok(count) = count_str.parse::<usize>() {
@@ -1827,6 +1833,7 @@ impl Storage {
 
     /// Get all unique file paths in the index.
     pub async fn get_indexed_files(&self) -> Result<std::collections::HashSet<String>> {
+        let _guard = self.read_guard().await;
         Ok(self.get_file_hashes(None).await?.into_keys().collect())
     }
 
@@ -1932,9 +1939,9 @@ impl Storage {
         &self,
         query_vec: &[f32],
         limit: usize,
-    ) -> Result<Vec<SearchResult>> {
+) -> Result<Vec<SearchResult>> {
         let table = self.ensure_chunks().await?;
-        
+
         // Apply IVF-PQ tuning parameters for better recall
         let nprobes = get_ivf_nprobes();
         let refine_factor = get_ivf_refine_factor();
@@ -2346,6 +2353,7 @@ impl Storage {
     }
 
     pub async fn stats(&self) -> Result<(usize, usize, usize)> {
+        let _guard = self.read_guard().await;
         let files = self.count_files().await?;
         let chunks = self.count_chunks().await?;
         let embeddings = self.count_embeddings().await?;
@@ -2364,6 +2372,11 @@ impl Storage {
     /// 
     /// We skip `Index` optimization which rebuilds vector indexes and causes OOM.
     pub async fn compact(&self) -> Result<()> {
+        // Acquire write lock to block all concurrent reads during compaction.
+        // This prevents LanceDB RecordBatch size mismatch corruption
+        // (e.g. "Attempt to merge two RecordBatch with different sizes: 40 != 39")
+        // caused by reads scanning fragments while compaction merges/prunes them.
+        let _write_guard = self.compaction_guard.write().await;
         let table = self.ensure_chunks().await?;
         
         // Step 1: Compact - merge small files (low memory)
@@ -2388,6 +2401,14 @@ impl Storage {
 
         info!("compacted and pruned storage at {}", self.path.display());
         Ok(())
+    }
+
+    /// Acquire a read guard that blocks compaction (write lock) from starting
+    /// while reads are in progress. Call this before any LanceDB table read
+    /// (search, count, get_file_hashes, etc.) to prevent the RecordBatch size
+    /// mismatch corruption caused by concurrent compaction.
+    pub async fn read_guard(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.compaction_guard.read().await
     }
 
     /// Release any cached memory that can be regenerated.
@@ -2447,6 +2468,7 @@ impl Storage {
         query_vec: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
 
         use lancedb::index::scalar::FullTextSearchQuery;
