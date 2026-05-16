@@ -452,6 +452,40 @@ impl Clone for Storage {
     }
 }
 
+macro_rules! config_get_set_str {
+    ($getter:ident, $setter:ident, $key:expr) => {
+        pub async fn $getter(&self) -> Result<Option<String>> {
+            self.get_config($key).await
+        }
+        pub async fn $setter(&self, val: &str) -> Result<()> {
+            self.set_config($key, val).await
+        }
+    };
+}
+
+macro_rules! config_get_set_int {
+    ($getter:ident, $setter:ident, $key:expr, $ty:ty) => {
+        pub async fn $getter(&self) -> Result<Option<$ty>> {
+            let val = self.get_config($key).await?;
+            Ok(val.and_then(|v| v.parse().ok()))
+        }
+        pub async fn $setter(&self, val: $ty) -> Result<()> {
+            self.set_config($key, &val.to_string()).await
+        }
+    };
+}
+
+macro_rules! config_get_set_bool {
+    ($getter:ident, $setter:ident, $key:expr) => {
+        pub async fn $getter(&self) -> Result<bool> {
+            Ok(self.get_config($key).await?.is_some_and(|v| v == "true"))
+        }
+        pub async fn $setter(&self, val: bool) -> Result<()> {
+            self.set_config($key, if val { "true" } else { "false" }).await
+        }
+    };
+}
+
 impl Storage {
     /// Open or create a LanceDB database.
     /// If corruption is detected, automatically clears and recreates the database.
@@ -791,95 +825,25 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn get_dimensions(&self) -> Result<Option<u32>> {
-        let val = self.get_config("dimensions").await?;
-        Ok(val.and_then(|v| v.parse().ok()))
-    }
+    config_get_set_int!(get_dimensions, set_dimensions, "dimensions", u32);
 
-    pub async fn set_dimensions(&self, dims: u32) -> Result<()> {
-        self.set_config("dimensions", &dims.to_string()).await
-    }
+    config_get_set_str!(get_quantization, set_quantization, "quantization");
 
-    pub async fn get_quantization(&self) -> Result<Option<String>> {
-        self.get_config("quantization").await
-    }
+    config_get_set_int!(get_last_index_duration_ms, set_last_index_duration_ms, "last_index_duration_ms", i64);
 
-    pub async fn set_quantization(&self, quantization: &str) -> Result<()> {
-        self.set_config("quantization", quantization).await
-    }
+    config_get_set_int!(get_last_index_files_count, set_last_index_files_count, "last_index_files_count", i64);
 
-    pub async fn get_last_index_duration_ms(&self) -> Result<Option<i64>> {
-        let val = self.get_config("last_index_duration_ms").await?;
-        Ok(val.and_then(|v| v.parse().ok()))
-    }
+    config_get_set_str!(get_last_index_timestamp, set_last_index_timestamp, "last_index_timestamp");
 
-    pub async fn set_last_index_duration_ms(&self, ms: i64) -> Result<()> {
-        self.set_config("last_index_duration_ms", &ms.to_string()).await
-    }
+    config_get_set_str!(get_last_update_timestamp, set_last_update_timestamp, "last_update_timestamp");
 
-    pub async fn get_last_index_files_count(&self) -> Result<Option<i64>> {
-        let val = self.get_config("last_index_files_count").await?;
-        Ok(val.and_then(|v| v.parse().ok()))
-    }
+    config_get_set_str!(get_last_watched_timestamp, set_last_watched_timestamp, "last_watched_timestamp");
 
-    pub async fn set_last_index_files_count(&self, count: i64) -> Result<()> {
-        self.set_config("last_index_files_count", &count.to_string()).await
-    }
+    config_get_set_bool!(get_indexing_in_progress, set_indexing_in_progress, "indexing_in_progress");
 
-    pub async fn get_last_index_timestamp(&self) -> Result<Option<String>> {
-        self.get_config("last_index_timestamp").await
-    }
+    config_get_set_str!(get_indexing_start_time, set_indexing_start_time, "indexing_start_time");
 
-    pub async fn set_last_index_timestamp(&self, ts: &str) -> Result<()> {
-        self.set_config("last_index_timestamp", ts).await
-    }
-
-    pub async fn get_last_update_timestamp(&self) -> Result<Option<String>> {
-        self.get_config("last_update_timestamp").await
-    }
-
-    pub async fn set_last_update_timestamp(&self, ts: &str) -> Result<()> {
-        self.set_config("last_update_timestamp", ts).await
-    }
-
-    pub async fn get_last_watched_timestamp(&self) -> Result<Option<String>> {
-        self.get_config("last_watched_timestamp").await
-    }
-
-    pub async fn set_last_watched_timestamp(&self, ts: &str) -> Result<()> {
-        self.set_config("last_watched_timestamp", ts).await
-    }
-
-    pub async fn get_indexing_in_progress(&self) -> Result<bool> {
-        Ok(self
-            .get_config("indexing_in_progress")
-            .await?
-            .is_some_and(|v| v == "true"))
-    }
-
-    pub async fn set_indexing_in_progress(&self, in_progress: bool) -> Result<()> {
-        self.set_config(
-            "indexing_in_progress",
-            if in_progress { "true" } else { "false" },
-        )
-        .await
-    }
-
-    pub async fn get_indexing_start_time(&self) -> Result<Option<String>> {
-        self.get_config("indexing_start_time").await
-    }
-
-    pub async fn set_indexing_start_time(&self, ts: &str) -> Result<()> {
-        self.set_config("indexing_start_time", ts).await
-    }
-
-    pub async fn get_indexing_phase(&self) -> Result<Option<String>> {
-        self.get_config("indexing_phase").await
-    }
-
-    pub async fn set_indexing_phase(&self, phase: &str) -> Result<()> {
-        self.set_config("indexing_phase", phase).await
-    }
+    config_get_set_str!(get_indexing_phase, set_indexing_phase, "indexing_phase");
 
     pub async fn get_file_count(&self) -> Result<usize> {
         let _guard = self.read_guard().await;

@@ -205,7 +205,13 @@ fn http_base_url() -> String {
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
-        match reqwest::Client::builder().build() {
+        match reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .tcp_keepalive(std::time::Duration::from_secs(15))
+            .build()
+        {
             Ok(client) => client,
             Err(e) => {
                 eprintln!("FATAL: Failed to build HTTP client: {}", e);
@@ -518,14 +524,21 @@ fn reset_embedder() {
 }
 
 /// Return `true` only for connection-level failures that indicate the embedder
-/// process died (ECONNREFUSED, connection reset).  Timeouts and HTTP 5xx are
-/// NOT retryable — the embedder is alive but overloaded, and killing it would
-/// make things worse (model reload storm).
+/// process died (ECONNREFUSED, connection reset), timeouts, and transient
+/// HTTP 5xx errors (502/503/504).  HTTP 500 and 501 are NOT retryable.
 fn is_retryable_error(e: &anyhow::Error) -> bool {
     for cause in e.chain() {
         if let Some(req) = cause.downcast_ref::<reqwest::Error>() {
-            if req.is_connect() {
+            if req.is_connect() || req.is_timeout() {
                 return true;
+            }
+            if let Some(status) = req.status() {
+                if status.is_server_error()
+                    && status != reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                    && status != reqwest::StatusCode::NOT_IMPLEMENTED
+                {
+                    return true;
+                }
             }
         }
     }
@@ -1021,12 +1034,12 @@ pub async fn warmup() -> Result<()> {
     Ok(())
 }
 
-/// An HTTP-backed model client.
+/// An HTTP-backed embedder client.
 ///
 /// All operations delegate to the HTTP embedder API on localhost.
-pub struct PooledClient;
+pub struct EmbedderClient;
 
-impl PooledClient {
+impl EmbedderClient {
     /// Chunk content without embedding.
     pub async fn chunk(&mut self, content: &str, path: &str, tier: &str) -> Result<Vec<ChunkMeta>> {
         http_chunk(content, path, tier).await
@@ -1077,9 +1090,9 @@ impl PooledClient {
     }
 }
 
-/// Get an HTTP-backed model client.
-pub async fn pooled() -> Result<PooledClient> {
-    Ok(PooledClient)
+/// Get an HTTP-backed embedder client.
+pub async fn client() -> Result<EmbedderClient> {
+    Ok(EmbedderClient)
 }
 
 // ============================================================================

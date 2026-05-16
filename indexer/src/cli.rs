@@ -20,7 +20,7 @@ use crate::hardware::{self, HardwareInfo};
 use crate::storage::{self, ChunkData, FileChunks, Storage, WriteQueue};
 
 /// Tier -> (embed_model, rerank_model) mapping (must match Python's embeddings.py).
-fn models_for_tier(tier: &str) -> (&'static str, &'static str) {
+pub fn models_for_tier(tier: &str) -> (&'static str, &'static str) {
     match tier {
         "premium" => (
             "jinaai/jina-embeddings-v2-base-code",
@@ -216,11 +216,6 @@ macro_rules! jprintln {
     };
 }
 
-/// Make models_for_tier accessible from daemon module.
-pub fn models_for_tier_pub(tier: &str) -> (&'static str, &'static str) {
-    models_for_tier(tier)
-}
-
 /// Make update_file_partial accessible from daemon module.
 pub async fn update_file_partial_pub(
     root: &Path,
@@ -228,7 +223,7 @@ pub async fn update_file_partial_pub(
     symlink_dirs: &[discover::SymlinkDir],
     storage_path: &Path,
     storage: &Storage,
-    client: &mut crate::model_client::PooledClient,
+    client: &mut crate::model_client::EmbedderClient,
     file: &Path,
     tier: &str,
     dimensions: u32,
@@ -687,7 +682,7 @@ fn fallback_chunks(path: &Path) -> Result<Vec<crate::model_client::ChunkMeta>> {
 }
 
 async fn embed_batched(
-    client: &mut crate::model_client::PooledClient,
+    client: &mut crate::model_client::EmbedderClient,
     texts: &[String],
     model: &str,
     dimensions: u32,
@@ -772,13 +767,28 @@ pub struct FileUpdate {
     pub embedded: usize,
 }
 
+async fn cleanup_legacy_indexes(storage_path: &Path) {
+    let legacy_sqlite = storage_path
+        .parent()
+        .map(|p| p.join("index.sqlite"))
+        .unwrap_or_else(|| storage_path.join("index.sqlite"));
+    let legacy_usearch = storage_path
+        .parent()
+        .map(|p| p.join("index.usearch"))
+        .unwrap_or_else(|| storage_path.join("index.usearch"));
+    let _ = tokio::fs::remove_file(&legacy_usearch).await;
+    let _ = tokio::fs::remove_file(&legacy_sqlite).await;
+    let _ = tokio::fs::remove_file(legacy_sqlite.with_extension("sqlite-wal")).await;
+    let _ = tokio::fs::remove_file(legacy_sqlite.with_extension("sqlite-shm")).await;
+}
+
 async fn update_file_partial(
     root: &Path,
     include_dirs: &[PathBuf],
     symlink_dirs: &[discover::SymlinkDir],
     storage_path: &Path,
     storage: &Storage,
-    client: &mut crate::model_client::PooledClient,
+    client: &mut crate::model_client::EmbedderClient,
     file: &Path,
     tier: &str,
     dimensions: u32,
@@ -814,25 +824,7 @@ async fn update_file_partial(
         .map_err(|e| anyhow::anyhow!("hash task failed: {}", e))??;
 
     // Legacy purge (single-file update)
-    let legacy_sqlite = storage_path
-        .parent()
-        .map(|p| p.join("index.sqlite"))
-        .unwrap_or_else(|| storage_path.join("index.sqlite"));
-    let legacy_usearch = storage_path
-        .parent()
-        .map(|p| p.join("index.usearch"))
-        .unwrap_or_else(|| storage_path.join("index.usearch"));
-    if tokio::fs::try_exists(&legacy_sqlite).await.unwrap_or(false) {
-        let _ = tokio::fs::remove_file(&legacy_sqlite).await;
-        let _ = tokio::fs::remove_file(legacy_sqlite.with_extension("sqlite-wal")).await;
-        let _ = tokio::fs::remove_file(legacy_sqlite.with_extension("sqlite-shm")).await;
-    }
-    if tokio::fs::try_exists(&legacy_usearch)
-        .await
-        .unwrap_or(false)
-    {
-        let _ = tokio::fs::remove_file(&legacy_usearch).await;
-    }
+    cleanup_legacy_indexes(storage_path).await;
 
     let backend = storage
         .get_config("embedder_backend")
@@ -1082,25 +1074,8 @@ async fn run_indexing(
 
     let storage = Storage::open(storage_path, dimensions).await?;
 
-    // Legacy index detection (best-effort)
-    let legacy_sqlite = storage_path
-        .parent()
-        .map(|p| p.join("index.sqlite"))
-        .unwrap_or_else(|| storage_path.join("index.sqlite"));
-    let legacy_usearch = storage_path
-        .parent()
-        .map(|p| p.join("index.usearch"))
-        .unwrap_or_else(|| storage_path.join("index.usearch"));
-    let has_legacy_files = tokio::fs::try_exists(&legacy_sqlite).await.unwrap_or(false)
-        || tokio::fs::try_exists(&legacy_usearch)
-            .await
-            .unwrap_or(false);
-    if has_legacy_files {
-        let _ = tokio::fs::remove_file(&legacy_usearch).await;
-        let _ = tokio::fs::remove_file(&legacy_sqlite).await;
-        let _ = tokio::fs::remove_file(legacy_sqlite.with_extension("sqlite-wal")).await;
-        let _ = tokio::fs::remove_file(legacy_sqlite.with_extension("sqlite-shm")).await;
-    }
+        // Legacy index cleanup (best-effort)
+        cleanup_legacy_indexes(storage_path).await;
 
     let backend = storage
         .get_config("embedder_backend")
@@ -1110,7 +1085,7 @@ async fn run_indexing(
     // (missing config can happen with corrupted config.lance - don't wipe good data in that case)
     let legacy_backend = backend.as_deref().is_some_and(|b| b != "fastembed/v1");
     let has_data = storage.count_chunks().await? > 0;
-    if has_legacy_files || (legacy_backend && has_data) {
+    if legacy_backend && has_data {
         if !quiet {
             println!("Legacy index backend detected. Deleting old data and rebuilding...");
         }
@@ -1597,7 +1572,7 @@ async fn run_indexing(
                     let count = texts.len();
 
                     let result = async {
-                        let mut client = crate::model_client::pooled().await?;
+                        let mut client = crate::model_client::client().await?;
                         client
                             .embed_passages(&texts, &embed_model, dimensions)
                             .await
@@ -1662,7 +1637,7 @@ async fn run_indexing(
                 let result = std::panic::AssertUnwindSafe(async {
                     let _permit = sem.acquire().await.ok();
 
-                    let mut client = crate::model_client::pooled().await?;
+                    let mut client = crate::model_client::client().await?;
                     let chunks = if size <= MAX_INLINE_BYTES {
                         let Some(content) = read_text(&file, MAX_INLINE_BYTES)? else {
                             return Ok::<Option<Chunked>, anyhow::Error>(None);
@@ -1761,7 +1736,7 @@ async fn run_indexing(
                                     .collect();
 
                                 let result = async {
-                                    let mut client = crate::model_client::pooled().await?;
+                                    let mut client = crate::model_client::client().await?;
                                     client
                                         .embed_passages(&texts, &embed_model, dimensions)
                                         .await
@@ -2214,7 +2189,7 @@ async fn index_single_file(
     }
 
     let embed = Semaphore::new(1);
-    let mut client = crate::model_client::pooled().await?;
+    let mut client = crate::model_client::client().await?;
 
     // Create WriteQueue for this single file operation
     let write_queue = crate::storage::WriteQueue::new(std::sync::Arc::new(storage.clone()), 32);
@@ -2554,7 +2529,7 @@ async fn run_search(
     let stored_dims = storage.get_dimensions().await?.unwrap_or(dimensions);
     let storage = Storage::open(storage_path, stored_dims).await?;
 
-    let mut client = model_client::pooled().await?;
+    let mut client = model_client::client().await?;
     let (embed_model, rerank_model) = models_for_tier(&stored_tier);
 
     let qvec = client.embed_query(query, embed_model, stored_dims).await?;
