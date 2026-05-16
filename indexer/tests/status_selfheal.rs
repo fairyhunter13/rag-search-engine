@@ -170,7 +170,7 @@ async fn daemon_status_self_heals_stuck_progress() -> Result<()> {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    let mut port = 0u16;
+    let mut port: u16;
 
     loop {
         if tokio::time::Instant::now() > deadline {

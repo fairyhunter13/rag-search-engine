@@ -149,7 +149,7 @@ class Chunk:
 
 def count_tokens(text: str) -> int:
     """Count tokens using current tier's tokenizer"""
-    return tok.count_tokens_for_tier(text, get_tier())
+    return tok.count_tokens_for_tier(text)
 
 
 # ---------------------------------------------------------------------------

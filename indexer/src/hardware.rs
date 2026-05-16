@@ -97,53 +97,6 @@ impl HardwareInfo {
         4
     }
 
-    /// Get recommended concurrency for linked project background indexing.
-    ///
-    /// This controls how many linked projects (submodules, monorepo packages) can be
-    /// indexed concurrently in the background during search operations.
-    ///
-    /// Considerations:
-    /// - Each linked project indexing creates a LanceDB connection (~10-15 MB)
-    /// - Embedding work goes to the Python server (which has its own limits)
-    /// - Too much parallelism can cause memory pressure
-    pub fn link_index_concurrency(&self) -> usize {
-        if self.gpu.available {
-            // Conservative: each linked project opens a new LanceDB connection
-            // (~10-15 MB per connection). Background indexing should not compete
-            // with user workload. Cap at 2 regardless of GPU type.
-            match self.gpu.provider {
-                GpuProvider::MIGraphX | GpuProvider::Rocm | GpuProvider::Cuda => 2,
-                GpuProvider::Metal | GpuProvider::CoreML => 2,
-                GpuProvider::None => self.cpu_link_index_concurrency(),
-            }
-        } else {
-            self.cpu_link_index_concurrency()
-        }
-    }
-
-    /// CPU-only link index concurrency.
-    fn cpu_link_index_concurrency(&self) -> usize {
-        // CPU-only: be conservative to avoid memory/CPU pressure
-        // Each link index operation is memory-intensive
-        let memory_limit = (self.memory_gb / 8.0).max(1.0) as usize; // ~8 GB per slot
-        let core_limit = (self.cpu_cores / 4).max(1);
-        memory_limit.min(core_limit).clamp(1, 4)
-    }
-
-    /// Get recommended write batch size for LanceDB.
-    pub fn write_batch_size(&self) -> usize {
-        if self.gpu.available {
-            32 // Larger batches for GPU systems
-        } else {
-            16 // Smaller batches for CPU systems
-        }
-    }
-
-    /// Check if this is a high-performance system (GPU available).
-    pub fn is_high_performance(&self) -> bool {
-        self.gpu.available
-    }
-
     /// Get a human-readable description of detected hardware.
     pub fn description(&self) -> String {
         let platform = match self.platform {

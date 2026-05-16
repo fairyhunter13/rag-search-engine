@@ -47,12 +47,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-# Tune glibc malloc to minimize RSS: limit arena count and auto-trim freed pages.
-# Must be set before any allocation (i.e., at module load).
-os.environ.setdefault("MALLOC_ARENA_MAX", "2")
-os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "0")
-os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "65536")
-
 from aiohttp import web
 
 # ---------------------------------------------------------------------------
@@ -104,6 +98,9 @@ def _kill_process_group() -> None:
 
 from opencode_embedder import chunker, tokenizer as tok
 from opencode_embedder.embeddings import (
+    _EMBED_SUB_BATCH,
+    _HIGH_END,
+    _LOW_END,
     cleanup_models,
     embed_passages,
     embed_passages_f32_bytes,
@@ -245,13 +242,7 @@ def _detect_hardware() -> tuple[int, int]:
 
 
 _CPUS, _RAM_MB = _detect_hardware()
-_LOW_END = _CPUS <= 4 or _RAM_MB <= 8192  # ≤4 threads or ≤8 GB RAM
-
-
-# Performance tiers:
-#   LOW_END:  ≤4 CPUs or ≤8 GB RAM
-#   HIGH_END: ≥16 CPUs and ≥32 GB RAM
-_HIGH_END = _CPUS >= 16 and _RAM_MB >= 32768
+# _LOW_END, _HIGH_END, _EMBED_SUB_BATCH imported from opencode_embedder.embeddings
 
 # Worker scaling based on execution mode (CPU vs GPU).
 #
@@ -340,13 +331,7 @@ def _detect_embed_workers() -> int:
 
 EMBED_WORKERS = _detect_embed_workers()
 
-# Sub-batch size: match embeddings.py for consistency
-if _LOW_END:
-    EMBED_SUB_BATCH = 64
-elif _HIGH_END:
-    EMBED_SUB_BATCH = 128
-else:
-    EMBED_SUB_BATCH = 96
+# Sub-batch size imported from opencode_embedder.embeddings as _EMBED_SUB_BATCH
 
 # Idle cleanup: release memory when idle
 IDLE_CLEANUP_SECS = 120 if _RAM_MB <= 16384 else 300
@@ -562,7 +547,6 @@ class ModelServer:
         tier = params.get("tier", "budget")
 
         chunker.set_tier(tier)
-        tok.ensure_tokenizer_for_tier(tier)
         chunks = chunker.chunk_file(content, path)
 
         return [
@@ -783,6 +767,22 @@ class ModelServer:
 
     # ---- HTTP server ----
 
+    async def _handler_wrapper(
+        self, request: web.Request, handler_fn, formatter=None
+    ) -> web.Response:
+        """Parse JSON, call handler_fn, return JSON response. Common error wrapper."""
+        try:
+            params = await request.json()
+            result = await handler_fn(params)
+            if formatter:
+                result = formatter(result)
+            return web.json_response({"result": result})
+        except web.HTTPException:
+            raise
+        except Exception as exc:
+            log.exception("handler error")
+            return web.json_response({"error": str(exc)}, status=500)
+
     def _jsonify(self, v: Any) -> Any:
         """Recursively convert bytes → base64 strings for JSON serialization."""
         if isinstance(v, bytes):
@@ -845,81 +845,27 @@ class ModelServer:
             return web.json_response({"error": str(exc)}, status=500)
 
     async def _http_embed_query(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_embed_query(params)
-            return web.json_response({"result": result})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http embed_query error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_embed_query)
 
     async def _http_embed_query_f32(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_embed_query_f32(params)
-            return web.json_response({"result": self._jsonify(result)})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http embed_query_f32 error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_embed_query_f32,
+                                           lambda r: self._jsonify(r))
 
     async def _http_chunk(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_chunk(params)
-            return web.json_response({"result": result})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http chunk error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_chunk)
 
     async def _http_chunk_file(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_chunk(params)
-            return web.json_response({"result": result})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http chunk_file error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_chunk)
 
     async def _http_chunk_and_embed(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_chunk_and_embed(params)
-            return web.json_response({"result": result})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http chunk_and_embed error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_chunk_and_embed)
 
     async def _http_chunk_and_embed_f32(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_chunk_and_embed_f32(params)
-            return web.json_response({"result": self._jsonify(result)})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http chunk_and_embed_f32 error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_chunk_and_embed_f32,
+                                           lambda r: self._jsonify(r))
 
     async def _http_rerank(self, req: web.Request) -> web.Response:
-        try:
-            params = await req.json()
-            result = await self._handle_rerank(params)
-            return web.json_response({"result": result})
-        except web.HTTPException:
-            raise
-        except Exception as exc:
-            log.exception("http rerank error: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+        return await self._handler_wrapper(req, self._handle_rerank)
 
     def _http_app(self) -> web.Application:
         """Build the aiohttp Application with all REST routes.

@@ -124,7 +124,7 @@ impl DaemonHandle {
         let mut reader = tokio::io::BufReader::new(stdout);
         let mut buf = String::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        let mut port = 0u16;
+        let mut port: u16;
 
         loop {
             if tokio::time::Instant::now() > deadline {
@@ -878,13 +878,13 @@ async fn write_ops_serialised_through_queue() {
         assert_eq!(resp["result"]["success"], true, "index failed: {resp}");
     }
 
-    // Verify all 3 files indexed
-    let resp = rpc(port, "status",
-        serde_json::json!({"db": db.to_str().unwrap(), "dimensions": 256}),
-    )
-    .await
-    .expect("rpc");
-    assert_eq!(resp["result"]["files"].as_u64().unwrap_or(0), 3);
+// Verify all 3 files indexed
+let resp = rpc(port, "status",
+    serde_json::json!({"db": db.to_str().unwrap(), "dimensions": 256}),
+)
+.await
+.expect("rpc");
+assert_eq!(resp["result"]["files"].as_u64().unwrap_or(0), 3);
     daemon.shutdown().await;
 }
 

@@ -577,23 +577,26 @@ impl Storage {
         Ok(())
     }
 
-    /// Ensure the chunks table exists.
+    /// Open or create a table by name with the given schema.
+    async fn ensure_table_impl(&self, table_name: &str, schema: Arc<Schema>) -> Result<lancedb::Table> {
+        let names = self.db.table_names().execute().await?;
+        if names.iter().any(|n| n == table_name) {
+            Ok(self.db.open_table(table_name).execute().await?)
+        } else {
+            Ok(self.db.create_empty_table(table_name, schema).execute().await?)
+        }
+    }
+
+    /// Ensure the chunks table exists (cached).
     async fn ensure_chunks(&self) -> Result<lancedb::Table> {
-        // Fast path: cached
         if let Some(table) = self.cached_table.read().await.as_ref() {
             return Ok(table.clone());
         }
-        // Slow path: check + open/create, then cache
         let mut w = self.cached_table.write().await;
         if let Some(table) = w.as_ref() {
             return Ok(table.clone());
         }
-        let names = self.db.table_names().execute().await?;
-        let table = if names.iter().any(|n| n == "chunks") {
-            self.db.open_table("chunks").execute().await?
-        } else {
-            self.db.create_empty_table("chunks", chunks_schema(self.dimensions)).execute().await?
-        };
+        let table = self.ensure_table_impl("chunks", chunks_schema(self.dimensions)).await?;
         *w = Some(table.clone());
         Ok(table)
     }
@@ -622,16 +625,7 @@ impl Storage {
 
     /// Ensure the config table exists.
     async fn ensure_config(&self) -> Result<lancedb::Table> {
-        let names = self.db.table_names().execute().await?;
-        if names.contains(&"config".to_string()) {
-            Ok(self.db.open_table("config").execute().await?)
-        } else {
-            Ok(self
-                .db
-                .create_empty_table("config", config_schema())
-                .execute()
-                .await?)
-        }
+        self.ensure_table_impl("config", config_schema()).await
     }
     
     /// Repair a corrupted config table by deleting and recreating it.
@@ -668,16 +662,7 @@ impl Storage {
 
     /// Ensure the usage table exists.
     async fn ensure_usage(&self) -> Result<lancedb::Table> {
-        let names = self.db.table_names().execute().await?;
-        if names.contains(&"usage".to_string()) {
-            Ok(self.db.open_table("usage").execute().await?)
-        } else {
-            Ok(self
-                .db
-                .create_empty_table("usage", usage_schema())
-                .execute()
-                .await?)
-        }
+        self.ensure_table_impl("usage", usage_schema()).await
     }
 
     // =========================================================================

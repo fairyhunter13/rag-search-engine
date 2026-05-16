@@ -1,10 +1,10 @@
 """Comprehensive performance test suite for opencode-search-engine.
 
-Tests both the Python embedder (HTTP at localhost:9998) and the Rust indexer
+Tests both the Python embedder (HTTP at 127.0.0.1:9998) and the Rust indexer
 (JSON-RPC over Unix socket).
 
 Service auto-detection:
-  - Embedder: http://localhost:9998
+  - Embedder: http://127.0.0.1:9998
   - Indexer:  abstract socket "@opencode-indexer" (Linux) or ~/.opencode/indexer-*.sock
 
 Markers:
@@ -38,12 +38,13 @@ from typing import Any
 
 import psutil
 import pytest
+from conftest import _embedder_alive as embedder_alive, _find_embedder_pid, _find_indexer_pid, _rpc_call_abstract_socket, _rpc_call_file_socket
 
 # ---------------------------------------------------------------------------
 # Service auto-detection
 # ---------------------------------------------------------------------------
 
-EMBEDDER_URL = "http://localhost:9998"
+EMBEDDER_URL = "http://127.0.0.1:9998"
 
 # Indexer: on Linux the indexer binds an abstract Unix socket "@opencode-indexer".
 # File-based sockets (macOS / test mode) match ~/.opencode/indexer-*.sock.
@@ -160,10 +161,6 @@ def _http_get(url: str, timeout: int = 10) -> tuple[int, Any]:
         return 0, {}
 
 
-def embedder_alive() -> bool:
-    status, _ = _http_get(f"{EMBEDDER_URL}/health", timeout=3)
-    return status == 200
-
 
 def embed_passages(texts: list[str], timeout: int = 60) -> tuple[int, list]:
     status, body = _http_post(
@@ -205,118 +202,9 @@ def rerank_docs(query: str, documents: list[str], timeout: int = 60) -> tuple[in
     return status, scores
 
 
-def find_embedder_pid() -> int | None:
-    """Scan /proc for the embedder process."""
-    try:
-        for entry in os.scandir("/proc"):
-            if not entry.name.isdigit():
-                continue
-            try:
-                cmdline = open(f"/proc/{entry.name}/cmdline").read().replace("\x00", " ")
-                if "opencode_embedder" in cmdline or "opencode-embedder" in cmdline:
-                    return int(entry.name)
-            except OSError:
-                pass
-    except OSError:
-        pass
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Indexer Unix socket RPC helpers
 # ---------------------------------------------------------------------------
-
-
-def _rpc_call_file_socket(sock_path: str, method: str, params: dict | None = None, timeout: float = 10.0) -> Any:
-    """JSON-RPC 2.0 over file-based Unix socket (HTTP framing)."""
-    payload = json.dumps(
-        {"jsonrpc": "2.0", "method": method, "params": params or {}, "id": 1}
-    )
-    headers = (
-        f"POST /rpc HTTP/1.1\r\n"
-        f"Host: localhost\r\n"
-        f"Content-Type: application/json\r\n"
-        f"Connection: close\r\n"
-        f"Content-Length: {len(payload)}\r\n"
-        f"\r\n"
-    )
-
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
-        sock.connect(sock_path)
-        sock.sendall((headers + payload).encode())
-        response = b""
-        try:
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-        except socket.timeout:
-            pass
-    finally:
-        sock.close()
-
-    if b"\r\n\r\n" not in response:
-        raise RuntimeError(f"No HTTP response body. Raw: {response[:200]}")
-    body = response.split(b"\r\n\r\n", 1)[1]
-    parsed = json.loads(body)
-    return parsed.get("result", parsed)
-
-
-def _rpc_call_abstract_socket(socket_name: str, method: str, params: dict | None = None, timeout: float = 5.0) -> Any:
-    """JSON-RPC 2.0 over Linux abstract Unix socket (HTTP framing)."""
-    payload = json.dumps(
-        {"jsonrpc": "2.0", "method": method, "params": params or {}, "id": 1}
-    )
-    headers = (
-        f"POST /rpc HTTP/1.1\r\n"
-        f"Host: localhost\r\n"
-        f"Content-Type: application/json\r\n"
-        f"Connection: close\r\n"
-        f"Content-Length: {len(payload)}\r\n"
-        f"\r\n"
-    )
-
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
-        # Abstract socket: leading null byte + name
-        abstract_addr = "\x00" + socket_name.lstrip("@")
-        sock.connect(abstract_addr)
-        sock.sendall((headers + payload).encode())
-        response = b""
-        content_length: int | None = None
-        header_end: int = -1
-        try:
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-                # Parse Content-Length once headers are fully received
-                if header_end == -1 and b"\r\n\r\n" in response:
-                    header_end = response.index(b"\r\n\r\n") + 4
-                    header_part = response[:header_end].decode("utf-8", errors="replace")
-                    for line in header_part.split("\r\n"):
-                        if line.lower().startswith("content-length:"):
-                            content_length = int(line.split(":", 1)[1].strip())
-                            break
-                # Stop once full body received per Content-Length
-                if content_length is not None and header_end != -1:
-                    if len(response) - header_end >= content_length:
-                        break
-        except socket.timeout:
-            pass
-    finally:
-        sock.close()
-
-    if b"\r\n\r\n" not in response:
-        raise RuntimeError(f"No HTTP response body. Raw: {response[:200]}")
-    body = response.split(b"\r\n\r\n", 1)[1]
-    parsed = json.loads(body)
-    return parsed.get("result", parsed)
 
 
 def rpc_call(method: str, params: dict | None = None) -> Any:
@@ -341,23 +229,6 @@ def indexer_alive() -> bool:
         return result is not None
     except Exception:
         return False
-
-
-def find_indexer_pid() -> int | None:
-    """Scan /proc for the indexer process."""
-    try:
-        for entry in os.scandir("/proc"):
-            if not entry.name.isdigit():
-                continue
-            try:
-                cmdline = open(f"/proc/{entry.name}/cmdline").read().replace("\x00", " ")
-                if "opencode-indexer" in cmdline or "opencode_indexer" in cmdline:
-                    return int(entry.name)
-            except OSError:
-                pass
-    except OSError:
-        pass
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +320,7 @@ def require_indexer():
 
 @pytest.fixture(scope="session")
 def embedder_pid_fixture(require_embedder):  # type: ignore[reportUnusedParameter]
-    pid = find_embedder_pid()
+    pid = _find_embedder_pid()
     if pid is None:
         pytest.skip("Could not identify embedder PID (needed for memory tests)")
     return pid
@@ -457,7 +328,7 @@ def embedder_pid_fixture(require_embedder):  # type: ignore[reportUnusedParamete
 
 @pytest.fixture(scope="session")
 def indexer_pid_fixture(require_indexer):  # type: ignore[reportUnusedParameter]
-    pid = find_indexer_pid()
+    pid = _find_indexer_pid()
     if pid is None:
         pytest.skip("Could not identify indexer PID (needed for memory tests)")
     return pid
@@ -765,7 +636,7 @@ class TestEmbedderThroughput:
         print_table(f"Concurrent throughput ({duration:.0f}s per level)", rows)
 
     def test_max_sustainable_rps(self, require_embedder):  # type: ignore[reportUnusedParameter]
-        """Binary search for max RPS without >1% errors (uses batch requests)."""
+        """Iterate over increasing batch sizes to find max sustainable throughput."""
         # Instead of a true binary search over time (too slow), we measure
         # throughput at increasing batch sizes and report the knee point.
         rows: list[tuple[str, str]] = []

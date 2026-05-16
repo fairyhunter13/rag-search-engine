@@ -537,18 +537,7 @@ pub fn discover_files_with_config(
 
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-    // Check cache first and validate TTL
-    if let Ok(mut write) = cache.write() {
-        if let Some(entry) = write.get(&key) {
-            if !entry.is_expired() {
-                return Ok(entry.value.result.clone());
-            }
-            // Entry expired, remove it
-            write.remove(&key);
-        }
-    }
-
-    // Read lock for final check before expensive operation
+    // Check cache first (read lock)
     if let Ok(read) = cache.read() {
         if let Some(entry) = read.get(&key) {
             if !entry.is_expired() {
@@ -910,18 +899,7 @@ fn submodule_cache() -> &'static RwLock<HashMap<PathBuf, CacheEntry<Vec<(PathBuf
 pub fn discover_submodules(root: &Path) -> Vec<(PathBuf, String)> {
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-    // Check cache and validate TTL
-    if let Ok(mut write) = submodule_cache().write() {
-        if let Some(entry) = write.get(&key) {
-            if !entry.is_expired() {
-                return entry.value.clone();
-            }
-            // Entry expired, remove it
-            write.remove(&key);
-        }
-    }
-
-    // Read lock for final check
+    // Check cache (read lock)
     if let Ok(read) = submodule_cache().read() {
         if let Some(entry) = read.get(&key) {
             if !entry.is_expired() {

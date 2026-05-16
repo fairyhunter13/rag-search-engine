@@ -37,14 +37,23 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         }
     }
 
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            unsafe { cosine_similarity_neon(a, b) }
+        } else {
+            cosine_similarity_scalar(a, b)
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         cosine_similarity_scalar(a, b)
     }
 }
 
 /// Scalar fallback for non-x86 or when SIMD unavailable.
-/// Uses Kahan summation for improved numerical stability.
+/// Uses simple dot product (not Kahan summation).
 fn cosine_similarity_scalar(a: &[f32], b: &[f32]) -> f32 {
     let (mut dot, mut norm_a, mut norm_b) = (0.0f32, 0.0f32, 0.0f32);
 
@@ -181,6 +190,53 @@ unsafe fn hsum_sse(v: std::arch::x86_64::__m128) -> f32 {
     let sum64 = _mm_add_ps(v, _mm_movehl_ps(v, v));
     let sum32 = _mm_add_ss(sum64, _mm_shuffle_ps(sum64, sum64, 1));
     _mm_cvtss_f32(sum32)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn cosine_similarity_neon(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+
+    let n = a.len();
+    let chunks = n / 4;
+
+    let mut dot_acc = vdupq_n_f32(0.0);
+    let mut norm_a_acc = vdupq_n_f32(0.0);
+    let mut norm_b_acc = vdupq_n_f32(0.0);
+
+    // Process 4 floats at a time using FMLA (fused multiply-add)
+    for i in 0..chunks {
+        let va = vld1q_f32(a.as_ptr().add(i * 4));
+        let vb = vld1q_f32(b.as_ptr().add(i * 4));
+
+        dot_acc = vfmaq_f32(dot_acc, va, vb);
+        norm_a_acc = vfmaq_f32(norm_a_acc, va, va);
+        norm_b_acc = vfmaq_f32(norm_b_acc, vb, vb);
+    }
+
+    // Horizontal sum across 4 lanes
+    let dot = vaddvq_f32(dot_acc);
+    let norm_a = vaddvq_f32(norm_a_acc);
+    let norm_b = vaddvq_f32(norm_b_acc);
+
+    // Handle remainder (< 4 elements)
+    let (mut dot_rem, mut norm_a_rem, mut norm_b_rem) = (0.0f32, 0.0f32, 0.0f32);
+    for i in (chunks * 4)..n {
+        let x = *a.get_unchecked(i);
+        let y = *b.get_unchecked(i);
+        dot_rem += x * y;
+        norm_a_rem += x * x;
+        norm_b_rem += y * y;
+    }
+
+    let total_dot = dot + dot_rem;
+    let total_norm = ((norm_a + norm_a_rem) * (norm_b + norm_b_rem)).sqrt();
+
+    if total_norm > 0.0 {
+        total_dot / total_norm
+    } else {
+        0.0
+    }
 }
 
 /// Batch cosine similarity scores (parallel when rayon feature enabled)

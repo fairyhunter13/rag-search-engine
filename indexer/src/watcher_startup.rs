@@ -4,7 +4,7 @@
 //! These functions handle starting/stopping internal file watchers, corruption recovery,
 //! and background re-indexing.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,98 @@ use crate::search::embed_concurrency;
 use crate::tui::canonicalize_project_key;
 use crate::watcher::{self, WatchEvent};
 use crate::{cli, config, discover, storage};
+
+/// Guard that deregisters an active index on drop.
+struct StartupGuard(String);
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        let k = self.0.clone();
+        tokio::spawn(async move {
+            active_indexes().lock().await.remove(&k);
+        });
+    }
+}
+
+/// Spawn background rebuild: run full index then start watcher (with retry).
+/// Shared between the error path and corruption path.
+fn spawn_background_rebuild(
+    state: &Arc<Mutex<DaemonState>>,
+    root_str: &str,
+    db_str: Option<&str>,
+    tier_str: &str,
+    dims: u32,
+    db_path_for_guard: &Path,
+) {
+    let state_clone = state.clone();
+    let root_str = root_str.to_string();
+    let db_str = db_str.map(|s| s.to_string());
+    let tier_str = tier_str.to_string();
+    let guard_key = db_path_for_guard.to_string_lossy().to_string();
+
+    tokio::spawn(async move {
+        let db_path = db_str
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| storage::storage_path(&PathBuf::from(&root_str)));
+        active_indexes().lock().await.insert(guard_key.clone());
+        let _guard = StartupGuard(guard_key.clone());
+
+        tracing::info!("startup_check: starting background rebuild for {}", root_str);
+
+        if let Err(e) = cli::run_indexing_pub(
+            &PathBuf::from(&root_str),
+            &db_path,
+            &tier_str,
+            dims,
+            "int8",
+            true,  // force
+            None,  // daily_cost_limit
+            false, // verbose
+            &[],   // exclude
+            &[],   // include
+            embed_concurrency(),
+            None,  // scan_concurrency
+            true,  // quiet
+            false, // json_lines
+        )
+        .await
+        {
+            tracing::warn!("startup_check: background indexing failed: {}", e);
+            return;
+        }
+
+        tracing::info!("startup_check: background indexing completed for {}", root_str);
+
+        // Then start watcher (with retry)
+        let db_ref = db_str.as_deref();
+        let delays = WATCHER_START_RETRY_DELAYS;
+        let mut started = false;
+        for (attempt, &delay) in delays.iter().enumerate() {
+            match watcher_start_internal(&state_clone, &root_str, db_ref, Some(&tier_str), false).await {
+                Ok(_) => {
+                    started = true;
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "startup_check: background watcher start failed (attempt {}/{}): {}",
+                        attempt + 1,
+                        delays.len(),
+                        e
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                }
+            }
+        }
+        if !started {
+            tracing::error!(
+                "startup_check: background watcher start failed after {} retries for {}",
+                delays.len(),
+                root_str
+            );
+        }
+    });
+}
 
 // ============================================================================
 // startup_check — auto-fix corruption and/or start watcher
@@ -114,77 +206,7 @@ pub(crate) async fn startup_check_impl(
             invalidate_storage_cache(&db_path).await;
 
             // Spawn background rebuild: run full index then start watcher (non-blocking)
-            let state_clone = state.clone();
-            let root_str = root.to_string();
-            let db_str = db.map(|s| s.to_string());
-            let tier_str = tier.to_string();
-
-            tokio::spawn(async move {
-                // First run full index
-                let db_path = db_str
-                    .clone()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| storage::storage_path(&PathBuf::from(&root_str)));
-                // Register as active to prevent status self-heal from clearing progress
-                let active_key = db_path.to_string_lossy().to_string();
-                active_indexes().lock().await.insert(active_key.clone());
-                struct StartupGuard(String);
-                impl Drop for StartupGuard {
-                    fn drop(&mut self) {
-                        let k = self.0.clone();
-                        tokio::spawn(async move {
-                            active_indexes().lock().await.remove(&k);
-                        });
-                    }
-                }
-                let _guard = StartupGuard(active_key);
-                tracing::info!(
-                    "startup_check: starting background rebuild for {}",
-                    root_str
-                );
-                if let Err(e) = cli::run_indexing_pub(
-                    &PathBuf::from(&root_str),
-                    &db_path,
-                    &tier_str,
-                    dims,
-                    "int8",
-                    true,                // force
-                    None,                // daily_cost_limit
-                    false,               // verbose
-                    &[],                 // exclude
-                    &[],                 // include
-                    embed_concurrency(), // concurrency
-                    None,                // scan_concurrency
-                    true,                // quiet
-                    false,               // json_lines
-                )
-                .await
-                {
-                    tracing::warn!("startup_check: background indexing failed: {}", e);
-                    return;
-                }
-                tracing::info!(
-                    "startup_check: background indexing completed for {}",
-                    root_str
-                );
-
-                // Then start watcher
-                let db_ref = db_str.as_deref();
-                if let Err(rebuild_err) = watcher_start_internal(
-                    &state_clone,
-                    &root_str,
-                    db_ref,
-                    Some(&tier_str),
-                    false,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        "startup_check: background watcher start failed: {}",
-                        rebuild_err
-                    );
-                }
-            });
+            spawn_background_rebuild(state, root, db, tier, dims, &db_path);
 
             return serde_json::json!({
                 "action": "rebuilding",
@@ -242,98 +264,9 @@ pub(crate) async fn startup_check_impl(
         // Invalidate storage cache
         invalidate_storage_cache(&db_path).await;
 
-        // Spawn background rebuild: run full index then start watcher (non-blocking)
-        // Clone values for the spawned task
-        let state_clone = state.clone();
-        let root_str = root.to_string();
-        let db_str = db.map(|s| s.to_string());
-        let tier_str = tier.to_string();
-        let db_path_clone = db_path.clone();
-
-        tokio::spawn(async move {
-            // First run full index
-            // Register as active to prevent status self-heal from clearing progress
-            let active_key = db_path_clone.to_string_lossy().to_string();
-            active_indexes().lock().await.insert(active_key.clone());
-            struct StartupGuard2(String);
-            impl Drop for StartupGuard2 {
-                fn drop(&mut self) {
-                    let k = self.0.clone();
-                    tokio::spawn(async move {
-                        active_indexes().lock().await.remove(&k);
-                    });
-                }
-            }
-            let _guard = StartupGuard2(active_key);
-            tracing::info!(
-                "startup_check: starting background rebuild for {}",
-                root_str
-            );
-            if let Err(e) = cli::run_indexing_pub(
-                &PathBuf::from(&root_str),
-                &db_path_clone,
-                &tier_str,
-                dims,
-                "int8",
-                true,                // force
-                None,                // daily_cost_limit
-                false,               // verbose
-                &[],                 // exclude
-                &[],                 // include
-                embed_concurrency(), // concurrency
-                None,                // scan_concurrency
-                true,                // quiet
-                false,               // json_lines
-            )
-            .await
-            {
-                tracing::warn!("startup_check: background indexing failed: {}", e);
-                return;
-            }
-            tracing::info!(
-                "startup_check: background indexing completed for {}",
-                root_str
-            );
-
-            // Then start watcher (with retry)
-            let db_ref = db_str.as_deref();
-            let delays = WATCHER_START_RETRY_DELAYS;
-            let mut started = false;
-            for (attempt, &delay) in delays.iter().enumerate() {
-                match watcher_start_internal(
-                    &state_clone,
-                    &root_str,
-                    db_ref,
-                    Some(&tier_str),
-                    false,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        started = true;
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "startup_check: background watcher start failed (attempt {}/{}): {}",
-                            attempt + 1,
-                            delays.len(),
-                            e
-                        );
-                        tokio::time::sleep(Duration::from_millis(delay)).await;
-                    }
-                }
-            }
-            if !started {
-                tracing::error!(
-                    "startup_check: background watcher start failed after {} retries for {}",
-                    delays.len(),
-                    root_str
-                );
-            }
-        });
-
-        return serde_json::json!({
+            // Spawn background rebuild: run full index then start watcher (non-blocking)
+            spawn_background_rebuild(state, root, db, tier, dims, &db_path);
+            return serde_json::json!({
             "action": "rebuilding",
             "message": format!("Cleared corrupted index and started rebuild in background. Errors were: {}", corruption_errors.join(", ")),
             "corrupted": true,

@@ -106,7 +106,7 @@ fn main() -> Result<()> {
     // Required to serve concurrent RPC requests (search, status, etc.) without
     // queuing delays that cause socket timeouts under parallel clients.
     // Worker count is capped to stay conservative: min(num_cpus/2, 4), floor 2.
-    let num_cpus = std::thread::available_parallelism()
+    let _num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
     let rt = tokio::runtime::Builder::new_multi_thread()

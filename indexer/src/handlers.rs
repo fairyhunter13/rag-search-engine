@@ -9,6 +9,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::daemon::{active_indexes, cached_storage, invalidate_storage_cache};
+
+/// Extract a string array from JSON params by key.
+fn extract_string_array(params: &serde_json::Value, key: &str) -> Vec<String> {
+    params
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
 use crate::links::*;
 use crate::search::*;
 use crate::tui::canonicalize_project_key;
@@ -49,14 +58,7 @@ pub(crate) async fn handle_request(method: &str, params: &serde_json::Value) -> 
             let db = params["db"].as_str();
             let tier = params["tier"].as_str().unwrap_or("budget");
             let dims: u32 = params["dimensions"].as_u64().unwrap_or(1024) as u32;
-            let files: Vec<String> = params["files"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let files = extract_string_array(params, "files");
 
             let mut results = Vec::with_capacity(files.len());
             for file in &files {
@@ -88,14 +90,7 @@ pub(crate) async fn handle_request(method: &str, params: &serde_json::Value) -> 
             let tier = params["tier"].as_str().unwrap_or("budget");
             let dims: u32 = params["dimensions"].as_u64().unwrap_or(1024) as u32;
             let auto = params["autoFederate"].as_bool().unwrap_or(true);
-            let explicit: Vec<String> = params["federatedDb"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let explicit = extract_string_array(params, "federatedDb");
 
             // Auto-discover linked DBs when none are explicitly provided.
             // If autoFederate is enabled, we also opportunistically index missing/empty linked DBs
@@ -196,14 +191,7 @@ pub(crate) async fn handle_request(method: &str, params: &serde_json::Value) -> 
             let dims: u32 = params["dimensions"].as_u64().unwrap_or(1024) as u32;
             let root = params["root"].as_str();
             let auto = params["autoFederate"].as_bool().unwrap_or(true);
-            let explicit_ids: Vec<String> = params["federatedProjectIds"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let explicit_ids = extract_string_array(params, "federatedProjectIds");
 
             // Auto-discover linked project IDs when none are explicitly provided
             let federated_ids = if !explicit_ids.is_empty() {
@@ -267,22 +255,8 @@ pub(crate) async fn handle_request(method: &str, params: &serde_json::Value) -> 
             let tier = params["tier"].as_str().unwrap_or("budget");
             let dims: u32 = params["dimensions"].as_u64().unwrap_or(1024) as u32;
             let force = params["force"].as_bool().unwrap_or(false);
-            let exclude: Vec<String> = params["exclude"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let include: Vec<String> = params["include"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let exclude = extract_string_array(params, "exclude");
+            let include = extract_string_array(params, "include");
 
             match run_index_impl(root, db, tier, dims, force, &exclude, &include).await {
                 Ok(v) => v,
@@ -292,23 +266,8 @@ pub(crate) async fn handle_request(method: &str, params: &serde_json::Value) -> 
 
         "discover_files" => {
             let root = params["root"].as_str().unwrap_or(".").to_string();
-            let exclude: Vec<String> = params["exclude"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let include: Vec<String> = params["include"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
+            let exclude = extract_string_array(params, "exclude");
+            let include = extract_string_array(params, "include");
             match tokio::task::spawn_blocking(move || {
                 discover_files_impl(&root, &exclude, &include)
             })

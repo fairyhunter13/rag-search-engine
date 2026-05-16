@@ -63,6 +63,15 @@ _GPU_NORMALIZE_MODE = os.environ.get("OPENCODE_GPU_NORMALIZE", "auto").lower()
 # GPU usage tracking for debugging (thread-safe)
 import threading
 
+_GPU_PROVIDERS: set[str] = {
+    "CUDAExecutionProvider",
+    "TensorrtExecutionProvider",
+    "ROCMExecutionProvider",
+    "MIGraphXExecutionProvider",
+    "DirectMLExecutionProvider",
+    "CoreMLExecutionProvider",
+}
+
 _ops_lock = threading.Lock()
 _gpu_ops_count = 0
 _cpu_ops_count = 0
@@ -569,16 +578,9 @@ def _build_provider_list_with_options(providers: list[str]) -> list:
     skipped options when OPENCODE_ONNX_PROVIDER=cuda returned a single-item
     list before GPU provider options were applied.
     """
-    _GPU_EP_NAMES = {
-        "TensorrtExecutionProvider",
-        "CUDAExecutionProvider",
-        "ROCMExecutionProvider",
-        "MIGraphXExecutionProvider",
-        "DirectMLExecutionProvider",
-    }
     result: list = []
     for p in providers:
-        if p in _GPU_EP_NAMES:
+        if p in _GPU_PROVIDERS:
             opts = _gpu_provider_options(p)
             log.debug("Provider options for %s: %s", p, opts[0])
             result.append((p, opts[0]))
@@ -783,9 +785,6 @@ def _limit_onnx_threads() -> None:
         # Auto-detect: check if any GPU provider is available
         try:
             import onnxruntime as _ort
-            _GPU_PROVIDERS = {"CUDAExecutionProvider", "TensorrtExecutionProvider",
-                              "MIGraphXExecutionProvider", "ROCMExecutionProvider",
-                              "DmlExecutionProvider", "OpenVINOExecutionProvider"}
             gpu_mode = any(p in _GPU_PROVIDERS for p in _ort.get_available_providers())
         except Exception:
             pass
@@ -881,15 +880,7 @@ def is_gpu_available() -> bool:
     providers = _get_onnx_providers()
     if providers is None:
         return False
-    gpu_set = {
-        "TensorrtExecutionProvider",
-        "CUDAExecutionProvider",
-        "ROCMExecutionProvider",
-        "MIGraphXExecutionProvider",
-        "DirectMLExecutionProvider",
-        "CoreMLExecutionProvider",
-    }
-    return any(p in gpu_set for p in providers)
+    return any(p in _GPU_PROVIDERS for p in providers)
 
 
 def get_active_provider() -> str:
@@ -999,21 +990,13 @@ def assert_gpu_available() -> None:
     providers = _get_onnx_providers()  # may raise GPUNotAvailableError internally
 
     # Double-check: the returned list must contain at least one GPU provider
-    gpu_provider_names = {
-        "TensorrtExecutionProvider",
-        "CUDAExecutionProvider",
-        "ROCMExecutionProvider",
-        "DirectMLExecutionProvider",
-        "MIGraphXExecutionProvider",
-        "CoreMLExecutionProvider",
-    }
-    if providers is None or not any(p in gpu_provider_names for p in providers):
+    if providers is None or not any(p in _GPU_PROVIDERS for p in providers):
         _raise_no_gpu(
             available=_onnx_available_providers(),
-            tested=list(gpu_provider_names),
+            tested=list(_GPU_PROVIDERS),
         )
 
-    active = next((p for p in (providers or []) if p in gpu_provider_names), "none")
+    active = next((p for p in (providers or []) if p in _GPU_PROVIDERS), "none")
     log.info("[GPU-REQUIRED] Startup GPU check PASSED u2014 active provider: %s", active)
 
 
@@ -1979,10 +1962,7 @@ except Exception:
 _LOW_END: bool = _cpus <= 4 or _ram_mb <= 8192
 _HIGH_END: bool = _cpus >= 16 and _ram_mb >= 32768
 
-# Max tokens for ONNX inference (truncates to prevent O(n^2) attention OOM)
-_MAX_TOKENS: int = 1024
-
-# Sub-batch size for chunked ONNX inference u2014 hardware adaptive
+# Sub-batch size for chunked ONNX inference — hardware adaptive
 _EMBED_SUB_BATCH: int
 if os.environ.get("OPENCODE_EMBED_SUB_BATCH"):
     _EMBED_SUB_BATCH = int(os.environ["OPENCODE_EMBED_SUB_BATCH"])
@@ -2039,14 +2019,7 @@ def _test_provider(provider: str) -> bool:
         so = ort.SessionOptions()
         so.log_severity_level = 3
 
-        gpu_set = {
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "ROCMExecutionProvider",
-            "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider",
-        }
-        provider_list = [(provider, {})] if provider in gpu_set else [provider]
+        provider_list = [(provider, {})] if provider in _GPU_PROVIDERS else [provider]
 
         session = ort.InferenceSession(model_path, so, providers=provider_list)
         active = session.get_providers()
@@ -2091,14 +2064,9 @@ def _verify_onnx_session_provider(model_obj, name: str) -> None:
             )
         active = session.get_providers()
         log.info("[%s] ONNX session active providers: %s", name, active)
-        gpu_set = {
-            "TensorrtExecutionProvider", "CUDAExecutionProvider",
-            "ROCMExecutionProvider", "MIGraphXExecutionProvider",
-            "DirectMLExecutionProvider", "CoreMLExecutionProvider",
-        }
-        using_gpu = any(p in gpu_set for p in active)
+        using_gpu = any(p in _GPU_PROVIDERS for p in active)
         if using_gpu:
-            gpu_name = next(p for p in active if p in gpu_set)
+            gpu_name = next(p for p in active if p in _GPU_PROVIDERS)
             log.info("[%s] GPU ACTIVE: Using %s for inference", name, gpu_name)
 
             # Bug fix: re-confirm IOBinding on the actual model session.

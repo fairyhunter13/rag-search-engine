@@ -118,12 +118,9 @@ if __name__ == "__main__":
 
         providers = _get_onnx_providers()
         if providers:
-            gpu_set = {
-                "TensorrtExecutionProvider", "CUDAExecutionProvider",
-                "ROCMExecutionProvider", "MIGraphXExecutionProvider",
-                "DirectMLExecutionProvider", "CoreMLExecutionProvider",
-            }
-            active_gpu = [p for p in providers if p in gpu_set]
+            from opencode_embedder.embeddings import _GPU_PROVIDERS
+
+            active_gpu = [p for p in providers if p in _GPU_PROVIDERS]
             print(f"Selected providers       : {providers}")
             print(f"Active GPU providers     : {active_gpu or ['(none u2014 CPU only)']}")  
             if active_gpu:
@@ -134,9 +131,7 @@ if __name__ == "__main__":
             print("Selected providers       : (none u2014 ONNX defaults)")
             print("Status                   : WARNING u2014 CPU only")
         raise SystemExit(0 if (providers and any(
-            p in {"TensorrtExecutionProvider","CUDAExecutionProvider",
-                  "ROCMExecutionProvider","MIGraphXExecutionProvider",
-                  "DirectMLExecutionProvider","CoreMLExecutionProvider"}
+            p in _GPU_PROVIDERS
             for p in providers
         )) else 1)
 

@@ -51,8 +51,6 @@ const COMPACTION_QUEUE_SIZE: usize = 32; // Max pending compaction requests
 pub(crate) const WATCHER_START_RETRY_DELAYS: [u64; 3] = [100, 200, 400]; // ms, exponential backoff
 const PROJECT_INACTIVE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 const MAX_FILE_RETRIES: u32 = 3; // Max retries for failed files in memory watchers
-const TUI_CLEANUP_SETTLE_MS: u64 = 100; // ms to wait after shutdown signal before draining
-const TUI_CLEANUP_DRAIN_TIMEOUT_SECS: u64 = 30; // seconds to wait for WriteQueue drain
 
 // ---------------------------------------------------------------------------
 // Path canonicalization cache (prevents blocking I/O in async context)
@@ -947,127 +945,8 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
     }
 
     // DISABLED: TUI cleanup task that removes watchers from state after TUI disconnect.
-    // This was causing the "Not watching" bug where the watcher status would incorrectly
-    // report watcherActive=false even though the background watcher continues running.
-    // See: https://github.com/fairyhunter13/opencode/issues/[BUG_NUMBER]
-    // Root cause: Every 5 minutes, this task removed watchers from state.watchers when
-    // no TUI connections remained. The watcher_status RPC would then fall back to
-    // returning hardcoded watcherActive=false, causing the UI to show "Not watching"
-    // while files were still being indexed in the background.
-    //
-    // Solution: Keep watchers in state for the lifetime of the daemon. The watcher
-    // cleanup still happens (shutdown_tx signal), but we don't remove the metadata entry,
-    // allowing watcher_status() to accurately report the true watching state.
-    //
-    // Watchers are now only removed when:
-    // 1. The daemon shuts down (entire state cleared)
-    // 2. A project is explicitly removed by the user
-    //
-    // Memory impact: Negligible. Watchers are lightweight and typically only created
-    // for actively-indexed projects. TUI connections already create watchers that persist.
-    /*
-    {
-        let state = state.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(tui_cleanup_interval());
-            loop {
-                ticker.tick().await;
-                let roots: Vec<String> = {
-                    let mut s = state.lock().await;
-
-                    // Collect stale projects for cleanup
-                    let stale_projects: Vec<String> = s
-                        .projects
-                        .iter()
-                        .filter(|(project_key, queue)| {
-                            // Project is stale if:
-                            // 1. Not in tui_projects (no TUI ever connected)
-                            // 2. Queue is empty and not processing
-                            !s.tui_projects.contains(*project_key)
-                                && queue.queue.is_empty()
-                                && !queue.processing
-                        })
-                        .map(|(k, _)| k.clone())
-                        .collect();
-
-                    // Remove stale projects
-                    for project_key in &stale_projects {
-                        if let Some(_) = s.projects.remove(project_key) {
-                            tracing::debug!("cleaned up stale project queue: {}", project_key);
-                        }
-                    }
-
-                    // Collect roots that need watcher stopped
-                    s.tui_projects
-                        .iter()
-                        .filter(|root| {
-                            s.tui_connections
-                                .get(*root)
-                                .map(|c| !c.is_empty())
-                                .unwrap_or(false)
-                                == false
-                        })
-                        .cloned()
-                        .collect()
-                };
-
-                // Stop internal watchers for roots with no TUI connections
-                let drain_timeout = Duration::from_secs(TUI_CLEANUP_DRAIN_TIMEOUT_SECS);
-                for root in roots {
-                    let key = canonicalize_project_key(&root).await;
-
-                    // Signal shutdown first
-                    {
-                        let s = state.lock().await;
-                        if let Some(watcher) = s.watchers.get(&key) {
-                            let _ = watcher.shutdown_tx.send(true);
-                        }
-                    }
-
-                    // Wait briefly for processing to settle
-                    tokio::time::sleep(Duration::from_millis(TUI_CLEANUP_SETTLE_MS)).await;
-
-                    // Drain WriteQueue before removing watcher
-                    {
-                        let mut s = state.lock().await;
-                        if let Some(watcher) = s.watchers.get_mut(&key) {
-                            match tokio::time::timeout(drain_timeout, watcher.drain_write_queue())
-                                .await
-                            {
-                                Ok(Some(stats)) => {
-                                    tracing::info!(
-                                        "Watcher {}: drained WriteQueue ({} batches, {} chunks written)",
-                                        root, stats.batches_written, stats.chunks_written
-                                    );
-                                }
-                                Ok(None) => {
-                                    tracing::warn!("Watcher {}: WriteQueue already drained or has other references", root);
-                                }
-                                Err(_) => {
-                                    tracing::warn!(
-                                        "Watcher {}: WriteQueue drain timed out after {:?}",
-                                        root,
-                                        drain_timeout
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Now remove the watcher and tui_projects entry
-                    let mut s = state.lock().await;
-                    if s.watchers.remove(&key).is_some() {
-                        tracing::info!(
-                            "stopped internal watcher for {} (no TUI connections)",
-                            root
-                        );
-                    }
-                    s.tui_projects.remove(&key);
-                }
-            }
-        });
-    }
-    */
+        // This was causing the "Not watching" bug. See git history for the removed block.
+        // Watchers are now kept for the lifetime of the daemon.
 
     // Filesystem-event-driven project directory cleanup task.
     // Watches projects/ for DELETION events only (orphan detection).
@@ -1407,7 +1286,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                         let ops = changed.len() as u64;
 
                         // === OFFLOADED TO BLOCKING THREAD ===
-                        let result_count = {
+                        let _result_count = {
                             let files: Vec<_> = changed.into_iter().collect();
                             let sema = Arc::new(tokio::sync::Semaphore::new(2));
                             let embed = Arc::new(tokio::sync::Semaphore::new(2));

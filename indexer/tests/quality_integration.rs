@@ -13,7 +13,6 @@
 
 mod python_server;
 
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -68,7 +67,7 @@ impl DaemonHandle {
         let mut reader = tokio::io::BufReader::new(stdout);
         let mut buf = String::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        let mut port = 0u16;
+        let mut port: u16;
 
         loop {
             if tokio::time::Instant::now() > deadline {
