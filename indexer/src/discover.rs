@@ -5,8 +5,8 @@
 //! language detection.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
@@ -67,13 +67,6 @@ impl<T: Clone> CacheEntry<T> {
     fn is_expired(&self) -> bool {
         self.created.elapsed() > CACHE_TTL
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct LinkMount {
-    pub repo: PathBuf,
-    pub mount: String,
-    pub name: String,
 }
 
 /// A symlinked directory that is NOT an external git repo.
@@ -341,7 +334,7 @@ fn git_root(dir: &Path) -> Option<PathBuf> {
 }
 
 thread_local! {
-    static GIT_ROOT_CACHE: RefCell<HashMap<PathBuf, CacheEntry<Option<PathBuf>>>> = RefCell::new(HashMap::new());
+    static GIT_ROOT_CACHE: RefCell<lru::LruCache<PathBuf, CacheEntry<Option<PathBuf>>>> = RefCell::new(lru::LruCache::new(NonZeroUsize::new(MAX_CACHE_SIZE).unwrap()));
 }
 
 fn cached_git_root(path: &Path) -> Option<PathBuf> {
@@ -354,23 +347,12 @@ fn cached_git_root(path: &Path) -> Option<PathBuf> {
                 return entry.value.clone();
             }
             // Entry expired, remove it
-            cache.remove(path);
+            cache.pop(path);
         }
 
-        // Evict old entries if cache is full
-        if cache.len() >= MAX_CACHE_SIZE {
-            let keys_to_remove: Vec<PathBuf> = cache
-                .iter()
-                .take(MAX_CACHE_SIZE / 2)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for key in keys_to_remove {
-                cache.remove(&key);
-            }
-        }
-
+        // LruCache handles eviction automatically when full
         let result = git_root(path);
-        cache.insert(path.to_path_buf(), CacheEntry::new(result.clone()));
+        cache.put(path.to_path_buf(), CacheEntry::new(result.clone()));
         result
     })
 }
@@ -383,82 +365,6 @@ fn is_external_git_repo(target: &Path, project_root: &Path) -> bool {
         return false;
     };
     project_git_root != target_git_root
-}
-
-/// Discover symlinked directories that point to external git repos.
-///
-/// Returns repo git root + the symlink mount path (relative to `root`).
-pub fn discover_link_mounts(root: &Path, cfg: &config::IndexConfig) -> Result<Vec<LinkMount>> {
-    let root = root.canonicalize()?;
-    let mut out = Vec::new();
-    let mut seen_targets: HashSet<PathBuf> = HashSet::new();
-
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-        .current_dir(&root)
-        .output();
-
-    let Ok(outp) = output else {
-        return Ok(out);
-    };
-    if !outp.status.success() {
-        return Ok(out);
-    }
-
-    let stdout = String::from_utf8_lossy(&outp.stdout);
-    for line in stdout.lines() {
-        let mount = line.trim();
-        if mount.is_empty() {
-            continue;
-        }
-
-        let path = root.join(mount);
-        let Ok(symlink_meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !symlink_meta.file_type().is_symlink() {
-            continue;
-        }
-        // Check if symlink target is a directory (follow the link)
-        let Ok(target_meta) = std::fs::metadata(&path) else {
-            continue;
-        };
-        if !target_meta.file_type().is_dir() {
-            continue;
-        }
-
-        if !should_index(&path, &root, cfg) {
-            continue;
-        }
-
-        let Ok(target) = path.canonicalize() else {
-            continue;
-        };
-        if seen_targets.contains(&target) {
-            continue;
-        }
-        if !is_external_git_repo(&target, &root) {
-            continue;
-        }
-        seen_targets.insert(target.clone());
-
-        let Some(repo) = cached_git_root(&target) else {
-            continue;
-        };
-        let name = PathBuf::from(mount)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("linked")
-            .to_string();
-
-        out.push(LinkMount {
-            repo,
-            mount: mount.replace('\\', "/"),
-            name,
-        });
-    }
-
-    Ok(out)
 }
 
 pub fn should_index(path: &Path, root: &Path, cfg: &config::IndexConfig) -> bool {
@@ -511,9 +417,9 @@ fn is_ignored_extension_path(path: &Path) -> bool {
     is_ignored_extension(&ext.to_lowercase())
 }
 
-fn discovery_cache() -> &'static RwLock<HashMap<PathBuf, CacheEntry<CachedDiscoveryResult>>> {
-    static CACHE: OnceLock<RwLock<HashMap<PathBuf, CacheEntry<CachedDiscoveryResult>>>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+fn discovery_cache() -> &'static RwLock<lru::LruCache<PathBuf, CacheEntry<CachedDiscoveryResult>>> {
+    static CACHE: OnceLock<RwLock<lru::LruCache<PathBuf, CacheEntry<CachedDiscoveryResult>>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(NonZeroUsize::new(MAX_CACHE_SIZE).unwrap())))
 }
 
 /// Invalidate the discovery cache for a specific project root.
@@ -522,7 +428,7 @@ fn discovery_cache() -> &'static RwLock<HashMap<PathBuf, CacheEntry<CachedDiscov
 pub fn invalidate_discovery_cache(root: &Path) {
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     if let Ok(mut write) = discovery_cache().try_write() {
-        if write.remove(&key).is_some() {
+        if write.pop(&key).is_some() {
             tracing::debug!("invalidated discovery cache for {}", root.display());
         }
     }
@@ -537,14 +443,14 @@ pub fn discover_files_with_config(
 
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-    // Check cache first (read lock)
-    if let Ok(read) = cache.read() {
-        if let Some(entry) = read.get(&key) {
-            if !entry.is_expired() {
-                return Ok(entry.value.result.clone());
+        // Check cache first (LruCache needs write lock for get)
+        if let Ok(mut write) = cache.write() {
+            if let Some(entry) = write.get(&key) {
+                if !entry.is_expired() {
+                    return Ok(entry.value.result.clone());
+                }
             }
         }
-    }
 
     // Compute fresh result
     let root = root.canonicalize()?;
@@ -739,27 +645,12 @@ pub fn discover_files_with_config(
         symlink_dirs,
     };
 
-    // Store in cache with eviction if needed
-    if let Ok(mut write) = cache.write() {
-        // Evict old entries if cache is full
-        if write.len() >= MAX_CACHE_SIZE {
-            let keys_to_remove: Vec<PathBuf> = write
-                .iter()
-                .take(MAX_CACHE_SIZE / 2)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for k in keys_to_remove {
-                write.remove(&k);
-            }
-        }
-
-        write.insert(
-            key,
-            CacheEntry::new(CachedDiscoveryResult {
+        // Store in cache (LruCache handles eviction automatically)
+        if let Ok(mut write) = cache.write() {
+            write.put(key, CacheEntry::new(CachedDiscoveryResult {
                 result: result.clone(),
-            }),
-        );
-    }
+            }));
+        }
 
     Ok(result)
 }
@@ -887,9 +778,9 @@ pub fn relative_path_with_symlinks(
 
 
 /// Global cache for submodule discovery results keyed by project root.
-fn submodule_cache() -> &'static RwLock<HashMap<PathBuf, CacheEntry<Vec<(PathBuf, String)>>>> {
-    static CACHE: OnceLock<RwLock<HashMap<PathBuf, CacheEntry<Vec<(PathBuf, String)>>>>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+fn submodule_cache() -> &'static RwLock<lru::LruCache<PathBuf, CacheEntry<Vec<(PathBuf, String)>>>> {
+    static CACHE: OnceLock<RwLock<lru::LruCache<PathBuf, CacheEntry<Vec<(PathBuf, String)>>>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(NonZeroUsize::new(MAX_CACHE_SIZE).unwrap())))
 }
 
 /// Discover git submodules in the given project root.
@@ -899,32 +790,20 @@ fn submodule_cache() -> &'static RwLock<HashMap<PathBuf, CacheEntry<Vec<(PathBuf
 pub fn discover_submodules(root: &Path) -> Vec<(PathBuf, String)> {
     let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-    // Check cache (read lock)
-    if let Ok(read) = submodule_cache().read() {
-        if let Some(entry) = read.get(&key) {
-            if !entry.is_expired() {
-                return entry.value.clone();
+        // Check cache (LruCache needs write lock for get)
+        if let Ok(mut write) = submodule_cache().write() {
+            if let Some(entry) = write.get(&key) {
+                if !entry.is_expired() {
+                    return entry.value.clone();
+                }
             }
         }
-    }
 
     let result = run_discover_submodules(root);
 
-    if let Ok(mut write) = submodule_cache().write() {
-        // Evict old entries if cache is full
-        if write.len() >= MAX_CACHE_SIZE {
-            let keys_to_remove: Vec<PathBuf> = write
-                .iter()
-                .take(MAX_CACHE_SIZE / 2)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for k in keys_to_remove {
-                write.remove(&k);
-            }
+        if let Ok(mut write) = submodule_cache().write() {
+            write.put(key, CacheEntry::new(result.clone()));
         }
-
-        write.insert(key, CacheEntry::new(result.clone()));
-    }
 
     result
 }

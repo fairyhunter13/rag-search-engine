@@ -25,7 +25,6 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 const EMBED_TIMEOUT: Duration = Duration::from_secs(60);
-const CHUNK_AND_EMBED_TIMEOUT: Duration = Duration::from_secs(90);
 const RERANK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default HTTP port for the Python embedder's HTTP API.
@@ -696,15 +695,6 @@ struct HttpChunkResp {
 }
 
 #[derive(Deserialize)]
-struct HttpChunkAndEmbedResp {
-    chunks: Vec<HttpChunk>,
-    vectors_f32: String,
-    dimensions: usize,
-    count: usize,
-    endianness: String,
-}
-
-#[derive(Deserialize)]
 struct HttpRerankItem {
     index: usize,
     score: f32,
@@ -842,124 +832,6 @@ async fn http_chunk_file(file: &str, path: &str, tier: &str) -> Result<Vec<Chunk
     with_embedder_recovery(|| http_chunk_file_inner(file, path, tier)).await
 }
 
-async fn http_chunk_and_embed_inner(
-    content: &str,
-    path: &str,
-    tier: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<ChunkWithVector>> {
-    let wrapper: HttpResultWrapper<HttpChunkAndEmbedResp> = http_client()
-        .post(format!("{}/embed/chunk_and_embed", http_base_url()))
-        .json(&json!({
-            "content": content,
-            "path": path,
-            "tier": tier,
-            "model": model,
-            "dimensions": dimensions,
-        }))
-        .timeout(CHUNK_AND_EMBED_TIMEOUT)
-        .send()
-        .await
-        .context("HTTP embed/chunk_and_embed request failed")?
-        .error_for_status()
-        .context("HTTP embed/chunk_and_embed returned error status")?
-        .json()
-        .await
-        .context("HTTP embed/chunk_and_embed response parse failed")?;
-
-    let resp = wrapper.result;
-    if resp.endianness != "le" {
-        bail!("unsupported endianness: {}", resp.endianness);
-    }
-    let bytes = b64_decode(&resp.vectors_f32)?;
-    validate_embed_passages_response(
-        bytes.len(),
-        resp.dimensions,
-        resp.count,
-        dimensions,
-        "http_chunk_and_embed",
-    )?;
-    let vectors = decode_f32le_mat(&bytes, resp.dimensions, resp.count)?;
-    Ok(resp.chunks.into_iter().zip(vectors).map(|(c, vector)| ChunkWithVector {
-        content: c.content,
-        start_line: c.start_line,
-        end_line: c.end_line,
-        chunk_type: c.chunk_type,
-        language: c.language,
-        vector,
-    }).collect())
-}
-
-async fn http_chunk_and_embed(
-    content: &str,
-    path: &str,
-    tier: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<ChunkWithVector>> {
-    with_embedder_recovery(|| http_chunk_and_embed_inner(content, path, tier, model, dimensions)).await
-}
-
-async fn http_chunk_and_embed_file_inner(
-    file: &str,
-    path: &str,
-    tier: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<ChunkWithVector>> {
-    let wrapper: HttpResultWrapper<HttpChunkAndEmbedResp> = http_client()
-        .post(format!("{}/embed/chunk_and_embed", http_base_url()))
-        .json(&json!({
-            "path": file,
-            "display_path": path,
-            "tier": tier,
-            "model": model,
-            "dimensions": dimensions,
-        }))
-        .timeout(CHUNK_AND_EMBED_TIMEOUT)
-        .send()
-        .await
-        .context("HTTP embed/chunk_and_embed (file) request failed")?
-        .error_for_status()
-        .context("HTTP embed/chunk_and_embed (file) returned error status")?
-        .json()
-        .await
-        .context("HTTP embed/chunk_and_embed (file) response parse failed")?;
-
-    let resp = wrapper.result;
-    if resp.endianness != "le" {
-        bail!("unsupported endianness: {}", resp.endianness);
-    }
-    let bytes = b64_decode(&resp.vectors_f32)?;
-    validate_embed_passages_response(
-        bytes.len(),
-        resp.dimensions,
-        resp.count,
-        dimensions,
-        "http_chunk_and_embed_file",
-    )?;
-    let vectors = decode_f32le_mat(&bytes, resp.dimensions, resp.count)?;
-    Ok(resp.chunks.into_iter().zip(vectors).map(|(c, vector)| ChunkWithVector {
-        content: c.content,
-        start_line: c.start_line,
-        end_line: c.end_line,
-        chunk_type: c.chunk_type,
-        language: c.language,
-        vector,
-    }).collect())
-}
-
-async fn http_chunk_and_embed_file(
-    file: &str,
-    path: &str,
-    tier: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<ChunkWithVector>> {
-    with_embedder_recovery(|| http_chunk_and_embed_file_inner(file, path, tier, model, dimensions)).await
-}
-
 async fn http_rerank_inner(query: &str, docs: &[&str], model: &str, top_k: u32) -> Result<Vec<(usize, f32)>> {
     let wrapper: HttpResultWrapper<HttpRerankResp> = http_client()
         .post(format!("{}/embed/rerank", http_base_url()))
@@ -993,17 +865,6 @@ pub struct ChunkMeta {
     pub end_line: i32,
     pub chunk_type: String,
     pub language: String,
-}
-
-/// Chunk metadata with embedding vector (returned by chunk_and_embed).
-#[derive(Debug)]
-pub struct ChunkWithVector {
-    pub content: String,
-    pub start_line: i32,
-    pub end_line: i32,
-    pub chunk_type: String,
-    pub language: String,
-    pub vector: Vec<f32>,
 }
 
 // ============================================================================
@@ -1050,30 +911,6 @@ impl EmbedderClient {
         http_chunk_file(file, path, tier).await
     }
 
-    /// Chunk and embed in a single round-trip.
-    pub async fn chunk_and_embed(
-        &mut self,
-        content: &str,
-        path: &str,
-        tier: &str,
-        model: &str,
-        dimensions: u32,
-    ) -> Result<Vec<ChunkWithVector>> {
-        http_chunk_and_embed(content, path, tier, model, dimensions).await
-    }
-
-    /// Chunk and embed a file on disk in a single round-trip.
-    pub async fn chunk_and_embed_file(
-        &mut self,
-        file: &str,
-        path: &str,
-        tier: &str,
-        model: &str,
-        dimensions: u32,
-    ) -> Result<Vec<ChunkWithVector>> {
-        http_chunk_and_embed_file(file, path, tier, model, dimensions).await
-    }
-
     /// Embed multiple passages.
     pub async fn embed_passages(&mut self, texts: &[String], model: &str, dimensions: u32) -> Result<Vec<Vec<f32>>> {
         http_embed_passages(texts, model, dimensions).await
@@ -1095,62 +932,4 @@ pub async fn client() -> Result<EmbedderClient> {
     Ok(EmbedderClient)
 }
 
-// ============================================================================
-// Top-level convenience functions
-// ============================================================================
-
-/// Chunk and embed content.
-pub async fn chunk_and_embed(
-    content: &str,
-    path: &str,
-    tier: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<ChunkWithVector>> {
-    http_chunk_and_embed(content, path, tier, model, dimensions).await
-}
-
-/// Chunk and embed a file on disk.
-pub async fn chunk_and_embed_file(
-    file: &str,
-    path: &str,
-    tier: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<ChunkWithVector>> {
-    http_chunk_and_embed_file(file, path, tier, model, dimensions).await
-}
-
-/// Embed multiple passages.
-pub async fn embed_passages(
-    texts: &[String],
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<Vec<f32>>> {
-    http_embed_passages(texts, model, dimensions).await
-}
-
-/// Embed a search query.
-pub async fn embed_query(
-    text: &str,
-    model: &str,
-    dimensions: u32,
-) -> Result<Vec<f32>> {
-    http_embed_query(text, model, dimensions).await
-}
-
-/// Chunk content without embedding.
-pub async fn chunk(content: &str, path: &str, tier: &str) -> Result<Vec<ChunkMeta>> {
-    http_chunk(content, path, tier).await
-}
-
-/// Chunk a file on disk without embedding.
-pub async fn chunk_file(file: &str, path: &str, tier: &str) -> Result<Vec<ChunkMeta>> {
-    http_chunk_file(file, path, tier).await
-}
-
-/// Rerank documents against a query.
-pub async fn rerank(query: &str, docs: &[&str], model: &str, top_k: u32) -> Result<Vec<(usize, f32)>> {
-    http_rerank(query, docs, model, top_k).await
-}
 

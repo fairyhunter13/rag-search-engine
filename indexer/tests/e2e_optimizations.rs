@@ -614,6 +614,16 @@ async fn compaction_succeeds_on_indexed_data() -> Result<()> {
         "force": false, "exclude": [], "include": []
     })).await?;
 
+    // Actually trigger compaction and verify it was queued
+    let compact = rpc(daemon.port(), "compact", json!({
+        "db": db.to_str().unwrap(),
+        "dimensions": 256,
+    })).await?;
+    assert!(
+        compact["result"]["queued"].as_bool().unwrap_or(false),
+        "compaction should be queued: {compact:#}"
+    );
+
     // Verify status is healthy after indexing
     let s = rpc_retry(daemon.port(), "status", json!({
         "root": root_s, "db": db.to_str().unwrap(), "dimensions": 256

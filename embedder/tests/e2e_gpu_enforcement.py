@@ -88,15 +88,6 @@ def _unpack_f32_le(data: bytes | str) -> list[float]:
 # ---------------------------------------------------------------------------
 
 
-def test_health_gpu_stats_structure():
-    """Health endpoint must return gpu dict with required keys (replaces test_get_gpu_stats_returns_dict)."""
-    health = _get_health_or_skip()
-    gpu = health.get("gpu", {})
-    assert "provider" in gpu, f"Missing 'provider' in gpu stats: {gpu}"
-    assert "is_gpu" in gpu, f"Missing 'is_gpu' in gpu stats: {gpu}"
-    assert "gpu_ops" in gpu, f"Missing 'gpu_ops' in gpu stats: {gpu}"
-    assert "cpu_ops" in gpu, f"Missing 'cpu_ops' in gpu stats: {gpu}"
-
 
 def test_health_gpu_stats_types():
     """GPU stats must have correct types (replaces test_get_gpu_stats_types)."""
@@ -226,17 +217,6 @@ def test_gpu_provider_active():
 # MIGraphX / ROCm provider (replaces test_migraphx_provider.py)
 # ---------------------------------------------------------------------------
 
-
-def test_health_provider_reported():
-    """Health endpoint must include provider field (replaces test_migraphx_in_valid_providers)."""
-    health = _get_health_or_skip()
-    gpu = health.get("gpu", {})
-    provider = gpu.get("provider", "")
-    # If this system uses MIGraphX, is_gpu must be True
-    if provider == "migraphx":
-        assert gpu.get("is_gpu") is True, (
-            f"MIGraphX provider active but is_gpu=False: {gpu}"
-        )
 
 
 def test_migraphx_embed_passages_returns_correct_dimensions():

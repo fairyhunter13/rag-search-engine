@@ -179,39 +179,42 @@ fn test_clear_corrupted_index_removes_directory() {
 
 #[test]
 fn test_clear_corrupted_index_creates_backup() {
-    use opencode_indexer::storage::clear_corrupted_index;
+    use opencode_indexer::storage::{clear_corrupted_index, shared_data_dir};
 
     // Create a temp directory to simulate corrupted index
     let tmp = tempfile::TempDir::new().unwrap();
     let db_path = tmp.path().join("backup-test.lancedb");
     std::fs::create_dir_all(&db_path).unwrap();
-    std::fs::write(db_path.join("data.txt"), "important data").unwrap();
+std::fs::write(db_path.join("data.txt"), "important data").unwrap();
 
-    let result = clear_corrupted_index(&db_path);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), true);
+// Count existing backups before the operation
+let backup_dir = shared_data_dir().join("backups");
+std::fs::create_dir_all(&backup_dir).ok();
+let before_count = match std::fs::read_dir(&backup_dir) {
+    Ok(entries) => entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("corrupted-"))
+        .count(),
+    Err(_) => 0,
+};
 
-    // Check that backup was created (in ~/.local/share/opencode/backups/)
-    let backup_dir = dirs::home_dir()
-        .unwrap()
-        .join(".local/share/opencode/backups");
+let result = clear_corrupted_index(&db_path);
+assert!(result.is_ok());
+assert_eq!(result.unwrap(), true);
 
-    if backup_dir.exists() {
-        let backups: Vec<_> = std::fs::read_dir(&backup_dir)
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().starts_with("corrupted-"))
-            .collect();
+// Count backups after — must have at least one more
+let after_count = match std::fs::read_dir(&backup_dir) {
+    Ok(entries) => entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("corrupted-"))
+        .count(),
+    Err(_) => 0,
+};
 
-        // There should be at least one corrupted backup
-        // Note: we can't guarantee it's from THIS test due to parallel execution
-        // but we verify the backup mechanism works
-        println!(
-            "Found {} corrupted backups in {:?}",
-            backups.len(),
-            backup_dir
-        );
-    }
+assert!(
+    after_count > before_count,
+    "clear_corrupted_index should create a new backup: before={before_count} after={after_count}",
+);
 }
 
 // ---------------------------------------------------------------------------
