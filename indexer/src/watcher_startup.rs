@@ -65,7 +65,6 @@ fn spawn_background_rebuild(
             &db_path,
             &tier_str,
             dims,
-            "int8",
             true,  // force
             None,  // daily_cost_limit
             false, // verbose

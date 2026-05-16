@@ -507,7 +507,6 @@ async fn index_file_impl(
         &file_path,
         tier,
         dims,
-        "int8", // quantization
         None,   // daily_cost_limit
         &embed,
         false, // force
@@ -628,7 +627,6 @@ pub(crate) async fn run_index_impl(
         &storage_path,
         tier,
         dims,
-        "int8",
         force,
         None,  // daily_cost_limit
         false, // verbose
@@ -666,13 +664,12 @@ pub(crate) async fn run_index_impl(
                     return Err(e);
                 }
                 // Retry once with a clean slate
-                crate::cli::run_indexing_pub(
-                    &root,
-                    &storage_path,
-                    tier,
-                    dims,
-                    "int8",
-                    force,
+        crate::cli::run_indexing_pub(
+            &root,
+            &storage_path,
+            tier,
+            dims,
+            force,
                     None,
                     false,
                     exclude,

@@ -609,7 +609,6 @@ pub(crate) async fn run_index_background(root: &str, tier: &str, dims: u32) -> a
             &file_path,
             tier,
             dims,
-            "int8",
             None,
             &embed,
             false,

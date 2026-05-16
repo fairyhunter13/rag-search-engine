@@ -1627,6 +1627,7 @@ def embed_passages_f32_bytes(
 
     # Standard path (fallback)
     all_items: list = []
+    t_embed_total = 0.0
     for start in range(0, len(texts), _EMBED_SUB_BATCH):
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]

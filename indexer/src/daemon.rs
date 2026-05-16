@@ -1316,22 +1316,21 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                                                 // Index the file
                                                 let mut client = crate::model_client::client().await.ok()?;
 
-                                                match crate::cli::update_file_partial_pub(
-                                                    &*root,
-                                                    &*include_dirs,
-                                                    &*symlink_dirs,
-                                                    &*db_path,
-                                                    &storage,
-                                                    &mut client,
-                                                    &rel,
-                                                    &tier,
-                                                    dims,
-                                                    "int8",
-                                                    None,
-                                                    &*embed,
-                                                    false,
-                                                    false,
-                                                    &*write_queue,
+                                                    match crate::cli::update_file_partial_pub(
+                                                        &*root,
+                                                        &*include_dirs,
+                                                        &*symlink_dirs,
+                                                        &*db_path,
+                                                        &storage,
+                                                        &mut client,
+                                                        &rel,
+                                                        &tier,
+                                                        dims,
+                                                        None,
+                                                        &*embed,
+                                                        false,
+                                                        false,
+                                                        &*write_queue,
                                                 )
                                                 .await
                                                 {
@@ -1601,7 +1600,6 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                             &file_path,
                             tier,
                             dims,
-                            "int8", // quantization
                             None,   // daily_cost_limit
                             &embed,
                             false, // force
@@ -1803,7 +1801,6 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
                             &file_path,
                             tier,
                             dims,
-                            "int8",
                             None,
                             &embed,
                             false,

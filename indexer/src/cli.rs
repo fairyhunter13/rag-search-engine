@@ -214,7 +214,6 @@ pub async fn update_file_partial_pub(
     file: &Path,
     tier: &str,
     dimensions: u32,
-    quantization: &str,
     daily_cost_limit: Option<f64>,
     embed: &Semaphore,
     force: bool,
@@ -231,7 +230,6 @@ pub async fn update_file_partial_pub(
         file,
         tier,
         dimensions,
-        quantization,
         daily_cost_limit,
         embed,
         force,
@@ -242,11 +240,6 @@ pub async fn update_file_partial_pub(
 }
 
 pub async fn run(args: Args) -> Result<()> {
-    // Daemon mode: start HTTP server.
-    if args.daemon {
-        return crate::daemon::run(args.idle_shutdown, args.parent_pid, args.port).await;
-    }
-
     let root = args.root.canonicalize().context("invalid root path")?;
 
     let storage_path = match &args.db {
@@ -304,10 +297,6 @@ pub async fn run(args: Args) -> Result<()> {
         return show_files(&storage_path, args.dimensions, args.json).await;
     }
 
-    if args.usage {
-        return show_usage(&storage_path, args.dimensions).await;
-    }
-
     if args.discover_links {
         return discover_links(&root, args.json_lines).await;
     }
@@ -339,7 +328,6 @@ pub async fn run(args: Args) -> Result<()> {
             file,
             &args.tier,
             args.dimensions,
-            &args.quantization,
             args.force,
             args.daily_cost_limit,
             &args.include,
@@ -370,7 +358,6 @@ pub async fn run(args: Args) -> Result<()> {
         &storage_path,
         &args.tier,
         args.dimensions,
-        &args.quantization,
         args.force,
         args.daily_cost_limit,
         args.verbose,
@@ -432,9 +419,6 @@ fn show_tiers() {
     println!("  --dimensions 512");
     println!("  --dimensions 1024");
     println!("  --dimensions 2048");
-    println!("\nQuantization options:");
-    println!("  --quantization float");
-    println!("  --quantization int8");
 }
 
 fn show_backups() {
@@ -716,7 +700,6 @@ pub async fn run_indexing_pub(
     storage_path: &Path,
     tier: &str,
     dimensions: u32,
-    quantization: &str,
     force: bool,
     daily_cost_limit: Option<f64>,
     verbose: bool,
@@ -732,7 +715,6 @@ pub async fn run_indexing_pub(
         storage_path,
         tier,
         dimensions,
-        quantization,
         force,
         daily_cost_limit,
         verbose,
@@ -779,7 +761,6 @@ async fn update_file_partial(
     file: &Path,
     tier: &str,
     dimensions: u32,
-    quantization: &str,
     daily_cost_limit: Option<f64>,
     embed: &Semaphore,
     force: bool,
@@ -826,7 +807,6 @@ async fn update_file_partial(
     let (embed_model, rerank_model) = models_for_tier(tier);
     storage.set_tier(tier).await?;
     storage.set_dimensions(dimensions).await?;
-    storage.set_quantization(quantization).await?;
     storage
         .set_config("embedder_backend", "fastembed/v1")
         .await?;
@@ -1038,14 +1018,13 @@ async fn run_indexing(
     storage_path: &Path,
     tier: &str,
     dimensions: u32,
-    quantization: &str,
     force: bool,
     daily_cost_limit: Option<f64>,
     verbose: bool,
     exclude: &[String],
     include: &[PathBuf],
-    _concurrency: usize,
-    _scan_concurrency: Option<usize>,
+    concurrency: usize,
+    scan_concurrency: Option<usize>,
     quiet: bool,
     json_lines: bool,
 ) -> Result<IndexStats> {
@@ -1082,11 +1061,9 @@ async fn run_indexing(
     // Config changes require a full rebuild (backup + clear)
     let current_tier = storage.get_tier().await?;
     let current_dims = storage.get_dimensions().await?;
-    let current_quant = storage.get_quantization().await?;
     let tier_changed = current_tier.as_deref().is_some_and(|t| t != tier);
     let dims_changed = current_dims.is_some_and(|d| d != dimensions);
-    let quant_changed = current_quant.as_deref().is_some_and(|q| q != quantization);
-    if force || tier_changed || dims_changed || quant_changed {
+    if force || tier_changed || dims_changed {
         let backup = storage.backup().await?;
         if !quiet {
             println!("Backup created: {}", backup.display());
@@ -1098,7 +1075,6 @@ async fn run_indexing(
     let (embed_model, rerank_model) = models_for_tier(tier);
     storage.set_tier(tier).await?;
     storage.set_dimensions(dimensions).await?;
-    storage.set_quantization(quantization).await?;
     storage
         .set_config("embedder_backend", "fastembed/v1")
         .await?;
@@ -1192,7 +1168,7 @@ async fn run_indexing(
         .set_phase_progress("scanning", 0, total as i64)
         .await?;
 
-    let workers = _scan_concurrency.unwrap_or_else(|| {
+    let workers = scan_concurrency.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| (n.get() / 2).clamp(2, 8))
             .unwrap_or(4)
@@ -1290,7 +1266,7 @@ async fn run_indexing(
     // - Local: lower concurrency (CPU-bound)
     // - TCP: higher concurrency to overcome network latency
     let max_concurrency = crate::model_client::recommended_concurrency();
-    let embed_concurrency = _concurrency.max(1).min(max_concurrency);
+    let embed_concurrency = concurrency.max(1).min(max_concurrency);
     let sem = Arc::new(Semaphore::new(embed_concurrency));
     let storage = Arc::new(storage);
 
@@ -2100,7 +2076,6 @@ async fn index_single_file(
     file: &Path,
     tier: &str,
     dimensions: u32,
-    quantization: &str,
     force: bool,
     daily_cost_limit: Option<f64>,
     include: &[PathBuf],
@@ -2127,7 +2102,6 @@ async fn index_single_file(
     let (embed_model, rerank_model) = models_for_tier(tier);
     storage.set_tier(tier).await?;
     storage.set_dimensions(dimensions).await?;
-    storage.set_quantization(quantization).await?;
     storage
         .set_config("embedder_backend", "fastembed/v1")
         .await?;
@@ -2181,7 +2155,6 @@ async fn index_single_file(
         &path,
         tier,
         dimensions,
-        quantization,
         daily_cost_limit,
         &embed,
         force,
@@ -2308,22 +2281,6 @@ async fn show_files(storage_path: &Path, dimensions: u32, json: bool) -> Result<
         }
         println!("{} files indexed", sorted.len());
     }
-
-    Ok(())
-}
-
-async fn show_usage(storage_path: &Path, dimensions: u32) -> Result<()> {
-    if !tokio::fs::try_exists(storage_path).await.unwrap_or(false) {
-        println!("No index found at {}", storage_path.display());
-        return Ok(());
-    }
-
-    let storage = Storage::open(storage_path, dimensions).await?;
-    let daily = storage.get_daily_usage().await?;
-    let total = storage.get_total_usage().await?;
-
-    println!("Today:  {} tokens  ${:.4}", daily.tokens, daily.cost);
-    println!("Total:  {} tokens  ${:.4}", total.tokens, total.cost);
 
     Ok(())
 }
