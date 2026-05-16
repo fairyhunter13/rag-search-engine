@@ -1006,6 +1006,7 @@ impl Storage {
     // =========================================================================
 
     pub async fn record_usage(&self, tokens: i64, tier: &str) -> Result<()> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_usage().await?;
         let date = today();
         let cost = estimate_cost(tokens, tier);
@@ -1148,6 +1149,7 @@ impl Storage {
     /// # Performance
     /// For large repositories, consider using a limit to avoid loading all file hashes into memory.
     pub async fn get_file_hashes(&self, limit: Option<usize>) -> Result<std::collections::HashMap<String, String>> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let mut map = std::collections::HashMap::new();
 
@@ -1252,6 +1254,7 @@ impl Storage {
 
     /// Delete all chunks for a file path.
     pub async fn delete_file(&self, path: &str) -> Result<usize> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
 
         // Count first
@@ -1282,6 +1285,7 @@ impl Storage {
 
     /// Get stored file hash for a path (first matching chunk).
     pub async fn get_file_hash(&self, path: &str) -> Result<Option<String>> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let results = table
             .query()
@@ -1326,6 +1330,7 @@ impl Storage {
 
     /// Get chunks for a file with their IDs, content hashes, and positions.
     pub async fn get_chunks_with_hashes(&self, path: &str) -> Result<Vec<(i64, String, i32)>> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let results = table
             .query()
@@ -1364,6 +1369,7 @@ impl Storage {
     }
 
     pub async fn delete_chunk_by_id(&self, chunk_id: i64) -> Result<()> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let _ = table.delete(&format!("chunk_id = {chunk_id}")).await;
         Ok(())
@@ -1377,6 +1383,7 @@ impl Storage {
         start_line: i32,
         end_line: i32,
     ) -> Result<()> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
 
         let results = table
@@ -1505,6 +1512,7 @@ impl Storage {
             return Ok(());
         }
 
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let now = Utc::now().timestamp_micros();
 
@@ -1590,6 +1598,7 @@ impl Storage {
             return Ok(0);
         }
 
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let now = Utc::now().timestamp_micros();
         let base_id = self.next_id(&table).await?;
@@ -1674,6 +1683,7 @@ impl Storage {
         if paths.is_empty() {
             return Ok(0);
         }
+        let _guard = self.read_guard().await;
         let t_start = std::time::Instant::now();
         let table = self.ensure_chunks().await?;
         let escaped: Vec<String> = paths.iter().map(|p| format!("'{}'", escape_sql(p))).collect();
@@ -1703,6 +1713,7 @@ impl Storage {
 
     /// Find an existing embedding vector by content hash (for dedup).
     pub async fn find_by_content_hash(&self, content_hash: &str) -> Result<Option<Vec<f32>>> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         let results = table
             .query()
@@ -1799,11 +1810,12 @@ impl Storage {
     /// 
     /// Returns a corruption error if the LanceDB index is corrupted, allowing
     /// the caller to handle recovery (e.g., rebuild the index).
-    pub async fn search_vector(
+pub async fn search_vector(
         &self,
         query_vec: &[f32],
         limit: usize,
-) -> Result<Vec<SearchResult>> {
+    ) -> Result<Vec<SearchResult>> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
 
         // Apply IVF-PQ tuning parameters for better recall
@@ -1922,6 +1934,7 @@ impl Storage {
             return self.search_vector(query_vec, final_limit).await;
         }
 
+        let _guard = self.read_guard().await;
         // Step 1: Approximate search - fetch more candidates
         let table = self.ensure_chunks().await?;
         
@@ -2091,6 +2104,7 @@ impl Storage {
 
     /// Count total chunks.
     pub async fn count_chunks(&self) -> Result<usize> {
+        let _guard = self.read_guard().await;
         let table = self.ensure_chunks().await?;
         Ok(table.count_rows(None).await?)
     }
