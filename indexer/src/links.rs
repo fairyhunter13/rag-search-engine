@@ -3,10 +3,10 @@
 //! This module caches discovered linked projects on disk and in memory,
 //! invalidating when symlinks or repo structure changes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -174,7 +174,7 @@ pub async fn invalidate_links_cache(root: &Path) {
 
     // Also clear in-memory cache
     if let Ok(mut cache) = link_cache().try_write() {
-        cache.remove(root);
+        cache.pop(root);
     }
 }
 
@@ -200,16 +200,15 @@ pub(crate) fn should_invalidate_links_cache(path: &Path) -> bool {
     false
 }
 
-/// Cached links with LRU tracking
+/// Cached links (LRU evicted by LruCache)
 struct CachedLinks {
     links: Vec<Link>,
-    last_access: Instant,
 }
 
-fn link_cache() -> &'static tokio::sync::RwLock<HashMap<PathBuf, CachedLinks>> {
-    static CACHE: std::sync::OnceLock<tokio::sync::RwLock<HashMap<PathBuf, CachedLinks>>> =
+fn link_cache() -> &'static tokio::sync::RwLock<lru::LruCache<PathBuf, CachedLinks>> {
+    static CACHE: std::sync::OnceLock<tokio::sync::RwLock<lru::LruCache<PathBuf, CachedLinks>>> =
         std::sync::OnceLock::new();
-    CACHE.get_or_init(|| tokio::sync::RwLock::new(HashMap::new()))
+    CACHE.get_or_init(|| tokio::sync::RwLock::new(lru::LruCache::new(NonZeroUsize::new(MAX_LINK_CACHE_SIZE).unwrap())))
 }
 
 /// Returns linked repos using file-based cache.
@@ -221,26 +220,14 @@ pub(crate) fn cached_discover_links(root: &str) -> Vec<Link> {
         Err(_) => return vec![],
     };
 
-    // Fast path: check in-memory cache and update access time
-    match link_cache().try_read() {
-        Ok(r) => {
-            if let Some(cached) = r.get(&root_path) {
-                let links = cached.links.clone();
-                drop(r);
-
-                // Update last_access with write lock
-                if let Ok(mut w) = link_cache().try_write() {
-                    if let Some(entry) = w.get_mut(&root_path) {
-                        entry.last_access = Instant::now();
-                    }
-                }
-                return links;
+        // Fast path: check in-memory cache (LruCache needs write lock for get)
+        if let Ok(mut w) = link_cache().try_write() {
+            if let Some(cached) = w.get(&root_path) {
+                return cached.links.clone();
             }
+        } else {
+            tracing::debug!("link cache contended, will try file");
         }
-        Err(_) => {
-            tracing::debug!("link cache contended on read, will try file");
-        }
-    }
 
     // TTL check: invalidate the file cache if it is older than the configured threshold.
     // Default: 1 hour. Override via OPENCODE_INDEXER_LINKS_CACHE_TTL_SECS env var.
@@ -266,42 +253,26 @@ pub(crate) fn cached_discover_links(root: &str) -> Vec<Link> {
                 let _ = std::fs::remove_file(&cache_path);
                 // Also evict from in-memory cache so we don't serve the stale copy
                 if let Ok(mut cache) = link_cache().try_write() {
-                    cache.remove(&root_path);
+                    cache.pop(&root_path);
                 }
             }
         }
     }
 
-    // Medium path: try loading from file
-    tracing::debug!("checking links cache file for {}", root_path.display());
-    if let Some(links) = load_links_from_file(&root_path) {
-        // Update in-memory cache with LRU eviction
-        if let Ok(mut cache) = link_cache().try_write() {
-            // LRU eviction: remove oldest entry if cache is full
-            if cache.len() >= MAX_LINK_CACHE_SIZE && !cache.contains_key(&root_path) {
-                if let Some(oldest_key) = cache
-                    .iter()
-                    .min_by_key(|(_, cached)| cached.last_access)
-                    .map(|(k, _)| k.clone())
-                {
-                    tracing::debug!(
-                        "link cache full ({}), evicting oldest entry: {}",
-                        MAX_LINK_CACHE_SIZE,
-                        oldest_key.display()
-                    );
-                    cache.remove(&oldest_key);
-                }
+        // Medium path: try loading from file
+        tracing::debug!("checking links cache file for {}", root_path.display());
+        if let Some(links) = load_links_from_file(&root_path) {
+            // Update in-memory cache (LruCache handles eviction automatically)
+            if let Ok(mut cache) = link_cache().try_write() {
+                cache.put(
+                    root_path,
+                    CachedLinks {
+                        links: links.clone(),
+                    },
+                );
             }
-            cache.insert(
-                root_path,
-                CachedLinks {
-                    links: links.clone(),
-                    last_access: Instant::now(),
-                },
-            );
+            return links;
         }
-        return links;
-    }
 
     // Slow path: discover, save to file, and cache in memory
     let result = match discover_links_impl(root) {
@@ -344,36 +315,20 @@ pub(crate) fn cached_discover_links(root: &str) -> Vec<Link> {
         );
     }
 
-    // Update in-memory cache with LRU eviction
-    match link_cache().try_write() {
-        Ok(mut cache) => {
-            // LRU eviction: remove oldest entry if cache is full
-            if cache.len() >= MAX_LINK_CACHE_SIZE && !cache.contains_key(&root_path) {
-                if let Some(oldest_key) = cache
-                    .iter()
-                    .min_by_key(|(_, cached)| cached.last_access)
-                    .map(|(k, _)| k.clone())
-                {
-                    tracing::debug!(
-                        "link cache full ({}), evicting oldest entry: {}",
-                        MAX_LINK_CACHE_SIZE,
-                        oldest_key.display()
-                    );
-                    cache.remove(&oldest_key);
-                }
+        // Update in-memory cache (LruCache handles eviction automatically)
+        match link_cache().try_write() {
+            Ok(mut cache) => {
+                cache.put(
+                    root_path,
+                    CachedLinks {
+                        links: links.clone(),
+                    },
+                );
             }
-            cache.insert(
-                root_path,
-                CachedLinks {
-                    links: links.clone(),
-                    last_access: Instant::now(),
-                },
-            );
+            Err(_) => {
+                tracing::debug!("link cache contended on write, skipping in-memory cache update");
+            }
         }
-        Err(_) => {
-            tracing::debug!("link cache contended on write, skipping in-memory cache update");
-        }
-    }
 
     links
 }
@@ -695,16 +650,15 @@ pub(crate) async fn run_index_background(root: &str, tier: &str, dims: u32) -> a
 
     // Update cache with new storage
     let storage = storage_arc;
-    let key = (storage_path.to_string_lossy().to_string(), dims);
-    {
-        let mut w = storage_cache().write().await;
-        w.insert(
-            key,
-            CachedStorage {
-                storage,
-                last_access: Instant::now(),
-            },
-        );
+        let key = (storage_path.to_string_lossy().to_string(), dims);
+        {
+            let mut w = storage_cache().write().await;
+            w.put(
+                key,
+                CachedStorage {
+                    storage,
+                },
+            );
     }
 
     tracing::info!(

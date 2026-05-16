@@ -175,13 +175,6 @@ fn batch_size() -> usize {
         .unwrap_or(500)
 }
 
-/// Scan all project directories under the shared data dir.
-/// Uses shallow stat (O(1) per dir) instead of recursive walkdir.
-/// Called by identify() which handles the orphan/stale logic.
-pub fn scan(base: &Path) -> Vec<ProjectInfo> {
-    scan_full(base, false)
-}
-
 /// Full scan using recursive walkdir for deep mtime/size accuracy.
 /// Only called by the 24h fallback path.
 pub fn scan_deep(base: &Path) -> Vec<ProjectInfo> {
@@ -401,4 +394,217 @@ pub fn run(base: &Path, cfg: &Config, dry: bool) -> Report {
 /// Duration for the periodic cleanup interval, reading from env.
 pub fn interval() -> Duration {
     Duration::from_secs(config().interval)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn make_project(id: &str, root: Option<&str>, days_ago: u64) -> ProjectInfo {
+        let modified = SystemTime::now() - Duration::from_secs(days_ago * 86400);
+        ProjectInfo {
+            path: std::path::PathBuf::from(format!("/tmp/{}", id)),
+            id: id.to_string(),
+            root: root.map(String::from),
+            bytes: 0,
+            modified: Some(modified),
+        }
+    }
+
+    #[test]
+    fn empty_input_returns_no_targets() {
+        let result = identify(&[], &Config::default());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn orphan_when_root_missing() {
+        let cfg = Config {
+            orphans: true,
+            stale: false,
+            ..Config::default()
+        };
+        let projects = vec![make_project("orphan", Some("/nonexistent"), 0)];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].reason, Reason::Orphaned);
+    }
+
+    #[test]
+    fn stale_when_old() {
+        let cfg = Config {
+            orphans: false,
+            stale: true,
+            ..Config::default()
+        };
+        let projects = vec![make_project("stale", None, 200)];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].reason, Reason::Stale);
+    }
+
+    #[test]
+    fn recent_project_not_stale() {
+        let cfg = Config {
+            stale: true,
+            orphans: false,
+            ..Config::default()
+        };
+        let projects = vec![make_project("recent", None, 1)];
+        let result = identify(&projects, &cfg);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn orphan_takes_priority_over_stale() {
+        let cfg = Config {
+            orphans: true,
+            stale: true,
+            ..Config::default()
+        };
+        let projects = vec![make_project("both", Some("/nonexistent"), 200)];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].reason, Reason::Orphaned);
+    }
+
+    #[test]
+    fn orphans_disabled_skips_orphan_check() {
+        let cfg = Config {
+            orphans: false,
+            stale: true,
+            ..Config::default()
+        };
+        let projects = vec![make_project("orphan_skipped", Some("/nonexistent"), 200)];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].reason, Reason::Stale);
+    }
+
+    #[test]
+    fn stale_disabled_skips_stale_check() {
+        let cfg = Config {
+            orphans: true,
+            stale: false,
+            ..Config::default()
+        };
+        let projects = vec![make_project("stale_skipped", None, 200)];
+        let result = identify(&projects, &cfg);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn both_disabled_returns_empty() {
+        let cfg = Config {
+            orphans: false,
+            stale: false,
+            ..Config::default()
+        };
+        let projects = vec![make_project("disabled", Some("/nonexistent"), 200)];
+        let result = identify(&projects, &cfg);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn custom_stale_days() {
+        let cfg_under = Config {
+            orphans: false,
+            stale: true,
+            stale_days: 30,
+            ..Config::default()
+        };
+        // 31 days old → stale (exceeds 30 day threshold)
+        let stale = vec![make_project("old", None, 31)];
+        assert_eq!(identify(&stale, &cfg_under).len(), 1);
+        // 29 days old → not stale
+        let recent = vec![make_project("young", None, 29)];
+        assert!(identify(&recent, &cfg_under).is_empty());
+    }
+
+    #[test]
+    fn stale_days_zero_identifies_all() {
+        let cfg = Config {
+            orphans: false,
+            stale: true,
+            stale_days: 0,
+            ..Config::default()
+        };
+        let projects = vec![make_project("any", None, 0)];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].reason, Reason::Stale);
+    }
+
+    #[test]
+    fn missing_modified_is_not_stale() {
+        let cfg = Config {
+            orphans: false,
+            stale: true,
+            ..Config::default()
+        };
+        let p = ProjectInfo {
+            modified: None,
+            ..make_project("nomod", None, 200)
+        };
+        let projects = vec![p];
+        let result = identify(&projects, &cfg);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_root_is_orphaned() {
+        let cfg = Config {
+            orphans: true,
+            stale: false,
+            ..Config::default()
+        };
+        let projects = vec![make_project("empty_root", Some(""), 0)];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].reason, Reason::Orphaned);
+    }
+
+    #[test]
+    fn multiple_projects_mixed() {
+        let cfg = Config::default();
+        let orphan = make_project("orph", Some("/nonexistent"), 0);
+        let stale = ProjectInfo {
+            root: None,
+            ..make_project("stale_proj", None, 200)
+        };
+        let recent = ProjectInfo {
+            root: None,
+            ..make_project("recent_proj", None, 1)
+        };
+        let projects = vec![orphan, stale, recent];
+        let result = identify(&projects, &cfg);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].reason, Reason::Orphaned);
+        assert_eq!(result[0].info.id, "orph");
+        assert_eq!(result[1].reason, Reason::Stale);
+        assert_eq!(result[1].info.id, "stale_proj");
+    }
+
+    #[test]
+    fn cursor_path_is_outside_projects_dir() {
+        let base = Path::new("/tmp/opencode");
+        let cursor = cursor_path(base);
+        assert!(
+            !cursor.starts_with("/tmp/opencode/projects"),
+            "cursor should not be inside projects/ dir"
+        );
+        assert_eq!(cursor, Path::new("/tmp/opencode/cleaner_cursor"));
+    }
+
+    #[test]
+    fn report_default_is_all_zeros() {
+        let r = Report::default();
+        assert_eq!(r.orphans, 0);
+        assert_eq!(r.stale, 0);
+        assert_eq!(r.aux_dirs, 0);
+        assert_eq!(r.freed, 0);
+        assert!(r.errors.is_empty());
+        assert!(r.targets.is_empty());
+    }
 }

@@ -3,10 +3,8 @@
 //! Tracks TUI connections per project so the daemon can start/stop watchers.
 //! Extracted from daemon.rs for better organization.
 
-use std::time::Instant;
-
 use crate::daemon::{
-    canonicalized_paths_cache, CachedCanonicalPath, DaemonState, MAX_CANONICALIZED_CACHE_SIZE,
+    canonicalized_paths_cache, CachedCanonicalPath, DaemonState,
 };
 
 /// Register a TUI connection for a project.
@@ -84,23 +82,15 @@ pub(crate) fn tui_connections_impl(state: &mut DaemonState, key: &str) -> serde_
 
 /// Canonicalize project key for consistent lookups (async with caching).
 pub(crate) async fn canonicalize_project_key(root: &str) -> String {
-    // Fast path: check cache and update access time
+    // Fast path: check cache (LruCache needs write lock for get)
     {
-        let r = canonicalized_paths_cache().read().await;
-        if let Some(cached) = r.get(root) {
-            let path = cached.path.clone();
-            drop(r);
-
-            // Update last_access with write lock
-            let mut w = canonicalized_paths_cache().write().await;
-            if let Some(entry) = w.get_mut(root) {
-                entry.last_access = Instant::now();
-            }
-            return path;
+        let mut w = canonicalized_paths_cache().write().await;
+        if let Some(cached) = w.get(root) {
+            return cached.path.clone();
         }
     }
 
-    // Slow path: async canonicalize and cache with LRU eviction
+    // Slow path: async canonicalize and cache (LruCache handles eviction automatically)
     let canonical = tokio::fs::canonicalize(root)
         .await
         .map(|p| p.to_string_lossy().to_string())
@@ -108,26 +98,8 @@ pub(crate) async fn canonicalize_project_key(root: &str) -> String {
 
     {
         let mut cache = canonicalized_paths_cache().write().await;
-
-        // LRU eviction: remove oldest entry if cache is full
-        if cache.len() >= MAX_CANONICALIZED_CACHE_SIZE && !cache.contains_key(root) {
-            if let Some(oldest_key) = cache
-                .iter()
-                .min_by_key(|(_, cached)| cached.last_access)
-                .map(|(k, _)| k.clone())
-            {
-                tracing::debug!(
-                    "canonicalized path cache full ({}), evicting oldest entry: {}",
-                    MAX_CANONICALIZED_CACHE_SIZE,
-                    oldest_key
-                );
-                cache.remove(&oldest_key);
-            }
-        }
-
-        cache.insert(root.to_string(), CachedCanonicalPath {
+        cache.put(root.to_string(), CachedCanonicalPath {
             path: canonical.clone(),
-            last_access: Instant::now(),
         });
     }
 

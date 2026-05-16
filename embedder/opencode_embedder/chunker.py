@@ -130,10 +130,6 @@ def set_tier(tier: str) -> None:
     _tier_var.set(tier)
 
 
-def get_tier() -> str:
-    """Get the current tier for token counting"""
-    return _tier_var.get()
-
 
 @dataclass
 class Chunk:

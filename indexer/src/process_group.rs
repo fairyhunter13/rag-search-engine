@@ -81,3 +81,46 @@ pub async fn spawn_parent_monitor(parent_pid: i32, shutdown_tx: tokio::sync::wat
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kill_process_group_skipped_with_env_var() {
+        // SAFETY: test-only, single-threaded, no other code reads this var
+        unsafe { std::env::set_var("OPENCODE_NO_KILL_PROCESS_GROUP", "1") };
+        kill_process_group();
+        // SAFETY: test-only cleanup
+        unsafe { std::env::remove_var("OPENCODE_NO_KILL_PROCESS_GROUP") };
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn set_oom_score_noop_on_non_linux() {
+        let original = std::fs::read_to_string("/proc/self/oom_score_adj").unwrap();
+        set_oom_score(500);
+        let value = std::fs::read_to_string("/proc/self/oom_score_adj").unwrap();
+        assert_eq!(value, "500\n");
+        std::fs::write("/proc/self/oom_score_adj", original.trim()).unwrap();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn set_oom_score_noop_on_non_linux() {
+        set_oom_score(500);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn default_oom_score_is_zero() {
+        let value = std::fs::read_to_string("/proc/self/oom_score_adj").unwrap();
+        let _score: i32 = value.trim().parse().expect("oom_score_adj should be a valid number");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn default_oom_score_is_zero() {
+        // Skipping on non-Linux: /proc/self/oom_score_adj is not available
+    }
+}

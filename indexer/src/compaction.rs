@@ -182,24 +182,16 @@ pub async fn release_all_memory_pressure() {
     let cache = storage_cache();
     {
         let r = cache.read().await;
-        for entry in r.values() {
+        for (_, entry) in r.iter() {
             let _ = entry.storage.release_memory_pressure().await;
         }
     }
-    // Evict LRU half of storage cache to free LanceDB connections
+    // Evict half of storage cache (LruCache handles LRU ordering natively)
     {
         let mut w = cache.write().await;
         let keep = (w.len() + 1) / 2;
-        if w.len() > keep {
-            let to_evict = w.len() - keep;
-            let mut keys_by_age: Vec<_> = w
-                .iter()
-                .map(|(k, v)| (k.clone(), v.last_access))
-                .collect();
-            keys_by_age.sort_by_key(|(_, t)| *t);
-            for (k, _) in keys_by_age.into_iter().take(to_evict) {
-                w.remove(&k);
-            }
+        while w.len() > keep {
+            w.pop_lru();
         }
     }
     purge_jemalloc();

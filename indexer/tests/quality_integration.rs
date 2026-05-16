@@ -16,6 +16,7 @@ mod python_server;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use tokio::process::Command;
 
 // ---------------------------------------------------------------------------
@@ -43,10 +44,23 @@ async fn rpc(port: u16, method: &str, params: serde_json::Value) -> Result<serde
 struct DaemonHandle {
     child: tokio::process::Child,
     port: u16,
+    _lock: std::fs::File,
 }
 
 impl DaemonHandle {
+    fn lock() -> Result<std::fs::File> {
+        let path = std::env::temp_dir().join("opencode-indexer-quality-integration.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        file.lock_exclusive()?;
+        Ok(file)
+    }
+
     async fn spawn(home: &std::path::Path, embed_env: &[(&str, String)]) -> Result<Self> {
+        let _lock = Self::lock()?;
         let bin = assert_cmd::cargo::cargo_bin!("opencode-indexer");
 
         let mut cmd = Command::new(&bin);
@@ -96,7 +110,7 @@ impl DaemonHandle {
             }
         });
 
-        Ok(Self { child, port })
+        Ok(Self { child, port, _lock })
     }
 
     fn port(&self) -> u16 { self.port }

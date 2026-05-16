@@ -8,6 +8,7 @@
 //!   GET /ping - Health check: returns "pong"
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -56,16 +57,15 @@ const MAX_FILE_RETRIES: u32 = 3; // Max retries for failed files in memory watch
 // Path canonicalization cache (prevents blocking I/O in async context)
 // ---------------------------------------------------------------------------
 
-/// Cached canonicalized path with LRU tracking
+/// Cached canonicalized path (LRU evicted by LruCache)
 pub(crate) struct CachedCanonicalPath {
     pub(crate) path: String,
-    pub(crate) last_access: Instant,
 }
 
 /// Global cache for canonicalized paths to avoid blocking I/O.
-pub(crate) fn canonicalized_paths_cache() -> &'static RwLock<HashMap<String, CachedCanonicalPath>> {
-    static CACHE: OnceLock<RwLock<HashMap<String, CachedCanonicalPath>>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+pub(crate) fn canonicalized_paths_cache() -> &'static RwLock<lru::LruCache<String, CachedCanonicalPath>> {
+    static CACHE: OnceLock<RwLock<lru::LruCache<String, CachedCanonicalPath>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(NonZeroUsize::new(MAX_CANONICALIZED_CACHE_SIZE).unwrap())))
 }
 
 /// Global set of db paths currently being indexed.
@@ -351,16 +351,15 @@ pub(crate) struct MemoryWatcherState {
 /// Cache key: (db_path, dimensions)
 pub type StorageKey = (String, u32);
 
-/// Cached storage with LRU tracking
+/// Cached storage (LRU evicted by LruCache)
 pub struct CachedStorage {
     pub storage: Arc<crate::storage::Storage>,
-    pub last_access: Instant,
 }
 
-pub fn storage_cache() -> &'static RwLock<HashMap<StorageKey, CachedStorage>> {
-    static CACHE: std::sync::OnceLock<RwLock<HashMap<StorageKey, CachedStorage>>> =
+pub fn storage_cache() -> &'static RwLock<lru::LruCache<StorageKey, CachedStorage>> {
+    static CACHE: std::sync::OnceLock<RwLock<lru::LruCache<StorageKey, CachedStorage>>> =
         std::sync::OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+    CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(NonZeroUsize::new(max_storage_cache_size()).unwrap())))
 }
 
 
@@ -391,48 +390,23 @@ pub async fn cached_storage(path: &Path, dims: u32) -> anyhow::Result<Arc<crate:
     let key = (path.to_string_lossy().to_string(), dims);
     let cache = storage_cache();
 
-    // Fast path: read lock - check if entry exists
-    {
-        let r = cache.read().await;
-        if let Some(cached) = r.get(&key) {
-            let storage = cached.storage.clone();
-            drop(r);
-
-            // Update last_access with write lock
+        // Fast path: write lock needed (LruCache.get requires &mut self)
+        {
             let mut w = cache.write().await;
-            if let Some(entry) = w.get_mut(&key) {
-                entry.last_access = Instant::now();
-            }
-            return Ok(storage);
-        }
-    }
-
-    // Slow path: open and cache with LRU eviction
-    let storage = crate::storage::Storage::open(path, dims).await?;
-    let storage = Arc::new(storage);
-    {
-        let mut w = cache.write().await;
-
-        // Evict oldest entry if cache is full
-        if w.len() >= max_storage_cache_size() && !w.contains_key(&key) {
-            if let Some(oldest_key) = w
-                .iter()
-                .min_by_key(|(_, cached)| cached.last_access)
-                .map(|(k, _)| k.clone())
-            {
-                tracing::debug!(
-                    "storage cache full ({}), evicting oldest entry: {}",
-                    max_storage_cache_size(),
-                    oldest_key.0
-                );
-                w.remove(&oldest_key);
+            if let Some(cached) = w.get(&key) {
+                return Ok(cached.storage.clone());
             }
         }
 
-        w.entry(key).or_insert_with(|| CachedStorage {
-            storage: storage.clone(),
-            last_access: Instant::now(),
-        });
+        // Slow path: open and cache (LruCache handles eviction automatically)
+        let storage = crate::storage::Storage::open(path, dims).await?;
+        let storage = Arc::new(storage);
+        {
+            let mut w = cache.write().await;
+
+            w.put(key, CachedStorage {
+                storage: storage.clone(),
+            });
     }
     Ok(storage)
 }
@@ -443,13 +417,13 @@ pub(crate) async fn invalidate_storage_cache(path: &Path) {
     let cache = storage_cache();
     let mut w = cache.write().await;
 
-    // Remove all entries for this path (any dimension)
-    let keys_to_remove: Vec<_> = w.keys().filter(|(p, _)| p == &path_str).cloned().collect();
+        // Remove all entries for this path (any dimension)
+        let keys_to_remove: Vec<_> = w.iter().filter(|(p, _)| p.0 == path_str).map(|(k, _)| k.clone()).collect();
 
-    for key in keys_to_remove {
-        tracing::debug!("invalidating storage cache for {:?}", key);
-        w.remove(&key);
-    }
+        for key in keys_to_remove {
+            tracing::debug!("invalidating storage cache for {:?}", key);
+            w.pop(&key);
+        }
 }
 
 // Daemon server loop
@@ -944,9 +918,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
         });
     }
 
-    // DISABLED: TUI cleanup task that removes watchers from state after TUI disconnect.
-        // This was causing the "Not watching" bug. See git history for the removed block.
-        // Watchers are now kept for the lifetime of the daemon.
+
 
     // Filesystem-event-driven project directory cleanup task.
     // Watches projects/ for DELETION events only (orphan detection).

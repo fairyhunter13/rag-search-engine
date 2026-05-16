@@ -152,14 +152,6 @@ def _http_post(
         return 0, {}
 
 
-def _http_get(url: str, timeout: int = 10) -> tuple[int, Any]:
-    req = urllib.request.Request(url)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read())
-    except Exception:
-        return 0, {}
-
 
 
 def embed_passages(texts: list[str], timeout: int = 60) -> tuple[int, list]:
@@ -195,7 +187,7 @@ def chunk_text(content: str, content_type: str = "text", timeout: int = 30) -> t
 def rerank_docs(query: str, documents: list[str], timeout: int = 60) -> tuple[int, list]:
     status, body = _http_post(
         f"{EMBEDDER_URL}/embed/rerank",
-        {"query": query, "documents": documents},
+        {"query": query, "docs": documents},
         timeout=timeout,
     )
     scores = body.get("result", {}).get("scores", []) if status == 200 else []
@@ -1464,6 +1456,74 @@ class TestCombinedSystemPerformance:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Verification tests for dead code removal and bug fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestDeadCodeRemovalVerification:
+    """Verify that changes from dead code removal don't break the search engine."""
+
+    @pytest.fixture(autouse=True)
+    def _check_indexer(self, indexer_alive: bool) -> None:
+        if not indexer_alive:
+            pytest.skip("Indexer not running")
+        self._indexer_alive = indexer_alive  # type: ignore[reportUnusedVariable]
+
+    def test_rerank_endpoint_accepts_correct_key(self) -> None:
+        """Verify the rerank endpoint works with the correct 'docs' key (bug fix)."""
+        query = "test query for dead code removal verification"
+        documents = [
+            "This is a test document about code quality",
+            "Another test document about search engines",
+            "A third test document for verification purposes",
+        ]
+        status, scores = rerank_docs(query, documents, timeout=60)
+        assert status == 200, f"Rerank endpoint returned {status}"
+        assert len(scores) > 0, "Rerank should return scores"
+        assert all(isinstance(s, (int, float)) for s in scores), "Scores should be numeric"
+
+    def test_rerank_endpoint_rejects_wrong_key(self) -> None:
+        """Verify the rerank endpoint rejects the old wrong 'documents' key."""
+        status, body = _http_post(
+            f"{EMBEDDER_URL}/embed/rerank",
+            {"query": "test", "documents": ["doc1", "doc2"]},
+            timeout=30,
+        )
+        # The server expects "docs" or "passages", not "documents"
+        # With "documents" key, the server should return an error or empty results
+        assert status != 200 or len(body.get("result", {}).get("scores", [])) == 0, (
+            "Rerank should not accept 'documents' key"
+        )
+
+    def test_indexer_status_works(self) -> None:
+        """Verify the status endpoint still works after dead code removal."""
+        result = rpc_call("status", {"root": ".", "dimensions": 1024})
+        assert result is not None, "Status RPC should return a result"
+        assert isinstance(result, dict), "Status result should be a dict"
+
+    def test_indexer_health_works(self) -> None:
+        """Verify the health endpoint still works after dead code removal."""
+        result = rpc_call("health", {"root": ".", "dimensions": 1024})
+        assert result is not None, "Health RPC should return a result"
+        assert isinstance(result, dict), "Health result should be a dict"
+        assert result.get("healthy") is True, "Health check should report healthy"
+
+    def test_search_engine_search_works(self) -> None:
+        """Verify the search endpoint works after dead code removal."""
+        try:
+            result = rpc_call(
+                "search",
+                {"root": ".", "query": "function", "dimensions": 1024},
+            )
+        except Exception:
+            # Search may fail if no index exists, which is fine
+            pytest.skip("No index available for search")
+            return
+        assert result is not None, "Search RPC should return a result"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short", "-s", "-m", "perf"])

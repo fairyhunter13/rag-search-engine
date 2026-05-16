@@ -300,3 +300,245 @@ pub fn rerank_by_cosine(query: &[f32], candidates: &[Vec<f32>], limit: usize) ->
         .map(|(_, idx)| idx)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------------------
+    // cosine_similarity behavioral tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn identical_vectors_returns_one() {
+        let sim = cosine_similarity(&[1.0, 2.0, 3.0, 4.0], &[1.0, 2.0, 3.0, 4.0]);
+        assert!((sim - 1.0).abs() < 1e-6, "expected 1.0, got {}", sim);
+    }
+
+    #[test]
+    fn orthogonal_vectors_returns_zero() {
+        let sim = cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]);
+        assert!((sim - 0.0).abs() < 1e-6, "expected 0.0, got {}", sim);
+    }
+
+    #[test]
+    fn opposite_vectors_returns_negative_one() {
+        let sim = cosine_similarity(&[1.0, 2.0], &[-1.0, -2.0]);
+        assert!((sim - (-1.0)).abs() < 1e-6, "expected -1.0, got {}", sim);
+    }
+
+    #[test]
+    fn zero_vector_returns_zero() {
+        let sim = cosine_similarity(&[0.0, 0.0, 0.0], &[1.0, 2.0, 3.0]);
+        assert!((sim - 0.0).abs() < 1e-6, "expected 0.0, got {}", sim);
+    }
+
+    #[test]
+    fn both_zero_vectors_returns_zero() {
+        let sim = cosine_similarity(&[0.0, 0.0], &[0.0, 0.0]);
+        assert!((sim - 0.0).abs() < 1e-6, "expected 0.0, got {}", sim);
+    }
+
+    #[test]
+    #[should_panic(expected = "vectors must have same length")]
+    fn mismatched_lengths_panics() {
+        cosine_similarity(&[1.0, 2.0, 3.0], &[1.0, 2.0]);
+    }
+
+    #[test]
+    fn dim_768_vectors_produces_valid_result() {
+        let a: Vec<f32> = (0..768).map(|i| (i as f32 + 1.0) * 0.5).collect();
+        let b: Vec<f32> = (0..768).map(|i| (i as f32 + 1.0) * 0.3).collect();
+        let sim = cosine_similarity(&a, &b);
+        assert!(
+            sim >= -1.0 && sim <= 1.0,
+            "similarity must be in [-1, 1], got {}",
+            sim
+        );
+    }
+
+    #[test]
+    fn scalar_implementation_matches_public_api() {
+        let a = vec![1.5, 2.5, 3.5, 4.5, 5.5];
+        let b = vec![5.5, 4.5, 3.5, 2.5, 1.5];
+        let public = cosine_similarity(&a, &b);
+        let scalar = cosine_similarity_scalar(&a, &b);
+        assert!(
+            (public - scalar).abs() < 1e-6,
+            "public API ({}) and scalar ({}) differ",
+            public,
+            scalar
+        );
+    }
+
+    #[test]
+    fn normalized_unit_vectors() {
+        // Both vectors have norm = 1, so cos = dot product
+        let a = vec![1.0, 0.0, 0.0, 0.0];
+        let b = vec![0.6, 0.8, 0.0, 0.0];
+        let sim = cosine_similarity(&a, &b);
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        assert!(
+            (sim - dot).abs() < 1e-6,
+            "unit vectors: sim={}, dot={}",
+            sim,
+            dot
+        );
+    }
+
+    #[test]
+    fn partially_overlapping() {
+        // [1,0,0,1] · [1,1,0,0] = 1; norms both √2; sim = 1/2 = 0.5
+        let sim = cosine_similarity(&[1.0, 0.0, 0.0, 1.0], &[1.0, 1.0, 0.0, 0.0]);
+        assert!((sim - 0.5).abs() < 1e-6, "expected 0.5, got {}", sim);
+    }
+
+    // ---------------------------------------------------------------------------
+    // batch_cosine_similarity behavioral tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn batch_matches_individual_calls() {
+        let query = vec![1.0, 0.0, 0.0];
+        let candidates = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![-1.0, 0.0, 0.0],
+            vec![0.5, 0.5, 0.0],
+        ];
+        let batch = batch_cosine_similarity(&query, &candidates);
+        assert_eq!(batch.len(), candidates.len());
+        for (i, c) in candidates.iter().enumerate() {
+            let individual = cosine_similarity(&query, c);
+            assert!(
+                (batch[i] - individual).abs() < 1e-6,
+                "batch[{}] = {}, individual = {}",
+                i,
+                batch[i],
+                individual
+            );
+        }
+    }
+
+    #[test]
+    fn batch_empty_candidates_returns_empty() {
+        let candidates: Vec<Vec<f32>> = vec![];
+        let result = batch_cosine_similarity(&[1.0, 2.0, 3.0], &candidates);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn batch_single_candidate_matches_individual() {
+        let query = vec![1.0, 2.0, 3.0];
+        let candidates = vec![vec![4.0, 5.0, 6.0]];
+        let batch = batch_cosine_similarity(&query, &candidates);
+        assert_eq!(batch.len(), 1);
+        let individual = cosine_similarity(&query, &candidates[0]);
+        assert!((batch[0] - individual).abs() < 1e-6);
+    }
+
+    #[test]
+    fn batch_many_candidates_correct_ordering() {
+        // Verify output order matches candidate input order
+        let query = vec![1.0, 0.0, 0.0];
+        let candidates = vec![
+            vec![1.0, 0.0, 0.0],  // sim = 1.0
+            vec![-1.0, 0.0, 0.0], // sim = -1.0
+            vec![0.0, 1.0, 0.0],  // sim = 0.0
+            vec![0.5, 0.0, 0.0],  // sim = 1.0
+        ];
+        let batch = batch_cosine_similarity(&query, &candidates);
+        assert_eq!(batch.len(), 4);
+        for (i, c) in candidates.iter().enumerate() {
+            let expected = cosine_similarity_scalar(&query, c);
+            assert!(
+                (batch[i] - expected).abs() < 1e-6,
+                "batch[{}] mismatch: got {}, expected {}",
+                i,
+                batch[i],
+                expected
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // rerank_by_cosine behavioral tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn rerank_returns_top_k_by_similarity() {
+        let query = vec![2.0, 1.0, 0.0, 0.0];
+        let candidates = vec![
+            vec![2.0, 1.0, 0.0, 0.0],   // sim = 5/5 = 1.0
+            vec![0.0, 1.0, 0.0, 0.0],   // sim = 1/√5 ≈ 0.4472
+            vec![-2.0, -1.0, 0.0, 0.0], // sim = -5/5 = -1.0
+            vec![1.0, 0.0, 0.0, 0.0],   // sim = 2/√5 ≈ 0.8944
+            vec![0.0, 0.0, 1.0, 0.0],   // sim = 0.0
+        ];
+        let result = rerank_by_cosine(&query, &candidates, 3);
+        assert_eq!(result.len(), 3);
+        // Top 3: index 0 (sim=1.0), index 3 (sim≈0.894), index 1 (sim≈0.447)
+        assert_eq!(result[0], 0);
+        assert_eq!(result[1], 3);
+        assert_eq!(result[2], 1);
+    }
+
+    #[test]
+    fn rerank_empty_input_returns_empty() {
+        let result = rerank_by_cosine(&[1.0, 2.0, 3.0], &[], 5);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rerank_limit_zero_returns_empty() {
+        let candidates = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let result = rerank_by_cosine(&[1.0, 0.0], &candidates, 0);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rerank_limit_exceeds_candidates_returns_all() {
+        let candidates = vec![
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![-1.0, 0.0],
+        ];
+        let result = rerank_by_cosine(&[1.0, 0.0], &candidates, 10);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn rerank_ties_are_stable() {
+        let query = vec![1.0, 0.0];
+        let candidates = vec![
+            vec![1.0, 0.0], // sim = 1.0
+            vec![0.0, 1.0], // sim = 0.0
+            vec![1.0, 0.0], // sim = 1.0 (tied with index 0)
+        ];
+        let result = rerank_by_cosine(&query, &candidates, 2);
+        assert_eq!(result.len(), 2);
+        // Both tied candidates (index 0 and 2) should appear
+        assert!(result.contains(&0), "index 0 should be in results");
+        assert!(result.contains(&2), "index 2 should be in results");
+    }
+
+    #[test]
+    fn rerank_realistic_search_scenario() {
+        // 384-dim query and 10 diverse candidates
+        let query: Vec<f32> = (0..384).map(|i| ((i % 7) as f32) / 7.0).collect();
+        let candidates: Vec<Vec<f32>> = (0..10)
+            .map(|seed| (0..384).map(|i| ((i * (seed + 1)) % 11) as f32 / 11.0).collect())
+            .collect();
+        let result = rerank_by_cosine(&query, &candidates, 5);
+        assert_eq!(result.len(), 5);
+        // All indices must be valid
+        for &idx in &result {
+            assert!(idx < 10, "index {} out of range", idx);
+        }
+        // No duplicates
+        let mut sorted = result.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 5);
+    }
+}

@@ -357,6 +357,23 @@ IDLE_SHUTDOWN_SECS = _get_idle_shutdown_secs()
 MAX_TEXTS_PER_REQUEST = int(os.environ.get("OPENCODE_EMBED_MAX_TEXTS", "512"))
 
 
+def _validate_texts_params(params: dict) -> tuple[list[str], web.Response | None]:
+    """Validate and extract text list from request params. Returns (texts, error_response)."""
+    texts = params.get("texts", [])
+    if not isinstance(texts, list):
+        return [], web.json_response({"error": "texts must be a list"}, status=400)
+    # Support older 'passages' key name for embed_passages_f32
+    if not texts and "passages" in params:
+        texts = params["passages"]
+        if not isinstance(texts, list):
+            return [], web.json_response({"error": "passages must be a list"}, status=400)
+    if len(texts) > MAX_TEXTS_PER_REQUEST:
+        return [], web.json_response(
+            {"error": f"max {MAX_TEXTS_PER_REQUEST} texts per request"}, status=413
+        )
+    return texts, None
+
+
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------
@@ -803,17 +820,9 @@ class ModelServer:
     async def _http_embed_passages(self, req: web.Request) -> web.Response:
         try:
             params = await req.json()
-            texts = params.get("texts", [])
-            if not isinstance(texts, list):
-                return web.json_response(
-                    {"error": "texts must be a list"},
-                    status=400,
-                )
-            if len(texts) > MAX_TEXTS_PER_REQUEST:
-                return web.json_response(
-                    {"error": f"too many texts: {len(texts)} > {MAX_TEXTS_PER_REQUEST}"},
-                    status=413,
-                )
+            texts, error = _validate_texts_params(params)
+            if error:
+                return error
             result = await self._handle_embed_passages(params)
             return web.json_response({"result": result})
         except web.HTTPException:
@@ -825,17 +834,9 @@ class ModelServer:
     async def _http_embed_passages_f32(self, req: web.Request) -> web.Response:
         try:
             params = await req.json()
-            texts = params.get("passages", params.get("texts", []))
-            if not isinstance(texts, list):
-                return web.json_response(
-                    {"error": "texts/passages must be a list"},
-                    status=400,
-                )
-            if len(texts) > MAX_TEXTS_PER_REQUEST:
-                return web.json_response(
-                    {"error": f"too many texts: {len(texts)} > {MAX_TEXTS_PER_REQUEST}"},
-                    status=413,
-                )
+            texts, error = _validate_texts_params(params)
+            if error:
+                return error
             result = await self._handle_embed_passages_f32(params)
             return web.json_response({"result": self._jsonify(result)})
         except web.HTTPException:

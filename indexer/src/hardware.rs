@@ -304,11 +304,11 @@ impl MemoryUsage {
     }
 
     /// Memory usage as a percentage (0 - 100).
-    pub fn usage_percent(&self) -> f64 {
-        self.usage_fraction() * 100.0
-    }
+pub fn usage_percent(&self) -> f64 {
+    self.usage_fraction() * 100.0
+}
 
-    /// Whether memory usage exceeds the given threshold (0.0 - 1.0).
+/// Whether memory usage exceeds the given threshold (0.0 - 1.0).
     pub fn exceeds(&self, threshold: f64) -> bool {
         self.usage_fraction() > threshold
     }
@@ -429,4 +429,254 @@ fn read_memory_usage() -> Option<MemoryUsage> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn read_memory_usage() -> Option<MemoryUsage> {
     None // Unsupported platform
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_hw(
+        platform: Platform,
+        arch: Arch,
+        cores: usize,
+        mem_gb: f64,
+        gpu: GpuProvider,
+    ) -> HardwareInfo {
+        HardwareInfo {
+            platform,
+            arch,
+            cpu_cores: cores,
+            memory_gb: mem_gb,
+            gpu: GpuInfo {
+                available: gpu != GpuProvider::None,
+                provider: gpu,
+            },
+        }
+    }
+
+    // --- HardwareInfo::embedding_concurrency ---
+
+    #[test]
+    fn embedding_concurrency_cuda_returns_3() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 16, 32.0, GpuProvider::Cuda);
+        assert_eq!(hw.embedding_concurrency(), 3);
+    }
+
+    #[test]
+    fn embedding_concurrency_rocm_returns_3() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 16, 32.0, GpuProvider::Rocm);
+        assert_eq!(hw.embedding_concurrency(), 3);
+    }
+
+    #[test]
+    fn embedding_concurrency_metal_returns_2_or_3() {
+        let hw = make_hw(Platform::Darwin, Arch::Arm64, 16, 32.0, GpuProvider::Metal);
+        assert_eq!(hw.embedding_concurrency(), 2);
+    }
+
+    #[test]
+    fn embedding_concurrency_no_gpu_falls_to_cpu() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 4, 2.0, GpuProvider::None);
+        // cpu_embedding_concurrency: memory_limit = max(2/2, 1) = 1,
+        // core_limit = max(4/2, 1) = 2 → min(1, 2, 4) = 1
+        assert_eq!(hw.embedding_concurrency(), 1);
+    }
+
+    // --- HardwareInfo::cpu_embedding_concurrency (via embedding_concurrency with no GPU) ---
+
+    #[test]
+    fn cpu_concurrency_capped_at_4() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 64, 256.0, GpuProvider::None);
+        // memory_limit = max(256/2, 1) = 128, core_limit = max(64/2, 1) = 32
+        // min(128, 32, 4) = 4
+        assert_eq!(hw.embedding_concurrency(), 4);
+    }
+
+    #[test]
+    fn cpu_concurrency_low_memory_returns_1() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 64, 1.0, GpuProvider::None);
+        // memory_limit = max(1/2, 1) = 1, core_limit = max(64/2, 1) = 32
+        // min(1, 32, 4) = 1
+        assert_eq!(hw.embedding_concurrency(), 1);
+    }
+
+    #[test]
+    fn cpu_concurrency_low_cores_returns_1() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 2, 16.0, GpuProvider::None);
+        // memory_limit = max(16/2, 1) = 8, core_limit = max(2/2, 1) = 1
+        // min(8, 1, 4) = 1
+        assert_eq!(hw.embedding_concurrency(), 1);
+    }
+
+    #[test]
+    fn cpu_concurrency_minimum_is_1() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 0, 0.0, GpuProvider::None);
+        assert!(hw.embedding_concurrency() >= 1);
+    }
+
+    // --- HardwareInfo::scan_concurrency ---
+
+    #[test]
+    fn scan_concurrency_always_4() {
+        let hw_weak = make_hw(Platform::Linux, Arch::X64, 2, 0.5, GpuProvider::None);
+        assert_eq!(hw_weak.scan_concurrency(), 4);
+
+        let hw_beefy = make_hw(
+            Platform::Darwin,
+            Arch::Arm64,
+            128,
+            1024.0,
+            GpuProvider::Metal,
+        );
+        assert_eq!(hw_beefy.scan_concurrency(), 4);
+    }
+
+    // --- HardwareInfo::description ---
+
+    #[test]
+    fn description_contains_platform() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 4, 8.0, GpuProvider::None);
+        assert!(hw.description().contains("Linux"));
+
+        let hw = make_hw(Platform::Darwin, Arch::Arm64, 4, 8.0, GpuProvider::Metal);
+        assert!(hw.description().contains("macOS"));
+    }
+
+    #[test]
+    fn description_contains_cuda() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 16, 32.0, GpuProvider::Cuda);
+        assert!(hw.description().contains("NVIDIA CUDA"));
+    }
+
+    #[test]
+    fn description_contains_no_gpu() {
+        let hw = make_hw(Platform::Linux, Arch::X64, 4, 8.0, GpuProvider::None);
+        assert!(hw.description().contains("None"));
+    }
+
+    // --- MemoryUsage ---
+
+    #[test]
+    fn usage_fraction_zero_total() {
+        let mem = MemoryUsage {
+            total_bytes: 0,
+            available_bytes: 100,
+        };
+        assert!((mem.usage_fraction() - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_fraction_half_used() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 500,
+        };
+        assert!((mem.usage_fraction() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_fraction_fully_used() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 0,
+        };
+        assert!((mem.usage_fraction() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_fraction_none_used() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 1000,
+        };
+        assert!((mem.usage_fraction() - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_fraction_negative_available() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 2000,
+        };
+        // saturating_sub ensures no underflow → used = 0 → fraction = 0.0
+        assert!((mem.usage_fraction() - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn usage_percent_returns_0_to_100() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 750,
+        };
+        // usage_fraction = 250/1000 = 0.25 → 25.0%
+        assert!((mem.usage_percent() - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn exceeds_below_threshold_false() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 800,
+        };
+        // usage_fraction = 0.2 → 0.2 > 0.5 = false
+        assert!(!mem.exceeds(0.5));
+    }
+
+    #[test]
+    fn exceeds_above_threshold_true() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 100,
+        };
+        // usage_fraction = 0.9 → 0.9 > 0.5 = true
+        assert!(mem.exceeds(0.5));
+    }
+
+    #[test]
+    fn exceeds_exactly_at_threshold() {
+        let mem = MemoryUsage {
+            total_bytes: 1000,
+            available_bytes: 500,
+        };
+        // usage_fraction = 0.5, exceeds uses strict > → 0.5 > 0.5 = false
+        assert!(!mem.exceeds(0.5));
+    }
+
+    #[test]
+    fn memory_pressure_threshold_is_0_75() {
+        assert_eq!(MEMORY_PRESSURE_THRESHOLD, 0.75);
+    }
+
+    #[test]
+    fn memory_critical_threshold_is_0_85() {
+        assert_eq!(MEMORY_CRITICAL_THRESHOLD, 0.85);
+    }
+
+    // --- detect functions ---
+
+    #[test]
+    fn detect_platform_matches_compile_target() {
+        let platform = detect_platform();
+        if cfg!(target_os = "linux") {
+            assert_eq!(platform, Platform::Linux);
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(platform, Platform::Darwin);
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(platform, Platform::Windows);
+        } else {
+            assert_eq!(platform, Platform::Unknown);
+        }
+    }
+
+    #[test]
+    fn detect_arch_matches_compile_target() {
+        let arch = detect_arch();
+        if cfg!(target_arch = "x86_64") {
+            assert_eq!(arch, Arch::X64);
+        } else if cfg!(target_arch = "aarch64") {
+            assert_eq!(arch, Arch::Arm64);
+        } else {
+            assert_eq!(arch, Arch::Unknown);
+        }
+    }
 }

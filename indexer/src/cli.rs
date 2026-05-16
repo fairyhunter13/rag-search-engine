@@ -2229,10 +2229,6 @@ async fn index_single_file(
     Ok(())
 }
 
-fn watcher_state_path(storage_path: &Path) -> Option<PathBuf> {
-    Some(storage_path.parent()?.join(".watcher-state.json"))
-}
-
 // ============================================================================
 // CLI display helpers — these functions are called by run_cli and format output
 // for human-readable or JSON display.

@@ -15,7 +15,9 @@ from __future__ import annotations
 from opencode_embedder.cuda_setup import configure_cuda_paths as _configure_cuda_paths
 _configure_cuda_paths()
 
+import gc
 import logging
+import math
 import os
 
 log = logging.getLogger(__name__)
@@ -70,7 +72,19 @@ _GPU_PROVIDERS: set[str] = {
     "MIGraphXExecutionProvider",
     "DirectMLExecutionProvider",
     "CoreMLExecutionProvider",
+    # Short names (from get_active_provider()) — single source of truth
+    "cuda", "tensorrt", "rocm", "migraphx", "directml", "coreml",
 }
+
+def _resize_matrix(mat, dimensions):
+    """Resize matrix columns to exactly `dimensions` by truncating or zero-padding."""
+    if mat.shape[1] > dimensions:
+        return mat[:, :dimensions]
+    if mat.shape[1] < dimensions:
+        tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
+        tmp[:, : mat.shape[1]] = mat
+        return tmp
+    return mat
 
 _ops_lock = threading.Lock()
 _gpu_ops_count = 0
@@ -111,8 +125,7 @@ def _detect_gpu_capabilities() -> dict:
     - vram_mb: Available VRAM in MB or None
     - vendor: "nvidia", "amd", "intel", "apple", "qualcomm", or "unknown"
     - gpu_name: Human-readable GPU name (e.g. "NVIDIA RTX 4090") or None
-    - driver_version: Driver/runtime version if available, or None
-    """
+"""
     import platform
     import subprocess
 
@@ -123,7 +136,6 @@ def _detect_gpu_capabilities() -> dict:
         "vram_mb": None,
         "vendor": "unknown",
         "gpu_name": None,
-        "driver_version": None,
         "architecture": None,
     }
 
@@ -132,7 +144,7 @@ def _detect_gpu_capabilities() -> dict:
         out = subprocess.run(
             [
                 "nvidia-smi",
-                "--query-gpu=compute_cap,memory.total,name,driver_version",
+                "--query-gpu=compute_cap,memory.total,name",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -150,8 +162,6 @@ def _detect_gpu_capabilities() -> dict:
                 result["vendor"] = "nvidia"
                 if len(parts) >= 3:
                     result["gpu_name"] = parts[2].strip()
-                if len(parts) >= 4:
-                    result["driver_version"] = parts[3].strip()
                 # Tensor cores by architecture:
                 # SM 7.0-7.5: Volta/Turing - 1st/2nd gen tensor cores
                 # SM 8.0-8.9: Ampere/Ada - 3rd/4th gen tensor cores
@@ -458,8 +468,6 @@ def _resize(vec: list[float], dim: int) -> list[float]:
 
 
 def _normalize(vec: list[float]) -> list[float]:
-    import math
-
     norm = math.sqrt(sum((x * x) for x in vec))
     if norm <= 0:
         return vec
@@ -633,7 +641,7 @@ def _embedder(model: str):
         # Release old model before loading new one
         if _cached_embedder is not None:
             _cached_embedder = None
-            import gc; gc.collect()
+            gc.collect()
 
         from fastembed import TextEmbedding
 
@@ -681,7 +689,7 @@ def _reranker(model: str):
 
         if _cached_reranker is not None:
             del _cached_reranker
-            import gc; gc.collect()
+            gc.collect()
 
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
@@ -719,7 +727,6 @@ def cleanup_models() -> None:
     """
     global _cached_embedder, _cached_embedder_model
     global _cached_reranker, _cached_reranker_model
-    import gc
 
     with _embedder_lock:
         if _cached_embedder is not None:
@@ -823,8 +830,6 @@ _limit_onnx_threads()
 
 # Cached provider detection result (computed once at first use)
 # Thread-safe via _provider_lock to prevent race conditions during initialization
-import threading
-
 _detected_providers: list[str] | None = None
 _provider_detection_done: bool = False
 _provider_lock = threading.Lock()
@@ -1084,8 +1089,6 @@ def _detect_and_test_providers() -> list[str] | None:
         ("MIGraphXExecutionProvider", "AMD MIGraphX"),  # Primary for AMD (ORT 1.23+)
         ("ROCMExecutionProvider", "AMD ROCm"),  # Fallback for older ORT (< 1.23)
         ("DirectMLExecutionProvider", "DirectX ML"),
-        # CoreML disabled due to dimension limits with embedding models
-        # ("CoreMLExecutionProvider", "Apple CoreML"),
     ])
 
     # --- Runtime test skip policy ---
@@ -1137,15 +1140,6 @@ def _detect_and_test_providers() -> list[str] | None:
     return None  # unreachable; satisfies type checker
 
 
-# Track whether FP16 inference was confirmed working at runtime
-_fp16_runtime_confirmed = False
-
-
-def _set_fp16_confirmed(val: bool) -> None:
-    global _fp16_runtime_confirmed
-    _fp16_runtime_confirmed = val
-
-
 def _fp16_active() -> bool:
     """Return True if FP16 inference is currently active."""
     if not is_gpu_available():
@@ -1158,9 +1152,7 @@ def _fp16_active() -> bool:
         return False
     if env in ("1", "true", "on"):
         return True
-    # auto: trust runtime test result if available, else check tensor cores
-    if _fp16_runtime_confirmed:
-        return True
+    # auto: check tensor cores
     return caps.get("has_tensor_cores", False)
 
 
@@ -1285,35 +1277,6 @@ def _device_for_provider(provider: str) -> str:
     return "cpu"
 
 
-def _create_io_binding(session, inputs: dict, device: str = "cuda", device_id: int = 0):
-    """Create IOBinding to keep tensors on GPU memory.
-
-    Binds input/output tensors directly to GPU memory to avoid CPU-GPU transfers.
-    Works with CUDA, ROCm, MIGraphX, TensorRT, and DirectML providers.
-
-    Args:
-        session: ONNX InferenceSession
-        inputs: dict mapping input name -> numpy array
-        device: device string ("cuda" for NVIDIA/ROCm/MIGraphX, "dml" for DirectML)
-        device_id: GPU device index
-
-    Returns:
-        IOBinding object or None if IOBinding is unsupported.
-    """
-    try:
-        import onnxruntime as ort
-
-        binding = session.io_binding()
-        for name, arr in inputs.items():
-            val = ort.OrtValue.ortvalue_from_numpy(arr, device, device_id)
-            binding.bind_ortvalue_input(name, val)
-        for out in session.get_outputs():
-            binding.bind_output(out.name, device)
-        return binding
-    except Exception as e:
-        log.debug("IOBinding creation failed: %s", e)
-        return None
-
 
 def _embed_batch_iobinding(
     session,
@@ -1427,11 +1390,43 @@ def get_onnx_batch_size() -> int:
 _MAX_TOKENS = 1024  # Tokenizer truncation limit (safety net for ONNX memory)
 
 
+def _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage"):
+    """Try IOBinding-based embedding. Returns (matrix, success_bool)."""
+    session = embedder.model.model if hasattr(embedder.model, 'model') else None
+    tokenizer = embedder.model.tokenizer if hasattr(embedder.model, 'tokenizer') else None
+    if session is None or tokenizer is None:
+        return None, False
+
+    device = _device_for_provider(provider)
+    all_items = []
+    use_iobinding = True
+
+    for start in range(0, len(texts), _EMBED_SUB_BATCH):
+        batch = texts[start : start + _EMBED_SUB_BATCH]
+        prefixed = [f"{prefix}: {t}" for t in batch]
+        batch_result = _embed_batch_iobinding(
+            session, tokenizer, prefixed, get_onnx_batch_size(), device
+        )
+        if batch_result is not None:
+            if batch_result.ndim == 3:
+                batch_result = np.mean(batch_result, axis=1)
+            all_items.append(batch_result.astype(np.float32))
+        else:
+            use_iobinding = False
+            break
+
+    if not (use_iobinding and all_items):
+        return None, False
+
+    mat = np.concatenate(all_items, axis=0) if len(all_items) > 1 else all_items[0]
+    mat = _resize_matrix(mat, dimensions)
+    return mat, True
+
+
 def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[list[float]]:
     if not texts:
         return []
 
-    import gc
     import time
 
     t_start = time.perf_counter()
@@ -1440,7 +1435,7 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
 
     # Track GPU vs CPU operations
     provider = get_active_provider()
-    is_gpu = provider in ("tensorrt", "cuda", "rocm", "directml", "migraphx", "coreml")
+    is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
         _increment_gpu_ops()
     else:
@@ -1450,77 +1445,29 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
     avg_chars = total_chars // len(texts) if texts else 0
 
     # Try IOBinding path first if GPU available and active
-    use_iobinding = is_gpu and _io_binding_confirmed
-    if use_iobinding:
-        try:
-            # Access ONNX session from FastEmbed: embedder.model.model
-            session = embedder.model.model if hasattr(embedder.model, 'model') else None
-            tokenizer = embedder.model.tokenizer if hasattr(embedder.model, 'tokenizer') else None
-            
-            if session is not None and tokenizer is not None:
-                device = _device_for_provider(provider)
-                all_items: list = []
-                t_embed_total = 0.0
-                
-                for start in range(0, len(texts), _EMBED_SUB_BATCH):
-                    batch = texts[start : start + _EMBED_SUB_BATCH]
-                    prefixed = [f"passage: {t}" for t in batch]
-                    
-                    t_embed_start = time.perf_counter()
-                    # IOBinding: tensors stay on GPU
-                    batch_result = _embed_batch_iobinding(
-                        session, tokenizer, prefixed, 
-                        get_onnx_batch_size(), device
-                    )
-                    t_embed_done = time.perf_counter()
-                    t_embed_total += t_embed_done - t_embed_start
-                    
-                    if batch_result is not None:
-                        # Pool: mean of last_hidden_state (common for BERT models)
-                        # Shape: (batch, seq_len, hidden_dim) → (batch, hidden_dim)
-                        if batch_result.ndim == 3:
-                            batch_result = np.mean(batch_result, axis=1)
-                        all_items.append(batch_result.astype(np.float32))
-                        del batch_result
-                    else:
-                        # IOBinding failed, fall back to standard path
-                        use_iobinding = False
-                        break
-                
-                if use_iobinding and all_items:
-                    # Success! Process the GPU results
-                    mat = np.concatenate(all_items, axis=0) if len(all_items) > 1 else all_items[0]
-                    del all_items
-                    
-                    if mat.ndim == 1:
-                        mat = mat.reshape(1, -1)
-                    if dimensions > 0:
-                        if mat.shape[1] > dimensions:
-                            mat = mat[:, :dimensions]
-                        elif mat.shape[1] < dimensions:
-                            tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
-                            tmp[:, : mat.shape[1]] = mat
-                            del mat
-                            mat = tmp
-                    mat = _normalize_embeddings(mat)
-                    out = mat.tolist()
-                    del mat
-                    gc.collect()
-                    
-                    t_end = time.perf_counter()
-                    if log.isEnabledFor(logging.INFO):
-                        log.info(
-                            "embed[%s+IOBinding]: %d texts (%d avg chars), onnx=%.0fms, total=%.0fms",
-                            provider.upper(),
-                            len(texts),
-                            avg_chars,
-                            t_embed_total * 1000,
-                            (t_end - t_start) * 1000,
-                        )
-                    return out
-        except Exception as e:
-            log.debug("IOBinding path failed, falling back to standard: %s", e)
-            use_iobinding = False
+    if is_gpu and _io_binding_confirmed:
+        t_embed_start = time.perf_counter()
+        mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
+        t_embed_done = time.perf_counter()
+        if ok:
+            if mat.ndim == 1:
+                mat = mat.reshape(1, -1)
+            mat = _normalize_embeddings(mat)
+            out = mat.tolist()
+            del mat
+            gc.collect()
+
+            t_end = time.perf_counter()
+            if log.isEnabledFor(logging.INFO):
+                log.info(
+                    "embed[%s+IOBinding]: %d texts (%d avg chars), onnx=%.0fms, total=%.0fms",
+                    provider.upper(),
+                    len(texts),
+                    avg_chars,
+                    (t_embed_done - t_embed_start) * 1000,
+                    (t_end - t_start) * 1000,
+                )
+            return out
 
     # Standard path (fallback or when IOBinding unavailable)
     t_prefix = time.perf_counter()
@@ -1551,13 +1498,7 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
         if mat.ndim == 1:
             mat = mat.reshape(1, -1)
         if dimensions > 0:
-            if mat.shape[1] > dimensions:
-                mat = mat[:, :dimensions]
-            elif mat.shape[1] < dimensions:
-                tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
-                tmp[:, : mat.shape[1]] = mat
-                del mat
-                mat = tmp
+            mat = _resize_matrix(mat, dimensions)
         mat = _normalize_embeddings(mat)
         # ONLY convert to list at final output (single .tolist() call)
         out = mat.tolist()
@@ -1601,7 +1542,7 @@ def embed_query(text: str, *, model: str, dimensions: int) -> list[float]:
 
     # Track GPU vs CPU operations
     provider = get_active_provider()
-    is_gpu = provider in ("tensorrt", "cuda", "rocm", "directml", "migraphx", "coreml")
+    is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
         _increment_gpu_ops()
     else:
@@ -1643,14 +1584,13 @@ def embed_passages_f32_bytes(
     if not texts:
         return b"", dimensions, 0
 
-    import gc
     import sys
     import time
 
     embedder = _embedder(model)
 
     provider = get_active_provider()
-    is_gpu = provider in ("tensorrt", "cuda", "rocm", "directml", "migraphx", "coreml")
+    is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
         _increment_gpu_ops()
     else:
@@ -1658,81 +1598,32 @@ def embed_passages_f32_bytes(
 
     t_start = time.perf_counter()
     dim_out = dimensions
-    t_embed_total = 0.0
-
     # Try IOBinding path if GPU available
-    use_iobinding = is_gpu and _io_binding_confirmed
-    if use_iobinding:
-        try:
-            session = embedder.model.model if hasattr(embedder.model, 'model') else None
-            tokenizer = embedder.model.tokenizer if hasattr(embedder.model, 'tokenizer') else None
-            
-            if session is not None and tokenizer is not None:
-                device = _device_for_provider(provider)
-                all_items: list = []
-                
-                for start in range(0, len(texts), _EMBED_SUB_BATCH):
-                    batch = texts[start : start + _EMBED_SUB_BATCH]
-                    prefixed = [f"passage: {t}" for t in batch]
-                    
-                    t_embed_start = time.perf_counter()
-                    batch_result = _embed_batch_iobinding(
-                        session, tokenizer, prefixed,
-                        get_onnx_batch_size(), device
-                    )
-                    t_embed_done = time.perf_counter()
-                    t_embed_total += t_embed_done - t_embed_start
-                    
-                    if batch_result is not None:
-                        # Pool if needed
-                        if batch_result.ndim == 3:
-                            batch_result = np.mean(batch_result, axis=1)
-                        all_items.append(batch_result.astype(np.float32))
-                        del batch_result
-                    else:
-                        use_iobinding = False
-                        break
-                    
-                    gc.collect()
-                
-                if use_iobinding and all_items:
-                    # Process on GPU, single copy to bytes
-                    mat = np.concatenate(all_items, axis=0) if len(all_items) > 1 else all_items[0]
-                    del all_items
-                    gc.collect()
-                    
-                    if mat.ndim == 1:
-                        mat = mat.reshape(1, -1)
-                    
-                    if dimensions > 0:
-                        if mat.shape[1] > dimensions:
-                            mat = mat[:, :dimensions]
-                        elif mat.shape[1] < dimensions:
-                            tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
-                            tmp[:, : mat.shape[1]] = mat
-                            del mat
-                            mat = tmp
-                    
-                    dim_out = int(mat.shape[1]) if mat.size else dimensions
-                    mat = _normalize_embeddings(mat)
-                    mat = np.asarray(mat, dtype="<f4")
-                    out_bytes = mat.tobytes()
-                    del mat
-                    gc.collect()
-                    
-                    t_end = time.perf_counter()
-                    if log.isEnabledFor(logging.INFO):
-                        log.info(
-                            "embed_f32[%s+IOBinding]: %d texts, onnx=%.0fms, total=%.0fms",
-                            provider.upper(),
-                            len(texts),
-                            t_embed_total * 1000,
-                            (t_end - t_start) * 1000,
-                        )
-                    return out_bytes, dim_out, len(texts)
-        except Exception as e:
-            log.debug("IOBinding path failed for f32_bytes, falling back: %s", e)
-            use_iobinding = False
+    if is_gpu and _io_binding_confirmed:
+        t_embed_start = time.perf_counter()
+        mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
+        t_embed_done = time.perf_counter()
+        if ok:
+            if mat.ndim == 1:
+                mat = mat.reshape(1, -1)
+
+            dim_out = int(mat.shape[1]) if mat.size else dimensions
+            mat = _normalize_embeddings(mat)
+            mat = np.asarray(mat, dtype="<f4")
+            out_bytes = mat.tobytes()
+            del mat
+            gc.collect()
+
+            t_end = time.perf_counter()
+            if log.isEnabledFor(logging.INFO):
+                log.info(
+                    "embed_f32[%s+IOBinding]: %d texts, onnx=%.0fms, total=%.0fms",
+                    provider.upper(),
+                    len(texts),
+                    (t_embed_done - t_embed_start) * 1000,
+                    (t_end - t_start) * 1000,
+                )
+            return out_bytes, dim_out, len(texts)
 
     # Standard path (fallback)
     all_items: list = []
@@ -1766,18 +1657,11 @@ def embed_passages_f32_bytes(
             mat = mat.reshape(1, -1)
 
         if dimensions > 0:
-            if mat.shape[1] > dimensions:
-                mat = mat[:, :dimensions]
-            elif mat.shape[1] < dimensions:
-                tmp = np.zeros((mat.shape[0], dimensions), dtype=np.float32)
-                tmp[:, : mat.shape[1]] = mat
-                del mat
-                mat = tmp
+            mat = _resize_matrix(mat, dimensions)
 
         dim_out = int(mat.shape[1]) if mat.size else dimensions
         mat = _normalize_embeddings(mat)
         mat = np.asarray(mat, dtype="<f4")
-        # Convert to bytes directly, no .tolist() intermediate step
         out_bytes = mat.tobytes()
         del mat
     elif all_items:
@@ -1823,7 +1707,7 @@ def embed_query_f32_bytes(text: str, *, model: str, dimensions: int) -> tuple[by
     embedder = _embedder(model)
 
     provider = get_active_provider()
-    is_gpu = provider in ("tensorrt", "cuda", "rocm", "directml", "migraphx", "coreml")
+    is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
         _increment_gpu_ops()
     else:
@@ -1896,7 +1780,7 @@ def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple
 
     # Track GPU vs CPU operations
     provider = get_active_provider()
-    is_gpu = provider in ("tensorrt", "cuda", "rocm", "directml", "migraphx", "coreml")
+    is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
         _increment_gpu_ops()
     else:
@@ -2008,7 +1892,6 @@ def _test_provider(provider: str) -> bool:
     Returns True if the provider can run inference, False otherwise.
     Cleans up the ONNX session in a finally block.
     """
-    import gc
     import numpy as np
 
     session = None
@@ -2036,7 +1919,6 @@ def _test_provider(provider: str) -> bool:
     finally:
         if session is not None:
             del session
-            import gc
             gc.collect()
 
 

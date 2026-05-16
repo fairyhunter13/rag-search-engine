@@ -24,8 +24,8 @@ use arrow_array::{
         TimestampMicrosecondBuilder,
     },
     types::TimestampMicrosecondType,
-    Array, Float32Array, Int32Array, Int64Array, PrimitiveArray, RecordBatch, RecordBatchIterator,
-    StringArray,
+    Array, Float32Array, Int32Array, Int64Array, PrimitiveArray, RecordBatch,
+    RecordBatchIterator, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::Utc;
@@ -256,6 +256,35 @@ fn backup_dir() -> PathBuf {
 fn today() -> String {
     chrono::Local::now().date_naive().to_string()
 }
+
+// ---------------------------------------------------------------------------
+// RecordBatch column access helpers
+// ---------------------------------------------------------------------------
+fn col_str<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+}
+fn col_i32<'a>(batch: &'a RecordBatch, name: &str) -> &'a Int32Array {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap()
+}
+fn col_i64<'a>(batch: &'a RecordBatch, name: &str) -> &'a Int64Array {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+}
+// col_f32 not currently needed — Float32Array access uses different patterns with and_then/cloned
 
 /// Hash content with SHA-256 (compatible with Python's hash_content).
 pub fn hash_content(content: &str) -> String {
@@ -1107,50 +1136,6 @@ impl Storage {
         Ok(Usage { tokens, cost })
     }
 
-    pub async fn get_usage_history(&self, days: usize) -> Result<Vec<DailyUsage>> {
-        let table = self.ensure_usage().await?;
-        let results = table.query().execute().await?;
-        use futures::TryStreamExt;
-        let batches: Vec<RecordBatch> = results.try_collect().await?;
-
-        let mut grouped: std::collections::HashMap<String, (i64, f64)> =
-            std::collections::HashMap::new();
-        for batch in &batches {
-            let d = batch
-                .column_by_name("date")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let t = batch
-                .column_by_name("tokens")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let c = batch
-                .column_by_name("cost")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<arrow_array::Float64Array>()
-                .unwrap();
-            for i in 0..batch.num_rows() {
-                let date = d.value(i).to_string();
-                let entry = grouped.entry(date).or_insert((0, 0.0));
-                entry.0 += t.value(i);
-                entry.1 += c.value(i);
-            }
-        }
-
-        let mut out: Vec<DailyUsage> = grouped
-            .into_iter()
-            .map(|(date, (tokens, cost))| DailyUsage { date, tokens, cost })
-            .collect();
-        out.sort_by(|a, b| b.date.cmp(&a.date));
-        out.truncate(days);
-        Ok(out)
-    }
-
     // =========================================================================
     // Chunks
     // =========================================================================
@@ -1214,18 +1199,8 @@ impl Storage {
             let mut batch_rows = 0;
             for batch in &batches {
                 batch_rows += batch.num_rows();
-                let paths = batch
-                    .column_by_name("path")
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                let hashes = batch
-                    .column_by_name("file_hash")
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
+                let paths = col_str(batch, "path");
+                let hashes = col_str(batch, "file_hash");
 
                 for i in 0..batch.num_rows() {
                     // Stop early if limit reached
@@ -1331,18 +1306,8 @@ impl Storage {
             if batch.num_rows() == 0 {
                 continue;
             }
-            let ids = batch
-                .column_by_name("chunk_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let hashes = batch
-                .column_by_name("file_hash")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
+            let ids = col_i64(batch, "chunk_id");
+            let hashes = col_str(batch, "file_hash");
             for i in 0..batch.num_rows() {
                 let id = ids.value(i);
                 if id > best_id {
@@ -1381,24 +1346,9 @@ impl Storage {
                 continue;
             }
 
-            let ids = batch
-                .column_by_name("chunk_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let hashes = batch
-                .column_by_name("content_hash")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let positions = batch
-                .column_by_name("position")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
+            let ids = col_i64(batch, "chunk_id");
+            let hashes = col_str(batch, "content_hash");
+            let positions = col_i32(batch, "position");
 
             for i in 0..batch.num_rows() {
                 out.push((
@@ -1443,46 +1393,11 @@ impl Storage {
         }
 
         let batch = &batches[0];
-        let path = batch
-            .column_by_name("path")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0)
-            .to_string();
-        let file_hash = batch
-            .column_by_name("file_hash")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0)
-            .to_string();
-        let language = batch
-            .column_by_name("language")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0)
-            .to_string();
-        let content = batch
-            .column_by_name("content")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0)
-            .to_string();
-        let content_hash = batch
-            .column_by_name("content_hash")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(0)
-            .to_string();
+        let path = col_str(batch, "path").value(0).to_string();
+        let file_hash = col_str(batch, "file_hash").value(0).to_string();
+        let language = col_str(batch, "language").value(0).to_string();
+        let content = col_str(batch, "content").value(0).to_string();
+        let content_hash = col_str(batch, "content_hash").value(0).to_string();
 
         let vec_col = batch
             .column_by_name("vector")
@@ -1926,42 +1841,12 @@ impl Storage {
         let mut out = Vec::new();
 
         for batch in &batches {
-            let paths = batch
-                .column_by_name("path")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let contents = batch
-                .column_by_name("content")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let start_lines = batch
-                .column_by_name("start_line")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            let end_lines = batch
-                .column_by_name("end_line")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            let languages = batch
-                .column_by_name("language")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let chunk_ids = batch
-                .column_by_name("chunk_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+                    let paths = col_str(batch, "path");
+                    let contents = col_str(batch, "content");
+                    let start_lines = col_i32(batch, "start_line");
+                    let end_lines = col_i32(batch, "end_line");
+                    let languages = col_str(batch, "language");
+                    let chunk_ids = col_i64(batch, "chunk_id");
 
             let distances = batch
                 .column_by_name("_distance")
@@ -2075,42 +1960,12 @@ impl Storage {
 
         // Step 2: Extract results with vectors for reranking
         for batch in &batches {
-            let paths = batch
-                .column_by_name("path")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let contents = batch
-                .column_by_name("content")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let start_lines = batch
-                .column_by_name("start_line")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            let end_lines = batch
-                .column_by_name("end_line")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
-            let languages = batch
-                .column_by_name("language")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let chunk_ids = batch
-                .column_by_name("chunk_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+            let paths = col_str(batch, "path");
+            let contents = col_str(batch, "content");
+            let start_lines = col_i32(batch, "start_line");
+            let end_lines = col_i32(batch, "end_line");
+            let languages = col_str(batch, "language");
+            let chunk_ids = col_i64(batch, "chunk_id");
 
             // Get vectors for reranking
             let vectors = batch
@@ -2243,70 +2098,6 @@ impl Storage {
     /// Count unique indexed files.
     pub async fn count_files(&self) -> Result<usize> {
         self.get_file_count().await
-    }
-
-    pub async fn count_embeddings(&self) -> Result<usize> {
-        let table = self.ensure_chunks().await?;
-        let mut out = 0_usize;
-        let dims = self.dimensions as usize;
-
-        // Paginate through results to avoid streaming issues with large tables
-        let page_size = 5000;
-        let mut offset = 0;
-
-        loop {
-            let results = table
-                .query()
-                .select(lancedb::query::Select::Columns(vec!["vector".into()]))
-                .limit(page_size)
-                .offset(offset)
-                .execute()
-                .await?;
-
-            use futures::TryStreamExt;
-            let batches: Vec<RecordBatch> = results.try_collect().await?;
-
-            let mut batch_rows = 0;
-            for batch in &batches {
-                if batch.num_rows() == 0 {
-                    continue;
-                }
-                batch_rows += batch.num_rows();
-
-                let col = batch.column_by_name("vector").unwrap();
-                let list = col
-                    .as_any()
-                    .downcast_ref::<arrow_array::FixedSizeListArray>()
-                    .unwrap();
-                let values = list
-                    .values()
-                    .as_any()
-                    .downcast_ref::<Float32Array>()
-                    .unwrap();
-
-                for i in 0..batch.num_rows() {
-                    let first = values.value(i * dims);
-                    if first != 0.0 {
-                        out += 1;
-                    }
-                }
-            }
-
-            if batch_rows < page_size {
-                break;
-            }
-            offset += page_size;
-        }
-
-        Ok(out)
-    }
-
-    pub async fn stats(&self) -> Result<(usize, usize, usize)> {
-        let _guard = self.read_guard().await;
-        let files = self.count_files().await?;
-        let chunks = self.count_chunks().await?;
-        let embeddings = self.count_embeddings().await?;
-        Ok((files, chunks, embeddings))
     }
 
     /// Compact storage (merge fragments and prune old versions).
@@ -2469,43 +2260,13 @@ impl Storage {
                 let batches: Vec<RecordBatch> = results.try_collect().await?;
                 let mut out = Vec::new();
 
-                for batch in &batches {
-                    let paths = batch
-                        .column_by_name("path")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .unwrap();
-                    let contents = batch
-                        .column_by_name("content")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .unwrap();
-                    let start_lines = batch
-                        .column_by_name("start_line")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap();
-                    let end_lines = batch
-                        .column_by_name("end_line")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap();
-                    let languages = batch
-                        .column_by_name("language")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .unwrap();
-                    let chunk_ids = batch
-                        .column_by_name("chunk_id")
-                        .unwrap()
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap();
+        for batch in &batches {
+            let paths = col_str(batch, "path");
+            let contents = col_str(batch, "content");
+            let start_lines = col_i32(batch, "start_line");
+            let end_lines = col_i32(batch, "end_line");
+            let languages = col_str(batch, "language");
+            let chunk_ids = col_i64(batch, "chunk_id");
 
                     // _relevance_score from hybrid search (RRF combined score)
                     let scores = batch
@@ -2980,13 +2741,6 @@ impl WriteQueue {
         }
     }
     
-    /// Queue a usage recording operation (non-blocking).
-    pub fn try_record_usage(&self, tokens: i64, tier: &str) -> Result<()> {
-        self.stats.batches_queued.fetch_add(1, Ordering::Relaxed);
-        self.tx.try_send(WriteOp::Usage { tokens, tier: tier.to_string() })
-            .map_err(|e| anyhow::anyhow!("WriteQueue full: {}", e))
-    }
-    
     /// Queue a delete operation (async, waits if buffer full).
     pub async fn delete(&self, paths: Vec<String>) -> Result<()> {
         if paths.is_empty() {
@@ -3042,23 +2796,6 @@ impl WriteQueue {
     pub async fn delete_file(&self, path: &str) {
         self.stats.batches_queued.fetch_add(1, Ordering::Relaxed);
         let _ = self.tx.send(WriteOp::DeleteFile(path.to_string())).await;
-    }
-    
-    /// Get current statistics.
-    pub fn stats(&self) -> WriteQueueStatsSnapshot {
-        self.stats.snapshot()
-    }
-    
-    /// Check if queue is empty (all writes have been processed).
-    pub fn is_drained(&self) -> bool {
-        let s = self.stats.snapshot();
-        s.batches_queued == s.batches_written
-    }
-    
-    /// Get number of pending operations.
-    pub fn pending(&self) -> u64 {
-        let s = self.stats.snapshot();
-        s.batches_queued.saturating_sub(s.batches_written)
     }
     
     /// Gracefully shutdown: close the channel and wait for all pending writes to complete.
