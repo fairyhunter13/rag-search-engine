@@ -2883,3 +2883,393 @@ fn escape_sql(s: &str) -> String {
      .replace('\r', "\\r")
 }
 
+// ============================================================================
+// Tests — compaction concurrency safety
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Barrier;
+
+    /// Creates an empty LanceDB chunks table in a temp directory.
+    async fn create_test_storage(dimensions: u32) -> (Storage, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let db = tmp.path().join(".lancedb");
+        let storage = Storage::open(&db, dimensions).await.expect("open");
+        // Force creation of the chunks table
+        let _ = storage.ensure_chunks().await.expect("ensure_chunks");
+        (storage, tmp)
+    }
+
+    /// Adds a single chunk to the storage so there is data for compaction.
+    async fn add_test_chunk(storage: &Storage, path: &str, content: &str) {
+        let vec = vec![0.0f32; storage.dimensions as usize];
+        storage
+            .add_chunks(
+                path,
+                &hash_content(content),
+                "text",
+                vec![ChunkData {
+                    position: 0,
+                    content: content.to_string(),
+                    start_line: 1,
+                    end_line: 1,
+                    vector: vec,
+                }],
+            )
+            .await
+            .expect("add_chunks");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 1: read_guard blocks compaction (deterministic)
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn read_guard_prevents_concurrent_compaction() {
+        let (storage, _tmp) = create_test_storage(256).await;
+        add_test_chunk(&storage, "a.rs", "fn main() {}").await;
+        let storage = Arc::new(storage);
+
+        // Hold a read guard across an await point so compaction cannot start
+        let guard = storage.read_guard().await;
+
+        // Spawn compaction — it must wait for the read guard to drop
+        let s = storage.clone();
+        let compact_task = tokio::spawn(async move { s.compact().await });
+
+        // Give compaction a moment to try to acquire the write lock
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Compaction should NOT have finished — the read guard is still held
+        assert!(!compact_task.is_finished());
+
+        // Drop the read guard; compaction should now proceed
+        drop(guard);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(compact_task.is_finished());
+        compact_task.await.unwrap().expect("compact succeeded");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 2: compaction write-lock blocks concurrent reads (deterministic)
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn compaction_blocks_concurrent_reads() {
+        let (storage, _tmp) = create_test_storage(256).await;
+        add_test_chunk(&storage, "b.rs", "fn bar() {}").await;
+        let storage = Arc::new(storage);
+
+        let barrier = Arc::new(Barrier::new(2));
+
+        // Task A: start compaction, signal when inside the critical section
+        let s = storage.clone();
+        let b = barrier.clone();
+        let compact_handle = tokio::spawn(async move {
+            // Acquire write lock and hold it for a bit
+            let _write_guard = s.compaction_guard.write().await;
+            b.wait().await; // signal "I'm inside compaction"
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            // Don't actually call compact() — just test the lock semantics
+            Ok::<_, anyhow::Error>(())
+        });
+
+        // Wait until compaction holds the write lock
+        barrier.wait().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Task B: try to acquire read lock — must block
+        let s2 = storage.clone();
+        let read_handle = tokio::spawn(async move {
+            let _guard = s2.read_guard().await;
+            "acquired"
+        });
+
+        // Read lock should still be blocked after 100ms
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!read_handle.is_finished(), "read_guard should block during compaction");
+
+        // Wait for compaction to finish
+        compact_handle.await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Now the read lock should be acquired
+        assert!(read_handle.is_finished(), "read_guard should proceed after compaction");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 3: multiple concurrent reads do not block each other
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn concurrent_reads_do_not_block_each_other() {
+        let (storage, _tmp) = create_test_storage(256).await;
+        add_test_chunk(&storage, "c.rs", "fn baz() {}").await;
+        let storage = Arc::new(storage);
+
+        let mut handles = Vec::new();
+        for i in 0..20 {
+            let s = storage.clone();
+            handles.push(tokio::spawn(async move {
+                let _guard = s.read_guard().await;
+                // Simulate reading by counting chunks
+                s.count_chunks().await.map(|_| i)
+            }));
+        }
+
+        // All 20 concurrent readers should complete within 5 seconds
+        let results = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut out = Vec::new();
+            for h in handles {
+                out.push(h.await.unwrap());
+            }
+            out
+        })
+        .await
+        .expect("all concurrent reads completed within timeout");
+
+        assert_eq!(results.len(), 20);
+        for r in &results {
+            assert!(r.is_ok(), "all reads should succeed: {:?}", r);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Test 4: parallel writes maintain chunk consistency
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn concurrent_writes_maintain_chunk_count_consistency() {
+        let (storage, _tmp) = create_test_storage(256).await;
+        let storage = Arc::new(storage);
+
+        let count = 50usize;
+        let mut handles = Vec::new();
+        for i in 0..count {
+            let s = storage.clone();
+            handles.push(tokio::spawn(async move {
+                let path = format!("file_{:04}.rs", i);
+                let content = format!("// file {}", i);
+                let vec = vec![0.0f32; s.dimensions as usize];
+                s.add_chunks(
+                    &path,
+                    &hash_content(&content),
+                    "rust",
+                    vec![ChunkData { position: 0, content, start_line: 1, end_line: 1, vector: vec }],
+                ).await
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap().expect("add_chunks succeeded");
+        }
+
+        // Verify: all chunks exist and each file has exactly 1 chunk
+        let chunks = storage.count_chunks().await.expect("count_chunks");
+        assert_eq!(chunks, count, "chunk count should equal number of files");
+
+        let hashes = storage.get_file_hashes(None).await.expect("get_file_hashes");
+        assert_eq!(hashes.len(), count, "unique file count should equal number of files");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 5: add-then-read consistency (write → immediate read)
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn write_immediately_visible_to_read() {
+        let (storage, _tmp) = create_test_storage(256).await;
+
+        add_test_chunk(&storage, "d.rs", "fn main() { println!(\"hi\"); }").await;
+
+        // Read immediately after write — verify chunk visibility
+        let hashes = storage.get_file_hashes(None).await.expect("get_file_hashes");
+        assert!(hashes.contains_key("d.rs"), "newly written file should be visible in hashes");
+        assert_eq!(hashes.len(), 1, "exactly one file should be visible");
+
+        let chunks = storage.count_chunks().await.expect("count_chunks");
+        assert_eq!(chunks, 1, "exactly one chunk should exist");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 6: delete removes chunks correctly
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn delete_removes_chunks_correctly() {
+        let (storage, _tmp) = create_test_storage(256).await;
+
+        add_test_chunk(&storage, "x.rs", "one").await;
+        add_test_chunk(&storage, "y.rs", "two").await;
+        add_test_chunk(&storage, "z.rs", "three").await;
+
+        assert_eq!(storage.count_chunks().await.unwrap(), 3);
+        assert_eq!(storage.get_file_hashes(None).await.unwrap().len(), 3);
+
+        storage.delete_file("y.rs").await.expect("delete y.rs");
+        assert_eq!(storage.count_chunks().await.unwrap(), 2);
+        assert_eq!(storage.get_file_hashes(None).await.unwrap().len(), 2);
+        assert!(!storage.get_file_hashes(None).await.unwrap().contains_key("y.rs"));
+    }
+
+    // ------------------------------------------------------------------
+    // Test 7: corrupt error is detected correctly
+    // ------------------------------------------------------------------
+    #[test]
+    fn corruption_error_detected_for_recordbatch_size_mismatch() {
+        let err = anyhow::anyhow!(
+            "LanceError(Arrow): Invalid argument error: \
+             Attempt to merge two RecordBatch with different sizes: 40 != 39"
+        );
+        assert!(
+            is_corruption_error(&err),
+            "should detect RecordBatch size mismatch as corruption"
+        );
+    }
+
+    #[test]
+    fn corruption_error_not_detected_for_normal_errors() {
+        let err = anyhow::anyhow!("file not found: /tmp/foo.txt");
+        assert!(
+            !is_corruption_error(&err),
+            "normal IO errors should not be flagged as corruption"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Test 8: stress — interleave compaction with concurrent reads/writes
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn stress_compaction_concurrent_with_reads_and_writes() {
+        let (storage, _tmp) = create_test_storage(256).await;
+        let storage = Arc::new(storage);
+
+        // Pre-populate with data so compaction has fragments to merge,
+        // and searches have actual content to find.
+        for i in 0..20 {
+            let path = format!("mod_{:02}.rs", i);
+            // Use varied content so chunks are distinct
+            let content = format!(
+                "// module {}\nfn f{}() {{ println!(\"hello from {}\"); }}\nconst C{}: i32 = {};",
+                i, i, i, i, i
+            );
+            add_test_chunk(&storage, &path, &content).await;
+        }
+
+        let barrier = Arc::new(Barrier::new(4));
+
+        // Task 1: compaction (real compact)
+        let s = storage.clone();
+        let b = barrier.clone();
+        let compact_handle: tokio::task::JoinHandle<Result<(), anyhow::Error>> = tokio::spawn(async move {
+            b.wait().await;
+            s.compact().await
+        });
+
+        // Task 2: concurrent reads (search + count + hashes)
+        let s2 = storage.clone();
+        let b2 = barrier.clone();
+        let read_handle: tokio::task::JoinHandle<Result<usize, anyhow::Error>> = tokio::spawn(async move {
+            b2.wait().await;
+            let mut ok = 0usize;
+            for _ in 0..15 {
+                // Search — may return empty for zero vectors, that's fine
+                let _ = s2.search_vector(&vec![0.1f32; 256], 3).await;
+                let _ = s2.count_chunks().await;
+                let _ = s2.get_file_hashes(None).await;
+                ok += 1;
+            }
+            Ok(ok)
+        });
+
+        // Task 3: concurrent writes
+        let s3 = storage.clone();
+        let b3 = barrier.clone();
+        let write_handle: tokio::task::JoinHandle<Result<(), anyhow::Error>> = tokio::spawn(async move {
+            b3.wait().await;
+            for i in 20..30 {
+                let path = format!("mod_{:02}.rs", i);
+                add_test_chunk(&s3, &path, &format!("// module {i}\nfn f{i}() {{}}\n")).await;
+            }
+            // Explicitly set the file count to what we know it should be after writes
+            s3.set_file_count(30).await?;
+            Ok(())
+        });
+
+        // Task 4: delete + add in a tight loop
+        let s4 = storage.clone();
+        let b4 = barrier.clone();
+        let mix_handle: tokio::task::JoinHandle<Result<(), anyhow::Error>> = tokio::spawn(async move {
+            b4.wait().await;
+            for i in 0..5 {
+                let path = format!("temp_{:02}.rs", i);
+                add_test_chunk(&s4, &path, &format!("// temp {i}")).await;
+                s4.delete_file(&path).await?;
+            }
+            Ok(())
+        });
+
+        // All tasks complete within 30s
+        let timeout_dur = Duration::from_secs(30);
+        let result = tokio::time::timeout(timeout_dur, async {
+            let c = compact_handle.await.unwrap();
+            let r = read_handle.await.unwrap();
+            let w = write_handle.await.unwrap();
+            let m = mix_handle.await.unwrap();
+            (c, r, w, m)
+        })
+        .await
+        .expect("stress test completed within timeout");
+
+        // All operations must succeed
+        result.0.expect("compaction should succeed during concurrent ops");
+        assert_eq!(result.1.unwrap(), 15, "all reads should complete");
+        result.2.expect("writes should succeed");
+        result.3.expect("mix ops should succeed");
+
+        // Final consistency: at least 20 persistent files (some may have been deleted)
+        let chunks = storage.count_chunks().await.unwrap();
+        assert!(chunks >= 20, "at least 20 chunks should exist after stress test, got {}", chunks);
+    }
+
+    // ------------------------------------------------------------------
+    // Test 9: compact acquires write lock (guard level, not real compaction)
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn compact_write_lock_serializes_with_read_guards() {
+        let (storage, _tmp) = create_test_storage(256).await;
+        let storage = Arc::new(storage);
+
+        // Acquire 5 read guards
+        let mut guards = Vec::new();
+        for _ in 0..5 {
+            guards.push(storage.read_guard().await);
+        }
+
+        // Try to acquire write lock (compaction) — must time out
+        let s = storage.clone();
+        let compact_result = tokio::time::timeout(Duration::from_millis(200), async move {
+            let _write = s.compaction_guard.write().await;
+            "acquired"
+        })
+        .await;
+
+        assert!(
+            compact_result.is_err(),
+            "write lock should be blocked while read guards are held"
+        );
+
+        // Drop all read guards
+        drop(guards);
+
+        // Now write lock should be acquirable
+        let s = storage.clone();
+        let compact_result = tokio::time::timeout(Duration::from_secs(1), async move {
+            let _write = s.compaction_guard.write().await;
+            "acquired"
+        })
+        .await;
+
+        assert!(
+            compact_result.is_ok(),
+            "write lock should succeed after all read guards are dropped"
+        );
+    }
+}
+

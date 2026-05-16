@@ -257,14 +257,6 @@ pub fn batch_cosine_similarity(query: &[f32], candidates: &[Vec<f32>]) -> Vec<f3
         .collect()
 }
 
-#[cfg(not(feature = "rayon"))]
-pub fn batch_cosine_similarity(query: &[f32], candidates: &[Vec<f32>]) -> Vec<f32> {
-    candidates
-        .iter()
-        .map(|c| cosine_similarity(query, c))
-        .collect()
-}
-
 /// Rerank search results by exact cosine similarity.
 ///
 /// Takes top-K candidates from approximate search and reranks by computing

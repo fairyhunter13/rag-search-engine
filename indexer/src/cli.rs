@@ -84,10 +84,6 @@ pub struct Args {
     #[arg(long, short, default_value = "1024")]
     pub dimensions: u32,
 
-    /// Quantization (ignored, for backward compat with Python embedder)
-    #[arg(long, default_value = "int8")]
-    pub quantization: String,
-
     /// Show index status
     #[arg(long)]
     pub status: bool,
@@ -161,10 +157,6 @@ pub struct Args {
     #[arg(long)]
     pub remove: Option<PathBuf>,
 
-    /// Show usage stats (for backward compat, currently shows nothing)
-    #[arg(long)]
-    pub usage: bool,
-
     /// Federated search: additional DB paths to search across
     #[arg(long = "federated-db")]
     pub federated_db: Vec<PathBuf>,
@@ -176,11 +168,6 @@ pub struct Args {
     /// Health check (returns structured health info)
     #[arg(long)]
     pub health: bool,
-
-    /// Run as a daemon (Unix socket server) instead of one-shot CLI.
-    /// Deprecated: daemon now uses Unix domain sockets instead of TCP ports.
-    #[arg(long)]
-    pub daemon: bool,
 
     /// TCP port for daemon mode (0 = pick a random free port). If omitted, Unix socket is used.
     #[arg(long)]
@@ -1330,16 +1317,6 @@ async fn run_indexing(
 
     let total_to_process = to_process.len();
     let is_tcp = crate::model_client::is_remote_mode();
-
-    // Pre-warm connection pool for both TCP and local modes:
-    // - TCP: avoids SSH spawn race + connection latency
-    // - Local: prevents thundering herd at startup
-    if let Err(e) = crate::model_client::warmup().await {
-        tracing::warn!(
-            "pool warmup failed: {}, continuing with lazy connections",
-            e
-        );
-    }
 
     if is_tcp {
         // ======================================================================

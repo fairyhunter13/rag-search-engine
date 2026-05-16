@@ -890,11 +890,6 @@ pub fn is_remote_mode() -> bool {
     std::env::var("OPENCODE_INDEXER_REMOTE").as_deref() == Ok("1")
 }
 
-/// No-op warmup (HTTP connections are stateless).
-pub async fn warmup() -> Result<()> {
-    Ok(())
-}
-
 /// An HTTP-backed embedder client.
 ///
 /// All operations delegate to the HTTP embedder API on localhost.
