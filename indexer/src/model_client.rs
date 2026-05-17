@@ -532,22 +532,35 @@ async fn wait_for_embedder(timeout_secs: u64) -> bool {
     false
 }
 
-/// Spawn (at most once) a background task that shuts down the embedder after
-/// OPENCODE_INDEXER_EMBEDDER_IDLE_SECS of inactivity (default 300s).
-/// After shutdown, EMBEDDER_CHECKED is cleared so the next embed call re-spawns.
+/// The embedder is a child of the indexer and should never shut down independently.
+/// It dies only when the indexer itself shuts down (via reap_embedder_child on exit).
+/// This is required because the indexer depends on the embedder for search, and
+/// an idle embedder being killed while the indexer is still servicing TUI connections
+/// causes "Not watching" / "Not indexed" states and breaks codebase_search.
+///
+/// The old idle monitor killed the embedder after OPENCODE_INDEXER_EMBEDDER_IDLE_SECS
+/// (default 300s) of inactivity regardless of whether the indexer had active clients.
+/// Re-enabled via env: OPENCODE_INDEXER_EMBEDDER_IDLE_SECS=300 (set explicitly, not default).
 fn spawn_idle_monitor() {
-    // OnceLock ensures we spawn at most one monitor per process lifetime.
+    // Only enable embedder idle shutdown if explicitly opted in via env var.
+    // The default is disabled — the embedder lives as long as the indexer.
+    let idle_secs = std::env::var("OPENCODE_INDEXER_EMBEDDER_IDLE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0); // 0 = disabled
+
+    if idle_secs == 0 {
+        tracing::info!("embedder idle monitor disabled (embedder lives as long as indexer)");
+        return;
+    }
+
     IDLE_MONITOR_STARTED.get_or_init(|| {
+        tracing::info!("embedder idle monitor enabled (timeout={}s)", idle_secs);
         tokio::spawn(async move {
-            let idle_secs = std::env::var("OPENCODE_INDEXER_EMBEDDER_IDLE_SECS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(300);
             let threshold = Duration::from_secs(idle_secs);
             loop {
                 tokio::time::sleep(Duration::from_secs(120)).await;
                 let last = EMBEDDER_LAST_USED.load(Ordering::Relaxed);
-                // last == 0 means embedder was never used for actual work — skip
                 if last == 0 {
                     continue;
                 }
@@ -563,7 +576,6 @@ fn spawn_idle_monitor() {
                         idle_secs
                     );
                     shutdown_embedder();
-                    // Clear checked so next embed request re-spawns lazily
                     EMBEDDER_CHECKED.store(false, Ordering::SeqCst);
                     EMBEDDER_LAST_USED.store(0, Ordering::SeqCst);
                 }
