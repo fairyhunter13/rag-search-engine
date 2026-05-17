@@ -1,6 +1,7 @@
 #!/bin/bash
-# Auto-deploy opencode-indexer after commit.
-# Builds release binary and copies to ~/.opencode/bin/, then restarts daemon.
+# Auto-deploy opencode-indexer + health-supervisor after commit.
+# Builds release binary, copies to ~/.opencode/bin/, then restarts daemon
+# and ensures the health supervisor is running.
 #
 # Supports both onefile (single binary) and onedir (PyInstaller directory)
 # deployment modes.
@@ -13,60 +14,48 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 INDEXER_DIR="$REPO_ROOT/indexer"
 DEPLOY_DIR="$HOME/.opencode/bin"
 BINARY_NAME="opencode-indexer"
+SUPERVISOR_NAME="health-supervisor.sh"
 
 # Only build if indexer source files changed in this commit
 CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD -- indexer/src/ indexer/Cargo.toml indexer/build.rs 2>/dev/null)
 if [ -z "$CHANGED" ]; then
     echo "[post-commit] No indexer source changes, skipping deploy."
-    exit 0
+else
+    echo "[post-commit] Indexer source changed, building release..."
+    cd "$INDEXER_DIR"
+
+    # Build release binary
+    if cargo build --release 2>&1 | tail -3; then
+        echo "[post-commit] Build succeeded."
+    else
+        echo "[post-commit] Build FAILED, skipping deploy."
+    fi
+
+    # Deploy atomically (avoids "Text file busy" if daemon is running)
+    if [ -d "$DEPLOY_DIR" ] && [ -f "target/release/$BINARY_NAME" ]; then
+        # Remove old deployment to handle mode switches (onefile → onedir)
+        rm -rf "$DEPLOY_DIR/$BINARY_NAME" "$DEPLOY_DIR/$BINARY_NAME.old" 2>/dev/null || true
+
+        cp "target/release/$BINARY_NAME" "$DEPLOY_DIR/$BINARY_NAME.new"
+        mv -f "$DEPLOY_DIR/$BINARY_NAME.new" "$DEPLOY_DIR/$BINARY_NAME"
+        echo "[post-commit] Deployed to $DEPLOY_DIR/$BINARY_NAME"
+
+        # Kill old daemon — opencode will respawn it automatically
+        pkill -f "$BINARY_NAME" 2>/dev/null && echo "[post-commit] Restarting daemon..." || true
+    else
+        echo "[post-commit] Deploy dir $DEPLOY_DIR not found or build absent, skipping."
+    fi
 fi
 
-echo "[post-commit] Indexer source changed, building release..."
-cd "$INDEXER_DIR"
+# ── Deploy and restart health supervisor ──────────────────────────────────
+if [ -f "$REPO_ROOT/health-supervisor.sh" ]; then
+    cp "$REPO_ROOT/health-supervisor.sh" "$DEPLOY_DIR/$SUPERVISOR_NAME"
+    chmod +x "$DEPLOY_DIR/$SUPERVISOR_NAME"
+    echo "[post-commit] Health supervisor deployed to $DEPLOY_DIR/$SUPERVISOR_NAME"
 
-# Build release binary
-if cargo build --release 2>&1 | tail -3; then
-    echo "[post-commit] Build succeeded."
-else
-    echo "[post-commit] Build FAILED, skipping deploy."
-    exit 0
-fi
-
-# Deploy atomically (avoids "Text file busy" if daemon is running)
-if [ -d "$DEPLOY_DIR" ]; then
-    # Remove old deployment to handle mode switches (onefile → onedir)
-    rm -rf "$DEPLOY_DIR/$BINARY_NAME" "$DEPLOY_DIR/$BINARY_NAME.old" 2>/dev/null || true
-        
-    # Copy binary (single-file onefile mode for Rust, not PyInstaller)
-    cp "target/release/$BINARY_NAME" "$DEPLOY_DIR/$BINARY_NAME.new"
-    mv -f "$DEPLOY_DIR/$BINARY_NAME.new" "$DEPLOY_DIR/$BINARY_NAME"
-    echo "[post-commit] Deployed to $DEPLOY_DIR/$BINARY_NAME"
-
-    # Kill old daemon — opencode will respawn it automatically
-    pkill -f "$BINARY_NAME" 2>/dev/null && echo "[post-commit] Restarting daemon..." || true
-else
-    echo "[post-commit] Deploy dir $DEPLOY_DIR not found, skipping."
-fi
-
-echo "[post-commit] Indexer source changed, building release..."
-cd "$INDEXER_DIR"
-
-# Build release binary
-if cargo build --release 2>&1 | tail -3; then
-    echo "[post-commit] Build succeeded."
-else
-    echo "[post-commit] Build FAILED, skipping deploy."
-    exit 0
-fi
-
-# Deploy atomically (avoids "Text file busy" if daemon is running)
-if [ -d "$DEPLOY_DIR" ]; then
-    cp "target/release/$BINARY_NAME" "$DEPLOY_DIR/$BINARY_NAME.new"
-    mv -f "$DEPLOY_DIR/$BINARY_NAME.new" "$DEPLOY_DIR/$BINARY_NAME"
-    echo "[post-commit] Deployed to $DEPLOY_DIR/$BINARY_NAME"
-
-    # Kill old daemon u2014 opencode will respawn it automatically
-    pkill -f "$BINARY_NAME" 2>/dev/null && echo "[post-commit] Restarting daemon..." || true
-else
-    echo "[post-commit] Deploy dir $DEPLOY_DIR not found, skipping."
+    # Restart the supervisor if already running
+    pkill -f "$SUPERVISOR_NAME" 2>/dev/null || true
+    # Fire-and-forget: daemon mode, detached from tty
+    nohup "$DEPLOY_DIR/$SUPERVISOR_NAME" --interval 60 > /dev/null 2>&1 &
+    echo "[post-commit] Health supervisor restarted (PID $!)"
 fi
