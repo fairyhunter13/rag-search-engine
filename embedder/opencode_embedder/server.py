@@ -407,14 +407,28 @@ class ModelServer:
     # ---- Idle shutdown monitor ----
 
     async def _idle_shutdown_monitor(self) -> None:
-        """Monitor for idle time and trigger shutdown when no activity."""
+        """Monitor for idle time and trigger shutdown when no activity AND no connections.
+
+        Follows same connection-aware idle shutdown as the Rust indexer:
+        - When active_requests > 0: reset idle timer (clients are connected)
+        - When active_requests == 0 for idle_shutdown_secs: shut down
+        - Multiple opencode TUI instances keep the embedder alive via active connections
+        """
         if self._idle_shutdown_secs <= 0:
             log.info("idle shutdown disabled (OPENCODE_EMBED_IDLE_SHUTDOWN=0)")
             return
 
-        log.info("idle shutdown monitor started (timeout=%ds)", self._idle_shutdown_secs)
+        log.info(
+            "idle shutdown monitor started (timeout=%ds, connection-aware)",
+            self._idle_shutdown_secs,
+        )
 
         while not self._shutdown.is_set():
+            # When connections exist, reset the idle timer — the embedder
+            # stays alive as long as any client (indexer, TUI) is connected.
+            if self._active_requests > 0:
+                self._last_activity = time.monotonic()
+
             idle = time.monotonic() - self._last_activity
             remaining = max(1.0, self._idle_shutdown_secs - idle)
 
@@ -425,8 +439,11 @@ class ModelServer:
                 pass
 
             idle = time.monotonic() - self._last_activity
-            if idle >= self._idle_shutdown_secs:
-                log.info("idle shutdown: no activity for %.0fs", idle)
+            if idle >= self._idle_shutdown_secs and self._active_requests == 0:
+                log.info(
+                    "idle shutdown: no activity for %.0fs, no active connections",
+                    idle,
+                )
                 self._shutdown.set()
                 break
 
@@ -504,21 +521,38 @@ class ModelServer:
     # ---- Parent process monitor ----
 
     async def _parent_monitor(self, parent_pid: int) -> None:
-        """Monitor parent process and trigger shutdown if it dies."""
-        log.info("parent monitor started (parent_pid=%d)", parent_pid)
+        """Monitor parent process and trigger shutdown if it dies AND no connections.
+
+        Connection-aware: when the parent dies but active HTTP requests exist
+        (other TUI/indexer instances connected), the embedder stays alive.
+        Only shuts down when parent is dead AND zero active connections.
+        """
+        log.info("parent monitor started (parent_pid=%d, connection-aware)", parent_pid)
+        parent_dead = False
 
         while not self._shutdown.is_set():
             try:
                 await asyncio.sleep(5)
-                # Check if parent process is alive using kill(pid, 0)
-                # Signal 0 doesn't send a signal, just checks if process exists
                 try:
                     os.kill(parent_pid, 0)
                 except OSError:
-                    # Parent died
-                    log.warning("parent process %d died, initiating shutdown", parent_pid)
-                    self._shutdown.set()
-                    break
+                    if not parent_dead:
+                        log.warning("parent process %d died", parent_pid)
+                        parent_dead = True
+
+                    if self._active_requests == 0:
+                        log.info(
+                            "parent %d dead, no active connections — shutting down",
+                            parent_pid,
+                        )
+                        self._shutdown.set()
+                        break
+
+                    log.debug(
+                        "parent %d dead but %d active connections remain — staying alive",
+                        parent_pid,
+                        self._active_requests,
+                    )
             except asyncio.CancelledError:
                 break
 
