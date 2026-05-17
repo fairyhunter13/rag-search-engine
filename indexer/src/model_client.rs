@@ -231,6 +231,20 @@ static EMBEDDER_PID: AtomicU32 = AtomicU32::new(0);
 /// Unix-millis timestamp of last successful embed request (0 = never used).
 static EMBEDDER_LAST_USED: AtomicU64 = AtomicU64::new(0);
 
+/// Consecutive spawn failure count. Reset on first successful spawn.
+/// Used as a circuit breaker to prevent infinite restart loops when the
+/// embedder binary is broken/missing (e.g., onedir vs onefile mismatch).
+static EMBEDDER_SPAWN_FAILURES: AtomicU32 = AtomicU32::new(0);
+
+/// Unix-millis timestamp of the first spawn failure in the current burst (0 = no burst).
+static EMBEDDER_SPAWN_FAILURE_START: AtomicU64 = AtomicU64::new(0);
+
+/// Max consecutive spawn failures before giving up.
+const MAX_SPAWN_FAILURES: u32 = 5;
+
+/// Time window for counting consecutive spawn failures.
+const SPAWN_FAILURE_WINDOW_MS: u64 = 30_000; // 30 seconds
+
 /// Guard: idle-shutdown background task spawned at most once.
 static IDLE_MONITOR_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
@@ -257,14 +271,41 @@ fn embedder_pid_path() -> Option<std::path::PathBuf> {
 }
 
 /// Resolve the embedder binary path.
-/// Checks: ~/.opencode/bin/opencode-embedder (GPU wrapper), then the PyInstaller binary.
+///
+/// PyInstaller onedir mode creates a directory structure:
+///   opencode-embedder/
+///     _internal/    (Python runtime + libs)
+///     opencode-embedder  (executable stub)
+///
+/// The legacy onefile mode produced a single file. We handle both.
 fn embedder_binary() -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
-    let candidates = [
-        home.join(".opencode/bin/opencode-embedder"),
-        home.join(".opencode/bin/opencode-embedder-dir/opencode-embedder"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    let bin = home.join(".opencode/bin");
+
+    // onedir: directory containing the executable with same name
+    let onedir = bin.join("opencode-embedder");
+    if onedir.is_dir() {
+        let exe = onedir.join("opencode-embedder");
+        if exe.is_file() {
+            return Some(exe);
+        }
+    }
+
+    // onefile (legacy): single executable file
+    if onedir.is_file() {
+        return Some(onedir);
+    }
+
+    // onedir variant directory name
+    let onedir_alt = bin.join("opencode-embedder-dir");
+    if onedir_alt.is_dir() {
+        let exe = onedir_alt.join("opencode-embedder");
+        if exe.is_file() {
+            return Some(exe);
+        }
+    }
+
+    None
 }
 
 /// Ensure the Python embedder is running. Called lazily on first use.
@@ -288,6 +329,8 @@ pub async fn ensure_embedder() {
     // Check if embedder is already healthy
     if http_health().await.unwrap_or(false) {
         EMBEDDER_CHECKED.store(true, Ordering::Relaxed);
+        EMBEDDER_SPAWN_FAILURES.store(0, Ordering::SeqCst);
+        EMBEDDER_SPAWN_FAILURE_START.store(0, Ordering::SeqCst);
         tracing::info!("embedder already running");
         spawn_idle_monitor();
         return;
@@ -321,6 +364,29 @@ pub async fn ensure_embedder() {
         }
     }
 
+    // Circuit breaker: if we've had too many recent spawn failures, give up.
+    // Prevents infinite restart loops when the embedder binary is broken/missing.
+    let failures = EMBEDDER_SPAWN_FAILURES.load(Ordering::Relaxed);
+    let failure_start = EMBEDDER_SPAWN_FAILURE_START.load(Ordering::Relaxed);
+    if failures >= MAX_SPAWN_FAILURES && failure_start > 0 {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if now_ms.saturating_sub(failure_start) < SPAWN_FAILURE_WINDOW_MS {
+            tracing::error!(
+                "embedder spawn circuit breaker: {} failures in {}s, giving up permanently",
+                failures,
+                SPAWN_FAILURE_WINDOW_MS / 1000
+            );
+            EMBEDDER_CHECKED.store(true, Ordering::SeqCst);
+            return;
+        }
+        // Window expired, reset failure counter for a fresh attempt
+        EMBEDDER_SPAWN_FAILURES.store(0, Ordering::SeqCst);
+        EMBEDDER_SPAWN_FAILURE_START.store(0, Ordering::SeqCst);
+    }
+
     // Find and spawn the embedder binary
     let binary = match embedder_binary() {
         Some(b) => b,
@@ -350,8 +416,19 @@ pub async fn ensure_embedder() {
         .env("ORT_NUM_THREADS", "4")
         .env("OPENBLAS_NUM_THREADS", "2")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(std::process::Stdio::null());
+
+    // Redirect stderr to a log file so crash evidence is preserved.
+    // Each spawn rotates: embedder.log → embedder.log.1 (previous run).
+    if let Some(home) = dirs::home_dir() {
+        let log_dir = home.join(".opencode");
+        let log_path = log_dir.join("embedder.log");
+        let log_prev = log_dir.join("embedder.log.1");
+        let _ = std::fs::rename(&log_path, &log_prev);
+        if let Ok(file) = std::fs::File::create(&log_path) {
+            cmd.stderr(file);
+        }
+    }
 
     // REC-5+6: Set resource limits and priority on embedder child process.
     // - RLIMIT_AS: GPU mode needs large virtual address space for CUDA memory mapping.
@@ -399,6 +476,8 @@ pub async fn ensure_embedder() {
             if wait_for_embedder(90).await {
                 tracing::info!("embedder healthy on port {}", port);
                 EMBEDDER_CHECKED.store(true, Ordering::Relaxed);
+                EMBEDDER_SPAWN_FAILURES.store(0, Ordering::SeqCst);
+                EMBEDDER_SPAWN_FAILURE_START.store(0, Ordering::SeqCst);
                 touch_last_used();
                 spawn_idle_monitor();
             } else {
@@ -413,8 +492,30 @@ pub async fn ensure_embedder() {
             }
         }
         Err(e) => {
-            tracing::error!("failed to spawn embedder: {}", e);
-            EMBEDDER_CHECKED.store(true, Ordering::Relaxed);
+            let failures = EMBEDDER_SPAWN_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            EMBEDDER_SPAWN_FAILURE_START.compare_exchange(
+                0, now_ms, Ordering::SeqCst, Ordering::SeqCst
+            ).ok();
+
+            tracing::error!(
+                "failed to spawn embedder (attempt {}/{}): {}",
+                failures, MAX_SPAWN_FAILURES, e
+            );
+
+            if failures >= MAX_SPAWN_FAILURES {
+                tracing::error!(
+                    "embedder spawn permanently disabled after {} consecutive failures",
+                    failures
+                );
+                EMBEDDER_CHECKED.store(true, Ordering::SeqCst);
+            } else {
+                // Allow one more retry cycle
+                EMBEDDER_CHECKED.store(false, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -516,8 +617,16 @@ pub fn shutdown_embedder() {
 /// Reset embedder state so the next call to `ensure_embedder` will respawn it.
 ///
 /// Called when an HTTP request detects the embedder has gone away (ECONNREFUSED).
+/// Does NOT reset if the spawn circuit breaker has tripped.
 fn reset_embedder() {
+    let failures = EMBEDDER_SPAWN_FAILURES.load(Ordering::Relaxed);
+    if failures >= MAX_SPAWN_FAILURES {
+        tracing::warn!("embedder spawn circuit breaker active, not resetting");
+        return;
+    }
     tracing::warn!("embedder appears to have crashed — resetting state for respawn");
+    EMBEDDER_SPAWN_FAILURES.store(0, Ordering::SeqCst);
+    EMBEDDER_SPAWN_FAILURE_START.store(0, Ordering::SeqCst);
     EMBEDDER_CHECKED.store(false, Ordering::SeqCst);
     EMBEDDER_PID.store(0, Ordering::SeqCst);
 }
@@ -622,6 +731,16 @@ where
             }
             // Connection refused — embedder process likely died
             Err(e) if failures < MAX_RETRIES && is_retryable_error(&e) => {
+                // Check if spawn circuit breaker is active before retrying
+                let spawn_failures = EMBEDDER_SPAWN_FAILURES.load(Ordering::Relaxed);
+                if spawn_failures >= MAX_SPAWN_FAILURES {
+                    tracing::error!(
+                        "embedder spawn circuit breaker active ({} failures), giving up",
+                        spawn_failures
+                    );
+                    return Err(e);
+                }
+
                 failures += 1;
                 tracing::warn!(
                     "embedder unreachable, resetting and retrying (attempt {}): {}",
