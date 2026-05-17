@@ -23,9 +23,9 @@ const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 /// Source code files get generous limits since large generated files are common.
 /// Non-code text files get stricter limits.
 /// All limits configurable via OPENCODE_SEARCH_MAX_FILE_SIZE_KB env var (applies to all categories).
-const DEFAULT_SOURCE_FILE_SIZE_KB: u64 = 1 * 1024; // 1 MB
-const DEFAULT_TEXT_FILE_SIZE_KB: u64 = 512;         // 512 KB
-const DEFAULT_UNKNOWN_FILE_SIZE_KB: u64 = 256;      // 256 KB
+const DEFAULT_SOURCE_FILE_SIZE_KB: u64 = 2 * 1024; // 2 MB
+const DEFAULT_TEXT_FILE_SIZE_KB: u64 = 1024;       // 1 MB
+const DEFAULT_UNKNOWN_FILE_SIZE_KB: u64 = 512;     // 512 KB
 
 /// Read configurable file size limit from env (in KB). Returns None if not set.
 /// OPENCODE_SEARCH_MAX_FILE_SIZE_KB overrides all per-category limits uniformly.
