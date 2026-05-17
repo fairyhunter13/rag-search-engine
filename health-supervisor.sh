@@ -1,28 +1,26 @@
 #!/bin/bash
 # =============================================================================
-# opencode search engine health supervisor
+# opencode search engine health supervisor v2
 # =============================================================================
-# Monitors the Rust indexer and Python embedder services, auto-restarts them
-# for known-recoverable issues, captures crash evidence for AI diagnosis,
-# and sends desktop notifications for fatal/unrecoverable problems.
+# Monitors the Python embedder (port 9998) and Rust indexer (Unix socket).
+# Auto-restarts the embedder (indexer is managed by opencode's spawn.ts).
+# Captures crash evidence for AI diagnosis on fatal failures.
 #
 # Usage: ./health-supervisor.sh [--oneshot] [--interval SECONDS]
-#   --oneshot    Run once and exit (for cron/systemd timer)
-#   --interval   Seconds between checks (default: 30, daemon mode only)
 #
-# Environment:
-#   OPENCODE_NO_NOTIFY=1        Disable desktop notifications
-#   OPENCODE_HEALTH_INTERVAL    Override check interval (seconds)
+# Design:
+#   - Indexer: opencode spawns it via spawn.ts — supervisor only monitors + alerts
+#   - Embedder: supervisor auto-restarts with backoff (max 5 attempts per hour)
+#   - Both: crash evidence captured on fatal (permanent) failures
 # =============================================================================
 
 set -euo pipefail
-
-# ── Configuration ──────────────────────────────────────────────────────────
 
 OPENDIR="${HOME}/.opencode"
 LOG_DIR="${OPENDIR}/health"
 mkdir -p "$LOG_DIR"
 
+OPENCODE_BIN="${OPENDIR}/bin"
 INDEXER_SOCKET="@opencode-indexer"
 EMBEDDER_PORT="${OPENCODE_EMBED_HTTP_PORT:-9998}"
 INDEXER_LOG="${OPENDIR}/indexer.log"
@@ -33,12 +31,10 @@ mkdir -p "$CRASH_DIR"
 STATE_FILE="${LOG_DIR}/supervisor-state.json"
 NOTIFY_ENABLED="${OPENCODE_NO_NOTIFY:-0}"
 
-# Health check thresholds
 HEALTH_CHECK_TIMEOUT=5
-INDEXER_STARTUP_TIMEOUT=30
-MAX_AUTO_RESTARTS=3
-RESTART_COOLDOWN=60        # seconds between restart attempts
-FATAL_NOTIFY_THRESHOLD=5   # consecutive failures before notification
+EMBEDDER_RESTART_COOLDOWN=120   # seconds between embedder restart attempts
+MAX_EMBEDDER_RESTARTS_PER_HOUR=5
+FATAL_NOTIFY_THRESHOLD=4
 
 # ── Logging ────────────────────────────────────────────────────────────────
 
@@ -50,206 +46,90 @@ log() {
 # ── State Management ───────────────────────────────────────────────────────
 
 read_state() {
-    if [[ -f "$STATE_FILE" ]]; then
-        cat "$STATE_FILE" 2>/dev/null || echo '{}'
-    else
-        echo '{}'
-    fi
+    cat "$STATE_FILE" 2>/dev/null || echo '{}'
 }
 
 write_state() {
     echo "$1" > "$STATE_FILE"
 }
 
-get_state_field() {
+get_field() {
     local state="$1" field="$2" default="${3:-0}"
     echo "$state" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('${field}', ${default}))" 2>/dev/null || echo "$default"
 }
 
 # ── Health Checks ──────────────────────────────────────────────────────────
 
-check_indexer_health() {
-    # Probe via abstract Unix socket: POST /ping expects "pong"
+check_indexer() {
     local resp
     resp=$(echo '{"method":"ping","params":{}}' | timeout "$HEALTH_CHECK_TIMEOUT" nc -U "$INDEXER_SOCKET" 2>/dev/null || true)
-    if echo "$resp" | grep -q '"pong"'; then
-        return 0
-    fi
-    return 1
+    echo "$resp" | grep -q '"pong"'
 }
 
-check_embedder_health() {
-    # Probe via HTTP: GET /health expects 200 with JSON
-    local http_code
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$HEALTH_CHECK_TIMEOUT" "http://127.0.0.1:${EMBEDDER_PORT}/health" 2>/dev/null || echo "000")
-    if [[ "$http_code" == "200" ]]; then
-        return 0
-    fi
-    return 1
+check_embedder() {
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$HEALTH_CHECK_TIMEOUT" "http://127.0.0.1:${EMBEDDER_PORT}/health" 2>/dev/null || echo "000")
+    [[ "$code" == "200" ]]
 }
 
-# ── Crash Evidence Capture ─────────────────────────────────────────────────
+# ── Crash Evidence (lightweight, no hanging commands) ──────────────────────
 
 capture_crash_evidence() {
-    local service="$1"  # "indexer" or "embedder"
-    local timestamp
-    timestamp=$(date -u +%Y%m%d-%H%M%S)
-    local report_dir="${CRASH_DIR}/${service}-${timestamp}"
-    mkdir -p "$report_dir"
+    local service="$1"
+    local ts
+    ts=$(date -u +%Y%m%d-%H%M%S)
+    local dir="${CRASH_DIR}/${service}-${ts}"
+    mkdir -p "$dir"
 
-    log "WARN" "Capturing crash evidence for ${service} → ${report_dir}"
+    log "INFO" "Capturing crash evidence for ${service} → ${dir}"
 
-    # Copy the service log
-    if [[ "$service" == "indexer" && -f "$INDEXER_LOG" ]]; then
-        cp "$INDEXER_LOG" "${report_dir}/indexer.log" 2>/dev/null || true
-        cp "${INDEXER_LOG}.old" "${report_dir}/indexer.log.old" 2>/dev/null || true
-    elif [[ "$service" == "embedder" && -f "$EMBEDDER_LOG" ]]; then
-        cp "$EMBEDDER_LOG" "${report_dir}/embedder.log" 2>/dev/null || true
-        cp "${EMBEDDER_LOG}.1" "${report_dir}/embedder.log.1" 2>/dev/null || true
+    # Copy logs
+    if [[ "$service" == "embedder" ]]; then
+        cp "$EMBEDDER_LOG" "${dir}/embedder.log" 2>/dev/null || true
+        cp "${EMBEDDER_LOG}.1" "${dir}/embedder.log.1" 2>/dev/null || true
     fi
 
-    # Capture process tree
+    # Quick system snapshot (avoid hanging commands: no lsof, no pgrep)
     {
-        echo "=== Process Tree ==="
-        ps auxf 2>/dev/null || ps aux
+        echo "=== Time ==="
+        date -u
         echo ""
         echo "=== Memory ==="
         free -h 2>/dev/null || true
         echo ""
-        echo "=== GPU (nvidia-smi) ==="
+        echo "=== GPU ==="
         nvidia-smi 2>/dev/null || echo "nvidia-smi not available"
         echo ""
-        echo "=== GPU (rocm-smi) ==="
-        rocm-smi --showproductname 2>/dev/null || echo "rocm-smi not available"
+        echo "=== Last 50 embedder log lines ==="
+        tail -50 "$EMBEDDER_LOG" 2>/dev/null || true
         echo ""
-        echo "=== Open Files ==="
-        lsof -p "$(pgrep -f "opencode-indexer" | head -1)" 2>/dev/null || echo "no indexer process"
-        echo ""
-        echo "=== Socket State ==="
-        ss -xl 2>/dev/null | grep opencode || echo "no opencode sockets"
-        echo ""
-        echo "=== Disk ==="
-        df -h "${OPENDIR}" 2>/dev/null || true
-    } > "${report_dir}/system-state.txt" 2>/dev/null
+        echo "=== Errors from embedder log ==="
+        grep -i 'error\|fatal\|traceback\|OOM\|killed\|GPU\|CUDA\|signal' "$EMBEDDER_LOG" 2>/dev/null | tail -20 || true
+    } > "${dir}/crash-report.txt"
 
-    # Crash summary for AI
-    {
-        echo "# Crash Report: ${service}"
-        echo "**Time:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-        echo "**Service:** ${service}"
-        echo ""
-        echo "## Last 50 Log Lines"
-        echo '```'
-        if [[ "$service" == "indexer" && -f "$INDEXER_LOG" ]]; then
-            tail -50 "$INDEXER_LOG" 2>/dev/null
-        elif [[ "$service" == "embedder" && -f "$EMBEDDER_LOG" ]]; then
-            tail -50 "$EMBEDDER_LOG" 2>/dev/null
-        fi
-        echo '```'
-        echo ""
-        echo "## Error Summary"
-        echo '```'
-        if [[ "$service" == "indexer" && -f "$INDEXER_LOG" ]]; then
-            grep -i 'error\|fatal\|panic\|SIGSEGV\|SIGABRT\|OOM\|killed' "$INDEXER_LOG" 2>/dev/null | tail -20 || echo "no errors found"
-        elif [[ "$service" == "embedder" && -f "$EMBEDDER_LOG" ]]; then
-            grep -i 'error\|fatal\|traceback\|exception\|SIGSEGV\|SIGABRT\|OOM\|killed\|GPU\|CUDA\|ROCm' "$EMBEDDER_LOG" 2>/dev/null | tail -20 || echo "no errors found"
-        fi
-        echo '```'
-        echo ""
-        echo "## Recovery Actions Attempted"
-        echo "- Auto-restart attempt: $(get_state_field "$state" "${service}_restarts" 0)"
-        echo "- Last restart: $(get_state_field "$state" "${service}_last_restart" 'never')"
-    } > "${report_dir}/crash-report.md"
-
-    log "INFO" "Crash evidence saved to ${report_dir}"
-    echo "$report_dir"
+    log "INFO" "Crash evidence saved to ${dir}"
+    echo "$dir"
 }
 
 # ── Desktop Notification ───────────────────────────────────────────────────
 
 notify() {
     local title="$1" body="$2" urgency="${3:-normal}"
-    if [[ "$NOTIFY_ENABLED" == "1" ]]; then
-        return
-    fi
-
-    # Try multiple notification methods
+    [[ "$NOTIFY_ENABLED" == "1" ]] && return
     if command -v notify-send &>/dev/null; then
         notify-send -u "$urgency" -a "opencode-health" "$title" "$body" 2>/dev/null || true
-    elif command -v osascript &>/dev/null; then
-        osascript -e "display notification \"${body}\" with title \"${title}\"" 2>/dev/null || true
     fi
 }
 
-# ── Service Restart ────────────────────────────────────────────────────────
-
-restart_indexer() {
-    log "INFO" "Attempting to restart indexer daemon..."
-
-    # Kill any existing indexer
-    pkill -f "opencode-indexer" 2>/dev/null || true
-    sleep 2
-
-    # Find the binary
-    local binary=""
-    for candidate in \
-        "${OPENDIR}/bin/opencode-indexer" \
-        "${HOME}/.opencode/bin/opencode-indexer" \
-        "/usr/local/bin/opencode-indexer"; do
-        if [[ -x "$candidate" ]] && [[ -f "$candidate" ]]; then
-            binary="$candidate"
-            break
-        fi
-    done
-
-    if [[ -z "$binary" ]]; then
-        log "ERROR" "Cannot restart indexer: binary not found"
-        return 1
-    fi
-
-    # Rotate log if > 10MB
-    if [[ -f "$INDEXER_LOG" ]]; then
-        local size
-        size=$(stat -c%s "$INDEXER_LOG" 2>/dev/null || echo 0)
-        if [[ "$size" -gt 10485760 ]]; then
-            mv "$INDEXER_LOG" "${INDEXER_LOG}.old" 2>/dev/null || true
-        fi
-    fi
-
-    # Start the indexer (matching how spawn.ts does it)
-    nohup ionice -c3 nice -n 10 "$binary" \
-        --parent-pid "$$" \
-        >>"$INDEXER_LOG" 2>&1 &
-    local pid=$!
-    log "INFO" "Indexer spawned with PID ${pid}"
-
-    # Wait for it to become healthy
-    local deadline=$(($(date +%s) + INDEXER_STARTUP_TIMEOUT))
-    while [[ $(date +%s) -lt $deadline ]]; do
-        if check_indexer_health; then
-            log "INFO" "Indexer healthy on socket ${INDEXER_SOCKET}"
-            return 0
-        fi
-        # Check if process died
-        if ! kill -0 "$pid" 2>/dev/null; then
-            log "ERROR" "Indexer process ${pid} died during startup"
-            return 1
-        fi
-        sleep 1
-    done
-
-    log "ERROR" "Indexer startup timed out after ${INDEXER_STARTUP_TIMEOUT}s"
-    return 1
-}
+# ── Embedder Restart ───────────────────────────────────────────────────────
 
 restart_embedder() {
-    log "INFO" "Attempting to restart embedder..."
+    log "INFO" "Restarting embedder..."
 
-    # Find the binary
     local binary=""
     for candidate in \
-        "${OPENDIR}/bin/opencode-embedder/opencode-embedder" \
-        "${OPENDIR}/bin/opencode-embedder"; do
+        "${OPENCODE_BIN}/opencode-embedder/opencode-embedder" \
+        "${OPENCODE_BIN}/opencode-embedder"; do
         if [[ -x "$candidate" ]] && [[ -f "$candidate" ]]; then
             binary="$candidate"
             break
@@ -257,7 +137,7 @@ restart_embedder() {
     done
 
     if [[ -z "$binary" ]]; then
-        log "ERROR" "Cannot restart embedder: binary not found at expected paths"
+        log "ERROR" "Embedder binary not found"
         return 1
     fi
 
@@ -266,8 +146,8 @@ restart_embedder() {
         mv "$EMBEDDER_LOG" "${EMBEDDER_LOG}.1" 2>/dev/null || true
     fi
 
-    # Start embedder with parent PID monitoring
-    OPENCODE_EMBEDDER_PARENT_PID="$$" \
+    # Start embedder WITHOUT parent-pid so it survives supervisor restarts.
+    # The embedder's own idle shutdown handles termination when unused.
     OPENCODE_EMBED_HTTP_PORT="$EMBEDDER_PORT" \
     OPENCODE_EMBED_WORKERS="1" \
     OMP_NUM_THREADS="2" \
@@ -275,17 +155,17 @@ restart_embedder() {
     local pid=$!
     log "INFO" "Embedder spawned with PID ${pid}"
 
-    # Wait for it to become healthy
-    local deadline=$(($(date +%s) + 90))  # 90s for model loading
+    # Wait for healthy (up to 90s for model loading)
+    local deadline=$(($(date +%s) + 90))
     while [[ $(date +%s) -lt $deadline ]]; do
-        if check_embedder_health; then
+        if check_embedder; then
             log "INFO" "Embedder healthy on port ${EMBEDDER_PORT}"
             return 0
         fi
-        if ! kill -0 "$pid" 2>/dev/null; then
-            log "ERROR" "Embedder process ${pid} died during startup"
+        kill -0 "$pid" 2>/dev/null || {
+            log "ERROR" "Embedder ${pid} died during startup"
             return 1
-        fi
+        }
         sleep 2
     done
 
@@ -293,42 +173,47 @@ restart_embedder() {
     return 1
 }
 
-# ── Main Health Check Loop ─────────────────────────────────────────────────
+# ── Main Health Check ──────────────────────────────────────────────────────
 
 run_health_check() {
     local state indexer_ok embedder_ok
     state=$(read_state)
 
-    # ── Check Indexer ──────────────────────────────────────────────────
-    if check_indexer_health; then
+    # ── Indexer: monitor only (opencode's spawn.ts handles restarts) ───
+    if check_indexer; then
         indexer_ok=true
-        state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['indexer_failures'] = 0
-d['indexer_restarts'] = 0
-d['indexer_last_ok'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
     else
         indexer_ok=false
-        local failures restarts last_restart elapsed
-        failures=$(get_state_field "$state" "indexer_failures" 0)
-        restarts=$(get_state_field "$state" "indexer_restarts" 0)
-        last_restart=$(get_state_field "$state" "indexer_last_restart" 0)
-        failures=$((failures + 1))
+    fi
 
-        state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['indexer_failures'] = ${failures}
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
+    local idx_failures
+    idx_failures=$(get_field "$state" "indexer_failures" 0)
+    if $indexer_ok; then
+        idx_failures=0
+    else
+        idx_failures=$((idx_failures + 1))
+    fi
 
-        log "WARN" "Indexer health check FAILED (failure #${failures})"
+    # ── Embedder: auto-restart with backoff ────────────────────────────
+    if check_embedder; then
+        embedder_ok=true
+    else
+        embedder_ok=false
+    fi
 
-        # Check if we're in a cooldown period
-        local now
+    local emb_failures emb_restarts last_restart
+    emb_failures=$(get_field "$state" "embedder_failures" 0)
+    emb_restarts=$(get_field "$state" "embedder_restarts" 0)
+    last_restart=$(get_field "$state" "embedder_last_restart" 0)
+
+    if $embedder_ok; then
+        emb_failures=0
+        emb_restarts=0
+    else
+        emb_failures=$((emb_failures + 1))
+        log "WARN" "Embedder down (failure #${emb_failures})"
+
+        local now elapsed
         now=$(date +%s)
         if [[ "$last_restart" -gt 0 ]]; then
             elapsed=$((now - last_restart))
@@ -336,135 +221,68 @@ print(json.dumps(d))
             elapsed=999
         fi
 
-        # Try auto-restart if within limits
-        if [[ "$restarts" -lt "$MAX_AUTO_RESTARTS" && "$elapsed" -ge "$RESTART_COOLDOWN" ]]; then
-            restarts=$((restarts + 1))
-            state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['indexer_restarts'] = ${restarts}
-d['indexer_last_restart'] = $(date +%s)
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
-
-            notify "opencode: Indexer Down" \
-                "Indexer is unreachable (failure #${failures}). Auto-restarting (attempt ${restarts}/${MAX_AUTO_RESTARTS})..." \
-                "critical"
-
-            local report_dir
-            report_dir=$(capture_crash_evidence "indexer")
-
-            if restart_indexer; then
-                log "INFO" "Indexer auto-restart succeeded"
-                state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['indexer_failures'] = 0
-d['indexer_restarts'] = 0
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
-            else
-                log "ERROR" "Indexer auto-restart FAILED"
-                notify "opencode: Indexer Restart Failed" \
-                    "Auto-restart attempt ${restarts} failed. Crash report: ${report_dir}/crash-report.md" \
-                    "critical"
-            fi
-
-        elif [[ "$failures" -ge "$FATAL_NOTIFY_THRESHOLD" ]]; then
-            notify "opencode: Indexer FATAL" \
-                "Indexer down for ${failures} consecutive checks (${restarts} restart attempts). Manual investigation needed.\nLog: ${INDEXER_LOG}\nRun: AI inspect ${CRASH_DIR}" \
-                "critical"
-        fi
-    fi
-
-    # ── Check Embedder ─────────────────────────────────────────────────
-    if check_embedder_health; then
-        embedder_ok=true
-        state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['embedder_failures'] = 0
-d['embedder_restarts'] = 0
-d['embedder_last_ok'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
-    else
-        embedder_ok=false
-        local efailures erestarts elast_restart
-        efailures=$(get_state_field "$state" "embedder_failures" 0)
-        erestarts=$(get_state_field "$state" "embedder_restarts" 0)
-        elast_restart=$(get_state_field "$state" "embedder_last_restart" 0)
-        efailures=$((efailures + 1))
-
-        state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['embedder_failures'] = ${efailures}
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
-
-        log "WARN" "Embedder health check FAILED (failure #${efailures})"
-
-        local now eelapsed
-        now=$(date +%s)
-        if [[ "$elast_restart" -gt 0 ]]; then
-            eelapsed=$((now - elast_restart))
-        else
-            eelapsed=999
-        fi
-
-        if [[ "$erestarts" -lt "$MAX_AUTO_RESTARTS" && "$eelapsed" -ge "$RESTART_COOLDOWN" ]]; then
-            erestarts=$((erestarts + 1))
-            state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['embedder_restarts'] = ${erestarts}
-d['embedder_last_restart'] = $(date +%s)
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
+        if [[ "$emb_restarts" -lt "$MAX_EMBEDDER_RESTARTS_PER_HOUR" && "$elapsed" -ge "$EMBEDDER_RESTART_COOLDOWN" ]]; then
+            emb_restarts=$((emb_restarts + 1))
 
             notify "opencode: Embedder Down" \
-                "Embedder is unreachable (failure #${efailures}). Auto-restarting (attempt ${erestarts}/${MAX_AUTO_RESTARTS})..." \
+                "Auto-restarting (attempt ${emb_restarts}/${MAX_EMBEDDER_RESTARTS_PER_HOUR})..." \
                 "critical"
 
-            local ereport_dir
-            ereport_dir=$(capture_crash_evidence "embedder")
-
             if restart_embedder; then
+                embedder_ok=true
+                emb_failures=0
+                emb_restarts=0
                 log "INFO" "Embedder auto-restart succeeded"
-                state=$(echo "$state" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-d['embedder_failures'] = 0
-d['embedder_restarts'] = 0
-print(json.dumps(d))
-" 2>/dev/null || echo "$state")
             else
                 log "ERROR" "Embedder auto-restart FAILED"
-                notify "opencode: Embedder Restart Failed" \
-                    "Auto-restart attempt ${erestarts} failed. Crash report: ${ereport_dir}/crash-report.md" \
+                local report_dir
+                report_dir=$(capture_crash_evidence "embedder")
+                notify "opencode: Embedder Fatal" \
+                    "Restart failed. Crash report: ${report_dir}/crash-report.txt" \
                     "critical"
             fi
-
-        elif [[ "$efailures" -ge "$FATAL_NOTIFY_THRESHOLD" ]]; then
-            notify "opencode: Embedder FATAL" \
-                "Embedder down for ${efailures} consecutive checks (${erestarts} restart attempts). Manual investigation needed.\nLog: ${EMBEDDER_LOG}\nRun: AI inspect ${CRASH_DIR}" \
+        elif [[ "$emb_failures" -ge "$FATAL_NOTIFY_THRESHOLD" ]]; then
+            notify "opencode: Embedder Down" \
+                "Embedder unreachable for ${emb_failures} checks. Restart limit reached." \
                 "critical"
         fi
     fi
 
+    # ── Persist state ─────────────────────────────────────────────────
+    state=$(echo "$state" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+d['indexer_failures'] = ${idx_failures}
+d['embedder_failures'] = ${emb_failures}
+d['embedder_restarts'] = ${emb_restarts}
+d['embedder_last_restart'] = ${last_restart}
+d['indexer_last_ok'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+print(json.dumps(d))
+" 2>/dev/null || echo "$state")
     write_state "$state"
 
-    # Log summary
-    local idx_status="${indexer_ok:-unknown}"
-    local emb_status="${embedder_ok:-unknown}"
-    log "INFO" "Health check: indexer=${idx_status} embedder=${emb_status}"
+    log "INFO" "Health: indexer=$indexer_ok embedder=$embedder_ok"
+}
+
+# ── Periodic state reset (prevents permanent lockout) ──────────────────────
+
+reset_hourly_state() {
+    local state hour
+    state=$(read_state)
+    hour=$(get_field "$state" "last_reset_hour" "")
+    local now_hour
+    now_hour=$(date -u +%H)
+
+    if [[ "$hour" != "$now_hour" ]]; then
+        log "INFO" "Hourly state reset — clearing restart counters"
+        echo '{"last_reset_hour":"'"$now_hour"'"}' > "$STATE_FILE"
+    fi
 }
 
 # ── Entry Point ────────────────────────────────────────────────────────────
 
 ONEShot=false
-INTERVAL="${OPENCODE_HEALTH_INTERVAL:-30}"
+INTERVAL="${OPENCODE_HEALTH_INTERVAL:-60}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -474,15 +292,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "$ONEShot" == "true" ]]; then
+if $ONEShot; then
     run_health_check
     exit 0
 fi
 
-log "INFO" "Health supervisor started (interval=${INTERVAL}s)"
-trap 'log "INFO" "Health supervisor stopped"; exit 0' INT TERM
+log "INFO" "Health supervisor v2 started (interval=${INTERVAL}s)"
+trap 'log "INFO" "Stopped"; exit 0' INT TERM
 
 while true; do
+    reset_hourly_state
     run_health_check
     sleep "$INTERVAL"
 done

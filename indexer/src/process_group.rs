@@ -69,14 +69,31 @@ pub fn kill_process_group() {
 /// Spawns a background task that polls parent PID every 5 seconds.
 pub async fn spawn_parent_monitor(parent_pid: i32, shutdown_tx: tokio::sync::watch::Sender<bool>) {
     tokio::spawn(async move {
+        let mut parent_dead = false;
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            // Check if parent is alive via kill(pid, 0)
             let alive = unsafe { libc::kill(parent_pid, 0) == 0 };
             if !alive {
-                tracing::warn!("Parent process {} died, initiating shutdown", parent_pid);
-                let _ = shutdown_tx.send(true);
-                break;
+                if !parent_dead {
+                    tracing::warn!("Parent process {} died", parent_pid);
+                    parent_dead = true;
+                }
+                // Only shut down when no other opencode instances are connected.
+                // Multiple TUI instances may share the same indexer daemon; when
+                // one parent dies, the daemon stays alive for the others.
+                let connections = crate::http_server::ACTIVE_CONNECTIONS.load(std::sync::atomic::Ordering::SeqCst);
+                if connections == 0 {
+                    tracing::info!(
+                        "Parent {} dead, no active connections — shutting down",
+                        parent_pid
+                    );
+                    let _ = shutdown_tx.send(true);
+                    break;
+                }
+                tracing::debug!(
+                    "Parent {} dead but {} active connections remain — staying alive",
+                    parent_pid, connections
+                );
             }
         }
     });
