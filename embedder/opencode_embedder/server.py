@@ -1339,7 +1339,9 @@ def _acquire_singleton_lock():
 
 
 def _probe_and_exit(reason: str):
-    """Log singleton conflict with health probe, then exit."""
+    """Log singleton conflict with health probe. If the existing holder is a zombie
+    (not responding on the health endpoint), kill it and re-enter run_server to
+    acquire the lock. Otherwise exit gracefully (another instance is healthy)."""
     import urllib.request
 
     port = int(os.environ.get("OPENCODE_EMBED_HTTP_PORT", "9998"))
@@ -1351,7 +1353,58 @@ def _probe_and_exit(reason: str):
             "another embedder holds the lock but is not responding on port %d "
             "(zombie or starting up) — %s", port, reason
         )
+        # Find and kill the zombie process holding the abstract socket.
+        # ss -xlp shows abstract sockets with their owning PID.
+        _kill_singleton_zombie()
+        # Re-enter to acquire the lock. The recursion depth is at most 1
+        # because after killing the zombie the lock will be free.
+        log.info("retrying singleton lock acquisition after zombie cleanup")
+        run_server()
+        return  # unreachable — run_server is blocking
+
     sys.exit(1)
+
+
+def _kill_singleton_zombie():
+    """Find the process holding the @opencode-embedder abstract socket and SIGKILL it."""
+    import subprocess
+
+    try:
+        output = subprocess.check_output(
+            ["ss", "-xlp"], text=True, timeout=5, stderr=subprocess.DEVNULL
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        log.warning("could not run ss -xlp to find zombie process")
+        return
+
+    import re
+    zombie_pid = None
+    for line in output.split("\n"):
+        if "@opencode-embedder" in line:
+            # Extract PID from ss output like "users:(("opencode-embed",pid=12345,fd=3))"
+            match = re.search(r"pid=(\d+)", line)
+            if match:
+                zombie_pid = int(match.group(1))
+                break
+
+    if zombie_pid is None:
+        log.warning("could not find zombie PID from ss output")
+        return
+
+    our_pid = os.getpid()
+    if zombie_pid == our_pid:
+        log.warning("zombie PID is our own PID (%d) — this should not happen", our_pid)
+        return
+
+    log.warning("killing zombie embedder (PID %d) to release singleton lock", zombie_pid)
+    try:
+        os.kill(zombie_pid, signal.SIGKILL)
+        # Wait briefly for the kernel to release the abstract socket
+        import time
+        time.sleep(0.5)
+        log.info("zombie PID %d killed", zombie_pid)
+    except OSError as e:
+        log.warning("failed to kill zombie PID %d: %s", zombie_pid, e)
 
 
 def run_server(

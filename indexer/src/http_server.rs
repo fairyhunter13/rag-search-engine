@@ -14,8 +14,31 @@ use axum::{
     Json, Router,
 };
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::daemon::Dispatcher;
+
+// ── Connection tracking (for connection-aware idle shutdown) ──────────────
+
+/// Active Unix socket connection count.
+/// Incremented via middleware on each HTTP request, decremented on response
+/// completion. The idle shutdown loop in daemon.rs checks this — only shuts
+/// down when zero connections exist AND the activity timeout has elapsed.
+pub static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Middleware: increment ACTIVE_CONNECTIONS when a request arrives,
+/// decrement when the response future completes.
+async fn connection_tracker(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    ACTIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+    let response = next.run(request).await;
+    ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+    response
+}
+
+// ── Axum router ───────────────────────────────────────────────────────────
 
 /// Shared app state: dispatcher.
 #[derive(Clone)]
@@ -28,8 +51,11 @@ fn build_router(dispatch: Dispatcher) -> Router {
     Router::new()
         .route("/rpc", post(handle_rpc))
         .route("/ping", get(ping))
+        .layer(axum::middleware::from_fn(connection_tracker))
         .with_state(state)
 }
+
+// ── Serve ─────────────────────────────────────────────────────────────────
 
 /// Start the HTTP server on a TCP socket (for testing / --port mode).
 ///
@@ -62,6 +88,8 @@ pub async fn serve(dispatch: Dispatcher) -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
     Ok(())
 }
+
+// ── Handlers ──────────────────────────────────────────────────────────────
 
 async fn ping() -> &'static str {
     "pong"

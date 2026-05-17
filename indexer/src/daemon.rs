@@ -1976,20 +1976,30 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
             _ = sighup.recv() => { "SIGHUP" }
             _ = async {
                 loop {
+                    let connections = crate::http_server::ACTIVE_CONNECTIONS.load(std::sync::atomic::Ordering::SeqCst);
                     let last_activity = {
                         let s = state_for_idle.lock().await;
                         s.last_activity
                     };
                     let idle = last_activity.elapsed().as_secs();
-                    tracing::debug!("idle check: idle={}s, threshold={}s", idle, idle_shutdown_secs);
+
+                    // Only consider idle shutdown when zero clients are connected.
+                    // When connections exist, reset the idle timer (touch last_activity).
+                    if connections > 0 {
+                        let mut s = state_for_idle.lock().await;
+                        s.last_activity = std::time::Instant::now();
+                        tracing::debug!("idle check: {} active connections, resetting idle timer", connections);
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        continue;
+                    }
+
+                    tracing::debug!("idle check: no connections, idle={}s, threshold={}s", idle, idle_shutdown_secs);
                     if idle >= idle_shutdown_secs {
-                        tracing::info!("idle shutdown triggered (idle for {}s)", idle);
+                        tracing::info!("idle shutdown triggered (no connections for {}s)", idle);
                         break;
                     }
-                    // Sleep until timeout or next check (30s intervals)
                     let remaining = idle_shutdown_secs.saturating_sub(idle).max(1);
                     let sleep_duration = std::cmp::min(remaining, 30);
-                    tracing::debug!("idle monitor sleeping for {}s", sleep_duration);
                     tokio::time::sleep(Duration::from_secs(sleep_duration)).await;
                 }
             } => { "idle timeout" }

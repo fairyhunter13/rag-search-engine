@@ -180,6 +180,10 @@ pub struct Args {
     /// Parent process PID to monitor (shutdown if parent dies)
     #[arg(long)]
     pub parent_pid: Option<i32>,
+
+    /// Daemon mode (legacy, accepted for compatibility — no effect)
+    #[arg(long, hide = true)]
+    pub daemon: bool,
 }
 
 /// Emit a structured JSON-lines event to stdout.
@@ -341,7 +345,14 @@ pub async fn run(args: Args) -> Result<()> {
         return run_dry_run(&root, &args.exclude, &args.include).await;
     }
 
-    // Log hardware detection for diagnostics
+    // ── Daemon mode ──────────────────────────────────────────────────────
+    // Entered when --parent-pid is set (opencode spawn) or --daemon is passed.
+    // Serves RPC over Unix abstract socket @opencode-indexer (or TCP when --port set).
+    if args.parent_pid.is_some() || args.daemon {
+        return crate::daemon::run(args.idle_shutdown, args.parent_pid, args.port).await;
+    }
+
+    // ── One-shot indexing mode ───────────────────────────────────────────
     if args.verbose {
         let hw = HardwareInfo::detect();
         println!("Hardware: {}", hw.description());
