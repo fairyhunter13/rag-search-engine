@@ -353,6 +353,64 @@ def _get_idle_shutdown_secs() -> int:
 
 IDLE_SHUTDOWN_SECS = _get_idle_shutdown_secs()
 
+# ── Crash notification ────────────────────────────────────────────────────
+
+
+def _notify_crash(title: str, body: str) -> None:
+    """Send a desktop notification via notify-send on critical failure."""
+    import subprocess as _subprocess
+
+    try:
+        _subprocess.run(
+            ["notify-send", "-u", "critical", "-a", "opencode-embedder", title, body],
+            timeout=3,
+            capture_output=True,
+        )
+    except Exception:
+        pass
+
+
+def _install_crash_notifier() -> None:
+    """Install hooks that send desktop notifications on unhandled exceptions
+    and fatal signals, including the crash location (file, line, message)."""
+
+    original_excepthook = sys.excepthook
+
+    def _crash_excepthook(exc_type, exc_value, exc_tb):
+        try:
+            tb = exc_tb
+            while tb is not None:
+                frame = tb.tb_frame
+                filename = frame.f_code.co_filename
+                lineno = tb.tb_lineno
+                tb = tb.tb_next
+            location = f"{filename}:{lineno}"
+        except Exception:
+            location = "unknown"
+
+        body = f"{location}\n{exc_type.__name__}: {exc_value}"
+        _notify_crash("opencode: Embedder Crashed", body)
+        original_excepthook(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _crash_excepthook
+
+    def _fatal_signal(signum: int, frame) -> None:
+        sig_name = signal.Signals(signum).name
+        try:
+            filename = frame.f_code.co_filename
+            lineno = frame.f_lineno
+        except Exception:
+            filename, lineno = "unknown", 0
+        _notify_crash("opencode: Embedder Fatal Signal", f"{filename}:{lineno}\nSignal {sig_name} ({signum})")
+        signal.raise_signal(signum)
+
+    for sig in (signal.SIGABRT, signal.SIGBUS, signal.SIGFPE, signal.SIGILL, signal.SIGSEGV):
+        try:
+            signal.signal(sig, _fatal_signal)
+        except (ValueError, OSError):
+            pass
+
+
 # Maximum texts per single embed request to prevent memory spikes
 MAX_TEXTS_PER_REQUEST = int(os.environ.get("OPENCODE_EMBED_MAX_TEXTS", "512"))
 
@@ -1457,6 +1515,9 @@ def run_server(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # ── Crash notification ────────────────────────────────────────────────
+    _install_crash_notifier()
 
     # Acquire OS-level singleton lock before anything else.
     # Two simultaneous starts are serialized by the kernel; second one exits.

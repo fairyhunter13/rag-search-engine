@@ -88,7 +88,36 @@ fn deprioritize_process() {}
 
 // Use synchronous main to set env vars BEFORE tokio runtime starts.
 // This is critical because LanceDB creates its own runtime and reads TOKIO_WORKER_THREADS.
+
+/// Install a panic hook that sends a desktop notification with the crash
+/// location (file, line, message) before the process aborts.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Call the default hook first (prints to stderr)
+        default_hook(info);
+
+        // Extract crash location
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".to_string());
+
+        let body = format!("{location}\n{msg}");
+        let _ = std::process::Command::new("notify-send")
+            .args(["-u", "critical", "-a", "opencode-indexer", "opencode: Indexer Panic", &body])
+            .spawn();
+    }));
+}
+
 fn main() -> Result<()> {
+    install_panic_hook();
     // Set thread limits FIRST, before ANY runtime is created
     limit_thread_pools();
     deprioritize_process();
