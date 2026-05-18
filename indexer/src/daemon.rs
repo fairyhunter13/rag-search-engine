@@ -659,11 +659,10 @@ pub(crate) async fn dispatch_unified(
             let mut s = state.lock().await;
             tui_disconnect_impl(&mut s, &key, params["connectionId"].as_str().unwrap_or(""))
         };
-        // Lock dropped — watcher_stop_internal acquires its own lock
-        if result["shouldStopWatcher"].as_bool() == Some(true) {
-            tracing::info!("all TUI connections gone for {} — stopping watcher", key);
-            let _ = watcher_stop_internal(&state, root).await;
-        }
+        // Watchers are NOT auto-stopped on TUI disconnect — connection drops
+        // are transient (SSE reconnect, network hiccups) and stopping the
+        // watcher causes flapping with the TUI's auto-start mechanism.
+        // Watchers are only stopped explicitly via watcher_stop RPC or daemon shutdown.
         return result;
     }
 
