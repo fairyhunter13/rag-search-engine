@@ -6,20 +6,14 @@ use std::time::Duration;
 
 /// Set up process group for clean child process termination.
 ///
-/// On Linux, uses prctl(PR_SET_PDEATHSIG) to ensure child processes receive
-/// SIGTERM when the daemon dies (even from SIGKILL). Also creates a new
-/// process group so we can kill all children on shutdown.
+/// Creates a new process group so we can kill all children on shutdown.
+/// Does NOT use PR_SET_PDEATHSIG — the daemon must stay alive across
+/// TUI parent restarts or the watcher dies and never stabilizes.
 #[cfg(target_os = "linux")]
 pub fn setup_process_group() {
     // Try to become session leader (new process group)
     unsafe {
         libc::setpgid(0, 0);
-    }
-
-    // Set parent death signal for any children we spawn
-    unsafe {
-        const PR_SET_PDEATHSIG: libc::c_int = 1;
-        libc::prctl(PR_SET_PDEATHSIG, libc::SIGTERM);
     }
 }
 
@@ -65,9 +59,12 @@ pub fn kill_process_group() {
     }
 }
 
-/// Monitor parent process and exit if it dies.
+/// Monitor parent process and log when it dies.
+/// Does NOT shut down the daemon — the daemon stays alive across TUI
+/// parent restarts so the watcher is not killed. The idle timeout
+/// (300s default) handles eventual cleanup if no TUI reconnects.
 /// Spawns a background task that polls parent PID every 5 seconds.
-pub async fn spawn_parent_monitor(parent_pid: i32, shutdown_tx: tokio::sync::watch::Sender<bool>) {
+pub async fn spawn_parent_monitor(parent_pid: i32, _shutdown_tx: tokio::sync::watch::Sender<bool>) {
     tokio::spawn(async move {
         let mut parent_dead = false;
         loop {
@@ -75,25 +72,18 @@ pub async fn spawn_parent_monitor(parent_pid: i32, shutdown_tx: tokio::sync::wat
             let alive = unsafe { libc::kill(parent_pid, 0) == 0 };
             if !alive {
                 if !parent_dead {
-                    tracing::warn!("Parent process {} died", parent_pid);
+                    let connections = crate::http_server::ACTIVE_CONNECTIONS.load(std::sync::atomic::Ordering::SeqCst);
+                    tracing::warn!(
+                        "Parent process {} died ({} active connections) — daemon stays alive until idle timeout",
+                        parent_pid,
+                        connections,
+                    );
                     parent_dead = true;
                 }
-                // Only shut down when no other opencode instances are connected.
-                // Multiple TUI instances may share the same indexer daemon; when
-                // one parent dies, the daemon stays alive for the others.
-                let connections = crate::http_server::ACTIVE_CONNECTIONS.load(std::sync::atomic::Ordering::SeqCst);
-                if connections == 0 {
-                    tracing::info!(
-                        "Parent {} dead, no active connections — shutting down",
-                        parent_pid
-                    );
-                    let _ = shutdown_tx.send(true);
-                    break;
-                }
-                tracing::debug!(
-                    "Parent {} dead but {} active connections remain — staying alive",
-                    parent_pid, connections
-                );
+                // Do NOT shut down. The daemon stays alive across TUI restarts
+                // so the watcher is not killed. The idle timeout (300s default)
+                // handles eventual cleanup if no TUI reconnects.
+                // New TUI instances reuse this daemon via Unix socket probe.
             }
         }
     });
