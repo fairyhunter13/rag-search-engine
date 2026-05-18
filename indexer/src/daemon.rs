@@ -302,6 +302,8 @@ pub struct WatcherState {
     pub(crate) max_pending_files: usize,
     /// Statistics for dropped events (for diagnostics)
     pub(crate) dropped_stats: Arc<tokio::sync::Mutex<DroppedEventStats>>,
+    /// Last heartbeat timestamp (updated by event collector task for zombie detection)
+    pub(crate) last_heartbeat: Arc<tokio::sync::Mutex<Instant>>,
     /// Watcher start time (for uptime calculation)
     pub(crate) started_at: Instant,
 }
@@ -582,12 +584,33 @@ pub(crate) async fn dispatch_unified(
                     w.started_at,
                     w.db_path.clone(),
                     w.max_pending_files,
+                    w.last_heartbeat.clone(), // Arc<Mutex<_>> clone
                 )
             })
         };
         // Outer lock dropped here
 
-        return if let Some((dropped_stats, pending, started_at, db_path, max_pending_files)) = watcher_data {
+        return if let Some((dropped_stats, pending, started_at, db_path, max_pending_files, last_heartbeat)) = watcher_data {
+            // Check if watcher heartbeat is alive — detects zombie watchers where
+            // the inotify thread silently died but the HashMap entry remains.
+            let heartbeat_alive = {
+                let hb = last_heartbeat.lock().await;
+                hb.elapsed() < Duration::from_secs(120)
+            };
+
+            if !heartbeat_alive {
+                // Zombie watcher detected — remove it and return non-active status
+                tracing::warn!("zombie watcher detected for {} (heartbeat stale), removing", key);
+                let mut s = state.lock().await;
+                s.watchers.remove(&key);
+                let (conn_count, _) = {
+                    let cc = s.tui_connections.get(&key).map(|c| c.len()).unwrap_or(0);
+                    let wa = s.watchers.contains_key(&key);
+                    (cc, wa)
+                };
+                return watcher_status_with_connections(root, db, conn_count, false);
+            }
+
             // Now safe to acquire inner locks without holding outer lock
             let dropped = dropped_stats.lock().await;
             let uptime = started_at.elapsed().as_secs();

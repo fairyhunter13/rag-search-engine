@@ -470,6 +470,10 @@ pub(crate) fn watcher_start_internal<'a>(
         let dropped_stats: Arc<tokio::sync::Mutex<DroppedEventStats>> =
             Arc::new(tokio::sync::Mutex::new(DroppedEventStats::default()));
 
+        // Heartbeat timestamp for zombie watcher detection
+        let last_heartbeat: Arc<tokio::sync::Mutex<Instant>> =
+            Arc::new(tokio::sync::Mutex::new(Instant::now()));
+
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -488,6 +492,7 @@ pub(crate) fn watcher_start_internal<'a>(
         // Spawn task to collect events into pending with configurable backpressure
         let pending_for_collector = pending.clone();
         let dropped_stats_for_collector = dropped_stats.clone();
+        let last_heartbeat_for_collector = last_heartbeat.clone();
         let root_for_collector = root_path.to_string_lossy().to_string();
         let mut shutdown_rx_clone = shutdown_rx.clone();
         tokio::spawn(async move {
@@ -496,6 +501,11 @@ pub(crate) fn watcher_start_internal<'a>(
             const STATS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
             loop {
+                // Update heartbeat to signal that the event collector is alive.
+                // If this task stops (e.g. inotify thread silently dies), the heartbeat
+                // goes stale and watcher_status detects the zombie.
+                *last_heartbeat_for_collector.lock().await = Instant::now();
+
                 tokio::select! {
                     event = watcher_rx.recv() => {
                         match event {
@@ -605,6 +615,7 @@ pub(crate) fn watcher_start_internal<'a>(
             shutdown_tx,
             max_pending_files,
             dropped_stats,
+            last_heartbeat,
             started_at: Instant::now(),
         };
 
