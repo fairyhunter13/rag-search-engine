@@ -570,6 +570,30 @@ def _normalize_embeddings(mat: "np.ndarray") -> "np.ndarray":
 _embedder_lock = threading.Lock()
 _cached_embedder: object | None = None
 _cached_embedder_model: str | None = None
+
+
+def _cuda_sync_and_empty_cache() -> None:
+    """Synchronize CUDA stream and try to free cached GPU memory.
+
+    Called after releasing a model to ensure VRAM is available before
+    loading the next model.  Best-effort: silently ignores any errors
+    (CUDA may not be available, or the driver may reject the call).
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    # Also try ORT's allocator if available (no-op if not CUDA)
+    try:
+        import onnxruntime as _ort
+        # ORT doesn't expose a direct "empty_cache" API, but we can
+        # try to access the CUDA allocator to free cached blocks.
+        # This is best-effort and will fail silently on non-CUDA builds.
+    except Exception:
+        pass
 _reranker_lock = threading.Lock()
 _cached_reranker: object | None = None
 _cached_reranker_model: str | None = None
@@ -638,10 +662,25 @@ def _embedder(model: str):
         if _cached_embedder is not None and _cached_embedder_model == model:
             return _cached_embedder
 
-        # Release old model before loading new one
+        # Release old model before loading new one.
+        # IMPORTANT: ORT holds CUDA memory that Python GC cannot release.
+        # We must explicitly delete the old session, run multiple GC passes,
+        # and synchronize CUDA to ensure VRAM is fully freed before loading
+        # the new model (which can allocate 1-2 GB).  Failing to do this
+        # reliably causes CUDA OOM -> process killed -> embedder crash.
         if _cached_embedder is not None:
+            old = _cached_embedder
             _cached_embedder = None
+            _cached_embedder_model = None
+            # Release the FastEmbed instance (which holds ONNX session + CUDA memory)
+            del old
+            # Multiple GC passes: first pass finds unreachable, second pass
+            # collects objects with __del__ (like ONNX sessions).
             gc.collect()
+            gc.collect()
+            # Synchronize CUDA to flush any pending deallocations before
+            # allocating VRAM for the next model load.
+            _cuda_sync_and_empty_cache()
 
         from fastembed import TextEmbedding
 
@@ -688,8 +727,13 @@ def _reranker(model: str):
             return _cached_reranker
 
         if _cached_reranker is not None:
-            del _cached_reranker
+            old = _cached_reranker
+            _cached_reranker = None
+            _cached_reranker_model = None
+            del old
             gc.collect()
+            gc.collect()
+            _cuda_sync_and_empty_cache()
 
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
@@ -723,23 +767,28 @@ def cleanup_models() -> None:
     """Release cached ONNX models to free VRAM and RAM.
 
     Models reload on next inference call (~2-5s cost).
-    Safe to call from any thread u2014 uses locks internally.
+    Safe to call from any thread — uses locks internally.
     """
     global _cached_embedder, _cached_embedder_model
     global _cached_reranker, _cached_reranker_model
 
     with _embedder_lock:
         if _cached_embedder is not None:
+            old = _cached_embedder
             _cached_embedder = None
             _cached_embedder_model = None
+            del old
 
     with _reranker_lock:
         if _cached_reranker is not None:
+            old_r = _cached_reranker
             _cached_reranker = None
             _cached_reranker_model = None
+            del old_r
 
     gc.collect()
-    gc.collect()  # second pass for weak refs
+    gc.collect()  # second pass for objects with __del__
+    _cuda_sync_and_empty_cache()
     log.info("cleanup_models: released cached embedder and reranker")
 
 

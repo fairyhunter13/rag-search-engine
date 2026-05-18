@@ -432,6 +432,34 @@ def _validate_texts_params(params: dict) -> tuple[list[str], web.Response | None
     return texts, None
 
 
+# ── Transient CUDA error detection ──────────────────────────────────────────
+
+
+def _is_cuda_transient_error(exc: Exception) -> bool:
+    """Return True if the exception is a transient CUDA/ORT error worth retrying.
+
+    Catches CUDA OOM, driver timeout, ORT session errors, and model loading
+    races that can happen during concurrent model switches.
+    """
+    msg = str(exc).lower()
+    transient_markers = [
+        "cuda out of memory",
+        "out of memory",
+        "cuda error",
+        "cudnn error",
+        "driver timeout",
+        "unknown error",
+        "the operation timed out",
+        "no cuda device",
+        "cuda-capable device",
+        # ORT session errors during model switch
+        "invalid handle",
+        "session",
+        "cannot find",
+    ]
+    return any(marker in msg for marker in transient_markers)
+
+
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------
@@ -743,9 +771,19 @@ class ModelServer:
 
         self._touch_embed_time()
         async with self._embed_sem:
-            buf, dims = await asyncio.to_thread(
-                embed_query_f32_bytes, text, model=model, dimensions=dimensions
-            )
+            # Retry once on transient CUDA/model errors (race during model switch)
+            for attempt in range(2):
+                try:
+                    buf, dims = await asyncio.to_thread(
+                        embed_query_f32_bytes, text, model=model, dimensions=dimensions
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 0 and _is_cuda_transient_error(e):
+                        log.warning("embed_query_f32 CUDA transient error, retrying: %s", e)
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
 
         return {
             "vector_f32": buf,
