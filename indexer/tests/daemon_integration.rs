@@ -102,6 +102,8 @@ impl DaemonHandle {
             .arg("--daemon")
             .arg("--port")
             .arg("0")
+            .arg("--idle-shutdown")
+            .arg("0")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -116,10 +118,23 @@ impl DaemonHandle {
         let mut child = cmd.spawn().context("spawn daemon")?;
 
         let stdout = child.stdout.take().context("no stdout")?;
+        let stderr = child.stderr.take().context("no stderr")?;
         let mut reader = tokio::io::BufReader::new(stdout);
+        let mut stderr_reader = tokio::io::BufReader::new(stderr);
         let mut buf = String::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut port: u16;
+
+        // Drain stderr so the child cannot block when its pipe buffer fills.
+        tokio::spawn(async move {
+            let mut discard = vec![0u8; 4096];
+            loop {
+                match tokio::io::AsyncReadExt::read(&mut stderr_reader, &mut discard).await {
+                    Ok(0) | Err(_) => break,
+                    _ => {}
+                }
+            }
+        });
 
         loop {
             if tokio::time::Instant::now() > deadline {
