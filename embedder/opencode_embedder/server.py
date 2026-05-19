@@ -288,9 +288,8 @@ def _detect_embed_workers() -> int:
             # Non-integer value (e.g. "auto") falls through to auto-detection below
             pass
     else:
-        # No env var set: default to 1 worker to minimize resource usage.
-        # Set OPENCODE_EMBED_WORKERS=auto to enable auto-detection.
-        return 1
+        # No env var set: auto-detect based on hardware (falls through).
+        pass
 
     # Check for low-memory mode — cap at 2 workers to reduce GPU/RAM contention
     low_mem = os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "yes")
