@@ -523,7 +523,7 @@ pub(crate) async fn dispatch_unified(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         shutdown_drain_write_queues(state.clone()).await;
         shutdown_compaction(state.clone()).await;
-        crate::model_client::shutdown_embedder();
+        crate::model_client::shutdown_embedder().await;
         #[cfg(target_os = "macos")]
         {
             let _ = tokio::fs::remove_file(crate::http_server::socket_file_path()).await;
@@ -2044,7 +2044,7 @@ pub async fn run(idle_shutdown_arg: Option<u64>, parent_pid_arg: Option<i32>, tc
     tokio::time::sleep(Duration::from_millis(100)).await;
     shutdown_drain_write_queues(state.clone()).await;
     shutdown_compaction(state.clone()).await;
-    crate::model_client::shutdown_embedder();
+    crate::model_client::shutdown_embedder().await;
     #[cfg(target_os = "macos")]
     {
         let _ = tokio::fs::remove_file(crate::http_server::socket_file_path()).await;

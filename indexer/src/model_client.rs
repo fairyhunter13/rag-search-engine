@@ -263,7 +263,7 @@ fn inflight_semaphore() -> &'static tokio::sync::Semaphore {
 }
 
 /// Child handle for the embedder process we spawned (None = not spawned by us).
-static EMBEDDER_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+static EMBEDDER_CHILD: tokio::sync::Mutex<Option<std::process::Child>> = tokio::sync::Mutex::const_new(None);
 
 /// Port file path for the embedder PID.
 fn embedder_pid_path() -> Option<std::path::PathBuf> {
@@ -356,7 +356,7 @@ pub async fn ensure_embedder() {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     unsafe { libc::kill(pid as i32, libc::SIGKILL); }
                     // Also reap our own child if any
-                    reap_embedder_child();
+                    reap_embedder_child().await;
                 }
                 // Remove stale PID file
                 let _ = tokio::fs::remove_file(&pid_path).await;
@@ -458,12 +458,9 @@ pub async fn ensure_embedder() {
                 let path = format!("/proc/{}/oom_score_adj", pid);
                 let _ = std::fs::write(path, "600");
             }
-            match EMBEDDER_CHILD.lock() {
-                Ok(mut guard) => *guard = Some(child),
-                Err(e) => {
-                    tracing::error!("EMBEDDER_CHILD mutex poisoned: {}", e);
-                    std::process::exit(1);
-                }
+            {
+                let mut guard = EMBEDDER_CHILD.lock().await;
+                *guard = Some(child);
             }
             tracing::info!("embedder spawned with PID {}", pid);
 
@@ -482,7 +479,7 @@ pub async fn ensure_embedder() {
                 spawn_idle_monitor();
             } else {
                 tracing::error!("embedder failed to become healthy after 90s, killing and resetting");
-                reap_embedder_child();
+                reap_embedder_child().await;
                 if let Some(pid_path) = embedder_pid_path() {
                     let _ = tokio::fs::remove_file(&pid_path).await;
                 }
@@ -575,7 +572,7 @@ fn spawn_idle_monitor() {
                         elapsed.as_secs(),
                         idle_secs
                     );
-                    shutdown_embedder();
+                    shutdown_embedder().await;
                     EMBEDDER_CHECKED.store(false, Ordering::SeqCst);
                     EMBEDDER_LAST_USED.store(0, Ordering::SeqCst);
                 }
@@ -585,26 +582,35 @@ fn spawn_idle_monitor() {
 }
 
 /// Kill the embedder child process and wait for it to be reaped (no zombies).
-fn reap_embedder_child() {
+/// Uses non-blocking try_wait with timeout to prevent async runtime deadlocks.
+async fn reap_embedder_child() {
     let pid = EMBEDDER_PID.load(Ordering::Relaxed);
     if pid != 0 {
         unsafe { libc::kill(pid as i32, libc::SIGTERM); }
         // Give it a moment to exit gracefully
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    if let Ok(mut guard) = EMBEDDER_CHILD.lock() {
-        if let Some(ref mut child) = *guard {
-            match child.try_wait() {
-                Ok(Some(_)) => {} // already exited
-                Ok(None) => {
-                    // Still running, force kill and wait
-                    let _ = child.kill();
-                    let _ = child.wait();
+    let mut guard = EMBEDDER_CHILD.lock().await;
+    if let Some(ref mut child) = *guard {
+        // Try non-blocking reap first — handles already-exited children (zombies)
+        match child.try_wait() {
+            Ok(Some(_)) => {} // already exited and reaped
+            Ok(None) | Err(_) => {
+                // Force kill, then reap in a blocking thread to unblock the async runtime
+                let _ = child.kill();
+                let child_pid = child.id();
+                drop(guard); // release lock before blocking
+                let waited = tokio::task::spawn_blocking(move || {
+                    // Reap in blocking context — returns immediately for zombies
+                    unsafe { libc::waitpid(child_pid as i32, std::ptr::null_mut(), 0); }
+                }).await;
+                if let Err(e) = waited {
+                    tracing::warn!("reap_embedder_child spawn_blocking failed: {}", e);
                 }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+                // Re-acquire to clear the handle
+                let mut guard2 = EMBEDDER_CHILD.lock().await;
+                *guard2 = None;
+                return;
             }
         }
         *guard = None;
@@ -612,13 +618,13 @@ fn reap_embedder_child() {
 }
 
 /// Shut down the embedder if we spawned it.
-pub fn shutdown_embedder() {
+pub async fn shutdown_embedder() {
     let pid = EMBEDDER_PID.load(Ordering::Relaxed);
     if pid == 0 {
         return;
     }
     tracing::info!("shutting down embedder PID {}", pid);
-    reap_embedder_child();
+    reap_embedder_child().await;
     // Clean up PID file
     if let Some(pid_path) = embedder_pid_path() {
         let _ = std::fs::remove_file(&pid_path);

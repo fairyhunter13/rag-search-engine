@@ -117,6 +117,14 @@ fn install_panic_hook() {
 }
 
 fn main() -> Result<()> {
+    // Prevent zombie processes: ignore SIGCHLD so the kernel auto-reaps
+    // all children. Required for long-running daemon — without this, every
+    // forked child that exits before being wait()'d becomes a zombie.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
+    }
+
     install_panic_hook();
     // Set thread limits FIRST, before ANY runtime is created
     limit_thread_pools();
