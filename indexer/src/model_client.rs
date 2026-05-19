@@ -410,6 +410,7 @@ pub async fn ensure_embedder() {
     let mut cmd = std::process::Command::new(&binary);
     cmd.env("OPENCODE_EMBED_HTTP_PORT", port.to_string())
         .env("OPENCODE_EMBEDDER_PARENT_PID", our_pid.to_string())
+        .env("OPENCODE_EMBED_WORKERS", "5")
         // Cap thread counts to keep CPU ≤10% during active indexing.
         .env("OMP_NUM_THREADS", "2")
         .env("MKL_NUM_THREADS", "2")
