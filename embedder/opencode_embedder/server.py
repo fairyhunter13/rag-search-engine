@@ -341,7 +341,14 @@ IDLE_CLEANUP_SECS = 120 if _RAM_MB <= 16384 else 300
 # Default: 5 minutes. Set OPENCODE_EMBED_IDLE_SHUTDOWN=0 to disable.
 # This is useful when the embedder is spawned on-demand via SSH from a remote client.
 def _get_idle_shutdown_secs() -> int:
-    """Get idle shutdown timeout from environment, or default to 300 (5 min)."""
+    """Get idle shutdown timeout from environment, or default to 300 (5 min).
+
+    Idle shutdown is DISABLED when OPENCODE_EMBEDDER_PARENT_PID is set
+    because the embedder was spawned by the indexer and should live
+    as long as the parent indexer is alive.
+    """
+    if os.environ.get("OPENCODE_EMBEDDER_PARENT_PID", "").strip():
+        return 0  # Disabled: spawned by indexer, lives as long as parent
     val = os.environ.get("OPENCODE_EMBED_IDLE_SHUTDOWN", "").strip()
     if not val:
         return 300  # Default: 5 minutes
