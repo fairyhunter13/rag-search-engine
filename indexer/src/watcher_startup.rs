@@ -499,6 +499,7 @@ pub(crate) fn watcher_start_internal<'a>(
             let mut watcher_rx = watcher_rx;
             // Log dropped event stats every 30 seconds if there were drops
             const STATS_LOG_INTERVAL: Duration = Duration::from_secs(30);
+            const HEARTBEAT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
             loop {
                 // Update heartbeat to signal that the event collector is alive.
@@ -594,6 +595,12 @@ pub(crate) fn watcher_start_internal<'a>(
                             }
                             break;
                         }
+                    }
+                    // Keep idle watchers alive. Otherwise a quiet repository blocks on
+                    // watcher_rx.recv(), stops refreshing the heartbeat, and gets removed
+                    // as a zombie by watcher_status after 120 seconds.
+                    _ = tokio::time::sleep(HEARTBEAT_KEEPALIVE_INTERVAL) => {
+                        *last_heartbeat_for_collector.lock().await = Instant::now();
                     }
                 }
             }

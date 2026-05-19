@@ -149,9 +149,23 @@ impl DaemonState {
             keep
         });
 
-        // Remove inactive watchers (stopped or idle for TTL)
-        self.watchers.retain(|_key, watcher| {
-            now.duration_since(watcher.started_at) < PROJECT_INACTIVE_TTL
+        let active_tui_projects: HashSet<String> = self
+            .tui_connections
+            .iter()
+            .filter(|(_, connections)| !connections.is_empty())
+            .map(|(key, _)| key.clone())
+            .collect();
+
+        // Keep TUI-managed watchers alive while the TUI is connected. For
+        // background watchers, age from the heartbeat rather than start time so
+        // long-running healthy watchers are not evicted after one hour.
+        self.watchers.retain(|key, watcher| {
+            active_tui_projects.contains(key)
+                || watcher
+                    .last_heartbeat
+                    .try_lock()
+                    .map(|heartbeat| now.duration_since(*heartbeat) < PROJECT_INACTIVE_TTL)
+                    .unwrap_or(true)
         });
 
         // Remove inactive memory watchers
