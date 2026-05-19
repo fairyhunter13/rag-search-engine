@@ -55,13 +55,9 @@ impl PythonServer {
         // 2. Spawn a new HTTP server
         tracing::info!("no existing embedder found, spawning new one on port {port}");
         let real_home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        let bin = real_home.join(".opencode/bin/opencode-embedder-dir/opencode-embedder");
 
-        anyhow::ensure!(
-            bin.exists(),
-            "Python embedder binary not found at {}",
-            bin.display()
-        );
+        // Resolve embedder binary: env override, then known candidates
+        let bin = resolve_embedder_bin(&real_home)?;
 
         // Use the real home's HuggingFace cache to avoid re-downloading models
         // This significantly speeds up tests since models are already cached
@@ -121,4 +117,61 @@ impl Drop for PythonServer {
             let _ = child.wait();
         }
     }
+}
+
+/// Resolve the embedder binary path.
+///
+/// Checks in order:
+/// 1. `OPENCODE_EMBEDDER_PATH` env var (explicit override)
+/// 2. Known candidate paths under `real_home`:
+///    - `~/.opencode/bin/opencode-embedder-dir/opencode-embedder` (original default)
+///    - `~/.opencode/bin/opencode-embedder/opencode-embedder`
+/// 3. Known candidate paths relative to the project root (via `CARGO_MANIFEST_DIR`):
+///    - `embedder/build/opencode-embedder/opencode-embedder`
+///    - `embedder/dist/opencode-embedder/opencode-embedder`
+/// 4. If none found, returns error listing all tried paths.
+fn resolve_embedder_bin(real_home: &Path) -> Result<PathBuf> {
+    // 1. Env override
+    if let Ok(val) = std::env::var("OPENCODE_EMBEDDER_PATH") {
+        let bin = PathBuf::from(&val);
+        anyhow::ensure!(
+            bin.is_file(),
+            "Python embedder binary not found at OPENCODE_EMBEDDER_PATH={}",
+            val
+        );
+        return Ok(bin);
+    }
+
+    // 2. Build candidate list (use is_file() so directories are skipped)
+    let mut candidates: Vec<PathBuf> = vec![
+        // Original default path
+        real_home.join(".opencode/bin/opencode-embedder-dir/opencode-embedder"),
+        // Common home-relative installs
+        real_home.join(".opencode/bin/opencode-embedder/opencode-embedder"),
+        // Project-relative build outputs (via CARGO_MANIFEST_DIR)
+    ];
+
+    // 3. Add project-relative candidates (compile-time known)
+    // CARGO_MANIFEST_DIR is .../opencode/cmd/opencode-search-engine/indexer
+    // project root is .../opencode
+    if let Some(cargo_dir) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+        if let Some(root) = cargo_dir.parent().and_then(|p| p.parent()) {
+            candidates.push(root.join("embedder/build/opencode-embedder/opencode-embedder"));
+            candidates.push(root.join("embedder/dist/opencode-embedder/opencode-embedder"));
+        }
+    }
+
+    // Pick first existing candidate
+    if let Some(bin) = candidates.iter().find(|p| p.is_file()) {
+        return Ok(bin.clone());
+    }
+
+    anyhow::bail!(
+        "Python embedder binary not found. Tried:\n  {}",
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    )
 }
