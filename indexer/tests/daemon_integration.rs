@@ -1513,3 +1513,131 @@ async fn watcher_uses_default_max_pending_files() {
 
     daemon.shutdown().await;
 }
+
+/// Regression test for idle indexed projects with an open TUI.
+///
+/// If a project is indexed and the TUI is connected, the watcher must remain
+/// active even during prolonged periods with zero filesystem activity. Without
+/// the idle heartbeat keepalive, this fails after roughly 120 seconds when
+/// `watcher_status` declares the watcher a zombie and removes it.
+#[ignore = "slow — only run when testing heartbeat / zombie regressions"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watcher_remains_active_during_idle_period() {
+    let (_server, daemon) = setup().await.expect("setup");
+
+    let root = tempfile::TempDir::new().unwrap();
+
+    let _ = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root.path())
+        .output();
+
+    std::fs::write(root.path().join("hello.txt"), "hello world").unwrap();
+
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(root.path())
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(root.path())
+        .output();
+
+    let index_resp = rpc(daemon.port(), "run_index",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "tier": "budget",
+            "dimensions": 256,
+            "force": false,
+            "exclude": [],
+            "include": []
+        }),
+    )
+    .await
+    .expect("run_index rpc");
+    assert_eq!(index_resp["result"]["success"], true, "run_index should succeed: {index_resp}");
+
+    let connect_resp = rpc(daemon.port(), "tui_connect",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "connectionId": "heartbeat-regression-tui"
+        }),
+    )
+    .await
+    .expect("tui_connect rpc");
+    assert_eq!(connect_resp["result"]["success"], true, "tui_connect should succeed: {connect_resp}");
+
+    let start_resp = rpc(daemon.port(), "watcher_start",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "tier": "budget"
+        }),
+    )
+    .await
+    .expect("watcher_start rpc");
+    assert_eq!(start_resp["result"]["success"], true, "watcher_start should succeed: {start_resp}");
+    assert_eq!(start_resp["result"]["internal"], true, "should be internal watcher");
+
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    const POLL_INTERVAL: Duration = Duration::from_secs(30);
+    const TOTAL_WAIT: Duration = Duration::from_secs(130);
+    let started = tokio::time::Instant::now();
+    let deadline = started + TOTAL_WAIT;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        tokio::time::sleep(std::cmp::min(POLL_INTERVAL, remaining)).await;
+
+        let status_resp = rpc(daemon.port(), "watcher_status",
+            serde_json::json!({
+                "root": root.path().to_str().unwrap()
+            }),
+        )
+        .await
+        .expect("watcher_status rpc");
+
+        assert_eq!(
+            status_resp["result"]["watcherActive"].as_bool().unwrap_or(false),
+            true,
+            "[t={}s] watcher went inactive during idle period: {status_resp}",
+            started.elapsed().as_secs()
+        );
+    }
+
+    let final_resp = rpc(daemon.port(), "watcher_status",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap()
+        }),
+    )
+    .await
+    .expect("final watcher_status rpc");
+    assert_eq!(
+        final_resp["result"]["watcherActive"].as_bool().unwrap_or(false),
+        true,
+        "watcher should still be active after {TOTAL_WAIT:?}: {final_resp}"
+    );
+
+    let disconnect_resp = rpc(daemon.port(), "tui_disconnect",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "connectionId": "heartbeat-regression-tui"
+        }),
+    )
+    .await
+    .expect("tui_disconnect rpc");
+    assert_eq!(disconnect_resp["result"]["success"], true, "tui_disconnect should succeed: {disconnect_resp}");
+
+    let _ = rpc(daemon.port(), "watcher_stop",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap()
+        }),
+    )
+    .await;
+
+    daemon.shutdown().await;
+}
