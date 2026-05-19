@@ -36,14 +36,16 @@ pub(crate) fn tui_disconnect_impl(
     connection_id: &str,
 ) -> serde_json::Value {
     let mut count = 0;
-    let mut should_stop_watcher = false;
+    // Watcher persists even without TUI connections — keeps index up-to-date
+    // for when a TUI reconnects. Stopping on every SSE reconnect cycle
+    // prevents the initial scan from ever completing.
+    let should_stop_watcher = false;
 
     if let Some(connections) = state.tui_connections.get_mut(key) {
         connections.remove(connection_id);
         count = connections.len();
         if count == 0 {
             state.tui_connections.remove(key);
-            should_stop_watcher = true;
         }
     }
 
