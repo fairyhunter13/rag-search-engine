@@ -683,14 +683,60 @@ pub(crate) async fn dispatch_unified(
     if matches!(method.as_str(), "tui_connect" | "tui_connections") {
         let root = params["root"].as_str().unwrap_or(".");
         let key = canonicalize_project_key(root).await;
-        let mut s = state.lock().await;
-        return match method.as_str() {
-            "tui_connect" => {
-                tui_connect_impl(&mut s, &key, params["connectionId"].as_str().unwrap_or(""))
+        let (should_self_heal, result) = {
+            let mut s = state.lock().await;
+            match method.as_str() {
+                "tui_connect" => {
+                    let result = tui_connect_impl(
+                        &mut s,
+                        &key,
+                        params["connectionId"].as_str().unwrap_or(""),
+                    );
+                    (!s.watchers.contains_key(&key), result)
+                }
+                "tui_connections" => (false, tui_connections_impl(&mut s, &key)),
+                _ => unreachable!(),
             }
-            "tui_connections" => tui_connections_impl(&mut s, &key),
-            _ => unreachable!(),
         };
+
+        if should_self_heal {
+            let state = state.clone();
+            let root = root.to_string();
+            tokio::spawn(async move {
+                let key = canonicalize_project_key(&root).await;
+                {
+                    let s = state.lock().await;
+                    if s.watchers.contains_key(&key) {
+                        return;
+                    }
+                }
+
+                for (attempt, delay) in WATCHER_START_RETRY_DELAYS.iter().enumerate() {
+                    match watcher_start_internal(&state, &root, None, None, false).await {
+                        Ok(result) => {
+                            tracing::info!(
+                                "tui_connect self-healed watcher for {} ({})",
+                                root,
+                                result["message"]
+                            );
+                            return;
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "tui_connect watcher self-heal attempt {}/{} failed for {}: {}",
+                                attempt + 1,
+                                WATCHER_START_RETRY_DELAYS.len(),
+                                root,
+                                err
+                            );
+                            tokio::time::sleep(Duration::from_millis(*delay)).await;
+                        }
+                    }
+                }
+            });
+        }
+
+        return result;
     }
 
     // Write operations are serialized through per-project queues.

@@ -1641,3 +1641,98 @@ async fn watcher_remains_active_during_idle_period() {
 
     daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tui_connect_auto_starts_missing_watcher() {
+    let (_server, daemon) = setup().await.expect("setup");
+    let root = tempfile::TempDir::new().unwrap();
+
+    let _ = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root.path())
+        .output();
+    std::fs::write(root.path().join("test.rs"), "fn main() {}").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(root.path())
+        .output();
+
+    let index_resp = rpc(daemon.port(), "run_index",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "tier": "budget",
+            "dimensions": 256,
+            "force": false,
+            "exclude": [],
+            "include": []
+        }),
+    )
+    .await
+    .expect("run_index rpc");
+    assert_eq!(
+        index_resp["result"]["success"],
+        true,
+        "run_index should succeed: {index_resp}"
+    );
+
+    let status_resp = rpc(daemon.port(), "watcher_status",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap()
+        }),
+    )
+    .await
+    .expect("watcher_status rpc");
+    assert_eq!(
+        status_resp["result"]["watcherActive"].as_bool().unwrap_or(false),
+        false,
+        "watcher should not be active before tui_connect: {status_resp}"
+    );
+
+    let connect_resp = rpc(daemon.port(), "tui_connect",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "connectionId": "self-heal-test-tui"
+        }),
+    )
+    .await
+    .expect("tui_connect rpc");
+    assert_eq!(connect_resp["result"]["success"], true);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "tui_connect should auto-start the watcher for an indexed project"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let status_resp = rpc(daemon.port(), "watcher_status",
+            serde_json::json!({
+                "root": root.path().to_str().unwrap()
+            }),
+        )
+        .await
+        .expect("watcher_status rpc");
+
+        if status_resp["result"]["watcherActive"].as_bool().unwrap_or(false) {
+            assert_eq!(status_resp["result"]["internal"], true);
+            break;
+        }
+    }
+
+    let _ = rpc(daemon.port(), "tui_disconnect",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap(),
+            "connectionId": "self-heal-test-tui"
+        }),
+    )
+    .await;
+    let _ = rpc(daemon.port(), "watcher_stop",
+        serde_json::json!({
+            "root": root.path().to_str().unwrap()
+        }),
+    )
+    .await;
+
+    daemon.shutdown().await;
+}
