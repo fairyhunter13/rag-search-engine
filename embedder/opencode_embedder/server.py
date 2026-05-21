@@ -101,6 +101,7 @@ from opencode_embedder.embeddings import (
     _EMBED_SUB_BATCH,
     _HIGH_END,
     _LOW_END,
+    TIER_MODELS,
     cleanup_models,
     embed_passages,
     embed_passages_f32_bytes,
@@ -111,6 +112,31 @@ from opencode_embedder.embeddings import (
     is_gpu_available,
     rerank,
 )
+
+# R8: Reranker score cache — avoids re-running GPU inference for identical (query, docs, model) tuples
+try:
+    from cachetools import TTLCache as _TTLCache
+    import hashlib as _hashlib
+    import threading as _threading
+
+    _rerank_result_cache: _TTLCache = _TTLCache(
+        maxsize=int(os.environ.get("OPENCODE_RERANK_CACHE_SIZE", "50")),
+        ttl=float(os.environ.get("OPENCODE_RERANK_CACHE_TTL", "30")),
+    )
+    _rerank_result_cache_lock = _threading.Lock()
+    _RERANK_CACHE_ENABLED = True
+
+    def _rerank_cache_key(query: str, docs: list[str], model: str) -> tuple:
+        docs_hash = _hashlib.sha256("\n".join(docs).encode()).hexdigest()[:16]
+        return (query.lower().strip(), docs_hash, model)
+
+except ImportError:
+    _RERANK_CACHE_ENABLED = False
+    log = logging.getLogger(__name__)  # will be redefined below; fine at module level
+    # Dummy so _RERANK_CACHE_ENABLED=False path can still reference these names
+    _rerank_result_cache = None  # type: ignore[assignment]
+    _rerank_result_cache_lock = None  # type: ignore[assignment]
+    def _rerank_cache_key(query, docs, model): return (query, "", model)  # type: ignore[misc]
 
 log = logging.getLogger(__name__)
 
@@ -481,6 +507,9 @@ class ModelServer:
         self._last_activity = time.monotonic()
         self._start_time = time.monotonic()
         self._embed_sem = asyncio.Semaphore(embed_workers)
+        # R10: Reranking is sequential by design — concurrent rerank on the same GPU
+        # causes VRAM spikes. A single-slot semaphore serializes rerank calls.
+        self._rerank_sem = asyncio.Semaphore(1)
         # Limit concurrent chunking to avoid CPU oversubscription.
         # Chunking is CPU-intensive (tree-sitter + tokenizers) and each thread
         # spawns OMP_NUM_THREADS internal threads, so unbounded concurrency
@@ -866,11 +895,28 @@ class ModelServer:
         query = params.get("query", "")
         # Accept both "docs" and "passages" (Rust sends "passages")
         docs = params.get("docs") or params.get("passages", [])
-        model = params.get("model", "")
+        model = params.get("model", "") or TIER_MODELS["budget"]["rerank"]
         top_k = params.get("top_k", 10)
 
-        async with self._embed_sem:
+        # R8: Check score cache before hitting GPU
+        if _RERANK_CACHE_ENABLED and docs:
+            cache_key = _rerank_cache_key(query, docs, model)
+            with _rerank_result_cache_lock:
+                cached = _rerank_result_cache.get(cache_key)
+            if cached is not None:
+                log.debug("rerank cache hit: %d docs", len(docs))
+                return {"results": [{"index": idx, "score": score} for idx, score in cached]}
+
+        # R10: Serialize rerank calls through _rerank_sem (prevents VRAM spikes)
+        async with self._rerank_sem:
             ranked = await asyncio.to_thread(rerank, query, docs, model=model, top_k=top_k)
+
+        # R8: Store result in cache
+        if _RERANK_CACHE_ENABLED and docs:
+            cache_key = _rerank_cache_key(query, docs, model)
+            with _rerank_result_cache_lock:
+                _rerank_result_cache[cache_key] = ranked
+
         # Note: Rust expects "results" key, not "ranked"
         return {"results": [{"index": idx, "score": score} for idx, score in ranked]}
 
@@ -1097,6 +1143,9 @@ class ModelServer:
         # Pre-warm embedding model in thread pool (downloads if needed)
         await asyncio.to_thread(self._warmup_embedder)
 
+        # R7: Pre-warm budget reranker (22M model, ~0.5s). Balanced/premium load on first use.
+        await asyncio.to_thread(self._warmup_reranker)
+
         # Pre-warm common CodeChunkers (tree-sitter grammars)
         await asyncio.to_thread(self._warmup_chunkers)
 
@@ -1203,6 +1252,15 @@ class ModelServer:
         except Exception as e:
             log.warning("failed to pre-warm embedder %s: %s", model, e)
 
+    def _warmup_reranker(self) -> None:
+        """R7: Pre-load the budget reranker to eliminate cold-start on first search."""
+        model = TIER_MODELS["budget"]["rerank"]
+        try:
+            rerank("warmup", ["warmup document a", "warmup document b"], model=model, top_k=2)
+            log.info("reranker model loaded: %s", model)
+        except Exception as e:
+            log.warning("reranker warmup failed %s: %s", model, e)
+
     def _warmup_chunkers(self) -> None:
         """Chunkers load on-demand to minimize startup RSS.
 
@@ -1262,7 +1320,8 @@ class ModelServer:
             log.info("VRAM watchdog: pynvml not available, disabled")
             return
 
-        throttled = False
+        throttled_embed = False
+        throttled_rerank = False
         check_interval = 30  # seconds
         high_threshold = 0.90
         low_threshold = 0.70
@@ -1273,25 +1332,44 @@ class ModelServer:
                 mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
                 vram_pct = mem_info.used / mem_info.total
 
-                if vram_pct >= high_threshold and not throttled:
-                    # Drain one semaphore slot to reduce concurrent GPU work
-                    try:
-                        # Use wait_for to avoid blocking indefinitely
-                        await asyncio.wait_for(self._embed_sem.acquire(), timeout=1.0)
-                        throttled = True
-                        log.warning(
-                            "VRAM watchdog: pressure %.1f%% >= %.0f%%, throttled embed concurrency",
-                            vram_pct * 100, high_threshold * 100,
+                if vram_pct >= high_threshold:
+                    # R10: Throttle embed concurrency
+                    if not throttled_embed:
+                        try:
+                            await asyncio.wait_for(self._embed_sem.acquire(), timeout=1.0)
+                            throttled_embed = True
+                            log.warning(
+                                "VRAM watchdog: pressure %.1f%% >= %.0f%%, throttled embed concurrency",
+                                vram_pct * 100, high_threshold * 100,
+                            )
+                        except asyncio.TimeoutError:
+                            pass
+                    # R10: Also block new rerank calls at high pressure
+                    if not throttled_rerank:
+                        try:
+                            await asyncio.wait_for(self._rerank_sem.acquire(), timeout=1.0)
+                            throttled_rerank = True
+                            log.warning(
+                                "VRAM watchdog: pressure %.1f%% >= %.0f%%, throttled rerank",
+                                vram_pct * 100, high_threshold * 100,
+                            )
+                        except asyncio.TimeoutError:
+                            pass
+                elif vram_pct < low_threshold:
+                    if throttled_embed:
+                        self._embed_sem.release()
+                        throttled_embed = False
+                        log.info(
+                            "VRAM watchdog: pressure %.1f%% < %.0f%%, restored embed concurrency",
+                            vram_pct * 100, low_threshold * 100,
                         )
-                    except asyncio.TimeoutError:
-                        pass  # Couldn't acquire, all slots busy
-                elif vram_pct < low_threshold and throttled:
-                    self._embed_sem.release()
-                    throttled = False
-                    log.info(
-                        "VRAM watchdog: pressure %.1f%% < %.0f%%, restored embed concurrency",
-                        vram_pct * 100, low_threshold * 100,
-                    )
+                    if throttled_rerank:
+                        self._rerank_sem.release()
+                        throttled_rerank = False
+                        log.info(
+                            "VRAM watchdog: pressure %.1f%% < %.0f%%, restored rerank",
+                            vram_pct * 100, low_threshold * 100,
+                        )
             except Exception as e:
                 log.debug("VRAM watchdog error: %s", e)
                 await asyncio.sleep(check_interval)

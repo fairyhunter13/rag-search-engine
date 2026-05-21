@@ -27,11 +27,11 @@ log = logging.getLogger(__name__)
 TIER_MODELS = {
     "premium": {
         "embed": "jinaai/jina-embeddings-v2-base-code",
-        "rerank": "Xenova/ms-marco-MiniLM-L-6-v2",
+        "rerank": "jinaai/jina-reranker-v2-base-multilingual",
     },
     "balanced": {
         "embed": "jinaai/jina-embeddings-v2-base-en",
-        "rerank": "Xenova/ms-marco-MiniLM-L-6-v2",
+        "rerank": "jinaai/jina-reranker-v1-turbo-en",
     },
     "budget": {
         "embed": "jinaai/jina-embeddings-v2-small-en",
@@ -594,9 +594,15 @@ def _cuda_sync_and_empty_cache() -> None:
         # This is best-effort and will fail silently on non-CUDA builds.
     except Exception:
         pass
-_reranker_lock = threading.Lock()
-_cached_reranker: object | None = None
-_cached_reranker_model: str | None = None
+_reranker_cache_lock = threading.Lock()
+_reranker_cache: dict[str, object] = {}   # model_name → reranker instance
+_reranker_lru: list[str] = []             # index 0 = most recently used
+RERANKER_CACHE_SIZE: int = int(os.environ.get("OPENCODE_RERANKER_CACHE_SIZE", "2"))
+
+# R4: IOBinding confirmation flag for the reranker (set per model load)
+_rerank_iobinding_confirmed: bool = False
+_rerank_iobinding_lock = threading.Lock()
+_rerank_input_names: list[str] = []
 
 
 def _build_provider_list_with_options(providers: list[str]) -> list:
@@ -718,22 +724,31 @@ def _embedder(model: str):
 
 
 def _reranker(model: str):
-    """Return (and cache) a FastEmbed TextCrossEncoder model loaded with GPU providers."""
-    global _cached_reranker, _cached_reranker_model
+    """Return (and LRU-cache) a FastEmbed TextCrossEncoder loaded with GPU providers.
+
+    Holds up to RERANKER_CACHE_SIZE models simultaneously. Evicts the least recently
+    used entry when the cache is full, freeing VRAM before loading the new model.
+    """
+    global _rerank_iobinding_confirmed, _rerank_input_names
     if not model:
         model = DEFAULT_RERANK_MODEL
-    with _reranker_lock:
-        if _cached_reranker is not None and _cached_reranker_model == model:
-            return _cached_reranker
+    with _reranker_cache_lock:
+        # Cache hit: promote to front of LRU list
+        if model in _reranker_cache:
+            _reranker_lru.remove(model)
+            _reranker_lru.insert(0, model)
+            return _reranker_cache[model]
 
-        if _cached_reranker is not None:
-            old = _cached_reranker
-            _cached_reranker = None
-            _cached_reranker_model = None
-            del old
-            gc.collect()
-            gc.collect()
-            _cuda_sync_and_empty_cache()
+        # Cache miss + full cache: evict LRU tail entry
+        if len(_reranker_cache) >= RERANKER_CACHE_SIZE:
+            evict_model = _reranker_lru.pop()
+            old = _reranker_cache.pop(evict_model, None)
+            if old is not None:
+                del old
+                gc.collect()
+                gc.collect()
+                _cuda_sync_and_empty_cache()
+            log.info("reranker LRU evicted: %s", evict_model)
 
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
@@ -744,7 +759,6 @@ def _reranker(model: str):
             providers or "default (CPU)",
         )
 
-        # Bug fix: always inject provider options regardless of list length.
         provider_list = _build_provider_list_with_options(providers) if providers else None
 
         import onnxruntime as _ort_ref
@@ -755,12 +769,53 @@ def _reranker(model: str):
             graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
         )
 
-        # Verify which provider the ONNX session actually selected
+        # Verify GPU provider and probe IOBinding for this model
         _verify_onnx_session_provider(reranker, "reranker")
+        _verify_reranker_iobinding(reranker, model)
 
-        _cached_reranker = reranker
-        _cached_reranker_model = model
+        _reranker_cache[model] = reranker
+        _reranker_lru.insert(0, model)
         return reranker
+
+
+def _verify_reranker_iobinding(reranker_obj, model: str) -> None:
+    """Probe IOBinding support and record input names for the reranker session."""
+    global _rerank_iobinding_confirmed, _rerank_input_names
+    try:
+        session = None
+        if hasattr(reranker_obj, "model"):
+            inner = reranker_obj.model
+            if hasattr(inner, "model"):
+                session = inner.model
+            elif hasattr(inner, "session"):
+                session = inner.session
+        if session is None:
+            return
+
+        names = [inp.name for inp in session.get_inputs()]
+        _rerank_input_names = names
+        log.info("reranker input names for %s: %s", model, names)
+
+        # Only confirm IOBinding when input names are the standard pair
+        if set(names) >= {"input_ids", "attention_mask"}:
+            try:
+                _probe = session.io_binding()
+                for out in session.get_outputs():
+                    _probe.bind_output(out.name, "cuda")
+                    break
+                with _rerank_iobinding_lock:
+                    _rerank_iobinding_confirmed = True
+                log.info("reranker IOBinding confirmed for model: %s", model)
+            except Exception as e:
+                with _rerank_iobinding_lock:
+                    _rerank_iobinding_confirmed = False
+                log.info("reranker IOBinding not supported: %s", e)
+        else:
+            with _rerank_iobinding_lock:
+                _rerank_iobinding_confirmed = False
+            log.info("reranker IOBinding skipped (non-standard input names): %s", names)
+    except Exception as e:
+        log.debug("reranker IOBinding probe failed: %s", e)
 
 
 def cleanup_models() -> None:
@@ -770,7 +825,6 @@ def cleanup_models() -> None:
     Safe to call from any thread — uses locks internally.
     """
     global _cached_embedder, _cached_embedder_model
-    global _cached_reranker, _cached_reranker_model
 
     with _embedder_lock:
         if _cached_embedder is not None:
@@ -779,17 +833,17 @@ def cleanup_models() -> None:
             _cached_embedder_model = None
             del old
 
-    with _reranker_lock:
-        if _cached_reranker is not None:
-            old_r = _cached_reranker
-            _cached_reranker = None
-            _cached_reranker_model = None
-            del old_r
+    with _reranker_cache_lock:
+        for model_name in list(_reranker_cache.keys()):
+            old_r = _reranker_cache.pop(model_name, None)
+            if old_r is not None:
+                del old_r
+        _reranker_lru.clear()
 
     gc.collect()
     gc.collect()  # second pass for objects with __del__
     _cuda_sync_and_empty_cache()
-    log.info("cleanup_models: released cached embedder and reranker")
+    log.info("cleanup_models: released cached embedder and all rerankers")
 
 
 def _setup_migraphx_caching() -> None:
@@ -1819,6 +1873,93 @@ def embed_query_f32_bytes(text: str, *, model: str, dimensions: int) -> tuple[by
         return buf.tobytes(), len(vec)
 
 
+# R5: Per-model temperature defaults for sigmoid calibration.
+# Override via OPENCODE_RERANK_TEMPERATURE env var.
+RERANK_TEMPERATURE: dict[str, float] = {
+    "Xenova/ms-marco-MiniLM-L-6-v2":              1.0,
+    "jinaai/jina-reranker-v1-turbo-en":            1.0,
+    "jinaai/jina-reranker-v2-base-multilingual":   1.0,
+}
+
+
+def _calibrate_scores(logits, temperature: float = 1.0) -> "np.ndarray":
+    """Convert raw cross-encoder logits to [0,1] via sigmoid.
+
+    Sigmoid preserves absolute meaning: docs scoring [5.01..5.05] all map to
+    ~0.993, correctly showing they are all highly relevant. Min-max would spread
+    them across [0.0, 1.0], creating a false ranking signal from noise.
+    """
+    arr = np.asarray(logits, dtype=np.float32)
+    return 1.0 / (1.0 + np.exp(-arr / temperature))
+
+
+def _get_rerank_batch_size() -> int:
+    """VRAM-scaled rerank batch size (conservative to share VRAM with embed workers)."""
+    if _LOW_MEMORY_MODE:
+        return 8
+    vram_mb = _get_gpu_vram_mb()
+    if vram_mb is None:
+        return 16
+    vram_gb = vram_mb / 1024
+    if vram_gb < 8:
+        return 8
+    if vram_gb < 16:
+        return 16
+    return 32  # RTX 5080 (16GB): 32 pairs per batch
+
+
+def _rerank_batched(reranker, query: str, docs: list[str], batch_size: int) -> list[float]:
+    """Run reranker inference in explicit batches of `batch_size` pairs."""
+    all_scores: list[float] = []
+    for i in range(0, len(docs), batch_size):
+        batch = docs[i : i + batch_size]
+        all_scores.extend(reranker.rerank(query, batch))
+    return all_scores
+
+
+def _rerank_iobinding(session, tokenizer, query: str, docs: list[str], batch_size: int, device: str = "cuda") -> list[float] | None:
+    """Run cross-encoder reranking with IOBinding (single GPU→CPU copy per batch).
+
+    Returns list of raw logit scores or None if IOBinding fails.
+    """
+    try:
+        import onnxruntime as ort
+
+        all_scores: list[float] = []
+        pairs = [[query, doc] for doc in docs]
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i : i + batch_size]
+            encoded = tokenizer.encode_batch(batch)
+            input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
+            attn_mask  = np.array([e.attention_mask for e in encoded], dtype=np.int64)
+
+            binding = session.io_binding()
+            ids_gpu  = ort.OrtValue.ortvalue_from_numpy(input_ids, device)
+            mask_gpu = ort.OrtValue.ortvalue_from_numpy(attn_mask, device)
+            binding.bind_ortvalue_input("input_ids", ids_gpu)
+            binding.bind_ortvalue_input("attention_mask", mask_gpu)
+
+            # Handle optional token_type_ids (some models include it)
+            if "token_type_ids" in _rerank_input_names:
+                token_type_ids = np.zeros_like(input_ids)
+                tti_gpu = ort.OrtValue.ortvalue_from_numpy(token_type_ids, device)
+                binding.bind_ortvalue_input("token_type_ids", tti_gpu)
+
+            for out in session.get_outputs():
+                binding.bind_output(out.name, device)
+
+            session.run_with_iobinding(binding)
+            logits = binding.get_outputs()[0].numpy()
+            if logits.ndim > 1:
+                logits = logits.squeeze(-1)
+            all_scores.extend(logits.tolist())
+            del ids_gpu, mask_gpu, binding
+        return all_scores
+    except Exception as e:
+        log.debug("reranker IOBinding failed: %s", e)
+        return None
+
+
 def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple[int, float]]:
     if not docs or top_k <= 0:
         return []
@@ -1828,7 +1969,6 @@ def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple
     t_start = time.perf_counter()
     reranker = _reranker(model)
 
-    # Track GPU vs CPU operations
     provider = get_active_provider()
     is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
@@ -1836,46 +1976,68 @@ def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple
     else:
         _increment_cpu_ops()
 
-    scores = list(reranker.rerank(query, docs))
+    batch_size = _get_rerank_batch_size()
+    scores: list[float] | None = None
+
+    # R4: Try IOBinding fast path (single GPU→CPU copy per batch)
+    if is_gpu and _rerank_iobinding_confirmed:
+        try:
+            session = None
+            tokenizer = None
+            if hasattr(reranker, "model"):
+                inner = reranker.model
+                if hasattr(inner, "model"):
+                    session = inner.model
+                if hasattr(inner, "tokenizer"):
+                    tokenizer = inner.tokenizer
+            if session is not None and tokenizer is not None:
+                device = _device_for_provider(provider)
+                scores = _rerank_iobinding(session, tokenizer, query, docs, batch_size, device)
+        except Exception as e:
+            log.debug("reranker IOBinding path failed, falling back: %s", e)
+            scores = None
+
+    # R3: Standard batched path (fallback)
+    if scores is None:
+        scores = _rerank_batched(reranker, query, docs, batch_size)
+
     t_end = time.perf_counter()
 
-    # Empty scores check to prevent ValueError on min()/max()
     if not scores:
         return []
 
-    # Vectorized score normalization using numpy (faster than list comprehension)
-    if _HAS_NUMPY and len(scores) > 10:
+    # R5: Sigmoid calibration — preserves absolute relevance meaning.
+    # Opt-in to legacy min-max via OPENCODE_RERANK_NORMALIZE=minmax.
+    normalize_mode = os.environ.get("OPENCODE_RERANK_NORMALIZE", "sigmoid").lower()
+    temperature = float(os.environ.get(
+        "OPENCODE_RERANK_TEMPERATURE",
+        str(RERANK_TEMPERATURE.get(model, 1.0)),
+    ))
+
+    if normalize_mode == "minmax":
         scores_arr = np.array(scores, dtype=np.float32)
-        lo = float(scores_arr.min())
-        hi = float(scores_arr.max())
-        
+        lo, hi = float(scores_arr.min()), float(scores_arr.max())
         if hi == lo:
             normed = np.full(len(scores), 0.5, dtype=np.float32)
         else:
             normed = (scores_arr - lo) / (hi - lo)
-        
-        # argsort + reverse for top-k (more efficient than sorted())
-        order = np.argsort(normed)[::-1][:top_k].tolist()
-        normed = normed.tolist()
     else:
-        # Fallback to list comprehension for small batches
-        lo = min(scores)
-        hi = max(scores)
-        if hi == lo:
-            normed = [0.5 for _ in scores]
-        else:
-            normed = [(s - lo) / (hi - lo) for s in scores]
-        
-        order = sorted(range(len(normed)), key=lambda i: normed[i], reverse=True)[:top_k]
+        normed = _calibrate_scores(scores, temperature)
+
+    order = np.argsort(normed)[::-1][:top_k].tolist()
+    normed_list = normed.tolist()
 
     if log.isEnabledFor(logging.INFO):
         log.info(
-            "rerank[%s]: %d docs, %.0fms",
+            "rerank[%s%s]: %d docs -> top %d, batch=%d, %.0fms",
             provider.upper(),
+            "+IOB" if is_gpu and _rerank_iobinding_confirmed else "",
             len(docs),
+            min(top_k, len(docs)),
+            batch_size,
             (t_end - t_start) * 1000,
         )
-    return [(i, float(normed[i])) for i in order]
+    return [(i, float(normed_list[i])) for i in order]
 
 
 # ---------------------------------------------------------------------------

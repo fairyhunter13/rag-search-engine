@@ -26,6 +26,10 @@ dependencies = [
     "aiohttp>=3.9.0",
     # RSS watchdog: monitors process memory to trigger GC or restart under pressure
     "psutil>=5.9.0",
+    # R8: Reranker score cache (TTLCache for (query, docs_hash, model) → results)
+    "cachetools>=5.3.0",
+    # VRAM watchdog + FP16 verification
+    "pynvml>=11.0.0",
 ]
 
 [project.optional-dependencies]

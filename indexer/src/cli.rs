@@ -24,11 +24,11 @@ pub fn models_for_tier(tier: &str) -> (&'static str, &'static str) {
     match tier {
         "premium" => (
             "jinaai/jina-embeddings-v2-base-code",
-            "Xenova/ms-marco-MiniLM-L-6-v2",
+            "jinaai/jina-reranker-v2-base-multilingual",
         ),
         "balanced" => (
             "jinaai/jina-embeddings-v2-base-en",
-            "Xenova/ms-marco-MiniLM-L-6-v2",
+            "jinaai/jina-reranker-v1-turbo-en",
         ),
         _ => (
             "jinaai/jina-embeddings-v2-small-en",

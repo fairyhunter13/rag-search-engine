@@ -71,7 +71,7 @@ fn cosine_similarity_scalar(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 unsafe fn cosine_similarity_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
@@ -119,6 +119,7 @@ unsafe fn cosine_similarity_avx2(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
 #[inline]
 unsafe fn hsum_avx2(v: std::arch::x86_64::__m256) -> f32 {
     use std::arch::x86_64::*;
@@ -135,7 +136,7 @@ unsafe fn hsum_avx2(v: std::arch::x86_64::__m256) -> f32 {
     _mm_cvtss_f32(sum32)
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse")]
 unsafe fn cosine_similarity_sse(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::*;
