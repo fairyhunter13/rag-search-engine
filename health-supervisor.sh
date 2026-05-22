@@ -1,19 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# opencode search engine health supervisor v3
+# opencode search engine health supervisor v4
 # =============================================================================
-# Monitor only. Indexer is spawned by opencode's spawn.ts (lazy).
-# Embedder is spawned by the indexer via ensure_embedder() (lazy).
-# Both have connection-aware idle shutdown — they die when unused.
+# Monitor-only supervisor for the unified opencode-search Python package.
 #
-# Since v0.2.0 there is also a unified Python package `opencode-search`
-# (see src/) that runs as an MCP stdio child of an AI assistant. The MCP
-# process is owned by the parent and does NOT need separate supervision,
-# but a long-running `opencode-search watch <path>` daemon DOES — for that
-# case this supervisor monitors the process group via pgrep.
+# The opencode-search package runs as:
+#   • An MCP stdio child of an AI assistant (owned by the parent, no supervision
+#     needed)
+#   • A long-running `opencode-search watch <path>` daemon — THIS is what we
+#     monitor here.
 #
-# This supervisor captures crash evidence on fatal failures and sends
-# desktop notifications. It does NOT auto-restart any service.
+# This supervisor captures crash evidence on fatal failures and sends desktop
+# notifications. It does NOT auto-restart any service.
 # =============================================================================
 
 set -euo pipefail
@@ -22,9 +20,6 @@ OPENDIR="${HOME}/.opencode"
 LOG_DIR="${OPENDIR}/health"
 mkdir -p "$LOG_DIR"
 
-INDEXER_SOCKET="@opencode-indexer"
-EMBEDDER_PORT="${OPENCODE_EMBED_HTTP_PORT:-9998}"
-EMBEDDER_LOG="${OPENDIR}/embedder.log"
 CRASH_DIR="${LOG_DIR}/crashes"
 mkdir -p "$CRASH_DIR"
 
@@ -51,22 +46,9 @@ get_field() {
 
 # ── Health Checks ──────────────────────────────────────────────────────────
 
-check_indexer() {
-    local resp
-    resp=$(echo '{"method":"ping","params":{}}' | timeout "$HEALTH_CHECK_TIMEOUT" nc -U "$INDEXER_SOCKET" 2>/dev/null || true)
-    echo "$resp" | grep -q '"pong"'
-}
-
-check_embedder() {
-    local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$HEALTH_CHECK_TIMEOUT" "http://127.0.0.1:${EMBEDDER_PORT}/health" 2>/dev/null || echo "000")
-    [[ "$code" == "200" ]]
-}
-
 check_opencode_search_watcher() {
-    # New v0.2.0 unified package: detect any long-running `opencode-search watch`
-    # daemons. Returns 0 if at least one is running, 1 otherwise. This is purely
-    # observational — the supervisor does not respawn.
+    # Detect any long-running `opencode-search watch` daemons.
+    # Returns 0 if at least one is running, 1 otherwise.
     pgrep -f "opencode-search.*watch" >/dev/null 2>&1
 }
 
@@ -81,6 +63,7 @@ capture_crash_evidence() {
 
     log "INFO" "Capturing crash evidence for ${service} → ${dir}"
 
+    local log_file="${OPENDIR}/${service}.log"
     {
         echo "# Crash: ${service}  $(date -u)"
         echo ""
@@ -90,21 +73,19 @@ capture_crash_evidence() {
         nvidia-smi 2>/dev/null || echo "nvidia-smi not available"
         echo '```'
         echo ""
-        echo "## Embedder Log (last 50 lines)"
+        echo "## Service Log (last 50 lines)"
         echo '```'
-        tail -50 "$EMBEDDER_LOG" 2>/dev/null || true
+        tail -50 "$log_file" 2>/dev/null || true
         echo '```'
         echo ""
         echo "## Errors"
         echo '```'
-        grep -i 'error\|fatal\|traceback\|OOM\|killed\|signal\|GPU\|CUDA' "$EMBEDDER_LOG" 2>/dev/null | tail -20 || true
+        grep -i 'error\|fatal\|traceback\|OOM\|killed\|signal\|GPU\|CUDA' "$log_file" 2>/dev/null | tail -20 || true
         echo '```'
     } > "${dir}/crash-report.md"
 
-    if [[ "$service" == "embedder" ]]; then
-        cp "$EMBEDDER_LOG" "${dir}/embedder.log" 2>/dev/null || true
-        cp "${EMBEDDER_LOG}.1" "${dir}/embedder.log.1" 2>/dev/null || true
-    fi
+    cp "$log_file" "${dir}/${service}.log" 2>/dev/null || true
+    cp "${log_file}.1" "${dir}/${service}.log.1" 2>/dev/null || true
 
     log "INFO" "Crash evidence saved to ${dir}"
 }
@@ -121,49 +102,34 @@ notify() {
 # ── Main Check ─────────────────────────────────────────────────────────────
 
 run_health_check() {
-    local state indexer_ok embedder_ok
+    local state watcher_ok
     state=$(read_state)
 
-    # Indexer
-    indexer_ok=false
-    check_indexer && indexer_ok=true
+    # opencode-search watch daemon
+    watcher_ok=false
+    check_opencode_search_watcher && watcher_ok=true
 
-    local idx_failures
-    idx_failures=$(get_field "$state" "indexer_failures" 0)
-    $indexer_ok && idx_failures=0 || idx_failures=$((idx_failures + 1))
+    local watcher_failures
+    watcher_failures=$(get_field "$state" "watcher_failures" 0)
+    $watcher_ok && watcher_failures=0 || watcher_failures=$((watcher_failures + 1))
 
-    if [[ "$idx_failures" -ge "$FATAL_NOTIFY_THRESHOLD" ]] && [[ "$idx_failures" -eq "$FATAL_NOTIFY_THRESHOLD" ]]; then
-        notify "opencode: Indexer Down" \
-            "Indexer unreachable for ${idx_failures} checks. opencode will restart it on next use." \
+    if [[ "$watcher_failures" -ge "$FATAL_NOTIFY_THRESHOLD" ]] && [[ "$watcher_failures" -eq "$FATAL_NOTIFY_THRESHOLD" ]]; then
+        notify "opencode-search: Watcher Down" \
+            "No opencode-search watch daemon detected for ${watcher_failures} checks." \
             "normal"
-    fi
-
-    # Embedder
-    embedder_ok=false
-    check_embedder && embedder_ok=true
-
-    local emb_failures
-    emb_failures=$(get_field "$state" "embedder_failures" 0)
-    $embedder_ok && emb_failures=0 || emb_failures=$((emb_failures + 1))
-
-    if [[ "$emb_failures" -ge "$FATAL_NOTIFY_THRESHOLD" ]] && [[ "$emb_failures" -eq "$FATAL_NOTIFY_THRESHOLD" ]]; then
-        notify "opencode: Embedder Down" \
-            "Embedder unreachable for ${emb_failures} checks. Indexer will restart it on next use." \
-            "normal"
-        capture_crash_evidence "embedder"
+        capture_crash_evidence "opencode-search"
     fi
 
     # Persist
     state=$(echo "$state" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-d['indexer_failures'] = ${idx_failures}
-d['embedder_failures'] = ${emb_failures}
+d['watcher_failures'] = ${watcher_failures}
 print(json.dumps(d))
 " 2>/dev/null || echo "$state")
     write_state "$state"
 
-    log "INFO" "Health: indexer=${indexer_ok} embedder=${embedder_ok}"
+    log "INFO" "Health: watcher=${watcher_ok}"
 }
 
 # ── Entry Point ────────────────────────────────────────────────────────────
@@ -184,7 +150,7 @@ if $ONEShot; then
     exit 0
 fi
 
-log "INFO" "Health supervisor v3 started (monitor-only, interval=${INTERVAL}s)"
+log "INFO" "Health supervisor v4 started (monitor-only, interval=${INTERVAL}s)"
 trap 'log "INFO" "Stopped"; exit 0' INT TERM
 
 while true; do
