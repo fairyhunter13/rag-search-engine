@@ -1,0 +1,22 @@
+{
+  "name": "opencode-search",
+  "description": "GPU-accelerated local semantic code search for Codex CLI",
+  "version": "0.2.0",
+  "mcp": {
+    "server": {
+      "command": "opencode-search",
+      "args": ["mcp"],
+      "transport": "stdio",
+      "env": {
+        "OPENCODE_LOG_LEVEL": "INFO"
+      }
+    },
+    "tools": [
+      "index_project",
+      "search_code",
+      "project_status",
+      "list_indexed_projects",
+      "stop_watching"
+    ]
+  }
+}
