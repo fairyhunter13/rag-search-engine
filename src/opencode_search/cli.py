@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from typing import Optional
 
 import typer
 
@@ -253,7 +254,7 @@ def list_cmd(
 @app.command()
 def watch(
     path: str = typer.Argument(..., help="Project root to watch for file changes."),
-    tier: str = typer.Option("balanced", help="Embedding tier used when indexed."),
+    tier: Optional[str] = typer.Option(None, help="Embedding tier. Defaults to the tier already in the registry, or 'budget' for new projects."),
 ) -> None:
     """Start a live file-watcher for a project (incremental re-indexing on change).
 
@@ -268,8 +269,14 @@ def watch(
     from opencode_search.handlers import handle_index_project
     from opencode_search.watcher import watcher_manager
 
-    typer.echo(f"Starting watcher for {path} (tier={tier}) — press Ctrl+C to stop.")
     project_path = str(Path(path).expanduser().resolve())
+    # Use the persisted tier if the project is already indexed, so the watcher
+    # stays consistent with the existing index without requiring --tier on every call.
+    if tier is None:
+        registry = load_registry()
+        entry = registry.get(project_path)
+        tier = entry.tier if entry is not None else "budget"
+    typer.echo(f"Starting watcher for {path} (tier={tier}) — press Ctrl+C to stop.")
 
     async def _watch_forever() -> None:
         result = await handle_index_project(path=path, tier=tier, watch=True)

@@ -160,8 +160,8 @@ See `mcp-config/hermes.json`.
 
 | Variable                              | Default                     | Meaning                                         |
 |---------------------------------------|-----------------------------|-------------------------------------------------|
-| `OPENCODE_REGISTRY_PATH`              | `~/.opencode/projects.json` | Where the project registry is persisted         |
-| `OPENCODE_INDEX_ROOT`                 | `~/.opencode/indexes`       | Centralized root directory for LanceDB indexes  |
+| `OPENCODE_REGISTRY_PATH`              | `~/.local/share/opencode-search/projects.json` | Where the project registry is persisted         |
+| `OPENCODE_INDEX_ROOT`                 | `~/.local/share/opencode-search/indexes`       | Centralized root directory for LanceDB indexes  |
 | `OPENCODE_DEBOUNCE_DELAY_MS`          | `1000`                      | Watcher debounce window                         |
 | `OPENCODE_MIN_FLUSH_INTERVAL_S`       | `5`                         | Min seconds between watcher flushes             |
 | `OPENCODE_STAGE1_VECTOR_K`            | `20`                        | Per-project vector candidates                   |
@@ -243,7 +243,7 @@ opencode-search index ~/myproject --tier balanced --force
 If an index needs a fully clean rebuild, remove the centralized index directory and index again:
 
 ```bash
-rm -rf ~/.opencode/indexes/<project-slug>-<hash>/index_balanced
+rm -rf ~/.local/share/opencode-search/indexes/<project-slug>-<hash>/index_balanced
 opencode-search index ~/myproject --tier balanced --force
 ```
 
@@ -282,6 +282,6 @@ Mixed-tier federated search is rejected by design because the underlying embeddi
          └───────────────┘   └────────────────┘
 ```
 
-Per-project DB lives at `~/.opencode/indexes/<project-slug>-<hash>/index_{tier}/` by default.
-The cross-project registry lives at `~/.opencode/projects.json`.
+Per-project DB lives at `~/.local/share/opencode-search/indexes/<project-slug>-<hash>/index_{tier}/` by default.
+The cross-project registry lives at `~/.local/share/opencode-search/projects.json`.
 Existing legacy registry entries are migrated from `<project>/.opencode/index_{tier}/` on load.

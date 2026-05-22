@@ -59,7 +59,7 @@ EMBED_PASSAGES_MAX_BYTES: int = int(os.environ.get("OPENCODE_EMBED_PASSAGES_MAX_
 # Registry path
 # ---------------------------------------------------------------------------
 REGISTRY_PATH: Path = Path(
-    os.environ.get("OPENCODE_REGISTRY_PATH", os.path.expanduser("~/.opencode/projects.json"))
+    os.environ.get("OPENCODE_REGISTRY_PATH", os.path.expanduser("~/.local/share/opencode-search/projects.json"))
 )
 
 # ---------------------------------------------------------------------------
