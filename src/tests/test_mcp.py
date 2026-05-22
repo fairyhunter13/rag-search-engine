@@ -23,6 +23,14 @@ def _import_mcp():
     return importlib.import_module("opencode_search.mcp")
 
 
+class _FakeRequest:
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
 # ---------------------------------------------------------------------------
 # Import sanity
 # ---------------------------------------------------------------------------
@@ -88,9 +96,27 @@ async def test_index_project_tool_callable():
                                        "files_unchanged": 0, "files_removed": 0,
                                        "chunks_total": 0, "errors": 0,
                                        "elapsed_s": 0.1, "watching": False,
-                                       "path": "/tmp/x", "tier": "balanced"})):
+                                       "path": "/tmp/x", "tier": "balanced"})), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()):
         result = await mod.index_project(path="/tmp/x", tier="balanced")
     assert "status" in result or result is not None
+
+
+@pytest.mark.asyncio
+async def test_index_project_auto_starts_watch_for_matching_open_client():
+    mod = _import_mcp()
+
+    with patch("opencode_search.mcp.handle_index_project",
+               AsyncMock(return_value={"status": "ok", "path": "/tmp/proj", "watching": False})), \
+         patch("opencode_search.mcp._ensure_watchers_resumed", AsyncMock()), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()), \
+         patch.object(mod.runtime_state, "bind_clients_to_project", return_value=1) as mock_bind, \
+         patch("opencode_search.mcp.handle_ensure_project_watching", AsyncMock(return_value={"status": "ok"})) as mock_watch:
+        result = await mod.index_project(path="/tmp/proj", tier="balanced")
+
+    assert result["status"] == "ok"
+    mock_bind.assert_called_once_with("/tmp/proj")
+    mock_watch.assert_awaited_once_with("/tmp/proj", persist=False)
 
 
 @pytest.mark.asyncio
@@ -100,6 +126,7 @@ async def test_search_code_tool_callable():
     with patch("opencode_search.mcp.handle_search_code",
                AsyncMock(return_value={"results": [], "elapsed_ms": 0.0,
                                        "query": "test", "projects_searched": 0})), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()), \
          patch("opencode_search.mcp._ensure_watchers_resumed", AsyncMock()) as mock_resume:
         result = await mod.search_code(query="test")
     assert "results" in result or result is not None
@@ -110,7 +137,8 @@ async def test_search_code_tool_callable():
 async def test_project_status_tool_callable():
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_project_status",
-               AsyncMock(return_value={"indexed": False, "path": "/tmp/x"})):
+               AsyncMock(return_value={"indexed": False, "path": "/tmp/x"})), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()):
         result = await mod.project_status(path="/tmp/x")
     assert result is not None
 
@@ -119,7 +147,8 @@ async def test_project_status_tool_callable():
 async def test_list_indexed_projects_tool_callable():
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_list_indexed_projects",
-               AsyncMock(return_value={"projects": []})):
+               AsyncMock(return_value={"projects": []})), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()):
         result = await mod.list_indexed_projects()
     assert "projects" in result or result is not None
 
@@ -128,7 +157,8 @@ async def test_list_indexed_projects_tool_callable():
 async def test_stop_watching_tool_callable():
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_stop_watching",
-               AsyncMock(return_value={"was_watching": False, "status": "stopped", "path": "/tmp/x"})):
+               AsyncMock(return_value={"was_watching": False, "status": "stopped", "path": "/tmp/x"})), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()):
         result = await mod.stop_watching(path="/tmp/x")
     assert result is not None
 
@@ -185,7 +215,48 @@ async def test_resume_watchers_starts_watcher_for_watched_entries():
         return True
 
     with patch("opencode_search.config.load_registry", return_value={"/tmp/watched": entry}), \
-         patch("opencode_search.watcher.watcher_manager.start", side_effect=mock_start):
+         patch("opencode_search.handlers.load_registry", return_value={"/tmp/watched": entry}), \
+         patch("opencode_search.handlers.watcher_manager.start", side_effect=mock_start):
         await mod.resume_watchers()
 
     assert "/tmp/watched" in started["calls"]
+
+
+@pytest.mark.asyncio
+async def test_client_open_auto_starts_watch_for_indexed_project():
+    mod = _import_mcp()
+
+    with patch("opencode_search.mcp.resolve_indexed_project_path", return_value="/tmp/proj"), \
+         patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()), \
+         patch("opencode_search.mcp._ensure_watchers_resumed", AsyncMock()), \
+         patch("opencode_search.mcp.handle_ensure_project_watching", AsyncMock(return_value={"status": "ok"})) as mock_watch:
+        response = await mod.client_open(_FakeRequest({"client_id": "client-a", "cwd": "/tmp/proj"}))
+
+    assert response.status_code == 200
+    mock_watch.assert_awaited_once_with("/tmp/proj", persist=False)
+
+
+@pytest.mark.asyncio
+async def test_client_close_marks_pending_disconnect_without_immediate_release():
+    mod = _import_mcp()
+
+    with patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()), \
+         patch("opencode_search.mcp._release_stale_project_watches", AsyncMock()), \
+         patch.object(mod.runtime_state, "client_close", return_value="/tmp/proj") as mock_close, \
+         patch("opencode_search.mcp.handle_release_project_watch", AsyncMock(return_value={"status": "stopped"})) as mock_release:
+        response = await mod.client_close(_FakeRequest({"client_id": "client-a"}))
+
+    assert response.status_code == 200
+    mock_close.assert_called_once_with("client-a")
+    mock_release.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_cleanup_loop_releases_project_watch_without_new_requests():
+    mod = _import_mcp()
+
+    with patch.object(mod.runtime_state, "releaseable_stale_projects", return_value=["/tmp/proj"]), \
+         patch("opencode_search.mcp.handle_release_project_watch", AsyncMock(return_value={"status": "stopped"})) as mock_release:
+        await mod._release_stale_project_watches()
+
+    mock_release.assert_awaited_once_with("/tmp/proj")

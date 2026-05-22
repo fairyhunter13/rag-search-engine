@@ -58,6 +58,39 @@ def _print_json(obj: object) -> None:
 
 
 @app.command()
+def init(
+    path: str = typer.Argument(".", help="Project root directory to index. Defaults to current directory."),
+    tier: str = typer.Option("balanced", help="Embedding tier: budget | balanced | premium."),
+    watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Initialize semantic indexing for a project, defaulting to the current directory."""
+    from opencode_search.handlers import handle_index_project
+
+    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force))
+
+    if json_output:
+        _print_json(result)
+        return
+
+    if "error" in result:
+        typer.echo(f"Error: {result['error']}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(
+        f"Indexed {result['path']}\n"
+        f"  tier:          {result['tier']}\n"
+        f"  files indexed: {result['files_indexed']}\n"
+        f"  files skipped: {result.get('files_unchanged', 0)}\n"
+        f"  chunks total:  {result.get('chunks_total', 0)}\n"
+        f"  errors:        {result.get('errors', 0)}\n"
+        f"  elapsed:       {result['elapsed_s']}s\n"
+        f"  watching:      {result['watching']}"
+    )
+
+
+@app.command()
 def index(
     path: str = typer.Argument(..., help="Project root directory to index."),
     tier: str = typer.Option("balanced", help="Embedding tier: budget | balanced | premium."),
@@ -307,25 +340,36 @@ def mcp() -> None:
 
 @daemon_app.command("serve")
 def daemon_serve(
-    host: str = typer.Option("127.0.0.1", help="Bind host for the HTTP daemon."),
-    port: int = typer.Option(8765, help="Bind port for the HTTP daemon."),
+    host: str | None = typer.Option(None, help="Bind host for the HTTP daemon."),
+    port: int | None = typer.Option(None, help="Bind port for the HTTP daemon."),
 ) -> None:
     """Run the singleton MCP daemon in the foreground."""
-    from opencode_search.daemon import run_http_daemon_server
+    from opencode_search.daemon import (
+        DEFAULT_DAEMON_HOST,
+        DEFAULT_DAEMON_PORT,
+        run_http_daemon_server,
+    )
 
-    run_http_daemon_server(host=host, port=port)
+    run_http_daemon_server(host=host or DEFAULT_DAEMON_HOST, port=port or DEFAULT_DAEMON_PORT)
 
 
 @daemon_app.command("ensure")
 def daemon_ensure(
-    host: str = typer.Option("127.0.0.1", help="Expected daemon host."),
-    port: int = typer.Option(8765, help="Expected daemon port."),
+    host: str | None = typer.Option(None, help="Expected daemon host."),
+    port: int | None = typer.Option(None, help="Expected daemon port."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Start the singleton daemon if it is not already running."""
-    from opencode_search.daemon import ensure_daemon_running
+    from opencode_search.daemon import (
+        DEFAULT_DAEMON_HOST,
+        DEFAULT_DAEMON_PORT,
+        ensure_daemon_running,
+    )
 
-    result = ensure_daemon_running(host=host, port=port)
+    result = ensure_daemon_running(
+        host=host or DEFAULT_DAEMON_HOST,
+        port=port or DEFAULT_DAEMON_PORT,
+    )
     if json_output:
         _print_json(result)
         return
@@ -342,14 +386,14 @@ def daemon_bridge_stdio() -> None:
 
 @daemon_app.command("status")
 def daemon_status_cmd(
-    host: str = typer.Option("127.0.0.1", help="Expected daemon host."),
-    port: int = typer.Option(8765, help="Expected daemon port."),
+    host: str | None = typer.Option(None, help="Expected daemon host."),
+    port: int | None = typer.Option(None, help="Expected daemon port."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Show current singleton daemon status."""
-    from opencode_search.daemon import daemon_status
+    from opencode_search.daemon import DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT, daemon_status
 
-    result = daemon_status(host=host, port=port)
+    result = daemon_status(host=host or DEFAULT_DAEMON_HOST, port=port or DEFAULT_DAEMON_PORT)
     if json_output:
         _print_json(result)
         return
@@ -359,14 +403,14 @@ def daemon_status_cmd(
 
 @daemon_app.command("stop")
 def daemon_stop(
-    host: str = typer.Option("127.0.0.1", help="Daemon host to stop."),
-    port: int = typer.Option(8765, help="Daemon port to stop."),
+    host: str | None = typer.Option(None, help="Daemon host to stop."),
+    port: int | None = typer.Option(None, help="Daemon port to stop."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Stop the singleton daemon."""
-    from opencode_search.daemon import stop_daemon
+    from opencode_search.daemon import DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT, stop_daemon
 
-    result = stop_daemon(host=host, port=port)
+    result = stop_daemon(host=host or DEFAULT_DAEMON_HOST, port=port or DEFAULT_DAEMON_PORT)
     if json_output:
         _print_json(result)
         return
@@ -375,14 +419,21 @@ def daemon_stop(
 
 @daemon_app.command("install-systemd")
 def daemon_install_systemd(
-    host: str = typer.Option("127.0.0.1", help="Daemon host for the systemd unit."),
-    port: int = typer.Option(8765, help="Daemon port for the systemd unit."),
+    host: str | None = typer.Option(None, help="Daemon host for the systemd unit."),
+    port: int | None = typer.Option(None, help="Daemon port for the systemd unit."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Install and enable a user systemd service for login-time daemon startup."""
-    from opencode_search.daemon import install_systemd_user_service
+    from opencode_search.daemon import (
+        DEFAULT_DAEMON_HOST,
+        DEFAULT_DAEMON_PORT,
+        install_systemd_user_service,
+    )
 
-    result = install_systemd_user_service(host=host, port=port)
+    result = install_systemd_user_service(
+        host=host or DEFAULT_DAEMON_HOST,
+        port=port or DEFAULT_DAEMON_PORT,
+    )
     if json_output:
         _print_json(result)
         return
@@ -395,14 +446,21 @@ def daemon_install_systemd(
 
 @daemon_app.command("install-global")
 def daemon_install_global(
-    host: str = typer.Option("127.0.0.1", help="Daemon host to register in client configs."),
-    port: int = typer.Option(8765, help="Daemon port to register in client configs."),
+    host: str | None = typer.Option(None, help="Daemon host to register in client configs."),
+    port: int | None = typer.Option(None, help="Daemon port to register in client configs."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Register the singleton daemon globally in Claude Code, Codex, and Hermes."""
-    from opencode_search.daemon import install_global_integration
+    from opencode_search.daemon import (
+        DEFAULT_DAEMON_HOST,
+        DEFAULT_DAEMON_PORT,
+        install_global_integration,
+    )
 
-    result = install_global_integration(host=host, port=port)
+    result = install_global_integration(
+        host=host or DEFAULT_DAEMON_HOST,
+        port=port or DEFAULT_DAEMON_PORT,
+    )
     if json_output:
         _print_json(result)
         return

@@ -40,6 +40,55 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat()
 
 
+def resolve_indexed_project_path(path: str) -> str | None:
+    """Return the nearest indexed project root containing ``path``."""
+    candidate = Path(path).expanduser().resolve()
+    registry = load_registry()
+    best_match: str | None = None
+    best_depth = -1
+    for project_path in registry:
+        project_root = Path(project_path)
+        try:
+            candidate.relative_to(project_root)
+        except ValueError:
+            continue
+        depth = len(project_root.parts)
+        if depth > best_depth:
+            best_match = project_path
+            best_depth = depth
+    return best_match
+
+
+def _build_incremental_on_change(
+    *,
+    db_path: str,
+    dims: int,
+    tier: str,
+    project_root: Path,
+):
+    async def on_change(modified: list[Path], deleted: list[str]) -> None:
+        st = Storage(db_path=db_path, dims=dims)
+        await st.open()
+        try:
+            if deleted:
+                from opencode_search.cleaner import remove_chunks_for_paths
+
+                project_deleted = [
+                    p for p in deleted if ".opencode" not in Path(p).parts
+                ]
+                await remove_chunks_for_paths(st, project_deleted)
+            if modified:
+                project_modified = [
+                    p for p in modified if is_indexable_file(p, root=project_root)
+                ]
+                await _index_files(st, project_modified, tier=tier)
+            clear_search_cache()
+        finally:
+            await st.close()
+
+    return on_change
+
+
 # ---------------------------------------------------------------------------
 # index_project
 # ---------------------------------------------------------------------------
@@ -109,31 +158,15 @@ async def handle_index_project(
 
         # Start watcher if requested
         if watch and not watcher_manager.is_active(path_str):
-            _dims = dims
-            _db_path = db_path
-            _tier = tier
-            _project_root = project_path
-
-            async def on_change(modified: list[Path], deleted: list[str]) -> None:
-                st = Storage(db_path=_db_path, dims=_dims)
-                await st.open()
-                try:
-                    if deleted:
-                        from opencode_search.cleaner import remove_chunks_for_paths
-                        project_deleted = [
-                            p for p in deleted if ".opencode" not in Path(p).parts
-                        ]
-                        await remove_chunks_for_paths(st, project_deleted)
-                    if modified:
-                        project_modified = [
-                            p for p in modified if is_indexable_file(p, root=_project_root)
-                        ]
-                        await _index_files(st, project_modified, tier=_tier)
-                    clear_search_cache()
-                finally:
-                    await st.close()
-
-            await watcher_manager.start(path_str, on_change=on_change)
+            await watcher_manager.start(
+                path_str,
+                on_change=_build_incremental_on_change(
+                    db_path=db_path,
+                    dims=dims,
+                    tier=tier,
+                    project_root=project_path,
+                ),
+            )
 
         status = {
             "status": "ok",
@@ -270,6 +303,92 @@ async def handle_list_indexed_projects() -> dict[str, Any]:
             }
             for p in registry.values()
         ]
+    }
+
+
+async def handle_ensure_project_watching(path: str, *, persist: bool = False) -> dict[str, Any]:
+    """Start watching the nearest indexed project containing ``path``."""
+    project_path = resolve_indexed_project_path(path)
+    if project_path is None:
+        return {
+            "status": "not_indexed",
+            "indexed": False,
+            "path": str(Path(path).expanduser().resolve()),
+            "watching": False,
+        }
+
+    registry = load_registry()
+    entry = registry[project_path]
+    if persist and not entry.watch:
+        entry.watch = True
+        save_registry(registry)
+
+    if watcher_manager.is_active(project_path):
+        return {
+            "status": "ok",
+            "indexed": True,
+            "path": project_path,
+            "watching": True,
+            "already_watching": True,
+        }
+
+    started = await watcher_manager.start(
+        project_path,
+        on_change=_build_incremental_on_change(
+            db_path=str(entry.db_path),
+            dims=entry.dims,
+            tier=entry.tier,
+            project_root=Path(project_path),
+        ),
+    )
+    if not started:
+        return {
+            "status": "error",
+            "indexed": True,
+            "path": project_path,
+            "watching": False,
+            "error": "watcher start failed",
+        }
+
+    return {
+        "status": "ok",
+        "indexed": True,
+        "path": project_path,
+        "watching": True,
+        "already_watching": False,
+    }
+
+
+async def handle_release_project_watch(path: str) -> dict[str, Any]:
+    """Stop an auto-started watcher when the last attached client closes."""
+    project_path = resolve_indexed_project_path(path)
+    if project_path is None:
+        return {
+            "status": "not_indexed",
+            "indexed": False,
+            "path": str(Path(path).expanduser().resolve()),
+            "watching": False,
+        }
+
+    registry = load_registry()
+    entry = registry[project_path]
+    if entry.watch:
+        return {
+            "status": "kept_persisted",
+            "indexed": True,
+            "path": project_path,
+            "watching": watcher_manager.is_active(project_path),
+        }
+
+    was_watching = watcher_manager.is_active(project_path)
+    if was_watching:
+        await watcher_manager.stop(project_path)
+
+    return {
+        "status": "stopped" if was_watching else "not_watching",
+        "indexed": True,
+        "path": project_path,
+        "watching": False,
     }
 
 

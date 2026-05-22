@@ -323,6 +323,87 @@ async def test_handle_list_indexed_projects_with_entries():
 
 
 # ---------------------------------------------------------------------------
+# auto watch lifecycle helpers
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_indexed_project_path_prefers_nearest_ancestor():
+    from opencode_search.handlers import resolve_indexed_project_path
+
+    registry = {
+        "/tmp/work": _make_entry("/tmp/work"),
+        "/tmp/work/repo": _make_entry("/tmp/work/repo"),
+    }
+
+    with patch("opencode_search.handlers.load_registry", return_value=registry):
+        resolved = resolve_indexed_project_path("/tmp/work/repo/src/module.py")
+
+    assert resolved == "/tmp/work/repo"
+
+
+@pytest.mark.asyncio
+async def test_handle_ensure_project_watching_starts_for_indexed_ancestor():
+    from opencode_search.handlers import handle_ensure_project_watching
+
+    entry = _make_entry("/tmp/work/repo")
+
+    started: dict[str, object] = {}
+
+    async def _mock_start(root, *, on_change):
+        started["root"] = root
+        started["callback"] = on_change
+        return True
+
+    with patch("opencode_search.handlers.load_registry", return_value={entry.path: entry}), \
+         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+        MockWatcher.is_active.return_value = False
+        MockWatcher.start = AsyncMock(side_effect=_mock_start)
+
+        result = await handle_ensure_project_watching("/tmp/work/repo/src/module.py")
+
+    assert result["status"] == "ok"
+    assert result["path"] == entry.path
+    assert started["root"] == entry.path
+    assert started["callback"] is not None
+
+
+@pytest.mark.asyncio
+async def test_handle_release_project_watch_keeps_persisted_watch():
+    from opencode_search.handlers import handle_release_project_watch
+
+    entry = _make_entry("/tmp/proj")
+    entry.watch = True
+
+    with patch("opencode_search.handlers.load_registry", return_value={entry.path: entry}), \
+         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+        MockWatcher.is_active.return_value = True
+        MockWatcher.stop = AsyncMock()
+
+        result = await handle_release_project_watch("/tmp/proj")
+
+    assert result["status"] == "kept_persisted"
+    MockWatcher.stop.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_release_project_watch_stops_non_persisted_watch():
+    from opencode_search.handlers import handle_release_project_watch
+
+    entry = _make_entry("/tmp/proj")
+    entry.watch = False
+
+    with patch("opencode_search.handlers.load_registry", return_value={entry.path: entry}), \
+         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+        MockWatcher.is_active.return_value = True
+        MockWatcher.stop = AsyncMock()
+
+        result = await handle_release_project_watch("/tmp/proj/subdir")
+
+    assert result["status"] == "stopped"
+    MockWatcher.stop.assert_called_once_with("/tmp/proj")
+
+
+# ---------------------------------------------------------------------------
 # handle_stop_watching
 # ---------------------------------------------------------------------------
 

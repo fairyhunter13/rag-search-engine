@@ -90,6 +90,64 @@ def test_index_with_force_and_watch(tmp_path):
     assert captured.get("watch") is True
 
 
+def test_init_defaults_to_current_directory(tmp_path, monkeypatch):
+    fake_result = {
+        "status": "ok",
+        "path": str(tmp_path),
+        "tier": "balanced",
+        "files_indexed": 1,
+        "files_unchanged": 0,
+        "chunks_total": 1,
+        "errors": 0,
+        "elapsed_s": 0.1,
+        "watching": False,
+    }
+    monkeypatch.chdir(tmp_path)
+    with patch("opencode_search.handlers.handle_index_project", AsyncMock(return_value=fake_result)) as mock_handle:
+        result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+    mock_handle.assert_awaited_once()
+    assert mock_handle.await_args.kwargs["path"] == "."
+
+
+def test_init_json_output(tmp_path):
+    fake_result = {
+        "status": "ok",
+        "path": str(tmp_path),
+        "tier": "budget",
+        "files_indexed": 1,
+        "chunks_total": 2,
+        "errors": 0,
+        "elapsed_s": 0.1,
+        "watching": False,
+    }
+    with patch("opencode_search.handlers.handle_index_project", AsyncMock(return_value=fake_result)):
+        result = runner.invoke(app, ["init", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "ok"
+
+
+def test_daemon_status_uses_runtime_defaults_when_flags_omitted(monkeypatch):
+    import opencode_search.daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "DEFAULT_DAEMON_HOST", "127.0.0.9")
+    monkeypatch.setattr(daemon_mod, "DEFAULT_DAEMON_PORT", 8892)
+
+    captured = {}
+
+    def fake_status(*, host, port):
+        captured["host"] = host
+        captured["port"] = port
+        return {"running": False, "url": f"http://{host}:{port}/mcp"}
+
+    with patch("opencode_search.daemon.daemon_status", side_effect=fake_status):
+        result = runner.invoke(app, ["daemon", "status", "--json"])
+
+    assert result.exit_code == 0
+    assert captured == {"host": "127.0.0.9", "port": 8892}
+
+
 # ---------------------------------------------------------------------------
 # search
 # ---------------------------------------------------------------------------

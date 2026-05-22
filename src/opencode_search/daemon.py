@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
@@ -32,13 +33,23 @@ _LOCK_PATH = _STATE_DIR / "daemon.lock"
 _PID_PATH = _STATE_DIR / "daemon.pid"
 _META_PATH = _STATE_DIR / "daemon.json"
 _LOG_PATH = _STATE_DIR / "daemon.log"
-_HELPER_PATH = Path.home() / ".local" / "bin" / "opencode-search-global-mcp-ensure"
+_BIN_DIR = Path.home() / ".opencode" / "bin"
+_HELPER_PATH = _BIN_DIR / "opencode-search-global-mcp-ensure"
+_INIT_WRAPPER_PATH = _BIN_DIR / "opencode-search-init"
 _ALIASES_PATH = Path.home() / ".bash_aliases"
 _ALIAS_BLOCK_START = "# >>> opencode-search global singleton MCP >>>"
 _ALIAS_BLOCK_END = "# <<< opencode-search global singleton MCP <<<"
 _SYSTEMD_USER_DIR = Path.home() / ".config" / "systemd" / "user"
 _SYSTEMD_SERVICE_NAME = "opencode-search-mcp-daemon.service"
 _SYSTEMD_SERVICE_PATH = _SYSTEMD_USER_DIR / _SYSTEMD_SERVICE_NAME
+_GLOBAL_PROMPT_DIR = Path.home() / ".config" / "opencode-search"
+_CLAUDE_GLOBAL_MD = Path.home() / "CLAUDE.md"
+_CODEX_BLOCK_START = "# >>> opencode-search developer instructions >>>"
+_CODEX_BLOCK_END = "# <<< opencode-search developer instructions <<<"
+_CLAUDE_BLOCK_START = "<!-- >>> opencode-search global instructions >>> -->"
+_CLAUDE_BLOCK_END = "<!-- <<< opencode-search global instructions <<< -->"
+_HERMES_MARKER_START = "[opencode-search-global-instructions:start]"
+_HERMES_MARKER_END = "[opencode-search-global-instructions:end]"
 
 
 def _state_dir() -> Path:
@@ -397,6 +408,167 @@ def _bridge_command(python_bin: Path | None = None) -> list[str]:
     return [str(python_bin), "-m", "opencode_search", "daemon", "bridge-stdio"]
 
 
+def _global_prompt_text() -> str:
+    return (
+        "Use the opencode-search MCP server as the first codebase lookup path when the current project "
+        "is already indexed.\n"
+        "\n"
+        "Rules:\n"
+        "- Before broad codebase exploration, recursive grep, manual file-by-file reading, reviews, debugging, or edits, "
+        "first check index state with project_status or list_indexed_projects and then use search_code to locate relevant code.\n"
+        "- Never auto-index a project just because it is open.\n"
+        "- Only call index_project when the user explicitly asks to index the current project. Treat commands like "
+        "\"/index-project\", \"index this project\", \"index this repo\", running `opencode-search init`, "
+        "running `opencode-search-init`, or equivalent direct requests as explicit authorization.\n"
+        "- If the current project is not indexed and the user did not explicitly ask to index it, say that the project is not indexed yet and ask before indexing.\n"
+        "- After a project has been explicitly indexed, rely on the daemon's automatic watch behavior while the client remains open.\n"
+        "- Do not call stop_watching unless the user explicitly asks for it.\n"
+        "- Prefer search_code results over large ad hoc filesystem scans.\n"
+    )
+
+
+def _global_prompt_with_markers(start: str, end: str) -> str:
+    return f"{start}\n{_global_prompt_text().rstrip()}\n{end}"
+
+
+def _replace_managed_block(existing: str, start: str, end: str, block: str) -> str:
+    if start in existing and end in existing:
+        pattern = re.compile(rf"{re.escape(start)}.*?{re.escape(end)}", flags=re.DOTALL)
+        return pattern.sub(block, existing)
+    stripped = existing.rstrip()
+    if stripped:
+        return stripped + "\n\n" + block + "\n"
+    return block + "\n"
+
+
+def _install_claude_global_prompt() -> str:
+    block = _global_prompt_with_markers(_CLAUDE_BLOCK_START, _CLAUDE_BLOCK_END)
+    existing = _CLAUDE_GLOBAL_MD.read_text(encoding="utf-8") if _CLAUDE_GLOBAL_MD.exists() else ""
+    updated = _replace_managed_block(existing, _CLAUDE_BLOCK_START, _CLAUDE_BLOCK_END, block)
+    _CLAUDE_GLOBAL_MD.write_text(updated, encoding="utf-8")
+    return str(_CLAUDE_GLOBAL_MD)
+
+
+def _remove_managed_block(existing: str, start: str, end: str) -> str:
+    updated = existing
+    if start in updated and end in updated:
+        pattern = re.compile(rf"\n?{re.escape(start)}.*?{re.escape(end)}\n?", flags=re.DOTALL)
+        updated = pattern.sub("\n", updated)
+    marker_pattern = re.compile(
+        rf"(?m)^[ \t]*(?:{re.escape(start)}|{re.escape(end)})[ \t]*\n?"
+    )
+    return marker_pattern.sub("", updated)
+
+
+def _split_toml_root_preamble(existing: str) -> tuple[str, str]:
+    match = re.search(r"(?m)^\s*\[", existing)
+    if match is None:
+        return existing, ""
+    return existing[: match.start()], existing[match.start() :]
+
+
+def _strip_root_toml_assignment(preamble: str, key: str) -> str:
+    pattern = re.compile(
+        rf"""(?ms)
+        ^[ \t]*{re.escape(key)}[ \t]*=[ \t]*
+        (?:
+            \"\"\".*?\"\"\"
+            |'''.*?'''
+            |"(?:\\.|[^"\\])*"
+            |'(?:\\.|[^'\\])*'
+        )
+        [ \t]*\n?
+        """,
+        flags=re.VERBOSE,
+    )
+    return pattern.sub("", preamble)
+
+
+def _render_root_toml_string_assignment(key: str, value: str) -> str:
+    return f"{key} = {json.dumps(value)}"
+
+
+def _update_codex_config_text(existing: str) -> str:
+    managed = _global_prompt_with_markers(_HERMES_MARKER_START, _HERMES_MARKER_END)
+    unmanaged = ""
+    try:
+        parsed = tomllib.loads(existing)
+    except tomllib.TOMLDecodeError:
+        parsed = {}
+    existing_prompt = parsed.get("developer_instructions")
+    if isinstance(existing_prompt, str):
+        unmanaged = _strip_marker_block(existing_prompt, _HERMES_MARKER_START, _HERMES_MARKER_END).strip()
+    prompt = f"{unmanaged}\n\n{managed}".strip() if unmanaged else managed
+
+    cleaned = _remove_managed_block(existing, _CODEX_BLOCK_START, _CODEX_BLOCK_END)
+    preamble, remainder = _split_toml_root_preamble(cleaned)
+    preamble = _strip_root_toml_assignment(preamble, "developer_instructions").rstrip()
+    block = "\n".join(
+        [
+            _CODEX_BLOCK_START,
+            _render_root_toml_string_assignment("developer_instructions", prompt),
+            _CODEX_BLOCK_END,
+        ]
+    )
+
+    parts: list[str] = []
+    if preamble:
+        parts.append(preamble)
+    parts.append(block)
+    if remainder:
+        parts.append(remainder.lstrip("\n"))
+    updated = "\n\n".join(parts).rstrip() + "\n"
+    tomllib.loads(updated)
+    return updated
+
+
+def _install_codex_global_prompt() -> str:
+    config_path = Path.home() / ".codex" / "config.toml"
+    if not config_path.exists():
+        return str(config_path)
+    existing = config_path.read_text(encoding="utf-8")
+    updated = _update_codex_config_text(existing)
+    config_path.write_text(updated, encoding="utf-8")
+    return str(config_path)
+
+
+def _strip_marker_block(text: str, start: str, end: str) -> str:
+    if start not in text or end not in text:
+        return text
+    pattern = re.compile(rf"\n?{re.escape(start)}.*?{re.escape(end)}\n?", flags=re.DOTALL)
+    return pattern.sub("\n", text).strip()
+
+
+def _install_hermes_global_prompt() -> str:
+    config_path = Path.home() / ".hermes" / "config.yaml"
+    if not config_path.exists():
+        return str(config_path)
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    agent = data.setdefault("agent", {})
+    existing = str(agent.get("system_prompt", "") or "")
+    unmanaged = _strip_marker_block(existing, _HERMES_MARKER_START, _HERMES_MARKER_END).strip()
+    managed = _global_prompt_with_markers(_HERMES_MARKER_START, _HERMES_MARKER_END)
+    agent["system_prompt"] = f"{unmanaged}\n\n{managed}".strip() if unmanaged else managed
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return str(config_path)
+
+
+def _install_init_wrapper(python_bin: Path) -> str:
+    _INIT_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    script = "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            f'exec "{python_bin}" -m opencode_search init "$@"',
+            "",
+        ]
+    )
+    _INIT_WRAPPER_PATH.write_text(script, encoding="utf-8")
+    _INIT_WRAPPER_PATH.chmod(0o755)
+    return str(_INIT_WRAPPER_PATH)
+
+
 def _install_claude(bridge_command: list[str], config_dirs: Iterable[Path]) -> list[str]:
     claude_bin = shutil.which("claude")
     if not claude_bin:
@@ -553,6 +725,10 @@ def install_global_integration(
     codex_installed = _install_codex(bridge_command)
     hermes_installed = _install_hermes(bridge_command)
     _update_hermes_config_for_global_servers(bridge_command)
+    init_wrapper_path = _install_init_wrapper(helper_python)
+    claude_prompt_path = _install_claude_global_prompt()
+    codex_prompt_path = _install_codex_global_prompt()
+    hermes_prompt_path = _install_hermes_global_prompt()
     systemd_result = install_systemd_user_service(host=host, port=port)
 
     return {
@@ -562,6 +738,10 @@ def install_global_integration(
         "claude_config_dirs": installed_claude,
         "codex_installed": codex_installed,
         "hermes_installed": hermes_installed,
+        "init_wrapper_path": init_wrapper_path,
+        "claude_prompt_path": claude_prompt_path,
+        "codex_prompt_path": codex_prompt_path,
+        "hermes_prompt_path": hermes_prompt_path,
         "aliases_path": str(aliases_path),
         "systemd": systemd_result,
     }

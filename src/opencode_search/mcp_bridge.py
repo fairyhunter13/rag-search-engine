@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import urllib.error
 import urllib.request
 import uuid
@@ -37,12 +38,13 @@ async def _notify_daemon(path: str, payload: dict[str, Any]) -> None:
 
 
 async def _register_bridge_client() -> None:
+    payload = {"client_id": _bridge_client_id, "cwd": os.getcwd()}
     try:
-        await _notify_daemon("/admin/client/open", {"client_id": _bridge_client_id})
+        await _notify_daemon("/admin/client/open", payload)
     except Exception:
         await asyncio.to_thread(stop_daemon)
         await asyncio.to_thread(ensure_daemon_running)
-        await _notify_daemon("/admin/client/open", {"client_id": _bridge_client_id})
+        await _notify_daemon("/admin/client/open", payload)
 
 
 async def _heartbeat_loop() -> None:

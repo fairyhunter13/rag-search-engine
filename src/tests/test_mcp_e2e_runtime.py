@@ -12,9 +12,12 @@ pytest.importorskip("lancedb")
 pytest.importorskip("pyarrow")
 pytest.importorskip("mcp")
 
+import opencode_search.mcp as mcp_mod
 from opencode_search import config
 from opencode_search.mcp import (
     _ensure_watchers_resumed,
+    client_close,
+    client_open,
     index_project,
     list_indexed_projects,
     project_status,
@@ -25,6 +28,14 @@ from opencode_search.search import clear_search_cache
 from opencode_search.watcher import watcher_manager
 
 pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps, pytest.mark.gpu]
+
+
+class _FakeRequest:
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
 
 
 async def _wait_for_search_result(
@@ -225,3 +236,65 @@ async def test_mcp_resumes_persisted_watcher_and_removes_deleted_files(tmp_path,
         assert stopped["was_watching"] is True
     finally:
         await watcher_manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    nested = project_root / "nested"
+    nested.mkdir(parents=True)
+    source_file = project_root / "app.py"
+    source_file.write_text(
+        "SMOKE_MCP_FIRST_USE = 'mcp_first_use_unique'\n"
+        "def first_use_token():\n"
+        "    return SMOKE_MCP_FIRST_USE\n"
+    )
+
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
+    monkeypatch.setattr("opencode_search.mcp._resumed", False)
+    monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
+    monkeypatch.setattr("opencode_search.mcp._stale_cleanup_task", None)
+    monkeypatch.setattr("opencode_search.mcp._stale_cleanup_lock", None)
+    monkeypatch.setattr("opencode_search.mcp.DEFAULT_CLIENT_STALE_S", 1)
+
+    await watcher_manager.stop_all()
+    await _ensure_watchers_resumed()
+
+    try:
+        open_response = await client_open(
+            _FakeRequest({"client_id": "client-a", "cwd": str(nested)})
+        )
+        assert open_response.status_code == 200
+
+        indexed = await index_project(path=str(project_root), tier="budget", watch=False)
+        assert indexed["status"] == "ok"
+        assert indexed["watching"] is False
+
+        status = await project_status(path=str(project_root))
+        assert status["indexed"] is True
+        assert status["watching"] is True
+        assert str(project_root) in watcher_manager.list_active()
+
+        await _wait_for_search_result(
+            project_root,
+            "mcp_first_use_unique",
+            expected_substring="mcp_first_use_unique",
+        )
+
+        close_response = await client_close(_FakeRequest({"client_id": "client-a"}))
+        assert close_response.status_code == 200
+        assert str(project_root) in watcher_manager.list_active()
+
+        deadline = asyncio.get_running_loop().time() + 6.0
+        while asyncio.get_running_loop().time() < deadline:
+            if str(project_root) not in watcher_manager.list_active():
+                break
+            await asyncio.sleep(0.2)
+        else:
+            raise AssertionError("auto-started watcher was not released after client disconnect")
+    finally:
+        await watcher_manager.stop_all()
+        task = getattr(mcp_mod, "_stale_cleanup_task", None)
+        if task is not None:
+            task.cancel()

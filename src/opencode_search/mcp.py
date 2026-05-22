@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from pathlib import Path
 from typing import Any
 
 try:
@@ -39,13 +38,17 @@ else:
 
 from starlette.responses import JSONResponse
 
+from opencode_search.daemon import DEFAULT_CLIENT_STALE_S
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
+    handle_ensure_project_watching,
     handle_index_project,
     handle_list_indexed_projects,
     handle_project_status,
+    handle_release_project_watch,
     handle_search_code,
     handle_stop_watching,
+    resolve_indexed_project_path,
 )
 
 log = logging.getLogger(__name__)
@@ -62,6 +65,38 @@ if _MCP_IMPORT_ERROR is not None:
     _mcp_kwargs["missing_exc"] = _MCP_IMPORT_ERROR
 
 mcp = FastMCP(**_mcp_kwargs)
+
+_stale_cleanup_task: asyncio.Task[None] | None = None
+_stale_cleanup_lock: asyncio.Lock | None = None
+
+
+async def _release_stale_project_watches() -> None:
+    for project_path in runtime_state.releaseable_stale_projects(DEFAULT_CLIENT_STALE_S):
+        await handle_release_project_watch(project_path)
+
+
+async def _stale_cleanup_loop() -> None:
+    interval_s = max(1.0, min(float(DEFAULT_CLIENT_STALE_S) / 3.0, 5.0))
+    while True:
+        try:
+            await asyncio.sleep(interval_s)
+            await _release_stale_project_watches()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("stale cleanup failed: %s", exc)
+
+
+async def _ensure_stale_cleanup_started() -> None:
+    global _stale_cleanup_lock, _stale_cleanup_task
+    if _stale_cleanup_task is not None and not _stale_cleanup_task.done():
+        return
+    if _stale_cleanup_lock is None:
+        _stale_cleanup_lock = asyncio.Lock()
+    async with _stale_cleanup_lock:
+        if _stale_cleanup_task is not None and not _stale_cleanup_task.done():
+            return
+        _stale_cleanup_task = asyncio.create_task(_stale_cleanup_loop())
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +121,17 @@ async def index_project(
         watch: Start a live file-watcher for incremental re-indexing.
         force: Re-index all files even if unchanged (ignores hash cache).
     """
+    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
+    await _release_stale_project_watches()
     await _ensure_watchers_resumed()
-    return await handle_index_project(path=path, tier=tier, watch=watch, force=force)
+    result = await handle_index_project(path=path, tier=tier, watch=watch, force=force)
+    project_path = str(result.get("path", "")) if isinstance(result, dict) else ""
+    if result.get("status") == "ok" and project_path:
+        bound_clients = runtime_state.bind_clients_to_project(project_path)
+        if bound_clients > 0:
+            await handle_ensure_project_watching(project_path, persist=False)
+    return result
 
 
 @mcp.tool()
@@ -99,7 +142,9 @@ async def search_code(
     use_rerank: bool = True,
 ) -> dict[str, Any]:
     """Search indexed projects for code matching the query."""
+    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
+    await _release_stale_project_watches()
     await _ensure_watchers_resumed()
     return await handle_search_code(
         query=query,
@@ -112,7 +157,9 @@ async def search_code(
 @mcp.tool()
 async def project_status(path: str) -> dict[str, Any]:
     """Get the current indexing and watching status for a project."""
+    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
+    await _release_stale_project_watches()
     await _ensure_watchers_resumed()
     return await handle_project_status(path=path)
 
@@ -120,7 +167,9 @@ async def project_status(path: str) -> dict[str, Any]:
 @mcp.tool()
 async def list_indexed_projects() -> dict[str, Any]:
     """List all projects that have been indexed."""
+    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
+    await _release_stale_project_watches()
     await _ensure_watchers_resumed()
     return await handle_list_indexed_projects()
 
@@ -128,7 +177,9 @@ async def list_indexed_projects() -> dict[str, Any]:
 @mcp.tool()
 async def stop_watching(path: str) -> dict[str, Any]:
     """Stop the live file-watcher for a project."""
+    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
+    await _release_stale_project_watches()
     await _ensure_watchers_resumed()
     return await handle_stop_watching(path=path)
 
@@ -136,6 +187,8 @@ async def stop_watching(path: str) -> dict[str, Any]:
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
 async def healthz(_request) -> JSONResponse:
     """Lightweight health endpoint for the singleton HTTP daemon."""
+    await _ensure_stale_cleanup_started()
+    await _release_stale_project_watches()
     return JSONResponse(
         {
             "ok": True,
@@ -149,13 +202,23 @@ async def healthz(_request) -> JSONResponse:
 @mcp.custom_route("/admin/client/open", methods=["POST"], include_in_schema=False)
 async def client_open(request) -> JSONResponse:
     payload = await request.json()
-    runtime_state.client_open(str(payload.get("client_id", "")))
+    client_id = str(payload.get("client_id", ""))
+    cwd = str(payload.get("cwd", ""))
+    await _ensure_stale_cleanup_started()
+    await _release_stale_project_watches()
+    project_path = resolve_indexed_project_path(cwd) if cwd else None
+    runtime_state.client_open(client_id, cwd=cwd or None, project_path=project_path)
+    await _ensure_watchers_resumed()
+    if project_path:
+        await handle_ensure_project_watching(project_path, persist=False)
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 @mcp.custom_route("/admin/client/heartbeat", methods=["POST"], include_in_schema=False)
 async def client_heartbeat(request) -> JSONResponse:
     payload = await request.json()
+    await _ensure_stale_cleanup_started()
+    await _release_stale_project_watches()
     runtime_state.client_heartbeat(str(payload.get("client_id", "")))
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
@@ -163,12 +226,16 @@ async def client_heartbeat(request) -> JSONResponse:
 @mcp.custom_route("/admin/client/close", methods=["POST"], include_in_schema=False)
 async def client_close(request) -> JSONResponse:
     payload = await request.json()
+    await _ensure_stale_cleanup_started()
+    await _release_stale_project_watches()
     runtime_state.client_close(str(payload.get("client_id", "")))
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 @mcp.custom_route("/admin/status", methods=["GET"], include_in_schema=False)
 async def admin_status(_request) -> JSONResponse:
+    await _ensure_stale_cleanup_started()
+    await _release_stale_project_watches()
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
@@ -183,45 +250,14 @@ async def resume_watchers() -> None:
     MUST be called from inside FastMCP's running event loop so that the watcher's
     `asyncio.run_coroutine_threadsafe(...)` dispatches to the right loop.
     """
-    from opencode_search.cleaner import remove_chunks_for_paths
-    from opencode_search.config import get_tier_dims, load_registry
-    from opencode_search.discover import is_indexable_file
-    from opencode_search.indexer import index_files
-    from opencode_search.search import clear_search_cache
-    from opencode_search.storage import Storage
-    from opencode_search.watcher import watcher_manager
+    from opencode_search.config import load_registry
 
     registry = load_registry()
     for path_str, entry in registry.items():
         if not entry.watch:
             continue
-        dims = get_tier_dims(entry.tier)
-        db_path = entry.db_path
-        tier = entry.tier
-        project_root = Path(path_str)
-
-        def make_cb(_db=db_path, _d=dims, _t=tier, _root=project_root):
-            async def on_change(modified: list[Path], deleted: list[str]) -> None:
-                st = Storage(db_path=_db, dims=_d)
-                await st.open()
-                try:
-                    if deleted:
-                        project_deleted = [
-                            p for p in deleted if ".opencode" not in Path(p).parts
-                        ]
-                        await remove_chunks_for_paths(st, project_deleted)
-                    if modified:
-                        project_modified = [
-                            p for p in modified if is_indexable_file(p, root=_root)
-                        ]
-                        await index_files(st, project_modified, tier=_t)
-                    clear_search_cache()
-                finally:
-                    await st.close()
-            return on_change
-
-        ok = await watcher_manager.start(path_str, on_change=make_cb())
-        if ok:
+        result = await handle_ensure_project_watching(path_str, persist=True)
+        if result.get("watching"):
             log.info("Resumed watcher for %s", path_str)
 
 
