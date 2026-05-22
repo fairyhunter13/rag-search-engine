@@ -1,0 +1,32 @@
+{
+  "server_name": "opencode-search",
+  "description": "GPU-accelerated local semantic code search",
+  "transport": "stdio",
+  "command": "opencode-search",
+  "args": ["mcp"],
+  "environment": {
+    "OPENCODE_LOG_LEVEL": "INFO"
+  },
+  "tools": {
+    "index_project": {
+      "description": "Index a project directory for semantic code search",
+      "always_allowed": false
+    },
+    "search_code": {
+      "description": "Search indexed projects with natural language",
+      "always_allowed": true
+    },
+    "project_status": {
+      "description": "Get indexing status for a project",
+      "always_allowed": true
+    },
+    "list_indexed_projects": {
+      "description": "List all indexed projects",
+      "always_allowed": true
+    },
+    "stop_watching": {
+      "description": "Stop file watcher for a project",
+      "always_allowed": false
+    }
+  }
+}
