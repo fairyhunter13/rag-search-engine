@@ -37,15 +37,9 @@ pip install -e "src/[dev]"
 
 The `[dev]` extras include `pytest`, `ruff`, and `mypy`. Omit them for a leaner runtime install.
 
-### 4. Install the `openai` package (chonkie compat shim)
+For the canonical local developer workflow, see [DEVELOPMENT.md](/home/user/git/github.com/fairyhunter13/opencode-search-engine/DEVELOPMENT.md).
 
-```bash
-pip install openai
-```
-
-Chonkie's embedding registry eagerly imports `openai`. We don't actually use OpenAI's API — this is just a stub to satisfy the import.
-
-### 5. Verify GPU is detected
+### 4. Verify GPU is detected
 
 ```bash
 opencode-search health
@@ -99,7 +93,7 @@ opencode-search health --json
 
 ### MCP integration (AI assistants)
 
-The MCP server runs via stdio and exposes five tools to AI assistants:
+The MCP server exposes five tools to AI assistants:
 
 - `index_project(path, tier, watch, force)` — index a directory
 - `search_code(query, project_paths, top_k, use_rerank)` — search
@@ -107,16 +101,46 @@ The MCP server runs via stdio and exposes five tools to AI assistants:
 - `list_indexed_projects()` — enumerate projects
 - `stop_watching(path)` — stop file-watcher
 
+#### Global Singleton Daemon
+
+For a shared MCP daemon across Claude Code, Codex, and Hermes:
+
+```bash
+.venv/bin/python -m opencode_search daemon install-global
+.venv/bin/python -m opencode_search daemon status
+```
+
+This does three things:
+
+- registers a stdio MCP bridge in Claude Code, Codex, and Hermes
+- installs and enables a user `systemd` service for login-time startup
+- configures the bridge so client MCP load auto-starts the singleton daemon if it is not already running
+
+The daemon commands are:
+
+- `opencode-search daemon ensure` — start if needed
+- `opencode-search daemon status` — inspect status
+- `opencode-search daemon stop` — stop the shared daemon
+- `opencode-search daemon serve` — run the HTTP MCP daemon in the foreground
+- `opencode-search daemon bridge-stdio` — run the MCP stdio bridge
+- `opencode-search daemon install-systemd` — install the login-time user service
+
+The daemon also supports:
+
+- idle auto-shutdown after `OPENCODE_MCP_IDLE_SHUTDOWN_S` seconds with no active MCP clients
+- client-session tracking through the stdio bridge with heartbeat expiry
+- login-time startup through `systemd --user`
+
 #### Claude Code
 
-Add to `~/.config/claude-code/mcp.json` (or the OS-specific equivalent):
+Add the stdio bridge as the MCP server:
 
 ```json
 {
   "mcpServers": {
     "opencode-search": {
       "command": "opencode-search",
-      "args": ["mcp"]
+      "args": ["daemon", "bridge-stdio"]
     }
   }
 }
@@ -144,6 +168,7 @@ See `mcp-config/hermes.json`.
 | `OPENCODE_GLOBAL_RERANK_MAX`          | `100`                       | Max candidates before global rerank             |
 | `OPENCODE_FINAL_TOP_K`                | `10`                        | Default `top_k` for `search_code`               |
 | `OPENCODE_SKIP_STAGE1_RERANK_N`       | `5`                         | Skip per-project rerank above this many projects|
+| `OPENCODE_ONNX_LOG_SEVERITY`          | `3`                         | ONNX Runtime log level (`3` hides warnings)     |
 | `OPENCODE_RERANK_NORMALIZE`           | `sigmoid`                   | `sigmoid` or `minmax`                           |
 | `OPENCODE_RERANKER_CACHE_SIZE`        | `2`                         | LRU model cache for cross-encoders              |
 | `OPENCODE_SEARCH_CACHE_SIZE`          | `128`                       | Query result cache size (TTL'd)                 |
@@ -161,12 +186,12 @@ pip install --force-reinstall "onnxruntime-gpu[cuda,cudnn]>=1.24.0"
 opencode-search health
 ```
 
-### `ModuleNotFoundError: No module named 'openai'`
+### `ModuleNotFoundError` for a runtime package
 
-Chonkie's import chain expects the `openai` package. Install it:
+This usually means the environment was installed before the dependency list was updated, or the install was partial. Reinstall the package set:
 
 ```bash
-pip install openai
+pip install --upgrade -e "src/[dev]"
 ```
 
 ### Slow first search
@@ -185,11 +210,43 @@ sudo sysctl -p
 ## Running tests
 
 ```bash
-cd src
-pytest tests/
+./scripts/validate-local-gpu.sh
 ```
 
-232 tests should pass on a non-GPU machine (GPU-only tests are marked `@pytest.mark.gpu` and auto-skip without CUDA). On a GPU machine, no tests are skipped.
+That local validation path is strict:
+
+- it fails immediately if CUDA is unavailable
+- it fails if core runtime packages are missing
+- it fails if any test is skipped
+- it runs lint, bytecode compilation, the Python test suite, and the CLI end-to-end smoke flow locally
+
+Ad-hoc `pytest` runs are dependency-aware: integration tests may skip if runtime packages such as `lancedb`, `pyarrow`, or `typer` are not installed in the current environment.
+
+## Dependency lock
+
+This repo keeps a Python 3.12 Linux GPU lock snapshot at `requirements-lock-py312-linux-gpu.txt`.
+Refresh it only from the repo-local `.venv`:
+
+```bash
+./scripts/refresh-lock.sh
+```
+
+## Reindexing and migrations
+
+Force a rebuild after changing schema, chunking, language detection, embedding models, embedding dimensions, or tier:
+
+```bash
+opencode-search index ~/myproject --tier balanced --force
+```
+
+If an index needs a fully clean rebuild, remove the per-project index directory and index again:
+
+```bash
+rm -rf ~/myproject/.opencode/index_balanced
+opencode-search index ~/myproject --tier balanced --force
+```
+
+Mixed-tier federated search is rejected by design because the underlying embedding models and dimensions can differ. Reindex projects to the same tier before searching them together.
 
 ## Architecture overview
 

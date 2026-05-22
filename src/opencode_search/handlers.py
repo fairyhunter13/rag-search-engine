@@ -17,11 +17,12 @@ from opencode_search.config import (
     FINAL_TOP_K,
     ProjectEntry,
     get_tier_dims,
-    get_tier_models,
     load_registry,
     save_registry,
 )
-from opencode_search.indexer import index_project as _index_project, index_files as _index_files
+from opencode_search.discover import is_indexable_file
+from opencode_search.indexer import index_files as _index_files
+from opencode_search.indexer import index_project as _index_project
 from opencode_search.search import clear_search_cache, search
 from opencode_search.storage import Storage
 from opencode_search.watcher import watcher_manager
@@ -36,7 +37,7 @@ _indexing_lock = asyncio.Lock()
 
 
 def _now_iso() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return datetime.datetime.now(datetime.UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -65,79 +66,95 @@ async def handle_index_project(
             return {"status": "already_indexing", "path": path_str}
         _indexing_status[path_str] = {"running": True, "started_at": _now_iso()}
 
-    dims = get_tier_dims(tier)
-    db_path = str(project_path / ".opencode" / f"index_{tier}")
-
-    storage = Storage(db_path=db_path, dims=dims)
-    await storage.open()
+    status: dict[str, Any] | None = None
     try:
-        t0 = time.perf_counter()
-        result = await _index_project(storage, project_path, tier=tier, force=force)
-        elapsed = time.perf_counter() - t0
+        dims = get_tier_dims(tier)
+        db_path = str(project_path / ".opencode" / f"index_{tier}")
+
+        storage = Storage(db_path=db_path, dims=dims)
+        await storage.open()
+        try:
+            t0 = time.perf_counter()
+            result = await _index_project(storage, project_path, tier=tier, force=force)
+            elapsed = time.perf_counter() - t0
+        finally:
+            await storage.close()
+
+        # Update / insert registry entry
+        registry = load_registry()
+        entry = registry.get(path_str)
+        if entry is None:
+            entry = ProjectEntry(
+                path=path_str,
+                db_path=db_path,
+                tier=tier,
+                dims=dims,
+                indexed_at=_now_iso(),
+                file_count=result.files_indexed + result.files_unchanged,
+                watch=watch,
+            )
+        else:
+            entry.tier = tier
+            entry.db_path = db_path
+            entry.dims = dims
+            entry.indexed_at = _now_iso()
+            entry.file_count = result.files_indexed + result.files_unchanged
+            # A plain re-index should not implicitly disable an active watcher.
+            # `stop-watching` is the explicit API for turning watch mode off.
+            entry.watch = entry.watch or watch
+        registry[path_str] = entry
+        save_registry(registry)
+
+        clear_search_cache()
+
+        # Start watcher if requested
+        if watch and not watcher_manager.is_active(path_str):
+            _dims = dims
+            _db_path = db_path
+            _tier = tier
+            _project_root = project_path
+
+            async def on_change(modified: list[Path], deleted: list[str]) -> None:
+                st = Storage(db_path=_db_path, dims=_dims)
+                await st.open()
+                try:
+                    if deleted:
+                        from opencode_search.cleaner import remove_chunks_for_paths
+                        project_deleted = [
+                            p for p in deleted if ".opencode" not in Path(p).parts
+                        ]
+                        await remove_chunks_for_paths(st, project_deleted)
+                    if modified:
+                        project_modified = [
+                            p for p in modified if is_indexable_file(p, root=_project_root)
+                        ]
+                        await _index_files(st, project_modified, tier=_tier)
+                    clear_search_cache()
+                finally:
+                    await st.close()
+
+            await watcher_manager.start(path_str, on_change=on_change)
+
+        status = {
+            "status": "ok",
+            "path": path_str,
+            "tier": tier,
+            "files_indexed": result.files_indexed,
+            "files_unchanged": result.files_unchanged,
+            "files_removed": result.files_removed,
+            "chunks_total": result.chunks_total,
+            "errors": result.errors,
+            "elapsed_s": round(elapsed, 2),
+            "watching": watcher_manager.is_active(path_str),
+        }
+        return status
+    except Exception as exc:  # noqa: BLE001
+        log.exception("index_project failed for %s", path_str)
+        status = {"status": "error", "path": path_str, "error": str(exc)}
+        return status
     finally:
-        await storage.close()
-
-    # Update / insert registry entry
-    registry = load_registry()
-    entry = registry.get(path_str)
-    if entry is None:
-        entry = ProjectEntry(
-            path=path_str,
-            db_path=db_path,
-            tier=tier,
-            dims=dims,
-            indexed_at=_now_iso(),
-            file_count=result.files_indexed,
-            watch=watch,
-        )
-    else:
-        entry.tier = tier
-        entry.db_path = db_path
-        entry.dims = dims
-        entry.indexed_at = _now_iso()
-        entry.file_count = result.files_indexed
-        entry.watch = watch
-    registry[path_str] = entry
-    save_registry(registry)
-
-    clear_search_cache()
-
-    # Start watcher if requested
-    if watch and not watcher_manager.is_active(path_str):
-        _dims = dims
-        _db_path = db_path
-        _tier = tier
-
-        async def on_change(modified: list[Path], deleted: list[str]) -> None:
-            st = Storage(db_path=_db_path, dims=_dims)
-            await st.open()
-            try:
-                if deleted:
-                    from opencode_search.cleaner import remove_chunks_for_paths
-                    await remove_chunks_for_paths(st, deleted)
-                if modified:
-                    await _index_files(st, modified, tier=_tier)
-                clear_search_cache()
-            finally:
-                await st.close()
-
-        await watcher_manager.start(path_str, on_change=on_change)
-
-    status: dict[str, Any] = {
-        "status": "ok",
-        "path": path_str,
-        "tier": tier,
-        "files_indexed": result.files_indexed,
-        "files_unchanged": result.files_unchanged,
-        "files_removed": result.files_removed,
-        "chunks_total": result.chunks_total,
-        "errors": result.errors,
-        "elapsed_s": round(elapsed, 2),
-        "watching": watcher_manager.is_active(path_str),
-    }
-    async with _indexing_lock:
-        _indexing_status[path_str] = {"running": False, **status}
-    return status
+        async with _indexing_lock:
+            _indexing_status[path_str] = {"running": False, **(status or {})}
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +185,10 @@ async def handle_search_code(
         projects = list(registry.values())
 
     t0 = time.perf_counter()
-    results = await search(query, projects=projects, top_k=top_k, use_rerank=use_rerank)
+    try:
+        results = await search(query, projects=projects, top_k=top_k, use_rerank=use_rerank)
+    except ValueError as exc:
+        return {"error": str(exc)}
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     return {

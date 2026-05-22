@@ -13,6 +13,8 @@ dependencies = [
 
     # Chunking: code (tree-sitter), semantic, token
     "chonkie[code,semantic]>=1.5.0",
+    # Chonkie's embedding registry imports openai even for local-only paths
+    "openai>=1.0.0",
 
     # Chunking: structure-aware text splitters
     "langchain-text-splitters>=0.3.0",
@@ -87,4 +89,14 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["tests"]
+testpaths = ["src/tests", "tests"]
+markers = [
+    "unit: fast logic-only test",
+    "integration: test exercises real runtime integrations",
+    "runtime_deps: test requires optional runtime packages",
+    "gpu: test requires a real CUDA GPU",
+    "perf: performance benchmark tests",
+    "embedder: tests that require the Python embedder service",
+    "indexer: tests that require the Rust indexer service",
+    "slow: tests that run for more than 30 seconds",
+]

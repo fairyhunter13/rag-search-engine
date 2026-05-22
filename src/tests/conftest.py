@@ -4,15 +4,17 @@ GPU enforcement rule: all tests run — no skips.
 Tests that call actual GPU inference are marked @pytest.mark.gpu and run only
 when a real CUDA device is present. All other tests (logic, config, storage,
 chunking, search cache, handler routing) run via mocking and must always pass.
+Tests marked @pytest.mark.integration may still skip if their runtime
+dependencies are not installed in the current environment.
 
 This conftest patches opencode_search.embeddings at session scope so that
 modules importing it are importable even without a real GPU.
 """
 from __future__ import annotations
 
+import os
 import sys
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -28,8 +30,15 @@ def _gpu_available() -> bool:
 HAS_GPU = _gpu_available()
 
 
+def _strict_no_skip_enabled() -> bool:
+    return os.environ.get("OPENCODE_FAIL_ON_SKIP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "gpu: test requires a real CUDA GPU")
+    config.addinivalue_line("markers", "integration: test exercises real runtime integrations")
+    config.addinivalue_line("markers", "runtime_deps: test requires optional runtime packages")
+    config.addinivalue_line("markers", "unit: fast logic-only test")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -42,6 +51,15 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("gpu"):
             item.add_marker(skip_gpu)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail strict validation runs if pytest reported any skipped tests."""
+    if not _strict_no_skip_enabled():
+        return
+    skipped = session.config.pluginmanager.get_plugin("terminalreporter").stats.get("skipped", [])
+    if skipped and session.exitstatus == 0:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture(scope="session", autouse=True)

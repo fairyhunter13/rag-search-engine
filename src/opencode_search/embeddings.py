@@ -10,15 +10,17 @@ Notes:
 
 from __future__ import annotations
 
-# Configure CUDA/cuDNN library paths before any CUDA-linked import.
-# This is the in-code equivalent of the nvidia_ld_fix.pth site hook.
-from opencode_search.cuda_setup import configure_cuda_paths as _configure_cuda_paths
-_configure_cuda_paths()
-
 import gc
 import logging
 import math
 import os
+import threading
+
+# Configure CUDA/cuDNN library paths before any CUDA-linked import.
+# This is the in-code equivalent of the nvidia_ld_fix.pth site hook.
+from opencode_search.cuda_setup import configure_cuda_paths as _configure_cuda_paths
+
+_configure_cuda_paths()
 
 log = logging.getLogger(__name__)
 
@@ -51,19 +53,36 @@ except ImportError:
     _HAS_NUMPY = False
     np = None  # type: ignore[assignment]
 
-# Check CuPy availability for GPU-accelerated matrix operations
-_HAS_CUPY = False
-try:
-    import cupy as cp
-    _HAS_CUPY = True
-except ImportError:
-    cp = None  # type: ignore[assignment]
+# CuPy is loaded lazily because importing it eagerly can destabilize
+# ONNX Runtime CUDA inference on some Blackwell systems.
+_cp = None
+_cupy_import_attempted = False
+
+
+def _get_cupy():
+    """Import CuPy on demand.
+
+    Keeping this lazy avoids process-wide CUDA side effects during normal
+    embedding/reranking startup, where ONNX Runtime should initialize first.
+    """
+    global _cp, _cupy_import_attempted
+    if _cupy_import_attempted:
+        return _cp
+    _cupy_import_attempted = True
+    try:
+        import cupy as cp_mod
+
+        _cp = cp_mod
+    except ImportError:
+        _cp = None
+    return _cp
+
+
+def _cupy_available() -> bool:
+    return _get_cupy() is not None
 
 # GPU normalization mode: "auto" (default), "gpu", "cpu"
 _GPU_NORMALIZE_MODE = os.environ.get("OPENCODE_GPU_NORMALIZE", "auto").lower()
-
-# GPU usage tracking for debugging (thread-safe)
-import threading
 
 _GPU_PROVIDERS: set[str] = {
     "CUDAExecutionProvider",
@@ -75,6 +94,7 @@ _GPU_PROVIDERS: set[str] = {
     # Short names (from get_active_provider()) — single source of truth
     "cuda", "tensorrt", "rocm", "migraphx", "directml", "coreml",
 }
+
 
 def _resize_matrix(mat, dimensions):
     """Resize matrix columns to exactly `dimensions` by truncating or zero-padding."""
@@ -495,21 +515,22 @@ def _resize_np(vec, target_dim: int):  # type: ignore[no-untyped-def]
     return vec[:target_dim]
 
 
-def _normalize_embeddings_gpu(mat: "np.ndarray") -> "np.ndarray":
+def _normalize_embeddings_gpu(mat: np.ndarray) -> np.ndarray:
     """GPU-accelerated L2 normalization using CuPy.
 
     Keeps data on GPU for normalization, avoiding CPU-GPU transfers.
     Falls back to CPU if GPU fails or CuPy unavailable.
     """
-    if not _HAS_CUPY:
+    cp_mod = _get_cupy()
+    if cp_mod is None:
         return _normalize_embeddings_cpu(mat)
 
     try:
         # Transfer to GPU, normalize, transfer back
-        mat_gpu = cp.asarray(mat, dtype=cp.float32)
-        norms = cp.linalg.norm(mat_gpu, axis=1, keepdims=True)
-        cp.divide(mat_gpu, norms, out=mat_gpu, where=norms > 0)
-        result = cp.asnumpy(mat_gpu)
+        mat_gpu = cp_mod.asarray(mat, dtype=cp_mod.float32)
+        norms = cp_mod.linalg.norm(mat_gpu, axis=1, keepdims=True)
+        cp_mod.divide(mat_gpu, norms, out=mat_gpu, where=norms > 0)
+        result = cp_mod.asnumpy(mat_gpu)
 
         # Clean up GPU memory
         del mat_gpu, norms
@@ -520,7 +541,7 @@ def _normalize_embeddings_gpu(mat: "np.ndarray") -> "np.ndarray":
         return _normalize_embeddings_cpu(mat)
 
 
-def _normalize_embeddings_cpu(mat: "np.ndarray") -> "np.ndarray":
+def _normalize_embeddings_cpu(mat: np.ndarray) -> np.ndarray:
     """CPU L2 normalization using numpy.
 
     In-place normalization to minimize memory copies.
@@ -530,7 +551,7 @@ def _normalize_embeddings_cpu(mat: "np.ndarray") -> "np.ndarray":
     return mat
 
 
-def _normalize_embeddings(mat: "np.ndarray") -> "np.ndarray":
+def _normalize_embeddings(mat: np.ndarray) -> np.ndarray:
     """Smart L2 normalization: GPU for large batches, CPU for small.
 
     Mode controlled by OPENCODE_GPU_NORMALIZE env var:
@@ -541,11 +562,11 @@ def _normalize_embeddings(mat: "np.ndarray") -> "np.ndarray":
     batch_size = mat.shape[0]
 
     if _GPU_NORMALIZE_MODE == "gpu":
-        if _HAS_CUPY:
+        if _cupy_available():
             log.debug(f"normalize: {batch_size} embeddings via GPU (forced)")
             return _normalize_embeddings_gpu(mat)
         else:
-            log.debug(f"normalize: GPU requested but CuPy unavailable, using CPU")
+            log.debug("normalize: GPU requested but CuPy unavailable, using CPU")
             return _normalize_embeddings_cpu(mat)
 
     elif _GPU_NORMALIZE_MODE == "cpu":
@@ -555,7 +576,7 @@ def _normalize_embeddings(mat: "np.ndarray") -> "np.ndarray":
     else:  # auto mode
         # Use GPU for large batches (>= 256 embeddings)
         # GPU has overhead, only worth it for larger batches
-        if _HAS_CUPY and batch_size >= 256:
+        if _cupy_available() and batch_size >= 256:
             log.debug(f"normalize: {batch_size} embeddings via GPU (auto)")
             return _normalize_embeddings_gpu(mat)
         else:
@@ -586,14 +607,8 @@ def _cuda_sync_and_empty_cache() -> None:
             torch.cuda.empty_cache()
     except Exception:
         pass
-    # Also try ORT's allocator if available (no-op if not CUDA)
-    try:
-        import onnxruntime as _ort
-        # ORT doesn't expose a direct "empty_cache" API, but we can
-        # try to access the CUDA allocator to free cached blocks.
-        # This is best-effort and will fail silently on non-CUDA builds.
-    except Exception:
-        pass
+
+
 _reranker_cache_lock = threading.Lock()
 _reranker_cache: dict[str, object] = {}   # model_name → reranker instance
 _reranker_lru: list[str] = []             # index 0 = most recently used
@@ -635,6 +650,7 @@ try:
         _OnnxModel.EXPOSED_SESSION_OPTIONS = (
             *_OnnxModel.EXPOSED_SESSION_OPTIONS,
             "enable_mem_pattern", "execution_mode", "graph_optimization_level",
+            "log_severity_level",
         )
         _orig_add_extra = _OnnxModel.add_extra_session_options.__func__
         @classmethod
@@ -646,6 +662,8 @@ try:
                 session_options.execution_mode = extra_options["execution_mode"]
             if "graph_optimization_level" in extra_options:
                 session_options.graph_optimization_level = extra_options["graph_optimization_level"]
+            if "log_severity_level" in extra_options:
+                session_options.log_severity_level = extra_options["log_severity_level"]
             # Disable weight prepacking: ORT pre-packs MatMul weights into CPU-optimized
             # layouts even when GPU handles inference. Disabling saves ~30-60MB CPU RSS.
             if extra_options.get("enable_cpu_mem_arena") is False:
@@ -657,6 +675,9 @@ try:
         del _patched_add_extra
 except ImportError:
     pass
+
+
+_ONNX_LOG_SEVERITY_LEVEL = int(os.environ.get("OPENCODE_ONNX_LOG_SEVERITY", "3"))
 
 
 def _embedder(model: str):
@@ -707,6 +728,7 @@ def _embedder(model: str):
             enable_cpu_mem_arena=False, enable_mem_pattern=False,
             execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
             graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+            log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
         )
 
         # Verify which provider the ONNX session actually selected
@@ -767,6 +789,7 @@ def _reranker(model: str):
             enable_cpu_mem_arena=False, enable_mem_pattern=False,
             execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
             graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+            log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
         )
 
         # Verify GPU provider and probe IOBinding for this model
@@ -1031,6 +1054,10 @@ def _parse_provider_env() -> list[str] | None:
     provider_env = os.environ.get("OPENCODE_ONNX_PROVIDER", "").strip().lower()
     if not provider_env:
         return None
+    if provider_env == "cpu":
+        raise GPUNotAvailableError(
+            "OPENCODE_ONNX_PROVIDER=cpu is forbidden; opencode-search requires a GPU provider."
+        )
 
     # GPU-only provider map — CPU is not an option.
     provider_map = {
@@ -1124,10 +1151,22 @@ def _detect_and_test_providers() -> list[str] | None:
     driver mismatches, missing libraries, or model incompatibilities.
     """
 
-    # Check for environment variable override first
+    # Check for environment variable override first. Overrides are still
+    # validated here; otherwise `health` can report OK for an unavailable
+    # provider and only fail later during model load.
     env_providers = _parse_provider_env()
     if env_providers is not None:
-        return env_providers
+        available = _onnx_available_providers()
+        accepted: list[str] = []
+        for provider in env_providers:
+            if provider not in available:
+                log.warning("Forced provider %s is not available in ONNX Runtime", provider)
+                continue
+            if provider in _GPU_PROVIDERS and _test_provider(provider):
+                accepted.append(provider)
+        if accepted:
+            return accepted
+        _raise_no_gpu(available=available, tested=env_providers)
 
     try:
         import onnxruntime as ort
@@ -1400,6 +1439,7 @@ def _embed_batch_iobinding(
         encoded = tokenizer.encode_batch(texts)
         input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
         attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
+        input_names = {node.name for node in session.get_inputs()}
 
         # Create IOBinding for GPU tensors
         binding = session.io_binding()
@@ -1410,6 +1450,18 @@ def _embed_batch_iobinding(
 
         binding.bind_ortvalue_input("input_ids", input_ids_gpu)
         binding.bind_ortvalue_input("attention_mask", attention_mask_gpu)
+
+        if "token_type_ids" in input_names:
+            token_type_ids = np.array(
+                [getattr(item, "type_ids", [0] * len(item.ids)) for item in encoded],
+                dtype=np.int64,
+            )
+            token_type_ids_gpu = ort.OrtValue.ortvalue_from_numpy(
+                token_type_ids, device, device_id
+            )
+            binding.bind_ortvalue_input("token_type_ids", token_type_ids_gpu)
+        else:
+            token_type_ids_gpu = None
 
         # Bind output to GPU (avoids CPU allocation)
         output_names = [o.name for o in session.get_outputs()]
@@ -1429,6 +1481,8 @@ def _embed_batch_iobinding(
 
         # Clean up GPU tensors
         del input_ids_gpu, attention_mask_gpu, binding, outputs
+        if token_type_ids_gpu is not None:
+            del token_type_ids_gpu
         return result
 
     except Exception as e:
@@ -1538,7 +1592,6 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
 
     t_start = time.perf_counter()
     embedder = _embedder(model)
-    t_get_embedder = time.perf_counter()
 
     # Track GPU vs CPU operations
     provider = get_active_provider()
@@ -1577,7 +1630,6 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
             return out
 
     # Standard path (fallback or when IOBinding unavailable)
-    t_prefix = time.perf_counter()
     all_items: list = []
     t_embed_total = 0.0
     for start in range(0, len(texts), _EMBED_SUB_BATCH):
@@ -1886,7 +1938,7 @@ RERANK_TEMPERATURE: dict[str, float] = {
 }
 
 
-def _calibrate_scores(logits, temperature: float = 1.0) -> "np.ndarray":
+def _calibrate_scores(logits, temperature: float = 1.0) -> np.ndarray:
     """Convert raw cross-encoder logits to [0,1] via sigmoid.
 
     Sigmoid preserves absolute meaning: docs scoring [5.01..5.05] all map to
@@ -2120,9 +2172,14 @@ def _test_provider(provider: str) -> bool:
     import numpy as np
 
     session = None
-    model_path = _get_test_model_path()
     try:
         import onnxruntime as ort
+
+        try:
+            model_path = _get_test_model_path()
+        except FileNotFoundError as exc:
+            log.info("%s provider pre-test deferred: %s", provider, exc)
+            return True
 
         so = ort.SessionOptions()
         so.log_severity_level = 3
@@ -2134,9 +2191,22 @@ def _test_provider(provider: str) -> bool:
         if provider not in active:
             return False
 
-        input_data = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
-        result = session.run(None, {"X": input_data})
-        return bool(result and np.allclose(result[0], input_data))
+        feeds = {}
+        for inp in session.get_inputs():
+            shape = [1 if not isinstance(dim, int) or dim <= 0 else dim for dim in inp.shape]
+            if not shape:
+                shape = [1]
+            if "int64" in inp.type:
+                feeds[inp.name] = np.ones(shape, dtype=np.int64)
+            elif "int32" in inp.type:
+                feeds[inp.name] = np.ones(shape, dtype=np.int32)
+            elif "bool" in inp.type:
+                feeds[inp.name] = np.ones(shape, dtype=bool)
+            else:
+                feeds[inp.name] = np.ones(shape, dtype=np.float32)
+
+        result = session.run(None, feeds)
+        return bool(result)
 
     except Exception as e:
         log.debug("%s provider test failed: %s", provider, e)
@@ -2201,4 +2271,4 @@ def _verify_onnx_session_provider(model_obj, name: str) -> None:
     except RuntimeError:
         raise
     except Exception as e:
-        log.warning("[%s] Failed to verify ONNX provider: %s", name, e)
+        raise RuntimeError(f"[{name}] GPU ENFORCEMENT FAILED: {e}") from e

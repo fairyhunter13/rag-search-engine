@@ -20,10 +20,48 @@ import hashlib
 import logging
 import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
-from cachetools import TTLCache
+try:
+    from cachetools import TTLCache
+except ModuleNotFoundError:  # pragma: no cover - exercised in dep-light envs
+    class TTLCache:
+        """Small fallback TTL cache for test/import environments."""
+
+        def __init__(self, maxsize: int, ttl: float) -> None:
+            self.maxsize = maxsize
+            self.ttl = ttl
+            self._entries: OrderedDict[object, tuple[float, object]] = OrderedDict()
+
+        def _purge(self) -> None:
+            now = time.monotonic()
+            expired = [key for key, (expires_at, _) in self._entries.items() if expires_at <= now]
+            for key in expired:
+                self._entries.pop(key, None)
+            while len(self._entries) > self.maxsize:
+                self._entries.popitem(last=False)
+
+        def get(self, key: object, default: object = None) -> object:
+            self._purge()
+            entry = self._entries.get(key)
+            if entry is None:
+                return default
+            expires_at, value = entry
+            if expires_at <= time.monotonic():
+                self._entries.pop(key, None)
+                return default
+            self._entries.move_to_end(key)
+            return value
+
+        def __setitem__(self, key: object, value: object) -> None:
+            self._entries[key] = (time.monotonic() + self.ttl, value)
+            self._entries.move_to_end(key)
+            self._purge()
+
+        def clear(self) -> None:
+            self._entries.clear()
 
 from opencode_search.config import (
     FINAL_TOP_K,
@@ -86,7 +124,21 @@ def _cache_key(
     use_rerank: bool,
 ) -> tuple:
     proj_sig = hashlib.sha256(
-        "|".join(sorted(p.path for p in projects)).encode()
+        "|".join(
+            sorted(
+                "::".join(
+                    (
+                        p.path,
+                        p.db_path,
+                        p.tier,
+                        str(p.dims),
+                        str(p.indexed_at),
+                        str(p.file_count),
+                    )
+                )
+                for p in projects
+            )
+        ).encode()
     ).hexdigest()[:16]
     return (query.lower().strip(), proj_sig, tier, top_k, use_rerank)
 
@@ -194,10 +246,10 @@ async def search(
     # Use the tier of the first project; mixed-tier federations are unsupported.
     tier = projects[0].tier
     if any(p.tier != tier for p in projects):
-        log.warning(
-            "Mixed-tier federation detected (using %s from first project); "
-            "results from projects on other tiers may be ranked unfairly.",
-            tier,
+        tiers = sorted({p.tier for p in projects})
+        raise ValueError(
+            "Mixed-tier search is unsupported because embedding dimensions/models differ. "
+            f"Requested tiers: {tiers}. Search one tier at a time or re-index projects with the same tier."
         )
     embed_model, rerank_model = get_tier_models(tier)
     dims = get_tier_dims(tier)
@@ -248,10 +300,16 @@ async def search(
     if not candidates:
         return []
 
-    # Deduplicate by (path, content) keeping highest score
-    seen: dict[tuple[str, str], dict] = {}
+    # Deduplicate by chunk identity keeping highest score. Content-prefix
+    # dedup can hide separate chunks that start with common boilerplate.
+    seen: dict[tuple, dict] = {}
     for row in candidates:
-        dedup_key = (row.get("path", ""), row.get("content", "")[:64])
+        dedup_key = (
+            row.get("_project_path", ""),
+            row.get("chunk_id")
+            if row.get("chunk_id") is not None
+            else (row.get("path", ""), row.get("position", 0)),
+        )
         score = row.get("_score", 0.0)
         if dedup_key not in seen or score > seen[dedup_key].get("_score", 0.0):
             seen[dedup_key] = row

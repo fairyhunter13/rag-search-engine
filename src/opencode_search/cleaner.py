@@ -1,8 +1,8 @@
 """Remove stale chunks from LanceDB (chunks for files no longer on disk)."""
 from __future__ import annotations
-import asyncio
+
 import logging
-from pathlib import Path
+
 from opencode_search.storage import Storage
 
 log = logging.getLogger(__name__)

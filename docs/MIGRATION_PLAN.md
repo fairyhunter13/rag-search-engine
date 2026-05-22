@@ -132,10 +132,10 @@ SCHEMA = pa.schema([
 **Goal:** Port `discover.rs` (896 lines) → `discover.py`.
 
 **Steps:**
-1. Extension and directory blacklists (copy exactly from Rust: `target/`, `node_modules/`, `.git/`, `__pycache__/`, `vendor/`, `dist/`, `build/`, etc.)
+1. Extension and directory ignore lists (copy exactly from Rust: `target/`, `node_modules/`, `.git/`, `__pycache__/`, `vendor/`, `dist/`, `build/`, etc.)
 2. `gitignore_walker(root)` — `pathspec.PathSpec.from_lines("gitwildmatch", ...)` at each directory level; stack rules parent → child
 3. `detect_language(path)` — extract extension map from `chunker.py` as single source of truth
-4. `iter_files(root, follow_symlinks=True)` — `os.walk(root, followlinks=True)`, apply gitignore + blacklist + size limits
+4. `iter_files(root, follow_symlinks=True)` — `os.walk(root, followlinks=True)`, apply gitignore + ignore-list rules + size limits
    - Source files: 2MB max
    - Text files: 1MB max
    - Unknown: 512KB max
@@ -225,7 +225,7 @@ workers = min(6, max(2, (vram_mb - 1024) // 600))
 4. On flush:
    - `created`/`modified` → `indexer.index_files(paths, db_path, tier, dims)`
    - `deleted` → `cleaner.remove_chunks_for_paths(storage, paths)` + invalidate query cache
-5. Apply gitignore/blacklist filter from `discover.py` to incoming events
+5. Apply gitignore/ignore-list filter from `discover.py` to incoming events
 6. `WatcherHandle`: `{observer, debounce_task, root, db_path, last_flush}`
 7. `WatcherManager`: dict of `project_key → WatcherHandle`, start/stop per project
 8. Graceful shutdown: `observer.stop(); observer.join()` on SIGTERM/SIGINT

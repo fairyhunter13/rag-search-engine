@@ -2,10 +2,7 @@
   "mcpServers": {
     "opencode-search": {
       "command": "opencode-search",
-      "args": ["mcp"],
-      "env": {
-        "OPENCODE_LOG_LEVEL": "INFO"
-      },
+      "args": ["daemon", "bridge-stdio"],
       "description": "GPU-accelerated local semantic code search. Index your projects and search with natural language.",
       "alwaysAllow": [
         "list_indexed_projects",

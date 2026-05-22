@@ -3,10 +3,7 @@
   "description": "GPU-accelerated local semantic code search",
   "transport": "stdio",
   "command": "opencode-search",
-  "args": ["mcp"],
-  "environment": {
-    "OPENCODE_LOG_LEVEL": "INFO"
-  },
+  "args": ["daemon", "bridge-stdio"],
   "tools": {
     "index_project": {
       "description": "Index a project directory for semantic code search",

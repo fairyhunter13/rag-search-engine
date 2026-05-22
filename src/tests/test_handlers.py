@@ -3,19 +3,15 @@
 All tests mock GPU-dependent calls (embed/rerank/indexer).
 No GPU required unless @pytest.mark.gpu.
 """
+# ruff: noqa: N806
 from __future__ import annotations
 
-import asyncio
-import json
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from opencode_search.config import ProjectEntry, get_tier_dims, get_tier_models
-
+from opencode_search.config import ProjectEntry, get_tier_dims
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,6 +96,55 @@ async def test_handle_index_project_no_duplicate_run(tmp_path):
     del _indexing_status[path_str]
 
 
+@pytest.mark.asyncio
+async def test_handle_index_project_clears_running_on_exception(tmp_path):
+    from opencode_search.handlers import _indexing_status, handle_index_project
+
+    with patch("opencode_search.handlers.Storage") as MockStorage:
+        mock_st = MagicMock()
+        mock_st.open = AsyncMock(side_effect=RuntimeError("db failed"))
+        mock_st.close = AsyncMock()
+        MockStorage.return_value = mock_st
+
+        result = await handle_index_project(path=str(tmp_path), tier="balanced")
+
+    path_str = str(tmp_path.resolve())
+    assert result["status"] == "error"
+    assert _indexing_status[path_str]["running"] is False
+
+
+@pytest.mark.asyncio
+async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tmp_path):
+    from opencode_search.handlers import handle_index_project
+
+    path_str = str(tmp_path.resolve())
+    existing = _make_entry(path_str)
+    existing.watch = True
+
+    saved_registry: dict[str, ProjectEntry] = {}
+
+    def _capture_save(registry):
+        saved_registry.clear()
+        saved_registry.update(registry)
+
+    with patch("opencode_search.handlers._index_project", AsyncMock(return_value=_FakeIndexResult())), \
+         patch("opencode_search.handlers.load_registry", return_value={path_str: existing}), \
+         patch("opencode_search.handlers.save_registry", side_effect=_capture_save), \
+         patch("opencode_search.handlers.clear_search_cache"), \
+         patch("opencode_search.handlers.Storage") as MockStorage, \
+         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+        mock_st = MagicMock()
+        mock_st.open = AsyncMock()
+        mock_st.close = AsyncMock()
+        MockStorage.return_value = mock_st
+        MockWatcher.is_active.return_value = True
+
+        result = await handle_index_project(path=path_str, tier="balanced", watch=False)
+
+    assert result["status"] == "ok"
+    assert saved_registry[path_str].watch is True
+
+
 # ---------------------------------------------------------------------------
 # handle_search_code
 # ---------------------------------------------------------------------------
@@ -153,7 +198,6 @@ async def test_handle_search_code_with_results():
 @pytest.mark.asyncio
 async def test_handle_search_code_filters_by_project_paths():
     from opencode_search.handlers import handle_search_code
-    from opencode_search.search import SearchResult
 
     registry = {
         "/tmp/a": _make_entry("/tmp/a"),
@@ -182,6 +226,22 @@ async def test_handle_search_code_missing_project_paths():
         result = await handle_search_code(query="test", project_paths=["/tmp/nonexistent"])
 
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_search_code_returns_error_for_mixed_tiers():
+    from opencode_search.handlers import handle_search_code
+
+    registry = {
+        "/tmp/a": _make_entry("/tmp/a", tier="budget"),
+        "/tmp/b": _make_entry("/tmp/b", tier="balanced"),
+    }
+
+    with patch("opencode_search.handlers.load_registry", return_value=registry):
+        result = await handle_search_code(query="test")
+
+    assert "error" in result
+    assert "Mixed-tier" in result["error"]
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,6 @@ import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from opencode_search import tokenizer as tok
 
@@ -49,6 +48,12 @@ def _detect_language(path: Path) -> str:
             return "javascript"
         case "jsx":
             return "jsx"
+        case "vue":
+            return "vue"
+        case "svelte":
+            return "svelte"
+        case "astro":
+            return "astro"
         case "py" | "pyi" | "pyw":
             return "python"
         case "java":
@@ -139,7 +144,7 @@ class Chunk:
     start_line: int
     end_line: int
     chunk_type: str
-    name: Optional[str] = None
+    name: str | None = None
     language: str = "unknown"
 
 
@@ -311,12 +316,37 @@ def cleanup_chunkers() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_chunk(text: str, chunk_type: str, language: str, name: Optional[str] = None) -> Chunk:
+def _line_count(text: str) -> int:
+    """Return the number of 1-based source lines spanned by text."""
+    if not text:
+        return 0
+    return text.count("\n") if text.endswith("\n") else text.count("\n") + 1
+
+
+def _line_for_offset(source: str, offset: int) -> int:
+    """Convert a character offset into a 1-based line number."""
+    offset = max(0, min(offset, len(source)))
+    return source.count("\n", 0, offset) + 1
+
+
+def _make_chunk(
+    text: str,
+    chunk_type: str,
+    language: str,
+    name: str | None = None,
+    start_line: int | None = None,
+) -> Chunk:
     """Create a Chunk from text."""
-    end_line = max(0, text.count("\n"))
+    if start_line is None or start_line <= 0:
+        start_line_value = 0
+        end_line = 0
+    else:
+        start_line_value = start_line
+        line_count = _line_count(text)
+        end_line = start_line_value + max(1, line_count) - 1
     return Chunk(
         content=text,
-        start_line=0,
+        start_line=start_line_value,
         end_line=end_line,
         chunk_type=chunk_type,
         name=name,
@@ -324,18 +354,24 @@ def _make_chunk(text: str, chunk_type: str, language: str, name: Optional[str] =
     )
 
 
-def _chonkie_to_chunks(results, chunk_type: str, language: str) -> list[Chunk]:
+def _chonkie_to_chunks(results, chunk_type: str, language: str, source: str) -> list[Chunk]:
     """Convert Chonkie chunk results to our Chunk dataclass."""
-    return [
-        Chunk(
-            content=r.text,
-            start_line=getattr(r, "start_index", 0),
-            end_line=getattr(r, "end_index", 0),
-            chunk_type=chunk_type,
-            language=language,
+    chunks: list[Chunk] = []
+    for r in results:
+        start_index = int(getattr(r, "start_index", 0) or 0)
+        end_index = int(getattr(r, "end_index", start_index + len(r.text)) or 0)
+        start_line = _line_for_offset(source, start_index)
+        end_line = _line_for_offset(source, max(start_index, end_index - 1))
+        chunks.append(
+            Chunk(
+                content=r.text,
+                start_line=start_line,
+                end_line=max(start_line, end_line),
+                chunk_type=chunk_type,
+                language=language,
+            )
         )
-        for r in results
-    ]
+    return chunks
 
 
 def _enforce_token_limit(chunks: list[Chunk]) -> list[Chunk]:
@@ -428,23 +464,28 @@ def _chunk_jsonl(content: str) -> list[Chunk]:
     """JSONL: group line-delimited JSON objects into chunks."""
     chunks: list[Chunk] = []
     buffer = ""
+    buffer_start_line: int | None = None
 
-    for line in content.splitlines():
+    for line_number, line in enumerate(content.splitlines(), start=1):
         stripped = line.strip()
         if not stripped:
             continue
 
+        if buffer_start_line is None:
+            buffer_start_line = line_number
+
         candidate = f"{buffer}\n{stripped}" if buffer else stripped
         if len(candidate) > TARGET_CHARS and buffer:
-            chunks.append(_make_chunk(buffer, "json", "json"))
+            chunks.append(_make_chunk(buffer, "json", "json", start_line=buffer_start_line))
             buffer = stripped
+            buffer_start_line = line_number
         else:
             buffer = candidate
 
     if buffer:
-        chunks.append(_make_chunk(buffer, "json", "json"))
+        chunks.append(_make_chunk(buffer, "json", "json", start_line=buffer_start_line))
 
-    return chunks or [_make_chunk(content, "json", "json")]
+    return chunks or [_make_chunk(content, "json", "json", start_line=1)]
 
 
 def _chunk_yaml(content: str) -> list[Chunk]:
@@ -456,11 +497,11 @@ def _chunk_yaml(content: str) -> list[Chunk]:
     docs = [d for d in docs if d is not None]
 
     if not docs:
-        return [_make_chunk(content, "yaml", "yaml")]
+        return [_make_chunk(content, "yaml", "yaml", start_line=1)]
 
     data = docs[0] if len(docs) == 1 else docs
     if not isinstance(data, (dict, list)):
-        return [_make_chunk(content, "yaml", "yaml")]
+        return [_make_chunk(content, "yaml", "yaml", start_line=1)]
 
     splitter = _make_json_splitter()
     texts = splitter.split_text(json_data=data)
@@ -577,7 +618,7 @@ def _chunk_code(content: str, language: str) -> list[Chunk]:
 
     chunker = _get_code_chunker(ts_lang)
     results = chunker.chunk(content)
-    chunks = _chonkie_to_chunks(results, "code", language)
+    chunks = _chonkie_to_chunks(results, "code", language, content)
 
     return chunks if chunks else _chunk_fallback(content, language)
 
@@ -586,18 +627,18 @@ def _chunk_prose(content: str) -> list[Chunk]:
     """Prose/text: semantic chunking groups related content together."""
     chunker = _get_semantic_chunker()
     results = chunker.chunk(content)
-    chunks = _chonkie_to_chunks(results, "semantic", "text")
+    chunks = _chonkie_to_chunks(results, "semantic", "text", content)
 
-    return chunks if chunks else [_make_chunk(content, "text", "text")]
+    return chunks if chunks else [_make_chunk(content, "text", "text", start_line=1)]
 
 
 def _chunk_fallback(content: str, language: str) -> list[Chunk]:
     """Fallback: fixed-size token chunking."""
     chunker = _get_token_chunker()
     results = chunker.chunk(content)
-    chunks = _chonkie_to_chunks(results, "block", language)
+    chunks = _chonkie_to_chunks(results, "block", language, content)
 
-    return chunks if chunks else [_make_chunk(content, "block", language)]
+    return chunks if chunks else [_make_chunk(content, "block", language, start_line=1)]
 
 
 # ---------------------------------------------------------------------------
@@ -632,11 +673,11 @@ def chunk_file(content: str, path: Path) -> list[Chunk]:
     # Small files: return as single chunk
     tokens = count_tokens(content)
     if tokens <= MIN_TOKENS_PER_CHUNK:
-        return [_make_chunk(content, "block", language)]
+        return [_make_chunk(content, "block", language, start_line=1)]
 
     # Files that fit in one chunk: skip splitting overhead
     if tokens <= TARGET_TOKENS_PER_CHUNK:
-        return [_make_chunk(content, "block", language)]
+        return [_make_chunk(content, "block", language, start_line=1)]
 
     # Large files: skip structure-aware parsing (too slow), use fast fallback
     if len(content) > LARGE_FILE_CHARS:
@@ -659,7 +700,7 @@ def chunk_file(content: str, path: Path) -> list[Chunk]:
     # Merge tiny fragments
     chunks = _merge_tiny(chunks)
 
-    return chunks or [_make_chunk(content, "block", language)]
+    return chunks or [_make_chunk(content, "block", language, start_line=1)]
 
 
 def _route(content: str, ext: str, language: str) -> list[Chunk]:
@@ -734,7 +775,14 @@ def split_by_tokens(text: str, language: str) -> list[Chunk]:
                     break
 
         if segment.strip():
-            chunks.append(_make_chunk(segment, "block", language))
+            chunks.append(
+                _make_chunk(
+                    segment,
+                    "block",
+                    language,
+                    start_line=_line_for_offset(text, start),
+                )
+            )
 
         start = end
 

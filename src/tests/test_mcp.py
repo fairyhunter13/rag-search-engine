@@ -10,8 +10,9 @@ No GPU required (GPU guard is patched in conftest).
 """
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 
 
 def _import_mcp():
@@ -98,9 +99,11 @@ async def test_search_code_tool_callable():
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_search_code",
                AsyncMock(return_value={"results": [], "elapsed_ms": 0.0,
-                                       "query": "test", "projects_searched": 0})):
+                                       "query": "test", "projects_searched": 0})), \
+         patch("opencode_search.mcp._ensure_watchers_resumed", AsyncMock()) as mock_resume:
         result = await mod.search_code(query="test")
     assert "results" in result or result is not None
+    mock_resume.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ Commands:
   watch          — start live file-watcher for a project
   stop-watching  — stop live file-watcher for a project
   mcp            — start the MCP stdio server (for AI assistants)
+  daemon         — manage the shared singleton MCP HTTP daemon
   health         — GPU and system health check
 
 GPU enforcement:  CPUExecutionProvider is FORBIDDEN.
@@ -19,8 +20,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -30,6 +29,8 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+daemon_app = typer.Typer(help="Manage the shared singleton MCP HTTP daemon.")
+app.add_typer(daemon_app, name="daemon")
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ def index(
 @app.command("search")
 def search_cmd(
     query: str = typer.Argument(..., help="Natural-language or code search query."),
-    projects: Optional[list[str]] = typer.Option(
+    projects: list[str] | None = typer.Option(
         None, "--project", "-p", help="Limit to this project path (repeatable)."
     ),
     top_k: int = typer.Option(10, "--top", "-k", help="Number of results to return."),
@@ -149,7 +150,7 @@ def search_cmd(
 
 @app.command()
 def status(
-    path: Optional[str] = typer.Argument(None, help="Project path (omit for all projects)."),
+    path: str | None = typer.Argument(None, help="Project path (omit for all projects)."),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
     """Show indexing and watching status for one or all projects."""
@@ -228,24 +229,43 @@ def watch(
     handle_index_project starts the watcher inside this loop, so callbacks bind
     to the loop that we then run forever.
     """
+    from pathlib import Path
+
+    from opencode_search.config import load_registry
     from opencode_search.handlers import handle_index_project
+    from opencode_search.watcher import watcher_manager
 
     typer.echo(f"Starting watcher for {path} (tier={tier}) — press Ctrl+C to stop.")
+    project_path = str(Path(path).expanduser().resolve())
 
     async def _watch_forever() -> None:
-        await handle_index_project(path=path, tier=tier, watch=True)
+        result = await handle_index_project(path=path, tier=tier, watch=True)
+        if "error" in result or result.get("status") != "ok":
+            raise RuntimeError(result.get("error", f"watch start failed: {result}"))
+
         # Keep the loop alive so the watchdog Observer thread can dispatch
-        # events into this loop indefinitely.
-        stop_event = asyncio.Event()
-        try:
-            await stop_event.wait()
-        except asyncio.CancelledError:
-            pass
+        # events into this loop indefinitely. Another process can stop this
+        # watcher by clearing the persisted registry watch flag.
+        while True:
+            registry = load_registry()
+            entry = registry.get(project_path)
+            if entry is None or not entry.watch:
+                if watcher_manager.is_active(project_path):
+                    await watcher_manager.stop(project_path)
+                break
+            if not watcher_manager.is_active(project_path):
+                break
+            await asyncio.sleep(0.5)
 
     try:
         asyncio.run(_watch_forever())
     except KeyboardInterrupt:
         typer.echo("\nWatcher stopped.")
+    except RuntimeError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    else:
+        typer.echo("Watcher stopped.")
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +303,110 @@ def mcp() -> None:
     from opencode_search.mcp import run_mcp_server
 
     run_mcp_server()
+
+
+@daemon_app.command("serve")
+def daemon_serve(
+    host: str = typer.Option("127.0.0.1", help="Bind host for the HTTP daemon."),
+    port: int = typer.Option(8765, help="Bind port for the HTTP daemon."),
+) -> None:
+    """Run the singleton MCP daemon in the foreground."""
+    from opencode_search.daemon import run_http_daemon_server
+
+    run_http_daemon_server(host=host, port=port)
+
+
+@daemon_app.command("ensure")
+def daemon_ensure(
+    host: str = typer.Option("127.0.0.1", help="Expected daemon host."),
+    port: int = typer.Option(8765, help="Expected daemon port."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Start the singleton daemon if it is not already running."""
+    from opencode_search.daemon import ensure_daemon_running
+
+    result = ensure_daemon_running(host=host, port=port)
+    if json_output:
+        _print_json(result)
+        return
+    typer.echo(f"{result['status']}: {result['url']}")
+
+
+@daemon_app.command("bridge-stdio")
+def daemon_bridge_stdio() -> None:
+    """Run the stdio MCP bridge that auto-starts and forwards to the singleton daemon."""
+    from opencode_search.mcp_bridge import run_stdio_bridge
+
+    run_stdio_bridge()
+
+
+@daemon_app.command("status")
+def daemon_status_cmd(
+    host: str = typer.Option("127.0.0.1", help="Expected daemon host."),
+    port: int = typer.Option(8765, help="Expected daemon port."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Show current singleton daemon status."""
+    from opencode_search.daemon import daemon_status
+
+    result = daemon_status(host=host, port=port)
+    if json_output:
+        _print_json(result)
+        return
+    state = "running" if result["running"] else "stopped"
+    typer.echo(f"{state}: {result['url']}")
+
+
+@daemon_app.command("stop")
+def daemon_stop(
+    host: str = typer.Option("127.0.0.1", help="Daemon host to stop."),
+    port: int = typer.Option(8765, help="Daemon port to stop."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Stop the singleton daemon."""
+    from opencode_search.daemon import stop_daemon
+
+    result = stop_daemon(host=host, port=port)
+    if json_output:
+        _print_json(result)
+        return
+    typer.echo(str(result["status"]))
+
+
+@daemon_app.command("install-systemd")
+def daemon_install_systemd(
+    host: str = typer.Option("127.0.0.1", help="Daemon host for the systemd unit."),
+    port: int = typer.Option(8765, help="Daemon port for the systemd unit."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Install and enable a user systemd service for login-time daemon startup."""
+    from opencode_search.daemon import install_systemd_user_service
+
+    result = install_systemd_user_service(host=host, port=port)
+    if json_output:
+        _print_json(result)
+        return
+    if result.get("installed"):
+        typer.echo(f"Installed systemd user service: {result['service_path']}")
+    else:
+        typer.echo(f"Systemd install failed: {result.get('reason', 'unknown error')}", err=True)
+        raise typer.Exit(code=1)
+
+
+@daemon_app.command("install-global")
+def daemon_install_global(
+    host: str = typer.Option("127.0.0.1", help="Daemon host to register in client configs."),
+    port: int = typer.Option(8765, help="Daemon port to register in client configs."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Register the singleton daemon globally in Claude Code, Codex, and Hermes."""
+    from opencode_search.daemon import install_global_integration
+
+    result = install_global_integration(host=host, port=port)
+    if json_output:
+        _print_json(result)
+        return
+    typer.echo(f"Installed global MCP integration: {result['url']}")
 
 
 # ---------------------------------------------------------------------------

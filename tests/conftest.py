@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import socket
-import time
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +28,10 @@ import pytest
 
 EMBEDDER_URL = os.environ.get("EMBEDDER_URL", "http://127.0.0.1:9998")
 INDEXER_PORT_FILE = Path.home() / ".opencode" / "indexer.port"
+
+
+def _strict_no_skip_enabled() -> bool:
+    return os.environ.get("OPENCODE_FAIL_ON_SKIP", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _read_indexer_port() -> int | None:
@@ -205,6 +208,8 @@ def indexer_url() -> str | None:
 def embedder_alive(embedder_url):
     """Skip if embedder not running."""
     if not _check_url(f"{embedder_url}/health"):
+        if _strict_no_skip_enabled():
+            pytest.fail(f"Embedder not reachable at {embedder_url}/health")
         pytest.skip(f"Embedder not reachable at {embedder_url}/health")
     return True
 
@@ -213,10 +218,14 @@ def embedder_alive(embedder_url):
 def indexer_alive(indexer_url):
     """Skip if indexer not running."""
     if indexer_url is None:
+        if _strict_no_skip_enabled():
+            pytest.fail("~/.opencode/indexer.port not found and abstract socket unreachable; indexer not running")
         pytest.skip("~/.opencode/indexer.port not found and abstract socket unreachable; indexer not running")
     if indexer_url.startswith("abstract://"):
         return True
     if not _check_url(f"{indexer_url}/ping"):
+        if _strict_no_skip_enabled():
+            pytest.fail(f"Indexer not reachable at {indexer_url}/ping")
         pytest.skip(f"Indexer not reachable at {indexer_url}/ping")
     return True
 
@@ -235,6 +244,8 @@ def embedder_pid(embedder_alive) -> int:
         cmdline = " ".join(proc.info.get("cmdline") or [])
         if "server.py" in cmdline and "embedder" in cmdline:
             return proc.info["pid"]
+    if _strict_no_skip_enabled():
+        pytest.fail("Could not identify embedder PID")
     pytest.skip("Could not identify embedder PID")
 
 
@@ -246,7 +257,16 @@ def indexer_pid(indexer_alive) -> int:
         cmdline = " ".join(proc.info.get("cmdline") or [])
         if "opencode-indexer" in name or "opencode-indexer" in cmdline:
             return proc.info["pid"]
+    if _strict_no_skip_enabled():
+        pytest.fail("Could not identify indexer PID")
     pytest.skip("Could not identify indexer PID")
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """Fail strict validation runs if pytest reported any skipped tests."""
+    if not _strict_no_skip_enabled():
+        return
+    skipped = session.config.pluginmanager.get_plugin("terminalreporter").stats.get("skipped", [])
+    if skipped and session.exitstatus == 0:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 

@@ -1,13 +1,18 @@
 """Tests for opencode_search.cleaner — stale chunk removal."""
+# ruff: noqa: E402
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock
 
 import pytest
 
+pytest.importorskip("lancedb")
+pytest.importorskip("pyarrow")
+
 from opencode_search.cleaner import remove_chunks_for_paths, remove_stale_chunks
 from opencode_search.storage import ChunkData, Storage
+
+pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 
 @pytest.fixture

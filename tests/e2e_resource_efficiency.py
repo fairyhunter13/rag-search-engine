@@ -23,7 +23,6 @@ Run:
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import subprocess
 import threading
@@ -109,7 +108,7 @@ def wait_for_idle(pid, cpu_threshold=5.0, timeout=60, interval=3):
     # Return current CPU even if not idle (test will handle threshold assertion)
     try:
         return psutil.Process(pid).cpu_percent(interval=1)
-    except:
+    except Exception:
         return -1
 
 

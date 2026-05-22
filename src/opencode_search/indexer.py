@@ -13,8 +13,8 @@ from opencode_search.config import (
     get_tier_dims,
     get_tier_models,
 )
-from opencode_search.storage import ChunkData, Storage
 from opencode_search.discover import detect_language, iter_files
+from opencode_search.storage import ChunkData, Storage
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +88,7 @@ async def index_file(
 
     content = await asyncio.to_thread(_read_file, path)
     if content is None:
+        await storage.delete_by_path(str(path))
         return {"status": "skipped", "chunks": 0}
 
     language = detect_language(path)
@@ -98,6 +99,7 @@ async def index_file(
         return {"status": "error", "error": str(e), "chunks": 0}
 
     if not chunks:
+        await storage.delete_by_path(str(path))
         return {"status": "empty", "chunks": 0}
 
     texts = [c.content for c in chunks]
@@ -111,10 +113,15 @@ async def index_file(
         return {"status": "error", "error": str(e), "chunks": 0}
 
     if len(vectors) != len(chunks):
-        log.warning(
+        log.error(
             "embed_passages returned %d vectors for %d chunks at %s",
             len(vectors), len(chunks), path,
         )
+        return {
+            "status": "error",
+            "error": f"embedding vector count mismatch: {len(vectors)} != {len(chunks)}",
+            "chunks": 0,
+        }
 
     now_us = int(time.time() * 1_000_000)
     chunk_data = [
@@ -135,7 +142,11 @@ async def index_file(
         if i < len(vectors)
     ]
 
+    # Upserting by chunk_id alone leaves stale rows when a file shrinks from N
+    # chunks to fewer chunks. Write first so a failed write does not erase the
+    # previous good index, then remove positions beyond the new chunk count.
     await storage.write_chunks(chunk_data)
+    await storage.delete_positions_at_or_after(str(path), len(chunk_data))
     return {"status": "indexed", "chunks": len(chunk_data)}
 
 
@@ -147,6 +158,7 @@ async def index_project(
     force: bool = False,
     progress_callback=None,
     embed_workers: int = 2,
+    file_workers: int = 8,
 ) -> IndexResult:
     """Index an entire project directory. GPU-enforced, fully async.
 
@@ -159,7 +171,8 @@ async def index_project(
         embed_workers: Concurrent embed semaphore slots.
     """
     t_start = time.monotonic()
-    embed_sem = asyncio.Semaphore(embed_workers)
+    embed_sem = asyncio.Semaphore(max(1, embed_workers))
+    file_sem = asyncio.Semaphore(max(1, file_workers))
 
     paths = list(iter_files(root))
     total = len(paths)
@@ -175,12 +188,13 @@ async def index_project(
     )
 
     async def process_file(path: Path, idx: int) -> None:
-        r = await index_file(
-            storage, path,
-            tier=tier, force=force,
-            embed_sem=embed_sem,
-            existing_hashes=existing_hashes,
-        )
+        async with file_sem:
+            r = await index_file(
+                storage, path,
+                tier=tier, force=force,
+                embed_sem=embed_sem,
+                existing_hashes=existing_hashes,
+            )
         if r["status"] == "indexed":
             result.files_indexed += 1
             result.chunks_total += r["chunks"]
@@ -215,22 +229,29 @@ async def index_files(
     *,
     tier: str,
     embed_workers: int = 2,
+    file_workers: int = 8,
 ) -> IndexResult:
     """Index a specific list of files (used by watcher for incremental updates)."""
     t_start = time.monotonic()
-    embed_sem = asyncio.Semaphore(embed_workers)
+    embed_sem = asyncio.Semaphore(max(1, embed_workers))
+    file_sem = asyncio.Semaphore(max(1, file_workers))
     result = IndexResult(0, 0, 0, 0, 0, 0.0)
+
+    # Watchdog can emit duplicate events for the same file in one debounce
+    # window. Preserve order while avoiding concurrent replacement of one path.
+    paths = list(dict.fromkeys(paths))
 
     # Reuse hash map across the batch
     existing_hashes = await storage.get_file_hashes()
 
     async def process(path: Path) -> None:
-        r = await index_file(
-            storage, path,
-            tier=tier,
-            embed_sem=embed_sem,
-            existing_hashes=existing_hashes,
-        )
+        async with file_sem:
+            r = await index_file(
+                storage, path,
+                tier=tier,
+                embed_sem=embed_sem,
+                existing_hashes=existing_hashes,
+            )
         if r["status"] == "indexed":
             result.files_indexed += 1
             result.chunks_total += r["chunks"]

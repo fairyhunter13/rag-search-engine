@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from opencode_search.hardware import (
     _compute_cap_to_arch,
     _major_cc,
@@ -15,7 +13,6 @@ from opencode_search.hardware import (
     log_hardware_info,
     set_oom_score,
 )
-
 
 # ---------------------------------------------------------------------------
 # _major_cc and _compute_cap_to_arch

@@ -3,11 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from opencode_search.discover import (
-    BLACKLISTED_DIRS,
-    BLACKLISTED_EXTENSIONS,
+    IGNORED_DIRS,
+    IGNORED_EXTENSIONS,
     LANGUAGE_MAP,
     SOURCE_EXTENSIONS,
     TEXT_EXTENSIONS,
@@ -15,9 +13,9 @@ from opencode_search.discover import (
     _is_binary,
     _load_gitignore,
     detect_language,
+    is_indexable_file,
     iter_files,
 )
-
 
 # ---------------------------------------------------------------------------
 # detect_language
@@ -33,7 +31,11 @@ def test_detect_language_typescript():
 
 
 def test_detect_language_tsx():
-    assert detect_language(Path("foo.tsx")) == "typescriptreact"
+    assert detect_language(Path("foo.tsx")) == "tsx"
+
+
+def test_detect_language_jsx():
+    assert detect_language(Path("foo.jsx")) == "jsx"
 
 
 def test_detect_language_rust():
@@ -61,9 +63,18 @@ def test_detect_language_case_insensitive():
     assert detect_language(Path("FOO.PY")) == "python"
 
 
-def test_detect_language_makefile_matches_text():
-    # Makefile is in TEXT_EXTENSIONS — falls back to "text" rather than "unknown".
-    assert detect_language(Path("Makefile")) == "text"
+def test_detect_language_component_and_data_formats():
+    assert detect_language(Path("Component.vue")) == "vue"
+    assert detect_language(Path("App.svelte")) == "svelte"
+    assert detect_language(Path("page.astro")) == "astro"
+    assert detect_language(Path("data.jsonl")) == "json"
+    assert detect_language(Path("settings.jsonc")) == "json"
+    assert detect_language(Path("README.mdx")) == "markdown"
+
+
+def test_detect_language_special_filenames():
+    assert detect_language(Path("Makefile")) == "makefile"
+    assert detect_language(Path("Dockerfile")) == "dockerfile"
 
 
 def test_detect_language_truly_unknown():
@@ -118,6 +129,45 @@ def test_size_limit_unknown_extension():
     assert limit > 0
 
 
+def test_is_indexable_file_allows_dotenv_in_project_root(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("TOKEN=abc\n")
+
+    assert is_indexable_file(env_file, root=tmp_path) is True
+
+
+def test_is_indexable_file_allows_ignored_ancestor_outside_project_root(tmp_path):
+    project_root = tmp_path / "build" / "repo"
+    project_root.mkdir(parents=True)
+    source_file = project_root / "app.py"
+    source_file.write_text("x = 1\n")
+
+    assert is_indexable_file(source_file, root=project_root) is True
+
+
+def test_is_indexable_file_rejects_ignored_directory_inside_project_root(tmp_path):
+    nested_build_dir = tmp_path / "src" / "build"
+    nested_build_dir.mkdir(parents=True)
+    source_file = nested_build_dir / "app.py"
+    source_file.write_text("x = 1\n")
+
+    assert is_indexable_file(source_file, root=tmp_path) is False
+
+
+def test_is_indexable_file_allows_symlink_inside_project_to_external_target(tmp_path):
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    external_file = external_dir / "shared.py"
+    external_file.write_text("x = 1\n")
+
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    symlink_path = project_root / "link.py"
+    symlink_path.symlink_to(external_file)
+
+    assert is_indexable_file(symlink_path, root=project_root) is True
+
+
 # ---------------------------------------------------------------------------
 # _load_gitignore
 # ---------------------------------------------------------------------------
@@ -153,7 +203,7 @@ def test_iter_files_finds_python(tmp_path):
     assert files[0].name == "main.py"
 
 
-def test_iter_files_skips_blacklisted_dirs(tmp_path):
+def test_iter_files_skips_ignored_dirs(tmp_path):
     (tmp_path / "node_modules").mkdir()
     (tmp_path / "node_modules" / "lodash.js").write_text("// dep\n")
     (tmp_path / "src.py").write_text("x = 1\n")
@@ -162,7 +212,7 @@ def test_iter_files_skips_blacklisted_dirs(tmp_path):
     assert "lodash.js" not in files
 
 
-def test_iter_files_skips_blacklisted_extensions(tmp_path):
+def test_iter_files_skips_ignored_extensions(tmp_path):
     (tmp_path / "img.png").write_bytes(b"\x89PNG\x00")
     (tmp_path / "main.py").write_text("ok\n")
     files = [f.name for f in iter_files(tmp_path)]
@@ -196,6 +246,18 @@ def test_iter_files_nested_dirs(tmp_path):
     assert files[0].name == "deep.py"
 
 
+def test_iter_files_does_not_follow_symlink_by_default(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "code.py").write_text("x = 1\n")
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+
+    files = [f.relative_to(tmp_path) for f in iter_files(tmp_path)]
+
+    assert Path("real/code.py") in files
+    assert Path("link/code.py") not in files
+
+
 def test_iter_files_skips_oversize(tmp_path, monkeypatch):
     # Make the limit tiny so we can test
     monkeypatch.setattr(
@@ -227,14 +289,14 @@ def test_iter_files_gitignore_inheritance(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_blacklisted_dirs_includes_common():
+def test_ignored_dirs_includes_common():
     for d in [".git", "node_modules", "__pycache__", ".venv", "target"]:
-        assert d in BLACKLISTED_DIRS
+        assert d in IGNORED_DIRS
 
 
-def test_blacklisted_extensions_includes_binaries():
+def test_ignored_extensions_includes_binaries():
     for ext in [".png", ".exe", ".so", ".jar"]:
-        assert ext in BLACKLISTED_EXTENSIONS
+        assert ext in IGNORED_EXTENSIONS
 
 
 def test_source_extensions_includes_languages():

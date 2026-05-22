@@ -3,13 +3,15 @@
 Embed_passages is mocked out so no GPU is required.
 @pytest.mark.gpu tests run the real GPU pipeline (skipped without CUDA).
 """
+# ruff: noqa: E402
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+
+pytest.importorskip("lancedb")
+pytest.importorskip("pyarrow")
 
 from opencode_search.indexer import (
     IndexResult,
@@ -22,6 +24,7 @@ from opencode_search.indexer import (
 )
 from opencode_search.storage import Storage
 
+pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 # ---------------------------------------------------------------------------
 # Helper unit tests
@@ -184,6 +187,64 @@ async def test_index_file_success(real_storage, tmp_path):
     # Verify it was stored
     count = await real_storage.count()
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_index_file_replaces_stale_chunks_for_path(real_storage, tmp_path):
+    """Re-indexing a shorter file removes old higher-position chunks."""
+    from opencode_search.chunker import Chunk
+    from opencode_search.storage import ChunkData
+
+    f = tmp_path / "code.py"
+    f.write_text("def hello():\n    return 'world'\n")
+
+    await real_storage.write_chunks([
+        ChunkData(
+            chunk_id=_make_chunk_id(str(f), i),
+            path=str(f),
+            file_hash="old",
+            language="python",
+            position=i,
+            content=f"old chunk {i}",
+            content_hash=f"old{i}",
+            start_line=i + 1,
+            end_line=i + 1,
+            vector=[0.0] * 512,
+            created_at=1,
+        )
+        for i in range(3)
+    ])
+
+    fake_chunks = [Chunk(content="def hello(): pass", start_line=1, end_line=1,
+                        chunk_type="code", language="python")]
+
+    with patch("opencode_search.chunker.chunk_file", return_value=fake_chunks), \
+         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
+        result = await index_file(real_storage, f, tier="budget", existing_hashes={})
+
+    assert result["status"] == "indexed"
+    assert await real_storage.count() == 1
+    hashes = await real_storage.get_file_hashes()
+    assert hashes[str(f)] == _hash_file(f)
+
+
+@pytest.mark.asyncio
+async def test_index_file_vector_count_mismatch_is_error(real_storage, tmp_path):
+    from opencode_search.chunker import Chunk
+
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    fake_chunks = [
+        Chunk(content="x = 1", start_line=1, end_line=1, chunk_type="code", language="python"),
+        Chunk(content="y = 2", start_line=2, end_line=2, chunk_type="code", language="python"),
+    ]
+
+    with patch("opencode_search.chunker.chunk_file", return_value=fake_chunks), \
+         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
+        result = await index_file(real_storage, f, tier="budget", existing_hashes={})
+
+    assert result["status"] == "error"
+    assert await real_storage.count() == 0
 
 
 @pytest.mark.asyncio

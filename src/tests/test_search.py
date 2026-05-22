@@ -3,19 +3,16 @@
 All tests use mocked embed_query and rerank so no GPU is required.
 @pytest.mark.gpu tests run actual inference and only execute on real CUDA.
 """
+# ruff: noqa: N806
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from opencode_search.config import (
-    FINAL_TOP_K,
     SKIP_STAGE1_RERANK_N,
     STAGE1_RERANK_K,
-    STAGE1_VECTOR_K,
     ProjectEntry,
     get_tier_dims,
     get_tier_models,
@@ -27,7 +24,6 @@ from opencode_search.search import (
     search,
     search_project,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,6 +102,16 @@ def test_cache_key_differs_by_project_set():
     assert key1 != key2
 
 
+def test_cache_key_differs_by_index_metadata():
+    p1 = [_make_project("/tmp/a")]
+    p2 = [_make_project("/tmp/a")]
+    p1[0].indexed_at = "2026-01-01T00:00:00Z"
+    p2[0].indexed_at = "2026-01-02T00:00:00Z"
+    key1 = _cache_key("query", p1, "balanced", 10, True)
+    key2 = _cache_key("query", p2, "balanced", 10, True)
+    assert key1 != key2
+
+
 # ---------------------------------------------------------------------------
 # search() with mocked dependencies
 # ---------------------------------------------------------------------------
@@ -147,6 +153,13 @@ async def test_search_empty_query_returns_empty():
 async def test_search_no_projects_returns_empty():
     result = await search("hello", projects=[])
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_mixed_tiers():
+    projects = [_make_project("/tmp/a", tier="budget"), _make_project("/tmp/b", tier="balanced")]
+    with pytest.raises(ValueError, match="Mixed-tier"):
+        await search("hello", projects=projects)
 
 
 @pytest.mark.asyncio

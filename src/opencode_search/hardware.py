@@ -3,7 +3,6 @@
 import logging
 import os
 import subprocess
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +82,7 @@ def detect_gpu() -> dict:
     return result
 
 
-def _major_cc(compute_cap: Optional[str]) -> Optional[int]:
+def _major_cc(compute_cap: str | None) -> int | None:
     """Return the major compute-capability integer, or None on parse failure."""
     if not compute_cap:
         return None
@@ -111,7 +110,7 @@ def _compute_cap_to_arch(compute_cap: str) -> str:
     return mapping.get(major, f"Unknown (SM {major})")
 
 
-def get_embed_workers(vram_mb: Optional[int]) -> int:
+def get_embed_workers(vram_mb: int | None) -> int:
     """Compute a sensible number of embedding workers given available VRAM.
 
     Formula: min(6, max(2, (vram_mb - 1024) // 600)) when vram_mb is known.
@@ -148,7 +147,7 @@ def get_ram_mb() -> int:
 
     # Fallback: /proc/meminfo
     try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
             for line in fh:
                 if line.startswith("MemTotal:"):
                     # Format: "MemTotal:       16384000 kB"

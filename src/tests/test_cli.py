@@ -1,14 +1,20 @@
 """Tests for opencode_search.cli — typer command dispatch with mocked handlers."""
+# ruff: noqa: E402
 from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+pytest.importorskip("typer")
+pytest.importorskip("typer.testing")
+
 from typer.testing import CliRunner
 
 from opencode_search.cli import app
 
+pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 runner = CliRunner()
 
@@ -270,6 +276,36 @@ def test_health_json_output():
 
 
 # ---------------------------------------------------------------------------
+# daemon
+# ---------------------------------------------------------------------------
+
+
+def test_daemon_ensure_json_output():
+    fake = {"status": "already_running", "url": "http://127.0.0.1:8765/mcp"}
+    with patch("opencode_search.daemon.ensure_daemon_running", return_value=fake):
+        result = runner.invoke(app, ["daemon", "ensure", "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "already_running"
+
+
+def test_daemon_install_global_success():
+    fake = {"status": "ok", "url": "http://127.0.0.1:8765/mcp"}
+    with patch("opencode_search.daemon.install_global_integration", return_value=fake):
+        result = runner.invoke(app, ["daemon", "install-global"])
+    assert result.exit_code == 0
+    assert "Installed global MCP integration" in result.output
+
+
+def test_daemon_install_systemd_success():
+    fake = {"installed": True, "service_path": "/tmp/opencode-search-mcp-daemon.service"}
+    with patch("opencode_search.daemon.install_systemd_user_service", return_value=fake):
+        result = runner.invoke(app, ["daemon", "install-systemd"])
+    assert result.exit_code == 0
+    assert "Installed systemd user service" in result.output
+
+
+# ---------------------------------------------------------------------------
 # Help / no-args
 # ---------------------------------------------------------------------------
 
@@ -284,5 +320,5 @@ def test_no_args_shows_help():
 def test_help_lists_all_commands():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["index", "search", "status", "list", "watch", "stop-watching", "mcp", "health"]:
+    for cmd in ["index", "search", "status", "list", "watch", "stop-watching", "mcp", "daemon", "health"]:
         assert cmd in result.output

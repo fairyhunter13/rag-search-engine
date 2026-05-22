@@ -11,25 +11,35 @@ Usage:
   opencode-search mcp           # stdio (for AI assistants)
   python -m opencode_search mcp # equivalent
 
-On startup the server GPU-checks the embedding layer and begins watching any
-projects that were persisted with watch=True in the registry.
+On startup the server GPU-checks the embedding layer. Persisted watchers are
+resumed automatically on the first public tool call, bound to FastMCP's loop.
 
 Event-loop strategy:
   FastMCP owns the event loop. The GPU guard runs synchronously (no loop
-  required), and watcher resume is performed inside an mcp lifespan / startup
-  hook so the watchers bind to FastMCP's loop — NOT a transient pre-startup
-  loop that closes immediately.
+  required), and watcher resume is performed lazily from public tools so the
+  watchers bind to FastMCP's loop — NOT a transient pre-startup loop that closes.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in dep-light envs
+    from opencode_search._fastmcp_stub import FastMCPStub as FastMCP
 
+    _MCP_IMPORT_ERROR = exc
+else:
+    _MCP_IMPORT_ERROR = None
+
+from starlette.responses import JSONResponse
+
+from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_index_project,
     handle_list_indexed_projects,
@@ -40,14 +50,18 @@ from opencode_search.handlers import (
 
 log = logging.getLogger(__name__)
 
-mcp = FastMCP(
-    name="opencode-search",
-    instructions=(
+_mcp_kwargs: dict[str, Any] = {
+    "name": "opencode-search",
+    "instructions": (
         "GPU-accelerated local semantic code search. "
         "Index your project with index_project, then call search_code. "
         "All embedding and reranking runs locally on your GPU — no data leaves your machine."
     ),
-)
+}
+if _MCP_IMPORT_ERROR is not None:
+    _mcp_kwargs["missing_exc"] = _MCP_IMPORT_ERROR
+
+mcp = FastMCP(**_mcp_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +86,8 @@ async def index_project(
         watch: Start a live file-watcher for incremental re-indexing.
         force: Re-index all files even if unchanged (ignores hash cache).
     """
+    runtime_state.note_activity()
+    await _ensure_watchers_resumed()
     return await handle_index_project(path=path, tier=tier, watch=watch, force=force)
 
 
@@ -83,6 +99,8 @@ async def search_code(
     use_rerank: bool = True,
 ) -> dict[str, Any]:
     """Search indexed projects for code matching the query."""
+    runtime_state.note_activity()
+    await _ensure_watchers_resumed()
     return await handle_search_code(
         query=query,
         project_paths=project_paths,
@@ -94,19 +112,64 @@ async def search_code(
 @mcp.tool()
 async def project_status(path: str) -> dict[str, Any]:
     """Get the current indexing and watching status for a project."""
+    runtime_state.note_activity()
+    await _ensure_watchers_resumed()
     return await handle_project_status(path=path)
 
 
 @mcp.tool()
 async def list_indexed_projects() -> dict[str, Any]:
     """List all projects that have been indexed."""
+    runtime_state.note_activity()
+    await _ensure_watchers_resumed()
     return await handle_list_indexed_projects()
 
 
 @mcp.tool()
 async def stop_watching(path: str) -> dict[str, Any]:
     """Stop the live file-watcher for a project."""
+    runtime_state.note_activity()
+    await _ensure_watchers_resumed()
     return await handle_stop_watching(path=path)
+
+
+@mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
+async def healthz(_request) -> JSONResponse:
+    """Lightweight health endpoint for the singleton HTTP daemon."""
+    return JSONResponse(
+        {
+            "ok": True,
+            "service": "opencode-search",
+            "transport": "streamable-http",
+            **runtime_state.snapshot(),
+        }
+    )
+
+
+@mcp.custom_route("/admin/client/open", methods=["POST"], include_in_schema=False)
+async def client_open(request) -> JSONResponse:
+    payload = await request.json()
+    runtime_state.client_open(str(payload.get("client_id", "")))
+    return JSONResponse({"ok": True, **runtime_state.snapshot()})
+
+
+@mcp.custom_route("/admin/client/heartbeat", methods=["POST"], include_in_schema=False)
+async def client_heartbeat(request) -> JSONResponse:
+    payload = await request.json()
+    runtime_state.client_heartbeat(str(payload.get("client_id", "")))
+    return JSONResponse({"ok": True, **runtime_state.snapshot()})
+
+
+@mcp.custom_route("/admin/client/close", methods=["POST"], include_in_schema=False)
+async def client_close(request) -> JSONResponse:
+    payload = await request.json()
+    runtime_state.client_close(str(payload.get("client_id", "")))
+    return JSONResponse({"ok": True, **runtime_state.snapshot()})
+
+
+@mcp.custom_route("/admin/status", methods=["GET"], include_in_schema=False)
+async def admin_status(_request) -> JSONResponse:
+    return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +185,7 @@ async def resume_watchers() -> None:
     """
     from opencode_search.cleaner import remove_chunks_for_paths
     from opencode_search.config import get_tier_dims, load_registry
+    from opencode_search.discover import is_indexable_file
     from opencode_search.indexer import index_files
     from opencode_search.search import clear_search_cache
     from opencode_search.storage import Storage
@@ -134,16 +198,23 @@ async def resume_watchers() -> None:
         dims = get_tier_dims(entry.tier)
         db_path = entry.db_path
         tier = entry.tier
+        project_root = Path(path_str)
 
-        def make_cb(_db=db_path, _d=dims, _t=tier):
+        def make_cb(_db=db_path, _d=dims, _t=tier, _root=project_root):
             async def on_change(modified: list[Path], deleted: list[str]) -> None:
                 st = Storage(db_path=_db, dims=_d)
                 await st.open()
                 try:
                     if deleted:
-                        await remove_chunks_for_paths(st, deleted)
+                        project_deleted = [
+                            p for p in deleted if ".opencode" not in Path(p).parts
+                        ]
+                        await remove_chunks_for_paths(st, project_deleted)
                     if modified:
-                        await index_files(st, modified, tier=_t)
+                        project_modified = [
+                            p for p in modified if is_indexable_file(p, root=_root)
+                        ]
+                        await index_files(st, project_modified, tier=_t)
                     clear_search_cache()
                 finally:
                     await st.close()
@@ -154,25 +225,30 @@ async def resume_watchers() -> None:
             log.info("Resumed watcher for %s", path_str)
 
 
-# Register resume_watchers as a tool callable by clients that need to trigger
-# resume after the server is up. FastMCP doesn't expose a lifespan hook in this
-# version, so we run resume_watchers on the first incoming request via a tool.
-_resumed_lock = False
+# FastMCP doesn't expose a lifespan hook in this version, so public tools call
+# this idempotent guard before doing work.
+_resumed = False
+_resume_lock: asyncio.Lock | None = None
 
 
-@mcp.tool()
-async def _resume_persisted_watchers() -> dict[str, Any]:
-    """Internal: resume watchers from the registry (idempotent).
-
-    AI assistants typically don't need to call this manually — it's invoked
-    automatically on first contact. Safe to call multiple times.
-    """
-    global _resumed_lock
-    if _resumed_lock:
-        return {"status": "already_resumed"}
-    _resumed_lock = True
-    try:
+async def _ensure_watchers_resumed() -> None:
+    """Resume persisted watchers once, bound to FastMCP's active event loop."""
+    global _resume_lock, _resumed
+    if _resumed:
+        return
+    if _resume_lock is None:
+        _resume_lock = asyncio.Lock()
+    async with _resume_lock:
+        if _resumed:
+            return
         await resume_watchers()
+        _resumed = True
+
+
+async def _resume_persisted_watchers() -> dict[str, Any]:
+    """Internal/testing helper: resume watchers from the registry."""
+    try:
+        await _ensure_watchers_resumed()
         return {"status": "ok"}
     except Exception as exc:
         log.warning("resume_watchers failed: %s", exc)
@@ -215,3 +291,23 @@ def run_mcp_server() -> None:
 
     log.info("Starting opencode-search MCP server on stdio…")
     mcp.run(transport="stdio")
+
+
+def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
+    """Start the MCP server over streamable HTTP for shared daemon usage."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
+    try:
+        _gpu_guard()
+    except Exception as exc:
+        log.critical("GPU guard failed: %s", exc)
+        sys.exit(1)
+
+    mcp.settings.host = host
+    mcp.settings.port = port
+    log.info("Starting opencode-search MCP server on http://%s:%s/mcp", host, port)
+    mcp.run(transport="streamable-http")

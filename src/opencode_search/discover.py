@@ -2,8 +2,8 @@
 
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Optional
 
 import pathspec
 
@@ -16,10 +16,10 @@ from opencode_search.config import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Extension / directory blacklists
+# Extension / directory ignore lists
 # ---------------------------------------------------------------------------
 
-BLACKLISTED_DIRS: frozenset[str] = frozenset(
+IGNORED_DIRS: frozenset[str] = frozenset(
     [
         ".git", ".svn", ".hg", "node_modules", "target", "__pycache__",
         ".pytest_cache", ".mypy_cache", ".ruff_cache", "vendor", "dist",
@@ -31,7 +31,7 @@ BLACKLISTED_DIRS: frozenset[str] = frozenset(
     ]
 )
 
-BLACKLISTED_EXTENSIONS: frozenset[str] = frozenset(
+IGNORED_EXTENSIONS: frozenset[str] = frozenset(
     [
         ".o", ".a", ".so", ".dylib", ".dll", ".exe", ".bin", ".obj",
         ".pyc", ".pyo", ".class", ".jar", ".war", ".ear",
@@ -47,6 +47,7 @@ BLACKLISTED_EXTENSIONS: frozenset[str] = frozenset(
 SOURCE_EXTENSIONS: frozenset[str] = frozenset(
     [
         ".go", ".rs", ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".kt",
+        ".vue", ".svelte", ".astro",
         ".swift", ".c", ".cpp", ".cc", ".h", ".hpp", ".cs", ".rb", ".php",
         ".scala", ".clj", ".ex", ".exs", ".hs", ".ml", ".mli", ".fs", ".fsx",
         ".lua", ".r", ".jl", ".nim", ".zig", ".v", ".elm", ".dart",
@@ -57,8 +58,8 @@ SOURCE_EXTENSIONS: frozenset[str] = frozenset(
 
 TEXT_EXTENSIONS: frozenset[str] = frozenset(
     [
-        ".md", ".markdown", ".txt", ".rst", ".adoc",
-        ".json", ".yaml", ".yml", ".toml", ".xml", ".html", ".htm",
+        ".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc",
+        ".json", ".jsonc", ".json5", ".jsonl", ".yaml", ".yml", ".toml", ".xml", ".html", ".htm",
         ".css", ".scss", ".sass", ".less",
         ".env", ".cfg", ".conf", ".ini", ".properties",
         ".dockerfile", "Dockerfile", ".makefile", "Makefile",
@@ -72,8 +73,11 @@ LANGUAGE_MAP: dict[str, str] = {
     ".py": "python",
     ".js": "javascript",
     ".ts": "typescript",
-    ".jsx": "javascriptreact",
-    ".tsx": "typescriptreact",
+    ".jsx": "jsx",
+    ".tsx": "tsx",
+    ".vue": "vue",
+    ".svelte": "svelte",
+    ".astro": "astro",
     ".java": "java",
     ".kt": "kotlin",
     ".swift": "swift",
@@ -111,8 +115,12 @@ LANGUAGE_MAP: dict[str, str] = {
     ".graphql": "graphql",
     ".proto": "protobuf",
     ".md": "markdown",
+    ".mdx": "markdown",
     ".rst": "restructuredtext",
     ".json": "json",
+    ".jsonc": "json",
+    ".json5": "json",
+    ".jsonl": "json",
     ".yaml": "yaml",
     ".yml": "yaml",
     ".toml": "toml",
@@ -121,6 +129,14 @@ LANGUAGE_MAP: dict[str, str] = {
     ".htm": "html",
     ".css": "css",
     ".scss": "scss",
+    "Dockerfile": "dockerfile",
+    "dockerfile": "dockerfile",
+    "Makefile": "makefile",
+    "makefile": "makefile",
+    "GNUmakefile": "makefile",
+    "gnumakefile": "makefile",
+    "CMakeLists.txt": "cmake",
+    "cmakelists.txt": "cmake",
 }
 
 # ---------------------------------------------------------------------------
@@ -150,7 +166,7 @@ def detect_language(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_gitignore(directory: Path) -> Optional[pathspec.PathSpec]:
+def _load_gitignore(directory: Path) -> pathspec.PathSpec | None:
     """Read the .gitignore in *directory* and return a PathSpec, or None."""
     gi_path = directory / ".gitignore"
     if not gi_path.is_file():
@@ -158,7 +174,7 @@ def _load_gitignore(directory: Path) -> Optional[pathspec.PathSpec]:
     try:
         with gi_path.open("r", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
-        return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+        return pathspec.PathSpec.from_lines("gitignore", lines)
     except OSError as exc:
         logger.debug("Cannot read %s: %s", gi_path, exc)
         return None
@@ -189,18 +205,64 @@ def _get_size_limit_bytes(path: Path) -> int:
     return DEFAULT_UNKNOWN_FILE_SIZE_KB * 1024
 
 
+def is_indexable_file(path: Path, root: Path | None = None) -> bool:
+    """Return True if *path* is eligible for indexing.
+
+    This mirrors the main discovery filters so watch-based incremental indexing
+    does not ingest ignored directories or the project's own `.opencode` data.
+    When *root* is provided, directory-ignore checks are scoped to directories inside
+    that watched project root rather than ancestors elsewhere on the filesystem.
+    """
+    try:
+        candidate_path = path.expanduser()
+    except OSError:
+        return False
+
+    if root is not None and not candidate_path.is_absolute():
+        candidate_path = root / candidate_path
+
+    if not candidate_path.is_file():
+        return False
+
+    if root is not None:
+        try:
+            relative_parts = candidate_path.relative_to(root.resolve()).parts
+        except (OSError, ValueError):
+            return False
+        ignored_dir_parts = relative_parts[:-1]
+    else:
+        ignored_dir_parts = candidate_path.resolve().parts[:-1]
+
+    if any(part in IGNORED_DIRS for part in ignored_dir_parts):
+        return False
+
+    if candidate_path.suffix.lower() in IGNORED_EXTENSIONS:
+        return False
+
+    try:
+        if candidate_path.stat().st_size > _get_size_limit_bytes(candidate_path):
+            return False
+    except OSError:
+        return False
+
+    if _is_binary(candidate_path):
+        return False
+
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main iterator
 # ---------------------------------------------------------------------------
 
 
-def iter_files(root: Path, follow_symlinks: bool = True) -> Iterator[Path]:
+def iter_files(root: Path, follow_symlinks: bool = False) -> Iterator[Path]:
     """Walk *root* recursively, yielding eligible source / text files.
 
     Applies:
-    - BLACKLISTED_DIRS pruning
+    - IGNORED_DIRS pruning
     - Per-directory .gitignore stacking (root spec is inherited by children)
-    - BLACKLISTED_EXTENSIONS filtering
+    - IGNORED_EXTENSIONS filtering
     - File-size limits (category-based)
     - Binary-content detection
     """
@@ -216,9 +278,9 @@ def iter_files(root: Path, follow_symlinks: bool = True) -> Iterator[Path]:
 
     # We track accumulated specs as a dict: abs_dir -> PathSpec | None
     # to avoid re-computing for every child.
-    _spec_cache: dict[Path, Optional[pathspec.PathSpec]] = {root: root_spec}
+    _spec_cache: dict[Path, pathspec.PathSpec | None] = {root: root_spec}
 
-    def _get_spec(directory: Path) -> Optional[pathspec.PathSpec]:
+    def _get_spec(directory: Path) -> pathspec.PathSpec | None:
         """Return the accumulated PathSpec for *directory* (cached)."""
         if directory in _spec_cache:
             return _spec_cache[directory]
@@ -245,17 +307,17 @@ def iter_files(root: Path, follow_symlinks: bool = True) -> Iterator[Path]:
     ):
         current_dir = Path(dirpath)
 
-        # Prune blacklisted directory names in-place (modifies os.walk).
-        dirnames[:] = [d for d in dirnames if d not in BLACKLISTED_DIRS]
+        # Prune ignored directory names in-place (modifies os.walk).
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
 
         spec = _get_spec(current_dir)
 
         for filename in filenames:
             file_path = current_dir / filename
 
-            # 1. Blacklisted extension check.
+            # 1. Ignored extension check.
             suffix = file_path.suffix.lower()
-            if suffix in BLACKLISTED_EXTENSIONS:
+            if suffix in IGNORED_EXTENSIONS:
                 continue
 
             # 2. Gitignore check (relative to root).

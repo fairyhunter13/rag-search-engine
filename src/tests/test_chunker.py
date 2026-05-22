@@ -4,6 +4,7 @@ All tests run without GPU (chunking is CPU-only).
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -11,7 +12,6 @@ import pytest
 
 from opencode_search.chunker import (
     MAX_TOKENS_PER_CHUNK,
-    MIN_TOKENS_PER_CHUNK,
     TARGET_TOKENS_PER_CHUNK,
     Chunk,
     _chunk_fallback,
@@ -19,6 +19,7 @@ from opencode_search.chunker import (
     _chunk_jsonl,
     _chunk_markdown,
     _enforce_token_limit,
+    _make_chunk,
     _merge_tiny,
     _route,
     chunk_file,
@@ -26,6 +27,14 @@ from opencode_search.chunker import (
     split_by_tokens,
 )
 
+HAS_CHONKIE = importlib.util.find_spec("chonkie") is not None
+HAS_LANGCHAIN_SPLITTERS = importlib.util.find_spec("langchain_text_splitters") is not None
+
+requires_chonkie = pytest.mark.skipif(not HAS_CHONKIE, reason="chonkie is not installed")
+requires_langchain = pytest.mark.skipif(
+    not HAS_LANGCHAIN_SPLITTERS,
+    reason="langchain_text_splitters is not installed",
+)
 
 # ---------------------------------------------------------------------------
 # Token counting
@@ -71,6 +80,8 @@ def test_chunk_file_small_returns_one_chunk():
     result = chunk_file(content, Path("test.py"))
     assert len(result) == 1
     assert result[0].content == content
+    assert result[0].start_line == 1
+    assert result[0].end_line == 2
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +89,7 @@ def test_chunk_file_small_returns_one_chunk():
 # ---------------------------------------------------------------------------
 
 
+@requires_langchain
 def test_chunk_markdown_returns_chunks():
     content = "# Title\n\nSome content.\n\n## Section\n\nMore content here.\n"
     chunks = _chunk_markdown(content)
@@ -87,6 +99,7 @@ def test_chunk_markdown_returns_chunks():
         assert c.content.strip()
 
 
+@requires_langchain
 def test_chunk_markdown_preserves_content():
     content = "# Header\n\nParagraph text.\n"
     chunks = _chunk_markdown(content)
@@ -99,6 +112,7 @@ def test_chunk_markdown_preserves_content():
 # ---------------------------------------------------------------------------
 
 
+@requires_langchain
 def test_chunk_json_dict():
     data = {"key": "value", "nested": {"a": 1, "b": 2}}
     content = json.dumps(data)
@@ -108,6 +122,7 @@ def test_chunk_json_dict():
         assert c.chunk_type == "json"
 
 
+@requires_langchain
 def test_chunk_json_large_object():
     data = {f"key_{i}": f"value_{i}" * 10 for i in range(50)}
     content = json.dumps(data)
@@ -135,11 +150,42 @@ def test_chunk_jsonl_empty_lines_ignored():
     assert len(chunks) >= 1
 
 
+def test_chunk_jsonl_preserves_actual_line_spans(monkeypatch):
+    monkeypatch.setattr("opencode_search.chunker.TARGET_CHARS", 12)
+    content = '\n{"a": 1}\n\n{"b": 2}\n{"c": 3}\n'
+
+    chunks = _chunk_jsonl(content)
+
+    assert len(chunks) == 3
+    assert [(chunk.start_line, chunk.end_line) for chunk in chunks] == [(2, 2), (4, 4), (5, 5)]
+
+
+def test_make_chunk_without_offset_reports_unknown_lines():
+    chunk = _make_chunk("alpha\nbeta\n", "markdown", "markdown")
+
+    assert chunk.start_line == 0
+    assert chunk.end_line == 0
+
+
+def test_chunk_json_split_chunks_leave_line_numbers_unknown(monkeypatch):
+    class _FakeSplitter:
+        def split_text(self, *, json_data):
+            return ['{"a": 1}', '{"b": 2}']
+
+    monkeypatch.setattr("opencode_search.chunker._make_json_splitter", lambda: _FakeSplitter())
+
+    chunks = _chunk_json('{"a": 1, "b": 2}')
+
+    assert len(chunks) == 2
+    assert all((chunk.start_line, chunk.end_line) == (0, 0) for chunk in chunks)
+
+
 # ---------------------------------------------------------------------------
 # Fallback chunker
 # ---------------------------------------------------------------------------
 
 
+@requires_chonkie
 def test_chunk_fallback_returns_chunks():
     content = "Some random text " * 100
     chunks = _chunk_fallback(content, "text")
@@ -148,6 +194,7 @@ def test_chunk_fallback_returns_chunks():
         assert c.content.strip()
 
 
+@requires_chonkie
 def test_chunk_fallback_chunk_type():
     chunks = _chunk_fallback("hello world", "python")
     assert all(c.chunk_type == "block" for c in chunks)
@@ -217,17 +264,27 @@ def test_split_by_tokens_respects_limit():
         assert count_tokens(c.content) <= MAX_TOKENS_PER_CHUNK
 
 
+def test_split_by_tokens_preserves_line_spans():
+    content = "line\n" * 7000
+    chunks = split_by_tokens(content, "python")
+    assert len(chunks) > 1
+    assert chunks[0].start_line == 1
+    assert chunks[1].start_line > chunks[0].end_line
+
+
 # ---------------------------------------------------------------------------
 # Route dispatch — language detection
 # ---------------------------------------------------------------------------
 
 
+@requires_langchain
 def test_route_markdown():
     content = "# Title\nContent"
     chunks = _route(content, "md", "markdown")
     assert len(chunks) >= 1
 
 
+@requires_langchain
 def test_route_json():
     content = '{"key": "value"}'
     chunks = _route(content, "json", "json")
@@ -245,6 +302,7 @@ def test_route_jsonl():
 # ---------------------------------------------------------------------------
 
 
+@requires_chonkie
 def test_chunk_file_python():
     content = "def hello():\n    return 'world'\n" * 20
     chunks = chunk_file(content, Path("module.py"))
@@ -252,12 +310,14 @@ def test_chunk_file_python():
     assert all(isinstance(c, Chunk) for c in chunks)
 
 
+@requires_langchain
 def test_chunk_file_markdown_large():
     content = "# Section\n\nContent paragraph.\n\n" * 30
     chunks = chunk_file(content, Path("readme.md"))
     assert len(chunks) >= 1
 
 
+@requires_langchain
 def test_chunk_file_json():
     data = {f"field_{i}": f"value_{i}" for i in range(20)}
     content = json.dumps(data, indent=2)
@@ -271,6 +331,7 @@ def test_chunk_file_unknown_extension():
     assert len(chunks) >= 1
 
 
+@requires_chonkie
 def test_chunk_file_no_chunk_exceeds_max_tokens():
     content = "word " * (MAX_TOKENS_PER_CHUNK * 4)
     chunks = chunk_file(content, Path("big.txt"))

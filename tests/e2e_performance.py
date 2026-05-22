@@ -573,7 +573,7 @@ class TestEmbedderThroughput:
         )
         # At minimum 0.5 RPS sequential (very conservative — even cold GPU)
         assert rps > 0.5, f"Sequential RPS {rps:.2f} is below 0.5"
-        assert errors / max(1, count + errors) < 0.05, f"Error rate > 5%"
+        assert errors / max(1, count + errors) < 0.05, "Error rate > 5%"
 
     def test_concurrent_throughput(self, require_embedder):  # type: ignore[reportUnusedParameter]
         """Concurrent throughput: 2, 4, 8 clients over 30 seconds each."""
@@ -768,7 +768,7 @@ class TestEmbedderMemory:
 
         # Allow RSS to settle
         time.sleep(3)
-        final_pid = find_embedder_pid()
+        final_pid = _find_embedder_pid()
         if final_pid and final_pid != pid:
             pid = final_pid  # Process restarted, use new PID
         final_mb = rss_mb(pid)
@@ -941,7 +941,7 @@ class TestIndexerLatency:
 
         # Try to get a valid root path from status
         try:
-            status_result = rpc_call("status", {"root": ".", "dimensions": 1024})
+            rpc_call("status", {"root": ".", "dimensions": 1024})
             root = "."
         except Exception:
             root = "."
@@ -949,7 +949,7 @@ class TestIndexerLatency:
         for i in range(n):
             t0 = time.perf_counter()
             try:
-                result = rpc_call(
+                rpc_call(
                     "search",
                     {
                         "root": root,

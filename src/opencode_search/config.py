@@ -1,12 +1,11 @@
 """Project configuration, constants, and registry management."""
 
 import json
+import logging
 import os
 import tempfile
-import logging
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +123,9 @@ class ProjectEntry:
     db_path: str
     tier: str
     dims: int
-    indexed_at: Optional[str] = None    # ISO-8601 timestamp or None
+    indexed_at: str | None = None    # ISO-8601 timestamp or None
     file_count: int = 0
-    last_active: Optional[str] = None   # ISO-8601 timestamp or None
+    last_active: str | None = None   # ISO-8601 timestamp or None
     watch: bool = False
 
     def to_dict(self) -> dict:

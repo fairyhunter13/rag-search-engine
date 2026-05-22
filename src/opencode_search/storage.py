@@ -1,28 +1,63 @@
 """LanceDB storage backend — Arrow schema byte-for-byte compatible with Rust."""
 
-import hashlib
-import logging
-import os
-import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Optional
+from __future__ import annotations
 
-import lancedb
-import numpy as np
-import pyarrow as pa
+import asyncio
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+try:
+    import lancedb
+except ModuleNotFoundError:  # pragma: no cover - exercised via import-time fallback
+    lancedb = None
+
+try:
+    import numpy as np
+except ModuleNotFoundError:  # pragma: no cover - exercised via import-time fallback
+    np = None
+
+try:
+    import pyarrow as pa
+except ModuleNotFoundError:  # pragma: no cover - exercised via import-time fallback
+    pa = None
 
 from opencode_search.config import (
     FTS_THRESHOLD,
+    IVF_NPROBES,
     IVF_NUM_PARTITIONS_MAX,
     IVF_NUM_SUB_VECTORS_MAX,
-    IVF_NPROBES,
     IVF_PQ_THRESHOLD,
     IVF_REFINE_FACTOR,
     SCHEMA_VERSION,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _missing_dependency_error(package: str) -> ModuleNotFoundError:
+    return ModuleNotFoundError(
+        f"{package} is required for the LanceDB storage backend. "
+        'Install the full runtime with `pip install -e "src/[dev]"`.'
+    )
+
+
+def _require_lancedb():
+    if lancedb is None:
+        raise _missing_dependency_error("lancedb")
+    return lancedb
+
+
+def _require_numpy():
+    if np is None:
+        raise _missing_dependency_error("numpy")
+    return np
+
+
+def _require_pyarrow():
+    if pa is None:
+        raise _missing_dependency_error("pyarrow")
+    return pa
 
 # ---------------------------------------------------------------------------
 # Arrow schema helpers
@@ -33,29 +68,38 @@ def build_schema(dims: int) -> pa.Schema:
 
     Must remain byte-for-byte compatible with the Rust storage.rs schema.
     """
-    return pa.schema(
+    pa_mod = _require_pyarrow()
+    return pa_mod.schema(
         [
-            pa.field("chunk_id",     pa.int64()),
-            pa.field("path",         pa.utf8()),
-            pa.field("file_hash",    pa.utf8()),
-            pa.field("language",     pa.utf8()),
-            pa.field("position",     pa.int32()),
-            pa.field("content",      pa.utf8()),
-            pa.field("content_hash", pa.utf8()),
-            pa.field("start_line",   pa.int32()),
-            pa.field("end_line",     pa.int32()),
-            pa.field("vector",       pa.list_(pa.float32(), dims)),
-            pa.field("created_at",   pa.timestamp("us")),
+            pa_mod.field("chunk_id", pa_mod.int64()),
+            pa_mod.field("path", pa_mod.utf8()),
+            pa_mod.field("file_hash", pa_mod.utf8()),
+            pa_mod.field("language", pa_mod.utf8()),
+            pa_mod.field("position", pa_mod.int32()),
+            pa_mod.field("content", pa_mod.utf8()),
+            pa_mod.field("content_hash", pa_mod.utf8()),
+            pa_mod.field("start_line", pa_mod.int32()),
+            pa_mod.field("end_line", pa_mod.int32()),
+            pa_mod.field("vector", pa_mod.list_(pa_mod.float32(), dims)),
+            pa_mod.field("created_at", pa_mod.timestamp("us")),
         ]
     )
 
 
-_CONFIG_SCHEMA = pa.schema(
-    [
-        pa.field("key",   pa.utf8()),
-        pa.field("value", pa.utf8()),
-    ]
-)
+_CONFIG_SCHEMA: pa.Schema | None = None
+
+
+def _get_config_schema() -> pa.Schema:
+    global _CONFIG_SCHEMA
+    if _CONFIG_SCHEMA is None:
+        pa_mod = _require_pyarrow()
+        _CONFIG_SCHEMA = pa_mod.schema(
+            [
+                pa_mod.field("key", pa_mod.utf8()),
+                pa_mod.field("value", pa_mod.utf8()),
+            ]
+        )
+    return _CONFIG_SCHEMA
 
 # ---------------------------------------------------------------------------
 # Dataclass
@@ -94,6 +138,7 @@ class Storage:
         self._db: Any = None
         self._table: Any = None
         self._config_table: Any = None
+        self._write_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -101,7 +146,8 @@ class Storage:
 
     async def open(self) -> None:
         """Connect to (or create) the LanceDB database and ensure tables exist."""
-        self._db = lancedb.connect(self.db_path)
+        lancedb_mod = _require_lancedb()
+        self._db = lancedb_mod.connect(self.db_path)
         await self._ensure_chunks_table()
         await self._ensure_config_table()
         logger.debug("Storage opened at %s (dims=%d)", self.db_path, self.dims)
@@ -156,7 +202,7 @@ class Storage:
         if self.TABLE_CONFIG not in existing:
             self._config_table = self._db.create_table(
                 self.TABLE_CONFIG,
-                schema=_CONFIG_SCHEMA,
+                schema=_get_config_schema(),
             )
             # Store schema version immediately.
             self.set_config("schema_version", SCHEMA_VERSION)
@@ -172,66 +218,80 @@ class Storage:
         if not chunks:
             return
 
+        pa_mod = _require_pyarrow()
         schema = build_schema(self.dims)
 
         # Build column-oriented data for PyArrow.
-        chunk_ids   = pa.array([c.chunk_id     for c in chunks], type=pa.int64())
-        paths       = pa.array([c.path         for c in chunks], type=pa.utf8())
-        file_hashes = pa.array([c.file_hash    for c in chunks], type=pa.utf8())
-        languages   = pa.array([c.language     for c in chunks], type=pa.utf8())
-        positions   = pa.array([c.position     for c in chunks], type=pa.int32())
-        contents    = pa.array([c.content      for c in chunks], type=pa.utf8())
-        content_hashes = pa.array([c.content_hash for c in chunks], type=pa.utf8())
-        start_lines = pa.array([c.start_line   for c in chunks], type=pa.int32())
-        end_lines   = pa.array([c.end_line     for c in chunks], type=pa.int32())
-        vectors     = pa.array(
+        chunk_ids = pa_mod.array([c.chunk_id for c in chunks], type=pa_mod.int64())
+        paths = pa_mod.array([c.path for c in chunks], type=pa_mod.utf8())
+        file_hashes = pa_mod.array([c.file_hash for c in chunks], type=pa_mod.utf8())
+        languages = pa_mod.array([c.language for c in chunks], type=pa_mod.utf8())
+        positions = pa_mod.array([c.position for c in chunks], type=pa_mod.int32())
+        contents = pa_mod.array([c.content for c in chunks], type=pa_mod.utf8())
+        content_hashes = pa_mod.array([c.content_hash for c in chunks], type=pa_mod.utf8())
+        start_lines = pa_mod.array([c.start_line for c in chunks], type=pa_mod.int32())
+        end_lines = pa_mod.array([c.end_line for c in chunks], type=pa_mod.int32())
+        vectors = pa_mod.array(
             [c.vector for c in chunks],
-            type=pa.list_(pa.float32(), self.dims),
+            type=pa_mod.list_(pa_mod.float32(), self.dims),
         )
-        created_ats = pa.array(
+        created_ats = pa_mod.array(
             [c.created_at for c in chunks],
-            type=pa.timestamp("us"),
+            type=pa_mod.timestamp("us"),
         )
 
-        pa_table = pa.table(
+        pa_table = pa_mod.table(
             {
-                "chunk_id":     chunk_ids,
-                "path":         paths,
-                "file_hash":    file_hashes,
-                "language":     languages,
-                "position":     positions,
-                "content":      contents,
+                "chunk_id": chunk_ids,
+                "path": paths,
+                "file_hash": file_hashes,
+                "language": languages,
+                "position": positions,
+                "content": contents,
                 "content_hash": content_hashes,
-                "start_line":   start_lines,
-                "end_line":     end_lines,
-                "vector":       vectors,
-                "created_at":   created_ats,
+                "start_line": start_lines,
+                "end_line": end_lines,
+                "vector": vectors,
+                "created_at": created_ats,
             },
             schema=schema,
         )
 
-        (
-            self._table
-            .merge_insert("chunk_id")
-            .when_matched_update_all()
-            .when_not_matched_insert_all()
-            .execute(pa_table)
-        )
+        async with self._write_lock:
+            (
+                self._table
+                .merge_insert("chunk_id")
+                .when_matched_update_all()
+                .when_not_matched_insert_all()
+                .execute(pa_table)
+            )
         logger.debug("Wrote %d chunks", len(chunks))
+
+    @staticmethod
+    def _sql_quote(value: str) -> str:
+        """Quote a string literal for LanceDB/DataFusion SQL predicates."""
+        return "'" + value.replace("'", "''") + "'"
 
     async def delete_by_path(self, path: str) -> None:
         """Delete all chunks whose path matches the given string."""
-        escaped = path.replace("'", "\\'")
-        self._table.delete(f"path = '{escaped}'")
+        async with self._write_lock:
+            self._table.delete(f"path = {self._sql_quote(path)}")
         logger.debug("Deleted chunks for path: %s", path)
 
     async def delete_by_paths(self, paths: list[str]) -> None:
         """Delete all chunks whose path is in the given list."""
         if not paths:
             return
-        quoted = ", ".join(f"'{p.replace(chr(39), chr(92) + chr(39))}'" for p in paths)
-        self._table.delete(f"path IN ({quoted})")
+        quoted = ", ".join(self._sql_quote(p) for p in paths)
+        async with self._write_lock:
+            self._table.delete(f"path IN ({quoted})")
         logger.debug("Deleted chunks for %d paths", len(paths))
+
+    async def delete_positions_at_or_after(self, path: str, position: int) -> None:
+        """Delete chunks for path whose position is greater than or equal to position."""
+        async with self._write_lock:
+            self._table.delete(f"path = {self._sql_quote(path)} AND position >= {int(position)}")
+        logger.debug("Deleted stale chunks for path %s at position >= %d", path, position)
 
     # ------------------------------------------------------------------
     # Read operations
@@ -273,7 +333,8 @@ class Storage:
         refine_factor: int = IVF_REFINE_FACTOR,
     ) -> list[dict]:
         """ANN vector search.  Returns list of row dicts with a '_score' key."""
-        query_arr = np.array(query_vec, dtype=np.float32)
+        np_mod = _require_numpy()
+        query_arr = np_mod.array(query_vec, dtype=np_mod.float32)
         try:
             results = (
                 self._table
@@ -327,17 +388,22 @@ class Storage:
         query_vec: list[float],
         limit: int = 20,
     ) -> list[dict]:
-        """Merge vector + FTS results, deduplicate by path keeping highest score."""
+        """Merge vector + FTS results, deduplicate by chunk keeping highest score."""
         vec_results = await self.search_vector(query_vec, limit=limit)
         fts_results = await self.search_fts(query_text, limit=limit)
 
-        # Deduplicate by path, keeping the row with the highest score.
-        seen: dict[str, dict] = {}
+        # Deduplicate by chunk, keeping the row with the highest score. Path-level
+        # dedup hides multiple relevant chunks from the same file.
+        seen: dict[object, dict] = {}
         for row in vec_results + fts_results:
-            path = row.get("path", "")
+            key = (
+                row.get("chunk_id")
+                if row.get("chunk_id") is not None
+                else (row.get("path", ""), row.get("position", 0))
+            )
             score = row.get("_score", 0.0)
-            if path not in seen or score > seen[path].get("_score", 0.0):
-                seen[path] = row
+            if key not in seen or score > seen[key].get("_score", 0.0):
+                seen[key] = row
 
         merged = sorted(seen.values(), key=lambda r: r.get("_score", 0.0), reverse=True)
         return merged[:limit]
@@ -391,13 +457,13 @@ class Storage:
     # Config key-value store
     # ------------------------------------------------------------------
 
-    def get_config(self, key: str) -> Optional[str]:
+    def get_config(self, key: str) -> str | None:
         """Retrieve a config value by key, or None if not found."""
         try:
             result = (
                 self._config_table
                 .search()
-                .where(f"key = '{key}'")
+                .where(f"key = {self._sql_quote(key)}")
                 .limit(1)
                 .to_arrow()
             )
@@ -410,9 +476,13 @@ class Storage:
 
     def set_config(self, key: str, value: str) -> None:
         """Upsert a config key-value pair."""
-        pa_table = pa.table(
-            {"key": pa.array([key], type=pa.utf8()), "value": pa.array([value], type=pa.utf8())},
-            schema=_CONFIG_SCHEMA,
+        pa_mod = _require_pyarrow()
+        pa_table = pa_mod.table(
+            {
+                "key": pa_mod.array([key], type=pa_mod.utf8()),
+                "value": pa_mod.array([value], type=pa_mod.utf8()),
+            },
+            schema=_get_config_schema(),
         )
         try:
             (
@@ -438,9 +508,11 @@ class Storage:
         try:
             optimize = getattr(self._table, "optimize", None)
             if callable(optimize):
-                optimize()
+                async with self._write_lock:
+                    optimize()
             else:
-                self._table.compact_files()
+                async with self._write_lock:
+                    self._table.compact_files()
             logger.info("Chunks table compacted")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Compaction failed: %s", exc)

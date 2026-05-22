@@ -1,9 +1,13 @@
 """Tests for opencode_search.compaction — gated and forced compaction."""
+# ruff: noqa: E402
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
 import pytest
+
+pytest.importorskip("lancedb")
+pytest.importorskip("pyarrow")
 
 from opencode_search.compaction import (
     COMPACTION_THRESHOLD_OPS,
@@ -11,6 +15,8 @@ from opencode_search.compaction import (
     force_compact,
 )
 from opencode_search.storage import Storage
+
+pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 
 @pytest.fixture

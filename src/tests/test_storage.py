@@ -3,17 +3,19 @@
 Storage tests that require a real LanceDB table use tmp_path fixtures.
 GPU tests (actual embedding inference) are @pytest.mark.gpu.
 """
+# ruff: noqa: E402
 from __future__ import annotations
 
-import asyncio
 import time
-from pathlib import Path
 
-import pyarrow as pa
 import pytest
+
+pytest.importorskip("lancedb")
+pa = pytest.importorskip("pyarrow")
 
 from opencode_search.storage import ChunkData, Storage, build_schema
 
+pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 # ---------------------------------------------------------------------------
 # Schema tests
@@ -88,6 +90,10 @@ def test_chunk_data_creation():
     assert chunk.chunk_id == 12345
     assert chunk.language == "python"
     assert len(chunk.vector) == 512
+
+
+def test_storage_sql_quote_escapes_single_quotes():
+    assert Storage._sql_quote("/tmp/bob's/file.py") == "'/tmp/bob''s/file.py'"
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +214,19 @@ async def test_storage_search_hybrid_returns_merged(storage):
     query_vec = [0.5] * 384
     results = await storage.search_hybrid("func", query_vec, limit=5)
     assert isinstance(results, list)
+
+
+@pytest.mark.asyncio
+async def test_storage_search_hybrid_keeps_multiple_chunks_same_path(storage):
+    chunks = [
+        await _make_chunk(path="/tmp/same.py", pos=0),
+        await _make_chunk(path="/tmp/same.py", pos=1),
+    ]
+    await storage.write_chunks(chunks)
+    query_vec = [0.5] * 384
+    results = await storage.search_hybrid("func", query_vec, limit=5)
+    positions = {r.get("position") for r in results}
+    assert {0, 1}.issubset(positions)
 
 
 @pytest.mark.asyncio

@@ -5,11 +5,8 @@
   "mcp": {
     "server": {
       "command": "opencode-search",
-      "args": ["mcp"],
-      "transport": "stdio",
-      "env": {
-        "OPENCODE_LOG_LEVEL": "INFO"
-      }
+      "args": ["daemon", "bridge-stdio"],
+      "transport": "stdio"
     },
     "tools": [
       "index_project",

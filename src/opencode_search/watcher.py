@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Union
 
 from opencode_search.config import DEBOUNCE_DELAY_MS, MIN_FLUSH_INTERVAL_S
+from opencode_search.discover import IGNORED_DIRS
 
 log = logging.getLogger(__name__)
 
@@ -18,10 +18,10 @@ log = logging.getLogger(__name__)
 class WatcherHandle:
     root: Path
     observer: object  # watchdog Observer
-    # Stored as a concurrent.futures.Future because asyncio.run_coroutine_threadsafe
-    # returns one (it's called from the watchdog Observer thread).
-    debounce_task: Union[concurrent.futures.Future, None] = None
+    # Managed on the asyncio loop side by _dispatch/_schedule_flush.
+    debounce_task: asyncio.Task | None = None
     last_flush: float = 0.0
+    flush_in_progress: bool = False
     _pending_paths: set[str] = field(default_factory=set)
     _pending_deleted: set[str] = field(default_factory=set)
 
@@ -36,6 +36,28 @@ class WatcherManager:
         h = self._handles.get(root)
         return h is not None and h.observer is not None
 
+    @staticmethod
+    def _should_ignore_event_path(root: Path, candidate: str | None) -> bool:
+        """Return True when a watchdog event path should not enter debounce state."""
+        if not candidate:
+            return True
+        try:
+            candidate_path = Path(candidate)
+        except OSError:
+            return True
+
+        if not candidate_path.is_absolute():
+            candidate_path = root / candidate_path
+
+        try:
+            relative_parts = candidate_path.relative_to(root).parts
+        except ValueError:
+            return True
+
+        # Ignore only configured ignored directories inside the watched project. The
+        # final path component may be an indexable dotfile such as `.env`.
+        return any(part in IGNORED_DIRS for part in relative_parts[:-1])
+
     async def start(
         self,
         root: str | Path,
@@ -49,8 +71,8 @@ class WatcherManager:
             return True
 
         try:
-            from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
 
             # Bind to the currently-running loop so events dispatch to the
             # loop that called start() — required for FastMCP and CLI watch.
@@ -69,40 +91,64 @@ class WatcherManager:
                     )
 
             async def _dispatch(src: str | None, dest: str | None, etype: str) -> None:
+                changed = False
                 if etype in ("created", "modified", "moved"):
                     p = dest if etype == "moved" and dest else src
-                    if p:
+                    if p and not self._should_ignore_event_path(handle.root, p):
+                        before = len(handle._pending_paths)
                         handle._pending_paths.add(p)
-                elif etype == "deleted" and src:
+                        changed = len(handle._pending_paths) != before
+                elif etype == "deleted" and src and not self._should_ignore_event_path(handle.root, src):
+                    before = len(handle._pending_deleted)
                     handle._pending_deleted.add(src)
-                _schedule_flush()
+                    changed = len(handle._pending_deleted) != before
+                if changed:
+                    _schedule_flush()
 
             def _schedule_flush():
                 if handle.debounce_task and not handle.debounce_task.done():
+                    if handle.flush_in_progress:
+                        return
                     handle.debounce_task.cancel()
-                handle.debounce_task = asyncio.run_coroutine_threadsafe(
-                    _debounced_flush(), loop
-                )
+                handle.debounce_task = asyncio.create_task(_debounced_flush())
 
             async def _debounced_flush():
-                await asyncio.sleep(DEBOUNCE_DELAY_MS / 1000.0)
-                import time as _time
-                now = _time.monotonic()
-                if now - handle.last_flush < MIN_FLUSH_INTERVAL_S:
-                    await asyncio.sleep(MIN_FLUSH_INTERVAL_S - (now - handle.last_flush))
-                # If a file appears in both pending sets, "deleted" takes
-                # precedence because the file no longer exists on disk anyway.
-                pending_paths = set(handle._pending_paths) - handle._pending_deleted
-                modified = [Path(p) for p in pending_paths if os.path.exists(p)]
-                deleted = list(handle._pending_deleted)
-                handle._pending_paths.clear()
-                handle._pending_deleted.clear()
-                handle.last_flush = _time.monotonic()
-                if modified or deleted:
+                try:
+                    await asyncio.sleep(DEBOUNCE_DELAY_MS / 1000.0)
+                    import time as _time
+
+                    now = _time.monotonic()
+                    if now - handle.last_flush < MIN_FLUSH_INTERVAL_S:
+                        await asyncio.sleep(MIN_FLUSH_INTERVAL_S - (now - handle.last_flush))
+
+                    # If another flush is already indexing, leave the pending
+                    # sets intact and let that flush's finally block reschedule.
+                    if handle.flush_in_progress:
+                        return
+
+                    # If a file appears in both pending sets, "deleted" takes
+                    # precedence because the file no longer exists on disk anyway.
+                    pending_paths = set(handle._pending_paths) - handle._pending_deleted
+                    modified = [Path(p) for p in pending_paths if os.path.exists(p)]
+                    deleted = list(handle._pending_deleted)
+                    handle._pending_paths.clear()
+                    handle._pending_deleted.clear()
+                    handle.last_flush = _time.monotonic()
+
+                    if not (modified or deleted):
+                        return
+
+                    handle.flush_in_progress = True
                     try:
                         await on_change(modified, deleted)
                     except Exception as e:
                         log.error("on_change callback error: %s", e)
+                    finally:
+                        handle.flush_in_progress = False
+                        if handle._pending_paths or handle._pending_deleted:
+                            _schedule_flush()
+                except asyncio.CancelledError:
+                    raise
 
             observer = Observer()
             observer.schedule(_Handler(), root, recursive=True)

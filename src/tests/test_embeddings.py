@@ -1,0 +1,147 @@
+"""Unit tests for embedding helpers."""
+from __future__ import annotations
+
+import sys
+import types
+
+import numpy as np
+import pytest
+
+from opencode_search.embeddings import _embed_batch_iobinding
+
+
+class _FakeEncoding:
+    def __init__(self, ids, attention_mask, type_ids=None):
+        self.ids = ids
+        self.attention_mask = attention_mask
+        self.type_ids = type_ids if type_ids is not None else [0] * len(ids)
+
+
+class _FakeTokenizer:
+    def __init__(self, encodings):
+        self._encodings = encodings
+
+    def encode_batch(self, texts):
+        assert texts
+        return self._encodings
+
+
+class _FakeInput:
+    def __init__(self, name: str):
+        self.name = name
+
+
+class _FakeOutput:
+    def __init__(self, name: str, value=None):
+        self.name = name
+        self._value = value if value is not None else np.ones((1, 3, 4), dtype=np.float32)
+
+    def numpy(self):
+        return self._value
+
+
+class _FakeBinding:
+    def __init__(self):
+        self.inputs = {}
+        self.outputs = []
+
+    def bind_ortvalue_input(self, name, value):
+        self.inputs[name] = value
+
+    def bind_output(self, name, device):
+        self.outputs.append((name, device))
+
+    def get_outputs(self):
+        return [_FakeOutput("last_hidden_state")]
+
+
+class _FakeSession:
+    def __init__(self, input_names):
+        self._inputs = [_FakeInput(name) for name in input_names]
+        self._binding = _FakeBinding()
+
+    def get_inputs(self):
+        return self._inputs
+
+    def get_outputs(self):
+        return [_FakeOutput("last_hidden_state")]
+
+    def io_binding(self):
+        return self._binding
+
+    def run_with_iobinding(self, binding):
+        assert binding is self._binding
+
+
+def _install_fake_onnxruntime(monkeypatch):
+    class _FakeOrtValue:
+        @staticmethod
+        def ortvalue_from_numpy(array, device, device_id=0):
+            return {"array": array, "device": device, "device_id": device_id}
+
+    fake_ort = types.SimpleNamespace(OrtValue=_FakeOrtValue)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+
+
+def test_embed_batch_iobinding_binds_token_type_ids_when_required(monkeypatch):
+    _install_fake_onnxruntime(monkeypatch)
+    session = _FakeSession(["input_ids", "attention_mask", "token_type_ids"])
+    tokenizer = _FakeTokenizer([
+        _FakeEncoding([1, 2, 3], [1, 1, 1], [0, 0, 0]),
+    ])
+
+    result = _embed_batch_iobinding(session, tokenizer, ["hello"], batch_size=1)
+
+    assert result is not None
+    assert "token_type_ids" in session._binding.inputs
+    np.testing.assert_array_equal(
+        session._binding.inputs["token_type_ids"]["array"],
+        np.array([[0, 0, 0]], dtype=np.int64),
+    )
+
+
+def test_embed_batch_iobinding_skips_token_type_ids_when_not_required(monkeypatch):
+    _install_fake_onnxruntime(monkeypatch)
+    session = _FakeSession(["input_ids", "attention_mask"])
+    tokenizer = _FakeTokenizer([
+        _FakeEncoding([1, 2, 3], [1, 1, 1]),
+    ])
+
+    result = _embed_batch_iobinding(session, tokenizer, ["hello"], batch_size=1)
+
+    assert result is not None
+    assert "token_type_ids" not in session._binding.inputs
+
+
+@pytest.mark.runtime_deps
+def test_fastembed_session_options_expose_log_severity_level():
+    fastembed = pytest.importorskip("fastembed.common.onnx_model")
+
+    class _FakeSessionOptions:
+        def __init__(self):
+            self.enable_cpu_mem_arena = True
+            self.enable_mem_pattern = True
+            self.execution_mode = None
+            self.graph_optimization_level = None
+            self.log_severity_level = None
+
+        def add_session_config_entry(self, key, value):
+            self._last_session_config = (key, value)
+
+    session_options = _FakeSessionOptions()
+    fastembed.OnnxModel.add_extra_session_options(
+        session_options,
+        {
+            "enable_cpu_mem_arena": False,
+            "enable_mem_pattern": False,
+            "execution_mode": "sequential",
+            "graph_optimization_level": "extended",
+            "log_severity_level": 3,
+        },
+    )
+
+    assert session_options.enable_cpu_mem_arena is False
+    assert session_options.enable_mem_pattern is False
+    assert session_options.execution_mode == "sequential"
+    assert session_options.graph_optimization_level == "extended"
+    assert session_options.log_severity_level == 3

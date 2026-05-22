@@ -4,6 +4,7 @@ These tests exercise the real watchdog Observer against tmp_path filesystems.
 The Observer thread dispatches events back into the test's asyncio loop, so
 we keep timing assertions loose (≥ DEBOUNCE_DELAY_MS, ≤ several seconds).
 """
+# ruff: noqa: E402
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("watchdog")
+
 from opencode_search.watcher import WatcherManager, watcher_manager
+
+pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 
 @pytest.fixture
@@ -146,7 +151,7 @@ async def test_watcher_dispatches_modified_event(fresh_manager, tmp_path, monkey
 
     try:
         await asyncio.wait_for(event.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("watcher never fired on_change after file create")
 
     assert len(received) >= 1
@@ -178,10 +183,97 @@ async def test_watcher_dispatches_deleted_event(fresh_manager, tmp_path, monkeyp
 
     try:
         await asyncio.wait_for(event.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("watcher never fired on_change for deletion")
 
     assert any("doomed.py" in p for p in received[0][1])
+
+
+@pytest.mark.asyncio
+async def test_watcher_dispatches_dotenv_event(fresh_manager, tmp_path, monkeypatch):
+    """Indexable dotfiles such as `.env` must not be dropped by watcher filters."""
+    monkeypatch.setattr("opencode_search.watcher.DEBOUNCE_DELAY_MS", 100)
+    monkeypatch.setattr("opencode_search.watcher.MIN_FLUSH_INTERVAL_S", 0.1)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("TOKEN=alpha\n")
+
+    received: list[tuple[list[Path], list[str]]] = []
+    event = asyncio.Event()
+
+    async def cb(modified, deleted):
+        received.append((modified, deleted))
+        event.set()
+
+    await fresh_manager.start(tmp_path, on_change=cb)
+    await asyncio.sleep(0.2)
+
+    env_file.write_text("TOKEN=beta\n")
+
+    try:
+        await asyncio.wait_for(event.wait(), timeout=5.0)
+    except TimeoutError:
+        pytest.fail("watcher never fired on_change for .env modification")
+
+    modified, deleted = received[0]
+    assert deleted == []
+    assert any(path.name == ".env" for path in modified)
+
+
+def test_should_ignore_event_path_allows_project_symlink_to_external_target(tmp_path):
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    external_file = external_dir / "real.py"
+    external_file.write_text("x = 1\n")
+
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    symlink_path = project_root / "link.py"
+    symlink_path.symlink_to(external_file)
+
+    assert WatcherManager._should_ignore_event_path(project_root, str(symlink_path)) is False
+
+
+@pytest.mark.asyncio
+async def test_watcher_ignores_internal_opencode_churn(fresh_manager, tmp_path, monkeypatch):
+    """Internal `.opencode` activity must not starve real source-file flushes."""
+    monkeypatch.setattr("opencode_search.watcher.DEBOUNCE_DELAY_MS", 200)
+    monkeypatch.setattr("opencode_search.watcher.MIN_FLUSH_INTERVAL_S", 0.0)
+
+    source_file = tmp_path / "app.py"
+    internal_dir = tmp_path / ".opencode"
+    internal_dir.mkdir()
+    internal_file = internal_dir / "touch.log"
+
+    received: list[tuple[list[Path], list[str]]] = []
+    event = asyncio.Event()
+
+    async def cb(modified, deleted):
+        received.append((modified, deleted))
+        event.set()
+
+    await fresh_manager.start(tmp_path, on_change=cb)
+    await asyncio.sleep(0.2)
+
+    async def churn_internal_state() -> None:
+        for i in range(30):
+            internal_file.write_text(f"{i}\n")
+            await asyncio.sleep(0.05)
+
+    churn_task = asyncio.create_task(churn_internal_state())
+    source_file.write_text("tracked = 1\n")
+
+    try:
+        await asyncio.wait_for(event.wait(), timeout=1.0)
+    except TimeoutError:
+        pytest.fail("watcher starved while `.opencode` churned")
+    finally:
+        await churn_task
+
+    modified, deleted = received[0]
+    assert deleted == []
+    assert any(path.name == "app.py" for path in modified)
+    assert not any(".opencode" in path.parts for path in modified)
 
 
 # ---------------------------------------------------------------------------

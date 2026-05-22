@@ -2,6 +2,7 @@
 indexer/target/
 
 # Python
+.venv/
 embedder/__pycache__/
 embedder/build/
 embedder/dist/
