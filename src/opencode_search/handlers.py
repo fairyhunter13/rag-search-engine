@@ -16,6 +16,7 @@ from typing import Any
 from opencode_search.config import (
     FINAL_TOP_K,
     ProjectEntry,
+    get_project_db_path,
     get_tier_dims,
     load_registry,
     save_registry,
@@ -118,7 +119,7 @@ async def handle_index_project(
     status: dict[str, Any] | None = None
     try:
         dims = get_tier_dims(tier)
-        db_path = str(project_path / ".opencode" / f"index_{tier}")
+        db_path = get_project_db_path(project_path, tier)
 
         storage = Storage(db_path=db_path, dims=dims)
         await storage.open()
@@ -259,10 +260,11 @@ async def handle_project_status(path: str) -> dict[str, Any]:
 
     chunk_count: int | None = None
     try:
-        storage = Storage(db_path=str(entry.db_path), dims=entry.dims)
-        await storage.open()
-        chunk_count = await storage.count()
-        await storage.close()
+        if Path(entry.db_path).exists():
+            storage = Storage(db_path=str(entry.db_path), dims=entry.dims)
+            await storage.open()
+            chunk_count = await storage.count()
+            await storage.close()
     except Exception:
         pass
 

@@ -161,6 +161,7 @@ See `mcp-config/hermes.json`.
 | Variable                              | Default                     | Meaning                                         |
 |---------------------------------------|-----------------------------|-------------------------------------------------|
 | `OPENCODE_REGISTRY_PATH`              | `~/.opencode/projects.json` | Where the project registry is persisted         |
+| `OPENCODE_INDEX_ROOT`                 | `~/.opencode/indexes`       | Centralized root directory for LanceDB indexes  |
 | `OPENCODE_DEBOUNCE_DELAY_MS`          | `1000`                      | Watcher debounce window                         |
 | `OPENCODE_MIN_FLUSH_INTERVAL_S`       | `5`                         | Min seconds between watcher flushes             |
 | `OPENCODE_STAGE1_VECTOR_K`            | `20`                        | Per-project vector candidates                   |
@@ -239,10 +240,10 @@ Force a rebuild after changing schema, chunking, language detection, embedding m
 opencode-search index ~/myproject --tier balanced --force
 ```
 
-If an index needs a fully clean rebuild, remove the per-project index directory and index again:
+If an index needs a fully clean rebuild, remove the centralized index directory and index again:
 
 ```bash
-rm -rf ~/myproject/.opencode/index_balanced
+rm -rf ~/.opencode/indexes/<project-slug>-<hash>/index_balanced
 opencode-search index ~/myproject --tier balanced --force
 ```
 
@@ -276,10 +277,11 @@ Mixed-tier federated search is rejected by design because the underlying embeddi
                  ▼                    ▼
          ┌───────────────┐   ┌────────────────┐
          │   LanceDB     │   │   ONNX Runtime │
-         │  (per-project │   │   CUDA GPU     │
-         │   vector DB)  │   │   (mandatory)  │
+         │ (centralized  │   │   CUDA GPU     │
+         │  vector DBs)  │   │   (mandatory)  │
          └───────────────┘   └────────────────┘
 ```
 
-Per-project DB lives at `{project_root}/.opencode/index_{tier}/`.
+Per-project DB lives at `~/.opencode/indexes/<project-slug>-<hash>/index_{tier}/` by default.
 The cross-project registry lives at `~/.opencode/projects.json`.
+Existing legacy registry entries are migrated from `<project>/.opencode/index_{tier}/` on load.

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -298,3 +299,71 @@ async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, m
         task = getattr(mcp_mod, "_stale_cleanup_task", None)
         if task is not None:
             task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_mcp_migrates_legacy_registry_db_path_before_resuming_watchers(tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    source_file = project_root / "app.py"
+    source_file.write_text(
+        "SMOKE_MCP_LEGACY = 'mcp_legacy_unique'\n"
+        "def legacy_token():\n"
+        "    return SMOKE_MCP_LEGACY\n"
+    )
+
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
+    monkeypatch.setattr("opencode_search.mcp._resumed", False)
+    monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
+
+    await watcher_manager.stop_all()
+    await _ensure_watchers_resumed()
+
+    try:
+        indexed = await index_project(path=str(project_root), tier="budget", watch=True)
+        assert indexed["status"] == "ok"
+
+        canonical_db_path = Path(config.get_project_db_path(project_root, "budget"))
+        legacy_db_path = project_root / ".opencode" / "index_budget"
+        canonical_db_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        await watcher_manager.stop_all()
+        assert watcher_manager.list_active() == []
+        canonical_db_path.rename(legacy_db_path)
+
+        registry_path.write_text(
+            json.dumps(
+                {
+                    str(project_root): {
+                        "path": str(project_root),
+                        "db_path": str(legacy_db_path),
+                        "tier": "budget",
+                        "dims": config.get_tier_dims("budget"),
+                        "watch": True,
+                    }
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr("opencode_search.mcp._resumed", False)
+        monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
+
+        status = await project_status(path=str(project_root))
+        assert status["indexed"] is True
+        assert status["watching"] is True
+        assert Path(status["db_path"]) == canonical_db_path
+        assert canonical_db_path.exists()
+        assert not legacy_db_path.exists()
+
+        resumed = await _wait_for_search_result(
+            project_root,
+            "mcp_legacy_unique",
+            expected_substring="mcp_legacy_unique",
+        )
+        assert any("mcp_legacy_unique" in row["content"] for row in resumed["results"])
+    finally:
+        await watcher_manager.stop_all()

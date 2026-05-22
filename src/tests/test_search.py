@@ -14,8 +14,8 @@ from opencode_search.config import (
     SKIP_STAGE1_RERANK_N,
     STAGE1_RERANK_K,
     ProjectEntry,
+    get_project_db_path,
     get_tier_dims,
-    get_tier_models,
 )
 from opencode_search.search import (
     SearchResult,
@@ -31,11 +31,10 @@ from opencode_search.search import (
 
 
 def _make_project(path: str = "/tmp/proj", tier: str = "balanced") -> ProjectEntry:
-    embed_model, rerank_model = get_tier_models(tier)
     dims = get_tier_dims(tier)
     return ProjectEntry(
         path=path,
-        db_path=f"{path}/.opencode/index_{tier}",
+        db_path=get_project_db_path(path, tier),
         tier=tier,
         dims=dims,
     )

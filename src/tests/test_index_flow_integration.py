@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -94,7 +95,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
         assert not any(row["content"] == "gamma" for row in after["results"])
 
     storage = Storage(
-        db_path=str(project_root / ".opencode" / "index_budget"),
+        db_path=config.get_project_db_path(project_root, "budget"),
         dims=dims,
     )
     await storage.open()
@@ -104,3 +105,64 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
         assert list(hashes) == [str(source_file)]
     finally:
         await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_local_index_is_migrated_to_centralized_root(tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    source_file = project_root / "app.py"
+    source_file.write_text("legacy_token\n")
+
+    registry_path = tmp_path / "registry.json"
+    monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
+
+    dims = config.get_tier_dims("budget")
+    legacy_db_path = project_root / ".opencode" / "index_budget"
+    canonical_db_path = Path(config.get_project_db_path(project_root, "budget"))
+
+    def fake_embed_passages(texts, *, model, dimensions):
+        assert dimensions == dims
+        return [_vector_for(text, dimensions) for text in texts]
+
+    def fake_embed_query(query, model, dimensions):
+        assert dimensions == dims
+        return _vector_for(query.strip(), dimensions)
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        indexed = await handle_index_project(path=str(project_root), tier="budget")
+        assert indexed["status"] == "ok"
+        assert canonical_db_path.exists()
+
+        canonical_db_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_db_path.parent.mkdir(parents=True, exist_ok=True)
+        canonical_db_path.rename(legacy_db_path)
+
+        registry_path.write_text(
+            json.dumps(
+                {
+                    str(project_root): {
+                        "path": str(project_root),
+                        "db_path": str(legacy_db_path),
+                        "tier": "budget",
+                        "dims": dims,
+                        "watch": False,
+                    }
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        clear_search_cache()
+        results = await handle_search_code(
+            query="legacy_token",
+            project_paths=[str(project_root)],
+            use_rerank=False,
+        )
+
+    assert any(row["content"] == "legacy_token" for row in results["results"])
+    assert canonical_db_path.exists()
+    assert not legacy_db_path.exists()

@@ -16,9 +16,13 @@ from opencode_search.config import (
     STAGE1_RERANK_K,
     STAGE1_VECTOR_K,
     ProjectEntry,
+    get_legacy_project_db_path,
+    get_project_db_path,
+    get_project_index_dir,
     get_tier_dims,
     get_tier_models,
     load_registry,
+    migrate_project_entry,
     save_registry,
 )
 
@@ -85,9 +89,10 @@ def test_schema_version_is_string_digit():
 
 
 def test_project_entry_round_trip():
+    project_path = "/tmp/myproject"
     entry = ProjectEntry(
-        path="/tmp/myproject",
-        db_path="/tmp/myproject/.opencode/index_balanced",
+        path=project_path,
+        db_path=get_project_db_path(project_path, "balanced"),
         tier="balanced",
         dims=512,
         indexed_at="2026-01-01T00:00:00Z",
@@ -104,9 +109,10 @@ def test_project_entry_round_trip():
 
 
 def test_project_entry_from_dict_extra_keys_ignored():
+    project_path = "/tmp/test"
     d = {
-        "path": "/tmp/test",
-        "db_path": "/tmp/test/.opencode/index_budget",
+        "path": project_path,
+        "db_path": get_project_db_path(project_path, "budget"),
         "tier": "budget",
         "dims": 384,
         "unknown_future_key": "whatever",
@@ -117,9 +123,10 @@ def test_project_entry_from_dict_extra_keys_ignored():
 
 
 def test_project_entry_defaults():
+    project_path = "/tmp/x"
     entry = ProjectEntry(
-        path="/tmp/x",
-        db_path="/tmp/x/.opencode/index_balanced",
+        path=project_path,
+        db_path=get_project_db_path(project_path, "balanced"),
         tier="balanced",
         dims=512,
     )
@@ -142,9 +149,10 @@ def test_load_registry_missing_file():
 
 
 def test_save_and_load_registry():
+    project_path = "/tmp/proj_a"
     entry = ProjectEntry(
-        path="/tmp/proj_a",
-        db_path="/tmp/proj_a/.opencode/index_balanced",
+        path=project_path,
+        db_path=get_project_db_path(project_path, "balanced"),
         tier="balanced",
         dims=512,
         file_count=10,
@@ -163,9 +171,10 @@ def test_save_and_load_registry():
 
 def test_save_registry_atomic(tmp_path):
     reg_path = tmp_path / "projects.json"
+    project_path = "/tmp/proj_b"
     entry = ProjectEntry(
-        path="/tmp/proj_b",
-        db_path="/tmp/proj_b/.opencode/index_budget",
+        path=project_path,
+        db_path=get_project_db_path(project_path, "budget"),
         tier="budget",
         dims=384,
     )
@@ -189,9 +198,9 @@ def test_load_registry_corrupted_file(tmp_path):
 def test_registry_multiple_entries(tmp_path):
     reg_path = tmp_path / "projects.json"
     entries = {
-        "/tmp/a": ProjectEntry(path="/tmp/a", db_path="/tmp/a/.opencode/index_budget",
+        "/tmp/a": ProjectEntry(path="/tmp/a", db_path=get_project_db_path("/tmp/a", "budget"),
                                tier="budget", dims=384),
-        "/tmp/b": ProjectEntry(path="/tmp/b", db_path="/tmp/b/.opencode/index_premium",
+        "/tmp/b": ProjectEntry(path="/tmp/b", db_path=get_project_db_path("/tmp/b", "premium"),
                                tier="premium", dims=768),
     }
     with patch("opencode_search.config.REGISTRY_PATH", reg_path):
@@ -199,3 +208,67 @@ def test_registry_multiple_entries(tmp_path):
         loaded = load_registry()
     assert len(loaded) == 2
     assert loaded["/tmp/b"].tier == "premium"
+
+
+def test_get_project_db_path_uses_centralized_root(tmp_path):
+    with patch("opencode_search.config.REGISTRY_PATH", tmp_path / "projects.json"):
+        db_path = Path(get_project_db_path("/tmp/demo-project", "balanced"))
+        index_dir = get_project_index_dir("/tmp/demo-project")
+
+    assert db_path.parent == index_dir
+    assert db_path.name == "index_balanced"
+    assert ".opencode" not in db_path.parts
+
+
+def test_migrate_project_entry_moves_legacy_index(tmp_path):
+    project_root = tmp_path / "project"
+    legacy_index = project_root / ".opencode" / "index_budget"
+    legacy_index.mkdir(parents=True)
+    (legacy_index / "marker.txt").write_text("ok", encoding="utf-8")
+
+    with patch("opencode_search.config.REGISTRY_PATH", tmp_path / "projects.json"):
+        entry = ProjectEntry(
+            path=str(project_root),
+            db_path=get_legacy_project_db_path(project_root, "budget"),
+            tier="budget",
+            dims=384,
+        )
+
+        changed = migrate_project_entry(entry)
+        migrated_path = Path(entry.db_path)
+
+    assert changed is True
+    assert migrated_path.exists()
+    assert (migrated_path / "marker.txt").read_text(encoding="utf-8") == "ok"
+    assert not legacy_index.exists()
+
+
+def test_load_registry_migrates_legacy_db_path_and_persists(tmp_path):
+    project_root = tmp_path / "project"
+    reg_path = tmp_path / "projects.json"
+    legacy_index = project_root / ".opencode" / "index_budget"
+    legacy_index.mkdir(parents=True)
+    (legacy_index / "marker.txt").write_text("ok", encoding="utf-8")
+    reg_path.write_text(
+        json.dumps(
+            {
+                str(project_root): {
+                    "path": str(project_root),
+                    "db_path": get_legacy_project_db_path(project_root, "budget"),
+                    "tier": "budget",
+                    "dims": 384,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("opencode_search.config.REGISTRY_PATH", reg_path):
+        loaded = load_registry()
+
+    migrated_path = Path(loaded[str(project_root)].db_path)
+    persisted = json.loads(reg_path.read_text(encoding="utf-8"))
+
+    assert migrated_path.exists()
+    assert not legacy_index.exists()
+    assert persisted[str(project_root)]["db_path"] == str(migrated_path)

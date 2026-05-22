@@ -197,12 +197,12 @@ async def test_resume_watchers_skips_when_no_watch_entries():
 @pytest.mark.asyncio
 async def test_resume_watchers_starts_watcher_for_watched_entries():
     """resume_watchers() must call watcher_manager.start for each watched entry."""
-    from opencode_search.config import ProjectEntry
+    from opencode_search.config import ProjectEntry, get_project_db_path
 
     mod = _import_mcp()
     entry = ProjectEntry(
         path="/tmp/watched",
-        db_path="/tmp/watched/.opencode/index_balanced",
+        db_path=get_project_db_path("/tmp/watched", "balanced"),
         tier="balanced",
         dims=768,
         watch=True,

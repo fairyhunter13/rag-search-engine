@@ -38,7 +38,7 @@ Reindex and migration rules:
 
 - Run `opencode-search index <project> --tier <tier> --force` after changing schema, chunking, language detection, embedding model, embedding dimensions, or tier.
 - Mixed-tier federated search is intentionally rejected. Reindex projects to the same tier when they need to be searched together.
-- Per-project indexes live under `<project>/.opencode/index_<tier>/`; removing that directory and running `index --force` is the clean rebuild path.
+- Centralized indexes live under `~/.opencode/indexes/<project-slug>-<hash>/index_<tier>/` by default; removing that directory and running `index --force` is the clean rebuild path.
 
 Release checklist:
 

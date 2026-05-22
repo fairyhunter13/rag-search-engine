@@ -7,11 +7,12 @@ No GPU required unless @pytest.mark.gpu.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from opencode_search.config import ProjectEntry, get_tier_dims
+from opencode_search.config import ProjectEntry, get_project_db_path, get_tier_dims
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,7 +33,7 @@ def _make_entry(path: str, tier: str = "balanced") -> ProjectEntry:
     dims = get_tier_dims(tier)
     return ProjectEntry(
         path=path,
-        db_path=f"{path}/.opencode/index_{tier}",
+        db_path=get_project_db_path(path, tier),
         tier=tier,
         dims=dims,
     )
@@ -62,6 +63,7 @@ async def test_handle_index_project_missing_dir():
 @pytest.mark.asyncio
 async def test_handle_index_project_success(tmp_path):
     from opencode_search.handlers import handle_index_project
+    expected_db_path = get_project_db_path(tmp_path, "balanced")
 
     with patch("opencode_search.handlers._index_project", AsyncMock(return_value=_FakeIndexResult())), \
          patch("opencode_search.handlers.load_registry", return_value={}), \
@@ -77,6 +79,7 @@ async def test_handle_index_project_success(tmp_path):
 
         result = await handle_index_project(path=str(tmp_path), tier="balanced")
 
+    MockStorage.assert_called_once_with(db_path=expected_db_path, dims=get_tier_dims("balanced"))
     assert result.get("status") == "ok"
     assert result["files_indexed"] == 3
     assert result["chunks_total"] == 12
@@ -143,6 +146,30 @@ async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tm
 
     assert result["status"] == "ok"
     assert saved_registry[path_str].watch is True
+
+
+@pytest.mark.asyncio
+async def test_handle_project_status_skips_missing_db_without_recreating(tmp_path):
+    from opencode_search.handlers import handle_project_status
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    entry = ProjectEntry(
+        path=str(project_root),
+        db_path=str(tmp_path / "central-index" / "index_budget"),
+        tier="budget",
+        dims=get_tier_dims("budget"),
+    )
+
+    with patch("opencode_search.handlers.load_registry", return_value={str(project_root): entry}), \
+         patch("opencode_search.handlers.watcher_manager") as MockWatcher, \
+         patch("opencode_search.handlers.Storage") as MockStorage:
+        MockWatcher.is_active.return_value = False
+        result = await handle_project_status(path=str(project_root))
+
+    MockStorage.assert_not_called()
+    assert result["indexed"] is True
+    assert result["chunks"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -260,11 +287,14 @@ async def test_handle_project_status_not_indexed():
 
 
 @pytest.mark.asyncio
-async def test_handle_project_status_indexed():
+async def test_handle_project_status_indexed(tmp_path):
     from opencode_search.handlers import handle_project_status
 
-    entry = _make_entry("/tmp/proj")
-    registry = {"/tmp/proj": entry}
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+    entry = _make_entry(str(project_root))
+    Path(entry.db_path).mkdir(parents=True)
+    registry = {str(project_root): entry}
 
     mock_storage = MagicMock()
     mock_storage.open = AsyncMock()
@@ -276,7 +306,7 @@ async def test_handle_project_status_indexed():
          patch("opencode_search.handlers.watcher_manager") as MockWatcher:
         MockWatcher.is_active.return_value = False
 
-        result = await handle_project_status(path="/tmp/proj")
+        result = await handle_project_status(path=str(project_root))
 
     assert result["indexed"] is True
     assert result["tier"] == "balanced"

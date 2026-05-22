@@ -1,8 +1,10 @@
 """Project configuration, constants, and registry management."""
 
+import hashlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -85,6 +87,35 @@ _TIER_DIMS: dict[str, int] = {
 }
 
 
+def get_index_root() -> Path:
+    """Return the centralized root directory for all project indexes."""
+    configured = os.environ.get("OPENCODE_INDEX_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    return REGISTRY_PATH.parent / "indexes"
+
+
+def get_project_index_dir(project_path: str | Path) -> Path:
+    """Return the centralized index directory for one project."""
+    resolved = Path(project_path).expanduser().resolve()
+    name = resolved.name or "project"
+    slug = "".join(char.lower() if char.isalnum() else "-" for char in name).strip("-")
+    slug = slug or "project"
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+    return get_index_root() / f"{slug}-{digest}"
+
+
+def get_project_db_path(project_path: str | Path, tier: str) -> str:
+    """Return the centralized LanceDB path for the project+tier pair."""
+    return str(get_project_index_dir(project_path) / f"index_{tier}")
+
+
+def get_legacy_project_db_path(project_path: str | Path, tier: str) -> str:
+    """Return the historical per-project LanceDB path for compatibility checks."""
+    resolved = Path(project_path).expanduser().resolve()
+    return str(resolved / ".opencode" / f"index_{tier}")
+
+
 def get_tier_models(tier: str) -> tuple[str, str]:
     """Return (embed_model, rerank_model) for the given tier name.
 
@@ -109,6 +140,35 @@ def get_tier_dims(tier: str) -> int:
         raise ValueError(
             f"Unknown tier {tier!r}. Valid tiers: {list(_TIER_DIMS)}"
         )
+
+
+def migrate_project_entry(entry: "ProjectEntry") -> bool:
+    """Normalize a registry entry to the centralized index root.
+
+    If the entry still points at the legacy per-project path and that directory
+    exists, move it into the centralized root so indexed data is preserved.
+    """
+    canonical_db_path = get_project_db_path(entry.path, entry.tier)
+    if entry.db_path == canonical_db_path:
+        return False
+
+    current_path = Path(entry.db_path).expanduser()
+    canonical_path = Path(canonical_db_path).expanduser()
+    if current_path.exists() and not canonical_path.exists():
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(current_path), str(canonical_path))
+        except OSError as exc:
+            logger.warning(
+                "Failed to migrate legacy index from %s to %s: %s",
+                current_path,
+                canonical_path,
+                exc,
+            )
+            return False
+
+    entry.db_path = canonical_db_path
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +211,13 @@ def load_registry() -> dict[str, ProjectEntry]:
     try:
         with path.open("r", encoding="utf-8") as fh:
             raw: dict = json.load(fh)
-        return {k: ProjectEntry.from_dict(v) for k, v in raw.items()}
+        entries = {k: ProjectEntry.from_dict(v) for k, v in raw.items()}
+        changed = False
+        for entry in entries.values():
+            changed = migrate_project_entry(entry) or changed
+        if changed:
+            save_registry(entries)
+        return entries
     except (json.JSONDecodeError, OSError, TypeError) as exc:
         logger.warning("Failed to load registry at %s: %s", path, exc)
         return {}

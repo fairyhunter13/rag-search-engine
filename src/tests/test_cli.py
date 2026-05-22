@@ -234,7 +234,7 @@ def test_search_error_response():
 def test_status_with_path_indexed():
     fake = {
         "indexed": True, "path": "/tmp/proj", "tier": "balanced",
-        "db_path": "/tmp/proj/.opencode/index_balanced", "chunks": 42,
+        "db_path": "/tmp/central/indexes/proj-abc123/index_balanced", "chunks": 42,
         "watching": False, "indexed_at": "2026-01-01T00:00:00",
     }
     with patch("opencode_search.handlers.handle_project_status",
