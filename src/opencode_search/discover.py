@@ -1,6 +1,5 @@
 """File discovery with gitignore-aware traversal."""
 
-import fnmatch
 import logging
 import os
 from pathlib import Path
@@ -27,6 +26,8 @@ BLACKLISTED_DIRS: frozenset[str] = frozenset(
         "build", ".build", "out", ".next", ".nuxt", ".cache", "coverage",
         ".coverage", ".tox", "venv", ".venv", "env", ".env", "bower_components",
         ".cargo", "pkg", ".idea", ".vscode", "Pods", "DerivedData",
+        # opencode-search's own per-project index directory — never index it
+        ".opencode",
     ]
 )
 
@@ -245,13 +246,6 @@ def iter_files(root: Path, follow_symlinks: bool = True) -> Iterator[Path]:
         current_dir = Path(dirpath)
 
         # Prune blacklisted directory names in-place (modifies os.walk).
-        dirnames[:] = [
-            d for d in dirnames
-            if d not in BLACKLISTED_DIRS and not d.startswith(".")
-            or d not in BLACKLISTED_DIRS
-            # Re-check: only remove if truly blacklisted
-        ]
-        # Simpler, correct pruning:
         dirnames[:] = [d for d in dirnames if d not in BLACKLISTED_DIRS]
 
         spec = _get_spec(current_dir)

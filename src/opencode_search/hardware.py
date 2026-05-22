@@ -105,7 +105,8 @@ def _compute_cap_to_arch(compute_cap: str) -> str:
         7: "Volta/Turing",
         8: "Ampere/Ada",
         9: "Hopper",
-        10: "Blackwell",
+        10: "Blackwell",   # B100 datacenter
+        12: "Blackwell",   # RTX 50-series (consumer)
     }
     return mapping.get(major, f"Unknown (SM {major})")
 
@@ -186,4 +187,9 @@ def log_hardware_info() -> None:
             workers,
         )
     else:
-        logger.info("No NVIDIA GPU detected; embed workers: %d (CPU mode)", workers)
+        # No CPU fallback is allowed — the embeddings layer will raise
+        # GPUNotAvailableError at startup. We only log here for diagnostics.
+        logger.error(
+            "No NVIDIA GPU detected. opencode-search requires CUDA; "
+            "the process will refuse to start (CPUExecutionProvider is forbidden)."
+        )

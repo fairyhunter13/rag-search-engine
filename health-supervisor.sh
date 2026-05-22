@@ -6,8 +6,14 @@
 # Embedder is spawned by the indexer via ensure_embedder() (lazy).
 # Both have connection-aware idle shutdown — they die when unused.
 #
+# Since v0.2.0 there is also a unified Python package `opencode-search`
+# (see src/) that runs as an MCP stdio child of an AI assistant. The MCP
+# process is owned by the parent and does NOT need separate supervision,
+# but a long-running `opencode-search watch <path>` daemon DOES — for that
+# case this supervisor monitors the process group via pgrep.
+#
 # This supervisor captures crash evidence on fatal failures and sends
-# desktop notifications. It does NOT auto-restart either service.
+# desktop notifications. It does NOT auto-restart any service.
 # =============================================================================
 
 set -euo pipefail
@@ -55,6 +61,13 @@ check_embedder() {
     local code
     code=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$HEALTH_CHECK_TIMEOUT" "http://127.0.0.1:${EMBEDDER_PORT}/health" 2>/dev/null || echo "000")
     [[ "$code" == "200" ]]
+}
+
+check_opencode_search_watcher() {
+    # New v0.2.0 unified package: detect any long-running `opencode-search watch`
+    # daemons. Returns 0 if at least one is running, 1 otherwise. This is purely
+    # observational — the supervisor does not respawn.
+    pgrep -f "opencode-search.*watch" >/dev/null 2>&1
 }
 
 # ── Crash Evidence ─────────────────────────────────────────────────────────

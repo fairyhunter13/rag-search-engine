@@ -18,9 +18,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from cachetools import TTLCache
 
@@ -62,11 +63,19 @@ class SearchResult:
 # Query result cache (TTL-based, keyed by query + project fingerprint + params)
 # ---------------------------------------------------------------------------
 
-_CACHE_MAXSIZE = int(__import__("os").environ.get("OPENCODE_SEARCH_CACHE_SIZE", "128"))
-_CACHE_TTL = float(__import__("os").environ.get("OPENCODE_SEARCH_CACHE_TTL", "60"))
+_CACHE_MAXSIZE = int(os.environ.get("OPENCODE_SEARCH_CACHE_SIZE", "128"))
+_CACHE_TTL = float(os.environ.get("OPENCODE_SEARCH_CACHE_TTL", "60"))
 
 _result_cache: TTLCache = TTLCache(maxsize=_CACHE_MAXSIZE, ttl=_CACHE_TTL)
-_cache_lock = asyncio.Lock()
+# Lock is lazily initialised on first use so it binds to the running event loop.
+_cache_lock: asyncio.Lock | None = None
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    global _cache_lock
+    if _cache_lock is None:
+        _cache_lock = asyncio.Lock()
+    return _cache_lock
 
 
 def _cache_key(
@@ -183,13 +192,19 @@ async def search(
 
     # All projects must use the same tier for embedding consistency.
     # Use the tier of the first project; mixed-tier federations are unsupported.
-    tier = projects[0].tier if projects else "balanced"
+    tier = projects[0].tier
+    if any(p.tier != tier for p in projects):
+        log.warning(
+            "Mixed-tier federation detected (using %s from first project); "
+            "results from projects on other tiers may be ranked unfairly.",
+            tier,
+        )
     embed_model, rerank_model = get_tier_models(tier)
     dims = get_tier_dims(tier)
 
     # Cache lookup
     key = _cache_key(query, projects, tier, top_k, use_rerank)
-    async with _cache_lock:
+    async with _get_cache_lock():
         cached = _result_cache.get(key)
     if cached is not None:
         log.debug("search cache hit for query=%.40r", query)
@@ -270,17 +285,17 @@ async def search(
     ]
 
     elapsed = (time.perf_counter() - t0) * 1000
+    raw_total = sum(len(r) for r in per_project_results)
     log.info(
-        "search[%d projects, %d→%d candidates → %d results]: %.0fms",
+        "search[%d projects, %d raw → %d results]: %.0fms",
         n_projects,
-        sum(len(r) for r in per_project_results),
-        len(candidates) + len(results),
+        raw_total,
         len(results),
         elapsed,
     )
 
     # Store in cache
-    async with _cache_lock:
+    async with _get_cache_lock():
         _result_cache[key] = results
 
     return results

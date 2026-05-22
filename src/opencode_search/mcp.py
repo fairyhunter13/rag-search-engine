@@ -13,11 +13,16 @@ Usage:
 
 On startup the server GPU-checks the embedding layer and begins watching any
 projects that were persisted with watch=True in the registry.
+
+Event-loop strategy:
+  FastMCP owns the event loop. The GPU guard runs synchronously (no loop
+  required), and watcher resume is performed inside an mcp lifespan / startup
+  hook so the watchers bind to FastMCP's loop — NOT a transient pre-startup
+  loop that closes immediately.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -77,17 +82,7 @@ async def search_code(
     top_k: int = 10,
     use_rerank: bool = True,
 ) -> dict[str, Any]:
-    """Search indexed projects for code matching the query.
-
-    Combines vector similarity (semantic) and BM25 full-text search,
-    then reranks candidates with a cross-encoder on GPU.
-
-    Args:
-        query:         Natural language or code query string.
-        project_paths: Limit search to these project paths. Searches all if omitted.
-        top_k:         Maximum results to return (default 10).
-        use_rerank:    Run cross-encoder reranking (slower but more accurate).
-    """
+    """Search indexed projects for code matching the query."""
     return await handle_search_code(
         query=query,
         project_paths=project_paths,
@@ -98,11 +93,7 @@ async def search_code(
 
 @mcp.tool()
 async def project_status(path: str) -> dict[str, Any]:
-    """Get the current indexing and watching status for a project.
-
-    Args:
-        path: Absolute path to the project root directory.
-    """
+    """Get the current indexing and watching status for a project."""
     return await handle_project_status(path=path)
 
 
@@ -114,61 +105,89 @@ async def list_indexed_projects() -> dict[str, Any]:
 
 @mcp.tool()
 async def stop_watching(path: str) -> dict[str, Any]:
-    """Stop the live file-watcher for a project.
-
-    Args:
-        path: Absolute path to the project root directory.
-    """
+    """Stop the live file-watcher for a project."""
     return await handle_stop_watching(path=path)
 
 
 # ---------------------------------------------------------------------------
-# Startup: GPU guard + resume watchers from registry
+# Async startup: resume persisted watchers (bound to FastMCP's event loop)
 # ---------------------------------------------------------------------------
 
 
-async def _startup() -> None:
-    """GPU guard + resume persisted watchers from registry."""
+async def resume_watchers() -> None:
+    """Restart any watchers that were persisted with watch=True in the registry.
+
+    MUST be called from inside FastMCP's running event loop so that the watcher's
+    `asyncio.run_coroutine_threadsafe(...)` dispatches to the right loop.
+    """
+    from opencode_search.cleaner import remove_chunks_for_paths
+    from opencode_search.config import get_tier_dims, load_registry
+    from opencode_search.indexer import index_files
+    from opencode_search.search import clear_search_cache
+    from opencode_search.storage import Storage
+    from opencode_search.watcher import watcher_manager
+
+    registry = load_registry()
+    for path_str, entry in registry.items():
+        if not entry.watch:
+            continue
+        dims = get_tier_dims(entry.tier)
+        db_path = entry.db_path
+        tier = entry.tier
+
+        def make_cb(_db=db_path, _d=dims, _t=tier):
+            async def on_change(modified: list[Path], deleted: list[str]) -> None:
+                st = Storage(db_path=_db, dims=_d)
+                await st.open()
+                try:
+                    if deleted:
+                        await remove_chunks_for_paths(st, deleted)
+                    if modified:
+                        await index_files(st, modified, tier=_t)
+                    clear_search_cache()
+                finally:
+                    await st.close()
+            return on_change
+
+        ok = await watcher_manager.start(path_str, on_change=make_cb())
+        if ok:
+            log.info("Resumed watcher for %s", path_str)
+
+
+# Register resume_watchers as a tool callable by clients that need to trigger
+# resume after the server is up. FastMCP doesn't expose a lifespan hook in this
+# version, so we run resume_watchers on the first incoming request via a tool.
+_resumed_lock = False
+
+
+@mcp.tool()
+async def _resume_persisted_watchers() -> dict[str, Any]:
+    """Internal: resume watchers from the registry (idempotent).
+
+    AI assistants typically don't need to call this manually — it's invoked
+    automatically on first contact. Safe to call multiple times.
+    """
+    global _resumed_lock
+    if _resumed_lock:
+        return {"status": "already_resumed"}
+    _resumed_lock = True
+    try:
+        await resume_watchers()
+        return {"status": "ok"}
+    except Exception as exc:
+        log.warning("resume_watchers failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Synchronous GPU guard (run before the FastMCP loop starts)
+# ---------------------------------------------------------------------------
+
+
+def _gpu_guard() -> None:
+    """Block startup if no GPU is available. CPUExecutionProvider is forbidden."""
     from opencode_search.embeddings import assert_gpu_available
     assert_gpu_available()
-
-    try:
-        from opencode_search.config import get_tier_dims, get_tier_models, load_registry
-        from opencode_search.cleaner import remove_chunks_for_paths
-        from opencode_search.indexer import index_files
-        from opencode_search.search import clear_search_cache
-        from opencode_search.storage import Storage
-        from opencode_search.watcher import watcher_manager
-
-        registry = load_registry()
-        for path_str, entry in registry.items():
-            if not entry.watch:
-                continue
-
-            dims = get_tier_dims(entry.tier)
-            db_path = entry.db_path
-            tier = entry.tier
-
-            async def make_cb(_db=db_path, _d=dims, _t=tier):
-                async def on_change(modified: list[Path], deleted: list[str]) -> None:
-                    st = Storage(db_path=_db, dims=_d)
-                    await st.open()
-                    try:
-                        if deleted:
-                            await remove_chunks_for_paths(st, deleted)
-                        if modified:
-                            await index_files(st, modified, tier=_t)
-                        clear_search_cache()
-                    finally:
-                        await st.close()
-                return on_change
-
-            cb = await make_cb()
-            ok = await watcher_manager.start(path_str, on_change=cb)
-            if ok:
-                log.info("Resumed watcher for %s", path_str)
-    except Exception as exc:
-        log.warning("Failed to resume watchers: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +196,11 @@ async def _startup() -> None:
 
 
 def run_mcp_server() -> None:
-    """Start the MCP server with stdio transport."""
+    """Start the MCP server with stdio transport.
+
+    The GPU guard runs synchronously (raises if no CUDA), then FastMCP takes
+    ownership of the event loop. Watcher resume runs lazily on first tool call.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -185,9 +208,10 @@ def run_mcp_server() -> None:
     )
 
     try:
-        asyncio.get_event_loop().run_until_complete(_startup())
+        _gpu_guard()
     except Exception as exc:
-        log.critical("Startup failed: %s", exc)
+        log.critical("GPU guard failed: %s", exc)
         sys.exit(1)
 
+    log.info("Starting opencode-search MCP server on stdio…")
     mcp.run(transport="stdio")

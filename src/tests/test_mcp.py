@@ -135,23 +135,54 @@ async def test_stop_watching_tool_callable():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_startup_calls_assert_gpu_available():
-    """_startup() must call assert_gpu_available (GPU enforcement guard)."""
+def test_gpu_guard_calls_assert_gpu_available():
+    """_gpu_guard() must call assert_gpu_available (GPU enforcement guard)."""
     mod = _import_mcp()
-    assert hasattr(mod, "_startup"), "mcp.py must expose _startup() coroutine"
+    assert hasattr(mod, "_gpu_guard"), "mcp.py must expose _gpu_guard()"
 
     gpu_checked = {"called": False}
 
     def mock_assert():
         gpu_checked["called"] = True
 
-    # Patch at the opencode_search.embeddings module level (where _startup imports it)
-    with patch("opencode_search.embeddings.assert_gpu_available", side_effect=mock_assert), \
-         patch("opencode_search.config.load_registry", return_value={}):
-        try:
-            await mod._startup()
-        except Exception:
-            pass  # Registry load or watcher start may fail in test environment
+    with patch("opencode_search.embeddings.assert_gpu_available", side_effect=mock_assert):
+        mod._gpu_guard()
 
-    assert gpu_checked["called"], "_startup() must call assert_gpu_available()"
+    assert gpu_checked["called"], "_gpu_guard() must call assert_gpu_available()"
+
+
+@pytest.mark.asyncio
+async def test_resume_watchers_skips_when_no_watch_entries():
+    """resume_watchers() must work with an empty registry without error."""
+    mod = _import_mcp()
+    assert hasattr(mod, "resume_watchers"), "mcp.py must expose resume_watchers()"
+
+    with patch("opencode_search.config.load_registry", return_value={}):
+        await mod.resume_watchers()  # Should not raise
+
+
+@pytest.mark.asyncio
+async def test_resume_watchers_starts_watcher_for_watched_entries():
+    """resume_watchers() must call watcher_manager.start for each watched entry."""
+    from opencode_search.config import ProjectEntry
+
+    mod = _import_mcp()
+    entry = ProjectEntry(
+        path="/tmp/watched",
+        db_path="/tmp/watched/.opencode/index_balanced",
+        tier="balanced",
+        dims=768,
+        watch=True,
+    )
+
+    started = {"calls": []}
+
+    async def mock_start(root, *, on_change):
+        started["calls"].append(root)
+        return True
+
+    with patch("opencode_search.config.load_registry", return_value={"/tmp/watched": entry}), \
+         patch("opencode_search.watcher.watcher_manager.start", side_effect=mock_start):
+        await mod.resume_watchers()
+
+    assert "/tmp/watched" in started["calls"]

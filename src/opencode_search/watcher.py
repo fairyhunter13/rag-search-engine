@@ -2,23 +2,25 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Union
+
+from opencode_search.config import DEBOUNCE_DELAY_MS, MIN_FLUSH_INTERVAL_S
 
 log = logging.getLogger(__name__)
-
-DEBOUNCE_DELAY_MS = int(os.environ.get("OPENCODE_DEBOUNCE_MS", "1000"))
-MIN_FLUSH_INTERVAL_S = float(os.environ.get("OPENCODE_MIN_FLUSH_S", "5"))
 
 
 @dataclass
 class WatcherHandle:
     root: Path
     observer: object  # watchdog Observer
-    debounce_task: asyncio.Task | None = None
+    # Stored as a concurrent.futures.Future because asyncio.run_coroutine_threadsafe
+    # returns one (it's called from the watchdog Observer thread).
+    debounce_task: Union[concurrent.futures.Future, None] = None
     last_flush: float = 0.0
     _pending_paths: set[str] = field(default_factory=set)
     _pending_deleted: set[str] = field(default_factory=set)
@@ -50,7 +52,9 @@ class WatcherManager:
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
 
-            loop = asyncio.get_event_loop()
+            # Bind to the currently-running loop so events dispatch to the
+            # loop that called start() — required for FastMCP and CLI watch.
+            loop = asyncio.get_running_loop()
             handle = WatcherHandle(root=Path(root), observer=None)
 
             class _Handler(FileSystemEventHandler):
@@ -86,7 +90,10 @@ class WatcherManager:
                 now = _time.monotonic()
                 if now - handle.last_flush < MIN_FLUSH_INTERVAL_S:
                     await asyncio.sleep(MIN_FLUSH_INTERVAL_S - (now - handle.last_flush))
-                modified = [Path(p) for p in list(handle._pending_paths) if os.path.exists(p)]
+                # If a file appears in both pending sets, "deleted" takes
+                # precedence because the file no longer exists on disk anyway.
+                pending_paths = set(handle._pending_paths) - handle._pending_deleted
+                modified = [Path(p) for p in pending_paths if os.path.exists(p)]
                 deleted = list(handle._pending_deleted)
                 handle._pending_paths.clear()
                 handle._pending_deleted.clear()

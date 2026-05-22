@@ -3,29 +3,20 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator
 
+from opencode_search.cleaner import remove_stale_chunks
 from opencode_search.config import (
-    EMBED_PASSAGES_MAX_BYTES,
-    EMBED_PASSAGES_MAX_TEXTS,
     get_tier_dims,
     get_tier_models,
 )
 from opencode_search.storage import ChunkData, Storage
-from opencode_search.discover import iter_files, detect_language
-from opencode_search.cleaner import remove_stale_chunks
-from opencode_search.compaction import compact_if_needed
+from opencode_search.discover import detect_language, iter_files
 
 log = logging.getLogger(__name__)
-
-# Number of IO threads for reading files in parallel
-_IO_WORKERS = 10
 
 
 @dataclass
@@ -61,19 +52,6 @@ def _make_chunk_id(path: str, position: int) -> int:
     return int(hashlib.sha256(raw.encode()).hexdigest()[:16], 16) % (2**62)
 
 
-async def _embed_batch(
-    texts: list[str],
-    model: str,
-    dims: int,
-    sem: asyncio.Semaphore,
-) -> list[list[float]]:
-    """Embed a batch of texts on GPU (GPU-enforced, no CPU fallback)."""
-    # Import here to avoid circular at module load
-    from opencode_search.embeddings import embed_passages
-    async with sem:
-        return await asyncio.to_thread(embed_passages, texts, model=model, dimensions=dims)
-
-
 async def index_file(
     storage: Storage,
     path: Path,
@@ -81,9 +59,14 @@ async def index_file(
     tier: str,
     force: bool = False,
     embed_sem: asyncio.Semaphore | None = None,
+    existing_hashes: dict[str, str] | None = None,
 ) -> dict:
-    """Index a single file. Returns status dict with 'status' and 'chunks' keys."""
-    from opencode_search.chunker import chunk_content
+    """Index a single file. Returns status dict with 'status' and 'chunks' keys.
+
+    `existing_hashes` should be the result of `storage.get_file_hashes()` (passed
+    in so that a project-wide indexing run only loads it once instead of per-file).
+    """
+    from opencode_search.chunker import chunk_file
     from opencode_search.embeddings import embed_passages
 
     embed_model, _ = get_tier_models(tier)
@@ -98,8 +81,9 @@ async def index_file(
 
     # Skip if unchanged (unless force)
     if not force:
-        existing = await storage.get_file_hashes()
-        if existing.get(str(path)) == file_hash:
+        if existing_hashes is None:
+            existing_hashes = await storage.get_file_hashes()
+        if existing_hashes.get(str(path)) == file_hash:
             return {"status": "unchanged", "chunks": 0}
 
     content = await asyncio.to_thread(_read_file, path)
@@ -108,9 +92,7 @@ async def index_file(
 
     language = detect_language(path)
     try:
-        chunks = await asyncio.to_thread(
-            chunk_content, content, language=language, filepath=str(path)
-        )
+        chunks = await asyncio.to_thread(chunk_file, content, path)
     except Exception as e:
         log.warning("chunking failed for %s: %s", path, e)
         return {"status": "error", "error": str(e), "chunks": 0}
@@ -118,7 +100,7 @@ async def index_file(
     if not chunks:
         return {"status": "empty", "chunks": 0}
 
-    texts = [c["content"] for c in chunks]
+    texts = [c.content for c in chunks]
     try:
         async with embed_sem:
             vectors = await asyncio.to_thread(
@@ -128,6 +110,12 @@ async def index_file(
         log.error("embedding failed for %s: %s", path, e)
         return {"status": "error", "error": str(e), "chunks": 0}
 
+    if len(vectors) != len(chunks):
+        log.warning(
+            "embed_passages returned %d vectors for %d chunks at %s",
+            len(vectors), len(chunks), path,
+        )
+
     now_us = int(time.time() * 1_000_000)
     chunk_data = [
         ChunkData(
@@ -136,10 +124,10 @@ async def index_file(
             file_hash=file_hash,
             language=language,
             position=i,
-            content=c["content"],
-            content_hash=hashlib.sha256(c["content"].encode()).hexdigest()[:16],
-            start_line=c.get("start_line", 0),
-            end_line=c.get("end_line", 0),
+            content=c.content,
+            content_hash=hashlib.sha256(c.content.encode()).hexdigest()[:16],
+            start_line=c.start_line,
+            end_line=c.end_line,
             vector=vectors[i],
             created_at=now_us,
         )
@@ -173,12 +161,11 @@ async def index_project(
     t_start = time.monotonic()
     embed_sem = asyncio.Semaphore(embed_workers)
 
-    # Collect all files
     paths = list(iter_files(root))
     total = len(paths)
     log.info("indexing %d files in %s (tier=%s)", total, root, tier)
 
-    # Load existing hashes for skip detection
+    # Load existing hashes ONCE so per-file skip detection is O(1) lookup.
     existing_hashes = await storage.get_file_hashes()
     current_path_set = {str(p) for p in paths}
 
@@ -188,7 +175,12 @@ async def index_project(
     )
 
     async def process_file(path: Path, idx: int) -> None:
-        r = await index_file(storage, path, tier=tier, force=force, embed_sem=embed_sem)
+        r = await index_file(
+            storage, path,
+            tier=tier, force=force,
+            embed_sem=embed_sem,
+            existing_hashes=existing_hashes,
+        )
         if r["status"] == "indexed":
             result.files_indexed += 1
             result.chunks_total += r["chunks"]
@@ -200,15 +192,12 @@ async def index_project(
         if progress_callback:
             await progress_callback(idx + 1, total, str(path))
 
-    # Process files concurrently (embed_sem limits GPU concurrency)
     tasks = [process_file(p, i) for i, p in enumerate(paths)]
     await asyncio.gather(*tasks)
 
-    # Remove stale chunks
     removed = await remove_stale_chunks(storage, current_path_set)
     result.files_removed = removed
 
-    # Update indexes
     await storage.maybe_create_indexes()
 
     result.elapsed_s = time.monotonic() - t_start
@@ -232,8 +221,16 @@ async def index_files(
     embed_sem = asyncio.Semaphore(embed_workers)
     result = IndexResult(0, 0, 0, 0, 0, 0.0)
 
+    # Reuse hash map across the batch
+    existing_hashes = await storage.get_file_hashes()
+
     async def process(path: Path) -> None:
-        r = await index_file(storage, path, tier=tier, embed_sem=embed_sem)
+        r = await index_file(
+            storage, path,
+            tier=tier,
+            embed_sem=embed_sem,
+            existing_hashes=existing_hashes,
+        )
         if r["status"] == "indexed":
             result.files_indexed += 1
             result.chunks_total += r["chunks"]

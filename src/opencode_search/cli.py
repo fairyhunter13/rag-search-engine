@@ -38,8 +38,13 @@ app = typer.Typer(
 
 
 def _run(coro):
-    """Run an async coroutine from a sync CLI handler."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine from a sync CLI handler.
+
+    Uses asyncio.run() to create a fresh event loop per invocation. Do NOT use
+    asyncio.get_event_loop() — it's deprecated and creates inconsistent loops
+    across CLI subcommands.
+    """
+    return asyncio.run(coro)
 
 
 def _print_json(obj: object) -> None:
@@ -216,15 +221,29 @@ def watch(
     path: str = typer.Argument(..., help="Project root to watch for file changes."),
     tier: str = typer.Option("balanced", help="Embedding tier used when indexed."),
 ) -> None:
-    """Start a live file-watcher for a project (incremental re-indexing on change)."""
+    """Start a live file-watcher for a project (incremental re-indexing on change).
+
+    Runs `index_project` + `watcher_manager.start` then keeps the same event
+    loop running so the watcher dispatches to a live loop. The first call to
+    handle_index_project starts the watcher inside this loop, so callbacks bind
+    to the loop that we then run forever.
+    """
     from opencode_search.handlers import handle_index_project
 
     typer.echo(f"Starting watcher for {path} (tier={tier}) — press Ctrl+C to stop.")
-    _run(handle_index_project(path=path, tier=tier, watch=True))
 
-    # Block the process so the watcher stays alive
+    async def _watch_forever() -> None:
+        await handle_index_project(path=path, tier=tier, watch=True)
+        # Keep the loop alive so the watchdog Observer thread can dispatch
+        # events into this loop indefinitely.
+        stop_event = asyncio.Event()
+        try:
+            await stop_event.wait()
+        except asyncio.CancelledError:
+            pass
+
     try:
-        asyncio.get_event_loop().run_forever()
+        asyncio.run(_watch_forever())
     except KeyboardInterrupt:
         typer.echo("\nWatcher stopped.")
 

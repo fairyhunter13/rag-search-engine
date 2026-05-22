@@ -113,9 +113,27 @@ class Storage:
     # Table initialisation
     # ------------------------------------------------------------------
 
+    def _list_tables(self) -> list[str]:
+        """Return existing table names.
+
+        Modern LanceDB (>=0.21) exposes `list_tables()` which returns a
+        TablesResponse with a `.tables` attribute. Older versions used
+        `table_names()` (deprecated). Handles both shapes.
+        """
+        list_tables = getattr(self._db, "list_tables", None)
+        if callable(list_tables):
+            resp = list_tables()
+            # New API returns a TablesResponse-like object; unwrap .tables.
+            tables = getattr(resp, "tables", None)
+            if tables is not None:
+                return list(tables)
+            # Some older 0.20.x versions returned a list directly.
+            return list(resp)
+        return list(self._db.table_names())
+
     async def _ensure_chunks_table(self) -> None:
         schema = build_schema(self.dims)
-        existing = self._db.table_names()
+        existing = self._list_tables()
         if self.TABLE_CHUNKS not in existing:
             self._table = self._db.create_table(
                 self.TABLE_CHUNKS,
@@ -134,7 +152,7 @@ class Storage:
                 )
 
     async def _ensure_config_table(self) -> None:
-        existing = self._db.table_names()
+        existing = self._list_tables()
         if self.TABLE_CONFIG not in existing:
             self._config_table = self._db.create_table(
                 self.TABLE_CONFIG,
@@ -275,9 +293,12 @@ class Storage:
             )
 
         rows = results.to_pylist()
-        # LanceDB returns '_distance'; convert to similarity score (lower = better).
+        # LanceDB returns '_distance' (lower = closer). Convert to similarity
+        # score and clamp to [0, 1] — cosine distance ranges [0, 2] so naive
+        # `1 - d` can go negative for poor matches.
         for row in rows:
-            row.setdefault("_score", 1.0 - float(row.get("_distance", 0.0)))
+            d = float(row.get("_distance", 0.0))
+            row.setdefault("_score", max(0.0, min(1.0, 1.0 - d)))
         return rows
 
     async def search_fts(self, query: str, limit: int = 20) -> list[dict]:
@@ -409,9 +430,17 @@ class Storage:
     # ------------------------------------------------------------------
 
     async def compact(self) -> None:
-        """Compact the chunks table to remove fragmentation."""
+        """Compact the chunks table to remove fragmentation.
+
+        Prefers `Table.optimize()` (new API since LanceDB 0.21). Falls back to
+        the deprecated `compact_files()` for older installations.
+        """
         try:
-            self._table.compact_files()
+            optimize = getattr(self._table, "optimize", None)
+            if callable(optimize):
+                optimize()
+            else:
+                self._table.compact_files()
             logger.info("Chunks table compacted")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Compaction failed: %s", exc)
