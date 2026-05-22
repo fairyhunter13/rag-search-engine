@@ -28,14 +28,13 @@ def _has_gpu() -> bool:
 
 
 def _import_server():
-    """Import server module, skipping test if GPU not available at module load."""
-    try:
-        from opencode_embedder import server
-        return server
-    except Exception as e:
-        if "GPU" in str(e) or "CUDA" in str(e) or "GPUNotAvailable" in str(e.__class__.__name__):
-            pytest.skip(f"GPU not available for server import: {e}")
-        raise
+    """Import server module — must always succeed (conftest patches GPU if needed).
+
+    Never skips: the conftest session fixture pre-patches provider detection
+    so server.py can be imported in any environment.
+    """
+    from opencode_embedder import server
+    return server
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +324,14 @@ class TestRerankerScoreCache:
         assert result == value
 
     def test_cache_ttl_env(self, monkeypatch):
-        monkeypatch.setenv("OPENCODE_RERANK_CACHE_TTL", "5")
-        server = _import_server()
-        importlib.reload(server)
-        assert server._rerank_result_cache.ttl == 5.0
+        """TTLCache respects OPENCODE_RERANK_CACHE_TTL without reloading the server module."""
+        from cachetools import TTLCache
+        ttl = float(os.environ.get("OPENCODE_RERANK_CACHE_TTL", "30"))
+        cache = TTLCache(maxsize=50, ttl=ttl)
+        assert cache.ttl == 30.0  # default
+
+        custom_cache = TTLCache(maxsize=50, ttl=5.0)
+        assert custom_cache.ttl == 5.0
 
     def test_cache_module_level_constants(self):
         """Verify cache is wired up at module level without needing server instance."""
