@@ -24,6 +24,32 @@ class WatcherHandle:
     flush_in_progress: bool = False
     _pending_paths: set[str] = field(default_factory=set)
     _pending_deleted: set[str] = field(default_factory=set)
+    # Maps resolved real directory paths → their symlink path under the project
+    # root.  Built at watcher start so event paths from inotify (which always
+    # resolves symlinks) can be translated back to the paths stored in the index.
+    _symlink_map: dict[str, str] = field(default_factory=dict)
+
+
+def _build_symlink_map(root: str) -> dict[str, str]:
+    """Walk *root* (non-recursively through symlinks) and return a mapping of
+    resolved real directory paths to their symlink paths under *root*.
+
+    Only top-level symlinked directories are registered — watchdog will handle
+    recursive discovery inside each real target once it is scheduled.
+    Symlink targets that fall inside *root* are skipped to avoid duplicates.
+    """
+    symlink_map: dict[str, str] = {}
+    for dirpath, dirnames, _ in os.walk(root, followlinks=False, topdown=True):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for dirname in dirnames:
+            subdir = Path(dirpath) / dirname
+            if subdir.is_symlink() and subdir.is_dir():
+                real_target = str(subdir.resolve())
+                # Skip targets already under the project root — they would get
+                # a duplicate inotify watch from the main recursive schedule.
+                if real_target != root and not real_target.startswith(root + os.sep):
+                    symlink_map[real_target] = str(subdir)
+    return symlink_map
 
 
 class WatcherManager:
@@ -64,7 +90,13 @@ class WatcherManager:
         *,
         on_change: Callable[[list[Path], list[str]], Awaitable[None]],
     ) -> bool:
-        """Start watching a project root. on_change(modified_paths, deleted_paths)."""
+        """Start watching a project root. on_change(modified_paths, deleted_paths).
+
+        Symlinked directories inside the project root are also watched by
+        registering additional inotify schedules for each resolved real target.
+        Event paths from those targets are translated back to their symlink paths
+        (matching the paths stored in the index) before the debounce flush.
+        """
         root = str(Path(root).resolve())
         if self.is_active(root):
             log.info("watcher already active for %s", root)
@@ -78,6 +110,23 @@ class WatcherManager:
             # loop that called start() — required for FastMCP and CLI watch.
             loop = asyncio.get_running_loop()
             handle = WatcherHandle(root=Path(root), observer=None)
+
+            # Build the real→symlink translation map before the observer starts
+            # so _dispatch can use it immediately for the first events.
+            handle._symlink_map = _build_symlink_map(root)
+            if handle._symlink_map:
+                log.info(
+                    "watcher: found %d symlinked directories in %s — adding extra watches",
+                    len(handle._symlink_map),
+                    root,
+                )
+
+            def _translate_path(p: str) -> str:
+                """Map a real resolved path back to its symlink path under the project root."""
+                for real_prefix, sym_prefix in handle._symlink_map.items():
+                    if p == real_prefix or p.startswith(real_prefix + os.sep):
+                        return sym_prefix + p[len(real_prefix):]
+                return p
 
             class _Handler(FileSystemEventHandler):
                 def on_any_event(self, event):
@@ -94,14 +143,18 @@ class WatcherManager:
                 changed = False
                 if etype in ("created", "modified", "moved"):
                     p = dest if etype == "moved" and dest else src
-                    if p and not self._should_ignore_event_path(handle.root, p):
-                        before = len(handle._pending_paths)
-                        handle._pending_paths.add(p)
-                        changed = len(handle._pending_paths) != before
-                elif etype == "deleted" and src and not self._should_ignore_event_path(handle.root, src):
-                    before = len(handle._pending_deleted)
-                    handle._pending_deleted.add(src)
-                    changed = len(handle._pending_deleted) != before
+                    if p:
+                        p = _translate_path(p)
+                        if not self._should_ignore_event_path(handle.root, p):
+                            before = len(handle._pending_paths)
+                            handle._pending_paths.add(p)
+                            changed = len(handle._pending_paths) != before
+                elif etype == "deleted" and src:
+                    src = _translate_path(src)
+                    if not self._should_ignore_event_path(handle.root, src):
+                        before = len(handle._pending_deleted)
+                        handle._pending_deleted.add(src)
+                        changed = len(handle._pending_deleted) != before
                 if changed:
                     _schedule_flush()
 
@@ -152,6 +205,12 @@ class WatcherManager:
 
             observer = Observer()
             observer.schedule(_Handler(), root, recursive=True)
+            # Register extra watches for each resolved symlink target so that
+            # inotify tracks changes inside symlinked directories.
+            for real_target, sym_path in handle._symlink_map.items():
+                if Path(real_target).is_dir():
+                    observer.schedule(_Handler(), real_target, recursive=True)
+                    log.debug("watcher: extra watch %s → %s", real_target, sym_path)
             observer.start()
             handle.observer = observer
             self._handles[root] = handle

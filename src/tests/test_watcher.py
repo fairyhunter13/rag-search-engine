@@ -284,3 +284,83 @@ async def test_watcher_ignores_internal_opencode_churn(fresh_manager, tmp_path, 
 def test_watcher_manager_singleton_exists():
     assert watcher_manager is not None
     assert isinstance(watcher_manager, WatcherManager)
+
+
+# ---------------------------------------------------------------------------
+# Symlink support
+# ---------------------------------------------------------------------------
+
+
+def test_build_symlink_map_finds_symlinked_dirs(tmp_path):
+    """_build_symlink_map returns real→symlink entries for directory symlinks."""
+    from opencode_search.watcher import _build_symlink_map
+
+    external = tmp_path / "external-repo"
+    external.mkdir()
+    (external / "main.go").write_text("package main\n")
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "services").symlink_to(external, target_is_directory=True)
+
+    smap = _build_symlink_map(str(project))
+
+    assert str(external.resolve()) in smap
+    assert smap[str(external.resolve())] == str(project / "services")
+
+
+def test_build_symlink_map_skips_internal_symlinks(tmp_path):
+    """Symlinks pointing inside the project root must not appear in the map."""
+    from opencode_search.watcher import _build_symlink_map
+
+    project = tmp_path / "project"
+    project.mkdir()
+    real_sub = project / "real"
+    real_sub.mkdir()
+    (project / "link").symlink_to(real_sub, target_is_directory=True)
+
+    smap = _build_symlink_map(str(project))
+
+    assert smap == {}
+
+
+@pytest.mark.asyncio
+async def test_watcher_dispatches_event_from_symlinked_directory(
+    fresh_manager, tmp_path, monkeypatch
+):
+    """Changes inside a symlinked directory must fire on_change with the
+    translated (symlink) path, not the resolved real path."""
+    monkeypatch.setattr("opencode_search.watcher.DEBOUNCE_DELAY_MS", 100)
+    monkeypatch.setattr("opencode_search.watcher.MIN_FLUSH_INTERVAL_S", 0.1)
+
+    external = tmp_path / "external-service"
+    external.mkdir()
+
+    project = tmp_path / "monorepo"
+    project.mkdir()
+    symlink_dir = project / "services"
+    symlink_dir.symlink_to(external, target_is_directory=True)
+
+    received: list[tuple[list[Path], list[str]]] = []
+    event = asyncio.Event()
+
+    async def cb(modified, deleted):
+        received.append((modified, deleted))
+        event.set()
+
+    await fresh_manager.start(project, on_change=cb)
+    await asyncio.sleep(0.3)
+
+    (external / "handler.go").write_text("package main\n")
+
+    try:
+        await asyncio.wait_for(event.wait(), timeout=8.0)
+    except TimeoutError:
+        pytest.fail("watcher never fired for change inside symlinked directory")
+
+    assert len(received) >= 1
+    modified, _ = received[0]
+    # Path must be reported under the symlink (project root), not the real target
+    assert any(str(project) in str(p) for p in modified), (
+        f"expected path under {project}, got {[str(p) for p in modified]}"
+    )

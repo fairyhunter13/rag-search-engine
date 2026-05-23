@@ -120,10 +120,11 @@ async def index_project(
     tier: str = "balanced",
     watch: bool = False,
     force: bool = False,
+    follow_symlinks: bool = True,
 ) -> dict[str, Any]:
     return await _forward_tool(
         "index_project",
-        {"path": path, "tier": tier, "watch": watch, "force": force},
+        {"path": path, "tier": tier, "watch": watch, "force": force, "follow_symlinks": follow_symlinks},
     )
 
 

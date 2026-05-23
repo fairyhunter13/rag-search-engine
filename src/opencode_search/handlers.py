@@ -100,6 +100,7 @@ async def handle_index_project(
     tier: str = "balanced",
     watch: bool = False,
     force: bool = False,
+    follow_symlinks: bool = True,
 ) -> dict[str, Any]:
     """Index a project directory and optionally start watching it."""
     if tier not in _VALID_TIERS:
@@ -125,7 +126,7 @@ async def handle_index_project(
         await storage.open()
         try:
             t0 = time.perf_counter()
-            result = await _index_project(storage, project_path, tier=tier, force=force)
+            result = await _index_project(storage, project_path, tier=tier, force=force, follow_symlinks=follow_symlinks)
             elapsed = time.perf_counter() - t0
         finally:
             await storage.close()

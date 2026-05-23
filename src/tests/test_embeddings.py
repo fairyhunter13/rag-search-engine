@@ -145,3 +145,43 @@ def test_fastembed_session_options_expose_log_severity_level():
     assert session_options.execution_mode == "sequential"
     assert session_options.graph_optimization_level == "extended"
     assert session_options.log_severity_level == 3
+
+
+# ---------------------------------------------------------------------------
+# Idle inference tracking
+# ---------------------------------------------------------------------------
+
+
+def test_seconds_since_last_inference_returns_inf_before_first_call():
+    """Before any embed/rerank call the timer should report inf."""
+    import importlib
+    import opencode_search.embeddings as emb
+    # Reset the global to simulate a fresh process state
+    original = emb._last_inference_monotonic
+    emb._last_inference_monotonic = 0.0
+    try:
+        assert emb.seconds_since_last_inference() == float("inf")
+    finally:
+        emb._last_inference_monotonic = original
+
+
+def test_touch_inference_time_resets_idle_counter():
+    """touch_inference_time() must make seconds_since_last_inference() < 1s."""
+    import time
+    import opencode_search.embeddings as emb
+
+    emb.touch_inference_time()
+    elapsed = emb.seconds_since_last_inference()
+    assert elapsed < 1.0, f"Expected <1s after touch, got {elapsed:.3f}s"
+
+
+def test_seconds_since_last_inference_increases_over_time():
+    """The reported idle time must grow between two reads."""
+    import time
+    import opencode_search.embeddings as emb
+
+    emb.touch_inference_time()
+    t1 = emb.seconds_since_last_inference()
+    time.sleep(0.05)
+    t2 = emb.seconds_since_last_inference()
+    assert t2 > t1

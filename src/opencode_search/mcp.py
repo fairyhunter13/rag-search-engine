@@ -38,7 +38,7 @@ else:
 
 from starlette.responses import JSONResponse
 
-from opencode_search.daemon import DEFAULT_CLIENT_STALE_S
+from opencode_search.daemon import DEFAULT_CLIENT_STALE_S, DEFAULT_MODEL_IDLE_UNLOAD_S
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_ensure_project_watching,
@@ -81,6 +81,19 @@ async def _stale_cleanup_loop() -> None:
         try:
             await asyncio.sleep(interval_s)
             await _release_stale_project_watches()
+            # Unload embedding/reranker models when idle to reclaim RAM/VRAM.
+            # Models reload automatically on the next search (~2-5s warm-up).
+            if DEFAULT_MODEL_IDLE_UNLOAD_S > 0:
+                from opencode_search.embeddings import (
+                    cleanup_models,
+                    seconds_since_last_inference,
+                )
+                if seconds_since_last_inference() > DEFAULT_MODEL_IDLE_UNLOAD_S:
+                    log.info(
+                        "models idle >%ds — unloading to free RAM/VRAM",
+                        DEFAULT_MODEL_IDLE_UNLOAD_S,
+                    )
+                    await asyncio.to_thread(cleanup_models)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -110,22 +123,25 @@ async def index_project(
     tier: str = "balanced",
     watch: bool = False,
     force: bool = False,
+    follow_symlinks: bool = True,
 ) -> dict[str, Any]:
     """Index a project directory for semantic code search.
 
     GPU-accelerated embedding via ONNX Runtime (CUDAExecutionProvider).
 
     Args:
-        path:  Absolute path to the project root directory.
-        tier:  Embedding quality — "budget" (fast), "balanced" (default), "premium" (best).
-        watch: Start a live file-watcher for incremental re-indexing.
-        force: Re-index all files even if unchanged (ignores hash cache).
+        path:            Absolute path to the project root directory.
+        tier:            Embedding quality — "budget" (fast), "balanced" (default), "premium" (best).
+        watch:           Start a live file-watcher for incremental re-indexing.
+        force:           Re-index all files even if unchanged (ignores hash cache).
+        follow_symlinks: Follow symlinked directories during indexing (default True; required for
+                         monorepos that use symlinks to share code across services).
     """
     await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
     await _release_stale_project_watches()
     await _ensure_watchers_resumed()
-    result = await handle_index_project(path=path, tier=tier, watch=watch, force=force)
+    result = await handle_index_project(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks)
     project_path = str(result.get("path", "")) if isinstance(result, dict) else ""
     if result.get("status") == "ok" and project_path:
         bound_clients = runtime_state.bind_clients_to_project(project_path)

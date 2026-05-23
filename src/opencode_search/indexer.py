@@ -156,6 +156,7 @@ async def index_project(
     *,
     tier: str,
     force: bool = False,
+    follow_symlinks: bool = True,
     progress_callback=None,
     embed_workers: int = 2,
     file_workers: int = 8,
@@ -174,7 +175,7 @@ async def index_project(
     embed_sem = asyncio.Semaphore(max(1, embed_workers))
     file_sem = asyncio.Semaphore(max(1, file_workers))
 
-    paths = list(iter_files(root))
+    paths = list(iter_files(root, follow_symlinks=follow_symlinks))
     total = len(paths)
     log.info("indexing %d files in %s (tier=%s)", total, root, tier)
 

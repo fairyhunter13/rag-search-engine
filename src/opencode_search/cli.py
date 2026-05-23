@@ -64,12 +64,13 @@ def init(
     tier: str = typer.Option("balanced", help="Embedding tier: budget | balanced | premium."),
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
+    follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Initialize semantic indexing for a project, defaulting to the current directory."""
     from opencode_search.handlers import handle_index_project
 
-    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force))
+    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
 
     if json_output:
         _print_json(result)
@@ -97,12 +98,13 @@ def index(
     tier: str = typer.Option("balanced", help="Embedding tier: budget | balanced | premium."),
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
+    follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Index a project directory for semantic code search."""
     from opencode_search.handlers import handle_index_project
 
-    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force))
+    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
 
     if json_output:
         _print_json(result)

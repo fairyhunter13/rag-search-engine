@@ -258,6 +258,26 @@ def test_iter_files_does_not_follow_symlink_by_default(tmp_path):
     assert Path("link/code.py") not in files
 
 
+def test_iter_files_follows_symlinked_dir_when_enabled(tmp_path):
+    external = tmp_path / "external-repo"
+    external.mkdir()
+    (external / "service.go").write_text("package main\n")
+
+    project = tmp_path / "monorepo"
+    project.mkdir()
+    (project / "main.py").write_text("x = 1\n")
+    (project / "services").symlink_to(external, target_is_directory=True)
+
+    files_no_follow = [f.relative_to(project) for f in iter_files(project, follow_symlinks=False)]
+    files_follow = [f.relative_to(project) for f in iter_files(project, follow_symlinks=True)]
+
+    assert Path("main.py") in files_no_follow
+    assert Path("services/service.go") not in files_no_follow
+
+    assert Path("main.py") in files_follow
+    assert Path("services/service.go") in files_follow
+
+
 def test_iter_files_skips_oversize(tmp_path, monkeypatch):
     # Make the limit tiny so we can test
     monkeypatch.setattr(

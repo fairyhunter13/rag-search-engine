@@ -28,6 +28,9 @@ DEFAULT_DAEMON_HOST = os.environ.get("OPENCODE_MCP_DAEMON_HOST", "127.0.0.1")
 DEFAULT_DAEMON_PORT = int(os.environ.get("OPENCODE_MCP_DAEMON_PORT", "8765"))
 DEFAULT_IDLE_SHUTDOWN_S = int(os.environ.get("OPENCODE_MCP_IDLE_SHUTDOWN_S", "900"))
 DEFAULT_CLIENT_STALE_S = int(os.environ.get("OPENCODE_MCP_CLIENT_STALE_S", "60"))
+# Unload embedding/reranker models after this many seconds of no inference.
+# Set to 0 to disable. Models reload on next search (~2-5s warm-up).
+DEFAULT_MODEL_IDLE_UNLOAD_S = int(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
 _STATE_DIR = Path.home() / ".local" / "state" / "opencode-search"
 _LOCK_PATH = _STATE_DIR / "daemon.lock"
 _PID_PATH = _STATE_DIR / "daemon.pid"

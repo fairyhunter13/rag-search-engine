@@ -592,6 +592,32 @@ _embedder_lock = threading.Lock()
 _cached_embedder: object | None = None
 _cached_embedder_model: str | None = None
 
+# Idle inference tracking — used by the daemon cleanup loop to unload models
+# after a configurable period of no embed/rerank calls.
+import time as _time_module  # noqa: E402 — placed here to keep with related state
+
+_last_inference_monotonic: float = 0.0
+_inference_time_lock = threading.Lock()
+
+
+def touch_inference_time() -> None:
+    """Record that an embed or rerank call just started."""
+    global _last_inference_monotonic
+    with _inference_time_lock:
+        _last_inference_monotonic = _time_module.monotonic()
+
+
+def seconds_since_last_inference() -> float:
+    """Return seconds elapsed since the last embed/rerank call.
+
+    Returns ``inf`` if inference has never been called in this process
+    (models are not yet loaded, so cleanup would be a no-op anyway).
+    """
+    with _inference_time_lock:
+        if _last_inference_monotonic == 0.0:
+            return float("inf")
+        return _time_module.monotonic() - _last_inference_monotonic
+
 
 def _cuda_sync_and_empty_cache() -> None:
     """Synchronize CUDA stream and try to free cached GPU memory.
@@ -1588,6 +1614,7 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
     if not texts:
         return []
 
+    touch_inference_time()
     import time
 
     t_start = time.perf_counter()
@@ -2020,6 +2047,7 @@ def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple
     if not docs or top_k <= 0:
         return []
 
+    touch_inference_time()
     import time
 
     t_start = time.perf_counter()
