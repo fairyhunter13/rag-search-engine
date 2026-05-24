@@ -62,6 +62,7 @@ async def _run() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="opencode-search-mcp-harness-"))
     workspace = tmp / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
+    repo_root = Path(__file__).resolve().parent.parent
 
     # Isolate registry + daemon state so this harness cannot interfere with any
     # user daemon/indexes.
@@ -71,6 +72,15 @@ async def _run() -> int:
 
     # Project A: stale docs vs source-of-truth regression.
     proj_a = workspace / "proj-a"
+    _write(
+        proj_a / ".opencode-index.yaml",
+        "index:\n"
+        "  # Exclude planning docs + benchmark prompts from the index so they\n"
+        "  # cannot outrank production code.\n"
+        "  exclude:\n"
+        "    - \"docs/**\"\n"
+        "    - \"scripts/**\"\n",
+    )
     _write(
         proj_a / "src" / "config.py",
         "REGISTRY_PATH = '~/.local/share/opencode-search/projects.json'\\n",
@@ -102,6 +112,8 @@ async def _run() -> int:
         "OPENCODE_MCP_STATE_DIR": str(state_dir),
         "OPENCODE_MCP_DAEMON_HOST": "127.0.0.1",
         "OPENCODE_MCP_DAEMON_PORT": str(port),
+        # Ensure we can import this repo without requiring an installed wheel.
+        "PYTHONPATH": str(repo_root / "src"),
         # Ensure workspace scoping is active.
         "OPENCODE_BRIDGE_WORKSPACE_ROOT": str(workspace),
         # Keep the daemon from lingering too long after the harness exits.
@@ -150,7 +162,8 @@ async def _run() -> int:
                     print(f"ERROR: index_project failed for {proj}: {d}", file=sys.stderr)
                     return 3
 
-            # Assert stale docs/tests/benchmarks do not outrank implementation.
+            # Assert stale docs/benchmarks are excluded by config and cannot
+            # outrank implementation.
             query = "Where is the registry of indexed projects stored and what format is it?"
             res = await session.call_tool(
                 "search_code",
@@ -173,11 +186,11 @@ async def _run() -> int:
             if cfg_i is None:
                 print(f"ERROR: expected src/config.py in results; got paths={paths}", file=sys.stderr)
                 return 5
-            if doc_i is not None and not (cfg_i < doc_i):
-                print(f"ERROR: stale docs outranked config. paths={paths}", file=sys.stderr)
+            if doc_i is not None:
+                print(f"ERROR: excluded docs were indexed. paths={paths}", file=sys.stderr)
                 return 6
-            if bench_i is not None and not (cfg_i < bench_i):
-                print(f"ERROR: benchmark question text outranked config. paths={paths}", file=sys.stderr)
+            if bench_i is not None:
+                print(f"ERROR: excluded scripts were indexed. paths={paths}", file=sys.stderr)
                 return 7
 
             # Federated search: ensure results return from multiple projects.

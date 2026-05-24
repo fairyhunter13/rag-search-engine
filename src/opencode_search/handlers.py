@@ -24,12 +24,13 @@ from opencode_search.config import (
 )
 
 _LAST_ACTIVE_UPDATE_INTERVAL_S: int = 3600  # throttle registry writes from search to once per hour
-from opencode_search.discover import is_indexable_file
+from opencode_search.discover import is_indexable_file_with_config
 from opencode_search.indexer import index_files as _index_files
 from opencode_search.indexer import index_project as _index_project
 from opencode_search.search import clear_search_cache, search
 from opencode_search.storage import Storage
 from opencode_search.watcher import watcher_manager
+from opencode_search.index_config import load_project_config, ProjectConfig
 
 log = logging.getLogger(__name__)
 
@@ -107,8 +108,14 @@ def _build_incremental_on_change(
                 ]
                 await remove_chunks_for_paths(st, project_deleted)
             if modified:
+                try:
+                    project_cfg: ProjectConfig | None = load_project_config(project_root)
+                except Exception:
+                    project_cfg = None
                 project_modified = [
-                    p for p in modified if is_indexable_file(p, root=project_root)
+                    p
+                    for p in modified
+                    if is_indexable_file_with_config(p, root=project_root, project_config=project_cfg)
                 ]
                 await _index_files(st, project_modified, tier=tier, project_root=project_root)
             clear_search_cache()

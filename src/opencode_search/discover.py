@@ -12,6 +12,12 @@ from opencode_search.config import (
     DEFAULT_TEXT_FILE_SIZE_KB,
     DEFAULT_UNKNOWN_FILE_SIZE_KB,
 )
+from opencode_search.index_config import (
+    ProjectConfig,
+    effective_index_config,
+    load_project_config,
+    matches_any_pattern,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +219,20 @@ def is_indexable_file(path: Path, root: Path | None = None) -> bool:
     When *root* is provided, directory-ignore checks are scoped to directories inside
     that watched project root rather than ancestors elsewhere on the filesystem.
     """
+    return is_indexable_file_with_config(path, root=root, project_config=None)
+
+
+def is_indexable_file_with_config(
+    path: Path,
+    root: Path | None = None,
+    *,
+    project_config: ProjectConfig | None = None,
+) -> bool:
+    """Like is_indexable_file(), but applies `.opencode-index.(yml|yaml)` when present.
+
+    The config only controls which files are indexed. It must not introduce any
+    query rewriting or keyword-based behavior.
+    """
     try:
         candidate_path = path.expanduser()
     except OSError:
@@ -224,20 +244,73 @@ def is_indexable_file(path: Path, root: Path | None = None) -> bool:
     if not candidate_path.is_file():
         return False
 
+    root_resolved: Path | None = None
     if root is not None:
         try:
-            relative_parts = candidate_path.relative_to(root.resolve()).parts
+            root_resolved = root.expanduser().resolve()
+        except OSError:
+            return False
+
+    if root is not None:
+        try:
+            relative_parts = candidate_path.relative_to(root_resolved).parts if root_resolved else ()
         except (OSError, ValueError):
             return False
         ignored_dir_parts = relative_parts[:-1]
     else:
         ignored_dir_parts = candidate_path.resolve().parts[:-1]
 
-    if any(part in IGNORED_DIRS for part in ignored_dir_parts):
-        return False
+    # Apply project-level include/exclude config (if any).
+    if root_resolved is not None:
+        try:
+            project_cfg = project_config or load_project_config(root_resolved)
+        except Exception:
+            project_cfg = ProjectConfig()
 
-    if candidate_path.suffix.lower() in IGNORED_EXTENSIONS:
-        return False
+        linked_cfg: ProjectConfig | None = None
+        linked_name: str | None = None
+        if relative_parts:
+            linked_name = relative_parts[0]
+            try:
+                top = root_resolved / linked_name
+                # Mirror watcher behavior: only treat top-level symlinks that
+                # point *outside* the root as linked project boundaries.
+                if top.is_symlink() and top.is_dir():
+                    real_target = top.resolve()
+                    if str(real_target) != str(root_resolved) and not str(real_target).startswith(
+                        str(root_resolved) + os.sep
+                    ):
+                        linked_cfg = load_project_config(real_target)
+                    else:
+                        linked_name = None
+            except Exception:
+                linked_name = None
+                linked_cfg = None
+
+        index_cfg = effective_index_config(project_cfg, linked_name=linked_name, linked=linked_cfg)
+        match_root = root_resolved if linked_name is None else (root_resolved / linked_name)
+
+        if index_cfg.use_default_ignores:
+            if any(part in IGNORED_DIRS for part in ignored_dir_parts):
+                return False
+            if candidate_path.suffix.lower() in IGNORED_EXTENSIONS:
+                return False
+        else:
+            # Always ignore the search engine's internal state and VCS metadata.
+            always_ignored = {".opencode", ".git", ".hg", ".svn"}
+            if any(part in always_ignored for part in ignored_dir_parts):
+                return False
+
+        # Config include/exclude patterns are evaluated after the coarse
+        # directory pruning above.
+        if index_cfg.exclude and matches_any_pattern(candidate_path, index_cfg.exclude, match_root):
+            if not (index_cfg.include and matches_any_pattern(candidate_path, index_cfg.include, match_root)):
+                return False
+    else:
+        if any(part in IGNORED_DIRS for part in ignored_dir_parts):
+            return False
+        if candidate_path.suffix.lower() in IGNORED_EXTENSIONS:
+            return False
 
     try:
         if candidate_path.stat().st_size > _get_size_limit_bytes(candidate_path):
@@ -267,6 +340,22 @@ def iter_files(root: Path, follow_symlinks: bool = False) -> Iterator[Path]:
     - Binary-content detection
     """
     root = root.resolve()
+
+    project_cfg = load_project_config(root)
+    linked_cfgs: dict[str, ProjectConfig] = {}
+    try:
+        for child in root.iterdir():
+            if not child.is_symlink() or not child.is_dir():
+                continue
+            try:
+                real_target = child.resolve()
+            except OSError:
+                continue
+            # Only treat external targets as linked boundaries (mirror watcher).
+            if str(real_target) != str(root) and not str(real_target).startswith(str(root) + os.sep):
+                linked_cfgs[child.name] = load_project_config(real_target)
+    except OSError:
+        linked_cfgs = {}
 
     # Stack of (directory, gitignore_spec | None) pairs.  We build an
     # accumulated spec per directory by combining ancestor specs.
@@ -308,26 +397,58 @@ def iter_files(root: Path, follow_symlinks: bool = False) -> Iterator[Path]:
         current_dir = Path(dirpath)
 
         # Prune ignored directory names in-place (modifies os.walk).
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        # If `use_default_ignores` is disabled, keep most directories; still
+        # prune internal state and VCS metadata to avoid self-indexing loops.
+        if project_cfg.index.use_default_ignores:
+            dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        else:
+            dirnames[:] = [d for d in dirnames if d not in {".opencode", ".git", ".hg", ".svn"}]
 
         spec = _get_spec(current_dir)
 
         for filename in filenames:
             file_path = current_dir / filename
 
-            # 1. Ignored extension check.
-            suffix = file_path.suffix.lower()
-            if suffix in IGNORED_EXTENSIONS:
-                continue
-
             # 2. Gitignore check (relative to root).
             if spec is not None:
                 try:
                     rel = file_path.relative_to(root)
                     if spec.match_file(str(rel)):
-                        continue
+                        # Allow config include patterns to override gitignore.
+                        rel_parts = rel.parts
+                        linked_name = rel_parts[0] if rel_parts else None
+                        linked = linked_cfgs.get(linked_name or "")
+                        if linked is None:
+                            linked_name = None
+                        index_cfg = effective_index_config(project_cfg, linked_name=linked_name, linked=linked)
+                        match_root = root if linked_name is None else (root / linked_name)
+                        if not (index_cfg.include and matches_any_pattern(file_path, index_cfg.include, match_root)):
+                            continue
                 except ValueError:
                     pass  # Outside root — should not happen but be safe.
+
+            # 2.5. Project-level include/exclude patterns.
+            try:
+                rel = file_path.relative_to(root)
+                rel_parts = rel.parts
+            except ValueError:
+                rel_parts = ()
+            linked_name = rel_parts[0] if rel_parts else None
+            linked = linked_cfgs.get(linked_name or "")
+            if linked is None:
+                linked_name = None
+            index_cfg = effective_index_config(project_cfg, linked_name=linked_name, linked=linked)
+            match_root = root if linked_name is None else (root / linked_name)
+
+            if index_cfg.use_default_ignores:
+                # 1. Ignored extension check.
+                suffix = file_path.suffix.lower()
+                if suffix in IGNORED_EXTENSIONS:
+                    continue
+
+            if index_cfg.exclude and matches_any_pattern(file_path, index_cfg.exclude, match_root):
+                if not (index_cfg.include and matches_any_pattern(file_path, index_cfg.include, match_root)):
+                    continue
 
             # 3. Size limit.
             try:

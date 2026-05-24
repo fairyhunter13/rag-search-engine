@@ -10,6 +10,12 @@ from pathlib import Path
 
 from opencode_search.config import DEBOUNCE_DELAY_MS, MIN_FLUSH_INTERVAL_S
 from opencode_search.discover import IGNORED_DIRS
+from opencode_search.index_config import (
+    ProjectConfig,
+    effective_index_config,
+    load_project_config,
+    matches_any_pattern,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,9 +86,46 @@ class WatcherManager:
         except ValueError:
             return True
 
-        # Ignore only configured ignored directories inside the watched project. The
-        # final path component may be an indexable dotfile such as `.env`.
-        return any(part in IGNORED_DIRS for part in relative_parts[:-1])
+        project_cfg: ProjectConfig
+        try:
+            project_cfg = load_project_config(root)
+        except Exception:
+            project_cfg = ProjectConfig()
+
+        linked_cfg: ProjectConfig | None = None
+        linked_name: str | None = relative_parts[0] if relative_parts else None
+        if linked_name:
+            try:
+                top = root / linked_name
+                if top.is_symlink() and top.is_dir():
+                    real_target = top.resolve()
+                    if str(real_target) != str(root) and not str(real_target).startswith(str(root) + os.sep):
+                        linked_cfg = load_project_config(real_target)
+                    else:
+                        linked_name = None
+            except Exception:
+                linked_name = None
+                linked_cfg = None
+
+        index_cfg = effective_index_config(project_cfg, linked_name=linked_name, linked=linked_cfg)
+        match_root = root if linked_name is None else (root / linked_name)
+
+        # Ignore only configured ignored directories inside the watched project.
+        # The final path component may be an indexable dotfile such as `.env`.
+        if index_cfg.use_default_ignores:
+            if any(part in IGNORED_DIRS for part in relative_parts[:-1]):
+                return True
+        else:
+            if any(part in {".opencode", ".git", ".hg", ".svn"} for part in relative_parts[:-1]):
+                return True
+
+        # Apply config include/exclude patterns early so we do not enqueue paths
+        # that will never be indexed.
+        if index_cfg.exclude and matches_any_pattern(candidate_path, index_cfg.exclude, match_root):
+            if not (index_cfg.include and matches_any_pattern(candidate_path, index_cfg.include, match_root)):
+                return True
+
+        return False
 
     async def start(
         self,

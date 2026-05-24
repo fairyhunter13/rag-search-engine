@@ -67,8 +67,8 @@ _EXPECTED_ANSWER_RULES: dict[str, list[list[str]]] = {
 _MCP_FIRST_PROMPT_PREFIX = (
     "Use the opencode-search MCP tools to answer this question.\n"
     "Step 1: Call list_indexed_projects.\n"
-    "Step 2: Call search_code with a relevant natural-language query.\n"
-    "Step 3: Answer based on the results.\n\n"
+    "Step 2: Call search_code using the question text verbatim as the initial query.\n"
+    "Step 3: Answer based strictly on the results, and cite the file paths + key symbols (function/constant names) you relied on.\n\n"
     "Question: "
 )
 
@@ -264,6 +264,7 @@ def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
+        "answer": answer_text[:8000],
         "answer_excerpt": " ".join(answer_text.split())[:400],
         "answer_valid": _answer_is_valid(question, answer_text),
     }
@@ -368,6 +369,7 @@ def _parse_codex_jsonl(raw: str, question: str) -> dict[str, Any]:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
+        "answer": answer_text[:8000],
         "answer_excerpt": " ".join(answer_text.split())[:400],
         "answer_valid": _answer_is_valid(question, answer_text),
     }

@@ -39,7 +39,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-EMBEDDER_DIR = Path(__file__).parent.parent / "embedder"
+CODE_DIR = Path(__file__).parent.parent / "src" / "opencode_search"
 DEFAULT_MODEL = "jinaai/jina-embeddings-v2-small-en"
 DEFAULT_DIMS = 512
 
@@ -154,7 +154,7 @@ class TestGPUOnlyEnforcement:
 
     def test_no_cpu_provider_in_source(self):
         """embeddings.py must contain 0 occurrences of CPUExecutionProvider."""
-        src = (EMBEDDER_DIR / "opencode_embedder" / "embeddings.py").read_text()
+        src = (CODE_DIR / "embeddings.py").read_text(encoding="utf-8", errors="replace")
         count = src.count("CPUExecutionProvider")
         assert count == 0, (
             f"CPUExecutionProvider found {count} time(s) in embeddings.py — "
@@ -163,7 +163,7 @@ class TestGPUOnlyEnforcement:
 
     def test_no_allow_cpu_in_source(self):
         """embeddings.py must contain 0 occurrences of ALLOW_CPU."""
-        src = (EMBEDDER_DIR / "opencode_embedder" / "embeddings.py").read_text()
+        src = (CODE_DIR / "embeddings.py").read_text(encoding="utf-8", errors="replace")
         count = src.count("ALLOW_CPU")
         assert count == 0, f"ALLOW_CPU found {count} time(s) — escape hatch must be removed."
 
@@ -519,21 +519,21 @@ class TestIdleModelCleanup:
     """Verify idle model cleanup config is present without running full timeout."""
 
     def test_idle_cleanup_env_var_controls_timeout(self):
-        """OPENCODE_EMBED_MODEL_IDLE_TIMEOUT env var must be read by server."""
-        src = (EMBEDDER_DIR / "opencode_embedder" / "server.py").read_text()
-        assert "OPENCODE_EMBED_MODEL_IDLE_TIMEOUT" in src, (
-            "OPENCODE_EMBED_MODEL_IDLE_TIMEOUT env var not found in server.py"
+        """OPENCODE_MODEL_IDLE_UNLOAD_S env var must be read by the MCP server."""
+        src = (CODE_DIR / "daemon.py").read_text(encoding="utf-8", errors="replace")
+        assert "OPENCODE_MODEL_IDLE_UNLOAD_S" in src, (
+            "OPENCODE_MODEL_IDLE_UNLOAD_S env var not found in daemon.py"
         )
 
     def test_idle_model_cleanup_method_exists(self):
-        src = (EMBEDDER_DIR / "opencode_embedder" / "server.py").read_text()
-        assert "_idle_model_cleanup" in src, "_idle_model_cleanup method not found"
-        assert "cleanup_models" in src, "cleanup_models() call not found"
+        src = (CODE_DIR / "mcp.py").read_text(encoding="utf-8", errors="replace")
+        assert "cleanup_models" in src, "cleanup_models() call not found in MCP server"
+        assert "seconds_since_last_inference" in src, "idle inference timer not referenced in MCP server"
 
     def test_touch_embed_time_called_on_inference(self):
-        src = (EMBEDDER_DIR / "opencode_embedder" / "server.py").read_text()
-        assert src.count("_touch_embed_time") >= 4, (
-            "_touch_embed_time() should be called in at least 4 embed handlers"
+        src = (CODE_DIR / "embeddings.py").read_text(encoding="utf-8", errors="replace")
+        assert src.count("touch_inference_time") >= 2, (
+            "touch_inference_time() should be called during embedding and reranking"
         )
 
 

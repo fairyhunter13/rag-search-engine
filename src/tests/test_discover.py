@@ -305,6 +305,85 @@ def test_iter_files_gitignore_inheritance(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# .opencode-index.yaml — include/exclude integration
+# ---------------------------------------------------------------------------
+
+
+def test_iter_files_respects_opencode_index_exclude(tmp_path):
+    (tmp_path / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  exclude:\n"
+        "    - \"docs/**\"\n"
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "plan.md").write_text("stale\n")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1\n")
+
+    files = [f.relative_to(tmp_path).as_posix() for f in iter_files(tmp_path)]
+    assert "src/app.py" in files
+    assert "docs/plan.md" not in files
+
+
+def test_iter_files_include_overrides_exclude(tmp_path):
+    (tmp_path / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  exclude:\n"
+        "    - \"docs/**\"\n"
+        "  include:\n"
+        "    - \"docs/KEEP.md\"\n"
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "KEEP.md").write_text("keep\n")
+    (tmp_path / "docs" / "skip.md").write_text("skip\n")
+    (tmp_path / "src.py").write_text("x = 1\n")
+
+    files = [f.relative_to(tmp_path).as_posix() for f in iter_files(tmp_path)]
+    assert "src.py" in files
+    assert "docs/KEEP.md" in files
+    assert "docs/skip.md" not in files
+
+
+def test_iter_files_include_can_override_gitignore(tmp_path):
+    (tmp_path / ".gitignore").write_text("docs/\n")
+    (tmp_path / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  include:\n"
+        "    - \"docs/KEEP.md\"\n"
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "KEEP.md").write_text("keep\n")
+    (tmp_path / "docs" / "other.md").write_text("ignore\n")
+
+    files = [f.relative_to(tmp_path).as_posix() for f in iter_files(tmp_path)]
+    assert "docs/KEEP.md" in files
+    assert "docs/other.md" not in files
+
+
+def test_iter_files_linked_override_applies_to_external_symlink(tmp_path):
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "docs").mkdir()
+    (external / "docs" / "design.md").write_text("stale\n")
+    (external / "lib.py").write_text("x = 1\n")
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "dep").symlink_to(external, target_is_directory=True)
+    (project / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  include: [\"**/*\"]\n"
+        "linked:\n"
+        "  dep:\n"
+        "    exclude: [\"docs/**\"]\n"
+    )
+
+    files = [f.relative_to(project).as_posix() for f in iter_files(project, follow_symlinks=True)]
+    assert "dep/lib.py" in files
+    assert "dep/docs/design.md" not in files
+
+
+# ---------------------------------------------------------------------------
 # Static data sanity
 # ---------------------------------------------------------------------------
 

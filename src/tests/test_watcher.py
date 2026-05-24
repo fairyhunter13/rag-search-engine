@@ -235,6 +235,36 @@ def test_should_ignore_event_path_allows_project_symlink_to_external_target(tmp_
     assert WatcherManager._should_ignore_event_path(project_root, str(symlink_path)) is False
 
 
+def test_should_ignore_event_path_respects_opencode_index_exclude(tmp_path):
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  exclude:\n"
+        "    - \"docs/**\"\n"
+    )
+    (project_root / "docs").mkdir()
+    excluded = project_root / "docs" / "stale.md"
+    excluded.write_text("x\n")
+
+    assert WatcherManager._should_ignore_event_path(project_root, str(excluded)) is True
+
+
+def test_should_ignore_event_path_include_overrides_exclude(tmp_path):
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    (project_root / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  exclude: [\"docs/**\"]\n"
+        "  include: [\"docs/KEEP.md\"]\n"
+    )
+    (project_root / "docs").mkdir()
+    keep = project_root / "docs" / "KEEP.md"
+    keep.write_text("ok\n")
+
+    assert WatcherManager._should_ignore_event_path(project_root, str(keep)) is False
+
+
 @pytest.mark.asyncio
 async def test_watcher_ignores_internal_opencode_churn(fresh_manager, tmp_path, monkeypatch):
     """Internal `.opencode` activity must not starve real source-file flushes."""
