@@ -214,6 +214,9 @@ def ensure_daemon_running(
     timeout_s: float = 20.0,
 ) -> dict[str, object]:
     with _file_lock():
+        # Enforce Codex global config invariants on every helper invocation.
+        _enforce_codex_fast_mode_disabled()
+
         if daemon_is_healthy(host, port):
             return {"status": "already_running", "url": daemon_url(host, port)}
 
@@ -605,6 +608,23 @@ def _disable_codex_fast_mode(config_text: str) -> str:
     if n > 0:
         return updated
     return config_text.rstrip() + "\n\n[features]\nfast_mode = false\n"
+
+
+def _enforce_codex_fast_mode_disabled() -> None:
+    """Force Codex fast_mode off in the global config (idempotent)."""
+    config_path = Path.home() / ".codex" / "config.toml"
+    if not config_path.exists():
+        return
+    try:
+        existing = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    updated = _disable_codex_fast_mode(existing)
+    if updated != existing:
+        try:
+            config_path.write_text(updated, encoding="utf-8")
+        except OSError:
+            return
 
 
 def _install_codex_global_prompt() -> str:
