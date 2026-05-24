@@ -273,6 +273,7 @@ async def test_search_authority_weight_prefers_source_over_docs_after_rerank(mon
     project = _make_project()
     dims = project.dims
     # Enable optional structural weights (no keyword-based heuristics).
+    monkeypatch.setenv("OPENCODE_ENABLE_AUTHORITY_WEIGHTS", "1")
     monkeypatch.setenv("OPENCODE_WEIGHT_SRC", "2.0")
     monkeypatch.setenv("OPENCODE_WEIGHT_DOCS", "0.1")
     monkeypatch.setenv("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", "0.1")
@@ -316,6 +317,7 @@ async def test_search_authority_weight_prefers_source_over_benchmark_and_plan(mo
     clear_search_cache()
     project = _make_project()
     dims = project.dims
+    monkeypatch.setenv("OPENCODE_ENABLE_AUTHORITY_WEIGHTS", "1")
     monkeypatch.setenv("OPENCODE_WEIGHT_SRC", "2.0")
     monkeypatch.setenv("OPENCODE_WEIGHT_DOCS", "0.1")
     monkeypatch.setenv("OPENCODE_WEIGHT_SCRIPTS", "0.1")
@@ -373,6 +375,7 @@ async def test_search_authority_weight_prefers_source_over_tests_for_questions(m
     clear_search_cache()
     project = _make_project()
     dims = project.dims
+    monkeypatch.setenv("OPENCODE_ENABLE_AUTHORITY_WEIGHTS", "1")
     monkeypatch.setenv("OPENCODE_WEIGHT_SRC", "2.0")
     monkeypatch.setenv("OPENCODE_WEIGHT_TESTS", "0.1")
     rows = [
@@ -504,6 +507,33 @@ async def test_search_few_projects_does_per_project_rerank():
 
 def test_clear_search_cache():
     clear_search_cache()  # Should not raise
+
+
+@pytest.mark.asyncio
+async def test_search_does_not_rewrite_or_augment_query():
+    """Search must pass the user's query verbatim to hybrid retrieval (no keyword hacks)."""
+    clear_search_cache()
+    project = _make_project()
+    dims = project.dims
+
+    captured: dict[str, object] = {}
+
+    async def capture_search_hybrid(query, query_vec, limit):  # noqa: ANN001
+        captured["query"] = query
+        captured["limit"] = limit
+        return [_make_row()]
+
+    mock_st = _make_mock_storage(rows=[_make_row()])
+    mock_st.search_hybrid = AsyncMock(side_effect=capture_search_hybrid)
+
+    q = "  registry of indexed projects stored  "
+    with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
+         patch("opencode_search.search._rerank_sync", return_value=[(0, 0.9)]), \
+         patch("opencode_search.search.Storage") as MockStorage:
+        MockStorage.return_value = mock_st
+        await search(q, projects=[project], top_k=1)
+
+    assert captured.get("query") == q
 
 
 # ---------------------------------------------------------------------------

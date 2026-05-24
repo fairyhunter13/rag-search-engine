@@ -80,8 +80,19 @@ _CANDIDATE_OVERSAMPLE = max(1, int(os.environ.get("OPENCODE_CANDIDATE_OVERSAMPLE
 _MAX_CANDIDATES_PER_PATH = max(1, int(os.environ.get("OPENCODE_MAX_CANDIDATES_PER_PATH", "3")))
 _RERANK_CONCURRENCY = max(1, int(os.environ.get("OPENCODE_RERANK_CONCURRENCY", "1")))
 
-# Optional structural authority weights (no keyword-based rules). Defaults are
-# neutral (1.0) unless configured by the user/operator.
+
+def _authority_weights_enabled() -> bool:
+    # Read env dynamically so tests and long-running daemons can toggle it.
+    return os.environ.get("OPENCODE_ENABLE_AUTHORITY_WEIGHTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+# Optional structural authority weights (no keyword-based rules). Disabled by
+# default to avoid any baked-in ranking bias. When enabled, weights are read
+# from env at runtime.
 def _env_weight(name: str, default: float = 1.0) -> float:
     """Read a structural weight from env at runtime.
 
@@ -212,7 +223,6 @@ def _rerank_sync(
 async def _search_project(
     project: ProjectEntry,
     query: str,
-    retrieval_query: str,
     query_vec: list[float],
     limit: int,
 ) -> list[dict]:
@@ -223,7 +233,8 @@ async def _search_project(
     )
     try:
         await storage.open()
-        rows = await storage.search_hybrid(retrieval_query, query_vec, limit=limit)
+        # IMPORTANT: never rewrite/augment the user's query here.
+        rows = await storage.search_hybrid(query, query_vec, limit=limit)
         for row in rows:
             row["_project_path"] = project.path
         return rows
@@ -257,6 +268,9 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     This deliberately avoids any keyword- or filename-token-based heuristics.
     All weights default to 1.0 (neutral) unless configured via environment.
     """
+    if not _authority_weights_enabled():
+        return 1.0
+
     parts = _relative_result_parts(row)
     name = parts[-1] if parts else ""
     language = str(row.get("language", "") or "").lower()
@@ -264,28 +278,28 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     weight = 1.0
 
     if "src" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_SRC", 1.18)
+        weight *= _env_weight("OPENCODE_WEIGHT_SRC", 1.0)
     elif language and language not in _DOCUMENT_LANGUAGES:
-        weight *= _env_weight("OPENCODE_WEIGHT_CODE_NON_DOC", 1.08)
+        weight *= _env_weight("OPENCODE_WEIGHT_CODE_NON_DOC", 1.0)
 
     # Tests often contain dense natural-language docstrings and question-shaped
     # sentences; aggressively downweight them for question queries so
     # implementation files win unless the user explicitly searches for tests.
     if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
-        weight *= _env_weight("OPENCODE_WEIGHT_TESTS", 0.35)
+        weight *= _env_weight("OPENCODE_WEIGHT_TESTS", 1.0)
 
     # Planning docs can be extremely "query-shaped" and outscore code on pure
     # lexical matching; treat them as low authority for question queries.
     if "docs" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCS", 0.12)
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCS", 1.0)
 
     if "scripts" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 0.25)
+        weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 1.0)
 
     if language in _DOCUMENT_LANGUAGES:
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.45)
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 1.0)
     elif language == "markdown":
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.45)
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 1.0)
 
     # Allow very low weights so stale/low-authority sources cannot dominate
     # purely by matching query-shaped prose (especially when hybrid FTS spikes
@@ -294,13 +308,14 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
 
 
 def _apply_authority_score(row: dict, *, query: str = "") -> dict:
-    """Attach authority metadata and overwrite score with the adjusted value."""
+    """Attach authority metadata and optionally overwrite score with adjusted value."""
     scored = dict(row)
     raw_score = float(scored.get("_score", 0.0))
     authority = _authority_weight(scored, query=query)
     scored["_raw_score"] = raw_score
     scored["_authority_weight"] = authority
-    scored["_score"] = raw_score * authority
+    if _authority_weights_enabled() and authority != 1.0:
+        scored["_score"] = raw_score * authority
     return scored
 
 
@@ -411,7 +426,7 @@ async def search(
     # Stage 1 — parallel per-project hybrid retrieval
     stage1_limit = max(STAGE1_VECTOR_K, STAGE1_VECTOR_K * _CANDIDATE_OVERSAMPLE)
     tasks = [
-        _search_project(proj, query, query, query_vec, limit=stage1_limit)
+        _search_project(proj, query, query_vec, limit=stage1_limit)
         for proj in projects
     ]
     per_project_results: list[list[dict]] = await asyncio.gather(*tasks)

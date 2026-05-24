@@ -175,6 +175,13 @@ async def test_search_prefers_source_over_stale_docs(tmp_path, monkeypatch):
     docs_dir = project_root / "docs"
     src_dir.mkdir(parents=True)
     docs_dir.mkdir(parents=True)
+    # Exclude planning docs from the index (preferred fix; no query hardcoding).
+    (project_root / ".opencode-index.yaml").write_text(
+        "index:\n"
+        "  exclude:\n"
+        "    - \"docs/**\"\n",
+        encoding="utf-8",
+    )
 
     (src_dir / "config.py").write_text(
         "REGISTRY_PATH = '~/.local/share/opencode-search/projects.json'\n",
