@@ -88,8 +88,19 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
         " mcp__opencode-search__search_metrics"
         " Bash Grep Glob Read"
     )
+    # Prefix the question with an explicit MCP-first instruction so the model
+    # treats tool ordering as part of the task, not just background guidance.
+    # claude -p is single-shot headless; without this, the model ignores CLAUDE.md
+    # workflow rules and reaches for native tools (Bash/Grep) directly.
+    prompted_question = (
+        "Use the opencode-search MCP tools to answer this question.\n"
+        "Step 1: Call list_indexed_projects.\n"
+        "Step 2: Call search_code with a relevant natural-language query.\n"
+        "Step 3: Answer based on the results.\n\n"
+        f"Question: {question}"
+    )
     cmd = [
-        "claude", "-p", question,
+        "claude", "-p", prompted_question,
         "--output-format", "stream-json",
         "--verbose",
         "--model", model,
