@@ -460,6 +460,31 @@ def remove_shell_wrapper_block(existing_text: str) -> str:
     return pattern.sub("\n", existing_text).strip() + ("\n" if existing_text.strip() else "")
 
 
+def uninstall_shell_wrappers(
+    aliases_path: Path = _ALIASES_PATH,
+    helper_path: Path = _HELPER_PATH,
+) -> dict[str, object]:
+    """Remove the managed ~/.bash_aliases wrapper block (if present).
+
+    This does not affect Claude/Codex/Hermes MCP configuration; it only removes
+    the optional shell hook layer that auto-runs `daemon ensure` on every
+    invocation.
+    """
+    existing = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
+    updated = remove_shell_wrapper_block(existing)
+    changed = updated != existing
+    if changed:
+        aliases_path.write_text(updated, encoding="utf-8")
+    helper_removed = False
+    try:
+        if helper_path.exists():
+            helper_path.unlink()
+            helper_removed = True
+    except OSError:
+        helper_removed = False
+    return {"changed": changed, "aliases_path": str(aliases_path), "helper_removed": helper_removed}
+
+
 def _bridge_command(python_bin: Path | None = None) -> list[str]:
     python_bin = python_bin or Path(sys.executable)
     return [str(python_bin), "-m", "opencode_search", "daemon", "bridge-stdio"]
@@ -675,31 +700,35 @@ def _install_init_wrapper(python_bin: Path) -> str:
     return str(_INIT_WRAPPER_PATH)
 
 
-def _install_claude(bridge_command: list[str], config_dirs: Iterable[Path]) -> list[str]:
+def _install_claude(
+    bridge_command: list[str],
+    config_dirs: Iterable[Path],
+    *,
+    transport: str,
+    host: str,
+    port: int,
+) -> list[str]:
     claude_bin = shutil.which("claude")
     if not claude_bin:
         return []
     installed: list[str] = ["default"]
     _remove_if_present([claude_bin, "mcp", "remove", "opencode-search", "--scope", "user"])
-    result = _run_command(
-        [
-            claude_bin,
-            "mcp",
-            "add",
-            "--scope",
-            "user",
-            "opencode-search",
-            "--",
-            *bridge_command,
-        ]
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Claude MCP install failed for default profile: {result.stderr.strip()}")
-
-    for config_dir in config_dirs:
-        env = os.environ.copy()
-        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-        _remove_if_present([claude_bin, "mcp", "remove", "opencode-search", "--scope", "user"], env=env)
+    transport = (transport or "http").strip().lower()
+    if transport == "http":
+        result = _run_command(
+            [
+                claude_bin,
+                "mcp",
+                "add",
+                "--scope",
+                "user",
+                "--transport",
+                "http",
+                "opencode-search",
+                daemon_url(host, port),
+            ]
+        )
+    else:
         result = _run_command(
             [
                 claude_bin,
@@ -710,21 +739,66 @@ def _install_claude(bridge_command: list[str], config_dirs: Iterable[Path]) -> l
                 "opencode-search",
                 "--",
                 *bridge_command,
-            ],
-            env=env,
+            ]
         )
+    if result.returncode != 0:
+        raise RuntimeError(f"Claude MCP install failed for default profile: {result.stderr.strip()}")
+
+    for config_dir in config_dirs:
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+        _remove_if_present([claude_bin, "mcp", "remove", "opencode-search", "--scope", "user"], env=env)
+        if transport == "http":
+            result = _run_command(
+                [
+                    claude_bin,
+                    "mcp",
+                    "add",
+                    "--scope",
+                    "user",
+                    "--transport",
+                    "http",
+                    "opencode-search",
+                    daemon_url(host, port),
+                ],
+                env=env,
+            )
+        else:
+            result = _run_command(
+                [
+                    claude_bin,
+                    "mcp",
+                    "add",
+                    "--scope",
+                    "user",
+                    "opencode-search",
+                    "--",
+                    *bridge_command,
+                ],
+                env=env,
+            )
         if result.returncode != 0:
             raise RuntimeError(f"Claude MCP install failed for {config_dir}: {result.stderr.strip()}")
         installed.append(str(config_dir))
     return installed
 
 
-def _install_codex(bridge_command: list[str]) -> bool:
+def _install_codex(
+    bridge_command: list[str],
+    *,
+    transport: str,
+    host: str,
+    port: int,
+) -> bool:
     codex_bin = shutil.which("codex")
     if not codex_bin:
         return False
     _remove_if_present([codex_bin, "mcp", "remove", "opencode-search"])
-    result = _run_command([codex_bin, "mcp", "add", "opencode-search", "--", *bridge_command])
+    transport = (transport or "http").strip().lower()
+    if transport == "http":
+        result = _run_command([codex_bin, "mcp", "add", "opencode-search", "--url", daemon_url(host, port)])
+    else:
+        result = _run_command([codex_bin, "mcp", "add", "opencode-search", "--", *bridge_command])
     if result.returncode != 0:
         raise RuntimeError(f"Codex MCP install failed: {result.stderr.strip()}")
     return True
@@ -735,7 +809,13 @@ def _install_hermes(_bridge_command: list[str]) -> bool:
     return bool(hermes_bin)
 
 
-def _update_hermes_config_for_global_servers(bridge_command: list[str]) -> None:
+def _update_hermes_config_for_global_servers(
+    bridge_command: list[str],
+    *,
+    transport: str,
+    host: str,
+    port: int,
+) -> None:
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
         return
@@ -750,11 +830,13 @@ def _update_hermes_config_for_global_servers(bridge_command: list[str]) -> None:
         if not legacy_mcp:
             data.pop("mcp", None)
     servers = data.setdefault("mcp_servers", {})
-    servers["opencode-search"] = {
-        "command": bridge_command[0],
-        "args": bridge_command[1:],
-        "enabled": True,
-    }
+    # Hermes MCP support varies by build; keep a stdio entry (bridge-stdio)
+    # for maximum compatibility. The bridge talks to the singleton daemon.
+    #
+    # If Hermes later supports native streamable-http MCP config, we can add a
+    # url-based entry behind an opt-in flag; for now keep behavior stable.
+    _ = (transport, host, port)  # reserved for future url transport support
+    servers["opencode-search"] = {"command": bridge_command[0], "args": bridge_command[1:], "enabled": True}
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
@@ -813,25 +895,36 @@ def install_global_integration(
     helper_path: Path = _HELPER_PATH,
     host: str = DEFAULT_DAEMON_HOST,
     port: int = DEFAULT_DAEMON_PORT,
+    *,
+    install_shell_wrappers: bool = False,
+    transport: str = "http",
 ) -> dict[str, object]:
     alias_text = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
     helper_python = Path(sys.executable)
-    # Upsert wrapper block + helper script. This keeps the integration sticky
-    # across new shell sessions and ensures the daemon is started on demand.
-    shell_wrappers = _install_shell_wrappers(
-        aliases_path=aliases_path,
-        helper_path=helper_path,
-        python_bin=helper_python,
-        host=host,
-        port=port,
-    )
+    shell_wrappers: dict[str, object] | None = None
+    if install_shell_wrappers:
+        # Upsert wrapper block + helper script. This keeps the integration sticky
+        # across new shell sessions and ensures the daemon is started on demand.
+        shell_wrappers = _install_shell_wrappers(
+            aliases_path=aliases_path,
+            helper_path=helper_path,
+            python_bin=helper_python,
+            host=host,
+            port=port,
+        )
+
+    # Prefer connecting clients directly to the singleton daemon over HTTP so no
+    # per-client wrapper is needed and no extra stdio server processes are spawned.
+    transport = (transport or "http").strip().lower()
+    if transport not in {"http", "stdio"}:
+        raise ValueError("transport must be 'http' or 'stdio'")
 
     bridge_command = _bridge_command(helper_python)
     claude_dirs = discover_claude_config_dirs(alias_text)
-    installed_claude = _install_claude(bridge_command, claude_dirs)
-    codex_installed = _install_codex(bridge_command)
+    installed_claude = _install_claude(bridge_command, claude_dirs, transport=transport, host=host, port=port)
+    codex_installed = _install_codex(bridge_command, transport=transport, host=host, port=port)
     hermes_installed = _install_hermes(bridge_command)
-    _update_hermes_config_for_global_servers(bridge_command)
+    _update_hermes_config_for_global_servers(bridge_command, transport=transport, host=host, port=port)
     init_wrapper_path = _install_init_wrapper(helper_python)
     claude_prompt_paths = _install_claude_global_prompt(claude_dirs)
     codex_prompt_path = _install_codex_global_prompt()
