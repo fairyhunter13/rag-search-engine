@@ -67,7 +67,7 @@ _EXPECTED_ANSWER_RULES: dict[str, list[list[str]]] = {
 _MCP_FIRST_PROMPT_PREFIX = (
     "Use the opencode-search MCP tools to answer this question.\n"
     "Step 1: Call list_indexed_projects.\n"
-    "Step 2: Call search_code using the question text verbatim as the initial query.\n"
+    "Step 2: Call search_code with query EXACTLY equal to the question string (verbatim; do not paraphrase or add extra words).\n"
     "Step 3: Answer based strictly on the results, and cite the file paths + key symbols (function/constant names) you relied on.\n\n"
     "Question: "
 )
@@ -138,7 +138,7 @@ def _strip_mcp_prefix(name: str) -> str:
 _CLAUDE_SYSTEM_PROMPT = (
     "MANDATORY RULE — no exceptions: Before using any native tool (Bash, Grep, Glob, Read) "
     "for code or file exploration, you MUST first call list_indexed_projects, then immediately "
-    "call search_code with a natural-language query. "
+    "call search_code. The search_code query must be EXACTLY the user question string (verbatim). "
     "Only use native tools if search_code returns no useful results. "
     "Do NOT answer from memory or training data. Do NOT skip the MCP tools step."
 )
