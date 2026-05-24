@@ -389,6 +389,50 @@ def upsert_shell_wrapper_block(existing_text: str, block: str) -> str:
     return block + "\n"
 
 
+def _install_shell_wrapper_helper(
+    helper_path: Path,
+    *,
+    python_bin: Path,
+    host: str,
+    port: int,
+) -> str:
+    """Install the helper script that ensures the MCP daemon is running."""
+    helper_path.parent.mkdir(parents=True, exist_ok=True)
+    helper_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                f"exec '{python_bin}' -m opencode_search daemon ensure --host {host} --port {port}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        helper_path.chmod(0o755)
+    except OSError:
+        pass
+    return str(helper_path)
+
+
+def _install_shell_wrappers(
+    *,
+    aliases_path: Path,
+    helper_path: Path,
+    python_bin: Path,
+    host: str,
+    port: int,
+) -> dict[str, object]:
+    """Upsert wrapper functions into ~/.bash_aliases for Claude/Codex/Hermes."""
+    existing = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
+    helper_installed = _install_shell_wrapper_helper(helper_path, python_bin=python_bin, host=host, port=port)
+    block = render_shell_wrapper_block(Path(helper_installed), existing)
+    updated = upsert_shell_wrapper_block(remove_shell_wrapper_block(existing), block)
+    aliases_path.write_text(updated, encoding="utf-8")
+    return {"helper_path": helper_installed, "aliases_path": str(aliases_path)}
+
+
 def _run_command(command: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
         command,
@@ -752,14 +796,15 @@ def install_global_integration(
 ) -> dict[str, object]:
     alias_text = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
     helper_python = Path(sys.executable)
-    if aliases_path.exists():
-        cleaned_alias_text = remove_shell_wrapper_block(alias_text)
-        if cleaned_alias_text != alias_text:
-            aliases_path.write_text(cleaned_alias_text, encoding="utf-8")
-    try:
-        helper_path.unlink()
-    except FileNotFoundError:
-        pass
+    # Upsert wrapper block + helper script. This keeps the integration sticky
+    # across new shell sessions and ensures the daemon is started on demand.
+    shell_wrappers = _install_shell_wrappers(
+        aliases_path=aliases_path,
+        helper_path=helper_path,
+        python_bin=helper_python,
+        host=host,
+        port=port,
+    )
 
     bridge_command = _bridge_command(helper_python)
     claude_dirs = discover_claude_config_dirs(alias_text)
@@ -785,6 +830,7 @@ def install_global_integration(
         "codex_prompt_path": codex_prompt_path,
         "hermes_prompt_path": hermes_prompt_path,
         "aliases_path": str(aliases_path),
+        "shell_wrappers": shell_wrappers,
         "systemd": systemd_result,
     }
 

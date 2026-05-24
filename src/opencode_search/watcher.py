@@ -92,6 +92,8 @@ class WatcherManager:
         except Exception:
             project_cfg = ProjectConfig()
 
+        # Only treat the first path component as a linked project boundary when
+        # it is a top-level symlink to an external directory (mirrors discover).
         linked_cfg: ProjectConfig | None = None
         linked_name: str | None = relative_parts[0] if relative_parts else None
         if linked_name:
@@ -103,6 +105,8 @@ class WatcherManager:
                         linked_cfg = load_project_config(real_target)
                     else:
                         linked_name = None
+                else:
+                    linked_name = None
             except Exception:
                 linked_name = None
                 linked_cfg = None
