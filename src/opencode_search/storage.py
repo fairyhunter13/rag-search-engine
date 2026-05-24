@@ -376,7 +376,12 @@ class Storage:
             )
             rows = results.to_pylist()
             for row in rows:
-                row.setdefault("_score", float(row.get("_relevance_score", 0.0)))
+                # LanceDB BM25 scores are not on the same scale as vector similarity.
+                # Normalize to [0, 1) dynamically so hybrid merging is well-behaved
+                # without any query-specific heuristics.
+                raw = float(row.get("_relevance_score", 0.0) or 0.0)
+                row["_fts_score_raw"] = raw
+                row["_score"] = raw / (raw + 1.0) if raw > 0.0 else 0.0
             return rows
         except Exception as exc:  # noqa: BLE001
             logger.debug("FTS search error: %s", exc)

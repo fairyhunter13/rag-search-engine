@@ -103,70 +103,9 @@ async def index_file(
         await storage.delete_by_path(str(path))
         return {"status": "empty", "chunks": 0}
 
-    # Embed a slightly richer representation than what we store as `content`.
-    # This improves recall for natural-language queries by including file context
-    # and identifiers present in the chunk, without hardcoding query keywords.
-    import re
-
-    def _extract_identifiers(text: str, limit: int = 32) -> list[str]:
-        # Prefer constant-like and identifier-like tokens; keep it small so we
-        # don't bloat embedding inputs.
-        tokens = []
-        for pat in (r"\b[A-Z][A-Z0-9_]{2,}\b", r"\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b"):
-            tokens.extend(re.findall(pat, text))
-        seen = set()
-        out = []
-        for t in tokens:
-            if t in seen:
-                continue
-            seen.add(t)
-            out.append(t)
-            if len(out) >= limit:
-                break
-        return out
-
-    def _identifier_terms(ids: list[str], limit: int = 64) -> list[str]:
-        terms: list[str] = []
-        seen: set[str] = set()
-        for ident in ids:
-            # Turn e.g. REGISTRY_PATH -> "registry path"
-            words = [w for w in ident.replace("__", "_").split("_") if w]
-            if not words:
-                continue
-            phrase = " ".join(w.lower() for w in words)
-            if phrase and phrase not in seen:
-                seen.add(phrase)
-                terms.append(phrase)
-            if len(terms) >= limit:
-                break
-        return terms
-
-    path_str = str(path)
-    rel_path = path_str
-    if project_root is not None:
-        try:
-            rel_path = str(path.relative_to(project_root))
-        except Exception:
-            rel_path = path.name or path_str
-    texts = []
-    for c in chunks:
-        ids = _extract_identifiers(c.content)
-        terms = _identifier_terms(ids)
-        header = f"FILE: {rel_path}\nLANG: {language}\n"
-        if ids:
-            header += "IDENTIFIERS: " + ", ".join(ids) + "\n"
-        if terms:
-            header += "TERMS: " + " | ".join(terms) + "\n"
-
-        # Keep the header bounded so we don't crowd out chunk content and
-        # trigger truncation in the embedder.
-        if len(header) > 1024:
-            header = f"FILE: {rel_path}\nLANG: {language}\n"
-            if ids:
-                header += "IDENTIFIERS: " + ", ".join(ids[:16]) + "\n"
-            if len(header) > 1024:
-                header = header[:1024] + "\n"
-        texts.append(header + "\n" + c.content)
+    # Embed exactly what we store (the chunk text). Avoid any heuristic query
+    # shaping or keyword/identifier augmentation.
+    texts = [c.content for c in chunks]
     try:
         async with embed_sem:
             vectors = await asyncio.to_thread(

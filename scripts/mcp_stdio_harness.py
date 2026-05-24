@@ -106,6 +106,11 @@ async def _run() -> int:
         "OPENCODE_BRIDGE_WORKSPACE_ROOT": str(workspace),
         # Keep the daemon from lingering too long after the harness exits.
         "OPENCODE_MCP_IDLE_SHUTDOWN_S": "30",
+        # Optional structural weights (no keyword heuristics): prefer source over docs/scripts.
+        "OPENCODE_WEIGHT_SRC": "2.0",
+        "OPENCODE_WEIGHT_DOCS": "0.1",
+        "OPENCODE_WEIGHT_SCRIPTS": "0.1",
+        "OPENCODE_WEIGHT_DOCUMENT_LANGUAGE": "0.1",
     }
 
     params = StdioServerParameters(
@@ -202,4 +207,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

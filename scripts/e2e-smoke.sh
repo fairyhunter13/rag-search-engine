@@ -17,6 +17,12 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 export OPENCODE_REGISTRY_PATH="$TMPDIR/registry.json"
 export OPENCODE_BIN
+# Optional structural weights (no keyword-based heuristics): prefer implementation
+# code over docs/scripts for fact-finding queries.
+export OPENCODE_WEIGHT_SRC="2.0"
+export OPENCODE_WEIGHT_DOCS="0.1"
+export OPENCODE_WEIGHT_SCRIPTS="0.1"
+export OPENCODE_WEIGHT_DOCUMENT_LANGUAGE="0.1"
 
 PROJECT_DIR="$TMPDIR/project"
 mkdir -p "$PROJECT_DIR"

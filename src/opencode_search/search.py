@@ -80,6 +80,18 @@ _CANDIDATE_OVERSAMPLE = max(1, int(os.environ.get("OPENCODE_CANDIDATE_OVERSAMPLE
 _MAX_CANDIDATES_PER_PATH = max(1, int(os.environ.get("OPENCODE_MAX_CANDIDATES_PER_PATH", "3")))
 _RERANK_CONCURRENCY = max(1, int(os.environ.get("OPENCODE_RERANK_CONCURRENCY", "1")))
 
+# Optional structural authority weights (no keyword-based rules). Defaults are
+# neutral (1.0) unless configured by the user/operator.
+def _env_weight(name: str, default: float = 1.0) -> float:
+    """Read a structural weight from env at runtime.
+
+    Defaults are neutral (1.0). This intentionally avoids keyword-based rules.
+    """
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return float(default)
+
 # Cross-encoder inference is memory-heavy; limit concurrent rerank calls across
 # projects to avoid VRAM spikes and latency cliffs.
 _rerank_sem: asyncio.Semaphore | None = None
@@ -239,67 +251,41 @@ def _relative_result_parts(row: dict) -> tuple[str, ...]:
         return tuple(part.lower() for part in Path(path_str).parts)
 
 
-def _is_question_query(query: str) -> bool:
-    normalized = query.strip().lower()
-    if "?" in normalized:
-        return True
-    prefixes = (
-        "what ",
-        "where ",
-        "how ",
-        "which ",
-        "when ",
-        "why ",
-        "who ",
-        "is ",
-        "does ",
-        "do ",
-    )
-    return normalized.startswith(prefixes)
-
-
-
 def _authority_weight(row: dict, *, query: str = "") -> float:
-    """Return a path-aware weight so implementation code outranks stale prose."""
+    """Return an optional path/type-aware weight.
+
+    This deliberately avoids any keyword- or filename-token-based heuristics.
+    All weights default to 1.0 (neutral) unless configured via environment.
+    """
     parts = _relative_result_parts(row)
     name = parts[-1] if parts else ""
     language = str(row.get("language", "") or "").lower()
-    question_query = _is_question_query(query)
 
     weight = 1.0
 
     if "src" in parts:
-        weight *= 1.28 if question_query else 1.18
+        weight *= _env_weight("OPENCODE_WEIGHT_SRC", 1.18)
     elif language and language not in _DOCUMENT_LANGUAGES:
-        weight *= 1.12 if question_query else 1.08
+        weight *= _env_weight("OPENCODE_WEIGHT_CODE_NON_DOC", 1.08)
 
     # Tests often contain dense natural-language docstrings and question-shaped
     # sentences; aggressively downweight them for question queries so
     # implementation files win unless the user explicitly searches for tests.
     if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
-        # Even for keyword-style queries, tests are rarely the source of truth.
-        weight *= 0.2 if question_query else 0.35
+        weight *= _env_weight("OPENCODE_WEIGHT_TESTS", 0.35)
 
     # Planning docs can be extremely "query-shaped" and outscore code on pure
     # lexical matching; treat them as low authority for question queries.
     if "docs" in parts:
-        # Prefer implementation over prose by default; docs can still appear,
-        # but should not dominate "how/where/what" or keyword fact-finding.
-        weight *= 0.08 if question_query else 0.12
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCS", 0.12)
 
     if "scripts" in parts:
-        weight *= 0.15 if question_query else 0.25
+        weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 0.25)
 
     if language in _DOCUMENT_LANGUAGES:
-        weight *= 0.2 if question_query else 0.45
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.45)
     elif language == "markdown":
-        weight *= 0.2 if question_query else 0.45
-
-    if "benchmark" in name:
-        weight *= 0.02 if question_query else 0.05
-
-    if any(token in name for token in ("migration", "e2e_testing", "testing", "plan")):
-        weight *= 0.05 if question_query else 0.35
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.45)
 
     # Allow very low weights so stale/low-authority sources cannot dominate
     # purely by matching query-shaped prose (especially when hybrid FTS spikes

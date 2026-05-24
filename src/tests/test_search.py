@@ -268,10 +268,14 @@ async def test_search_enforces_rerank_even_if_disabled_by_caller():
 
 
 @pytest.mark.asyncio
-async def test_search_authority_weight_prefers_source_over_docs_after_rerank():
+async def test_search_authority_weight_prefers_source_over_docs_after_rerank(monkeypatch):
     clear_search_cache()
     project = _make_project()
     dims = project.dims
+    # Enable optional structural weights (no keyword-based heuristics).
+    monkeypatch.setenv("OPENCODE_WEIGHT_SRC", "2.0")
+    monkeypatch.setenv("OPENCODE_WEIGHT_DOCS", "0.1")
+    monkeypatch.setenv("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", "0.1")
     rows = [
         {
             "path": "/tmp/proj/docs/MIGRATION_PLAN.md",
@@ -308,10 +312,14 @@ async def test_search_authority_weight_prefers_source_over_docs_after_rerank():
 
 
 @pytest.mark.asyncio
-async def test_search_authority_weight_prefers_source_over_benchmark_and_plan():
+async def test_search_authority_weight_prefers_source_over_benchmark_and_plan(monkeypatch):
     clear_search_cache()
     project = _make_project()
     dims = project.dims
+    monkeypatch.setenv("OPENCODE_WEIGHT_SRC", "2.0")
+    monkeypatch.setenv("OPENCODE_WEIGHT_DOCS", "0.1")
+    monkeypatch.setenv("OPENCODE_WEIGHT_SCRIPTS", "0.1")
+    monkeypatch.setenv("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", "0.1")
     rows = [
         {
             "path": "/tmp/proj/scripts/benchmark_mcp.py",
@@ -360,11 +368,13 @@ async def test_search_authority_weight_prefers_source_over_benchmark_and_plan():
 
 
 @pytest.mark.asyncio
-async def test_search_authority_weight_prefers_source_over_tests_for_questions():
-    """Question-like queries should prefer implementation over test descriptions."""
+async def test_search_authority_weight_prefers_source_over_tests_for_questions(monkeypatch):
+    """Prefer implementation over test descriptions when weights are configured."""
     clear_search_cache()
     project = _make_project()
     dims = project.dims
+    monkeypatch.setenv("OPENCODE_WEIGHT_SRC", "2.0")
+    monkeypatch.setenv("OPENCODE_WEIGHT_TESTS", "0.1")
     rows = [
         {
             "path": "/tmp/proj/src/tests/test_search.py",
