@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("lancedb")
 pytest.importorskip("pyarrow")
+import pytest_asyncio
 
 from opencode_search.indexer import (
     IndexResult,
@@ -100,7 +101,7 @@ def test_index_result_creation():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def real_storage(tmp_path):
     # Use budget-tier dims (512) so embeddings produced by the budget tier fit.
     # DB lives in a sibling of the project_root subdir used by tests so that

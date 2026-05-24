@@ -90,6 +90,35 @@ def test_index_with_force_and_watch(tmp_path):
     assert captured.get("watch") is True
 
 
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
+
+
+def test_search_defaults_to_scoped_project_from_cwd(tmp_path, monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def capture(**kwargs):
+        captured.update(kwargs)
+        return {"results": [], "elapsed_ms": 0.0, "query": kwargs["query"], "projects_searched": 1}
+
+    monkeypatch.chdir(tmp_path)
+    with patch("opencode_search.handlers.resolve_indexed_project_path", return_value=str(tmp_path)), \
+         patch("opencode_search.handlers.handle_search_code", side_effect=capture):
+        result = runner.invoke(app, ["search", "registry path", "--json"])
+
+    assert result.exit_code == 0
+    assert captured.get("project_paths") == [str(tmp_path)]
+
+
+def test_search_errors_when_no_indexed_project_contains_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with patch("opencode_search.handlers.resolve_indexed_project_path", return_value=None):
+        result = runner.invoke(app, ["search", "anything"])
+
+    assert result.exit_code == 1
+    assert "No indexed project contains the current working directory" in result.output
+
 def test_init_defaults_to_current_directory(tmp_path, monkeypatch):
     fake_result = {
         "status": "ok",
@@ -155,7 +184,8 @@ def test_daemon_status_uses_runtime_defaults_when_flags_omitted(monkeypatch):
 
 def test_search_no_results():
     fake = {"results": [], "elapsed_ms": 12.0, "query": "x", "projects_searched": 1}
-    with patch("opencode_search.handlers.handle_search_code",
+    with patch("opencode_search.handlers.resolve_indexed_project_path", return_value="/tmp/proj"), \
+         patch("opencode_search.handlers.handle_search_code",
                AsyncMock(return_value=fake)):
         result = runner.invoke(app, ["search", "find x"])
     assert result.exit_code == 0
@@ -175,7 +205,8 @@ def test_search_with_results():
         "query": "find foo",
         "projects_searched": 1,
     }
-    with patch("opencode_search.handlers.handle_search_code",
+    with patch("opencode_search.handlers.resolve_indexed_project_path", return_value="/tmp/proj"), \
+         patch("opencode_search.handlers.handle_search_code",
                AsyncMock(return_value=fake)):
         result = runner.invoke(app, ["search", "find foo"])
     assert result.exit_code == 0
@@ -185,7 +216,8 @@ def test_search_with_results():
 
 def test_search_json_output():
     fake = {"results": [], "elapsed_ms": 0.0, "query": "x", "projects_searched": 0}
-    with patch("opencode_search.handlers.handle_search_code",
+    with patch("opencode_search.handlers.resolve_indexed_project_path", return_value="/tmp/proj"), \
+         patch("opencode_search.handlers.handle_search_code",
                AsyncMock(return_value=fake)):
         result = runner.invoke(app, ["search", "x", "--json"])
     assert result.exit_code == 0
@@ -200,7 +232,8 @@ def test_search_no_rerank_flag():
         captured.update(kwargs)
         return {"results": [], "elapsed_ms": 0.0, "query": "x", "projects_searched": 0}
 
-    with patch("opencode_search.handlers.handle_search_code", side_effect=capture):
+    with patch("opencode_search.handlers.resolve_indexed_project_path", return_value="/tmp/proj"), \
+         patch("opencode_search.handlers.handle_search_code", side_effect=capture):
         runner.invoke(app, ["search", "x", "--no-rerank"])
 
     assert captured.get("use_rerank") is False

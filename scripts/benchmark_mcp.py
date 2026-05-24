@@ -42,6 +42,36 @@ QUESTIONS = [
     "What is the default top_k for search_code and where is it configured?",
 ]
 
+_EXPECTED_ANSWER_RULES: dict[str, list[list[str]]] = {
+    "Where is the registry of indexed projects stored and what format is it?": [
+        ["~/.local/share/opencode-search/projects.json"],
+        ["json"],
+    ],
+    "What embedding model is used for the budget tier?": [
+        ["jinaai/jina-embeddings-v2-small-en", "jina-embeddings-v2-small-en"],
+    ],
+    "How does search_code rank and rerank results?": [
+        ["stage 1", "vector"],
+        ["rerank"],
+    ],
+    "Where is the MCP server's FastMCP instance created?": [
+        ["mcp.py"],
+        ["fastmcp"],
+    ],
+    "What is the default top_k for search_code and where is it configured?": [
+        ["10"],
+        ["final_top_k"],
+    ],
+}
+
+_MCP_FIRST_PROMPT_PREFIX = (
+    "Use the opencode-search MCP tools to answer this question.\n"
+    "Step 1: Call list_indexed_projects.\n"
+    "Step 2: Call search_code with a relevant natural-language query.\n"
+    "Step 3: Answer based on the results.\n\n"
+    "Question: "
+)
+
 WORKDIR = str(Path(__file__).resolve().parent.parent)
 
 # Resolve the claude binary using the *shell's* PATH so nvm-managed node
@@ -73,6 +103,18 @@ _BASH_SEARCH_RE = re.compile(
 
 def _now() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _answer_is_valid(question: str, answer: str) -> bool | None:
+    groups = _EXPECTED_ANSWER_RULES.get(question)
+    if not groups:
+        return None
+    haystack = _normalize_text(answer)
+    return all(any(token in haystack for token in group) for group in groups)
 
 
 # ---------------------------------------------------------------------------
@@ -120,13 +162,7 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
     # treats tool ordering as part of the task, not just background guidance.
     # claude -p is single-shot headless; without this, the model ignores CLAUDE.md
     # workflow rules and reaches for native tools (Bash/Grep) directly.
-    prompted_question = (
-        "Use the opencode-search MCP tools to answer this question.\n"
-        "Step 1: Call list_indexed_projects.\n"
-        "Step 2: Call search_code with a relevant natural-language query.\n"
-        "Step 3: Answer based on the results.\n\n"
-        f"Question: {question}"
-    )
+    prompted_question = f"{_MCP_FIRST_PROMPT_PREFIX}{question}"
     cmd = [
         _CLAUDE_BIN, "-p", prompted_question,
         "--output-format", "stream-json",
@@ -156,6 +192,7 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
 def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
     tool_calls: list[str] = []   # bare tool names (mcp prefix stripped)
     bash_commands: list[str] = []
+    answer_parts: list[str] = []
     input_tokens = 0
     output_tokens = 0
 
@@ -180,6 +217,10 @@ def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
                     if name in ("Bash", "bash"):
                         inp = block.get("input", {})
                         bash_commands.append(inp.get("command", "") if isinstance(inp, dict) else "")
+                elif block.get("type") == "text":
+                    text = block.get("text", "")
+                    if text:
+                        answer_parts.append(text)
 
         # Also handle top-level tool_use (older format)
         if typ == "tool_use":
@@ -200,6 +241,7 @@ def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
             input_tokens += usage.get("input_tokens", 0)
             output_tokens += usage.get("output_tokens", 0)
 
+    answer_text = "\n".join(answer_parts).strip()
     called_list = "list_indexed_projects" in tool_calls
     called_search = "search_code" in tool_calls
     bash_search_used = any(_BASH_SEARCH_RE.search(c) for c in bash_commands)
@@ -222,6 +264,8 @@ def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
+        "answer_excerpt": " ".join(answer_text.split())[:400],
+        "answer_valid": _answer_is_valid(question, answer_text),
     }
 
 
@@ -235,7 +279,7 @@ def run_codex(question: str, model: str) -> dict[str, Any]:
     cmd = ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox"]
     if model:
         cmd += ["-m", model]
-    cmd.append(question)
+    cmd.append(f"{_MCP_FIRST_PROMPT_PREFIX}{question}")
 
     try:
         proc = subprocess.run(
@@ -259,6 +303,7 @@ def _parse_codex_jsonl(raw: str, question: str) -> dict[str, Any]:
     """
     tool_calls: list[str] = []       # opencode-search tool names in call order
     bash_commands: list[str] = []
+    answer_parts: list[str] = []
     input_tokens = 0
     output_tokens = 0
 
@@ -285,12 +330,23 @@ def _parse_codex_jsonl(raw: str, question: str) -> dict[str, Any]:
                 cmd_str = action.get("command", "") if isinstance(action, dict) else ""
                 if cmd_str:
                     bash_commands.append(cmd_str)
+            if item_type == "assistant_message":
+                for block in item.get("content", []) or []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if text:
+                            answer_parts.append(text)
+            if item_type == "agent_message":
+                text = item.get("text", "")
+                if text:
+                    answer_parts.append(text)
 
         if typ == "turn.completed":
             usage = obj.get("usage", {})
             input_tokens += usage.get("input_tokens", 0)
             output_tokens += usage.get("output_tokens", 0)
 
+    answer_text = "\n".join(answer_parts).strip()
     called_list = "list_indexed_projects" in tool_calls
     called_search = "search_code" in tool_calls
     bash_search_used = any(_BASH_SEARCH_RE.search(c) for c in bash_commands)
@@ -312,6 +368,8 @@ def _parse_codex_jsonl(raw: str, question: str) -> dict[str, Any]:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
+        "answer_excerpt": " ".join(answer_text.split())[:400],
+        "answer_valid": _answer_is_valid(question, answer_text),
     }
 
 
@@ -321,20 +379,23 @@ def _parse_codex_jsonl(raw: str, question: str) -> dict[str, Any]:
 
 def _print_table(results: list[dict[str, Any]], client: str) -> None:
     print(f"\n## {client} benchmark results\n")
-    header = "| # | Called list? | Called search? | Correct order? | Bash search? | Tokens |"
-    sep    = "|---|:---:|:---:|:---:|:---:|---:|"
+    header = "| # | Called list? | Called search? | Correct order? | Bash search? | Answer valid? | Tokens |"
+    sep    = "|---|:---:|:---:|:---:|:---:|:---:|---:|"
     print(header)
     print(sep)
     for i, r in enumerate(results, 1):
         if "error" in r:
-            print(f"| {i} | ERROR | - | - | - | - |")
+            print(f"| {i} | ERROR | - | - | - | - | - |")
             continue
         tick = lambda v: "✓" if v else "✗"
+        answer_valid = r.get("answer_valid")
+        answer_cell = "n/a" if answer_valid is None else tick(answer_valid)
         print(
             f"| {i} | {tick(r['called_list_indexed_projects'])} "
             f"| {tick(r['called_search_code'])} "
             f"| {tick(r['correct_order'])} "
             f"| {tick(r['bash_search_used'])} "
+            f"| {answer_cell} "
             f"| {r['total_tokens']} |"
         )
 
@@ -348,6 +409,10 @@ def _print_table(results: list[dict[str, Any]], client: str) -> None:
     print(f"- search_code usage: {rate('called_search_code'):.0f}%")
     print(f"- Correct ordering (list before search): {rate('correct_order'):.0f}%")
     print(f"- Bash search fallback rate: {rate('bash_search_used'):.0f}%")
+    answer_scored = [r for r in valid if r.get("answer_valid") is not None]
+    if answer_scored:
+        answer_rate = sum(1 for r in answer_scored if r["answer_valid"]) / len(answer_scored) * 100
+        print(f"- Answer validity rate (scored questions): {answer_rate:.0f}%")
     avg_tok = sum(r['total_tokens'] for r in valid) / n
     print(f"- Avg tokens/question: {avg_tok:.0f}")
 
@@ -363,11 +428,31 @@ def _save_json(results: list[dict[str, Any]], client: str, timestamp: str) -> st
 # Main
 # ---------------------------------------------------------------------------
 
-def _run_client(client: str, model: str) -> list[dict[str, Any]]:
+def _select_questions(
+    *,
+    requested: list[int] | None,
+    max_questions: int | None,
+) -> list[str]:
+    if requested:
+        selected: list[str] = []
+        for index in requested:
+            if index < 1 or index > len(QUESTIONS):
+                raise ValueError(f"Question index {index} is out of range 1..{len(QUESTIONS)}")
+            selected.append(QUESTIONS[index - 1])
+        return selected
+
+    if max_questions is not None:
+        return QUESTIONS[: max(0, min(len(QUESTIONS), max_questions))]
+
+    return QUESTIONS
+
+
+def _run_client(client: str, model: str, questions: list[str]) -> list[dict[str, Any]]:
     runner = run_claude if client == "claude" else run_codex
     results = []
-    for i, q in enumerate(QUESTIONS, 1):
-        print(f"  [{i}/{len(QUESTIONS)}] {q[:60]}...", flush=True)
+    total = len(questions)
+    for i, q in enumerate(questions, 1):
+        print(f"  [{i}/{total}] {q[:60]}...", flush=True)
         r = runner(q, model)
         results.append(r)
     return results
@@ -379,15 +464,29 @@ def main() -> None:
     parser.add_argument("--model", default="", help="Override model (client-specific default used if omitted)")
     parser.add_argument("--claude-model", default="claude-haiku-4-5-20251001")
     parser.add_argument("--codex-model", default="gpt-5.4-mini")
+    parser.add_argument(
+        "--question",
+        dest="questions",
+        type=int,
+        action="append",
+        help="Run only specific 1-based question numbers (repeatable).",
+    )
+    parser.add_argument(
+        "--max-questions",
+        type=int,
+        default=None,
+        help="Run only the first N questions.",
+    )
     args = parser.parse_args()
 
     ts = _now()
     clients = ["claude", "codex"] if args.client == "both" else [args.client]
+    questions = _select_questions(requested=args.questions, max_questions=args.max_questions)
 
     for client in clients:
         model = args.model or (args.claude_model if client == "claude" else args.codex_model)
         print(f"\nRunning {client} benchmark with model={model} …")
-        results = _run_client(client, model)
+        results = _run_client(client, model, questions)
         _print_table(results, f"{client}/{model}")
         path = _save_json(results, client, ts)
         print(f"\nResults saved to {path}")

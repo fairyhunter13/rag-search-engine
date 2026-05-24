@@ -101,6 +101,16 @@ The MCP server exposes five tools to AI assistants:
 - `list_indexed_projects()` — enumerate projects
 - `stop_watching(path)` — stop file-watcher
 
+#### Workspace Scoping (Important)
+
+For Claude Code/Codex/Hermes, you should run the MCP **stdio bridge** (the default in the provided configs). The bridge enforces a workspace boundary:
+
+- By default, it will only index/search/list projects under the opened workspace root.
+- If a model tries to pass `project_paths` outside the workspace, the bridge returns an error.
+- To intentionally operate outside the workspace (not recommended), set `OPENCODE_ALLOW_INDEX_OUTSIDE_CWD=1`.
+
+To make the boundary unambiguous (and robust to mis-set working directories), set `OPENCODE_BRIDGE_WORKSPACE_ROOT` to the project root when launching the bridge.
+
 #### Global Singleton Daemon
 
 For a shared MCP daemon across Claude Code, Codex, and Hermes:
@@ -160,6 +170,7 @@ See `mcp-config/hermes.json`.
 
 | Variable                              | Default                     | Meaning                                         |
 |---------------------------------------|-----------------------------|-------------------------------------------------|
+| `OPENCODE_BRIDGE_WORKSPACE_ROOT`      | *(unset)*                   | Pin the MCP stdio bridge workspace root. When set, the bridge will refuse to index/search projects outside this directory (unless `OPENCODE_ALLOW_INDEX_OUTSIDE_CWD=1`). |
 | `OPENCODE_REGISTRY_PATH`              | `~/.local/share/opencode-search/projects.json` | Where the project registry is persisted         |
 | `OPENCODE_INDEX_ROOT`                 | `~/.local/share/opencode-search/indexes`       | Centralized root directory for LanceDB indexes  |
 | `OPENCODE_DEBOUNCE_DELAY_MS`          | `1000`                      | Watcher debounce window                         |

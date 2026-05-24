@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("lancedb")
 pytest.importorskip("pyarrow")
+import pytest_asyncio
 
 from opencode_search.cleaner import remove_chunks_for_paths, remove_stale_chunks
 from opencode_search.storage import ChunkData, Storage
@@ -15,7 +16,7 @@ from opencode_search.storage import ChunkData, Storage
 pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def storage(tmp_path):
     s = Storage(db_path=str(tmp_path / "db"), dims=384)
     await s.open()

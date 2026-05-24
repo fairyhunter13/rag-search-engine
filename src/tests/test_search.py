@@ -203,6 +203,8 @@ async def test_search_result_fields():
         assert hasattr(r, "start_line")
         assert hasattr(r, "end_line")
         assert hasattr(r, "project_path")
+        assert "authority_weight" in r.metadata
+        assert "raw_score" in r.metadata
 
 
 @pytest.mark.asyncio
@@ -264,6 +266,140 @@ async def test_search_no_rerank_skips_reranker():
         await search("no rerank", projects=[project], use_rerank=False)
 
     assert rerank_calls["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_authority_weight_prefers_source_over_docs_after_rerank():
+    clear_search_cache()
+    project = _make_project()
+    dims = project.dims
+    rows = [
+        {
+            "path": "/tmp/proj/docs/MIGRATION_PLAN.md",
+            "content": "registry path ~/.opencode/projects.json",
+            "language": "markdown",
+            "start_line": 1,
+            "end_line": 3,
+            "_score": 0.98,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 1,
+        },
+        {
+            "path": "/tmp/proj/src/config.py",
+            "content": "REGISTRY_PATH = '~/.local/share/opencode-search/projects.json'",
+            "language": "python",
+            "start_line": 10,
+            "end_line": 12,
+            "_score": 0.82,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 2,
+        },
+    ]
+
+    with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
+         patch("opencode_search.search._rerank_sync", return_value=[(0, 0.99), (1, 0.8)]), \
+         patch("opencode_search.search.Storage") as MockStorage:
+        MockStorage.return_value = _make_mock_storage(rows=rows)
+        results = await search("where is registry path", projects=[project], top_k=2)
+
+    assert len(results) == 2
+    assert results[0].path.endswith("/src/config.py")
+    assert results[0].score > results[1].score
+    assert results[0].metadata["authority_weight"] > results[1].metadata["authority_weight"]
+
+
+@pytest.mark.asyncio
+async def test_search_authority_weight_prefers_source_over_benchmark_and_plan():
+    clear_search_cache()
+    project = _make_project()
+    dims = project.dims
+    rows = [
+        {
+            "path": "/tmp/proj/scripts/benchmark_mcp.py",
+            "content": "Where is the registry of indexed projects stored and what format is it?",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 10,
+            "_score": 0.99,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 1,
+        },
+        {
+            "path": "/tmp/proj/docs/MIGRATION_PLAN.md",
+            "content": "Legacy registry path ~/.opencode/projects.json",
+            "language": "markdown",
+            "start_line": 1,
+            "end_line": 4,
+            "_score": 0.96,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 2,
+        },
+        {
+            "path": "/tmp/proj/src/opencode_search/config.py",
+            "content": "REGISTRY_PATH = '~/.local/share/opencode-search/projects.json'",
+            "language": "python",
+            "start_line": 10,
+            "end_line": 12,
+            "_score": 0.7,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 3,
+        },
+    ]
+
+    with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
+         patch("opencode_search.search._rerank_sync", return_value=[(0, 0.99), (1, 0.96), (2, 0.7)]), \
+         patch("opencode_search.search.Storage") as MockStorage:
+        MockStorage.return_value = _make_mock_storage(rows=rows)
+        results = await search("where is registry path", projects=[project], top_k=3)
+
+    assert [r.path for r in results][:1] == ["/tmp/proj/src/opencode_search/config.py"]
+    assert results[0].metadata["authority_weight"] > results[1].metadata["authority_weight"]
+    assert {r.path for r in results[1:]} == {
+        "/tmp/proj/scripts/benchmark_mcp.py",
+        "/tmp/proj/docs/MIGRATION_PLAN.md",
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_limits_document_chunk_dominance_per_file():
+    clear_search_cache()
+    project = _make_project()
+    dims = project.dims
+    rows = [
+        {
+            "path": "/tmp/proj/docs/E2E_TESTING.md",
+            "content": f"doc chunk {i}",
+            "language": "markdown",
+            "start_line": i,
+            "end_line": i,
+            "_score": 0.95 - i * 0.01,
+            "_project_path": "/tmp/proj",
+            "chunk_id": i,
+        }
+        for i in range(5)
+    ]
+    rows.append(
+        {
+            "path": "/tmp/proj/src/search.py",
+            "content": "actual implementation",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 5,
+            "_score": 0.75,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 100,
+        }
+    )
+
+    with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
+         patch("opencode_search.search._rerank_sync", side_effect=AssertionError("rerank should not run")), \
+         patch("opencode_search.search.Storage") as MockStorage:
+        MockStorage.return_value = _make_mock_storage(rows=rows)
+        results = await search("implementation", projects=[project], top_k=6, use_rerank=False)
+
+    paths = [r.path for r in results]
+    assert paths.count("/tmp/proj/docs/E2E_TESTING.md") <= 3
+    assert "/tmp/proj/src/search.py" in paths
 
 
 @pytest.mark.asyncio

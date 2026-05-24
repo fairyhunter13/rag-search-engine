@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("lancedb")
 pa = pytest.importorskip("pyarrow")
+import pytest_asyncio
 
 from opencode_search.storage import ChunkData, Storage, build_schema
 
@@ -101,7 +102,7 @@ def test_storage_sql_quote_escapes_single_quotes():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def storage(tmp_path):
     s = Storage(db_path=str(tmp_path / "testdb"), dims=384)
     await s.open()

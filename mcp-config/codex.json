@@ -6,6 +6,10 @@
     "server": {
       "command": "opencode-search",
       "args": ["daemon", "bridge-stdio"],
+      "env": {
+        "_comment": "Optional but recommended: pin the workspace root so the bridge cannot access indexes outside the opened project.",
+        "OPENCODE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"
+      },
       "transport": "stdio"
     },
     "tools": [
