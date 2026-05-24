@@ -64,9 +64,23 @@ def _strip_mcp_prefix(name: str) -> str:
     return name[len(_MCP_OPENCODE_PREFIX):] if name.startswith(_MCP_OPENCODE_PREFIX) else name
 
 
+_CLAUDE_SYSTEM_PROMPT = (
+    "MANDATORY RULE — no exceptions: Before using any native tool (Bash, Grep, Glob, Read) "
+    "for code or file exploration, you MUST first call list_indexed_projects, then immediately "
+    "call search_code with a natural-language query. "
+    "Only use native tools if search_code returns no useful results. "
+    "Do NOT answer from memory or training data. Do NOT skip the MCP tools step."
+)
+
+
 def run_claude(question: str, model: str) -> dict[str, Any]:
-    # Pre-approve all opencode-search MCP tools plus read-only exploration tools
-    # so claude -p doesn't block them with "permission not granted".
+    # --tools restricts the built-in toolset to file-exploration tools only,
+    # excluding meta-tools (Agent, Skill, Task) that spawn sub-contexts which
+    # don't inherit the MCP-first instruction.
+    # --allowedTools pre-approves the MCP tools so they aren't permission-blocked.
+    # --append-system-prompt injects the MCP-first rule at system-prompt level
+    # (higher priority than CLAUDE.md) to improve small-model compliance.
+    builtin_tools = "Bash,Grep,Glob,Read"
     allowed = (
         "mcp__opencode-search__list_indexed_projects"
         " mcp__opencode-search__search_code"
@@ -79,8 +93,9 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
         "--output-format", "stream-json",
         "--verbose",
         "--model", model,
+        "--tools", builtin_tools,
         "--allowedTools", allowed,
-        "--disallowedTools", "Agent",
+        "--append-system-prompt", _CLAUDE_SYSTEM_PROMPT,
     ]
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(Path.home() / ".claude")}
     try:
