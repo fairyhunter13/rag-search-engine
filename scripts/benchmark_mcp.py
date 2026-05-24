@@ -57,17 +57,34 @@ def _now() -> str:
 # Claude Code runner
 # ---------------------------------------------------------------------------
 
+_MCP_OPENCODE_PREFIX = "mcp__opencode-search__"
+
+def _strip_mcp_prefix(name: str) -> str:
+    """Normalise 'mcp__opencode-search__search_code' → 'search_code'."""
+    return name[len(_MCP_OPENCODE_PREFIX):] if name.startswith(_MCP_OPENCODE_PREFIX) else name
+
+
 def run_claude(question: str, model: str) -> dict[str, Any]:
+    # Pre-approve all opencode-search MCP tools plus read-only exploration tools
+    # so claude -p doesn't block them with "permission not granted".
+    allowed = (
+        "mcp__opencode-search__list_indexed_projects"
+        " mcp__opencode-search__search_code"
+        " mcp__opencode-search__project_status"
+        " mcp__opencode-search__search_metrics"
+        " Bash Grep Glob Read"
+    )
     cmd = [
         "claude", "-p", question,
         "--output-format", "stream-json",
         "--verbose",
         "--model", model,
+        "--allowedTools", allowed,
     ]
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(Path.home() / ".claude")}
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120,
+            cmd, capture_output=True, text=True, timeout=180,
             cwd=WORKDIR, env=env,
         )
     except subprocess.TimeoutExpired:
@@ -78,7 +95,7 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
 
 
 def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
-    tool_calls: list[str] = []
+    tool_calls: list[str] = []   # bare tool names (mcp prefix stripped)
     bash_commands: list[str] = []
     input_tokens = 0
     output_tokens = 0
@@ -94,18 +111,33 @@ def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
 
         typ = obj.get("type", "")
 
-        # Tool invocations
+        # stream-json tool_use events live inside assistant message content blocks
+        if typ == "assistant":
+            for block in obj.get("message", {}).get("content", []):
+                if block.get("type") == "tool_use":
+                    raw_name = block.get("name", "")
+                    name = _strip_mcp_prefix(raw_name)
+                    tool_calls.append(name)
+                    if name in ("Bash", "bash"):
+                        inp = block.get("input", {})
+                        bash_commands.append(inp.get("command", "") if isinstance(inp, dict) else "")
+
+        # Also handle top-level tool_use (older format)
         if typ == "tool_use":
-            name = obj.get("name", "")
+            raw_name = obj.get("name", "")
+            name = _strip_mcp_prefix(raw_name)
             tool_calls.append(name)
             if name in ("Bash", "bash"):
                 inp = obj.get("input", {})
-                cmd_str = inp.get("command", "") if isinstance(inp, dict) else ""
-                bash_commands.append(cmd_str)
+                bash_commands.append(inp.get("command", "") if isinstance(inp, dict) else "")
 
-        # Token usage
-        if typ == "usage" or "usage" in obj:
-            usage = obj.get("usage", obj)
+        # Token usage — in stream-json it appears inside message.usage
+        if typ == "assistant":
+            usage = obj.get("message", {}).get("usage", {})
+            input_tokens += usage.get("input_tokens", 0)
+            output_tokens += usage.get("output_tokens", 0)
+        if typ == "result":
+            usage = obj.get("usage", {})
             input_tokens += usage.get("input_tokens", 0)
             output_tokens += usage.get("output_tokens", 0)
 
