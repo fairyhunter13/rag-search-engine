@@ -135,48 +135,70 @@ def _parse_stream_json(raw: str, question: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Codex runner
+# Codex runner  (codex exec --json JSONL format)
 # ---------------------------------------------------------------------------
 
 def run_codex(question: str, model: str) -> dict[str, Any]:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        out_path = f.name
-
-    cmd = ["codex", "-q", "--approval-mode", "full-auto", question]
-    env = {**os.environ}
+    # codex exec --json emits JSONL events; --dangerously-bypass-approvals-and-sandbox
+    # is required so the sandbox doesn't cancel MCP tool calls.
+    cmd = ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox"]
     if model:
-        env["OPENAI_MODEL"] = model
+        cmd += ["-m", model]
+    cmd.append(question)
 
     try:
-        with open(out_path, "w") as fout:
-            proc = subprocess.run(
-                cmd, stdout=fout, stderr=fout, timeout=120,
-                cwd=WORKDIR, env=env,
-            )
-        raw = Path(out_path).read_text()
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=180,
+            cwd=WORKDIR,
+        )
     except subprocess.TimeoutExpired:
         return {"error": "timeout", "question": question}
-    finally:
-        try:
-            os.unlink(out_path)
-        except OSError:
-            pass
 
-    return _parse_codex_output(raw, question)
+    raw = proc.stdout + proc.stderr
+    return _parse_codex_jsonl(raw, question)
 
 
-def _parse_codex_output(raw: str, question: str) -> dict[str, Any]:
-    tool_calls: list[str] = []
+def _parse_codex_jsonl(raw: str, question: str) -> dict[str, Any]:
+    """Parse JSONL from `codex exec --json`.
+
+    Relevant event shapes:
+      {"type":"item.completed","item":{"type":"mcp_tool_call","server":"opencode-search","tool":"search_code",...}}
+      {"type":"item.completed","item":{"type":"local_shell_call","action":{"command":"..."},...}}
+      {"type":"turn.completed","usage":{"input_tokens":N,"output_tokens":N,...}}
+    """
+    tool_calls: list[str] = []       # opencode-search tool names in call order
     bash_commands: list[str] = []
+    input_tokens = 0
+    output_tokens = 0
 
     for line in raw.splitlines():
-        # codex prints "mcp: opencode-search/<tool> (completed)" style lines
-        m = re.search(r"mcp: opencode-search/(\S+)\s", line)
-        if m:
-            tool_calls.append(m.group(1))
-        # bash calls: codex prints the shell command
-        if re.search(r"^\$\s+", line):
-            bash_commands.append(line)
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        typ = obj.get("type", "")
+
+        if typ == "item.completed":
+            item = obj.get("item", {})
+            item_type = item.get("type", "")
+
+            if item_type == "mcp_tool_call" and item.get("server") == "opencode-search":
+                tool_calls.append(item.get("tool", ""))
+
+            if item_type == "local_shell_call":
+                action = item.get("action", {})
+                cmd_str = action.get("command", "") if isinstance(action, dict) else ""
+                if cmd_str:
+                    bash_commands.append(cmd_str)
+
+        if typ == "turn.completed":
+            usage = obj.get("usage", {})
+            input_tokens += usage.get("input_tokens", 0)
+            output_tokens += usage.get("output_tokens", 0)
 
     called_list = "list_indexed_projects" in tool_calls
     called_search = "search_code" in tool_calls
@@ -189,14 +211,6 @@ def _parse_codex_output(raw: str, question: str) -> dict[str, Any]:
         except ValueError:
             pass
 
-    # Token count not reliably available from codex stdout
-    tokens_line = next((l for l in raw.splitlines() if "tokens used" in l.lower()), None)
-    total_tokens = 0
-    if tokens_line:
-        nums = re.findall(r"\d+", tokens_line)
-        if nums:
-            total_tokens = int(nums[0])
-
     return {
         "question": question,
         "tool_calls": tool_calls,
@@ -204,9 +218,9 @@ def _parse_codex_output(raw: str, question: str) -> dict[str, Any]:
         "called_search_code": called_search,
         "correct_order": correct_order,
         "bash_search_used": bash_search_used,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": total_tokens,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
     }
 
 
