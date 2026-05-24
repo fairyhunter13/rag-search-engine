@@ -413,12 +413,15 @@ def _bridge_command(python_bin: Path | None = None) -> list[str]:
 
 def _global_prompt_text() -> str:
     return (
-        "Use the opencode-search MCP server as the first codebase lookup path when the current project "
-        "is already indexed.\n"
+        "MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.\n"
         "\n"
-        "Rules:\n"
-        "- Before broad codebase exploration, recursive grep, manual file-by-file reading, reviews, debugging, or edits, "
-        "first check index state with project_status or list_indexed_projects and then use search_code to locate relevant code.\n"
+        "Rules (no exceptions):\n"
+        "- Before running ANY Bash command that searches code or text — grep, rg, ag, find -name/-exec, glob, fd, or similar — "
+        "FIRST call search_code with a natural language query describing what you need. "
+        "Only fall back to bash search commands if search_code returns no useful results or if the project is not indexed.\n"
+        "- Before reading, editing, or answering questions about ANY file: first call list_indexed_projects to confirm which "
+        "projects are indexed, then use search_code to locate relevant code. "
+        "Do NOT go straight to Bash/grep/find/Read for codebase exploration.\n"
         "- Never auto-index a project just because it is open.\n"
         "- Only call index_project when the user explicitly asks to index the current project. Treat commands like "
         "\"/index-project\", \"index this project\", \"index this repo\", running `opencode-search init`, "
@@ -426,7 +429,6 @@ def _global_prompt_text() -> str:
         "- If the current project is not indexed and the user did not explicitly ask to index it, say that the project is not indexed yet and ask before indexing.\n"
         "- After a project has been explicitly indexed, rely on the daemon's automatic watch behavior while the client remains open.\n"
         "- Do not call stop_watching unless the user explicitly asks for it.\n"
-        "- Prefer search_code results over large ad hoc filesystem scans.\n"
     )
 
 
@@ -444,12 +446,20 @@ def _replace_managed_block(existing: str, start: str, end: str, block: str) -> s
     return block + "\n"
 
 
-def _install_claude_global_prompt() -> str:
+def _install_claude_global_prompt(claude_dirs: list[Path], home: Path | None = None) -> list[str]:
+    home = home or Path.home()
     block = _global_prompt_with_markers(_CLAUDE_BLOCK_START, _CLAUDE_BLOCK_END)
-    existing = _CLAUDE_GLOBAL_MD.read_text(encoding="utf-8") if _CLAUDE_GLOBAL_MD.exists() else ""
-    updated = _replace_managed_block(existing, _CLAUDE_BLOCK_START, _CLAUDE_BLOCK_END, block)
-    _CLAUDE_GLOBAL_MD.write_text(updated, encoding="utf-8")
-    return str(_CLAUDE_GLOBAL_MD)
+    all_dirs = [home / ".claude"] + list(claude_dirs)
+    written: list[str] = []
+    for config_dir in all_dirs:
+        if not config_dir.exists():
+            continue
+        target = config_dir / "CLAUDE.md"
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        updated = _replace_managed_block(existing, _CLAUDE_BLOCK_START, _CLAUDE_BLOCK_END, block)
+        target.write_text(updated, encoding="utf-8")
+        written.append(str(target))
+    return written
 
 
 def _remove_managed_block(existing: str, start: str, end: str) -> str:
@@ -525,12 +535,25 @@ def _update_codex_config_text(existing: str) -> str:
     return updated
 
 
+def _disable_codex_fast_mode(config_text: str) -> str:
+    if re.search(r"(?m)^fast_mode\s*=\s*false\s*$", config_text):
+        return config_text
+    updated, n = re.subn(r"(?m)^fast_mode\s*=\s*.*$", "fast_mode = false", config_text)
+    if n > 0:
+        return updated
+    updated, n = re.subn(r"(\[features\]\n)", r"\1fast_mode = false\n", config_text, count=1)
+    if n > 0:
+        return updated
+    return config_text.rstrip() + "\n\n[features]\nfast_mode = false\n"
+
+
 def _install_codex_global_prompt() -> str:
     config_path = Path.home() / ".codex" / "config.toml"
     if not config_path.exists():
         return str(config_path)
     existing = config_path.read_text(encoding="utf-8")
     updated = _update_codex_config_text(existing)
+    updated = _disable_codex_fast_mode(updated)
     config_path.write_text(updated, encoding="utf-8")
     return str(config_path)
 
@@ -729,7 +752,7 @@ def install_global_integration(
     hermes_installed = _install_hermes(bridge_command)
     _update_hermes_config_for_global_servers(bridge_command)
     init_wrapper_path = _install_init_wrapper(helper_python)
-    claude_prompt_path = _install_claude_global_prompt()
+    claude_prompt_paths = _install_claude_global_prompt(claude_dirs)
     codex_prompt_path = _install_codex_global_prompt()
     hermes_prompt_path = _install_hermes_global_prompt()
     systemd_result = install_systemd_user_service(host=host, port=port)
@@ -742,7 +765,7 @@ def install_global_integration(
         "codex_installed": codex_installed,
         "hermes_installed": hermes_installed,
         "init_wrapper_path": init_wrapper_path,
-        "claude_prompt_path": claude_prompt_path,
+        "claude_prompt_paths": claude_prompt_paths,
         "codex_prompt_path": codex_prompt_path,
         "hermes_prompt_path": hermes_prompt_path,
         "aliases_path": str(aliases_path),

@@ -14,6 +14,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# opencode_search.mcp unconditionally imports starlette; skip the whole module
+# when running under system Python instead of the project .venv.
+pytest.importorskip("starlette", reason="starlette not installed — run tests with .venv/bin/pytest")
+
 
 def _import_mcp():
     """Import the mcp module, which triggers FastMCP server instantiation."""

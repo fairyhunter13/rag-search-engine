@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from opencode_search.metrics import record_search
 from opencode_search.config import (
     FINAL_TOP_K,
     ProjectEntry,
@@ -21,6 +22,8 @@ from opencode_search.config import (
     load_registry,
     save_registry,
 )
+
+_LAST_ACTIVE_UPDATE_INTERVAL_S: int = 3600  # throttle registry writes from search to once per hour
 from opencode_search.discover import is_indexable_file
 from opencode_search.indexer import index_files as _index_files
 from opencode_search.indexer import index_project as _index_project
@@ -39,6 +42,31 @@ _indexing_lock = asyncio.Lock()
 
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat()
+
+
+def _touch_projects_last_active(projects: list[ProjectEntry]) -> None:
+    """Update last_active for searched projects; throttled to once per hour per project."""
+    now_dt = datetime.datetime.now(datetime.UTC)
+    now_iso = now_dt.isoformat()
+    threshold = datetime.timedelta(seconds=_LAST_ACTIVE_UPDATE_INTERVAL_S)
+    registry = load_registry()
+    changed = False
+    for p in projects:
+        entry = registry.get(p.path)
+        if entry is None:
+            continue
+        stale = True
+        if entry.last_active is not None:
+            try:
+                age = now_dt - datetime.datetime.fromisoformat(entry.last_active)
+                stale = age > threshold
+            except Exception:
+                pass
+        if stale:
+            entry.last_active = now_iso
+            changed = True
+    if changed:
+        save_registry(registry)
 
 
 def resolve_indexed_project_path(path: str) -> str | None:
@@ -153,6 +181,7 @@ async def handle_index_project(
             # A plain re-index should not implicitly disable an active watcher.
             # `stop-watching` is the explicit API for turning watch mode off.
             entry.watch = entry.watch or watch
+        entry.last_active = _now_iso()
         registry[path_str] = entry
         save_registry(registry)
 
@@ -225,6 +254,12 @@ async def handle_search_code(
     except ValueError as exc:
         return {"error": str(exc)}
     elapsed_ms = (time.perf_counter() - t0) * 1000
+    top_score = results[0].score if results else None
+    record_search(elapsed_ms, len(results), top_score)
+    try:
+        _touch_projects_last_active(projects)
+    except Exception:
+        pass
 
     return {
         "results": [

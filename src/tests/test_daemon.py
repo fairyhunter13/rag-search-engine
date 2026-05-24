@@ -6,7 +6,9 @@ from pathlib import Path
 
 from opencode_search.daemon import (
     _bridge_command,
+    _disable_codex_fast_mode,
     _global_prompt_text,
+    _install_claude_global_prompt,
     _install_init_wrapper,
     _render_systemd_service,
     _replace_managed_block,
@@ -83,9 +85,13 @@ def test_render_systemd_service_uses_ensure_oneshot():
 def test_global_prompt_text_requires_explicit_index_and_search_first():
     text = _global_prompt_text()
 
+    assert "MANDATORY" in text
     assert "Never auto-index a project" in text
     assert "Only call index_project when the user explicitly asks" in text
-    assert "use search_code" in text
+    assert "search_code" in text
+    assert "grep" in text
+    assert "rg" in text
+    assert "find" in text
 
 
 def test_replace_managed_block_replaces_existing_section():
@@ -171,3 +177,105 @@ def test_update_codex_config_text_removes_orphaned_managed_markers_from_old_tabl
     assert "developer_instructions" in parsed
     assert updated.count("# >>> opencode-search developer instructions >>>") == 1
     assert updated.count("# <<< opencode-search developer instructions <<<") == 1
+
+
+# ---------------------------------------------------------------------------
+# _disable_codex_fast_mode
+# ---------------------------------------------------------------------------
+
+def test_disable_codex_fast_mode_inserts_into_existing_features_section():
+    config = "[features]\nterminal_resize_reflow = true\nmemories = true\n"
+
+    result = _disable_codex_fast_mode(config)
+
+    assert "fast_mode = false" in result
+    assert tomllib.loads(result)["features"]["fast_mode"] is False
+
+
+def test_disable_codex_fast_mode_replaces_true_with_false():
+    config = "[features]\nfast_mode = true\nmemories = true\n"
+
+    result = _disable_codex_fast_mode(config)
+
+    assert "fast_mode = false" in result
+    assert "fast_mode = true" not in result
+
+
+def test_disable_codex_fast_mode_is_noop_when_already_false():
+    config = "[features]\nfast_mode = false\n"
+
+    assert _disable_codex_fast_mode(config) == config
+
+
+def test_disable_codex_fast_mode_appends_features_section_when_missing():
+    config = "[tui]\nstatus_line_use_colors = true\n"
+
+    result = _disable_codex_fast_mode(config)
+
+    assert "[features]" in result
+    assert "fast_mode = false" in result
+    assert tomllib.loads(result)["features"]["fast_mode"] is False
+
+
+# ---------------------------------------------------------------------------
+# _install_claude_global_prompt
+# ---------------------------------------------------------------------------
+
+def test_install_claude_global_prompt_writes_to_default_and_all_profile_dirs(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude-account1").mkdir()
+    (tmp_path / ".claude-account2").mkdir()
+
+    written = _install_claude_global_prompt(
+        [tmp_path / ".claude-account1", tmp_path / ".claude-account2"],
+        home=tmp_path,
+    )
+
+    assert len(written) == 3
+    for path_str in written:
+        content = Path(path_str).read_text()
+        assert "MANDATORY" in content
+        assert "search_code" in content
+        assert "grep" in content
+
+
+def test_install_claude_global_prompt_skips_nonexistent_dirs(tmp_path):
+    (tmp_path / ".claude").mkdir()
+
+    written = _install_claude_global_prompt(
+        [tmp_path / ".claude-missing"],
+        home=tmp_path,
+    )
+
+    assert written == [str(tmp_path / ".claude" / "CLAUDE.md")]
+
+
+def test_install_claude_global_prompt_updates_existing_managed_block(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    target = claude_dir / "CLAUDE.md"
+    target.write_text(
+        "before\n"
+        "<!-- >>> opencode-search global instructions >>> -->\n"
+        "old content\n"
+        "<!-- <<< opencode-search global instructions <<< -->\n"
+        "after\n"
+    )
+
+    _install_claude_global_prompt([], home=tmp_path)
+
+    content = target.read_text()
+    assert "old content" not in content
+    assert "MANDATORY" in content
+    assert "before" in content
+    assert "after" in content
+
+
+def test_install_claude_global_prompt_creates_file_when_absent(tmp_path):
+    (tmp_path / ".claude").mkdir()
+
+    _install_claude_global_prompt([], home=tmp_path)
+
+    target = tmp_path / ".claude" / "CLAUDE.md"
+    assert target.exists()
+    assert "MANDATORY" in target.read_text()
