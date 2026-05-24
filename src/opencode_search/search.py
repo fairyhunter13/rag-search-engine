@@ -187,6 +187,7 @@ def _rerank_sync(
 async def _search_project(
     project: ProjectEntry,
     query: str,
+    retrieval_query: str,
     query_vec: list[float],
     limit: int,
 ) -> list[dict]:
@@ -197,7 +198,7 @@ async def _search_project(
     )
     try:
         await storage.open()
-        rows = await storage.search_hybrid(query, query_vec, limit=limit)
+        rows = await storage.search_hybrid(retrieval_query, query_vec, limit=limit)
         for row in rows:
             row["_project_path"] = project.path
         return rows
@@ -244,6 +245,7 @@ def _is_question_query(query: str) -> bool:
     return normalized.startswith(prefixes)
 
 
+
 def _authority_weight(row: dict, *, query: str = "") -> float:
     """Return a path-aware weight so implementation code outranks stale prose."""
     parts = _relative_result_parts(row)
@@ -258,17 +260,22 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     elif language and language not in _DOCUMENT_LANGUAGES:
         weight *= 1.12 if question_query else 1.08
 
+    # Tests often contain dense natural-language docstrings and question-shaped
+    # sentences; aggressively downweight them for question queries so
+    # implementation files win unless the user explicitly searches for tests.
     if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
-        weight *= 0.45 if question_query else 0.9
+        weight *= 0.2 if question_query else 0.85
 
+    # Planning docs can be extremely "query-shaped" and outscore code on pure
+    # lexical matching; treat them as low authority for question queries.
     if "docs" in parts:
-        weight *= 0.2 if question_query else 0.45
+        weight *= 0.08 if question_query else 0.4
 
     if "scripts" in parts:
         weight *= 0.15 if question_query else 0.6
 
     if language in _DOCUMENT_LANGUAGES:
-        weight *= 0.45 if question_query else 0.7
+        weight *= 0.2 if question_query else 0.7
     elif language == "markdown":
         weight *= 0.2 if question_query else 0.45
 
@@ -276,9 +283,12 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
         weight *= 0.02 if question_query else 0.05
 
     if any(token in name for token in ("migration", "e2e_testing", "testing", "plan")):
-        weight *= 0.15 if question_query else 0.35
+        weight *= 0.05 if question_query else 0.35
 
-    return max(0.01, min(1.5, weight))
+    # Allow very low weights so stale/low-authority sources cannot dominate
+    # purely by matching query-shaped prose (especially when hybrid FTS spikes
+    # their raw score).
+    return max(0.0001, min(1.5, weight))
 
 
 def _apply_authority_score(row: dict, *, query: str = "") -> dict:
@@ -319,8 +329,12 @@ async def _rerank_rows(
         return []
 
     docs = [row.get("content", "") for row in rows]
+    # Important: request scores for the *full* candidate set (not just top_k)
+    # so that authority weighting can promote high-authority chunks that would
+    # otherwise be pruned by the cross-encoder's raw top_k cut.
+    rerank_k = len(docs)
     ranked: list[tuple[int, float]] = await asyncio.to_thread(
-        _rerank_sync, query, docs, model, top_k
+        _rerank_sync, query, docs, model, rerank_k
     )
 
     out: list[dict] = []
@@ -329,6 +343,9 @@ async def _rerank_rows(
         row["_score"] = score
         out.append(_apply_authority_score(row, query=query))
 
+    # The cross-encoder ranks by semantic relevance only. We apply authority
+    # weighting after rerank, so we must re-sort by the final adjusted score.
+    out.sort(key=lambda r: r.get("_score", 0.0), reverse=True)
     return out[:top_k]
 
 
@@ -390,7 +407,10 @@ async def search(
 
     # Stage 1 — parallel per-project hybrid retrieval
     stage1_limit = max(STAGE1_VECTOR_K, STAGE1_VECTOR_K * _CANDIDATE_OVERSAMPLE)
-    tasks = [_search_project(proj, query, query_vec, limit=stage1_limit) for proj in projects]
+    tasks = [
+        _search_project(proj, query, query, query_vec, limit=stage1_limit)
+        for proj in projects
+    ]
     per_project_results: list[list[dict]] = await asyncio.gather(*tasks)
     per_project_results = [
         _limit_candidates_per_path(
@@ -403,20 +423,21 @@ async def search(
     n_projects = len(projects)
     candidates: list[dict] = []
 
-    if use_rerank and n_projects <= SKIP_STAGE1_RERANK_N:
-        # Stage 2a — per-project rerank, then merge
-        rerank_tasks = [
-            _rerank_rows(query, rows, rerank_model, STAGE1_RERANK_K)
-            for rows in per_project_results
-            if rows
-        ]
-        reranked_per_project: list[list[dict]] = await asyncio.gather(*rerank_tasks)
-        for group in reranked_per_project:
-            candidates.extend(group)
-    else:
-        # Stage 2b — merge raw results (no per-project rerank for large federations)
-        for rows in per_project_results:
-            candidates.extend(rows)
+    if not use_rerank:
+        # Rerank is a core correctness mechanism (especially for question-style queries).
+        # Keep the flag for API compatibility, but do not allow disabling in production.
+        log.warning("use_rerank=False requested; forcing rerank on for correctness")
+        use_rerank = True
+
+    # Stage 2a — ALWAYS per-project rerank, then merge.
+    rerank_tasks = [
+        _rerank_rows(query, rows, rerank_model, STAGE1_RERANK_K)
+        for rows in per_project_results
+        if rows
+    ]
+    reranked_per_project: list[list[dict]] = await asyncio.gather(*rerank_tasks)
+    for group in reranked_per_project:
+        candidates.extend(group)
 
     if not candidates:
         return []
@@ -442,12 +463,8 @@ async def search(
         candidates.sort(key=lambda r: r.get("_score", 0.0), reverse=True)
         candidates = candidates[:GLOBAL_RERANK_MAX]
 
-    # Global rerank
-    if use_rerank and candidates:
-        candidates = await _rerank_rows(query, candidates, rerank_model, top_k)
-    else:
-        candidates.sort(key=lambda r: r.get("_score", 0.0), reverse=True)
-        candidates = candidates[:top_k]
+    # Global rerank (ALWAYS)
+    candidates = await _rerank_rows(query, candidates, rerank_model, top_k)
 
     # Convert to SearchResult
     results = [

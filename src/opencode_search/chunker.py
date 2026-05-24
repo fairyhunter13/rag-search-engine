@@ -675,9 +675,13 @@ def chunk_file(content: str, path: Path) -> list[Chunk]:
     if tokens <= MIN_TOKENS_PER_CHUNK:
         return [_make_chunk(content, "block", language, start_line=1)]
 
-    # Files that fit in one chunk: skip splitting overhead
-    if tokens <= TARGET_TOKENS_PER_CHUNK:
-        return [_make_chunk(content, "block", language, start_line=1)]
+    # For Python, prefer structure-aware chunking even for smallish files.
+    # This avoids mixed-topic chunks (e.g., config constants + helpers) that
+    # degrade retrieval quality for natural-language queries.
+    if language != "python":
+        # Files that fit in one chunk: skip splitting overhead
+        if tokens <= TARGET_TOKENS_PER_CHUNK:
+            return [_make_chunk(content, "block", language, start_line=1)]
 
     # Large files: skip structure-aware parsing (too slow), use fast fallback
     if len(content) > LARGE_FILE_CHARS:

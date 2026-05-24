@@ -139,7 +139,7 @@ def search_cmd(
         None, "--project", "-p", help="Limit to this project path (repeatable)."
     ),
     top_k: int = typer.Option(10, "--top", "-k", help="Number of results to return."),
-    no_rerank: bool = typer.Option(False, "--no-rerank", help="Disable cross-encoder reranking."),
+    no_rerank: bool = typer.Option(False, "--no-rerank", help="(Deprecated) Reranking is enforced; this flag is ignored."),
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
 ) -> None:
     """Search indexed projects for code matching the query."""
@@ -164,7 +164,7 @@ def search_cmd(
             query=query,
             project_paths=project_paths,
             top_k=top_k,
-            use_rerank=not no_rerank,
+            use_rerank=True,
         )
     )
 

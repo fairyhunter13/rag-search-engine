@@ -236,7 +236,8 @@ def test_search_no_rerank_flag():
          patch("opencode_search.handlers.handle_search_code", side_effect=capture):
         runner.invoke(app, ["search", "x", "--no-rerank"])
 
-    assert captured.get("use_rerank") is False
+    # Reranking is enforced; --no-rerank is ignored for correctness.
+    assert captured.get("use_rerank") is True
 
 
 def test_search_with_project_filter():

@@ -249,8 +249,9 @@ async def handle_search_code(
         projects = list(registry.values())
 
     t0 = time.perf_counter()
+    # Rerank is enforced for correctness; ignore caller requests to disable it.
     try:
-        results = await search(query, projects=projects, top_k=top_k, use_rerank=use_rerank)
+        results = await search(query, projects=projects, top_k=top_k, use_rerank=True)
     except ValueError as exc:
         return {"error": str(exc)}
     elapsed_ms = (time.perf_counter() - t0) * 1000
