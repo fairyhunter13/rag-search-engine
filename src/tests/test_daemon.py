@@ -92,6 +92,7 @@ def test_global_prompt_text_requires_explicit_index_and_search_first():
     assert "grep" in text
     assert "rg" in text
     assert "find" in text
+    assert "Agent" in text  # anti-delegation rule must be present
 
 
 def test_replace_managed_block_replaces_existing_section():

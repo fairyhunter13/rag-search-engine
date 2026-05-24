@@ -80,6 +80,7 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
         "--verbose",
         "--model", model,
         "--allowedTools", allowed,
+        "--disallowedTools", "Agent",
     ]
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(Path.home() / ".claude")}
     try:

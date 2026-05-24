@@ -425,6 +425,8 @@ def _global_prompt_text() -> str:
         "Do NOT go straight to Bash/grep/find/Read for codebase exploration.\n"
         "- If list_indexed_projects shows the current project is indexed, calling search_code is NOT optional — "
         "you MUST call search_code before answering, even if you think you already know the answer from training data.\n"
+        "- Do NOT delegate codebase questions to sub-agents via the Agent tool. "
+        "Call list_indexed_projects and search_code yourself, directly — sub-agents do not inherit these instructions.\n"
         "- Never auto-index a project just because it is open.\n"
         "- Only call index_project when the user explicitly asks to index the current project. Treat commands like "
         "\"/index-project\", \"index this project\", \"index this repo\", running `opencode-search init`, "
