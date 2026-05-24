@@ -82,13 +82,25 @@ _RERANK_CONCURRENCY = max(1, int(os.environ.get("OPENCODE_RERANK_CONCURRENCY", "
 
 
 def _authority_weights_enabled() -> bool:
-    # Read env dynamically so tests and long-running daemons can toggle it.
-    return os.environ.get("OPENCODE_ENABLE_AUTHORITY_WEIGHTS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    """Return True if structural authority weighting is active.
+
+    This is intentionally *not* query rewriting or keyword injection. It only
+    applies path/type weights to retrieved chunks.
+
+    Enablement rules:
+    - Explicit toggle via OPENCODE_ENABLE_AUTHORITY_WEIGHTS.
+    - If any OPENCODE_WEIGHT_* variable is set, enable automatically (so a user
+      can set weights without having to remember a second flag).
+    - Explicit "off" wins even if weights are present.
+    """
+    raw = os.environ.get("OPENCODE_ENABLE_AUTHORITY_WEIGHTS", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    # Default on: weights have conservative defaults and can be disabled via
+    # OPENCODE_ENABLE_AUTHORITY_WEIGHTS=0.
+    return True
 
 # Optional structural authority weights (no keyword-based rules). Disabled by
 # default to avoid any baked-in ranking bias. When enabled, weights are read
@@ -278,7 +290,7 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     weight = 1.0
 
     if "src" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_SRC", 1.0)
+        weight *= _env_weight("OPENCODE_WEIGHT_SRC", 2.0)
     elif language and language not in _DOCUMENT_LANGUAGES:
         weight *= _env_weight("OPENCODE_WEIGHT_CODE_NON_DOC", 1.0)
 
@@ -286,20 +298,20 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     # sentences; aggressively downweight them for question queries so
     # implementation files win unless the user explicitly searches for tests.
     if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
-        weight *= _env_weight("OPENCODE_WEIGHT_TESTS", 1.0)
+        weight *= _env_weight("OPENCODE_WEIGHT_TESTS", 0.2)
 
     # Planning docs can be extremely "query-shaped" and outscore code on pure
     # lexical matching; treat them as low authority for question queries.
     if "docs" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCS", 1.0)
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCS", 0.1)
 
     if "scripts" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 1.0)
+        weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 0.1)
 
     if language in _DOCUMENT_LANGUAGES:
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 1.0)
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.1)
     elif language == "markdown":
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 1.0)
+        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.1)
 
     # Allow very low weights so stale/low-authority sources cannot dominate
     # purely by matching query-shaped prose (especially when hybrid FTS spikes
