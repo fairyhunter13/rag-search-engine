@@ -22,6 +22,7 @@ import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 try:
@@ -76,6 +77,21 @@ from opencode_search.config import (
 from opencode_search.storage import Storage
 
 log = logging.getLogger(__name__)
+
+_CANDIDATE_OVERSAMPLE = max(1, int(os.environ.get("OPENCODE_CANDIDATE_OVERSAMPLE", "4")))
+_MAX_CANDIDATES_PER_PATH = max(1, int(os.environ.get("OPENCODE_MAX_CANDIDATES_PER_PATH", "3")))
+
+_DOCUMENT_LANGUAGES = frozenset(
+    {
+        "markdown",
+        "text",
+        "restructuredtext",
+        "rst",
+        "adoc",
+        "asciidoc",
+        "unknown",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -192,6 +208,106 @@ async def _search_project(
         await storage.close()
 
 
+def _relative_result_parts(row: dict) -> tuple[str, ...]:
+    """Return lowercase relative path parts for a result row when possible."""
+    path_str = str(row.get("path", "") or "")
+    project_root = str(row.get("_project_path", "") or "")
+    if not path_str:
+        return ()
+
+    try:
+        path = Path(path_str)
+        if project_root:
+            rel = path.relative_to(Path(project_root))
+            return tuple(part.lower() for part in rel.parts)
+        return tuple(part.lower() for part in path.parts)
+    except Exception:
+        return tuple(part.lower() for part in Path(path_str).parts)
+
+
+def _is_question_query(query: str) -> bool:
+    normalized = query.strip().lower()
+    if "?" in normalized:
+        return True
+    prefixes = (
+        "what ",
+        "where ",
+        "how ",
+        "which ",
+        "when ",
+        "why ",
+        "who ",
+        "is ",
+        "does ",
+        "do ",
+    )
+    return normalized.startswith(prefixes)
+
+
+def _authority_weight(row: dict, *, query: str = "") -> float:
+    """Return a path-aware weight so implementation code outranks stale prose."""
+    parts = _relative_result_parts(row)
+    name = parts[-1] if parts else ""
+    language = str(row.get("language", "") or "").lower()
+    question_query = _is_question_query(query)
+
+    weight = 1.0
+
+    if "src" in parts:
+        weight *= 1.28 if question_query else 1.18
+    elif language and language not in _DOCUMENT_LANGUAGES:
+        weight *= 1.12 if question_query else 1.08
+
+    if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
+        weight *= 0.45 if question_query else 0.9
+
+    if "docs" in parts:
+        weight *= 0.2 if question_query else 0.45
+
+    if "scripts" in parts:
+        weight *= 0.15 if question_query else 0.6
+
+    if language in _DOCUMENT_LANGUAGES:
+        weight *= 0.45 if question_query else 0.7
+    elif language == "markdown":
+        weight *= 0.2 if question_query else 0.45
+
+    if "benchmark" in name:
+        weight *= 0.02 if question_query else 0.05
+
+    if any(token in name for token in ("migration", "e2e_testing", "testing", "plan")):
+        weight *= 0.15 if question_query else 0.35
+
+    return max(0.01, min(1.5, weight))
+
+
+def _apply_authority_score(row: dict, *, query: str = "") -> dict:
+    """Attach authority metadata and overwrite score with the adjusted value."""
+    scored = dict(row)
+    raw_score = float(scored.get("_score", 0.0))
+    authority = _authority_weight(scored, query=query)
+    scored["_raw_score"] = raw_score
+    scored["_authority_weight"] = authority
+    scored["_score"] = raw_score * authority
+    return scored
+
+
+def _limit_candidates_per_path(rows: list[dict], limit: int) -> list[dict]:
+    """Keep at most ``limit`` high-scoring chunks per file path."""
+    if limit <= 0 or not rows:
+        return rows
+
+    counts: dict[str, int] = {}
+    trimmed: list[dict] = []
+    for row in sorted(rows, key=lambda r: r.get("_score", 0.0), reverse=True):
+        path = str(row.get("path", "") or "")
+        counts[path] = counts.get(path, 0) + 1
+        if counts[path] > limit:
+            continue
+        trimmed.append(row)
+    return trimmed
+
+
 async def _rerank_rows(
     query: str,
     rows: list[dict],
@@ -211,7 +327,7 @@ async def _rerank_rows(
     for orig_idx, score in ranked:
         row = dict(rows[orig_idx])
         row["_score"] = score
-        out.append(row)
+        out.append(_apply_authority_score(row, query=query))
 
     return out[:top_k]
 
@@ -273,11 +389,16 @@ async def search(
         return []
 
     # Stage 1 — parallel per-project hybrid retrieval
-    tasks = [
-        _search_project(proj, query, query_vec, limit=STAGE1_VECTOR_K)
-        for proj in projects
-    ]
+    stage1_limit = max(STAGE1_VECTOR_K, STAGE1_VECTOR_K * _CANDIDATE_OVERSAMPLE)
+    tasks = [_search_project(proj, query, query_vec, limit=stage1_limit) for proj in projects]
     per_project_results: list[list[dict]] = await asyncio.gather(*tasks)
+    per_project_results = [
+        _limit_candidates_per_path(
+            [_apply_authority_score(row, query=query) for row in rows],
+            _MAX_CANDIDATES_PER_PATH,
+        )
+        for rows in per_project_results
+    ]
 
     n_projects = len(projects)
     candidates: list[dict] = []
@@ -314,6 +435,7 @@ async def search(
         if dedup_key not in seen or score > seen[dedup_key].get("_score", 0.0):
             seen[dedup_key] = row
     candidates = list(seen.values())
+    candidates = _limit_candidates_per_path(candidates, _MAX_CANDIDATES_PER_PATH)
 
     # Trim before global rerank to avoid OOM on VRAM
     if len(candidates) > GLOBAL_RERANK_MAX:
@@ -338,6 +460,10 @@ async def search(
             score=float(row.get("_score", 0.0)),
             project_path=row.get("_project_path", ""),
             chunk_id=int(row.get("chunk_id", 0)),
+            metadata={
+                "raw_score": float(row.get("_raw_score", row.get("_score", 0.0))),
+                "authority_weight": float(row.get("_authority_weight", 1.0)),
+            },
         )
         for row in candidates
     ]

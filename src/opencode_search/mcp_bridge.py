@@ -10,6 +10,7 @@ import urllib.request
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from mcp.client.session import ClientSession
@@ -20,6 +21,48 @@ from opencode_search.daemon import daemon_url, ensure_daemon_running, health_url
 
 _bridge_client_id = f"bridge-{uuid.uuid4()}"
 _heartbeat_task: asyncio.Task[None] | None = None
+_workspace_root: Path | None = None
+
+
+def _get_workspace_root() -> Path:
+    """Return the bridge workspace root used for tool scoping.
+
+    The stdio bridge is meant to be run from within a single "opened" workspace
+    (Codex/Claude project directory). Without scoping, a model could pass
+    arbitrary paths and query/index other projects registered on the machine.
+    """
+    env_root = os.environ.get("OPENCODE_BRIDGE_WORKSPACE_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    global _workspace_root
+    if _workspace_root is None:
+        _workspace_root = Path.cwd().resolve()
+    return _workspace_root
+
+
+def _allow_outside_workspace() -> bool:
+    return os.environ.get("OPENCODE_ALLOW_INDEX_OUTSIDE_CWD", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _ensure_within_workspace(path: str, *, what: str) -> dict[str, Any] | None:
+    """Return an error dict if `path` escapes the workspace, else None."""
+    if _allow_outside_workspace():
+        return None
+    root = _get_workspace_root()
+    candidate = Path(path).expanduser().resolve()
+    try:
+        candidate.relative_to(root)
+    except Exception:
+        return {
+            "status": "error",
+            "error": (
+                f"{what} is restricted to the currently opened workspace. "
+                f"workspace_root={str(root)} does not contain requested path={str(candidate)}. "
+                "Set OPENCODE_ALLOW_INDEX_OUTSIDE_CWD=1 to override."
+            ),
+        }
+    return None
 
 
 def _post_json(url: str, payload: dict[str, Any]) -> None:
@@ -114,6 +157,46 @@ async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return {"status": "error", "error": "Unexpected bridge response format"}
 
 
+def _resolve_path_like(value: str) -> str:
+    """Resolve a user-supplied path relative to the bridge cwd."""
+    if not value:
+        return str(Path.cwd().resolve())
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return str(candidate.resolve())
+
+
+def _nearest_indexed_project(cwd: str, indexed_projects: list[str]) -> str | None:
+    """Return the nearest indexed project root that contains cwd."""
+    try:
+        candidate = Path(cwd).expanduser().resolve()
+    except Exception:
+        return None
+
+    best: Path | None = None
+    for p in indexed_projects:
+        try:
+            root = Path(p).expanduser().resolve()
+            candidate.relative_to(root)
+        except Exception:
+            continue
+        if best is None or len(root.parts) > len(best.parts):
+            best = root
+    return str(best) if best is not None else None
+
+
+async def _default_scoped_project_paths() -> list[str] | None:
+    """Return [current_project_root] for this bridge cwd, or None if unknown."""
+    listed = await _forward_tool("list_indexed_projects", {})
+    projects = listed.get("projects", []) if isinstance(listed, dict) else []
+    indexed = [p.get("path", "") for p in projects if isinstance(p, dict)]
+    indexed = [p for p in indexed if isinstance(p, str) and p]
+    cwd = str(Path.cwd().resolve())
+    nearest = _nearest_indexed_project(cwd, indexed)
+    return [nearest] if nearest else None
+
+
 @bridge.tool()
 async def index_project(
     path: str,
@@ -122,9 +205,13 @@ async def index_project(
     force: bool = False,
     follow_symlinks: bool = True,
 ) -> dict[str, Any]:
+    resolved = _resolve_path_like(path)
+    err = _ensure_within_workspace(resolved, what="index_project")
+    if err is not None:
+        return err
     return await _forward_tool(
         "index_project",
-        {"path": path, "tier": tier, "watch": watch, "force": force, "follow_symlinks": follow_symlinks},
+        {"path": resolved, "tier": tier, "watch": watch, "force": force, "follow_symlinks": follow_symlinks},
     )
 
 
@@ -135,11 +222,28 @@ async def search_code(
     top_k: int = 10,
     use_rerank: bool = True,
 ) -> dict[str, Any]:
+    scoped_paths: list[str] | None = None
+    if project_paths is None:
+        scoped_paths = await _default_scoped_project_paths()
+        if not scoped_paths:
+            return {
+                "status": "error",
+                "error": (
+                    "No indexed project contains the current working directory. "
+                    "Run index_project on the current project root or pass explicit project_paths."
+                ),
+            }
+    else:
+        scoped_paths = [_resolve_path_like(p) for p in project_paths]
+        for p in scoped_paths:
+            err = _ensure_within_workspace(p, what="search_code")
+            if err is not None:
+                return err
     return await _forward_tool(
         "search_code",
         {
             "query": query,
-            "project_paths": project_paths,
+            "project_paths": scoped_paths,
             "top_k": top_k,
             "use_rerank": use_rerank,
         },
@@ -148,17 +252,43 @@ async def search_code(
 
 @bridge.tool()
 async def project_status(path: str) -> dict[str, Any]:
-    return await _forward_tool("project_status", {"path": path})
+    resolved = _resolve_path_like(path)
+    err = _ensure_within_workspace(resolved, what="project_status")
+    if err is not None:
+        return err
+    return await _forward_tool("project_status", {"path": resolved})
 
 
 @bridge.tool()
 async def list_indexed_projects() -> dict[str, Any]:
-    return await _forward_tool("list_indexed_projects", {})
+    result = await _forward_tool("list_indexed_projects", {})
+    if _allow_outside_workspace():
+        return result
+    if not isinstance(result, dict) or not isinstance(result.get("projects"), list):
+        return result
+    root = _get_workspace_root()
+    filtered: list[dict[str, Any]] = []
+    for p in result["projects"]:
+        if not isinstance(p, dict):
+            continue
+        path_val = p.get("path")
+        if not isinstance(path_val, str) or not path_val:
+            continue
+        try:
+            Path(path_val).expanduser().resolve().relative_to(root)
+        except Exception:
+            continue
+        filtered.append(p)
+    return {**result, "projects": filtered}
 
 
 @bridge.tool()
 async def stop_watching(path: str) -> dict[str, Any]:
-    return await _forward_tool("stop_watching", {"path": path})
+    resolved = _resolve_path_like(path)
+    err = _ensure_within_workspace(resolved, what="stop_watching")
+    if err is not None:
+        return err
+    return await _forward_tool("stop_watching", {"path": resolved})
 
 
 def run_stdio_bridge() -> None:

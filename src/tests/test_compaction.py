@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("lancedb")
 pytest.importorskip("pyarrow")
+import pytest_asyncio
 
 from opencode_search.compaction import (
     COMPACTION_THRESHOLD_OPS,
@@ -19,7 +20,7 @@ from opencode_search.storage import Storage
 pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def storage(tmp_path):
     s = Storage(db_path=str(tmp_path / "db"), dims=384)
     await s.open()

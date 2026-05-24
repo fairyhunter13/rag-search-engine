@@ -13,13 +13,14 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("watchdog")
+import pytest_asyncio
 
 from opencode_search.watcher import WatcherManager, watcher_manager
 
 pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def fresh_manager():
     m = WatcherManager()
     yield m

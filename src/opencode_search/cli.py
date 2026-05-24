@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from typing import Optional
 
@@ -143,11 +144,25 @@ def search_cmd(
 ) -> None:
     """Search indexed projects for code matching the query."""
     from opencode_search.handlers import handle_search_code
+    from opencode_search.handlers import resolve_indexed_project_path
+
+    project_paths = projects or None
+    if project_paths is None:
+        scoped = resolve_indexed_project_path(os.getcwd())
+        if scoped:
+            project_paths = [scoped]
+        else:
+            typer.echo(
+                "Error: No indexed project contains the current working directory. "
+                "Run `opencode-search index .` or pass `--project` explicitly.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
 
     result = _run(
         handle_search_code(
             query=query,
-            project_paths=projects or None,
+            project_paths=project_paths,
             top_k=top_k,
             use_rerank=not no_rerank,
         )

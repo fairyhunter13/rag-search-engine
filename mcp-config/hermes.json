@@ -4,6 +4,10 @@
   "transport": "stdio",
   "command": "opencode-search",
   "args": ["daemon", "bridge-stdio"],
+  "env": {
+    "_comment": "Optional but recommended: pin the workspace root so the bridge cannot access indexes outside the opened project.",
+    "OPENCODE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"
+  },
   "tools": {
     "index_project": {
       "description": "Index a project directory for semantic code search",
