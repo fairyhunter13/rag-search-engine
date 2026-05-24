@@ -31,7 +31,14 @@ DEFAULT_CLIENT_STALE_S = int(os.environ.get("OPENCODE_MCP_CLIENT_STALE_S", "60")
 # Unload embedding/reranker models after this many seconds of no inference.
 # Set to 0 to disable. Models reload on next search (~2-5s warm-up).
 DEFAULT_MODEL_IDLE_UNLOAD_S = int(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
-_STATE_DIR = Path.home() / ".local" / "state" / "opencode-search"
+# Allow isolating daemon state for tests/CI (prevents interference with any
+# existing user daemon).
+_STATE_DIR = Path(
+    os.environ.get(
+        "OPENCODE_MCP_STATE_DIR",
+        str(Path.home() / ".local" / "state" / "opencode-search"),
+    )
+).expanduser()
 _LOCK_PATH = _STATE_DIR / "daemon.lock"
 _PID_PATH = _STATE_DIR / "daemon.pid"
 _META_PATH = _STATE_DIR / "daemon.json"

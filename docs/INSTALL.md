@@ -120,6 +120,24 @@ For a shared MCP daemon across Claude Code, Codex, and Hermes:
 .venv/bin/python -m opencode_search daemon status
 ```
 
+#### Deterministic MCP Harness (No LLM)
+
+To validate the full MCP stdio flow (including indexing, hybrid retrieval, and enforced reranking)
+without involving Claude/Codex, run:
+
+```bash
+.venv/bin/python scripts/mcp_stdio_harness.py
+```
+
+This harness spawns the stdio bridge and speaks MCP over stdio using the official MCP Python SDK.
+It is meant to catch regressions like stale docs/benchmarks outranking implementation code.
+
+#### Notes On Codex CLI
+
+Some Codex CLI modes may not expose external MCP tools even if configured (depending on Codex version
+and runtime mode). If you don't see `opencode-search` tools available, use the Codex interactive TUI
+session (recommended) and ensure the server is installed via `daemon install-global` or `codex mcp add`.
+
 This does three things:
 
 - registers a stdio MCP bridge in Claude Code, Codex, and Hermes
