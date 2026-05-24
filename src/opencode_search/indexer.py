@@ -60,6 +60,7 @@ async def index_file(
     force: bool = False,
     embed_sem: asyncio.Semaphore | None = None,
     existing_hashes: dict[str, str] | None = None,
+    project_root: Path | None = None,
 ) -> dict:
     """Index a single file. Returns status dict with 'status' and 'chunks' keys.
 
@@ -141,15 +142,30 @@ async def index_file(
         return terms
 
     path_str = str(path)
+    rel_path = path_str
+    if project_root is not None:
+        try:
+            rel_path = str(path.relative_to(project_root))
+        except Exception:
+            rel_path = path.name or path_str
     texts = []
     for c in chunks:
         ids = _extract_identifiers(c.content)
         terms = _identifier_terms(ids)
-        header = f"FILE: {path_str}\nLANG: {language}\n"
+        header = f"FILE: {rel_path}\nLANG: {language}\n"
         if ids:
             header += "IDENTIFIERS: " + ", ".join(ids) + "\n"
         if terms:
             header += "TERMS: " + " | ".join(terms) + "\n"
+
+        # Keep the header bounded so we don't crowd out chunk content and
+        # trigger truncation in the embedder.
+        if len(header) > 1024:
+            header = f"FILE: {rel_path}\nLANG: {language}\n"
+            if ids:
+                header += "IDENTIFIERS: " + ", ".join(ids[:16]) + "\n"
+            if len(header) > 1024:
+                header = header[:1024] + "\n"
         texts.append(header + "\n" + c.content)
     try:
         async with embed_sem:
@@ -243,6 +259,7 @@ async def index_project(
                 tier=tier, force=force,
                 embed_sem=embed_sem,
                 existing_hashes=existing_hashes,
+                project_root=root,
             )
         if r["status"] == "indexed":
             result.files_indexed += 1
@@ -277,6 +294,7 @@ async def index_files(
     paths: list[Path],
     *,
     tier: str,
+    project_root: Path | None = None,
     embed_workers: int = 2,
     file_workers: int = 8,
 ) -> IndexResult:
@@ -300,6 +318,7 @@ async def index_files(
                 tier=tier,
                 embed_sem=embed_sem,
                 existing_hashes=existing_hashes,
+                project_root=project_root,
             )
         if r["status"] == "indexed":
             result.files_indexed += 1

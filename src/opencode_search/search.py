@@ -2,9 +2,8 @@
 
 Search flow:
   Stage 1 — Per-project hybrid (vector + FTS) retrieval, k=STAGE1_VECTOR_K
-  Stage 2 (≤SKIP_STAGE1_RERANK_N projects) — Per-project rerank, k=STAGE1_RERANK_K
-           (> SKIP_STAGE1_RERANK_N projects) — Skip per-project rerank; merge all stage-1 results
-  Global   — Rerank all merged candidates, return top FINAL_TOP_K
+  Stage 2 — Per-project rerank (always), keep top STAGE1_RERANK_K per project
+  Global  — Rerank all merged candidates, return top FINAL_TOP_K
 
 Query embeddings and rerank calls are dispatched to asyncio.to_thread so the
 async event loop stays responsive. Both are GPU-only (CPUExecutionProvider is
@@ -67,7 +66,6 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in dep-light envs
 from opencode_search.config import (
     FINAL_TOP_K,
     GLOBAL_RERANK_MAX,
-    SKIP_STAGE1_RERANK_N,
     STAGE1_RERANK_K,
     STAGE1_VECTOR_K,
     ProjectEntry,
@@ -80,6 +78,21 @@ log = logging.getLogger(__name__)
 
 _CANDIDATE_OVERSAMPLE = max(1, int(os.environ.get("OPENCODE_CANDIDATE_OVERSAMPLE", "4")))
 _MAX_CANDIDATES_PER_PATH = max(1, int(os.environ.get("OPENCODE_MAX_CANDIDATES_PER_PATH", "3")))
+_RERANK_CONCURRENCY = max(1, int(os.environ.get("OPENCODE_RERANK_CONCURRENCY", "1")))
+
+# Cross-encoder inference is memory-heavy; limit concurrent rerank calls across
+# projects to avoid VRAM spikes and latency cliffs.
+_rerank_sem: asyncio.Semaphore | None = None
+_rerank_sem_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_rerank_sem() -> asyncio.Semaphore:
+    global _rerank_sem, _rerank_sem_loop
+    loop = asyncio.get_running_loop()
+    if _rerank_sem is None or _rerank_sem_loop is not loop:
+        _rerank_sem = asyncio.Semaphore(_RERANK_CONCURRENCY)
+        _rerank_sem_loop = loop
+    return _rerank_sem
 
 _DOCUMENT_LANGUAGES = frozenset(
     {
@@ -328,14 +341,15 @@ async def _rerank_rows(
     if not rows:
         return []
 
-    docs = [row.get("content", "") for row in rows]
-    # Important: request scores for the *full* candidate set (not just top_k)
-    # so that authority weighting can promote high-authority chunks that would
-    # otherwise be pruned by the cross-encoder's raw top_k cut.
-    rerank_k = len(docs)
-    ranked: list[tuple[int, float]] = await asyncio.to_thread(
-        _rerank_sync, query, docs, model, rerank_k
-    )
+    async with _get_rerank_sem():
+        docs = [row.get("content", "") for row in rows]
+        # Important: request scores for the *full* candidate set (not just top_k)
+        # so that authority weighting can promote high-authority chunks that would
+        # otherwise be pruned by the cross-encoder's raw top_k cut.
+        rerank_k = len(docs)
+        ranked: list[tuple[int, float]] = await asyncio.to_thread(
+            _rerank_sync, query, docs, model, rerank_k
+        )
 
     out: list[dict] = []
     for orig_idx, score in ranked:

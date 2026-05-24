@@ -12,7 +12,6 @@ from opencode_search.config import (
     FINAL_TOP_K,
     GLOBAL_RERANK_MAX,
     SCHEMA_VERSION,
-    SKIP_STAGE1_RERANK_N,
     STAGE1_RERANK_K,
     STAGE1_VECTOR_K,
     ProjectEntry,
@@ -76,7 +75,6 @@ def test_constants_positive():
     assert GLOBAL_RERANK_MAX > 0
     assert STAGE1_VECTOR_K > 0
     assert STAGE1_RERANK_K > 0
-    assert SKIP_STAGE1_RERANK_N > 0
 
 
 def test_schema_version_is_string_digit():

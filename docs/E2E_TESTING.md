@@ -1024,12 +1024,12 @@ async def test_two_stage_two_projects(tmp_path):
     for s in stores: await s.close()
 ```
 
-#### Test 3.6.11 — Two-Stage Skip Per-Project Rerank (>5 Projects)
+#### Test 3.6.11 — Two-Stage Reranking (Many Projects)
 
 ```python
 @pytest.mark.asyncio
-async def test_two_stage_skip_stage1_over_5(tmp_path):
-    """With 6+ projects, per-project reranking must be skipped."""
+async def test_two_stage_many_projects(tmp_path):
+    """With 6+ projects, per-project reranking still runs; concurrency is capped."""
     from opencode_embedder.indexer import index_project
     from opencode_embedder.search import search_federated
     from opencode_embedder import storage as storage_mod
@@ -1058,8 +1058,9 @@ async def test_two_stage_skip_stage1_over_5(tmp_path):
     with patch.object(search_mod, "_stage1_rerank", side_effect=tracking_rerank):
         results = await search_federated(stores, "function", tier="budget", top_k=5)
 
-    # With 6 projects (> SKIP_STAGE1_RERANK_N=5), stage1 rerank must be skipped
-    assert len(stage1_rerank_calls) == 0, "Stage-1 rerank should be skipped for N>5 projects"
+    # Per-project rerank should still occur; use OPENCODE_RERANK_CONCURRENCY to
+    # prevent VRAM spikes when many projects are federated.
+    assert len(stage1_rerank_calls) > 0
 
     for s in stores: await s.close()
 ```

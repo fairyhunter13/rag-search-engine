@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from opencode_search.config import (
-    SKIP_STAGE1_RERANK_N,
     STAGE1_RERANK_K,
     ProjectEntry,
     get_project_db_path,
@@ -449,7 +448,7 @@ async def test_search_limits_document_chunk_dominance_per_file():
 async def test_search_many_projects_always_reranks_per_project_and_globally():
     """Per-project rerank must always run, then a global rerank must run."""
     clear_search_cache()
-    n = SKIP_STAGE1_RERANK_N + 2
+    n = 7
     projects = [_make_project(f"/tmp/proj{i}") for i in range(n)]
     dims = projects[0].dims
     rerank_calls = {"n": 0}
@@ -471,9 +470,9 @@ async def test_search_many_projects_always_reranks_per_project_and_globally():
 
 @pytest.mark.asyncio
 async def test_search_few_projects_does_per_project_rerank():
-    """With ≤SKIP_STAGE1_RERANK_N projects, per-project rerank is done."""
+    """With multiple projects, per-project rerank is done."""
     clear_search_cache()
-    n = min(SKIP_STAGE1_RERANK_N, 2)
+    n = 2
     projects = [_make_project(f"/tmp/proj{i}") for i in range(n)]
     dims = projects[0].dims
     rerank_calls = {"n": 0}

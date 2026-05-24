@@ -110,7 +110,7 @@ def _build_incremental_on_change(
                 project_modified = [
                     p for p in modified if is_indexable_file(p, root=project_root)
                 ]
-                await _index_files(st, project_modified, tier=tier)
+                await _index_files(st, project_modified, tier=tier, project_root=project_root)
             clear_search_cache()
         finally:
             await st.close()

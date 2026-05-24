@@ -33,7 +33,6 @@ STAGE1_VECTOR_K: int = int(os.environ.get("OPENCODE_STAGE1_VECTOR_K", "20"))
 STAGE1_RERANK_K: int = int(os.environ.get("OPENCODE_STAGE1_RERANK_K", "15"))
 GLOBAL_RERANK_MAX: int = int(os.environ.get("OPENCODE_GLOBAL_RERANK_MAX", "100"))
 FINAL_TOP_K: int = int(os.environ.get("OPENCODE_FINAL_TOP_K", "10"))
-SKIP_STAGE1_RERANK_N: int = int(os.environ.get("OPENCODE_SKIP_STAGE1_RERANK_N", "5"))
 
 # ---------------------------------------------------------------------------
 # Watcher / flush timing

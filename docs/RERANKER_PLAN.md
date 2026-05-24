@@ -215,37 +215,33 @@ The reranker is functional but has 5 significant problems:
 **Architecture:**
 ```
 Stage 1 (per-project, parallelized):
-    vector search → top 20 candidates
-    cross-encoder rerank → top 15 (prune noise early)
+hybrid retrieval (vector + FTS) → top 20 candidates
+cross-encoder rerank (always) → keep top 15
 
 Stage 2 (global, federated):
-    gather stage-1 outputs from all N projects → up to N×15 candidates
-    cross-encoder global rerank → final top 10
-    (skip if N=1 or total candidates ≤ 10)
+gather stage-1 outputs from all N projects → up to N×15 candidates
+cross-encoder global rerank (always) → final top 10
 ```
 
 **Constants:**
 ```python
-STAGE1_VECTOR_K = 20        # vector search candidates per project
+STAGE1_VECTOR_K = 20        # hybrid retrieval candidates per project
 STAGE1_RERANK_K = 15        # keep after per-project rerank
 GLOBAL_RERANK_MAX = 100     # cap before global rerank (prevents VRAM spike)
 FINAL_TOP_K = 10            # final results returned
-SKIP_STAGE1_RERANK_N = 5    # skip per-project rerank if more than this many projects
+OPENCODE_RERANK_CONCURRENCY = 1  # limit concurrent rerank calls (VRAM safety)
 ```
 
 **Steps:**
-1. `async def _search_single_project_stage1(storage, embed, query, embed_model, rerank_model, dims)`:
-   - Vector search: top `STAGE1_VECTOR_K`
-   - Cross-encoder rerank: `embeddings.rerank(query, docs, model=rerank_model, top_k=STAGE1_RERANK_K)` (direct call)
-   - Return `list[(score, path, content)]`
+1. Stage 1 per project:
+   - Hybrid retrieval: top `STAGE1_VECTOR_K` (optionally oversampled)
+   - Per-project cross-encoder rerank (always), keep top `STAGE1_RERANK_K`
+   - Use `OPENCODE_RERANK_CONCURRENCY` to cap concurrent rerank calls (VRAM safety)
 
-2. `async def search(...)`:
-   - N=1: call `_search_single_project_stage1` with `top_k=FINAL_TOP_K`, skip global
-   - N≤5: gather stage-1 from all, global rerank on combined (cap at `GLOBAL_RERANK_MAX`)
-   - N>5: vector-only per project (no per-project rerank), global rerank only
-   - `asyncio.Semaphore(min(cpu_count, 4))` on per-project tasks
-
-3. Deduplication by path (keep highest score) before global rerank
+2. Federated stage:
+   - Merge per-project outputs
+   - Deduplicate by chunk identity/path
+   - Global cross-encoder rerank (always), return top `FINAL_TOP_K`
 
 **Risk:** Low — direct translation of Rust `search.rs` logic.
 
