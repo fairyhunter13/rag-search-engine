@@ -277,18 +277,21 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     # sentences; aggressively downweight them for question queries so
     # implementation files win unless the user explicitly searches for tests.
     if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
-        weight *= 0.2 if question_query else 0.85
+        # Even for keyword-style queries, tests are rarely the source of truth.
+        weight *= 0.2 if question_query else 0.35
 
     # Planning docs can be extremely "query-shaped" and outscore code on pure
     # lexical matching; treat them as low authority for question queries.
     if "docs" in parts:
-        weight *= 0.08 if question_query else 0.4
+        # Prefer implementation over prose by default; docs can still appear,
+        # but should not dominate "how/where/what" or keyword fact-finding.
+        weight *= 0.08 if question_query else 0.12
 
     if "scripts" in parts:
-        weight *= 0.15 if question_query else 0.6
+        weight *= 0.15 if question_query else 0.25
 
     if language in _DOCUMENT_LANGUAGES:
-        weight *= 0.2 if question_query else 0.7
+        weight *= 0.2 if question_query else 0.45
     elif language == "markdown":
         weight *= 0.2 if question_query else 0.45
 
