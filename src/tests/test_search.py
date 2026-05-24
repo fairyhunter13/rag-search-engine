@@ -249,15 +249,15 @@ async def test_search_deduplicates_results():
 
 
 @pytest.mark.asyncio
-async def test_search_no_rerank_skips_reranker():
+async def test_search_enforces_rerank_even_if_disabled_by_caller():
     clear_search_cache()
     project = _make_project()
     dims = project.dims
     rerank_calls = {"n": 0}
 
-    def counting_rerank(*args, **kwargs):
+    def counting_rerank(query, docs, model, top_k):
         rerank_calls["n"] += 1
-        return [(0, 0.9)]
+        return [(i, 0.9 - i * 0.01) for i in range(min(len(docs), top_k))]
 
     with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
          patch("opencode_search.search._rerank_sync", side_effect=counting_rerank), \
@@ -265,7 +265,7 @@ async def test_search_no_rerank_skips_reranker():
         MockStorage.return_value = _make_mock_storage()
         await search("no rerank", projects=[project], use_rerank=False)
 
-    assert rerank_calls["n"] == 0
+    assert rerank_calls["n"] >= 1
 
 
 @pytest.mark.asyncio
@@ -361,6 +361,46 @@ async def test_search_authority_weight_prefers_source_over_benchmark_and_plan():
 
 
 @pytest.mark.asyncio
+async def test_search_authority_weight_prefers_source_over_tests_for_questions():
+    """Question-like queries should prefer implementation over test descriptions."""
+    clear_search_cache()
+    project = _make_project()
+    dims = project.dims
+    rows = [
+        {
+            "path": "/tmp/proj/src/tests/test_search.py",
+            "content": "Where is the registry of indexed projects stored and what format is it?",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 10,
+            "_score": 0.99,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 1,
+        },
+        {
+            "path": "/tmp/proj/src/opencode_search/config.py",
+            "content": "REGISTRY_PATH = '~/.local/share/opencode-search/projects.json'",
+            "language": "python",
+            "start_line": 10,
+            "end_line": 12,
+            "_score": 0.7,
+            "_project_path": "/tmp/proj",
+            "chunk_id": 2,
+        },
+    ]
+
+    with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
+         patch("opencode_search.search._rerank_sync", return_value=[(0, 0.99), (1, 0.7)]), \
+         patch("opencode_search.search.Storage") as MockStorage:
+        MockStorage.return_value = _make_mock_storage(rows=rows)
+        results = await search("Where is the registry stored?", projects=[project], top_k=2, use_rerank=False)
+
+    assert results
+    assert results[0].path == "/tmp/proj/src/opencode_search/config.py"
+    assert results[0].metadata["authority_weight"] > results[1].metadata["authority_weight"]
+
+
+@pytest.mark.asyncio
 async def test_search_limits_document_chunk_dominance_per_file():
     clear_search_cache()
     project = _make_project()
@@ -391,8 +431,11 @@ async def test_search_limits_document_chunk_dominance_per_file():
         }
     )
 
+    def stable_rerank(query, docs, model, top_k):
+        return [(i, 0.9 - i * 0.01) for i in range(min(len(docs), top_k))]
+
     with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
-         patch("opencode_search.search._rerank_sync", side_effect=AssertionError("rerank should not run")), \
+         patch("opencode_search.search._rerank_sync", side_effect=stable_rerank), \
          patch("opencode_search.search.Storage") as MockStorage:
         MockStorage.return_value = _make_mock_storage(rows=rows)
         results = await search("implementation", projects=[project], top_k=6, use_rerank=False)
@@ -403,8 +446,8 @@ async def test_search_limits_document_chunk_dominance_per_file():
 
 
 @pytest.mark.asyncio
-async def test_search_many_projects_skips_per_project_rerank():
-    """With >SKIP_STAGE1_RERANK_N projects, per-project rerank is skipped."""
+async def test_search_many_projects_always_reranks_per_project_and_globally():
+    """Per-project rerank must always run, then a global rerank must run."""
     clear_search_cache()
     n = SKIP_STAGE1_RERANK_N + 2
     projects = [_make_project(f"/tmp/proj{i}") for i in range(n)]
@@ -422,8 +465,8 @@ async def test_search_many_projects_skips_per_project_rerank():
         MockStorage.return_value = _make_mock_storage()
         await search("many projects", projects=projects, use_rerank=True)
 
-    # Should call rerank only ONCE (global rerank), not per project
-    assert rerank_calls["n"] == 1
+    # Per-project rerank + global rerank => more than one call
+    assert rerank_calls["n"] > 1
 
 
 @pytest.mark.asyncio

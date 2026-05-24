@@ -28,6 +28,19 @@ def smoke_initial():
     return SMOKE_CLI_INITIAL
 PY
 
+# Regression guard: stale docs must not outrank implementation code for
+# question-like queries.
+mkdir -p "$PROJECT_DIR/src" "$PROJECT_DIR/docs"
+cat > "$PROJECT_DIR/src/config.py" <<'PY'
+# Source of truth (current implementation)
+REGISTRY_PATH = "~/.local/share/opencode-search/projects.json"
+PY
+cat > "$PROJECT_DIR/docs/MIGRATION_PLAN.md" <<'MD'
+# Migration Plan (stale)
+
+The project registry is stored at `~/.opencode/projects.json`.
+MD
+
 "$OPENCODE_BIN" health --json > "$TMPDIR/health.json"
 "$PYTHON_BIN" - <<'PY' "$TMPDIR/health.json"
 import json
@@ -51,7 +64,7 @@ assert data["status"] == "ok", data
 assert data["files_indexed"] >= 1, data
 PY
 
-"$OPENCODE_BIN" search "cli_alpha_unique" --no-rerank --json > "$TMPDIR/search-initial.json"
+"$OPENCODE_BIN" search "cli_alpha_unique" --project "$PROJECT_DIR" --no-rerank --json > "$TMPDIR/search-initial.json"
 "$PYTHON_BIN" - <<'PY' "$TMPDIR/search-initial.json"
 import json
 import sys
@@ -61,6 +74,19 @@ with open(sys.argv[1], "r", encoding="utf-8") as fh:
 
 assert data["results"], data
 assert any("cli_alpha_unique" in row["content"] for row in data["results"]), data
+PY
+
+"$OPENCODE_BIN" search "Where is the registry of indexed projects stored and what format is it?" --project "$PROJECT_DIR" --no-rerank --json > "$TMPDIR/search-stale-docs.json"
+"$PYTHON_BIN" - <<'PY' "$TMPDIR/search-stale-docs.json"
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+assert data["results"], data
+top = data["results"][0]["path"]
+assert top.endswith("src/config.py"), data
 PY
 
 "$OPENCODE_BIN" status "$PROJECT_DIR" --json > "$TMPDIR/status.json"
@@ -149,13 +175,14 @@ def smoke_updated():
     return SMOKE_CLI_UPDATED
 PY
 
-"$PYTHON_BIN" - <<'PY' "$OPENCODE_BIN"
+"$PYTHON_BIN" - <<'PY' "$OPENCODE_BIN" "$PROJECT_DIR"
 import json
 import subprocess
 import sys
 import time
 
-cmd = [sys.argv[1], "search", "cli_beta_unique", "--no-rerank", "--json"]
+opencode_bin, project_dir = sys.argv[1:3]
+cmd = [opencode_bin, "search", "cli_beta_unique", "--project", project_dir, "--no-rerank", "--json"]
 deadline = time.time() + 20
 while time.time() < deadline:
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -205,7 +232,7 @@ def smoke_stopped():
 PY
 
 sleep 2
-"$OPENCODE_BIN" search "cli_gamma_unique" --no-rerank --json > "$TMPDIR/search-stopped.json"
+"$OPENCODE_BIN" search "cli_gamma_unique" --project "$PROJECT_DIR" --no-rerank --json > "$TMPDIR/search-stopped.json"
 "$PYTHON_BIN" - <<'PY' "$TMPDIR/search-stopped.json"
 import json
 import sys
