@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -60,6 +62,21 @@ def pytest_sessionfinish(session, exitstatus):
     skipped = session.config.pluginmanager.get_plugin("terminalreporter").stats.get("skipped", [])
     if skipped and session.exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.fixture(autouse=True)
+def isolate_registry(tmp_path):
+    """Redirect REGISTRY_PATH to a per-test temp file so tests never write to the real registry.
+
+    Tests that explicitly set config.REGISTRY_PATH themselves via monkeypatch or patch()
+    will override this at the narrower scope, which is fine — pytest fixture scoping
+    ensures their more-specific patches take precedence.
+    """
+    import opencode_search.config as cfg
+
+    tmp_registry = tmp_path / "projects.json"
+    with patch.object(cfg, "REGISTRY_PATH", tmp_registry):
+        yield tmp_registry
 
 
 @pytest.fixture(scope="session", autouse=True)
