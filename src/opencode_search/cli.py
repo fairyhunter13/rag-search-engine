@@ -453,6 +453,59 @@ def daemon_install_systemd(
         raise typer.Exit(code=1)
 
 
+@app.command("clean-orphans")
+def clean_orphans(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Actually delete (default is dry-run)."),
+    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
+) -> None:
+    """Remove index directories that are no longer tracked in the registry.
+
+    Runs as a dry-run by default — pass --yes to actually delete.
+    """
+    import shutil
+
+    from opencode_search.config import get_index_root, load_registry
+
+    registry = load_registry()
+    known_dbs: set[str] = {v.db_path for v in registry.values()}
+
+    index_root = get_index_root()
+    if not index_root.exists():
+        typer.echo("No index root found — nothing to clean.")
+        return
+
+    orphans: list[str] = []
+    for candidate in sorted(index_root.glob("*/index_*")):
+        if str(candidate) not in known_dbs:
+            orphans.append(str(candidate))
+
+    if not orphans:
+        typer.echo("No orphan index directories found.")
+        return
+
+    if json_output:
+        _print_json({"orphans": orphans, "deleted": yes})
+        if yes:
+            for path in orphans:
+                shutil.rmtree(path, ignore_errors=True)
+        return
+
+    action = "Deleting" if yes else "Would delete (dry-run — pass --yes to delete)"
+    for path in orphans:
+        typer.echo(f"  {action}: {path}")
+
+    if yes:
+        for path in orphans:
+            shutil.rmtree(path, ignore_errors=True)
+        # Remove empty parent dirs
+        for candidate in sorted(index_root.glob("*")):
+            if candidate.is_dir() and not any(candidate.iterdir()):
+                candidate.rmdir()
+        typer.echo(f"Deleted {len(orphans)} orphan director{'y' if len(orphans)==1 else 'ies'}.")
+    else:
+        typer.echo(f"\n{len(orphans)} orphan director{'y' if len(orphans)==1 else 'ies'} found. Re-run with --yes to delete.")
+
+
 @daemon_app.command("install-global")
 def daemon_install_global(
     host: str | None = typer.Option(None, help="Daemon host to register in client configs."),

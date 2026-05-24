@@ -38,7 +38,7 @@ else:
 
 from starlette.responses import JSONResponse
 
-from opencode_search.daemon import DEFAULT_CLIENT_STALE_S, DEFAULT_MODEL_IDLE_UNLOAD_S
+from opencode_search.daemon import DEFAULT_CLIENT_STALE_S, DEFAULT_MODEL_IDLE_UNLOAD_S, _global_prompt_text
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_ensure_project_watching,
@@ -56,9 +56,9 @@ log = logging.getLogger(__name__)
 _mcp_kwargs: dict[str, Any] = {
     "name": "opencode-search",
     "instructions": (
-        "GPU-accelerated local semantic code search. "
-        "Index your project with index_project, then call search_code. "
-        "All embedding and reranking runs locally on your GPU — no data leaves your machine."
+        "GPU-accelerated local semantic code search — all embedding and reranking runs locally"
+        " on your GPU, no data leaves your machine.\n\n"
+        + _global_prompt_text()
     ),
 }
 if _MCP_IMPORT_ERROR is not None:
@@ -198,6 +198,21 @@ async def stop_watching(path: str) -> dict[str, Any]:
     await _release_stale_project_watches()
     await _ensure_watchers_resumed()
     return await handle_stop_watching(path=path)
+
+
+@mcp.tool()
+async def search_metrics() -> dict[str, Any]:
+    """Return cumulative search_code call statistics for this daemon session.
+
+    Tracks call count, zero-result rate, latency percentiles (p50/p95), and
+    average top-score distribution — useful for measuring how effectively
+    clients are using the search engine.
+    """
+    from opencode_search.metrics import get_metrics
+
+    await _ensure_stale_cleanup_started()
+    runtime_state.note_activity()
+    return get_metrics()
 
 
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)

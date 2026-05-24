@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# mcp_bridge imports mcp.client.session at module level; skip when mcp is absent.
+pytest.importorskip("mcp", reason="mcp package not installed — run tests with .venv/bin/pytest")
+
 from opencode_search import mcp_bridge
 
 
