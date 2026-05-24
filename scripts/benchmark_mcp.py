@@ -44,6 +44,28 @@ QUESTIONS = [
 
 WORKDIR = str(Path(__file__).resolve().parent.parent)
 
+# Resolve the claude binary using the *shell's* PATH so nvm-managed node
+# installations are found even when the benchmark is run from a Python
+# subprocess that inherits a stripped PATH.
+def _find_binary(name: str) -> str:
+    """Return the absolute path to `name` via `which`, falling back to bare name."""
+    import shutil
+    # shutil.which searches os.environ['PATH'], which may be stripped.
+    # Run `which` in a login shell to pick up nvm / rbenv / etc.
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", f"which {name}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        path = result.stdout.strip()
+        if path:
+            return path
+    except Exception:
+        pass
+    return shutil.which(name) or name
+
+_CLAUDE_BIN = _find_binary("claude")
+
 _BASH_SEARCH_RE = re.compile(
     r'\b(grep|rg|ag|find\b.*-name|-exec|glob|fd)\b'
 )
@@ -57,11 +79,18 @@ def _now() -> str:
 # Claude Code runner
 # ---------------------------------------------------------------------------
 
-_MCP_OPENCODE_PREFIX = "mcp__opencode-search__"
+# Claude Code normalises the MCP server name differently in different contexts:
+# interactive sessions emit 'mcp__opencode-search__' (hyphen, matching the server name)
+# while headless -p mode emits 'mcp__opencode_search__' (underscore, sanitised form).
+# We must handle both.
+_MCP_PREFIXES = ("mcp__opencode-search__", "mcp__opencode_search__")
 
 def _strip_mcp_prefix(name: str) -> str:
-    """Normalise 'mcp__opencode-search__search_code' → 'search_code'."""
-    return name[len(_MCP_OPENCODE_PREFIX):] if name.startswith(_MCP_OPENCODE_PREFIX) else name
+    """Normalise MCP tool name → bare tool name (e.g. 'search_code')."""
+    for prefix in _MCP_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
 
 
 _CLAUDE_SYSTEM_PROMPT = (
@@ -74,19 +103,18 @@ _CLAUDE_SYSTEM_PROMPT = (
 
 
 def run_claude(question: str, model: str) -> dict[str, Any]:
-    # --tools restricts the built-in toolset to file-exploration tools only,
-    # excluding meta-tools (Agent, Skill, Task) that spawn sub-contexts which
-    # don't inherit the MCP-first instruction.
-    # --allowedTools pre-approves the MCP tools so they aren't permission-blocked.
-    # --append-system-prompt injects the MCP-first rule at system-prompt level
-    # (higher priority than CLAUDE.md) to improve small-model compliance.
-    builtin_tools = "Bash,Grep,Glob,Read"
+    # Block all native file-exploration tools: Bash, Grep, Glob, Read.
+    # With no file tools, the model's only way to get code content is via MCP —
+    # search_code returns relevant code chunks directly.
+    # --allowedTools pre-approves MCP tools so no permission dialog blocks them.
+    # Without Bash/Grep/Glob/Read in allowedTools they are effectively disabled
+    # (headless -p has no user to approve them).
+    disallowed_tools = "Bash Grep Glob Read"
     allowed = (
         "mcp__opencode-search__list_indexed_projects"
         " mcp__opencode-search__search_code"
         " mcp__opencode-search__project_status"
         " mcp__opencode-search__search_metrics"
-        " Bash Grep Glob Read"
     )
     # Prefix the question with an explicit MCP-first instruction so the model
     # treats tool ordering as part of the task, not just background guidance.
@@ -100,15 +128,19 @@ def run_claude(question: str, model: str) -> dict[str, Any]:
         f"Question: {question}"
     )
     cmd = [
-        "claude", "-p", prompted_question,
+        _CLAUDE_BIN, "-p", prompted_question,
         "--output-format", "stream-json",
         "--verbose",
         "--model", model,
-        "--tools", builtin_tools,
+        "--disallowedTools", disallowed_tools,
         "--allowedTools", allowed,
         "--append-system-prompt", _CLAUDE_SYSTEM_PROMPT,
     ]
-    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(Path.home() / ".claude")}
+    # Do NOT override CLAUDE_CONFIG_DIR. The user-scope MCP server registration
+    # lives in ~/.claude.json (home root), not ~/.claude/.claude.json. When
+    # CLAUDE_CONFIG_DIR is set to ~/.claude, Claude reads ~/.claude/.claude.json
+    # instead and loses the opencode-search MCP server registration entirely.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=180,
