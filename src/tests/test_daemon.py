@@ -15,57 +15,20 @@ from opencode_search.daemon import (
     _strip_marker_block,
     _update_codex_config_text,
     discover_claude_config_dirs,
-    parse_alias_map,
-    remove_shell_wrapper_block,
 )
 
 
-def test_parse_alias_map_extracts_target_aliases():
-    aliases = parse_alias_map(
-        '\n'.join(
-            [
-                'alias claude="claude --dangerously-skip-permissions"',
-                "alias codex='codex --yolo'",
-            ]
-        )
-    )
+def test_discover_claude_config_dirs_scans_home_for_profiles(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude-account1").mkdir()
+    (tmp_path / ".claude-account2").mkdir()
 
-    assert aliases["claude"] == "claude --dangerously-skip-permissions"
-    assert aliases["codex"] == "codex --yolo"
-
-
-def test_discover_claude_config_dirs_finds_alias_profiles(tmp_path):
-    alias_text = '\n'.join(
-        [
-            'alias claude="claude --dangerously-skip-permissions"',
-            'alias claude1="CLAUDE_CONFIG_DIR=~/.claude-account1 claude"',
-            'alias claude2="CLAUDE_CONFIG_DIR=~/.claude-account2 claude"',
-        ]
-    )
-
-    dirs = discover_claude_config_dirs(alias_text, home=tmp_path)
+    dirs = discover_claude_config_dirs(home=tmp_path)
 
     assert dirs == [
         tmp_path / ".claude-account1",
         tmp_path / ".claude-account2",
     ]
-
-
-def test_remove_shell_wrapper_block_removes_legacy_shell_hook():
-    original = "\n".join(
-        [
-            "alias codex='codex --yolo'",
-            "# >>> opencode-search global singleton MCP >>>",
-            "old block",
-            "# <<< opencode-search global singleton MCP <<<",
-            "",
-        ]
-    )
-
-    updated = remove_shell_wrapper_block(original)
-
-    assert "old block" not in updated
-    assert "alias codex='codex --yolo'" in updated
 
 
 def test_bridge_command_targets_stdio_bridge():

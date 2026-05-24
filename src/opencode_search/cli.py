@@ -529,10 +529,6 @@ def daemon_install_global(
         "http",
         help="How clients should connect (http or stdio). http is recommended (singleton, no client-side process).",
     ),
-    install_shell_wrappers: bool = typer.Option(
-        False,
-        help="If true, also install ~/.bash_aliases wrappers that auto-start the daemon before each cli invocation.",
-    ),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Register the singleton daemon globally in Claude Code, Codex, and Hermes."""
@@ -546,27 +542,11 @@ def daemon_install_global(
         host=host or DEFAULT_DAEMON_HOST,
         port=port or DEFAULT_DAEMON_PORT,
         transport=transport,
-        install_shell_wrappers=install_shell_wrappers,
     )
     if json_output:
         _print_json(result)
         return
     typer.echo(f"Installed global MCP integration: {result['url']}")
-
-
-@daemon_app.command("uninstall-shell-wrappers")
-def daemon_uninstall_shell_wrappers(
-    json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
-) -> None:
-    """Remove the optional ~/.bash_aliases wrapper block installed by older setups."""
-    from opencode_search.daemon import uninstall_shell_wrappers
-
-    result = uninstall_shell_wrappers()
-    if json_output:
-        _print_json(result)
-        return
-    changed = "removed" if result.get("changed") else "not present"
-    typer.echo(f"Shell wrappers: {changed}")
 
 
 # ---------------------------------------------------------------------------

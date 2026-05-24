@@ -44,11 +44,7 @@ _PID_PATH = _STATE_DIR / "daemon.pid"
 _META_PATH = _STATE_DIR / "daemon.json"
 _LOG_PATH = _STATE_DIR / "daemon.log"
 _BIN_DIR = Path.home() / ".opencode" / "bin"
-_HELPER_PATH = _BIN_DIR / "opencode-search-global-mcp-ensure"
 _INIT_WRAPPER_PATH = _BIN_DIR / "opencode-search-init"
-_ALIASES_PATH = Path.home() / ".bash_aliases"
-_ALIAS_BLOCK_START = "# >>> opencode-search global singleton MCP >>>"
-_ALIAS_BLOCK_END = "# <<< opencode-search global singleton MCP <<<"
 _SYSTEMD_USER_DIR = Path.home() / ".config" / "systemd" / "user"
 _SYSTEMD_SERVICE_NAME = "opencode-search-mcp-daemon.service"
 _SYSTEMD_SERVICE_PATH = _SYSTEMD_USER_DIR / _SYSTEMD_SERVICE_NAME
@@ -282,158 +278,33 @@ def daemon_status(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_DAEMON_PO
     }
 
 
-def parse_alias_map(text: str) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    pattern = re.compile(r"""^alias\s+([A-Za-z0-9_-]+)=(['"])(.*)\2$""")
-    for line in text.splitlines():
-        match = pattern.match(line.strip())
-        if match:
-            aliases[match.group(1)] = match.group(3)
-    return aliases
+def discover_claude_config_dirs(home: Path | None = None) -> list[Path]:
+    """Discover additional Claude Code profile config dirs.
 
-
-def discover_claude_config_dirs(alias_text: str, home: Path | None = None) -> list[Path]:
+    We intentionally do not install or rely on shell wrappers (e.g. in
+    `~/.bash_aliases`). Instead, we discover profile config directories by
+    scanning the user's home directory for folders matching `.claude-*` or
+    `.claude_*` (excluding the default `~/.claude`).
+    """
     home = home or Path.home()
-    dirs: list[Path] = []
-    for command in parse_alias_map(alias_text).values():
-        match = re.search(r"CLAUDE_CONFIG_DIR=([^\s]+)", command)
-        if not match:
-            continue
-        raw_path = match.group(1).strip("\"'")
-        expanded = Path(raw_path.replace("~", str(home), 1)).expanduser()
-        dirs.append(expanded)
+    candidates: list[Path] = []
+    for pattern in (".claude-*", ".claude_*"):
+        for path in home.glob(pattern):
+            if not path.is_dir():
+                continue
+            if path.name == ".claude":
+                continue
+            candidates.append(path)
+
     unique: list[Path] = []
     seen: set[str] = set()
-    for path in dirs:
-        key = str(path)
-        if key not in seen:
-            unique.append(path)
-            seen.add(key)
+    for path in sorted(candidates, key=lambda p: p.name):
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        unique.append(path)
+        seen.add(key)
     return unique
-
-
-def _wrap_command(command_text: str, base_command: str) -> str:
-    pattern = re.compile(rf"(?<!\S){re.escape(base_command)}(?!\S)")
-    return pattern.sub(f"command {base_command}", command_text, count=1)
-
-
-def render_shell_wrapper_block(helper_script: Path, alias_text: str) -> str:
-    aliases = parse_alias_map(alias_text)
-    claude_cmd = _wrap_command(
-        aliases.get("claude", "claude --dangerously-skip-permissions --model claude-opus-4-6"),
-        "claude",
-    )
-    claude1_cmd = _wrap_command(
-        aliases.get("claude1", "CLAUDE_CONFIG_DIR=~/.claude-account1 claude"),
-        "claude",
-    )
-    claude2_cmd = _wrap_command(
-        aliases.get("claude2", "CLAUDE_CONFIG_DIR=~/.claude-account2 claude"),
-        "claude",
-    )
-    claude3_cmd = _wrap_command(
-        aliases.get("claude3", "CLAUDE_CONFIG_DIR=~/.claude-account3 claude"),
-        "claude",
-    )
-    codex_cmd = _wrap_command(aliases.get("codex", "codex --yolo"), "codex")
-
-    return "\n".join(
-        [
-            _ALIAS_BLOCK_START,
-            "unset -f _opencode_search_ensure_global_mcp 2>/dev/null || true",
-            "_opencode_search_ensure_global_mcp() {",
-            f"  '{helper_script}' >/dev/null 2>&1 || true",
-            "}",
-            "unalias claude 2>/dev/null || true",
-            "claude() {",
-            "  _opencode_search_ensure_global_mcp",
-            f"  {claude_cmd} \"$@\"",
-            "}",
-            "unalias claude1 2>/dev/null || true",
-            "claude1() {",
-            "  _opencode_search_ensure_global_mcp",
-            f"  {claude1_cmd} \"$@\"",
-            "}",
-            "unalias claude2 2>/dev/null || true",
-            "claude2() {",
-            "  _opencode_search_ensure_global_mcp",
-            f"  {claude2_cmd} \"$@\"",
-            "}",
-            "unalias claude3 2>/dev/null || true",
-            "claude3() {",
-            "  _opencode_search_ensure_global_mcp",
-            f"  {claude3_cmd} \"$@\"",
-            "}",
-            "unalias codex 2>/dev/null || true",
-            "codex() {",
-            "  _opencode_search_ensure_global_mcp",
-            f"  {codex_cmd} \"$@\"",
-            "}",
-            "unset -f hermes 2>/dev/null || true",
-            "hermes() {",
-            "  _opencode_search_ensure_global_mcp",
-            "  command hermes \"$@\"",
-            "}",
-            _ALIAS_BLOCK_END,
-        ]
-    )
-
-
-def upsert_shell_wrapper_block(existing_text: str, block: str) -> str:
-    if _ALIAS_BLOCK_START in existing_text and _ALIAS_BLOCK_END in existing_text:
-        pattern = re.compile(
-            rf"{re.escape(_ALIAS_BLOCK_START)}.*?{re.escape(_ALIAS_BLOCK_END)}",
-            flags=re.DOTALL,
-        )
-        return pattern.sub(block, existing_text).rstrip() + "\n"
-    stripped = existing_text.rstrip()
-    if stripped:
-        return stripped + "\n\n" + block + "\n"
-    return block + "\n"
-
-
-def _install_shell_wrapper_helper(
-    helper_path: Path,
-    *,
-    python_bin: Path,
-    host: str,
-    port: int,
-) -> str:
-    """Install the helper script that ensures the MCP daemon is running."""
-    helper_path.parent.mkdir(parents=True, exist_ok=True)
-    helper_path.write_text(
-        "\n".join(
-            [
-                "#!/usr/bin/env bash",
-                "set -euo pipefail",
-                f"exec '{python_bin}' -m opencode_search daemon ensure --host {host} --port {port}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    try:
-        helper_path.chmod(0o755)
-    except OSError:
-        pass
-    return str(helper_path)
-
-
-def _install_shell_wrappers(
-    *,
-    aliases_path: Path,
-    helper_path: Path,
-    python_bin: Path,
-    host: str,
-    port: int,
-) -> dict[str, object]:
-    """Upsert wrapper functions into ~/.bash_aliases for Claude/Codex/Hermes."""
-    existing = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
-    helper_installed = _install_shell_wrapper_helper(helper_path, python_bin=python_bin, host=host, port=port)
-    block = render_shell_wrapper_block(Path(helper_installed), existing)
-    updated = upsert_shell_wrapper_block(remove_shell_wrapper_block(existing), block)
-    aliases_path.write_text(updated, encoding="utf-8")
-    return {"helper_path": helper_installed, "aliases_path": str(aliases_path)}
 
 
 def _run_command(command: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -448,41 +319,6 @@ def _run_command(command: list[str], env: dict[str, str] | None = None) -> subpr
 
 def _remove_if_present(command: list[str], env: dict[str, str] | None = None) -> None:
     _run_command(command, env=env)
-
-
-def remove_shell_wrapper_block(existing_text: str) -> str:
-    if _ALIAS_BLOCK_START not in existing_text or _ALIAS_BLOCK_END not in existing_text:
-        return existing_text
-    pattern = re.compile(
-        rf"\n?{re.escape(_ALIAS_BLOCK_START)}.*?{re.escape(_ALIAS_BLOCK_END)}\n?",
-        flags=re.DOTALL,
-    )
-    return pattern.sub("\n", existing_text).strip() + ("\n" if existing_text.strip() else "")
-
-
-def uninstall_shell_wrappers(
-    aliases_path: Path = _ALIASES_PATH,
-    helper_path: Path = _HELPER_PATH,
-) -> dict[str, object]:
-    """Remove the managed ~/.bash_aliases wrapper block (if present).
-
-    This does not affect Claude/Codex/Hermes MCP configuration; it only removes
-    the optional shell hook layer that auto-runs `daemon ensure` on every
-    invocation.
-    """
-    existing = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
-    updated = remove_shell_wrapper_block(existing)
-    changed = updated != existing
-    if changed:
-        aliases_path.write_text(updated, encoding="utf-8")
-    helper_removed = False
-    try:
-        if helper_path.exists():
-            helper_path.unlink()
-            helper_removed = True
-    except OSError:
-        helper_removed = False
-    return {"changed": changed, "aliases_path": str(aliases_path), "helper_removed": helper_removed}
 
 
 def _bridge_command(python_bin: Path | None = None) -> list[str]:
@@ -891,27 +727,12 @@ def install_systemd_user_service(
 
 
 def install_global_integration(
-    aliases_path: Path = _ALIASES_PATH,
-    helper_path: Path = _HELPER_PATH,
     host: str = DEFAULT_DAEMON_HOST,
     port: int = DEFAULT_DAEMON_PORT,
     *,
-    install_shell_wrappers: bool = False,
     transport: str = "http",
 ) -> dict[str, object]:
-    alias_text = aliases_path.read_text(encoding="utf-8") if aliases_path.exists() else ""
     helper_python = Path(sys.executable)
-    shell_wrappers: dict[str, object] | None = None
-    if install_shell_wrappers:
-        # Upsert wrapper block + helper script. This keeps the integration sticky
-        # across new shell sessions and ensures the daemon is started on demand.
-        shell_wrappers = _install_shell_wrappers(
-            aliases_path=aliases_path,
-            helper_path=helper_path,
-            python_bin=helper_python,
-            host=host,
-            port=port,
-        )
 
     # Prefer connecting clients directly to the singleton daemon over HTTP so no
     # per-client wrapper is needed and no extra stdio server processes are spawned.
@@ -920,7 +741,7 @@ def install_global_integration(
         raise ValueError("transport must be 'http' or 'stdio'")
 
     bridge_command = _bridge_command(helper_python)
-    claude_dirs = discover_claude_config_dirs(alias_text)
+    claude_dirs = discover_claude_config_dirs()
     installed_claude = _install_claude(bridge_command, claude_dirs, transport=transport, host=host, port=port)
     codex_installed = _install_codex(bridge_command, transport=transport, host=host, port=port)
     hermes_installed = _install_hermes(bridge_command)
@@ -942,8 +763,6 @@ def install_global_integration(
         "claude_prompt_paths": claude_prompt_paths,
         "codex_prompt_path": codex_prompt_path,
         "hermes_prompt_path": hermes_prompt_path,
-        "aliases_path": str(aliases_path),
-        "shell_wrappers": shell_wrappers,
         "systemd": systemd_result,
     }
 
