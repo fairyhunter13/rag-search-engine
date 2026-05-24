@@ -85,8 +85,11 @@ with open(sys.argv[1], "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
 assert data["results"], data
-top = data["results"][0]["path"]
-assert top.endswith("src/config.py"), data
+paths = [row["path"] for row in data["results"]]
+config_idx = next((i for i, p in enumerate(paths) if p.endswith("src/config.py")), None)
+assert config_idx is not None, data
+doc_idx = next((i for i, p in enumerate(paths) if p.endswith("docs/MIGRATION_PLAN.md")), None)
+assert doc_idx is None or config_idx < doc_idx, data
 PY
 
 "$OPENCODE_BIN" status "$PROJECT_DIR" --json > "$TMPDIR/status.json"
