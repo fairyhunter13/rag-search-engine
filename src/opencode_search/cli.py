@@ -81,6 +81,13 @@ def init(
         typer.echo(f"Error: {result['error']}", err=True)
         raise typer.Exit(code=1)
 
+    if result.get("status") == "indexing":
+        typer.echo(
+            f"Indexing started for {result['path']}\n"
+            f"  Run 'opencode-search status {result['path']}' to check progress."
+        )
+        return
+
     typer.echo(
         f"Indexed {result['path']}\n"
         f"  tier:          {result['tier']}\n"
@@ -114,6 +121,13 @@ def index(
     if "error" in result:
         typer.echo(f"Error: {result['error']}", err=True)
         raise typer.Exit(code=1)
+
+    if result.get("status") == "indexing":
+        typer.echo(
+            f"Indexing started for {result['path']}\n"
+            f"  Run 'opencode-search status {result['path']}' to check progress."
+        )
+        return
 
     typer.echo(
         f"Indexed {result['path']}\n"
