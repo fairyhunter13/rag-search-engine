@@ -257,14 +257,14 @@ class Storage:
             schema=schema,
         )
 
+        op = (
+            self._table
+            .merge_insert("chunk_id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+        )
         async with self._write_lock:
-            (
-                self._table
-                .merge_insert("chunk_id")
-                .when_matched_update_all()
-                .when_not_matched_insert_all()
-                .execute(pa_table)
-            )
+            await asyncio.to_thread(op.execute, pa_table)
         logger.debug("Wrote %d chunks", len(chunks))
 
     @staticmethod
@@ -274,8 +274,9 @@ class Storage:
 
     async def delete_by_path(self, path: str) -> None:
         """Delete all chunks whose path matches the given string."""
+        predicate = f"path = {self._sql_quote(path)}"
         async with self._write_lock:
-            self._table.delete(f"path = {self._sql_quote(path)}")
+            await asyncio.to_thread(self._table.delete, predicate)
         logger.debug("Deleted chunks for path: %s", path)
 
     async def delete_by_paths(self, paths: list[str]) -> None:
@@ -283,15 +284,30 @@ class Storage:
         if not paths:
             return
         quoted = ", ".join(self._sql_quote(p) for p in paths)
+        predicate = f"path IN ({quoted})"
         async with self._write_lock:
-            self._table.delete(f"path IN ({quoted})")
+            await asyncio.to_thread(self._table.delete, predicate)
         logger.debug("Deleted chunks for %d paths", len(paths))
 
     async def delete_positions_at_or_after(self, path: str, position: int) -> None:
         """Delete chunks for path whose position is greater than or equal to position."""
+        predicate = f"path = {self._sql_quote(path)} AND position >= {int(position)}"
         async with self._write_lock:
-            self._table.delete(f"path = {self._sql_quote(path)} AND position >= {int(position)}")
+            await asyncio.to_thread(self._table.delete, predicate)
         logger.debug("Deleted stale chunks for path %s at position >= %d", path, position)
+
+    async def batch_cleanup_positions(self, cleanups: list[tuple[str, int]]) -> None:
+        """Batch-delete stale positions for multiple files in one transaction."""
+        if not cleanups:
+            return
+        parts = [
+            f"(path = {self._sql_quote(p)} AND position >= {int(pos)})"
+            for p, pos in cleanups
+        ]
+        predicate = " OR ".join(parts)
+        async with self._write_lock:
+            await asyncio.to_thread(self._table.delete, predicate)
+        logger.debug("Batch-cleaned stale positions for %d files", len(cleanups))
 
     # ------------------------------------------------------------------
     # Read operations
