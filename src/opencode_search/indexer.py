@@ -367,7 +367,14 @@ async def index_project(
 
                 language = detect_language(path)
                 try:
-                    chunks = await asyncio.to_thread(chunk_file, content, path)
+                    chunks = await asyncio.wait_for(
+                        asyncio.to_thread(chunk_file, content, path),
+                        timeout=30.0,
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("chunking timed out (>30s), skipping %s", path)
+                    result.errors += 1
+                    return
                 except Exception as e:
                     log.warning("chunking failed for %s: %s", path, e)
                     result.errors += 1
