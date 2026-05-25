@@ -416,7 +416,10 @@ async def index_project(
             await ready_queue.put(None)  # sentinel: all reading done
 
     async def embed_writer() -> None:
-        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=64, batch_files=50,
+        # batch_files=2000: LanceDB triggers an expensive 63s rebase every 20
+        # write transactions. With batch_files=50 → 400 txns → 20 rebases = 21 min
+        # of overhead. With batch_files=2000 → ~10 txns → 0 rebases.
+        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=64, batch_files=2000,
                               append_mode=force)
         while True:
             item = await ready_queue.get()
