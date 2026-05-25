@@ -339,7 +339,13 @@ async def handle_project_status(path: str) -> dict[str, Any]:
     entry = registry.get(project_path)
 
     if entry is None:
-        return {"indexed": False, "path": project_path}
+        in_progress = _indexing_status.get(project_path, {})
+        return {
+            "indexed": False,
+            "path": project_path,
+            "indexing_running": in_progress.get("running", False),
+            "started_at": in_progress.get("started_at"),
+        }
 
     chunk_count: int | None = None
     try:
