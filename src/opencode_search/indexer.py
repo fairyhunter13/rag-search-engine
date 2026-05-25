@@ -69,11 +69,18 @@ class _FileReady:
 
 
 class _WriteBuffer:
-    """Collects chunks from multiple files and flushes to storage in batches."""
+    """Collects chunks from multiple files and flushes to storage in batches.
 
-    def __init__(self, storage: Storage, batch_files: int = 200):
+    When *append_mode* is True the buffer uses storage.append_chunks() (pure
+    table.add — no full-table scan) instead of write_chunks() (merge_insert).
+    Use append_mode only after storage.clear() has wiped old data; it skips
+    the stale-position cleanup step entirely since there are no stale rows.
+    """
+
+    def __init__(self, storage: Storage, batch_files: int = 200, *, append_mode: bool = False):
         self._storage = storage
         self._batch_files = batch_files
+        self._append_mode = append_mode
         self._pending: list[_DeferredWrite] = []
         self._lock = asyncio.Lock()
         self._total_written = 0
@@ -95,13 +102,15 @@ class _WriteBuffer:
             self._pending = []
 
         all_chunks: list[ChunkData] = []
-        cleanups: list[tuple[str, int]] = []
         for w in batch:
             all_chunks.extend(w.chunks)
-            cleanups.append((w.path, w.chunk_count))
 
-        await self._storage.write_chunks(all_chunks)
-        await self._storage.batch_cleanup_positions(cleanups)
+        if self._append_mode:
+            await self._storage.append_chunks(all_chunks)
+        else:
+            cleanups: list[tuple[str, int]] = [(w.path, w.chunk_count) for w in batch]
+            await self._storage.write_chunks(all_chunks)
+            await self._storage.batch_cleanup_positions(cleanups)
         self._total_written += len(batch)
         log.debug("flushed %d files (%d chunks)", len(batch), len(all_chunks))
 
@@ -122,6 +131,7 @@ class _GpuBatcher:
         *,
         batch_chunks: int = 256,
         batch_files: int = 50,
+        append_mode: bool = False,
     ) -> None:
         self._storage = storage
         self._embed_model = embed_model
@@ -129,7 +139,7 @@ class _GpuBatcher:
         self._batch_chunks = batch_chunks
         self._pending_files: list[_FileReady] = []
         self._pending_texts: list[str] = []
-        self._write_buf = _WriteBuffer(storage, batch_files=batch_files)
+        self._write_buf = _WriteBuffer(storage, batch_files=batch_files, append_mode=append_mode)
         self.total_indexed = 0
         self.total_chunks = 0
         self.errors = 0
@@ -334,6 +344,13 @@ async def index_project(
     existing_hashes = await storage.get_file_hashes()
     current_path_set = {str(p) for p in paths}
 
+    # force=True: wipe old data first so the write path can use pure appends
+    # (table.add) instead of merge_insert (full-table scan per batch). One
+    # clear scan upfront beats 400+ merge scans during indexing.
+    if force and existing_hashes:
+        await storage.clear()
+        existing_hashes = {}
+
     result = IndexResult(
         files_indexed=0, files_unchanged=0, files_removed=0,
         chunks_total=0, errors=0, elapsed_s=0.0,
@@ -399,7 +416,8 @@ async def index_project(
             await ready_queue.put(None)  # sentinel: all reading done
 
     async def embed_writer() -> None:
-        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=64, batch_files=50)
+        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=64, batch_files=50,
+                              append_mode=force)
         while True:
             item = await ready_queue.get()
             if item is None:
