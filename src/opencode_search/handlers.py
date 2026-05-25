@@ -31,6 +31,7 @@ from opencode_search.search import clear_search_cache, search
 from opencode_search.storage import Storage
 from opencode_search.watcher import watcher_manager
 from opencode_search.index_config import load_project_config, ProjectConfig
+from opencode_search.embeddings import get_embed_workers_gpu
 
 log = logging.getLogger(__name__)
 
@@ -161,7 +162,11 @@ async def handle_index_project(
         await storage.open()
         try:
             t0 = time.perf_counter()
-            result = await _index_project(storage, project_path, tier=tier, force=force, follow_symlinks=follow_symlinks)
+            result = await _index_project(
+                storage, project_path,
+                tier=tier, force=force, follow_symlinks=follow_symlinks,
+                embed_workers=get_embed_workers_gpu(),
+            )
             elapsed = time.perf_counter() - t0
         finally:
             await storage.close()

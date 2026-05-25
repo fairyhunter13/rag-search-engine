@@ -82,7 +82,7 @@ def _cupy_available() -> bool:
     return _get_cupy() is not None
 
 # GPU normalization mode: "auto" (default), "gpu", "cpu"
-_GPU_NORMALIZE_MODE = os.environ.get("OPENCODE_GPU_NORMALIZE", "auto").lower()
+_GPU_NORMALIZE_MODE = os.environ.get("OPENCODE_GPU_NORMALIZE", "gpu").lower()
 
 _GPU_PROVIDERS: set[str] = {
     "CUDAExecutionProvider",
@@ -1655,7 +1655,6 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
             mat = _normalize_embeddings(mat)
             out = mat.tolist()
             del mat
-            gc.collect()
 
             t_end = time.perf_counter()
             if log.isEnabledFor(logging.INFO):
@@ -2155,7 +2154,10 @@ except Exception:
 _LOW_END: bool = _cpus <= 4 or _ram_mb <= 8192
 _HIGH_END: bool = _cpus >= 16 and _ram_mb >= 32768
 
-# Sub-batch size for chunked ONNX inference — hardware adaptive
+# Sub-batch size for chunked ONNX inference — hardware adaptive.
+# _embed_batch_iobinding now loops internally in chunks of get_onnx_batch_size()
+# so this value only controls how many results are gathered before normalization,
+# not peak VRAM (the OOM guard is inside the IOBinding function).
 _EMBED_SUB_BATCH: int
 if os.environ.get("OPENCODE_EMBED_SUB_BATCH"):
     _EMBED_SUB_BATCH = int(os.environ["OPENCODE_EMBED_SUB_BATCH"])
@@ -2164,9 +2166,9 @@ elif os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "y
 elif _LOW_END:
     _EMBED_SUB_BATCH = 64
 elif _HIGH_END:
-    _EMBED_SUB_BATCH = 128
+    _EMBED_SUB_BATCH = 256
 else:
-    _EMBED_SUB_BATCH = 96
+    _EMBED_SUB_BATCH = 192
 
 
 def get_embed_workers_gpu(vram_mb: int | None = None) -> int:
