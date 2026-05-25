@@ -141,13 +141,17 @@ async def index_project(
     runtime_state.note_activity()
     await _release_stale_project_watches()
     await _ensure_watchers_resumed()
-    result = await handle_index_project(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks)
-    project_path = str(result.get("path", "")) if isinstance(result, dict) else ""
-    if result.get("status") == "ok" and project_path:
-        bound_clients = runtime_state.bind_clients_to_project(project_path)
-        if bound_clients > 0:
-            await handle_ensure_project_watching(project_path, persist=False)
-    return result
+    async def _post_index(result: dict) -> None:
+        pp = str(result.get("path", ""))
+        if result.get("status") == "ok" and pp:
+            bound_clients = runtime_state.bind_clients_to_project(pp)
+            if bound_clients > 0:
+                await handle_ensure_project_watching(pp, persist=False)
+
+    return await handle_index_project(
+        path=path, tier=tier, watch=watch, force=force,
+        follow_symlinks=follow_symlinks, on_complete=_post_index,
+    )
 
 
 @mcp.tool()

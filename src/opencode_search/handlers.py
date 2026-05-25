@@ -131,28 +131,16 @@ def _build_incremental_on_change(
 # ---------------------------------------------------------------------------
 
 
-async def handle_index_project(
-    path: str,
-    tier: str = "balanced",
-    watch: bool = False,
-    force: bool = False,
-    follow_symlinks: bool = True,
-) -> dict[str, Any]:
-    """Index a project directory and optionally start watching it."""
-    if tier not in _VALID_TIERS:
-        return {"error": f"Invalid tier '{tier}'. Choose: {sorted(_VALID_TIERS)}"}
-
-    project_path = Path(path).expanduser().resolve()
-    if not project_path.is_dir():
-        return {"error": f"Directory not found: {project_path}"}
-
-    path_str = str(project_path)
-
-    async with _indexing_lock:
-        if path_str in _indexing_status and _indexing_status[path_str].get("running"):
-            return {"status": "already_indexing", "path": path_str}
-        _indexing_status[path_str] = {"running": True, "started_at": _now_iso()}
-
+async def _run_index_project(
+    path_str: str,
+    project_path: Path,
+    tier: str,
+    watch: bool,
+    force: bool,
+    follow_symlinks: bool,
+    on_complete: Any,
+) -> None:
+    """Background task that performs the actual indexing work."""
     status: dict[str, Any] | None = None
     try:
         dims = get_tier_dims(tier)
@@ -223,14 +211,60 @@ async def handle_index_project(
             "elapsed_s": round(elapsed, 2),
             "watching": watcher_manager.is_active(path_str),
         }
-        return status
+
+        if on_complete is not None:
+            try:
+                await on_complete(status)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception as exc:  # noqa: BLE001
         log.exception("index_project failed for %s", path_str)
         status = {"status": "error", "path": path_str, "error": str(exc)}
-        return status
     finally:
         async with _indexing_lock:
             _indexing_status[path_str] = {"running": False, **(status or {})}
+
+
+async def handle_index_project(
+    path: str,
+    tier: str = "balanced",
+    watch: bool = False,
+    force: bool = False,
+    follow_symlinks: bool = True,
+    on_complete: Any = None,
+) -> dict[str, Any]:
+    """Index a project directory and optionally start watching it.
+
+    Returns immediately with ``status="indexing"``; the actual work runs in
+    the background.  Poll ``project_status`` to check for completion.
+    """
+    if tier not in _VALID_TIERS:
+        return {"error": f"Invalid tier '{tier}'. Choose: {sorted(_VALID_TIERS)}"}
+
+    project_path = Path(path).expanduser().resolve()
+    if not project_path.is_dir():
+        return {"error": f"Directory not found: {project_path}"}
+
+    path_str = str(project_path)
+
+    async with _indexing_lock:
+        if path_str in _indexing_status and _indexing_status[path_str].get("running"):
+            return {"status": "already_indexing", "path": path_str}
+        started_at = _now_iso()
+        _indexing_status[path_str] = {"running": True, "started_at": started_at}
+
+    asyncio.create_task(
+        _run_index_project(
+            path_str=path_str,
+            project_path=project_path,
+            tier=tier,
+            watch=watch,
+            force=force,
+            follow_symlinks=follow_symlinks,
+            on_complete=on_complete,
+        )
+    )
+    return {"status": "indexing", "path": path_str, "started_at": started_at}
 
 
 # ---------------------------------------------------------------------------
