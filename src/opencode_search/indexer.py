@@ -341,7 +341,7 @@ async def index_project(
 
     # Bounded queue: readers push _FileReady; embed_writer pulls and batches.
     # maxsize limits how many chunked files sit in memory awaiting embedding.
-    ready_queue: asyncio.Queue = asyncio.Queue(maxsize=file_workers * 8)
+    ready_queue: asyncio.Queue = asyncio.Queue(maxsize=file_workers * 32)
 
     async def reader_pool() -> None:
         async def read_one(path: Path, idx: int) -> None:
@@ -392,7 +392,7 @@ async def index_project(
             await ready_queue.put(None)  # sentinel: all reading done
 
     async def embed_writer() -> None:
-        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=256, batch_files=50)
+        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=64, batch_files=50)
         while True:
             item = await ready_queue.get()
             if item is None:
