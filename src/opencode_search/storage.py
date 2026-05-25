@@ -484,6 +484,10 @@ class Storage:
             return
         n_partitions = min(IVF_NUM_PARTITIONS_MAX, max(1, n // 10))
         n_sub_vectors = min(IVF_NUM_SUB_VECTORS_MAX, max(1, self.dims // 4))
+        # LanceDB requires num_sub_vectors to evenly divide vector dimensions.
+        # Round down to the nearest valid divisor (avoids silent index failure).
+        while n_sub_vectors > 1 and self.dims % n_sub_vectors != 0:
+            n_sub_vectors -= 1
         try:
             table = self._table
             await asyncio.to_thread(
