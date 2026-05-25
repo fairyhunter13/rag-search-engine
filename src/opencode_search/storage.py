@@ -409,24 +409,46 @@ class Storage:
         query_vec: list[float],
         limit: int = 20,
     ) -> list[dict]:
-        """Merge vector + FTS results, deduplicate by chunk keeping highest score."""
+        """Merge vector + FTS results using Reciprocal Rank Fusion (RRF).
+
+        RRF score = sum(1 / (k + rank_i)) across result lists.
+        Chunks that rank well in *both* signals score higher than those
+        that dominate only one, without requiring score-scale calibration.
+        """
         vec_results = await self.search_vector(query_vec, limit=limit)
         fts_results = await self.search_fts(query_text, limit=limit)
 
-        # Deduplicate by chunk, keeping the row with the highest score. Path-level
-        # dedup hides multiple relevant chunks from the same file.
-        seen: dict[object, dict] = {}
-        for row in vec_results + fts_results:
+        _K = 60  # standard RRF constant (Cormack et al. 2009)
+
+        rows_by_key: dict[object, dict] = {}
+        rrf_scores: dict[object, float] = {}
+
+        for rank, row in enumerate(vec_results):
             key = (
                 row.get("chunk_id")
                 if row.get("chunk_id") is not None
                 else (row.get("path", ""), row.get("position", 0))
             )
-            score = row.get("_score", 0.0)
-            if key not in seen or score > seen[key].get("_score", 0.0):
-                seen[key] = row
+            rows_by_key[key] = row
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_K + rank + 1)
 
-        merged = sorted(seen.values(), key=lambda r: r.get("_score", 0.0), reverse=True)
+        for rank, row in enumerate(fts_results):
+            key = (
+                row.get("chunk_id")
+                if row.get("chunk_id") is not None
+                else (row.get("path", ""), row.get("position", 0))
+            )
+            if key not in rows_by_key:
+                rows_by_key[key] = row
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_K + rank + 1)
+
+        merged = []
+        for key, rrf in rrf_scores.items():
+            row = dict(rows_by_key[key])
+            row["_score"] = rrf
+            merged.append(row)
+
+        merged.sort(key=lambda r: r.get("_score", 0.0), reverse=True)
         return merged[:limit]
 
     # ------------------------------------------------------------------
