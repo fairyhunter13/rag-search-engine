@@ -59,6 +59,15 @@ class _DeferredWrite:
     chunk_count: int
 
 
+@dataclass
+class _FileReady:
+    """A file that has been read and chunked, ready for GPU embedding."""
+    path: str
+    file_hash: str
+    language: str
+    chunks: list  # list of ChunkResult from chunker
+
+
 class _WriteBuffer:
     """Collects chunks from multiple files and flushes to storage in batches."""
 
@@ -95,6 +104,95 @@ class _WriteBuffer:
         await self._storage.batch_cleanup_positions(cleanups)
         self._total_written += len(batch)
         log.debug("flushed %d files (%d chunks)", len(batch), len(all_chunks))
+
+
+class _GpuBatcher:
+    """Batch-embeds chunks from many files in one large GPU call per batch.
+
+    Accumulates *batch_chunks* text chunks from many files before calling
+    embed_passages once. This keeps the GPU fully saturated (one large CUDA
+    kernel instead of many tiny ones) while the CPU does minimal work.
+    """
+
+    def __init__(
+        self,
+        storage: Storage,
+        embed_model: str,
+        dims: int,
+        *,
+        batch_chunks: int = 256,
+        batch_files: int = 50,
+    ) -> None:
+        self._storage = storage
+        self._embed_model = embed_model
+        self._dims = dims
+        self._batch_chunks = batch_chunks
+        self._pending_files: list[_FileReady] = []
+        self._pending_texts: list[str] = []
+        self._write_buf = _WriteBuffer(storage, batch_files=batch_files)
+        self.total_indexed = 0
+        self.total_chunks = 0
+        self.errors = 0
+
+    async def add(self, fr: _FileReady) -> None:
+        self._pending_files.append(fr)
+        self._pending_texts.extend(c.content for c in fr.chunks)
+        if len(self._pending_texts) >= self._batch_chunks:
+            await self._flush()
+
+    async def _flush(self) -> None:
+        if not self._pending_files:
+            return
+        from opencode_search.embeddings import embed_passages
+        files, texts = self._pending_files, self._pending_texts
+        self._pending_files, self._pending_texts = [], []
+
+        try:
+            vectors = await asyncio.to_thread(
+                embed_passages, texts, model=self._embed_model, dimensions=self._dims,
+            )
+        except Exception as exc:
+            log.error("GPU batch embed failed (%d chunks): %s", len(texts), exc)
+            self.errors += len(files)
+            return
+
+        now_us = int(time.time() * 1_000_000)
+        vi = 0
+        for fr in files:
+            n = len(fr.chunks)
+            fv = vectors[vi:vi + n]
+            vi += n
+            if len(fv) != n:
+                log.error("vector mismatch %s: got %d want %d", fr.path, len(fv), n)
+                self.errors += 1
+                continue
+            chunk_data = [
+                ChunkData(
+                    chunk_id=_make_chunk_id(fr.path, i),
+                    path=fr.path,
+                    file_hash=fr.file_hash,
+                    language=fr.language,
+                    position=i,
+                    content=c.content,
+                    content_hash=hashlib.sha256(c.content.encode()).hexdigest()[:16],
+                    start_line=c.start_line,
+                    end_line=c.end_line,
+                    vector=fv[i],
+                    created_at=now_us,
+                )
+                for i, c in enumerate(fr.chunks)
+            ]
+            await self._write_buf.add(
+                _DeferredWrite(chunks=chunk_data, path=fr.path, chunk_count=len(chunk_data))
+            )
+            self.total_indexed += 1
+            self.total_chunks += len(chunk_data)
+
+        log.debug("GPU batch: %d chunks from %d files embedded", len(texts), len(files))
+
+    async def finalize(self) -> None:
+        await self._flush()
+        await self._write_buf.flush()
 
 
 async def index_file(
@@ -209,28 +307,26 @@ async def index_project(
     force: bool = False,
     follow_symlinks: bool = True,
     progress_callback=None,
-    embed_workers: int = 2,
+    embed_workers: int = 2,  # kept for API compat; not used in GPU-batch mode
     file_workers: int = 4,
 ) -> IndexResult:
-    """Index an entire project directory. GPU-enforced, fully async.
+    """Index an entire project using GPU-batched embedding.
 
-    Args:
-        storage: Initialized Storage instance.
-        root: Project root directory.
-        tier: Model tier (budget/balanced/premium).
-        force: Re-index even unchanged files.
-        progress_callback: Optional async callable(indexed, total, path) for progress.
-        embed_workers: Concurrent embed semaphore slots.
+    Files are read and chunked concurrently (bounded by *file_workers*) then
+    fed to a single GPU batcher that embeds up to 256 chunks per CUDA call.
+    This keeps GPU utilisation high with minimal CPU and memory overhead.
     """
+    from opencode_search.chunker import chunk_file
+
+    embed_model, _ = get_tier_models(tier)
+    dims = get_tier_dims(tier)
     t_start = time.monotonic()
-    embed_sem = asyncio.Semaphore(max(1, embed_workers))
     file_sem = asyncio.Semaphore(max(1, file_workers))
 
     paths = list(iter_files(root, follow_symlinks=follow_symlinks))
     total = len(paths)
     log.info("indexing %d files in %s (tier=%s)", total, root, tier)
 
-    # Load existing hashes ONCE so per-file skip detection is O(1) lookup.
     existing_hashes = await storage.get_file_hashes()
     current_path_set = {str(p) for p in paths}
 
@@ -239,36 +335,74 @@ async def index_project(
         chunks_total=0, errors=0, elapsed_s=0.0,
     )
 
-    buf = _WriteBuffer(storage, batch_files=50)
+    # Bounded queue: readers push _FileReady; embed_writer pulls and batches.
+    # maxsize limits how many chunked files sit in memory awaiting embedding.
+    ready_queue: asyncio.Queue = asyncio.Queue(maxsize=file_workers * 8)
 
-    async def process_file(path: Path, idx: int) -> None:
-        async with file_sem:
-            r = await index_file(
-                storage, path,
-                tier=tier, force=force,
-                embed_sem=embed_sem,
-                existing_hashes=existing_hashes,
-                project_root=root,
-                write_buffer=buf,
+    async def reader_pool() -> None:
+        async def read_one(path: Path, idx: int) -> None:
+            async with file_sem:
+                try:
+                    file_hash = await asyncio.to_thread(_hash_file, path)
+                except Exception as e:
+                    result.errors += 1
+                    return
+
+                if not force and existing_hashes.get(str(path)) == file_hash:
+                    result.files_unchanged += 1
+                    if progress_callback:
+                        await progress_callback(idx + 1, total, str(path))
+                    return
+
+                content = await asyncio.to_thread(_read_file, path)
+                if content is None:
+                    await storage.delete_by_path(str(path))
+                    if progress_callback:
+                        await progress_callback(idx + 1, total, str(path))
+                    return
+
+                language = detect_language(path)
+                try:
+                    chunks = await asyncio.to_thread(chunk_file, content, path)
+                except Exception as e:
+                    log.warning("chunking failed for %s: %s", path, e)
+                    result.errors += 1
+                    return
+
+                if not chunks:
+                    await storage.delete_by_path(str(path))
+                    if progress_callback:
+                        await progress_callback(idx + 1, total, str(path))
+                    return
+
+            # Release file_sem before queueing to avoid holding it during backpressure.
+            await ready_queue.put(
+                _FileReady(path=str(path), file_hash=file_hash, language=language, chunks=chunks)
             )
-        if r["status"] == "indexed":
-            result.files_indexed += 1
-            result.chunks_total += r["chunks"]
-        elif r["status"] == "unchanged":
-            result.files_unchanged += 1
-        elif r["status"] == "error":
-            result.errors += 1
-            log.warning("index error %s: %s", path, r.get("error"))
-        if progress_callback:
-            await progress_callback(idx + 1, total, str(path))
+            if progress_callback:
+                await progress_callback(idx + 1, total, str(path))
 
-    tasks = [process_file(p, i) for i, p in enumerate(paths)]
-    await asyncio.gather(*tasks)
-    await buf.flush()
+        try:
+            await asyncio.gather(*[read_one(p, i) for i, p in enumerate(paths)])
+        finally:
+            await ready_queue.put(None)  # sentinel: all reading done
+
+    async def embed_writer() -> None:
+        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=256, batch_files=50)
+        while True:
+            item = await ready_queue.get()
+            if item is None:
+                break
+            await batcher.add(item)
+        await batcher.finalize()
+        result.files_indexed = batcher.total_indexed
+        result.chunks_total = batcher.total_chunks
+        result.errors += batcher.errors
+
+    await asyncio.gather(reader_pool(), embed_writer())
 
     removed = await remove_stale_chunks(storage, current_path_set)
     result.files_removed = removed
-
     await storage.maybe_create_indexes()
 
     result.elapsed_s = time.monotonic() - t_start

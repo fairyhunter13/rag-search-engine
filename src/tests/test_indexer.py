@@ -287,10 +287,9 @@ async def test_index_project_indexes_files(real_storage, tmp_path):
         return [Chunk(content=content, start_line=0, end_line=1,
                       chunk_type="code", language="python")]
 
-    fake_vectors = [[0.5] * 512]
-
     with patch("opencode_search.chunker.chunk_file", side_effect=fake_chunk), \
-         patch("opencode_search.embeddings.embed_passages", return_value=fake_vectors):
+         patch("opencode_search.embeddings.embed_passages",
+               side_effect=lambda texts, **kw: [[0.5] * 512] * len(texts)):
         result = await index_project(real_storage, project_root, tier="budget")
 
     assert result.files_indexed == 2
@@ -314,7 +313,8 @@ async def test_index_project_progress_callback(real_storage, tmp_path):
     with patch("opencode_search.chunker.chunk_file",
                return_value=[Chunk(content="x=1", start_line=0, end_line=0,
                                    chunk_type="code", language="python")]), \
-         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
+         patch("opencode_search.embeddings.embed_passages",
+               side_effect=lambda texts, **kw: [[0.1] * 512] * len(texts)):
         await index_project(real_storage, project_root, tier="budget", progress_callback=cb)
 
     assert len(calls) >= 1
@@ -341,7 +341,8 @@ async def test_index_project_loads_existing_hashes_once(real_storage, tmp_path):
     with patch("opencode_search.chunker.chunk_file",
                return_value=[Chunk(content="x", start_line=0, end_line=0,
                                    chunk_type="code", language="python")]), \
-         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
+         patch("opencode_search.embeddings.embed_passages",
+               side_effect=lambda texts, **kw: [[0.1] * 512] * len(texts)):
         await index_project(real_storage, tmp_path, tier="budget")
 
     # Should be called once for skip detection + once for stale cleanup = 2 max
