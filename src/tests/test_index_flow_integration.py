@@ -14,9 +14,10 @@ pytest.importorskip("pyarrow")
 
 from opencode_search import config
 from opencode_search.chunker import Chunk
-from opencode_search.handlers import handle_index_project, handle_search_code
+from opencode_search.handlers import handle_search_code
 from opencode_search.search import clear_search_cache
 from opencode_search.storage import Storage
+from tests.conftest import index_and_wait
 
 pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps]
 
@@ -68,7 +69,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        first = await handle_index_project(path=str(project_root), tier="budget")
+        first = await index_and_wait(str(project_root), tier="budget")
         assert first["status"] == "ok"
         assert first["chunks_total"] == 3
 
@@ -82,7 +83,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
 
         source_file.write_text("alpha\n")
 
-        second = await handle_index_project(path=str(project_root), tier="budget")
+        second = await index_and_wait(str(project_root), tier="budget")
         assert second["status"] == "ok"
         assert second["chunks_total"] == 1
 
@@ -132,7 +133,7 @@ async def test_legacy_local_index_is_migrated_to_centralized_root(tmp_path, monk
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        indexed = await handle_index_project(path=str(project_root), tier="budget")
+        indexed = await index_and_wait(str(project_root), tier="budget")
         assert indexed["status"] == "ok"
         assert canonical_db_path.exists()
 
@@ -207,7 +208,7 @@ async def test_search_prefers_source_over_stale_docs(tmp_path, monkeypatch):
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        indexed = await handle_index_project(path=str(project_root), tier="budget")
+        indexed = await index_and_wait(str(project_root), tier="budget")
         assert indexed["status"] == "ok"
 
         clear_search_cache()
@@ -250,8 +251,8 @@ async def test_federated_and_symlinked_projects_return_valid_results(tmp_path, m
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        indexed_root = await handle_index_project(path=str(root_project), tier="budget")
-        indexed_other = await handle_index_project(path=str(other_project), tier="budget")
+        indexed_root = await index_and_wait(str(root_project), tier="budget")
+        indexed_other = await index_and_wait(str(other_project), tier="budget")
         assert indexed_root["status"] == "ok"
         assert indexed_other["status"] == "ok"
 

@@ -119,3 +119,28 @@ def patch_embeddings_for_no_gpu():
 
     emb._provider_detection_done = _orig_done
     emb._detected_providers = _orig_providers
+
+
+# ---------------------------------------------------------------------------
+# Async helpers for fire-and-forget index_project tests
+# ---------------------------------------------------------------------------
+
+async def index_and_wait(path: str, **kwargs) -> dict:
+    """Call handle_index_project and wait for the background task to complete.
+
+    handle_index_project now returns immediately with status='indexing'.
+    This helper drains all pending asyncio tasks so tests can inspect the
+    final outcome without polling.  Returns the final status dict from
+    _indexing_status.
+    """
+    import asyncio
+    from pathlib import Path as _Path
+    from opencode_search.handlers import handle_index_project, _indexing_status
+
+    result = await handle_index_project(path=path, **kwargs)
+    # Drain the background task while the caller's patches are still active.
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    path_str = str(_Path(path).expanduser().resolve())
+    return _indexing_status.get(path_str, result)

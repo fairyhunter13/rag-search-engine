@@ -61,6 +61,27 @@ async def _wait_for_search_result(
     raise AssertionError(f"query {query!r} never returned content containing {expected_substring!r}")
 
 
+async def _index_and_wait(path: str, timeout_s: float = 120.0, **kwargs) -> dict:
+    """Call the index_project MCP tool and poll until the background task finishes."""
+    result = await index_project(path=path, **kwargs)
+    assert result["status"] == "indexing", f"expected 'indexing', got {result}"
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        st = await project_status(path=path)
+        if st.get("indexed") and not st.get("indexing_running"):
+            return st
+        if not st.get("indexing_running") and st.get("indexed") is False:
+            # Check _indexing_status directly for the error case
+            from opencode_search.handlers import _indexing_status
+            from pathlib import Path as _P
+            ps = str(_P(path).expanduser().resolve())
+            final = _indexing_status.get(ps, {})
+            if final.get("status") == "error":
+                return final
+        await asyncio.sleep(0.5)
+    raise AssertionError(f"indexing did not complete within {timeout_s}s")
+
+
 async def _wait_for_search_absence(
     project_root: Path,
     query: str,
@@ -107,9 +128,8 @@ async def test_mcp_tools_real_end_to_end(tmp_path, monkeypatch):
     await _ensure_watchers_resumed()
 
     try:
-        indexed = await index_project(path=str(project_root), tier="budget", watch=True)
-        assert indexed["status"] == "ok"
-        assert indexed["watching"] is True
+        indexed = await _index_and_wait(str(project_root), tier="budget", watch=True)
+        assert indexed.get("watching") is True
 
         status = await project_status(path=str(project_root))
         assert status["indexed"] is True
@@ -189,9 +209,8 @@ async def test_mcp_resumes_persisted_watcher_and_removes_deleted_files(tmp_path,
     await _ensure_watchers_resumed()
 
     try:
-        indexed = await index_project(path=str(project_root), tier="budget", watch=True)
-        assert indexed["status"] == "ok"
-        assert indexed["watching"] is True
+        indexed = await _index_and_wait(str(project_root), tier="budget", watch=True)
+        assert indexed.get("watching") is True
 
         await _wait_for_search_result(
             project_root,
@@ -268,9 +287,7 @@ async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, m
         )
         assert open_response.status_code == 200
 
-        indexed = await index_project(path=str(project_root), tier="budget", watch=False)
-        assert indexed["status"] == "ok"
-        assert indexed["watching"] is False
+        await _index_and_wait(str(project_root), tier="budget", watch=False)
 
         status = await project_status(path=str(project_root))
         assert status["indexed"] is True
@@ -321,8 +338,7 @@ async def test_mcp_migrates_legacy_registry_db_path_before_resuming_watchers(tmp
     await _ensure_watchers_resumed()
 
     try:
-        indexed = await index_project(path=str(project_root), tier="budget", watch=True)
-        assert indexed["status"] == "ok"
+        await _index_and_wait(str(project_root), tier="budget", watch=True)
 
         canonical_db_path = Path(config.get_project_db_path(project_root, "budget"))
         legacy_db_path = project_root / ".opencode" / "index_budget"

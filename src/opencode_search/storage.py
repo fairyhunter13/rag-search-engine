@@ -423,7 +423,8 @@ class Storage:
         if n < FTS_THRESHOLD:
             return
         try:
-            self._table.create_fts_index("content", replace=True)
+            table = self._table
+            await asyncio.to_thread(table.create_fts_index, "content", replace=True)
             logger.info("FTS index created/refreshed (%d rows)", n)
         except Exception as exc:  # noqa: BLE001
             logger.warning("FTS index creation failed: %s", exc)
@@ -436,7 +437,9 @@ class Storage:
         n_partitions = min(IVF_NUM_PARTITIONS_MAX, max(1, n // 10))
         n_sub_vectors = min(IVF_NUM_SUB_VECTORS_MAX, max(1, self.dims // 4))
         try:
-            self._table.create_index(
+            table = self._table
+            await asyncio.to_thread(
+                table.create_index,
                 metric="cosine",
                 vector_column_name="vector",
                 index_type="IVF_PQ",
@@ -454,7 +457,8 @@ class Storage:
             logger.warning("IVF-PQ index creation failed: %s", exc)
 
     async def maybe_create_indexes(self) -> None:
-        """Ensure both FTS and IVF-PQ indexes are created/updated as warranted."""
+        """Compact then ensure both FTS and IVF-PQ indexes are created/updated."""
+        await self.compact()
         await self.ensure_fts_index()
         await self.ensure_ivf_pq_index()
 
@@ -509,15 +513,17 @@ class Storage:
 
         Prefers `Table.optimize()` (new API since LanceDB 0.21). Falls back to
         the deprecated `compact_files()` for older installations.
+        Runs the sync LanceDB call off the event loop to avoid blocking.
         """
         try:
-            optimize = getattr(self._table, "optimize", None)
+            table = self._table
+            optimize = getattr(table, "optimize", None)
             if callable(optimize):
                 async with self._write_lock:
-                    optimize()
+                    await asyncio.to_thread(optimize)
             else:
                 async with self._write_lock:
-                    self._table.compact_files()
+                    await asyncio.to_thread(table.compact_files)
             logger.info("Chunks table compacted")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Compaction failed: %s", exc)

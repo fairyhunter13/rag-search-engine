@@ -62,7 +62,8 @@ async def test_handle_index_project_missing_dir():
 
 @pytest.mark.asyncio
 async def test_handle_index_project_success(tmp_path):
-    from opencode_search.handlers import handle_index_project
+    import asyncio
+    from opencode_search.handlers import _indexing_status, handle_index_project
     expected_db_path = get_project_db_path(tmp_path, "balanced")
 
     with patch("opencode_search.handlers._index_project", AsyncMock(return_value=_FakeIndexResult())), \
@@ -78,12 +79,23 @@ async def test_handle_index_project_success(tmp_path):
         MockWatcher.is_active.return_value = False
 
         result = await handle_index_project(path=str(tmp_path), tier="balanced")
+        # Returns immediately — background task still pending.
+        assert result.get("status") == "indexing"
+        assert "started_at" in result
 
-    MockStorage.assert_called_once_with(db_path=expected_db_path, dims=get_tier_dims("balanced"))
-    assert result.get("status") == "ok"
-    assert result["files_indexed"] == 3
-    assert result["chunks_total"] == 12
-    assert result["errors"] == 0
+        # Drain background task while patches are still active.
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        MockStorage.assert_called_once_with(db_path=expected_db_path, dims=get_tier_dims("balanced"))
+
+    path_str = str(tmp_path.resolve())
+    assert _indexing_status[path_str]["running"] is False
+    assert _indexing_status[path_str].get("status") == "ok"
+    assert _indexing_status[path_str]["files_indexed"] == 3
+    assert _indexing_status[path_str]["chunks_total"] == 12
+    assert _indexing_status[path_str]["errors"] == 0
 
 
 @pytest.mark.asyncio
@@ -101,6 +113,7 @@ async def test_handle_index_project_no_duplicate_run(tmp_path):
 
 @pytest.mark.asyncio
 async def test_handle_index_project_clears_running_on_exception(tmp_path):
+    import asyncio
     from opencode_search.handlers import _indexing_status, handle_index_project
 
     with patch("opencode_search.handlers.Storage") as MockStorage:
@@ -110,10 +123,16 @@ async def test_handle_index_project_clears_running_on_exception(tmp_path):
         MockStorage.return_value = mock_st
 
         result = await handle_index_project(path=str(tmp_path), tier="balanced")
+        assert result.get("status") == "indexing"
+
+        # Drain background task (it will catch the exception internally).
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     path_str = str(tmp_path.resolve())
-    assert result["status"] == "error"
     assert _indexing_status[path_str]["running"] is False
+    assert _indexing_status[path_str].get("status") == "error"
 
 
 @pytest.mark.asyncio
@@ -143,8 +162,14 @@ async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tm
         MockWatcher.is_active.return_value = True
 
         result = await handle_index_project(path=path_str, tier="balanced", watch=False)
+        assert result.get("status") == "indexing"
 
-    assert result["status"] == "ok"
+        # Wait for background task while patches are still active.
+        import asyncio
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     assert saved_registry[path_str].watch is True
 
 

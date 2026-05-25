@@ -108,17 +108,24 @@ async def test_index_project_tool_callable():
 
 @pytest.mark.asyncio
 async def test_index_project_auto_starts_watch_for_matching_open_client():
+    import asyncio
     mod = _import_mcp()
 
-    with patch("opencode_search.mcp.handle_index_project",
-               AsyncMock(return_value={"status": "ok", "path": "/tmp/proj", "watching": False})), \
+    # Simulate handle_index_project: fires on_complete with "ok" result, returns "indexing".
+    async def _fake_handle(*, path, tier, watch, force, follow_symlinks, on_complete=None):
+        ok_result = {"status": "ok", "path": "/tmp/proj", "watching": False}
+        if on_complete:
+            await on_complete(ok_result)
+        return {"status": "indexing", "path": "/tmp/proj", "started_at": "2026-01-01T00:00:00"}
+
+    with patch("opencode_search.mcp.handle_index_project", _fake_handle), \
          patch("opencode_search.mcp._ensure_watchers_resumed", AsyncMock()), \
          patch("opencode_search.mcp._ensure_stale_cleanup_started", AsyncMock()), \
          patch.object(mod.runtime_state, "bind_clients_to_project", return_value=1) as mock_bind, \
          patch("opencode_search.mcp.handle_ensure_project_watching", AsyncMock(return_value={"status": "ok"})) as mock_watch:
         result = await mod.index_project(path="/tmp/proj", tier="balanced")
 
-    assert result["status"] == "ok"
+    assert result["status"] == "indexing"
     mock_bind.assert_called_once_with("/tmp/proj")
     mock_watch.assert_awaited_once_with("/tmp/proj", persist=False)
 
