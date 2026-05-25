@@ -125,6 +125,9 @@ MAX_CHARS = MAX_TOKENS_PER_CHUNK * CHARS_PER_TOKEN  # 6 000
 
 # Files larger than this skip structure-aware chunkers (too slow to parse)
 LARGE_FILE_CHARS = 1_000_000  # ~1MB / ~250K tokens
+# HTML semantic splitter is O(n²) on deeply-nested markup — use fast fallback
+# much sooner to prevent 60+ second chunker stalls that starve the GPU.
+LARGE_HTML_CHARS = 100_000  # ~25K tokens
 
 # Current tier for token counting (thread-safe via contextvars)
 _tier_var: contextvars.ContextVar[str] = contextvars.ContextVar("tier", default="premium")
@@ -683,8 +686,10 @@ def chunk_file(content: str, path: Path) -> list[Chunk]:
         if tokens <= TARGET_TOKENS_PER_CHUNK:
             return [_make_chunk(content, "block", language, start_line=1)]
 
-    # Large files: skip structure-aware parsing (too slow), use fast fallback
-    if len(content) > LARGE_FILE_CHARS:
+    # Large files: skip structure-aware parsing (too slow), use fast fallback.
+    # HTML semantic splitter is O(n²) — apply a much lower threshold.
+    html_too_large = ext in (".html", ".htm") and len(content) > LARGE_HTML_CHARS
+    if len(content) > LARGE_FILE_CHARS or html_too_large:
         log.info("Large file %s (%d chars) — using fast fallback", path, len(content))
         chunks = _chunk_fallback(content, language)
     else:
