@@ -50,6 +50,36 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+async def _index_and_wait(path, tier, watch, force, follow_symlinks):
+    """Call handle_index_project and block until the background task finishes.
+
+    handle_index_project() is fire-and-forget (returns status=indexing
+    immediately and schedules work via asyncio.create_task). For CLI use we
+    capture the final result through the on_complete callback so the process
+    doesn't exit before indexing completes.
+    """
+    from opencode_search.handlers import handle_index_project
+
+    loop = asyncio.get_running_loop()
+    result_future: asyncio.Future = loop.create_future()
+
+    async def _capture(status):
+        if not result_future.done():
+            result_future.set_result(status)
+
+    initial = await handle_index_project(
+        path=path, tier=tier, watch=watch, force=force,
+        follow_symlinks=follow_symlinks, on_complete=_capture,
+    )
+
+    if initial.get("status") not in ("indexing",):
+        # error / already_indexing — return as-is
+        return initial
+
+    typer.echo(f"Indexing {initial['path']} ...")
+    return await result_future
+
+
 def _print_json(obj: object) -> None:
     typer.echo(json.dumps(obj, indent=2, default=str))
 
@@ -57,6 +87,22 @@ def _print_json(obj: object) -> None:
 # ---------------------------------------------------------------------------
 # index
 # ---------------------------------------------------------------------------
+
+
+def _print_index_result(result: dict) -> None:
+    if "error" in result:
+        typer.echo(f"Error: {result['error']}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"Indexed {result['path']}\n"
+        f"  tier:          {result['tier']}\n"
+        f"  files indexed: {result['files_indexed']}\n"
+        f"  files skipped: {result.get('files_unchanged', 0)}\n"
+        f"  chunks total:  {result.get('chunks_total', 0)}\n"
+        f"  errors:        {result.get('errors', 0)}\n"
+        f"  elapsed:       {result['elapsed_s']}s\n"
+        f"  watching:      {result['watching']}"
+    )
 
 
 @app.command()
@@ -69,35 +115,11 @@ def init(
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Initialize semantic indexing for a project, defaulting to the current directory."""
-    from opencode_search.handlers import handle_index_project
-
-    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
-
+    result = _run(_index_and_wait(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
     if json_output:
         _print_json(result)
         return
-
-    if "error" in result:
-        typer.echo(f"Error: {result['error']}", err=True)
-        raise typer.Exit(code=1)
-
-    if result.get("status") == "indexing":
-        typer.echo(
-            f"Indexing started for {result['path']}\n"
-            f"  Run 'opencode-search status {result['path']}' to check progress."
-        )
-        return
-
-    typer.echo(
-        f"Indexed {result['path']}\n"
-        f"  tier:          {result['tier']}\n"
-        f"  files indexed: {result['files_indexed']}\n"
-        f"  files skipped: {result.get('files_unchanged', 0)}\n"
-        f"  chunks total:  {result.get('chunks_total', 0)}\n"
-        f"  errors:        {result.get('errors', 0)}\n"
-        f"  elapsed:       {result['elapsed_s']}s\n"
-        f"  watching:      {result['watching']}"
-    )
+    _print_index_result(result)
 
 
 @app.command()
@@ -110,35 +132,11 @@ def index(
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Index a project directory for semantic code search."""
-    from opencode_search.handlers import handle_index_project
-
-    result = _run(handle_index_project(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
-
+    result = _run(_index_and_wait(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
     if json_output:
         _print_json(result)
         return
-
-    if "error" in result:
-        typer.echo(f"Error: {result['error']}", err=True)
-        raise typer.Exit(code=1)
-
-    if result.get("status") == "indexing":
-        typer.echo(
-            f"Indexing started for {result['path']}\n"
-            f"  Run 'opencode-search status {result['path']}' to check progress."
-        )
-        return
-
-    typer.echo(
-        f"Indexed {result['path']}\n"
-        f"  tier:          {result['tier']}\n"
-        f"  files indexed: {result['files_indexed']}\n"
-        f"  files skipped: {result.get('files_unchanged', 0)}\n"
-        f"  chunks total:  {result.get('chunks_total', 0)}\n"
-        f"  errors:        {result.get('errors', 0)}\n"
-        f"  elapsed:       {result['elapsed_s']}s\n"
-        f"  watching:      {result['watching']}"
-    )
+    _print_index_result(result)
 
 
 # ---------------------------------------------------------------------------
