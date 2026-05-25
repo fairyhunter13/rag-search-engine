@@ -52,6 +52,51 @@ def _make_chunk_id(path: str, position: int) -> int:
     return int(hashlib.sha256(raw.encode()).hexdigest()[:16], 16) % (2**62)
 
 
+@dataclass
+class _DeferredWrite:
+    chunks: list[ChunkData]
+    path: str
+    chunk_count: int
+
+
+class _WriteBuffer:
+    """Collects chunks from multiple files and flushes to storage in batches."""
+
+    def __init__(self, storage: Storage, batch_files: int = 200):
+        self._storage = storage
+        self._batch_files = batch_files
+        self._pending: list[_DeferredWrite] = []
+        self._lock = asyncio.Lock()
+        self._total_written = 0
+
+    async def add(self, write: _DeferredWrite) -> None:
+        do_flush = False
+        async with self._lock:
+            self._pending.append(write)
+            if len(self._pending) >= self._batch_files:
+                do_flush = True
+        if do_flush:
+            await self.flush()
+
+    async def flush(self) -> None:
+        async with self._lock:
+            if not self._pending:
+                return
+            batch = self._pending
+            self._pending = []
+
+        all_chunks: list[ChunkData] = []
+        cleanups: list[tuple[str, int]] = []
+        for w in batch:
+            all_chunks.extend(w.chunks)
+            cleanups.append((w.path, w.chunk_count))
+
+        await self._storage.write_chunks(all_chunks)
+        await self._storage.batch_cleanup_positions(cleanups)
+        self._total_written += len(batch)
+        log.debug("flushed %d files (%d chunks)", len(batch), len(all_chunks))
+
+
 async def index_file(
     storage: Storage,
     path: Path,
@@ -61,11 +106,14 @@ async def index_file(
     embed_sem: asyncio.Semaphore | None = None,
     existing_hashes: dict[str, str] | None = None,
     project_root: Path | None = None,
+    write_buffer: _WriteBuffer | None = None,
 ) -> dict:
     """Index a single file. Returns status dict with 'status' and 'chunks' keys.
 
     `existing_hashes` should be the result of `storage.get_file_hashes()` (passed
     in so that a project-wide indexing run only loads it once instead of per-file).
+    When *write_buffer* is provided, chunks are deferred into the buffer for
+    batched writing instead of being written immediately.
     """
     from opencode_search.chunker import chunk_file
     from opencode_search.embeddings import embed_passages
@@ -103,8 +151,6 @@ async def index_file(
         await storage.delete_by_path(str(path))
         return {"status": "empty", "chunks": 0}
 
-    # Embed exactly what we store (the chunk text). Avoid any heuristic query
-    # shaping or keyword/identifier augmentation.
     texts = [c.content for c in chunks]
     try:
         async with embed_sem:
@@ -145,11 +191,13 @@ async def index_file(
         if i < len(vectors)
     ]
 
-    # Upserting by chunk_id alone leaves stale rows when a file shrinks from N
-    # chunks to fewer chunks. Write first so a failed write does not erase the
-    # previous good index, then remove positions beyond the new chunk count.
-    await storage.write_chunks(chunk_data)
-    await storage.delete_positions_at_or_after(str(path), len(chunk_data))
+    if write_buffer is not None:
+        await write_buffer.add(_DeferredWrite(
+            chunks=chunk_data, path=str(path), chunk_count=len(chunk_data),
+        ))
+    else:
+        await storage.write_chunks(chunk_data)
+        await storage.delete_positions_at_or_after(str(path), len(chunk_data))
     return {"status": "indexed", "chunks": len(chunk_data)}
 
 
@@ -191,6 +239,8 @@ async def index_project(
         chunks_total=0, errors=0, elapsed_s=0.0,
     )
 
+    buf = _WriteBuffer(storage, batch_files=200)
+
     async def process_file(path: Path, idx: int) -> None:
         async with file_sem:
             r = await index_file(
@@ -199,6 +249,7 @@ async def index_project(
                 embed_sem=embed_sem,
                 existing_hashes=existing_hashes,
                 project_root=root,
+                write_buffer=buf,
             )
         if r["status"] == "indexed":
             result.files_indexed += 1
@@ -213,6 +264,7 @@ async def index_project(
 
     tasks = [process_file(p, i) for i, p in enumerate(paths)]
     await asyncio.gather(*tasks)
+    await buf.flush()
 
     removed = await remove_stale_chunks(storage, current_path_set)
     result.files_removed = removed
@@ -250,6 +302,8 @@ async def index_files(
     # Reuse hash map across the batch
     existing_hashes = await storage.get_file_hashes()
 
+    buf = _WriteBuffer(storage, batch_files=50)
+
     async def process(path: Path) -> None:
         async with file_sem:
             r = await index_file(
@@ -258,6 +312,7 @@ async def index_files(
                 embed_sem=embed_sem,
                 existing_hashes=existing_hashes,
                 project_root=project_root,
+                write_buffer=buf,
             )
         if r["status"] == "indexed":
             result.files_indexed += 1
@@ -268,5 +323,6 @@ async def index_files(
             result.errors += 1
 
     await asyncio.gather(*[process(p) for p in paths])
+    await buf.flush()
     result.elapsed_s = time.monotonic() - t_start
     return result
