@@ -277,6 +277,51 @@ class Storage:
             await asyncio.to_thread(op.execute, pa_table)
         logger.debug("Wrote %d chunks", len(chunks))
 
+    async def append_chunks(self, chunks: list[ChunkData]) -> None:
+        """Append chunks without merge/scan — use only after clear() wipes old data."""
+        if not chunks:
+            return
+        pa_mod = _require_pyarrow()
+        schema = build_schema(self.dims)
+        chunk_ids = pa_mod.array([c.chunk_id for c in chunks], type=pa_mod.int64())
+        paths = pa_mod.array([c.path for c in chunks], type=pa_mod.utf8())
+        file_hashes = pa_mod.array([c.file_hash for c in chunks], type=pa_mod.utf8())
+        languages = pa_mod.array([c.language for c in chunks], type=pa_mod.utf8())
+        positions = pa_mod.array([c.position for c in chunks], type=pa_mod.int32())
+        contents = pa_mod.array([c.content for c in chunks], type=pa_mod.utf8())
+        content_hashes = pa_mod.array([c.content_hash for c in chunks], type=pa_mod.utf8())
+        start_lines = pa_mod.array([c.start_line for c in chunks], type=pa_mod.int32())
+        end_lines = pa_mod.array([c.end_line for c in chunks], type=pa_mod.int32())
+        try:
+            import numpy as _np
+            mat = _np.stack([_np.asarray(c.vector, dtype=_np.float32) for c in chunks])
+            flat = pa_mod.array(mat.ravel(), type=pa_mod.float32())
+            vectors = pa_mod.FixedSizeListArray.from_arrays(flat, self.dims)
+        except Exception:
+            vectors = pa_mod.array(
+                [c.vector for c in chunks],
+                type=pa_mod.list_(pa_mod.float32(), self.dims),
+            )
+        created_ats = pa_mod.array([c.created_at for c in chunks], type=pa_mod.timestamp("us"))
+        pa_table = pa_mod.table(
+            {
+                "chunk_id": chunk_ids, "path": paths, "file_hash": file_hashes,
+                "language": languages, "position": positions, "content": contents,
+                "content_hash": content_hashes, "start_line": start_lines,
+                "end_line": end_lines, "vector": vectors, "created_at": created_ats,
+            },
+            schema=schema,
+        )
+        async with self._write_lock:
+            await asyncio.to_thread(self._table.add, pa_table)
+        logger.debug("Appended %d chunks", len(chunks))
+
+    async def clear(self) -> None:
+        """Delete all rows from the chunks table (used before a force re-index)."""
+        async with self._write_lock:
+            await asyncio.to_thread(self._table.delete, "chunk_id IS NOT NULL")
+        logger.info("Chunks table cleared")
+
     @staticmethod
     def _sql_quote(value: str) -> str:
         """Quote a string literal for LanceDB/DataFusion SQL predicates."""
