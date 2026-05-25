@@ -1555,17 +1555,17 @@ def _get_onnx_batch_size() -> int:
         log.info("Could not detect GPU VRAM, using default batch_size=8")
         return 8
 
+    # Round up: 16303MB / 1024 = 15.92GB → treat as 16GB to avoid off-by-one bucket
     vram_gb = vram_mb / 1024
 
-    # More conservative defaults to avoid memory issues
     if vram_gb < 8:
-        batch_size = 6  # Reduced from 8 for <8GB VRAM
-    elif vram_gb < 16:
-        batch_size = 8  # Reduced from 12
-    elif vram_gb < 24:
-        batch_size = 32  # Updated for >=16GB VRAM
+        batch_size = 6
+    elif vram_gb < 15:
+        # 8-15GB: moderate VRAM; stay conservative
+        batch_size = 8
     else:
-        batch_size = 32  # Updated cap for >24GB VRAM
+        # >=15GB (including RTX 5080 Laptop at 15.92GB): large batches are safe
+        batch_size = 32
 
     log.info("Auto-configured ONNX batch_size=%d for %.1fGB VRAM", batch_size, vram_gb)
     return batch_size
@@ -1623,9 +1623,23 @@ def _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage"
     return mat, True
 
 
-def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[list[float]]:
+def embed_passages(
+    texts: list[str],
+    *,
+    model: str,
+    dimensions: int,
+    _return_numpy: bool = False,
+) -> "list[list[float]] | np.ndarray":
+    """Embed passage texts on GPU.
+
+    When ``_return_numpy=True`` the raw normalized numpy matrix is returned
+    (shape [N, dims], dtype float32) instead of a Python list of lists.
+    Callers that slice the result and pass vectors straight to storage should
+    use this flag to avoid the O(N·dims) Python float object allocation that
+    ``mat.tolist()`` incurs.
+    """
     if not texts:
-        return []
+        return np.empty((0, dimensions), dtype=np.float32) if _return_numpy else []
 
     touch_inference_time()
     import time
@@ -1633,7 +1647,6 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
     t_start = time.perf_counter()
     embedder = _embedder(model)
 
-    # Track GPU vs CPU operations
     provider = get_active_provider()
     is_gpu = provider in _GPU_PROVIDERS
     if is_gpu:
@@ -1644,7 +1657,7 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
     total_chars = sum(len(t) for t in texts)
     avg_chars = total_chars // len(texts) if texts else 0
 
-    # Try IOBinding path first if GPU available and active
+    # IOBinding path: tensors stay on GPU; single transfer per chunk
     if is_gpu and _io_binding_confirmed:
         t_embed_start = time.perf_counter()
         mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
@@ -1653,8 +1666,6 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
             if mat.ndim == 1:
                 mat = mat.reshape(1, -1)
             mat = _normalize_embeddings(mat)
-            out = mat.tolist()
-            del mat
 
             t_end = time.perf_counter()
             if log.isEnabledFor(logging.INFO):
@@ -1666,6 +1677,10 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
                     (t_embed_done - t_embed_start) * 1000,
                     (t_end - t_start) * 1000,
                 )
+            if _return_numpy:
+                return mat
+            out = mat.tolist()
+            del mat
             return out
 
     # Standard path (fallback or when IOBinding unavailable)
@@ -1675,9 +1690,7 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]
         t_embed_start = time.perf_counter()
-        # Keep as generator to avoid materializing full list in memory
         items = embedder.embed(prefixed, batch_size=get_onnx_batch_size())
-        # Convert to numpy array immediately (single copy from GPU)
         if _HAS_NUMPY:
             batch_arr = np.array(list(items), dtype=np.float32)
             all_items.append(batch_arr)
@@ -1687,46 +1700,39 @@ def embed_passages(texts: list[str], *, model: str, dimensions: int) -> list[lis
         t_embed_done = time.perf_counter()
         t_embed_total += t_embed_done - t_embed_start
 
-    # Single-pass vectorized normalize across the full result matrix
     if _HAS_NUMPY and all_items:
-        # Concatenate all batches once (avoid repeated extend copies)
         mat = np.concatenate(all_items, axis=0) if len(all_items) > 1 else all_items[0]
-        del all_items  # Free batch list immediately
-
+        del all_items
         if mat.ndim == 1:
             mat = mat.reshape(1, -1)
         if dimensions > 0:
             mat = _resize_matrix(mat, dimensions)
         mat = _normalize_embeddings(mat)
-        # ONLY convert to list at final output (single .tolist() call)
+
+        t_postprocess = time.perf_counter()
+        t_end = time.perf_counter()
+        if log.isEnabledFor(logging.INFO):
+            t_post_ms = (t_postprocess - t_start - t_embed_total) * 1000
+            log.info(
+                "embed[%s]: %d texts (%d avg chars), onnx=%.0fms, post=%.1fms, total=%.0fms",
+                provider.upper(),
+                len(texts),
+                avg_chars,
+                t_embed_total * 1000,
+                t_post_ms,
+                (t_end - t_start) * 1000,
+            )
+        if _return_numpy:
+            return mat
         out = mat.tolist()
         del mat
+        return out
     else:
         out = []
         for item in all_items:
             vec_list = item.tolist() if hasattr(item, 'tolist') else item
             out.append(_normalize(_resize([float(x) for x in vec_list], dimensions)))
-
-    t_postprocess = time.perf_counter()
-    # Final GC to clean up intermediate arrays
-    gc.collect()
-
-    t_end = time.perf_counter()
-    if log.isEnabledFor(logging.INFO):
-        # Bug fix: t_embed_start was a loop variable referencing only the LAST
-        # batch's start time, making the "post" duration wrong for multi-batch
-        # inputs. Use t_postprocess - (t_start + t_embed_total) instead.
-        t_post_ms = (t_postprocess - t_start - t_embed_total) * 1000
-        log.info(
-            "embed[%s]: %d texts (%d avg chars), onnx=%.0fms, post=%.1fms, total=%.0fms",
-            provider.upper(),
-            len(texts),
-            avg_chars,
-            t_embed_total * 1000,
-            t_post_ms,
-            (t_end - t_start) * 1000,
-        )
-    return out
+        return out
 
 
 def embed_query(text: str, *, model: str, dimensions: int) -> list[float]:
@@ -1998,9 +2004,10 @@ def _get_rerank_batch_size() -> int:
     vram_gb = vram_mb / 1024
     if vram_gb < 8:
         return 8
-    if vram_gb < 16:
+    if vram_gb < 15:
+        # Same threshold fix as embed batch_size: 15.92GB RTX 5080 Laptop → 32
         return 16
-    return 32  # RTX 5080 (16GB): 32 pairs per batch
+    return 32  # >=15GB (RTX 5080 Laptop, RTX 3090, etc.)
 
 
 def _rerank_batched(reranker, query: str, docs: list[str], batch_size: int) -> list[float]:

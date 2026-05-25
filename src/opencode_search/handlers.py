@@ -157,7 +157,9 @@ async def _run_index_project(
                 storage, project_path,
                 tier=tier, force=force, follow_symlinks=follow_symlinks,
                 embed_workers=min(2, get_embed_workers_gpu()),
-                file_workers=4,
+                # 8 file workers: I/O-bound hashing/reading keeps GPU fed even
+                # when 2-3 slots are blocked by large files (>1MB).
+                file_workers=8,
             )
             elapsed = time.perf_counter() - t0
         finally:

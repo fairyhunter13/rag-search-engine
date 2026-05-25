@@ -58,9 +58,13 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
 
     dims = config.get_tier_dims("budget")
 
-    def fake_embed_passages(texts, *, model, dimensions):
+    def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
-        return [_vector_for(text, dimensions) for text in texts]
+        result = [_vector_for(text, dimensions) for text in texts]
+        if _return_numpy:
+            import numpy as np
+            return np.array(result, dtype=np.float32)
+        return result
 
     def fake_embed_query(query, model, dimensions):
         assert dimensions == dims
@@ -122,9 +126,13 @@ async def test_legacy_local_index_is_migrated_to_centralized_root(tmp_path, monk
     legacy_db_path = project_root / ".opencode" / "index_budget"
     canonical_db_path = Path(config.get_project_db_path(project_root, "budget"))
 
-    def fake_embed_passages(texts, *, model, dimensions):
+    def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
-        return [_vector_for(text, dimensions) for text in texts]
+        result = [_vector_for(text, dimensions) for text in texts]
+        if _return_numpy:
+            import numpy as np
+            return np.array(result, dtype=np.float32)
+        return result
 
     def fake_embed_query(query, model, dimensions):
         assert dimensions == dims
@@ -197,9 +205,13 @@ async def test_search_prefers_source_over_stale_docs(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
     dims = config.get_tier_dims("budget")
 
-    def fake_embed_passages(texts, *, model, dimensions):
+    def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
-        return [_vector_for(text, dimensions) for text in texts]
+        result = [_vector_for(text, dimensions) for text in texts]
+        if _return_numpy:
+            import numpy as np
+            return np.array(result, dtype=np.float32)
+        return result
 
     def fake_embed_query(query, model, dimensions):
         assert dimensions == dims
@@ -240,9 +252,13 @@ async def test_federated_and_symlinked_projects_return_valid_results(tmp_path, m
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
     dims = config.get_tier_dims("budget")
 
-    def fake_embed_passages(texts, *, model, dimensions):
+    def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
-        return [_vector_for(text, dimensions) for text in texts]
+        result = [_vector_for(text, dimensions) for text in texts]
+        if _return_numpy:
+            import numpy as np
+            return np.array(result, dtype=np.float32)
+        return result
 
     def fake_embed_query(query, model, dimensions):
         assert dimensions == dims

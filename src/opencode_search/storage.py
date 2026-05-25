@@ -231,10 +231,20 @@ class Storage:
         content_hashes = pa_mod.array([c.content_hash for c in chunks], type=pa_mod.utf8())
         start_lines = pa_mod.array([c.start_line for c in chunks], type=pa_mod.int32())
         end_lines = pa_mod.array([c.end_line for c in chunks], type=pa_mod.int32())
-        vectors = pa_mod.array(
-            [c.vector for c in chunks],
-            type=pa_mod.list_(pa_mod.float32(), self.dims),
-        )
+        # Fast path: if vectors are numpy arrays (from GPU batcher), stack them
+        # into a contiguous matrix and build a single PyArrow flat buffer — avoids
+        # creating O(N·dims) Python float objects that pa.array() with a list of
+        # lists would require.
+        try:
+            import numpy as _np
+            mat = _np.stack([_np.asarray(c.vector, dtype=_np.float32) for c in chunks])
+            flat = pa_mod.array(mat.ravel(), type=pa_mod.float32())
+            vectors = pa_mod.FixedSizeListArray.from_arrays(flat, self.dims)
+        except Exception:
+            vectors = pa_mod.array(
+                [c.vector for c in chunks],
+                type=pa_mod.list_(pa_mod.float32(), self.dims),
+            )
         created_ats = pa_mod.array(
             [c.created_at for c in chunks],
             type=pa_mod.timestamp("us"),

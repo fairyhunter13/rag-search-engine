@@ -148,8 +148,12 @@ class _GpuBatcher:
         self._pending_files, self._pending_texts = [], []
 
         try:
+            # _return_numpy=True skips the O(N·dims) mat.tolist() Python float
+            # allocation — vectors stay as a float32 numpy matrix until LanceDB
+            # writes them via np.stack in write_chunks (one C-level allocation).
             vectors = await asyncio.to_thread(
                 embed_passages, texts, model=self._embed_model, dimensions=self._dims,
+                _return_numpy=True,
             )
         except Exception as exc:
             log.error("GPU batch embed failed (%d chunks): %s", len(texts), exc)
@@ -160,7 +164,7 @@ class _GpuBatcher:
         vi = 0
         for fr in files:
             n = len(fr.chunks)
-            fv = vectors[vi:vi + n]
+            fv = vectors[vi:vi + n]  # numpy slice — O(1), no copy
             vi += n
             if len(fv) != n:
                 log.error("vector mismatch %s: got %d want %d", fr.path, len(fv), n)
@@ -177,7 +181,7 @@ class _GpuBatcher:
                     content_hash=hashlib.sha256(c.content.encode()).hexdigest()[:16],
                     start_line=c.start_line,
                     end_line=c.end_line,
-                    vector=fv[i],
+                    vector=fv[i],  # 1D numpy array — passed directly to storage
                     created_at=now_us,
                 )
                 for i, c in enumerate(fr.chunks)
