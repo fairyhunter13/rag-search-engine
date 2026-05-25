@@ -149,11 +149,15 @@ async def _run_index_project(
         storage = Storage(db_path=db_path, dims=dims)
         await storage.open()
         try:
+            # Compact fragmented txn log before indexing to avoid the memory
+            # spike caused by LanceDB loading thousands of tiny transaction files.
+            await storage.compact_before_index()
             t0 = time.perf_counter()
             result = await _index_project(
                 storage, project_path,
                 tier=tier, force=force, follow_symlinks=follow_symlinks,
-                embed_workers=get_embed_workers_gpu(),
+                embed_workers=min(2, get_embed_workers_gpu()),
+                file_workers=4,
             )
             elapsed = time.perf_counter() - t0
         finally:

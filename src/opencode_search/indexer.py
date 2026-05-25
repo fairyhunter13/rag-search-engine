@@ -210,7 +210,7 @@ async def index_project(
     follow_symlinks: bool = True,
     progress_callback=None,
     embed_workers: int = 2,
-    file_workers: int = 8,
+    file_workers: int = 4,
 ) -> IndexResult:
     """Index an entire project directory. GPU-enforced, fully async.
 
@@ -239,7 +239,7 @@ async def index_project(
         chunks_total=0, errors=0, elapsed_s=0.0,
     )
 
-    buf = _WriteBuffer(storage, batch_files=200)
+    buf = _WriteBuffer(storage, batch_files=50)
 
     async def process_file(path: Path, idx: int) -> None:
         async with file_sem:

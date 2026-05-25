@@ -543,3 +543,27 @@ class Storage:
             logger.info("Chunks table compacted")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Compaction failed: %s", exc)
+
+    async def compact_before_index(self, txn_threshold: int = 500) -> None:
+        """Compact if the transaction log is large enough to cause memory pressure.
+
+        Opening a LanceDB table with thousands of tiny transaction files loads all
+        of them into memory. Compacting first merges them into a few data files,
+        dramatically reducing memory overhead during a subsequent index run.
+        Only compacts when the txn count exceeds *txn_threshold* to avoid
+        adding unnecessary latency for small/fresh databases.
+        """
+        import os as _os
+        txn_dir = _os.path.join(self.db_path, "chunks.lance", "_transactions")
+        try:
+            txn_count = len(_os.listdir(txn_dir)) if _os.path.isdir(txn_dir) else 0
+        except OSError:
+            txn_count = 0
+        if txn_count < txn_threshold:
+            logger.debug("compact_before_index: %d txns < threshold, skipping", txn_count)
+            return
+        logger.info(
+            "compact_before_index: %d txns >= %d threshold — compacting first",
+            txn_count, txn_threshold,
+        )
+        await self.compact()

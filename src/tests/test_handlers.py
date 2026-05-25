@@ -75,6 +75,7 @@ async def test_handle_index_project_success(tmp_path):
         mock_st = MagicMock()
         mock_st.open = AsyncMock()
         mock_st.close = AsyncMock()
+        mock_st.compact_before_index = AsyncMock()
         MockStorage.return_value = mock_st
         MockWatcher.is_active.return_value = False
 
@@ -158,6 +159,7 @@ async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tm
         mock_st = MagicMock()
         mock_st.open = AsyncMock()
         mock_st.close = AsyncMock()
+        mock_st.compact_before_index = AsyncMock()
         MockStorage.return_value = mock_st
         MockWatcher.is_active.return_value = True
 
