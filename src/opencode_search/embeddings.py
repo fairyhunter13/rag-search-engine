@@ -1456,60 +1456,73 @@ def _embed_batch_iobinding(
 ) -> np.ndarray | None:
     """Embed a batch using IOBinding to keep tensors on GPU.
 
-    Returns numpy array of embeddings (single GPU→CPU copy at end) or None if IOBinding fails.
+    Processes texts in chunks of batch_size to bound peak VRAM usage — the
+    Jina v2 family supports sequences up to 8192 tokens via ALiBi attention,
+    so a naïve single-shot inference over a large sub-batch (e.g. 128 texts ×
+    1024 tokens) triggers a 4 GiB Q×K^T allocation and OOM-kills the process.
+
+    Returns numpy array of embeddings (single GPU→CPU copy per chunk) or None
+    if IOBinding fails on any chunk.
     """
     try:
         import onnxruntime as ort
 
-        # Tokenize on CPU (fast, unavoidable)
-        encoded = tokenizer.encode_batch(texts)
-        input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
-        attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
         input_names = {node.name for node in session.get_inputs()}
-
-        # Create IOBinding for GPU tensors
-        binding = session.io_binding()
-
-        # Bind inputs to GPU
-        input_ids_gpu = ort.OrtValue.ortvalue_from_numpy(input_ids, device, device_id)
-        attention_mask_gpu = ort.OrtValue.ortvalue_from_numpy(attention_mask, device, device_id)
-
-        binding.bind_ortvalue_input("input_ids", input_ids_gpu)
-        binding.bind_ortvalue_input("attention_mask", attention_mask_gpu)
-
-        if "token_type_ids" in input_names:
-            token_type_ids = np.array(
-                [getattr(item, "type_ids", [0] * len(item.ids)) for item in encoded],
-                dtype=np.int64,
-            )
-            token_type_ids_gpu = ort.OrtValue.ortvalue_from_numpy(
-                token_type_ids, device, device_id
-            )
-            binding.bind_ortvalue_input("token_type_ids", token_type_ids_gpu)
-        else:
-            token_type_ids_gpu = None
-
-        # Bind output to GPU (avoids CPU allocation)
         output_names = [o.name for o in session.get_outputs()]
-        for name in output_names:
-            binding.bind_output(name, device)
+        all_results: list[np.ndarray] = []
 
-        # Run inference with IOBinding (tensors stay on GPU)
-        session.run_with_iobinding(binding)
+        for start in range(0, len(texts), batch_size):
+            chunk = texts[start : start + batch_size]
 
-        # Extract output (single GPU→CPU copy)
-        outputs = binding.get_outputs()
-        if not outputs:
+            # Tokenize on CPU (fast, unavoidable)
+            encoded = tokenizer.encode_batch(chunk)
+            input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
+            attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
+
+            # Create IOBinding for GPU tensors
+            binding = session.io_binding()
+
+            # Bind inputs to GPU
+            input_ids_gpu = ort.OrtValue.ortvalue_from_numpy(input_ids, device, device_id)
+            attention_mask_gpu = ort.OrtValue.ortvalue_from_numpy(attention_mask, device, device_id)
+
+            binding.bind_ortvalue_input("input_ids", input_ids_gpu)
+            binding.bind_ortvalue_input("attention_mask", attention_mask_gpu)
+
+            token_type_ids_gpu = None
+            if "token_type_ids" in input_names:
+                token_type_ids = np.array(
+                    [getattr(item, "type_ids", [0] * len(item.ids)) for item in encoded],
+                    dtype=np.int64,
+                )
+                token_type_ids_gpu = ort.OrtValue.ortvalue_from_numpy(
+                    token_type_ids, device, device_id
+                )
+                binding.bind_ortvalue_input("token_type_ids", token_type_ids_gpu)
+
+            # Bind output to GPU (avoids CPU allocation)
+            for name in output_names:
+                binding.bind_output(name, device)
+
+            # Run inference with IOBinding (tensors stay on GPU)
+            session.run_with_iobinding(binding)
+
+            # Extract output (single GPU→CPU copy per chunk)
+            outputs = binding.get_outputs()
+            if not outputs:
+                return None
+
+            chunk_result = outputs[0].numpy()
+            all_results.append(chunk_result.astype(np.float32))
+
+            # Free GPU tensors before next chunk
+            del input_ids_gpu, attention_mask_gpu, binding, outputs
+            if token_type_ids_gpu is not None:
+                del token_type_ids_gpu
+
+        if not all_results:
             return None
-
-        # Get first output (last_hidden_state or pooled output)
-        result = outputs[0].numpy()
-
-        # Clean up GPU tensors
-        del input_ids_gpu, attention_mask_gpu, binding, outputs
-        if token_type_ids_gpu is not None:
-            del token_type_ids_gpu
-        return result
+        return np.concatenate(all_results, axis=0) if len(all_results) > 1 else all_results[0]
 
     except Exception as e:
         log.debug("IOBinding inference failed: %s", e)
