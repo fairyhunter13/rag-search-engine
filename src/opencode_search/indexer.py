@@ -401,9 +401,20 @@ async def index_project(
 
     await asyncio.gather(reader_pool(), embed_writer())
 
-    removed = await remove_stale_chunks(storage, current_path_set)
-    result.files_removed = removed
-    await storage.maybe_create_indexes()
+    # Compact first so the subsequent stale-hash scan and index builds
+    # read a small number of data files, not hundreds of tiny transactions.
+    await storage.compact()
+
+    # Reuse the pre-loaded existing_hashes to find stale paths without
+    # re-scanning the table (avoids an O(n) Lance scan after 400+ new txns).
+    stale = [p for p in existing_hashes if p not in current_path_set]
+    if stale:
+        await storage.delete_by_paths(stale)
+        log.info("removed stale chunks for %d paths", len(stale))
+    result.files_removed = len(stale)
+
+    await storage.ensure_fts_index()
+    await storage.ensure_ivf_pq_index()
 
     result.elapsed_s = time.monotonic() - t_start
     log.info(
