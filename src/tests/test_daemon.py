@@ -37,12 +37,12 @@ def test_bridge_command_targets_stdio_bridge():
     assert command[-4:] == ["-m", "opencode_search", "daemon", "bridge-stdio"]
 
 
-def test_render_systemd_service_uses_ensure_oneshot():
+def test_render_systemd_service_uses_simple_with_restart():
     service = _render_systemd_service(Path("/tmp/python"), host="127.0.0.1", port=8765)
 
-    assert "Type=oneshot" in service
-    assert "RemainAfterExit=yes" in service
-    assert "daemon ensure --host 127.0.0.1 --port 8765" in service
+    assert "Type=simple" in service
+    assert "Restart=on-failure" in service
+    assert "daemon serve --host 127.0.0.1 --port 8765" in service
 
 
 def test_global_prompt_text_requires_explicit_index_and_search_first():
