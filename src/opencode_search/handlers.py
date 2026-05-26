@@ -139,6 +139,7 @@ async def _run_index_project(
     force: bool,
     follow_symlinks: bool,
     on_complete: Any,
+    on_progress: Any = None,
 ) -> None:
     """Background task that performs the actual indexing work."""
     status: dict[str, Any] | None = None
@@ -151,7 +152,10 @@ async def _run_index_project(
         try:
             # Compact fragmented txn log before indexing to avoid the memory
             # spike caused by LanceDB loading thousands of tiny transaction files.
-            await storage.compact_before_index()
+            # Skip when force=True: the table is cleared immediately after open,
+            # so compacting before clearing is wasted work (~200s on 109K chunks).
+            if not force:
+                await storage.compact_before_index()
             t0 = time.perf_counter()
             result = await _index_project(
                 storage, project_path,
@@ -160,6 +164,7 @@ async def _run_index_project(
                 # 8 file workers: I/O-bound hashing/reading keeps GPU fed even
                 # when 2-3 slots are blocked by large files (>1MB).
                 file_workers=8,
+                progress_callback=on_progress,
             )
             elapsed = time.perf_counter() - t0
         finally:
@@ -238,6 +243,7 @@ async def handle_index_project(
     force: bool = False,
     follow_symlinks: bool = True,
     on_complete: Any = None,
+    on_progress: Any = None,
 ) -> dict[str, Any]:
     """Index a project directory and optionally start watching it.
 
@@ -268,6 +274,7 @@ async def handle_index_project(
             force=force,
             follow_symlinks=follow_symlinks,
             on_complete=on_complete,
+            on_progress=on_progress,
         )
     )
     return {"status": "indexing", "path": path_str, "started_at": started_at}
@@ -364,7 +371,9 @@ async def handle_project_status(path: str) -> dict[str, Any]:
         pass
 
     in_progress = _indexing_status.get(project_path, {})
-    watching = watcher_manager.is_active(project_path)
+    # watcher_manager.is_active() is process-local; entry.watch is the persisted
+    # intent (auto-starts when MCP server opens the project). Show True if either.
+    watching = watcher_manager.is_active(project_path) or entry.watch
 
     return {
         "indexed": True,
@@ -394,7 +403,7 @@ async def handle_list_indexed_projects() -> dict[str, Any]:
                 "path": p.path,
                 "tier": p.tier,
                 "db_path": str(p.db_path),
-                "watching": p.path in active,
+                "watching": p.path in active or p.watch,
                 "indexed_at": p.indexed_at,
                 "file_count": p.file_count,
             }

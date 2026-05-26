@@ -67,9 +67,16 @@ async def _index_and_wait(path, tier, watch, force, follow_symlinks):
         if not result_future.done():
             result_future.set_result(status)
 
+    _progress_total = [0]
+
+    async def _progress(current: int, total: int, _path: str) -> None:
+        _progress_total[0] = total
+        pct = 100 * current // max(total, 1)
+        print(f"\r  {current}/{total} files ({pct}%)", end="", flush=True)
+
     initial = await handle_index_project(
         path=path, tier=tier, watch=watch, force=force,
-        follow_symlinks=follow_symlinks, on_complete=_capture,
+        follow_symlinks=follow_symlinks, on_complete=_capture, on_progress=_progress,
     )
 
     if initial.get("status") not in ("indexing",):
@@ -77,7 +84,10 @@ async def _index_and_wait(path, tier, watch, force, follow_symlinks):
         return initial
 
     typer.echo(f"Indexing {initial['path']} ...")
-    return await result_future
+    result = await result_future
+    if _progress_total[0]:
+        print()  # newline after progress line
+    return result
 
 
 def _print_json(obj: object) -> None:
@@ -295,7 +305,6 @@ def watch(
     from pathlib import Path
 
     from opencode_search.config import load_registry
-    from opencode_search.handlers import handle_index_project
     from opencode_search.watcher import watcher_manager
 
     project_path = str(Path(path).expanduser().resolve())
@@ -308,8 +317,12 @@ def watch(
     typer.echo(f"Starting watcher for {path} (tier={tier}) — press Ctrl+C to stop.")
 
     async def _watch_forever() -> None:
-        result = await handle_index_project(path=path, tier=tier, watch=True)
-        if "error" in result or result.get("status") != "ok":
+        # Use _index_and_wait so we block until the background task completes
+        # and get the real {status: "ok"} result. handle_index_project() alone
+        # returns {status: "indexing"} immediately, which would cause a
+        # false-positive RuntimeError here before the watcher is started.
+        result = await _index_and_wait(path=path, tier=tier, watch=True, force=False, follow_symlinks=True)
+        if "error" in result or result.get("status") not in ("ok", "indexing"):
             raise RuntimeError(result.get("error", f"watch start failed: {result}"))
 
         # Keep the loop alive so the watchdog Observer thread can dispatch
