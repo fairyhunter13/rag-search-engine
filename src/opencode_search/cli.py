@@ -72,7 +72,8 @@ async def _index_and_wait(path, tier, watch, force, follow_symlinks):
     async def _progress(current: int, total: int, _path: str) -> None:
         _progress_total[0] = total
         pct = 100 * current // max(total, 1)
-        print(f"\r  {current}/{total} files ({pct}%)", end="", flush=True)
+        # stderr keeps stdout clean for --json consumers
+        print(f"\r  {current}/{total} files ({pct}%)", end="", flush=True, file=sys.stderr)
 
     initial = await handle_index_project(
         path=path, tier=tier, watch=watch, force=force,
@@ -83,10 +84,10 @@ async def _index_and_wait(path, tier, watch, force, follow_symlinks):
         # error / already_indexing — return as-is
         return initial
 
-    typer.echo(f"Indexing {initial['path']} ...")
+    typer.echo(f"Indexing {initial['path']} ...", err=True)
     result = await result_future
     if _progress_total[0]:
-        print()  # newline after progress line
+        print(file=sys.stderr)  # newline after progress line
     return result
 
 

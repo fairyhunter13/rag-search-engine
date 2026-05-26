@@ -147,6 +147,20 @@ async def _run_index_project(
         dims = get_tier_dims(tier)
         db_path = get_project_db_path(project_path, tier)
 
+        # Start watcher before indexing so no file changes are missed during
+        # the index scan. For large projects (20K files) hashing alone takes
+        # 30-60s — without early-start, changes during that window are lost.
+        if watch and not watcher_manager.is_active(path_str):
+            await watcher_manager.start(
+                path_str,
+                on_change=_build_incremental_on_change(
+                    db_path=db_path,
+                    dims=dims,
+                    tier=tier,
+                    project_root=project_path,
+                ),
+            )
+
         storage = Storage(db_path=db_path, dims=dims)
         await storage.open()
         try:
@@ -197,18 +211,6 @@ async def _run_index_project(
         save_registry(registry)
 
         clear_search_cache()
-
-        # Start watcher if requested
-        if watch and not watcher_manager.is_active(path_str):
-            await watcher_manager.start(
-                path_str,
-                on_change=_build_incremental_on_change(
-                    db_path=db_path,
-                    dims=dims,
-                    tier=tier,
-                    project_root=project_path,
-                ),
-            )
 
         status = {
             "status": "ok",
