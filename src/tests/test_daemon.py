@@ -4,14 +4,18 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+import json
+
 from opencode_search.daemon import (
     _bridge_command,
     _disable_codex_fast_mode,
     _global_prompt_text,
     _install_claude_global_prompt,
     _install_init_wrapper,
+    _install_opencode_configs,
     _render_systemd_service,
     _replace_managed_block,
+    _strip_jsonc_comments,
     _strip_marker_block,
     _update_codex_config_text,
     discover_claude_config_dirs,
@@ -243,3 +247,105 @@ def test_install_claude_global_prompt_creates_file_when_absent(tmp_path):
     target = tmp_path / ".claude" / "CLAUDE.md"
     assert target.exists()
     assert "MANDATORY" in target.read_text()
+
+
+# ---------------------------------------------------------------------------
+# _strip_jsonc_comments
+# ---------------------------------------------------------------------------
+
+def test_strip_jsonc_comments_removes_line_comments():
+    text = '{\n  "key": "value" // comment\n}'
+    assert json.loads(_strip_jsonc_comments(text)) == {"key": "value"}
+
+
+def test_strip_jsonc_comments_removes_block_comments():
+    text = '{\n  /* block */\n  "key": "value"\n}'
+    assert json.loads(_strip_jsonc_comments(text)) == {"key": "value"}
+
+
+def test_strip_jsonc_comments_leaves_plain_json_intact():
+    text = '{"key": "value"}'
+    assert _strip_jsonc_comments(text) == text
+
+
+# ---------------------------------------------------------------------------
+# _install_opencode_configs
+# ---------------------------------------------------------------------------
+
+_BRIDGE = ["/usr/bin/python", "-m", "opencode_search", "daemon", "bridge-stdio"]
+
+
+def test_install_opencode_configs_writes_mcp_entry_to_existing_config(tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True)
+    cfg = opencode_dir / "opencode.jsonc"
+    cfg.write_text('{"$schema": "https://opencode.ai/config.json"}\n', encoding="utf-8")
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    updated = _install_opencode_configs(_BRIDGE)
+
+    assert updated == [str(cfg)]
+    data = json.loads(cfg.read_text())
+    assert data["mcp"]["opencode-search"]["type"] == "local"
+    assert data["mcp"]["opencode-search"]["command"] == _BRIDGE
+    assert data["mcp"]["opencode-search"]["timeout"] == 30000
+
+
+def test_install_opencode_configs_picks_up_named_profiles(tmp_path, monkeypatch):
+    # Default profile: $XDG_CONFIG_HOME/opencode/opencode.jsonc
+    default_dir = tmp_path / "opencode"
+    default_dir.mkdir(parents=True)
+    (default_dir / "opencode.jsonc").write_text('{"$schema": "https://opencode.ai/config.json"}', encoding="utf-8")
+    # Named profiles: $XDG_CONFIG_HOME/opencode-<name>/opencode/opencode.jsonc
+    for subdir in ["opencode-personal", "opencode-work"]:
+        d = tmp_path / subdir / "opencode"
+        d.mkdir(parents=True)
+        (d / "opencode.jsonc").write_text('{"$schema": "https://opencode.ai/config.json"}', encoding="utf-8")
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    updated = _install_opencode_configs(_BRIDGE)
+
+    assert len(updated) == 3
+
+
+def test_install_opencode_configs_skips_missing_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    updated = _install_opencode_configs(_BRIDGE)
+
+    assert updated == []
+
+
+def test_install_opencode_configs_is_idempotent(tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True)
+    cfg = opencode_dir / "opencode.jsonc"
+    cfg.write_text('{"$schema": "https://opencode.ai/config.json"}\n', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    _install_opencode_configs(_BRIDGE)
+    mtime_after_first = cfg.stat().st_mtime_ns
+    updated_second = _install_opencode_configs(_BRIDGE)
+
+    # Second call must not rewrite the file (entry already matches)
+    assert updated_second == []
+    assert cfg.stat().st_mtime_ns == mtime_after_first
+
+
+def test_install_opencode_configs_strips_jsonc_comments(tmp_path, monkeypatch):
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True)
+    cfg = opencode_dir / "opencode.jsonc"
+    cfg.write_text(
+        '{\n  "$schema": "https://opencode.ai/config.json" // schema\n}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    updated = _install_opencode_configs(_BRIDGE)
+
+    assert updated == [str(cfg)]
+    data = json.loads(cfg.read_text())
+    assert "opencode-search" in data["mcp"]

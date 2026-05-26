@@ -727,6 +727,87 @@ def install_systemd_user_service(
     return {"installed": True, "service_path": str(_SYSTEMD_SERVICE_PATH)}
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Remove // and /* */ comments from JSONC text without touching string literals."""
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            result.append(ch)
+            if ch == "\\" and i + 1 < n:
+                i += 1
+                result.append(text[i])
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+            result.append(ch)
+        elif ch == "/" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == "/":
+                # single-line comment: skip to end of line
+                while i < n and text[i] != "\n":
+                    i += 1
+                continue
+            elif nxt == "*":
+                # block comment: skip to */
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2  # skip closing */
+                continue
+            else:
+                result.append(ch)
+        else:
+            result.append(ch)
+        i += 1
+    return "".join(result)
+
+
+def _install_opencode_configs(bridge_command: list[str]) -> list[str]:
+    """Write the opencode-search MCP entry into every opencode.jsonc found under ~/.config."""
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    candidates: list[Path] = []
+    # ~/.config/opencode/opencode.jsonc  (default profile)
+    candidates.append(config_home / "opencode" / "opencode.jsonc")
+    # ~/.config/opencode-*/opencode/opencode.jsonc  (named profiles, e.g. opencode-personal)
+    for entry in sorted(config_home.iterdir()) if config_home.exists() else []:
+        if entry.is_dir() and entry.name.startswith("opencode-"):
+            candidates.append(entry / "opencode" / "opencode.jsonc")
+
+    mcp_entry = {
+        "type": "local",
+        "command": bridge_command,
+        "timeout": 30000,
+    }
+
+    updated: list[str] = []
+    for path in candidates:
+        if not path.exists():
+            continue
+        raw = path.read_text(encoding="utf-8")
+        try:
+            data = json.loads(_strip_jsonc_comments(raw))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        mcp = data.setdefault("mcp", {})
+        if not isinstance(mcp, dict):
+            continue
+        existing = mcp.get("opencode-search", {})
+        if existing == mcp_entry:
+            continue
+        mcp["opencode-search"] = mcp_entry
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        updated.append(str(path))
+
+    return updated
+
+
 def install_global_integration(
     host: str = DEFAULT_DAEMON_HOST,
     port: int = DEFAULT_DAEMON_PORT,
@@ -747,6 +828,7 @@ def install_global_integration(
     codex_installed = _install_codex(bridge_command, transport=transport, host=host, port=port)
     hermes_installed = _install_hermes(bridge_command)
     _update_hermes_config_for_global_servers(bridge_command, transport=transport, host=host, port=port)
+    opencode_configs = _install_opencode_configs(bridge_command)
     init_wrapper_path = _install_init_wrapper(helper_python)
     claude_prompt_paths = _install_claude_global_prompt(claude_dirs)
     codex_prompt_path = _install_codex_global_prompt()
@@ -760,6 +842,7 @@ def install_global_integration(
         "claude_config_dirs": installed_claude,
         "codex_installed": codex_installed,
         "hermes_installed": hermes_installed,
+        "opencode_configs": opencode_configs,
         "init_wrapper_path": init_wrapper_path,
         "claude_prompt_paths": claude_prompt_paths,
         "codex_prompt_path": codex_prompt_path,
