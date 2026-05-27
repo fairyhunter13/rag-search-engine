@@ -12,12 +12,18 @@ Usage:
   opencode-search mcp           # stdio (for AI assistants)
   python -m opencode_search mcp # equivalent
 
-Startup sequence:
+Startup sequence (HTTP daemon):
   1. GPU guard runs synchronously before the event loop starts — exits with code 1
      if no CUDA provider is available (CPU fallback is forbidden).
-  2. FastMCP owns the event loop. The lifespan context manager starts the stale-
-     cleanup background task, resumes persisted watchers, and fires sd_notify READY=1
-     (a no-op outside systemd). On shutdown it cancels the task and fires STOPPING=1.
+  2. run_mcp_http_server builds the Starlette app, injects a combined lifespan that
+     wraps session_manager.run() with our background tasks (stale-cleanup, watcher
+     resumption) and fires sd_notify READY=1 after the session manager has started.
+     On shutdown it cancels the cleanup task and fires STOPPING=1.
+
+Note: FastMCP's lifespan= constructor param wires into _mcp_server, which for the
+streamable-HTTP transport fires once per MCP session (not once per process), so it
+cannot be used for process-level background tasks. The Starlette-level lifespan
+injected in run_mcp_http_server is used instead.
 """
 
 from __future__ import annotations
@@ -100,7 +106,7 @@ async def _stale_cleanup_loop() -> None:
 async def resume_watchers() -> None:
     """Restart any watchers that were persisted with watch=True in the registry.
 
-    Must be called from inside FastMCP's running event loop so watcher coroutines
+    Must be called from inside the running event loop so watcher coroutines
     bind to the correct loop.
     """
     from opencode_search.config import load_registry
@@ -115,31 +121,6 @@ async def resume_watchers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# FastMCP lifespan — replaces the old lazy-init module globals
-# ---------------------------------------------------------------------------
-
-
-@asynccontextmanager
-async def _mcp_lifespan(server: FastMCP):  # type: ignore[type-arg]
-    """Manage background tasks for the lifetime of the FastMCP server.
-
-    Runs after the port is bound (ASGI lifespan fires post-bind), so READY=1
-    is accurate. Works for both stdio and streamable-HTTP transports; sd_notify
-    calls are no-ops outside systemd.
-    """
-    cleanup_task = asyncio.create_task(_stale_cleanup_loop(), name="opencode-stale-cleanup")
-    await resume_watchers()
-    _sd_notify("READY=1\n")
-    try:
-        yield
-    finally:
-        cleanup_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await cleanup_task
-        _sd_notify("STOPPING=1\n")
-
-
-# ---------------------------------------------------------------------------
 # FastMCP instance
 # ---------------------------------------------------------------------------
 
@@ -150,7 +131,9 @@ _mcp_kwargs: dict[str, Any] = {
         " on your GPU, no data leaves your machine.\n\n"
         + _global_prompt_text()
     ),
-    "lifespan": _mcp_lifespan,
+    # No lifespan= here: the HTTP process-level lifespan is injected in
+    # run_mcp_http_server (Starlette layer). FastMCP's lifespan= wires into
+    # _mcp_server which fires per-session for HTTP — unsuitable for background tasks.
 }
 if _MCP_IMPORT_ERROR is not None:
     _mcp_kwargs["missing_exc"] = _MCP_IMPORT_ERROR
@@ -323,6 +306,9 @@ def run_mcp_server() -> None:
 
 def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
     """Start the MCP server over streamable HTTP for shared daemon usage."""
+    import anyio
+    import uvicorn
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -336,7 +322,28 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
         _sd_notify("STATUS=GPU guard failed — CUDA not available, refusing to start\n")
         sys.exit(1)
 
-    mcp.settings.host = host
-    mcp.settings.port = port
+    starlette_app = mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def _lifespan(app: Any) -> Any:
+        cleanup_task = asyncio.create_task(_stale_cleanup_loop(), name="opencode-stale-cleanup")
+        resume_task = asyncio.create_task(resume_watchers(), name="opencode-resume-watchers")
+        resume_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        async with mcp.session_manager.run():
+            _sd_notify("READY=1\n")
+            _sd_notify(f"STATUS=listening on http://{host}:{port}/mcp\n")
+            yield
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
+        _sd_notify("STOPPING=1\n")
+
+    starlette_app.router.lifespan_context = _lifespan
+
     log.info("Starting opencode-search MCP server on http://%s:%s/mcp", host, port)
-    mcp.run(transport="streamable-http")
+
+    async def _serve() -> None:
+        config = uvicorn.Config(starlette_app, host=host, port=port, log_level="info")
+        await uvicorn.Server(config).serve()
+
+    anyio.run(_serve)

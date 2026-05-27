@@ -16,6 +16,7 @@ pytest.importorskip("mcp")
 import opencode_search.mcp as mcp_mod
 from opencode_search import config
 from opencode_search.mcp import (
+    _release_stale_project_watches,
     client_close,
     client_open,
     index_project,
@@ -299,6 +300,7 @@ async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, m
         while asyncio.get_running_loop().time() < deadline:
             if str(project_root) not in watcher_manager.list_active():
                 break
+            await _release_stale_project_watches()
             await asyncio.sleep(0.2)
         else:
             raise AssertionError("auto-started watcher was not released after client disconnect")
