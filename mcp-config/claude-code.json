@@ -10,8 +10,6 @@
       },
       "description": "GPU-accelerated local semantic code search. Index your projects and search with natural language.",
       "alwaysAllow": [
-        "list_indexed_projects",
-        "project_status",
         "search_code"
       ]
     }

@@ -246,46 +246,5 @@ async def search_code(
     )
 
 
-@bridge.tool()
-async def project_status(path: str) -> dict[str, Any]:
-    resolved = _resolve_path_like(path)
-    err = _ensure_within_workspace(resolved, what="project_status")
-    if err is not None:
-        return err
-    return await _forward_tool("project_status", {"path": resolved})
-
-
-@bridge.tool()
-async def list_indexed_projects() -> dict[str, Any]:
-    result = await _forward_tool("list_indexed_projects", {})
-    if _allow_outside_workspace():
-        return result
-    if not isinstance(result, dict) or not isinstance(result.get("projects"), list):
-        return result
-    root = _get_workspace_root()
-    filtered: list[dict[str, Any]] = []
-    for p in result["projects"]:
-        if not isinstance(p, dict):
-            continue
-        path_val = p.get("path")
-        if not isinstance(path_val, str) or not path_val:
-            continue
-        try:
-            Path(path_val).expanduser().resolve().relative_to(root)
-        except Exception:
-            continue
-        filtered.append(p)
-    return {**result, "projects": filtered}
-
-
-@bridge.tool()
-async def stop_watching(path: str) -> dict[str, Any]:
-    resolved = _resolve_path_like(path)
-    err = _ensure_within_workspace(resolved, what="stop_watching")
-    if err is not None:
-        return err
-    return await _forward_tool("stop_watching", {"path": resolved})
-
-
 def run_stdio_bridge() -> None:
     bridge.run(transport="stdio")

@@ -121,29 +121,3 @@ async def test_bridge_search_code_rejects_explicit_project_paths_outside_workspa
     mock_forward.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_bridge_list_indexed_projects_filters_to_workspace_root(tmp_path, monkeypatch):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    monkeypatch.setenv("OPENCODE_BRIDGE_WORKSPACE_ROOT", str(repo))
-    monkeypatch.chdir(repo)
-
-    from opencode_search import mcp_bridge
-
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    async def fake_forward(name: str, arguments: dict):
-        assert name == "list_indexed_projects"
-        return {
-            "projects": [
-                {"path": str(repo), "tier": "balanced"},
-                {"path": str(outside), "tier": "balanced"},
-            ]
-        }
-
-    with patch.object(mcp_bridge, "_forward_tool", AsyncMock(side_effect=fake_forward)):
-        result = await mcp_bridge.list_indexed_projects()
-
-    paths = [p["path"] for p in result.get("projects", [])]
-    assert paths == [str(repo)]

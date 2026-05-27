@@ -16,18 +16,6 @@
     "search_code": {
       "description": "Search indexed projects with natural language",
       "always_allowed": true
-    },
-    "project_status": {
-      "description": "Get indexing status for a project",
-      "always_allowed": true
-    },
-    "list_indexed_projects": {
-      "description": "List all indexed projects",
-      "always_allowed": true
-    },
-    "stop_watching": {
-      "description": "Stop file watcher for a project",
-      "always_allowed": false
     }
   }
 }

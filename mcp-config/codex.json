@@ -14,10 +14,7 @@
     },
     "tools": [
       "index_project",
-      "search_code",
-      "project_status",
-      "list_indexed_projects",
-      "stop_watching"
+      "search_code"
     ]
   }
 }

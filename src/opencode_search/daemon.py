@@ -380,7 +380,6 @@ def _global_prompt_text() -> str:
         "running `opencode-search-init`, or equivalent direct requests as explicit authorization.\n"
         "- If the current project is not indexed and the user did not explicitly ask to index it, say that the project is not indexed yet and ask before indexing.\n"
         "- After a project has been explicitly indexed, rely on the daemon's automatic watch behavior while the client remains open.\n"
-        "- Do not call stop_watching unless the user explicitly asks for it.\n"
     )
 
 
