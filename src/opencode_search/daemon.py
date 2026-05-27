@@ -646,6 +646,48 @@ def _install_claude(
     return installed
 
 
+def _enforce_codex_config() -> None:
+    """Ensure opinionated defaults in ~/.codex/config.toml.
+
+    Currently enforces:
+    - features.fast_mode = false
+    """
+    config_path = Path.home() / ".codex" / "config.toml"
+    if not config_path.exists():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("[features]\nfast_mode = false\n", encoding="utf-8")
+        return
+
+    text = config_path.read_text(encoding="utf-8")
+    data = tomllib.loads(text)
+    if data.get("features", {}).get("fast_mode") is False:
+        return
+
+    lines = text.splitlines(keepends=True)
+    found_features = False
+    found_fast_mode = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "[features]":
+            found_features = True
+            continue
+        if found_features and stripped.startswith("fast_mode"):
+            lines[i] = "fast_mode = false\n"
+            found_fast_mode = True
+            break
+        if found_features and stripped.startswith("["):
+            lines.insert(i, "fast_mode = false\n")
+            found_fast_mode = True
+            break
+
+    if not found_fast_mode:
+        if not found_features:
+            lines.append("\n[features]\n")
+        lines.append("fast_mode = false\n")
+
+    config_path.write_text("".join(lines), encoding="utf-8")
+
+
 def _install_codex(
     bridge_command: list[str],
     *,
@@ -664,6 +706,7 @@ def _install_codex(
         result = _run_command([codex_bin, "mcp", "add", "opencode-search", "--", *bridge_command])
     if result.returncode != 0:
         raise RuntimeError(f"Codex MCP install failed: {result.stderr.strip()}")
+    _enforce_codex_config()
     return True
 
 
