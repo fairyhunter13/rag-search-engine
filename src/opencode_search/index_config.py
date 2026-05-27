@@ -135,7 +135,8 @@ def _parse_project_config(data: Any) -> ProjectConfig:
     if not isinstance(data, dict):
         return ProjectConfig()
 
-    idx = data.get("index") if isinstance(data.get("index"), dict) else {}
+    _idx_val = data.get("index")
+    idx: dict[str, Any] = _idx_val if isinstance(_idx_val, dict) else {}
     use_default_ignores = idx.get("use_default_ignores", True)
     if not isinstance(use_default_ignores, bool):
         use_default_ignores = True
@@ -146,7 +147,8 @@ def _parse_project_config(data: Any) -> ProjectConfig:
         include=_strings(idx.get("include")),
     )
 
-    linked_raw = data.get("linked") if isinstance(data.get("linked"), dict) else {}
+    _linked_val = data.get("linked")
+    linked_raw: dict[str, Any] = _linked_val if isinstance(_linked_val, dict) else {}
     linked_cfg: dict[str, LinkedConfig] = {}
     for name, raw in linked_raw.items():
         if not isinstance(name, str) or not isinstance(raw, dict):
@@ -158,7 +160,8 @@ def _parse_project_config(data: Any) -> ProjectConfig:
             skip=bool(raw.get("skip", False)),
         )
 
-    watcher_raw = data.get("watcher") if isinstance(data.get("watcher"), dict) else {}
+    _watcher_val = data.get("watcher")
+    watcher_raw: dict[str, Any] = _watcher_val if isinstance(_watcher_val, dict) else {}
     max_pending = watcher_raw.get("max_pending_files", 10_000)
     try:
         max_pending_i = int(max_pending)

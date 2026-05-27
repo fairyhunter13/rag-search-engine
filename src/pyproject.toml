@@ -90,6 +90,33 @@ ignore = [
 python_version = "3.11"
 strict = false
 ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+
+# Enforce stricter checking on business-logic modules that are fully typed.
+# Excluded: embeddings.py (ONNX monkey-patching), storage.py (lancedb dynamic API).
+[[tool.mypy.overrides]]
+module = [
+    "opencode_search.handlers.*",
+    "opencode_search.watcher",
+    "opencode_search.config",
+    "opencode_search.mcp",
+    "opencode_search.mcp_bridge",
+    "opencode_search.daemon",
+    "opencode_search.daemon_runtime",
+    "opencode_search.metrics",
+    "opencode_search.index_config",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "opencode_search.embeddings",
+    "opencode_search.storage",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

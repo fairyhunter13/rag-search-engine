@@ -194,7 +194,7 @@ class ProjectEntry:
     @classmethod
     def from_dict(cls, d: dict) -> "ProjectEntry":
         # Accept extra keys gracefully so forward-compatibility is maintained.
-        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        known = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in d.items() if k in known}
         return cls(**filtered)
 

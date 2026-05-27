@@ -38,12 +38,13 @@ from typing import Any
 try:
     from mcp.server.fastmcp import FastMCP
 except ModuleNotFoundError as exc:  # pragma: no cover
-    from opencode_search._fastmcp_stub import FastMCPStub as FastMCP
+    from opencode_search._fastmcp_stub import FastMCPStub as FastMCP  # type: ignore[assignment]
 
-    _MCP_IMPORT_ERROR = exc
+    _MCP_IMPORT_ERROR: ModuleNotFoundError | None = exc
 else:
     _MCP_IMPORT_ERROR = None
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from opencode_search.daemon import (
@@ -239,7 +240,7 @@ async def search_metrics() -> dict[str, Any]:
 
 
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
-async def healthz(_request) -> JSONResponse:
+async def healthz(_request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "ok": True,
@@ -251,7 +252,7 @@ async def healthz(_request) -> JSONResponse:
 
 
 @mcp.custom_route("/admin/client/open", methods=["POST"], include_in_schema=False)
-async def client_open(request) -> JSONResponse:
+async def client_open(request: Request) -> JSONResponse:
     payload = await request.json()
     client_id = str(payload.get("client_id", ""))
     cwd = str(payload.get("cwd", ""))
@@ -263,21 +264,21 @@ async def client_open(request) -> JSONResponse:
 
 
 @mcp.custom_route("/admin/client/heartbeat", methods=["POST"], include_in_schema=False)
-async def client_heartbeat(request) -> JSONResponse:
+async def client_heartbeat(request: Request) -> JSONResponse:
     payload = await request.json()
     runtime_state.client_heartbeat(str(payload.get("client_id", "")))
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 @mcp.custom_route("/admin/client/close", methods=["POST"], include_in_schema=False)
-async def client_close(request) -> JSONResponse:
+async def client_close(request: Request) -> JSONResponse:
     payload = await request.json()
     runtime_state.client_close(str(payload.get("client_id", "")))
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 @mcp.custom_route("/admin/status", methods=["GET"], include_in_schema=False)
-async def admin_status(_request) -> JSONResponse:
+async def admin_status(_request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 

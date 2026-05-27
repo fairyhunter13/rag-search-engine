@@ -2,6 +2,12 @@
 
 All tests mock GPU-dependent calls (embed/rerank/indexer).
 No GPU required unless @pytest.mark.gpu.
+
+Patch targets use the submodule where the name is bound, not the package root:
+  - indexing logic  → opencode_search.handlers._index.*
+  - query logic     → opencode_search.handlers._query.*
+  - watch logic     → opencode_search.handlers._watch.*
+  - shared utils    → opencode_search.handlers._common.*
 """
 # ruff: noqa: N806
 from __future__ import annotations
@@ -13,6 +19,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from opencode_search.config import ProjectEntry, get_project_db_path, get_tier_dims
+
+_IDX = "opencode_search.handlers._index"
+_QRY = "opencode_search.handlers._query"
+_WCH = "opencode_search.handlers._watch"
+_CMN = "opencode_search.handlers._common"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,12 +78,12 @@ async def test_handle_index_project_success(tmp_path):
     from opencode_search.handlers import _indexing_status, handle_index_project
     expected_db_path = get_project_db_path(tmp_path, "balanced")
 
-    with patch("opencode_search.handlers._index_project", AsyncMock(return_value=_FakeIndexResult())), \
-         patch("opencode_search.handlers.load_registry", return_value={}), \
-         patch("opencode_search.handlers.save_registry"), \
-         patch("opencode_search.handlers.clear_search_cache"), \
-         patch("opencode_search.handlers.Storage") as MockStorage, \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_IDX}._index_project", AsyncMock(return_value=_FakeIndexResult())), \
+         patch(f"{_IDX}.load_registry", return_value={}), \
+         patch(f"{_IDX}.save_registry"), \
+         patch(f"{_IDX}.clear_search_cache"), \
+         patch(f"{_IDX}.Storage") as MockStorage, \
+         patch(f"{_IDX}.watcher_manager") as MockWatcher:
         mock_st = MagicMock()
         mock_st.open = AsyncMock()
         mock_st.close = AsyncMock()
@@ -80,11 +92,9 @@ async def test_handle_index_project_success(tmp_path):
         MockWatcher.is_active.return_value = False
 
         result = await handle_index_project(path=str(tmp_path), tier="balanced")
-        # Returns immediately — background task still pending.
         assert result.get("status") == "indexing"
         assert "started_at" in result
 
-        # Drain background task while patches are still active.
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -117,7 +127,7 @@ async def test_handle_index_project_clears_running_on_exception(tmp_path):
     import asyncio
     from opencode_search.handlers import _indexing_status, handle_index_project
 
-    with patch("opencode_search.handlers.Storage") as MockStorage:
+    with patch(f"{_IDX}.Storage") as MockStorage:
         mock_st = MagicMock()
         mock_st.open = AsyncMock(side_effect=RuntimeError("db failed"))
         mock_st.close = AsyncMock()
@@ -126,7 +136,6 @@ async def test_handle_index_project_clears_running_on_exception(tmp_path):
         result = await handle_index_project(path=str(tmp_path), tier="balanced")
         assert result.get("status") == "indexing"
 
-        # Drain background task (it will catch the exception internally).
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -150,12 +159,12 @@ async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tm
         saved_registry.clear()
         saved_registry.update(registry)
 
-    with patch("opencode_search.handlers._index_project", AsyncMock(return_value=_FakeIndexResult())), \
-         patch("opencode_search.handlers.load_registry", return_value={path_str: existing}), \
-         patch("opencode_search.handlers.save_registry", side_effect=_capture_save), \
-         patch("opencode_search.handlers.clear_search_cache"), \
-         patch("opencode_search.handlers.Storage") as MockStorage, \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_IDX}._index_project", AsyncMock(return_value=_FakeIndexResult())), \
+         patch(f"{_IDX}.load_registry", return_value={path_str: existing}), \
+         patch(f"{_IDX}.save_registry", side_effect=_capture_save), \
+         patch(f"{_IDX}.clear_search_cache"), \
+         patch(f"{_IDX}.Storage") as MockStorage, \
+         patch(f"{_IDX}.watcher_manager") as MockWatcher:
         mock_st = MagicMock()
         mock_st.open = AsyncMock()
         mock_st.close = AsyncMock()
@@ -166,7 +175,6 @@ async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tm
         result = await handle_index_project(path=path_str, tier="balanced", watch=False)
         assert result.get("status") == "indexing"
 
-        # Wait for background task while patches are still active.
         import asyncio
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         if pending:
@@ -188,9 +196,9 @@ async def test_handle_project_status_skips_missing_db_without_recreating(tmp_pat
         dims=get_tier_dims("budget"),
     )
 
-    with patch("opencode_search.handlers.load_registry", return_value={str(project_root): entry}), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher, \
-         patch("opencode_search.handlers.Storage") as MockStorage:
+    with patch(f"{_QRY}.load_registry", return_value={str(project_root): entry}), \
+         patch(f"{_QRY}.watcher_manager") as MockWatcher, \
+         patch(f"{_QRY}.Storage") as MockStorage:
         MockWatcher.is_active.return_value = False
         result = await handle_project_status(path=str(project_root))
 
@@ -215,7 +223,7 @@ async def test_handle_search_code_empty_query():
 async def test_handle_search_code_no_registry():
     from opencode_search.handlers import handle_search_code
 
-    with patch("opencode_search.handlers.load_registry", return_value={}):
+    with patch(f"{_QRY}.load_registry", return_value={}):
         result = await handle_search_code(query="find something")
 
     assert "note" in result or "results" in result
@@ -238,9 +246,8 @@ async def test_handle_search_code_with_results():
         )
     ]
 
-    with patch("opencode_search.handlers.load_registry",
-               return_value={"/tmp": _make_entry("/tmp")}), \
-         patch("opencode_search.handlers.search", AsyncMock(return_value=fake_results)):
+    with patch(f"{_QRY}.load_registry", return_value={"/tmp": _make_entry("/tmp")}), \
+         patch(f"{_QRY}.search", AsyncMock(return_value=fake_results)):
         result = await handle_search_code(query="find function")
 
     assert "results" in result
@@ -264,8 +271,8 @@ async def test_handle_search_code_filters_by_project_paths():
         searched_projects.extend(projects)
         return []
 
-    with patch("opencode_search.handlers.load_registry", return_value=registry), \
-         patch("opencode_search.handlers.search", side_effect=capture_search):
+    with patch(f"{_QRY}.load_registry", return_value=registry), \
+         patch(f"{_QRY}.search", side_effect=capture_search):
         await handle_search_code(query="test", project_paths=["/tmp/a"])
 
     assert len(searched_projects) == 1
@@ -276,7 +283,7 @@ async def test_handle_search_code_filters_by_project_paths():
 async def test_handle_search_code_missing_project_paths():
     from opencode_search.handlers import handle_search_code
 
-    with patch("opencode_search.handlers.load_registry", return_value={"/tmp/a": _make_entry("/tmp/a")}):
+    with patch(f"{_QRY}.load_registry", return_value={"/tmp/a": _make_entry("/tmp/a")}):
         result = await handle_search_code(query="test", project_paths=["/tmp/nonexistent"])
 
     assert "error" in result
@@ -291,7 +298,7 @@ async def test_handle_search_code_returns_error_for_mixed_tiers():
         "/tmp/b": _make_entry("/tmp/b", tier="balanced"),
     }
 
-    with patch("opencode_search.handlers.load_registry", return_value=registry):
+    with patch(f"{_QRY}.load_registry", return_value=registry):
         result = await handle_search_code(query="test")
 
     assert "error" in result
@@ -307,7 +314,7 @@ async def test_handle_search_code_returns_error_for_mixed_tiers():
 async def test_handle_project_status_not_indexed():
     from opencode_search.handlers import handle_project_status
 
-    with patch("opencode_search.handlers.load_registry", return_value={}):
+    with patch(f"{_QRY}.load_registry", return_value={}):
         result = await handle_project_status(path="/tmp/unknown")
 
     assert result["indexed"] is False
@@ -328,9 +335,9 @@ async def test_handle_project_status_indexed(tmp_path):
     mock_storage.close = AsyncMock()
     mock_storage.count = AsyncMock(return_value=42)
 
-    with patch("opencode_search.handlers.load_registry", return_value=registry), \
-         patch("opencode_search.handlers.Storage", return_value=mock_storage), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_QRY}.load_registry", return_value=registry), \
+         patch(f"{_QRY}.Storage", return_value=mock_storage), \
+         patch(f"{_QRY}.watcher_manager") as MockWatcher:
         MockWatcher.is_active.return_value = False
 
         result = await handle_project_status(path=str(project_root))
@@ -349,8 +356,8 @@ async def test_handle_project_status_indexed(tmp_path):
 async def test_handle_list_indexed_projects_empty():
     from opencode_search.handlers import handle_list_indexed_projects
 
-    with patch("opencode_search.handlers.load_registry", return_value={}), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_QRY}.load_registry", return_value={}), \
+         patch(f"{_QRY}.watcher_manager") as MockWatcher:
         MockWatcher.list_active.return_value = []
         result = await handle_list_indexed_projects()
 
@@ -366,8 +373,8 @@ async def test_handle_list_indexed_projects_with_entries():
         "/tmp/b": _make_entry("/tmp/b", tier="premium"),
     }
 
-    with patch("opencode_search.handlers.load_registry", return_value=registry), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_QRY}.load_registry", return_value=registry), \
+         patch(f"{_QRY}.watcher_manager") as MockWatcher:
         MockWatcher.list_active.return_value = ["/tmp/a"]
         result = await handle_list_indexed_projects()
 
@@ -392,7 +399,7 @@ def test_resolve_indexed_project_path_prefers_nearest_ancestor():
         "/tmp/work/repo": _make_entry("/tmp/work/repo"),
     }
 
-    with patch("opencode_search.handlers.load_registry", return_value=registry):
+    with patch(f"{_CMN}.load_registry", return_value=registry):
         resolved = resolve_indexed_project_path("/tmp/work/repo/src/module.py")
 
     assert resolved == "/tmp/work/repo"
@@ -411,8 +418,9 @@ async def test_handle_ensure_project_watching_starts_for_indexed_ancestor():
         started["callback"] = on_change
         return True
 
-    with patch("opencode_search.handlers.load_registry", return_value={entry.path: entry}), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_WCH}.resolve_indexed_project_path", return_value=entry.path), \
+         patch(f"{_WCH}.load_registry", return_value={entry.path: entry}), \
+         patch(f"{_WCH}.watcher_manager") as MockWatcher:
         MockWatcher.is_active.return_value = False
         MockWatcher.start = AsyncMock(side_effect=_mock_start)
 
@@ -431,8 +439,9 @@ async def test_handle_release_project_watch_keeps_persisted_watch():
     entry = _make_entry("/tmp/proj")
     entry.watch = True
 
-    with patch("opencode_search.handlers.load_registry", return_value={entry.path: entry}), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_WCH}.resolve_indexed_project_path", return_value=entry.path), \
+         patch(f"{_WCH}.load_registry", return_value={entry.path: entry}), \
+         patch(f"{_WCH}.watcher_manager") as MockWatcher:
         MockWatcher.is_active.return_value = True
         MockWatcher.stop = AsyncMock()
 
@@ -449,8 +458,9 @@ async def test_handle_release_project_watch_stops_non_persisted_watch():
     entry = _make_entry("/tmp/proj")
     entry.watch = False
 
-    with patch("opencode_search.handlers.load_registry", return_value={entry.path: entry}), \
-         patch("opencode_search.handlers.watcher_manager") as MockWatcher:
+    with patch(f"{_WCH}.resolve_indexed_project_path", return_value=entry.path), \
+         patch(f"{_WCH}.load_registry", return_value={entry.path: entry}), \
+         patch(f"{_WCH}.watcher_manager") as MockWatcher:
         MockWatcher.is_active.return_value = True
         MockWatcher.stop = AsyncMock()
 
@@ -469,9 +479,9 @@ async def test_handle_release_project_watch_stops_non_persisted_watch():
 async def test_handle_stop_watching_not_active():
     from opencode_search.handlers import handle_stop_watching
 
-    with patch("opencode_search.handlers.watcher_manager") as MockWatcher, \
-         patch("opencode_search.handlers.load_registry", return_value={}), \
-         patch("opencode_search.handlers.save_registry"):
+    with patch(f"{_WCH}.watcher_manager") as MockWatcher, \
+         patch(f"{_WCH}.load_registry", return_value={}), \
+         patch(f"{_WCH}.save_registry"):
         MockWatcher.is_active.return_value = False
         MockWatcher.stop = AsyncMock()
 
@@ -487,9 +497,9 @@ async def test_handle_stop_watching_was_active():
 
     entry = _make_entry("/tmp/proj")
 
-    with patch("opencode_search.handlers.watcher_manager") as MockWatcher, \
-         patch("opencode_search.handlers.load_registry", return_value={"/tmp/proj": entry}), \
-         patch("opencode_search.handlers.save_registry"):
+    with patch(f"{_WCH}.watcher_manager") as MockWatcher, \
+         patch(f"{_WCH}.load_registry", return_value={"/tmp/proj": entry}), \
+         patch(f"{_WCH}.save_registry"):
         MockWatcher.is_active.return_value = True
         MockWatcher.stop = AsyncMock()
 

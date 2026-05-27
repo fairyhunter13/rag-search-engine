@@ -7,6 +7,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from opencode_search.config import DEBOUNCE_DELAY_MS, MIN_FLUSH_INTERVAL_S
 from opencode_search.discover import IGNORED_DIRS
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class WatcherHandle:
     root: Path
-    observer: object  # watchdog Observer
+    observer: Any  # watchdog Observer (Any — watchdog may not be installed)
     # Managed on the asyncio loop side by _dispatch/_schedule_flush.
     debounce_task: asyncio.Task | None = None
     last_flush: float = 0.0
@@ -176,7 +177,7 @@ class WatcherManager:
                 return p
 
             class _Handler(FileSystemEventHandler):
-                def on_any_event(self, event):
+                def on_any_event(self, event: Any) -> None:
                     if event.is_directory:
                         return
                     src = getattr(event, "src_path", None)
@@ -205,14 +206,14 @@ class WatcherManager:
                 if changed:
                     _schedule_flush()
 
-            def _schedule_flush():
+            def _schedule_flush() -> None:
                 if handle.debounce_task and not handle.debounce_task.done():
                     if handle.flush_in_progress:
                         return
                     handle.debounce_task.cancel()
                 handle.debounce_task = asyncio.create_task(_debounced_flush())
 
-            async def _debounced_flush():
+            async def _debounced_flush() -> None:
                 try:
                     await asyncio.sleep(DEBOUNCE_DELAY_MS / 1000.0)
                     import time as _time

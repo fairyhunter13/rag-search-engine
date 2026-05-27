@@ -27,7 +27,7 @@ from typing import Any
 try:
     from cachetools import TTLCache
 except ModuleNotFoundError:  # pragma: no cover - exercised in dep-light envs
-    class TTLCache:
+    class TTLCache:  # type: ignore[no-redef]
         """Small fallback TTL cache for test/import environments."""
 
         def __init__(self, maxsize: int, ttl: float) -> None:

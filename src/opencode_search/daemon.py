@@ -15,7 +15,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -184,7 +184,7 @@ def daemon_is_healthy(
 
 
 @contextmanager
-def _file_lock():
+def _file_lock() -> Generator[None, None, None]:
     import fcntl
 
     _state_dir()

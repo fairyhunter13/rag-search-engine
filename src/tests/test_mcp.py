@@ -221,8 +221,9 @@ async def test_resume_watchers_starts_watcher_for_watched_entries():
         return True
 
     with patch("opencode_search.config.load_registry", return_value={"/tmp/watched": entry}), \
-         patch("opencode_search.handlers.load_registry", return_value={"/tmp/watched": entry}), \
-         patch("opencode_search.handlers.watcher_manager.start", side_effect=mock_start):
+         patch("opencode_search.handlers._common.load_registry", return_value={"/tmp/watched": entry}), \
+         patch("opencode_search.handlers._watch.load_registry", return_value={"/tmp/watched": entry}), \
+         patch("opencode_search.handlers._watch.watcher_manager.start", side_effect=mock_start):
         await mod.resume_watchers()
 
     assert "/tmp/watched" in started["calls"]
