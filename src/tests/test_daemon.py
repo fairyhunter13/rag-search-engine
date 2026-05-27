@@ -7,12 +7,14 @@ from pathlib import Path
 import json
 
 from opencode_search.daemon import (
+    _SYSTEMD_NOTIFY_SERVICE_NAME,
     _bridge_command,
     _disable_codex_fast_mode,
     _global_prompt_text,
     _install_claude_global_prompt,
     _install_init_wrapper,
     _install_opencode_configs,
+    _render_systemd_notify_failure_service,
     _render_systemd_service,
     _replace_managed_block,
     _strip_jsonc_comments,
@@ -41,12 +43,39 @@ def test_bridge_command_targets_stdio_bridge():
     assert command[-4:] == ["-m", "opencode_search", "daemon", "bridge-stdio"]
 
 
-def test_render_systemd_service_uses_simple_with_restart():
+def test_render_systemd_service_is_true_daemon():
     service = _render_systemd_service(Path("/tmp/python"), host="127.0.0.1", port=8765)
 
-    assert "Type=simple" in service
-    assert "Restart=on-failure" in service
+    # Type=notify: systemd waits for READY=1 before marking the service active.
+    assert "Type=notify" in service
+    assert "NotifyAccess=main" in service
+    # Hard-fail desktop notification via OnFailure=.
+    assert f"OnFailure={_SYSTEMD_NOTIFY_SERVICE_NAME}" in service
+    # Restart limits: stop crash-looping if GPU guard fails repeatedly.
+    assert "StartLimitBurst=5" in service
+    assert "StartLimitIntervalSec=120" in service
+    # Always restart (including after idle self-shutdown via SIGTERM).
+    assert "Restart=always" in service
+    # Idle shutdown disabled; model unload handles GPU memory conservation.
+    assert "OPENCODE_MCP_IDLE_SHUTDOWN_S=0" in service
+    # Device protection.
+    assert "Nice=10" in service
+    assert "IOSchedulingClass=best-effort" in service
+    assert "OOMScoreAdj=200" in service
     assert "daemon serve --host 127.0.0.1 --port 8765" in service
+
+
+def test_render_systemd_notify_failure_service_fires_notify_send():
+    service = _render_systemd_notify_failure_service()
+
+    assert "Type=oneshot" in service
+    assert "notify-send" in service
+    assert "-u critical" in service
+    # Must not crash if notify-send is absent.
+    assert "|| true" in service
+    # Recovery instructions are included in the notification body.
+    assert "reset-failed" in service
+    assert "journalctl" in service
 
 
 def test_global_prompt_text_requires_explicit_index_and_search_first():

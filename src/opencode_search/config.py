@@ -1,5 +1,6 @@
 """Project configuration, constants, and registry management."""
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -122,10 +123,10 @@ def get_tier_models(tier: str) -> tuple[str, str]:
     """
     try:
         return _TIER_MODELS[tier]
-    except KeyError:
+    except KeyError as exc:
         raise ValueError(
             f"Unknown tier {tier!r}. Valid tiers: {list(_TIER_MODELS)}"
-        )
+        ) from exc
 
 
 def get_tier_dims(tier: str) -> int:
@@ -135,10 +136,10 @@ def get_tier_dims(tier: str) -> int:
     """
     try:
         return _TIER_DIMS[tier]
-    except KeyError:
+    except KeyError as exc:
         raise ValueError(
             f"Unknown tier {tier!r}. Valid tiers: {list(_TIER_DIMS)}"
-        )
+        ) from exc
 
 
 def migrate_project_entry(entry: "ProjectEntry") -> bool:
@@ -235,9 +236,6 @@ def save_registry(entries: dict[str, ProjectEntry]) -> None:
             json.dump(data, fh, indent=2)
         os.replace(tmp_path, path)
     except Exception:
-        # Clean up the temp file if something went wrong.
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise

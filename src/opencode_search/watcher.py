@@ -125,11 +125,11 @@ class WatcherManager:
 
         # Apply config include/exclude patterns early so we do not enqueue paths
         # that will never be indexed.
-        if index_cfg.exclude and matches_any_pattern(candidate_path, index_cfg.exclude, match_root):
-            if not (index_cfg.include and matches_any_pattern(candidate_path, index_cfg.include, match_root)):
-                return True
-
-        return False
+        return bool(
+            index_cfg.exclude
+            and matches_any_pattern(candidate_path, index_cfg.exclude, match_root)
+            and not (index_cfg.include and matches_any_pattern(candidate_path, index_cfg.include, match_root))
+        )
 
     async def start(
         self,

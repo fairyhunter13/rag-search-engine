@@ -308,9 +308,7 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     if "scripts" in parts:
         weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 0.1)
 
-    if language in _DOCUMENT_LANGUAGES:
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.1)
-    elif language == "markdown":
+    if language in _DOCUMENT_LANGUAGES or language == "markdown":
         weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.1)
 
     # Allow very low weights so stale/low-authority sources cannot dominate

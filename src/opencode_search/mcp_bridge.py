@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +58,7 @@ def _ensure_within_workspace(path: str, *, what: str) -> dict[str, Any] | None:
             "status": "error",
             "error": (
                 f"{what} is restricted to the currently opened workspace. "
-                f"workspace_root={str(root)} does not contain requested path={str(candidate)}. "
+                f"workspace_root={root!s} does not contain requested path={candidate!s}. "
                 "Set OPENCODE_ALLOW_INDEX_OUTSIDE_CWD=1 to override."
             ),
         }
@@ -112,15 +112,11 @@ async def _bridge_lifespan(_server: FastMCP) -> AsyncIterator[None]:
     finally:
         if _heartbeat_task is not None:
             _heartbeat_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await _heartbeat_task
-            except asyncio.CancelledError:
-                pass
             _heartbeat_task = None
-        try:
+        with suppress(Exception):
             await _notify_daemon("/admin/client/close", {"client_id": _bridge_client_id})
-        except Exception:
-            pass
 
 
 bridge = FastMCP(

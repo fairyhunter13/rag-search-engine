@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from opencode_search.cleaner import remove_stale_chunks
 from opencode_search.config import (
     get_tier_dims,
     get_tier_models,
@@ -365,7 +364,7 @@ async def index_project(
             async with file_sem:
                 try:
                     file_hash = await asyncio.to_thread(_hash_file, path)
-                except Exception as e:
+                except Exception:
                     result.errors += 1
                     return
 

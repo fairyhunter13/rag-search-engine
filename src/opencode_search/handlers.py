@@ -7,13 +7,13 @@ a JSON-serialisable dict that FastMCP transmits to the client.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import logging
 import time
 from pathlib import Path
 from typing import Any
 
-from opencode_search.metrics import record_search
 from opencode_search.config import (
     FINAL_TOP_K,
     ProjectEntry,
@@ -22,18 +22,19 @@ from opencode_search.config import (
     load_registry,
     save_registry,
 )
-
-_LAST_ACTIVE_UPDATE_INTERVAL_S: int = 3600  # throttle registry writes from search to once per hour
 from opencode_search.discover import is_indexable_file_with_config
+from opencode_search.embeddings import get_embed_workers_gpu
+from opencode_search.index_config import ProjectConfig, load_project_config
 from opencode_search.indexer import index_files as _index_files
 from opencode_search.indexer import index_project as _index_project
+from opencode_search.metrics import record_search
 from opencode_search.search import clear_search_cache, search
 from opencode_search.storage import Storage
 from opencode_search.watcher import watcher_manager
-from opencode_search.index_config import load_project_config, ProjectConfig
-from opencode_search.embeddings import get_embed_workers_gpu
 
 log = logging.getLogger(__name__)
+
+_LAST_ACTIVE_UPDATE_INTERVAL_S: int = 3600  # throttle registry writes from search to once per hour
 
 _VALID_TIERS = {"premium", "balanced", "budget"}
 
@@ -226,11 +227,9 @@ async def _run_index_project(
         }
 
         if on_complete is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await on_complete(status)
-            except Exception:  # noqa: BLE001
-                pass
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception("index_project failed for %s", path_str)
         status = {"status": "error", "path": path_str, "error": str(exc)}
     finally:
@@ -267,7 +266,7 @@ async def handle_index_project(
         started_at = _now_iso()
         _indexing_status[path_str] = {"running": True, "started_at": started_at}
 
-    asyncio.create_task(
+    _indexing_task = asyncio.create_task(
         _run_index_project(
             path_str=path_str,
             project_path=project_path,
@@ -277,8 +276,10 @@ async def handle_index_project(
             follow_symlinks=follow_symlinks,
             on_complete=on_complete,
             on_progress=on_progress,
-        )
+        ),
+        name=f"index-{path_str}",
     )
+    _indexing_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
     return {"status": "indexing", "path": path_str, "started_at": started_at}
 
 
@@ -318,10 +319,8 @@ async def handle_search_code(
     elapsed_ms = (time.perf_counter() - t0) * 1000
     top_score = results[0].score if results else None
     record_search(elapsed_ms, len(results), top_score)
-    try:
+    with contextlib.suppress(Exception):
         _touch_projects_last_active(projects)
-    except Exception:
-        pass
 
     return {
         "results": [

@@ -380,8 +380,8 @@ class Storage:
             )
             paths = df["path"].to_pylist()
             hashes = df["file_hash"].to_pylist()
-            return dict(zip(paths, hashes))
-        except Exception as exc:  # noqa: BLE001
+            return dict(zip(paths, hashes, strict=False))
+        except Exception as exc:
             logger.debug("get_file_hashes error (table may be empty): %s", exc)
             return {}
 
@@ -389,7 +389,7 @@ class Storage:
         """Return the total number of chunks stored."""
         try:
             return self._table.count_rows()
-        except Exception:  # noqa: BLE001
+        except Exception:
             return 0
 
     # ------------------------------------------------------------------
@@ -454,7 +454,7 @@ class Storage:
                 row["_fts_score_raw"] = raw
                 row["_score"] = raw / (raw + 1.0) if raw > 0.0 else 0.0
             return rows
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("FTS search error: %s", exc)
             return []
 
@@ -473,7 +473,7 @@ class Storage:
         vec_results = await self.search_vector(query_vec, limit=limit)
         fts_results = await self.search_fts(query_text, limit=limit)
 
-        _K = 60  # standard RRF constant (Cormack et al. 2009)
+        _k = 60  # standard RRF constant (Cormack et al. 2009)
 
         rows_by_key: dict[object, dict] = {}
         rrf_scores: dict[object, float] = {}
@@ -485,7 +485,7 @@ class Storage:
                 else (row.get("path", ""), row.get("position", 0))
             )
             rows_by_key[key] = row
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_K + rank + 1)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_k + rank + 1)
 
         for rank, row in enumerate(fts_results):
             key = (
@@ -495,7 +495,7 @@ class Storage:
             )
             if key not in rows_by_key:
                 rows_by_key[key] = row
-            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_K + rank + 1)
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_k + rank + 1)
 
         merged = []
         for key, rrf in rrf_scores.items():
@@ -519,7 +519,7 @@ class Storage:
             table = self._table
             await asyncio.to_thread(table.create_fts_index, "content", replace=True)
             logger.info("FTS index created/refreshed (%d rows)", n)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("FTS index creation failed: %s", exc)
 
     async def ensure_ivf_pq_index(self) -> None:
@@ -550,7 +550,7 @@ class Storage:
                 n_partitions,
                 n_sub_vectors,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("IVF-PQ index creation failed: %s", exc)
 
     async def maybe_create_indexes(self) -> None:
@@ -576,7 +576,7 @@ class Storage:
             rows = result.to_pylist()
             if rows:
                 return rows[0].get("value")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("get_config(%r) error: %s", key, exc)
         return None
 
@@ -598,7 +598,7 @@ class Storage:
                 .when_not_matched_insert_all()
                 .execute(pa_table)
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("set_config(%r, %r) error: %s", key, value, exc)
 
     # ------------------------------------------------------------------
@@ -622,7 +622,7 @@ class Storage:
                 async with self._write_lock:
                     await asyncio.to_thread(table.compact_files)
             logger.info("Chunks table compacted")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Compaction failed: %s", exc)
 
     async def compact_before_index(self, txn_threshold: int = 500) -> None:
