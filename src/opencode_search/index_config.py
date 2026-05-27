@@ -12,7 +12,6 @@ query rewriting or keyword-based ranking.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,7 +88,7 @@ def load_project_config(root: Path) -> ProjectConfig:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
             data = yaml.safe_load(text) or {}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("Failed to load %s: %s", path, exc)
             cfg = ProjectConfig()
             _cfg_cache[cache_key] = (st.st_mtime, cfg)

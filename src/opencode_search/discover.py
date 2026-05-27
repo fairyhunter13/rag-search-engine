@@ -303,9 +303,8 @@ def is_indexable_file_with_config(
 
         # Config include/exclude patterns are evaluated after the coarse
         # directory pruning above.
-        if index_cfg.exclude and matches_any_pattern(candidate_path, index_cfg.exclude, match_root):
-            if not (index_cfg.include and matches_any_pattern(candidate_path, index_cfg.include, match_root)):
-                return False
+        if index_cfg.exclude and matches_any_pattern(candidate_path, index_cfg.exclude, match_root) and not (index_cfg.include and matches_any_pattern(candidate_path, index_cfg.include, match_root)):
+            return False
     else:
         if any(part in IGNORED_DIRS for part in ignored_dir_parts):
             return False
@@ -318,10 +317,7 @@ def is_indexable_file_with_config(
     except OSError:
         return False
 
-    if _is_binary(candidate_path):
-        return False
-
-    return True
+    return not _is_binary(candidate_path)
 
 
 # ---------------------------------------------------------------------------
@@ -446,9 +442,8 @@ def iter_files(root: Path, follow_symlinks: bool = False) -> Iterator[Path]:
                 if suffix in IGNORED_EXTENSIONS:
                     continue
 
-            if index_cfg.exclude and matches_any_pattern(file_path, index_cfg.exclude, match_root):
-                if not (index_cfg.include and matches_any_pattern(file_path, index_cfg.include, match_root)):
-                    continue
+            if index_cfg.exclude and matches_any_pattern(file_path, index_cfg.exclude, match_root) and not (index_cfg.include and matches_any_pattern(file_path, index_cfg.include, match_root)):
+                continue
 
             # 3. Size limit.
             try:

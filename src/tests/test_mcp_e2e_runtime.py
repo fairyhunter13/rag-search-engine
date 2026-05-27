@@ -16,12 +16,12 @@ pytest.importorskip("mcp")
 import opencode_search.mcp as mcp_mod
 from opencode_search import config
 from opencode_search.mcp import (
-    _ensure_watchers_resumed,
     client_close,
     client_open,
     index_project,
     list_indexed_projects,
     project_status,
+    resume_watchers,
     search_code,
     stop_watching,
 )
@@ -121,11 +121,9 @@ async def test_mcp_tools_real_end_to_end(tmp_path, monkeypatch):
 
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
-    monkeypatch.setattr("opencode_search.mcp._resumed", False)
-    monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
 
     await watcher_manager.stop_all()
-    await _ensure_watchers_resumed()
+    await resume_watchers()
 
     try:
         indexed = await _index_and_wait(str(project_root), tier="budget", watch=True)
@@ -202,11 +200,9 @@ async def test_mcp_resumes_persisted_watcher_and_removes_deleted_files(tmp_path,
 
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
-    monkeypatch.setattr("opencode_search.mcp._resumed", False)
-    monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
 
     await watcher_manager.stop_all()
-    await _ensure_watchers_resumed()
+    await resume_watchers()
 
     try:
         indexed = await _index_and_wait(str(project_root), tier="budget", watch=True)
@@ -228,8 +224,7 @@ async def test_mcp_resumes_persisted_watcher_and_removes_deleted_files(tmp_path,
         await watcher_manager.stop_all()
         assert watcher_manager.list_active() == []
 
-        monkeypatch.setattr("opencode_search.mcp._resumed", False)
-        monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
+        await resume_watchers()
         status = await project_status(path=str(project_root))
         assert status["watching"] is True
 
@@ -272,14 +267,10 @@ async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, m
 
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
-    monkeypatch.setattr("opencode_search.mcp._resumed", False)
-    monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
-    monkeypatch.setattr("opencode_search.mcp._stale_cleanup_task", None)
-    monkeypatch.setattr("opencode_search.mcp._stale_cleanup_lock", None)
     monkeypatch.setattr("opencode_search.mcp.DEFAULT_CLIENT_STALE_S", 1)
 
     await watcher_manager.stop_all()
-    await _ensure_watchers_resumed()
+    await resume_watchers()
 
     try:
         open_response = await client_open(
@@ -313,9 +304,6 @@ async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, m
             raise AssertionError("auto-started watcher was not released after client disconnect")
     finally:
         await watcher_manager.stop_all()
-        task = getattr(mcp_mod, "_stale_cleanup_task", None)
-        if task is not None:
-            task.cancel()
 
 
 @pytest.mark.asyncio
@@ -331,11 +319,9 @@ async def test_mcp_migrates_legacy_registry_db_path_before_resuming_watchers(tmp
 
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
-    monkeypatch.setattr("opencode_search.mcp._resumed", False)
-    monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
 
     await watcher_manager.stop_all()
-    await _ensure_watchers_resumed()
+    await resume_watchers()
 
     try:
         await _index_and_wait(str(project_root), tier="budget", watch=True)
@@ -365,8 +351,7 @@ async def test_mcp_migrates_legacy_registry_db_path_before_resuming_watchers(tmp
             encoding="utf-8",
         )
 
-        monkeypatch.setattr("opencode_search.mcp._resumed", False)
-        monkeypatch.setattr("opencode_search.mcp._resume_lock", None)
+        await resume_watchers()
 
         status = await project_status(path=str(project_root))
         assert status["indexed"] is True

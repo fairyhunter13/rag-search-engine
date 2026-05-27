@@ -21,7 +21,6 @@ import asyncio
 import json
 import os
 import sys
-from typing import Optional
 
 import typer
 
@@ -166,8 +165,7 @@ def search_cmd(
     json_output: bool = typer.Option(False, "--json", help="Output results as JSON."),
 ) -> None:
     """Search indexed projects for code matching the query."""
-    from opencode_search.handlers import handle_search_code
-    from opencode_search.handlers import resolve_indexed_project_path
+    from opencode_search.handlers import handle_search_code, resolve_indexed_project_path
 
     project_paths = projects or None
     if project_paths is None:
@@ -294,7 +292,7 @@ def list_cmd(
 @app.command()
 def watch(
     path: str = typer.Argument(..., help="Project root to watch for file changes."),
-    tier: Optional[str] = typer.Option(None, help="Embedding tier. Defaults to the tier already in the registry, or 'budget' for new projects."),
+    tier: str | None = typer.Option(None, help="Embedding tier. Defaults to the tier already in the registry, or 'budget' for new projects."),
 ) -> None:
     """Start a live file-watcher for a project (incremental re-indexing on change).
 

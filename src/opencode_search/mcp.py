@@ -1,35 +1,37 @@
-"""MCP server for opencode-search — stdio transport via FastMCP.
+"""MCP server for opencode-search — stdio and streamable-HTTP transports via FastMCP.
 
-Exposes 5 tools:
+Exposes 6 tools:
   index_project          — index a directory (GPU-accelerated)
   search_code            — semantic + keyword hybrid search with reranking
   project_status         — get indexing state for a directory
   list_indexed_projects  — enumerate all registered projects
   stop_watching          — stop the file-watcher for a project
+  search_metrics         — return cumulative search statistics
 
 Usage:
   opencode-search mcp           # stdio (for AI assistants)
   python -m opencode_search mcp # equivalent
 
-On startup the server GPU-checks the embedding layer. Persisted watchers are
-resumed automatically on the first public tool call, bound to FastMCP's loop.
-
-Event-loop strategy:
-  FastMCP owns the event loop. The GPU guard runs synchronously (no loop
-  required), and watcher resume is performed lazily from public tools so the
-  watchers bind to FastMCP's loop — NOT a transient pre-startup loop that closes.
+Startup sequence:
+  1. GPU guard runs synchronously before the event loop starts — exits with code 1
+     if no CUDA provider is available (CPU fallback is forbidden).
+  2. FastMCP owns the event loop. The lifespan context manager starts the stale-
+     cleanup background task, resumes persisted watchers, and fires sd_notify READY=1
+     (a no-op outside systemd). On shutdown it cancels the task and fires STOPPING=1.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 try:
     from mcp.server.fastmcp import FastMCP
-except ModuleNotFoundError as exc:  # pragma: no cover - exercised in dep-light envs
+except ModuleNotFoundError as exc:  # pragma: no cover
     from opencode_search._fastmcp_stub import FastMCPStub as FastMCP
 
     _MCP_IMPORT_ERROR = exc
@@ -38,7 +40,12 @@ else:
 
 from starlette.responses import JSONResponse
 
-from opencode_search.daemon import DEFAULT_CLIENT_STALE_S, DEFAULT_MODEL_IDLE_UNLOAD_S, _global_prompt_text
+from opencode_search.daemon import (
+    DEFAULT_CLIENT_STALE_S,
+    DEFAULT_MODEL_IDLE_UNLOAD_S,
+    _global_prompt_text,
+    _sd_notify,
+)
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_ensure_project_watching,
@@ -53,21 +60,10 @@ from opencode_search.handlers import (
 
 log = logging.getLogger(__name__)
 
-_mcp_kwargs: dict[str, Any] = {
-    "name": "opencode-search",
-    "instructions": (
-        "GPU-accelerated local semantic code search — all embedding and reranking runs locally"
-        " on your GPU, no data leaves your machine.\n\n"
-        + _global_prompt_text()
-    ),
-}
-if _MCP_IMPORT_ERROR is not None:
-    _mcp_kwargs["missing_exc"] = _MCP_IMPORT_ERROR
 
-mcp = FastMCP(**_mcp_kwargs)
-
-_stale_cleanup_task: asyncio.Task[None] | None = None
-_stale_cleanup_lock: asyncio.Lock | None = None
+# ---------------------------------------------------------------------------
+# Background maintenance
+# ---------------------------------------------------------------------------
 
 
 async def _release_stale_project_watches() -> None:
@@ -77,22 +73,23 @@ async def _release_stale_project_watches() -> None:
 
 async def _stale_cleanup_loop() -> None:
     interval_s = max(1.0, min(float(DEFAULT_CLIENT_STALE_S) / 3.0, 5.0))
+    _watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+    _watchdog_every = max(1, int(_watchdog_usec / 2_000_000)) if _watchdog_usec else 0
+    _tick = 0
     while True:
         try:
             await asyncio.sleep(interval_s)
+            _tick += 1
             await _release_stale_project_watches()
-            # Unload embedding/reranker models when idle to reclaim RAM/VRAM.
-            # Models reload automatically on the next search (~2-5s warm-up).
+            if _watchdog_every and _tick % _watchdog_every == 0:
+                _sd_notify("WATCHDOG=1\n")
             if DEFAULT_MODEL_IDLE_UNLOAD_S > 0:
                 from opencode_search.embeddings import (
                     cleanup_models,
                     seconds_since_last_inference,
                 )
                 if seconds_since_last_inference() > DEFAULT_MODEL_IDLE_UNLOAD_S:
-                    log.info(
-                        "models idle >%ds — unloading to free RAM/VRAM",
-                        DEFAULT_MODEL_IDLE_UNLOAD_S,
-                    )
+                    log.info("models idle >%ds — unloading to free RAM/VRAM", DEFAULT_MODEL_IDLE_UNLOAD_S)
                     await asyncio.to_thread(cleanup_models)
         except asyncio.CancelledError:
             raise
@@ -100,16 +97,65 @@ async def _stale_cleanup_loop() -> None:
             log.warning("stale cleanup failed: %s", exc)
 
 
-async def _ensure_stale_cleanup_started() -> None:
-    global _stale_cleanup_lock, _stale_cleanup_task
-    if _stale_cleanup_task is not None and not _stale_cleanup_task.done():
-        return
-    if _stale_cleanup_lock is None:
-        _stale_cleanup_lock = asyncio.Lock()
-    async with _stale_cleanup_lock:
-        if _stale_cleanup_task is not None and not _stale_cleanup_task.done():
-            return
-        _stale_cleanup_task = asyncio.create_task(_stale_cleanup_loop())
+async def resume_watchers() -> None:
+    """Restart any watchers that were persisted with watch=True in the registry.
+
+    Must be called from inside FastMCP's running event loop so watcher coroutines
+    bind to the correct loop.
+    """
+    from opencode_search.config import load_registry
+
+    registry = load_registry()
+    for path_str, entry in registry.items():
+        if not entry.watch:
+            continue
+        result = await handle_ensure_project_watching(path_str, persist=True)
+        if result.get("watching"):
+            log.info("Resumed watcher for %s", path_str)
+
+
+# ---------------------------------------------------------------------------
+# FastMCP lifespan — replaces the old lazy-init module globals
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _mcp_lifespan(server: FastMCP):  # type: ignore[type-arg]
+    """Manage background tasks for the lifetime of the FastMCP server.
+
+    Runs after the port is bound (ASGI lifespan fires post-bind), so READY=1
+    is accurate. Works for both stdio and streamable-HTTP transports; sd_notify
+    calls are no-ops outside systemd.
+    """
+    cleanup_task = asyncio.create_task(_stale_cleanup_loop(), name="opencode-stale-cleanup")
+    await resume_watchers()
+    _sd_notify("READY=1\n")
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
+        _sd_notify("STOPPING=1\n")
+
+
+# ---------------------------------------------------------------------------
+# FastMCP instance
+# ---------------------------------------------------------------------------
+
+_mcp_kwargs: dict[str, Any] = {
+    "name": "opencode-search",
+    "instructions": (
+        "GPU-accelerated local semantic code search — all embedding and reranking runs locally"
+        " on your GPU, no data leaves your machine.\n\n"
+        + _global_prompt_text()
+    ),
+    "lifespan": _mcp_lifespan,
+}
+if _MCP_IMPORT_ERROR is not None:
+    _mcp_kwargs["missing_exc"] = _MCP_IMPORT_ERROR
+
+mcp = FastMCP(**_mcp_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -137,10 +183,8 @@ async def index_project(
         follow_symlinks: Follow symlinked directories during indexing (default True; required for
                          monorepos that use symlinks to share code across services).
     """
-    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
-    await _release_stale_project_watches()
-    await _ensure_watchers_resumed()
+
     async def _post_index(result: dict) -> None:
         pp = str(result.get("path", ""))
         if result.get("status") == "ok" and pp:
@@ -162,10 +206,7 @@ async def search_code(
     use_rerank: bool = True,
 ) -> dict[str, Any]:
     """Search indexed projects for code matching the query."""
-    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
-    await _release_stale_project_watches()
-    await _ensure_watchers_resumed()
     return await handle_search_code(
         query=query,
         project_paths=project_paths,
@@ -177,30 +218,21 @@ async def search_code(
 @mcp.tool()
 async def project_status(path: str) -> dict[str, Any]:
     """Get the current indexing and watching status for a project."""
-    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
-    await _release_stale_project_watches()
-    await _ensure_watchers_resumed()
     return await handle_project_status(path=path)
 
 
 @mcp.tool()
 async def list_indexed_projects() -> dict[str, Any]:
     """List all projects that have been indexed."""
-    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
-    await _release_stale_project_watches()
-    await _ensure_watchers_resumed()
     return await handle_list_indexed_projects()
 
 
 @mcp.tool()
 async def stop_watching(path: str) -> dict[str, Any]:
     """Stop the live file-watcher for a project."""
-    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
-    await _release_stale_project_watches()
-    await _ensure_watchers_resumed()
     return await handle_stop_watching(path=path)
 
 
@@ -214,16 +246,17 @@ async def search_metrics() -> dict[str, Any]:
     """
     from opencode_search.metrics import get_metrics
 
-    await _ensure_stale_cleanup_started()
     runtime_state.note_activity()
     return get_metrics()
 
 
+# ---------------------------------------------------------------------------
+# HTTP admin and health routes
+# ---------------------------------------------------------------------------
+
+
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
 async def healthz(_request) -> JSONResponse:
-    """Lightweight health endpoint for the singleton HTTP daemon."""
-    await _ensure_stale_cleanup_started()
-    await _release_stale_project_watches()
     return JSONResponse(
         {
             "ok": True,
@@ -239,11 +272,8 @@ async def client_open(request) -> JSONResponse:
     payload = await request.json()
     client_id = str(payload.get("client_id", ""))
     cwd = str(payload.get("cwd", ""))
-    await _ensure_stale_cleanup_started()
-    await _release_stale_project_watches()
     project_path = resolve_indexed_project_path(cwd) if cwd else None
     runtime_state.client_open(client_id, cwd=cwd or None, project_path=project_path)
-    await _ensure_watchers_resumed()
     if project_path:
         await handle_ensure_project_watching(project_path, persist=False)
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
@@ -252,8 +282,6 @@ async def client_open(request) -> JSONResponse:
 @mcp.custom_route("/admin/client/heartbeat", methods=["POST"], include_in_schema=False)
 async def client_heartbeat(request) -> JSONResponse:
     payload = await request.json()
-    await _ensure_stale_cleanup_started()
-    await _release_stale_project_watches()
     runtime_state.client_heartbeat(str(payload.get("client_id", "")))
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
@@ -261,101 +289,30 @@ async def client_heartbeat(request) -> JSONResponse:
 @mcp.custom_route("/admin/client/close", methods=["POST"], include_in_schema=False)
 async def client_close(request) -> JSONResponse:
     payload = await request.json()
-    await _ensure_stale_cleanup_started()
-    await _release_stale_project_watches()
     runtime_state.client_close(str(payload.get("client_id", "")))
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 @mcp.custom_route("/admin/status", methods=["GET"], include_in_schema=False)
 async def admin_status(_request) -> JSONResponse:
-    await _ensure_stale_cleanup_started()
-    await _release_stale_project_watches()
     return JSONResponse({"ok": True, **runtime_state.snapshot()})
 
 
 # ---------------------------------------------------------------------------
-# Async startup: resume persisted watchers (bound to FastMCP's event loop)
-# ---------------------------------------------------------------------------
-
-
-async def resume_watchers() -> None:
-    """Restart any watchers that were persisted with watch=True in the registry.
-
-    MUST be called from inside FastMCP's running event loop so that the watcher's
-    `asyncio.run_coroutine_threadsafe(...)` dispatches to the right loop.
-    """
-    from opencode_search.config import load_registry
-
-    registry = load_registry()
-    for path_str, entry in registry.items():
-        if not entry.watch:
-            continue
-        result = await handle_ensure_project_watching(path_str, persist=True)
-        if result.get("watching"):
-            log.info("Resumed watcher for %s", path_str)
-
-
-# FastMCP doesn't expose a lifespan hook in this version, so public tools call
-# this idempotent guard before doing work.
-_resumed = False
-_resume_lock: asyncio.Lock | None = None
-
-
-async def _ensure_watchers_resumed() -> None:
-    """Resume persisted watchers once, bound to FastMCP's active event loop."""
-    global _resume_lock, _resumed
-    if _resumed:
-        return
-    if _resume_lock is None:
-        _resume_lock = asyncio.Lock()
-    async with _resume_lock:
-        if _resumed:
-            return
-        await resume_watchers()
-        _resumed = True
-
-
-async def _resume_persisted_watchers() -> dict[str, Any]:
-    """Internal/testing helper: resume watchers from the registry."""
-    try:
-        await _ensure_watchers_resumed()
-        return {"status": "ok"}
-    except Exception as exc:
-        log.warning("resume_watchers failed: %s", exc)
-        return {"status": "error", "error": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# Synchronous GPU guard (run before the FastMCP loop starts)
-# ---------------------------------------------------------------------------
-
-
-def _gpu_guard() -> None:
-    """Block startup if no GPU is available. CPUExecutionProvider is forbidden."""
-    from opencode_search.embeddings import assert_gpu_available
-    assert_gpu_available()
-
-
-# ---------------------------------------------------------------------------
-# Server entrypoint
+# Server entrypoints
 # ---------------------------------------------------------------------------
 
 
 def run_mcp_server() -> None:
-    """Start the MCP server with stdio transport.
-
-    The GPU guard runs synchronously (raises if no CUDA), then FastMCP takes
-    ownership of the event loop. Watcher resume runs lazily on first tool call.
-    """
+    """Start the MCP server with stdio transport (for AI assistant subprocesses)."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-
     try:
-        _gpu_guard()
+        from opencode_search.embeddings import assert_gpu_available
+        assert_gpu_available()
     except Exception as exc:
         log.critical("GPU guard failed: %s", exc)
         sys.exit(1)
@@ -371,11 +328,12 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-
     try:
-        _gpu_guard()
+        from opencode_search.embeddings import assert_gpu_available
+        assert_gpu_available()
     except Exception as exc:
         log.critical("GPU guard failed: %s", exc)
+        _sd_notify("STATUS=GPU guard failed — CUDA not available, refusing to start\n")
         sys.exit(1)
 
     mcp.settings.host = host

@@ -31,6 +31,33 @@ DEFAULT_CLIENT_STALE_S = int(os.environ.get("OPENCODE_MCP_CLIENT_STALE_S", "60")
 # Unload embedding/reranker models after this many seconds of no inference.
 # Set to 0 to disable. Models reload on next search (~2-5s warm-up).
 DEFAULT_MODEL_IDLE_UNLOAD_S = int(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
+
+# ---------------------------------------------------------------------------
+# systemd sd_notify integration
+# ---------------------------------------------------------------------------
+
+def _sd_notify(message: str) -> None:
+    """Send a notification to systemd via the sd_notify protocol.
+
+    No-op when not running under systemd (NOTIFY_SOCKET not set).
+    Uses abstract namespace sockets when the path starts with '@'.
+    """
+    notify_socket = os.environ.get("NOTIFY_SOCKET")
+    if not notify_socket:
+        return
+    try:
+        addr: str | bytes = notify_socket
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        if notify_socket.startswith("@"):
+            addr = b"\0" + notify_socket[1:].encode()
+        sock.connect(addr)
+        sock.sendall(message.encode())
+        sock.close()
+    except Exception:
+        pass  # best-effort: never crash because of notify failure
+
+
+
 # Allow isolating daemon state for tests/CI (prevents interference with any
 # existing user daemon).
 _STATE_DIR = Path(
@@ -48,6 +75,8 @@ _INIT_WRAPPER_PATH = _BIN_DIR / "opencode-search-init"
 _SYSTEMD_USER_DIR = Path.home() / ".config" / "systemd" / "user"
 _SYSTEMD_SERVICE_NAME = "opencode-search-mcp-daemon.service"
 _SYSTEMD_SERVICE_PATH = _SYSTEMD_USER_DIR / _SYSTEMD_SERVICE_NAME
+_SYSTEMD_NOTIFY_SERVICE_NAME = "opencode-search-mcp-failure-notify.service"
+_SYSTEMD_NOTIFY_SERVICE_PATH = _SYSTEMD_USER_DIR / _SYSTEMD_NOTIFY_SERVICE_NAME
 _GLOBAL_PROMPT_DIR = Path.home() / ".config" / "opencode-search"
 _CLAUDE_GLOBAL_MD = Path.home() / "CLAUDE.md"
 _CODEX_BLOCK_START = "# >>> opencode-search developer instructions >>>"
@@ -182,7 +211,7 @@ def _spawn_daemon(host: str, port: int) -> int:
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
     with _LOG_PATH.open("a", encoding="utf-8") as log_fh:
-        proc = subprocess.Popen(  # noqa: S603
+        proc = subprocess.Popen(
             [
                 str(python_bin),
                 "-m",
@@ -308,7 +337,7 @@ def discover_claude_config_dirs(home: Path | None = None) -> list[Path]:
 
 
 def _run_command(command: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603
+    return subprocess.run(
         command,
         check=False,
         capture_output=True,
@@ -373,7 +402,7 @@ def _replace_managed_block(existing: str, start: str, end: str, block: str) -> s
 def _install_claude_global_prompt(claude_dirs: list[Path], home: Path | None = None) -> list[str]:
     home = home or Path.home()
     block = _global_prompt_with_markers(_CLAUDE_BLOCK_START, _CLAUDE_BLOCK_END)
-    all_dirs = [home / ".claude"] + list(claude_dirs)
+    all_dirs = [home / ".claude", *claude_dirs]
     written: list[str] = []
     for config_dir in all_dirs:
         if not config_dir.exists():
@@ -676,24 +705,103 @@ def _update_hermes_config_for_global_servers(
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
-def _render_systemd_service(python_bin: Path, host: str, port: int) -> str:
+def _detect_cuda_env_lines() -> list[str]:
+    """Return extra Environment= lines needed for CUDA to be discoverable.
+
+    If CUDA libraries are already registered in ldconfig (via /etc/ld.so.conf.d/),
+    no LD_LIBRARY_PATH is needed — systemd user services inherit the ldconfig
+    cache. Otherwise, fall back to injecting the common CUDA lib paths.
+    """
+    cuda_conf_dir = Path("/etc/ld.so.conf.d")
+    cuda_in_ldconfig = any(
+        p.name.startswith("cuda") or "cuda" in p.read_text(encoding="utf-8", errors="ignore")
+        for p in cuda_conf_dir.glob("*.conf")
+        if p.is_file()
+    ) if cuda_conf_dir.is_dir() else False
+
+    lines = ["Environment=CUDA_VISIBLE_DEVICES=0"]
+    if not cuda_in_ldconfig:
+        fallback_paths = [
+            "/usr/local/cuda/lib64",
+            "/usr/local/cuda/targets/x86_64-linux/lib",
+            "/usr/lib/x86_64-linux-gnu",
+        ]
+        existing = [p for p in fallback_paths if Path(p).exists()]
+        if existing:
+            lines.append("Environment=LD_LIBRARY_PATH=" + ":".join(existing))
+    return lines
+
+
+def _render_systemd_service(
+    python_bin: Path,
+    host: str,
+    port: int,
+    extra_env: list[str] | None = None,
+) -> str:
+    env_lines = list(extra_env) if extra_env else []
     return "\n".join(
         [
             "[Unit]",
-            "Description=opencode-search singleton MCP daemon",
+            "Description=opencode-search singleton MCP daemon (GPU-enforced)",
             "After=default.target",
+            f"OnFailure={_SYSTEMD_NOTIFY_SERVICE_NAME}",
+            "StartLimitIntervalSec=120",
+            "StartLimitBurst=5",
             "",
             "[Service]",
-            "Type=simple",
+            "Type=notify",
+            "NotifyAccess=main",
             f"ExecStart={python_bin} -m opencode_search daemon serve --host {host} --port {port}",
             f"ExecStop={python_bin} -m opencode_search daemon stop",
-            "Restart=on-failure",
+            "Restart=always",
             "RestartSec=5",
+            "TimeoutStartSec=60",
             "TimeoutStopSec=15",
             "Environment=PYTHONUNBUFFERED=1",
+            "Environment=OPENCODE_MCP_IDLE_SHUTDOWN_S=0",
+            *env_lines,
+            "Nice=10",
+            "IOSchedulingClass=best-effort",
+            "IOSchedulingPriority=7",
+            "OOMScoreAdj=200",
             "",
             "[Install]",
             "WantedBy=default.target",
+            "",
+        ]
+    )
+
+
+def _render_systemd_notify_failure_service() -> str:
+    """Render a oneshot service that fires a desktop notification on hard failure.
+
+    Triggered via OnFailure= in the main daemon unit when StartLimitBurst is
+    exceeded (i.e. GPU guard crashed 5× in 120s and systemd stops retrying).
+    Uses notify-send if available; silently succeeds otherwise so the oneshot
+    itself never blocks recovery.
+    """
+    title = "opencode-search: HARD FAIL — daemon stopped"
+    body = (
+        "GPU guard failed 5x in 120s. Automatic restarts exhausted.\\n"
+        "Fix the GPU/CUDA issue then run:\\n"
+        "  journalctl --user -u opencode-search-mcp-daemon -n 30\\n"
+        "  systemctl --user reset-failed opencode-search-mcp-daemon\\n"
+        "  systemctl --user start opencode-search-mcp-daemon"
+    )
+    exec_start = (
+        "/bin/sh -c '"
+        "command -v notify-send >/dev/null 2>&1 "
+        f"&& notify-send -u critical -a opencode-search \"{title}\" \"{body}\" "
+        "|| true'"
+    )
+    return "\n".join(
+        [
+            "[Unit]",
+            "Description=opencode-search MCP daemon hard-fail desktop notification",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            f"ExecStart={exec_start}",
             "",
         ]
     )
@@ -708,9 +816,14 @@ def install_systemd_user_service(
         return {"installed": False, "reason": "systemctl not found"}
 
     python_bin = Path(sys.executable)
+    cuda_env = _detect_cuda_env_lines()
     _SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
     _SYSTEMD_SERVICE_PATH.write_text(
-        _render_systemd_service(python_bin, host=host, port=port),
+        _render_systemd_service(python_bin, host=host, port=port, extra_env=cuda_env),
+        encoding="utf-8",
+    )
+    _SYSTEMD_NOTIFY_SERVICE_PATH.write_text(
+        _render_systemd_notify_failure_service(),
         encoding="utf-8",
     )
     _run_command([systemctl_bin, "--user", "daemon-reload"])
@@ -723,8 +836,13 @@ def install_systemd_user_service(
             "installed": False,
             "reason": enable.stderr.strip() or enable.stdout.strip(),
             "service_path": str(_SYSTEMD_SERVICE_PATH),
+            "notify_service_path": str(_SYSTEMD_NOTIFY_SERVICE_PATH),
         }
-    return {"installed": True, "service_path": str(_SYSTEMD_SERVICE_PATH)}
+    return {
+        "installed": True,
+        "service_path": str(_SYSTEMD_SERVICE_PATH),
+        "notify_service_path": str(_SYSTEMD_NOTIFY_SERVICE_PATH),
+    }
 
 
 def _strip_jsonc_comments(text: str) -> str:

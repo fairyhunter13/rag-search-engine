@@ -10,6 +10,7 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import logging
 import math
@@ -359,9 +360,7 @@ def _detect_gpu_capabilities() -> dict:
                     name_low = (result["gpu_name"] or "").lower()
                     # Adreno 690+ supports FP16 tensor ops
                     m = re.search(r"adreno\s*(\d+)", name_low)
-                    if m and int(m.group(1)) >= 690:
-                        result["supports_fp16"] = True
-                    elif "adreno 7" in name_low:
+                    if (m and int(m.group(1)) >= 690) or "adreno 7" in name_low:
                         result["supports_fp16"] = True
                     log.info("Qualcomm GPU detected: %s", result["gpu_name"])
                     return result
@@ -693,10 +692,8 @@ try:
             # Disable weight prepacking: ORT pre-packs MatMul weights into CPU-optimized
             # layouts even when GPU handles inference. Disabling saves ~30-60MB CPU RSS.
             if extra_options.get("enable_cpu_mem_arena") is False:
-                try:
+                with contextlib.suppress(Exception):
                     session_options.add_session_config_entry("session.disable_prepacking", "1")
-                except Exception:
-                    pass
         _OnnxModel.add_extra_session_options = _patched_add_extra
         del _patched_add_extra
 except ImportError:
@@ -761,10 +758,8 @@ def _embedder(model: str):
         _verify_onnx_session_provider(embedder, "embedder")
 
         # Cap token length to prevent O(nu00b2) attention memory explosion
-        try:
+        with contextlib.suppress(Exception):
             embedder.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
-        except (AttributeError, Exception):
-            pass
 
         _cached_embedder = embedder
         _cached_embedder_model = model
@@ -951,9 +946,7 @@ def _limit_onnx_threads() -> None:
         threads = "1"  # GPU mode: CPU threads only for tokenization, 1 is enough
     elif cpus <= 4:
         threads = "1"
-    elif cpus <= 8:
-        threads = "2"
-    elif cpus <= 16:
+    elif cpus <= 8 or cpus <= 16:
         threads = "2"
     else:
         threads = "4"
@@ -1629,7 +1622,7 @@ def embed_passages(
     model: str,
     dimensions: int,
     _return_numpy: bool = False,
-) -> "list[list[float]] | np.ndarray":
+) -> list[list[float]] | np.ndarray:
     """Embed passage texts on GPU.
 
     When ``_return_numpy=True`` the raw normalized numpy matrix is returned
