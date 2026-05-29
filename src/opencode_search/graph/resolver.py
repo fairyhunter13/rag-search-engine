@@ -6,13 +6,11 @@ Six strategies (tried in priority order per edge):
 3. import_map_suffix (0.85) — suffix of callee matches an import
 4. unique_name (0.75)     — exactly one node in the project with that name
 5. suffix_match (0.55)    — best suffix match among all nodes
-6. fuzzy (0.30)           — difflib similarity > 0.8
 
-Unresolvable edges are dropped.
+Unresolvable edges are dropped (fuzzy removed: O(n) per edge on large graphs).
 """
 from __future__ import annotations
 
-import difflib
 import logging
 from typing import TYPE_CHECKING
 
@@ -51,8 +49,8 @@ class CallResolver:
                 self._by_suffix[last_seg].append(n)
             self._id_to_file[n.id] = n.file
 
-        # Pre-compute qualified name list for fuzzy matching — built once, not per edge
-        self._all_qualified: list[str] = list(self._by_qualified.keys())
+        # Fuzzy step removed — O(n) per unresolvable edge, low confidence (0.30),
+        # and causes multi-minute stalls on large projects with millions of raw edges.
 
     def resolve(self, raw_edges: list[_RawEdge]) -> list[EdgeData]:
         """Convert _RawEdge list to real EdgeData, dropping unresolvable ones."""
@@ -139,11 +137,6 @@ class CallResolver:
             for n in suffix_candidates:
                 if n.file == caller_file:
                     return n.id, 0.55, "suffix_match"
-
-        # 6. Fuzzy — uses pre-computed list (not rebuilt per edge)
-        close = difflib.get_close_matches(callee, self._all_qualified, n=1, cutoff=0.8)
-        if close:
-            return self._by_qualified[close[0]].id, 0.30, "fuzzy"
 
         return None, 0.0, None
 
