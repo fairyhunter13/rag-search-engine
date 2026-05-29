@@ -1415,7 +1415,15 @@ def _gpu_provider_options(provider: str) -> list[dict]:
                     # when mixing IOBinding with standard session.run() after graph capture.
                     # Re-enable when ORT ships Blackwell-validated CUDA Graph support.
                     del opts["enable_cuda_graph"]
-                    log.info("Blackwell GPU (SM %.1f): disabled CUDA Graphs (ORT compat)", cc_float)
+                    # Blackwell: switch from EXHAUSTIVE to DEFAULT conv algo search.
+                    # EXHAUSTIVE benchmarks and caches every cuDNN algorithm variant,
+                    # filling the CUDA workspace cache. On SM 12.0 this accumulates
+                    # across forward passes and triggers SIGSEGV after ~50 batches.
+                    opts["cudnn_conv_algo_search"] = "DEFAULT"
+                    log.info(
+                        "Blackwell GPU (SM %.1f): disabled CUDA Graphs, DEFAULT conv algo (ORT compat)",
+                        cc_float,
+                    )
             except ValueError:
                 pass
         log.debug("CUDA provider options: %s", opts)
@@ -1608,6 +1616,47 @@ _MAX_TOKENS = 1024  # Tokenizer truncation limit (safety net for ONNX memory)
 EMBED_PASSAGES_MAX_TEXTS = 256
 EMBED_PASSAGES_MAX_BYTES = 24 * 1024 * 1024  # 24MB
 
+# ---------------------------------------------------------------------------
+# Blackwell ONNX session reset
+# ORT 1.26 + SM 12.0: CUDA workspace/free-list corrupts after ~50 forward passes
+# → SIGSEGV inside the ONNX kernel. Periodic session recreation clears all state.
+# ---------------------------------------------------------------------------
+_embed_batch_count: int = 0
+_embed_batch_count_lock = threading.Lock()
+# Default 25 batches ≈ 3–5 min; override with OPENCODE_BLACKWELL_RESET_EVERY=N
+_BLACKWELL_RESET_EVERY: int = int(os.environ.get("OPENCODE_BLACKWELL_RESET_EVERY", "25"))
+
+
+def _maybe_reset_blackwell_session(model: str) -> None:
+    """For Blackwell GPUs: reset ONNX session every N embed calls to prevent SIGSEGV."""
+    global _embed_batch_count
+    caps = _get_gpu_capabilities()
+    if caps.get("architecture") != "blackwell":
+        return
+    with _embed_batch_count_lock:
+        _embed_batch_count += 1
+        do_reset = _embed_batch_count >= _BLACKWELL_RESET_EVERY
+        if do_reset:
+            _embed_batch_count = 0
+    if not do_reset:
+        return
+    # Reset: evict the cached session so _embedder() recreates it on next call.
+    # _embedder() already handles del + gc.collect() + CUDA sync.
+    global _cached_embedder, _cached_embedder_model
+    with _embedder_lock:
+        if _cached_embedder is not None and _cached_embedder_model == model:
+            old = _cached_embedder
+            _cached_embedder = None
+            _cached_embedder_model = None
+            del old
+            gc.collect()
+            gc.collect()
+            _cuda_sync_and_empty_cache()
+            log.info(
+                "Blackwell ONNX session reset after %d batches (workspace leak prevention)",
+                _BLACKWELL_RESET_EVERY,
+            )
+
 
 def _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage"):
     """Try IOBinding-based embedding. Returns (matrix, success_bool)."""
@@ -1664,6 +1713,8 @@ def embed_passages(
     import time
 
     t_start = time.perf_counter()
+    # Blackwell: reset session every N batches before acquiring a new one.
+    _maybe_reset_blackwell_session(model)
     embedder = _embedder(model)
 
     provider = get_active_provider()
@@ -1671,7 +1722,14 @@ def embed_passages(
     if is_gpu:
         _increment_gpu_ops()
     else:
+        # CPU fallback is forbidden — this should never be reached because
+        # assert_gpu_available() crashes the daemon at startup. If somehow
+        # the provider changed at runtime, fail hard immediately.
         _increment_cpu_ops()
+        raise GPUNotAvailableError(
+            f"[GPU-REQUIRED] embed_passages reached CPU provider '{provider}'. "
+            "CPU inference is forbidden. GPU driver/ORT configuration error."
+        )
 
     total_chars = sum(len(t) for t in texts)
     avg_chars = total_chars // len(texts) if texts else 0
@@ -1733,17 +1791,6 @@ def embed_passages(
             mat = _resize_matrix(mat, dimensions)
         mat = _normalize_embeddings(mat)
 
-        # Force CUDA to release any accumulated workspace allocations after
-        # large batches. On Blackwell (SM 12.0) ONNX workspace is not freed
-        # between calls, accumulating across hundreds of batches → SIGSEGV.
-        if is_gpu:
-            try:
-                import torch as _torch
-                if _torch.cuda.is_available():
-                    _torch.cuda.synchronize()
-                    _torch.cuda.empty_cache()
-            except Exception:
-                pass
 
         t_postprocess = time.perf_counter()
         t_end = time.perf_counter()
