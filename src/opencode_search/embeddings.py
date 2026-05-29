@@ -1050,6 +1050,36 @@ def _get_gpu_vram_mb() -> int | None:
     return int(vram) if vram else None
 
 
+# Cached pynvml handle — initialized once to avoid repeated nvmlInit() overhead
+_nvml_handle = None
+_nvml_available: bool | None = None  # None = not yet probed
+
+
+def _get_gpu_temp_c() -> int | None:
+    """Return GPU temperature in Celsius using pynvml (fast, no subprocess).
+
+    Returns None if pynvml is unavailable or the query fails.
+    First call initializes nvml; subsequent calls reuse the cached handle.
+    """
+    global _nvml_handle, _nvml_available
+    if _nvml_available is False:
+        return None
+    try:
+        import pynvml  # type: ignore
+        if _nvml_handle is None:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                pynvml.nvmlInit()
+            _nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        _nvml_available = True
+        return int(pynvml.nvmlDeviceGetTemperature(_nvml_handle, pynvml.NVML_TEMPERATURE_GPU))
+    except Exception:
+        _nvml_available = False
+        _nvml_handle = None
+        return None
+
+
 def _parse_provider_env() -> list[str] | None:
     """Parse provider override from environment variables."""
 
@@ -1666,6 +1696,11 @@ def embed_passages(
             out = mat.tolist()
             del mat
             return out
+        else:
+            # IOBinding failed on the real model — disable permanently so we
+            # don't retry on every subsequent batch (avoids wasted setup overhead).
+            _set_io_binding_active(False)
+            log.info("embed[%s] IOBinding failed on real model; disabling for session", provider.upper())
 
     # Standard path (fallback or when IOBinding unavailable)
     all_items: list = []
@@ -2169,6 +2204,38 @@ def get_embed_workers_gpu(vram_mb: int | None = None) -> int:
     if vram_mb <= 0:
         return 2
     return min(6, max(2, (vram_mb - 1024) // 600))
+
+
+def get_embed_batch_chunks() -> int:
+    """Return optimal GPU batcher chunk count based on available VRAM.
+
+    Larger batches amortize CUDA kernel launch overhead and keep GPU utilization
+    high. Each chunk is ~200–500 chars of text; 512 chunks * 768-dim vectors ≈
+    1.5 MB VRAM — well within budget even on 4 GB cards when considering only
+    vector data (not ONNX model weight memory).
+
+    Override via OPENCODE_EMBED_BATCH_CHUNKS env var.
+    """
+    env = os.environ.get("OPENCODE_EMBED_BATCH_CHUNKS", "").strip()
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+
+    vram_mb = _get_gpu_vram_mb()
+    if vram_mb is None or vram_mb <= 0:
+        return 64  # no GPU detected, keep small
+
+    vram_gb = vram_mb / 1024
+    if vram_gb >= 14:
+        return 512   # RTX 5080 16GB / A100 / etc.
+    elif vram_gb >= 8:
+        return 256   # RTX 3070 / 4070 8GB
+    elif vram_gb >= 4:
+        return 128   # GTX 1650 4GB
+    else:
+        return 64    # low VRAM — keep conservative
 
 
 def _get_test_model_path() -> str:

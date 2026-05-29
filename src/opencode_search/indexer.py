@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,28 @@ from opencode_search.discover import detect_language, iter_files
 from opencode_search.storage import ChunkData, Storage
 
 log = logging.getLogger(__name__)
+
+# GPU temperature threshold above which we yield to let the card cool.
+# Default 80°C — keeps fans silent on most laptop GPUs (RTX 5080 starts
+# ramping fans around 83–85°C). Override via OPENCODE_EMBED_MAX_TEMP.
+_MAX_GPU_TEMP: int = int(os.environ.get("OPENCODE_EMBED_MAX_TEMP", "80"))
+
+
+async def _thermal_yield() -> None:
+    """Pause indexing if GPU is running hot to keep fans quiet.
+
+    Reads temperature via pynvml (fast, no subprocess). Sleep duration scales
+    linearly with excess degrees: 0.3 s per degree over threshold, capped at 10 s.
+    At threshold or below: no sleep (returns immediately).
+    """
+    from opencode_search.embeddings import _get_gpu_temp_c
+    temp = _get_gpu_temp_c()
+    if temp is None or temp <= _MAX_GPU_TEMP:
+        return
+    excess = temp - _MAX_GPU_TEMP
+    delay = min(10.0, excess * 0.3)
+    log.debug("thermal yield: GPU=%d°C (threshold=%d°C), sleeping %.1fs", temp, _MAX_GPU_TEMP, delay)
+    await asyncio.sleep(delay)
 
 
 @dataclass
@@ -166,6 +189,9 @@ class _GpuBatcher:
             self.errors += len(files)
             return
 
+        # Let GPU cool if it is running hot — keeps laptop fans silent.
+        await _thermal_yield()
+
         now_us = int(time.time() * 1_000_000)
         vi = 0
         for fr in files:
@@ -316,19 +342,29 @@ async def index_project(
     follow_symlinks: bool = True,
     progress_callback=None,
     embed_workers: int = 2,  # kept for API compat; not used in GPU-batch mode
-    file_workers: int = 4,
+    file_workers: int = 0,  # 0 = auto-scale with batch_chunks
 ) -> IndexResult:
     """Index an entire project using GPU-batched embedding.
 
     Files are read and chunked concurrently (bounded by *file_workers*) then
-    fed to a single GPU batcher that embeds up to 256 chunks per CUDA call.
-    This keeps GPU utilisation high with minimal CPU and memory overhead.
+    fed to a single GPU batcher that embeds up to ``batch_chunks`` chunks per
+    CUDA call. batch_chunks is auto-sized from VRAM (512 on 16 GB) to keep GPU
+    utilisation high while file_workers scales proportionally to keep the reader
+    pipeline saturated without wasting CPU on an idle GPU.
     """
     from opencode_search.chunker import chunk_file
+    from opencode_search.embeddings import get_embed_batch_chunks
 
     embed_model = DEFAULT_EMBED_MODEL
     dims = DEFAULT_DIMS
     t_start = time.monotonic()
+
+    batch_chunks = get_embed_batch_chunks()
+    # Scale file_workers with batch_chunks so the reader never starves the GPU:
+    # 512 batch_chunks → 8 workers; 64 batch_chunks → 4 workers.
+    # Cap at 16 to avoid excessive CPU/memory usage.
+    if file_workers == 0:
+        file_workers = min(16, max(4, batch_chunks // 64))
     file_sem = asyncio.Semaphore(max(1, file_workers))
 
     paths = list(iter_files(root, follow_symlinks=follow_symlinks))
@@ -406,8 +442,8 @@ async def index_project(
         # batch_files=2000: LanceDB triggers an expensive 63s rebase every 20
         # write transactions. With batch_files=50 → 400 txns → 20 rebases = 21 min
         # of overhead. With batch_files=2000 → ~10 txns → 0 rebases.
-        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=64, batch_files=2000,
-                              append_mode=force)
+        batcher = _GpuBatcher(storage, embed_model, dims, batch_chunks=batch_chunks,
+                              batch_files=2000, append_mode=force)
         while True:
             item = await ready_queue.get()
             if item is None:
