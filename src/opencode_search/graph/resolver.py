@@ -93,15 +93,15 @@ class CallResolver:
                     return n.id, 0.90, "same_module"
 
         # 3. Suffix of callee matches a qualified name (import_map_suffix)
+        # Use _by_suffix index for O(1) lookup, then filter by prefix — avoids O(n) scan
         parts = callee.split(".")
         if len(parts) >= 2:
             last = parts[-1]
             prefix = ".".join(parts[:-1])
-            # Look for qualified names ending with .last where the prefix fragment matches
-            candidates = []
-            for qn, n in self._by_qualified.items():
-                if qn.endswith(f".{last}") and prefix in qn:
-                    candidates.append(n)
+            candidates = [
+                n for n in self._by_suffix.get(last, [])
+                if prefix in n.qualified_name
+            ]
             if len(candidates) == 1:
                 return candidates[0].id, 0.85, "import_map_suffix"
             if len(candidates) > 1:
