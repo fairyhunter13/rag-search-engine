@@ -191,11 +191,21 @@ class Storage:
             # Validate that the stored schema matches expectations.
             stored_schema = self._table.schema
             if stored_schema.field("vector").type != schema.field("vector").type:
-                raise ValueError(
-                    f"Schema mismatch: stored vector type "
-                    f"{stored_schema.field('vector').type} != "
-                    f"expected {schema.field('vector').type}"
+                # Dim mismatch (e.g. old 512-dim budget tier vs new 768-dim model).
+                # Drop stale table and recreate with correct schema so re-indexing
+                # can proceed without manual intervention.
+                logger.warning(
+                    "Schema mismatch: stored vector type %s != expected %s; "
+                    "dropping stale table and recreating with correct dims.",
+                    stored_schema.field("vector").type,
+                    schema.field("vector").type,
                 )
+                self._db.drop_table(self.TABLE_CHUNKS)
+                self._table = self._db.create_table(
+                    self.TABLE_CHUNKS,
+                    schema=schema,
+                )
+                logger.info("Recreated chunks table (dims=%d)", self.dims)
 
     async def _ensure_config_table(self) -> None:
         existing = self._list_tables()
