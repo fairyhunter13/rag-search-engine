@@ -1544,42 +1544,49 @@ def _embed_batch_iobinding(
 
 
 def _get_onnx_batch_size() -> int:
-    """Get optimal ONNX batch size based on GPU specs.
+    """Get optimal ONNX batch size based on GPU VRAM.
 
-    Conservative scaling to avoid OOM with concurrent requests:
-    - Low-memory mode: 4 (minimal memory usage)
-    - No GPU or <4GB: 8 (CPU-optimized)
-    - 4-8GB VRAM: 8
-    - 8-16GB VRAM: 12
-    - 16-24GB VRAM: 32
-    - >24GB VRAM: 32
+    Larger ONNX batch sizes mean fewer Python→CUDA round-trips and less
+    tokenization overhead per text. Self-attention memory is O(batch × L²) but
+    at typical code chunk lengths (~300–500 tokens) even batch=128 stays well
+    under 2 GB, leaving plenty of headroom on 16 GB cards.
 
-    Note: With concurrent workers, total GPU memory usage can be
-    batch_size * workers * sequence_length. Smaller batches are more reliable.
+    Sizes:
+    - Low-memory mode: 4
+    - No GPU: 8 (CPU-safe)
+    - <8 GB VRAM: 16
+    - 8–14 GB VRAM: 32
+    - ≥14 GB VRAM: 128 (RTX 5080 16 GB: 7.8 GB free → safe)
+
+    Override via OPENCODE_ONNX_BATCH_SIZE env var.
     """
-    # Check for low-memory mode override
+    env = os.environ.get("OPENCODE_ONNX_BATCH_SIZE", "").strip()
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+
     if _LOW_MEMORY_MODE:
         return 4
 
     if not is_gpu_available():
-        return 8  # CPU optimal
+        return 8
 
     vram_mb = _get_gpu_vram_mb()
     if vram_mb is None:
         log.info("Could not detect GPU VRAM, using default batch_size=8")
         return 8
 
-    # Round up: 16303MB / 1024 = 15.92GB → treat as 16GB to avoid off-by-one bucket
     vram_gb = vram_mb / 1024
 
     if vram_gb < 8:
-        batch_size = 6
-    elif vram_gb < 15:
-        # 8-15GB: moderate VRAM; stay conservative
-        batch_size = 8
-    else:
-        # >=15GB (including RTX 5080 Laptop at 15.92GB): large batches are safe
+        batch_size = 16
+    elif vram_gb < 14:
         batch_size = 32
+    else:
+        # ≥14 GB (RTX 5080 Laptop 15.9 GB, etc.) — large batches safe
+        batch_size = 128
 
     log.info("Auto-configured ONNX batch_size=%d for %.1fGB VRAM", batch_size, vram_gb)
     return batch_size
@@ -2181,9 +2188,9 @@ _LOW_END: bool = _cpus <= 4 or _ram_mb <= 8192
 _HIGH_END: bool = _cpus >= 16 and _ram_mb >= 32768
 
 # Sub-batch size for chunked ONNX inference — hardware adaptive.
-# _embed_batch_iobinding now loops internally in chunks of get_onnx_batch_size()
-# so this value only controls how many results are gathered before normalization,
-# not peak VRAM (the OOM guard is inside the IOBinding function).
+# This controls how many texts are passed to embedder.embed() at once.
+# With ONNX batch_size=128 and _EMBED_SUB_BATCH=512: ceil(512/128)=4 kernel
+# calls per embed_passages invocation (vs 16 when batch_size=32+sub_batch=256).
 _EMBED_SUB_BATCH: int
 if os.environ.get("OPENCODE_EMBED_SUB_BATCH"):
     _EMBED_SUB_BATCH = int(os.environ["OPENCODE_EMBED_SUB_BATCH"])
@@ -2192,9 +2199,9 @@ elif os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "y
 elif _LOW_END:
     _EMBED_SUB_BATCH = 64
 elif _HIGH_END:
-    _EMBED_SUB_BATCH = 256
+    _EMBED_SUB_BATCH = 512   # ≥16 CPUs + ≥32 GB RAM: pass all batch_chunks in one sub-batch
 else:
-    _EMBED_SUB_BATCH = 192
+    _EMBED_SUB_BATCH = 256
 
 
 def get_embed_workers_gpu(vram_mb: int | None = None) -> int:

@@ -473,6 +473,7 @@ class ClaudeCodeClient(LLMClient):
             result = subprocess.run(
                 cmd,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=self.timeout,
             )
@@ -557,6 +558,7 @@ class CodexClient(LLMClient):
             result = subprocess.run(
                 cmd,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=self.timeout,
             )
