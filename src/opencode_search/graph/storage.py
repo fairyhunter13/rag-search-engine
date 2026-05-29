@@ -218,6 +218,17 @@ class GraphStorage:
                 (community_id, node_id),
             )
 
+    def set_community_batch(self, assignments: dict[str, int]) -> None:
+        """Write community assignments for many nodes in a single transaction."""
+        if not assignments:
+            return
+        db = self._db()
+        with db:
+            db.executemany(
+                "UPDATE nodes SET community_id=? WHERE id=?",
+                [(cid, nid) for nid, cid in assignments.items()],
+            )
+
     def upsert_community(self, community: CommunityData) -> None:
         import json
         db = self._db()

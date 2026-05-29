@@ -256,21 +256,33 @@ def _build_graph_sync(
             max_workers = min(4, cpu_count() or 1)
             batch_size = 200
 
+            _GRAPH_EXTRACT_MAX_BYTES = 512 * 1024  # skip files larger than 512 KB
+
             def _extract_one(file_path: Path) -> tuple:
                 try:
+                    if file_path.stat().st_size > _GRAPH_EXTRACT_MAX_BYTES:
+                        return [], []
                     text = file_path.read_text(encoding="utf-8", errors="replace")
                     lang = language_for_file(str(file_path))
                     return extractor.extract_file(str(file_path), text, lang)
                 except Exception:  # noqa: BLE001
                     return [], []
 
+            total_files = len(files)
+            processed = 0
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for i in range(0, len(files), batch_size):
+                for i in range(0, total_files, batch_size):
                     batch = files[i: i + batch_size]
                     results = list(pool.map(_extract_one, batch))
                     for nodes, raw_edges in results:
                         all_nodes.extend(nodes)
                         all_raw_edges.extend(raw_edges)
+                    processed += len(batch)
+                    if processed % 1000 < batch_size or processed == total_files:
+                        log.info(
+                            "graph extract: %d/%d files, %d nodes so far",
+                            processed, total_files, len(all_nodes),
+                        )
 
             # Resolve calls (full graph pass when within memory cap)
             if len(all_nodes) <= _GRAPH_RESOLVER_MAX_NODES:
