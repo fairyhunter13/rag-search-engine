@@ -1733,6 +1733,18 @@ def embed_passages(
             mat = _resize_matrix(mat, dimensions)
         mat = _normalize_embeddings(mat)
 
+        # Force CUDA to release any accumulated workspace allocations after
+        # large batches. On Blackwell (SM 12.0) ONNX workspace is not freed
+        # between calls, accumulating across hundreds of batches → SIGSEGV.
+        if is_gpu:
+            try:
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         t_postprocess = time.perf_counter()
         t_end = time.perf_counter()
         if log.isEnabledFor(logging.INFO):
@@ -2234,13 +2246,17 @@ def get_embed_batch_chunks() -> int:
 
     vram_gb = vram_mb / 1024
     if vram_gb >= 14:
-        return 512   # RTX 5080 16GB / A100 / etc.
+        # RTX 5080 16 GB: cap at 128. Blackwell (SM 12.0) ONNX-CUDA workspace
+        # does not free between calls; 512-chunk batches of long-text files
+        # (~1900 chars) exhaust 4.6 GB free VRAM after 2–3 flush cycles → SIGSEGV.
+        # 128 keeps peak activation ≤1 GB, avoids workspace fragmentation.
+        return 128
     elif vram_gb >= 8:
-        return 256   # RTX 3070 / 4070 8GB
+        return 128   # conservative for non-Blackwell 8-16 GB cards
     elif vram_gb >= 4:
-        return 128   # GTX 1650 4GB
+        return 64    # GTX 1650 4GB
     else:
-        return 64    # low VRAM — keep conservative
+        return 32    # low VRAM — keep conservative
 
 
 def _get_test_model_path() -> str:
