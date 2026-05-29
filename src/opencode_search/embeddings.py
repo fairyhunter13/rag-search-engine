@@ -1546,19 +1546,17 @@ def _embed_batch_iobinding(
 def _get_onnx_batch_size() -> int:
     """Get optimal ONNX batch size based on GPU VRAM.
 
-    Larger ONNX batch sizes mean fewer Python→CUDA round-trips and less
-    tokenization overhead per text. Self-attention memory is O(batch × L²) but
-    at typical code chunk lengths (~300–500 tokens) even batch=128 stays well
-    under 2 GB, leaving plenty of headroom on 16 GB cards.
+    Self-attention memory is O(batch × L²). At seq_len=1024 and batch=32:
+    activation ≈ 800 MB — safe on 16 GB with 11 GB already used by model +
+    CUDA workspace. Increasing to 64 or 128 causes OOM on this configuration.
+    Override via OPENCODE_ONNX_BATCH_SIZE env var for manual tuning.
 
     Sizes:
     - Low-memory mode: 4
     - No GPU: 8 (CPU-safe)
-    - <8 GB VRAM: 16
-    - 8–14 GB VRAM: 32
-    - ≥14 GB VRAM: 128 (RTX 5080 16 GB: 7.8 GB free → safe)
-
-    Override via OPENCODE_ONNX_BATCH_SIZE env var.
+    - <8 GB VRAM: 6
+    - 8–14 GB VRAM: 8
+    - ≥14 GB VRAM: 32 (RTX 5080 16 GB with seq_len≤1024 — proven safe)
     """
     env = os.environ.get("OPENCODE_ONNX_BATCH_SIZE", "").strip()
     if env:
@@ -1581,12 +1579,12 @@ def _get_onnx_batch_size() -> int:
     vram_gb = vram_mb / 1024
 
     if vram_gb < 8:
-        batch_size = 16
+        batch_size = 6
     elif vram_gb < 14:
-        batch_size = 32
+        batch_size = 8
     else:
-        # ≥14 GB (RTX 5080 Laptop 15.9 GB, etc.) — large batches safe
-        batch_size = 128
+        # ≥14 GB (RTX 5080 Laptop 15.9 GB, etc.): 32 is proven safe at seq_len≤1024
+        batch_size = 32
 
     log.info("Auto-configured ONNX batch_size=%d for %.1fGB VRAM", batch_size, vram_gb)
     return batch_size
@@ -2199,7 +2197,7 @@ elif os.environ.get("OPENCODE_EMBED_LOW_MEMORY", "").strip() in ("1", "true", "y
 elif _LOW_END:
     _EMBED_SUB_BATCH = 64
 elif _HIGH_END:
-    _EMBED_SUB_BATCH = 512   # ≥16 CPUs + ≥32 GB RAM: pass all batch_chunks in one sub-batch
+    _EMBED_SUB_BATCH = 256
 else:
     _EMBED_SUB_BATCH = 256
 
