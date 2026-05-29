@@ -170,6 +170,10 @@ def migrate_project_entry(entry: "ProjectEntry") -> bool:
         entry.indexed_at = None
 
     entry.db_path = canonical_db_path
+    # Always ensure dims matches DEFAULT_DIMS after migration — old entries may
+    # have stale dims=512 from a budget-tier run even after db_path was updated.
+    if entry.dims != DEFAULT_DIMS:
+        entry.dims = DEFAULT_DIMS
     return True
 
 
@@ -216,6 +220,12 @@ def load_registry() -> dict[str, ProjectEntry]:
         changed = False
         for entry in entries.values():
             changed = migrate_project_entry(entry) or changed
+            # Also fix stale dims that weren't caught by migration (e.g., entry
+            # was already at canonical db_path but still had dims=512 from an
+            # old tier-based run).
+            if entry.dims != DEFAULT_DIMS:
+                entry.dims = DEFAULT_DIMS
+                changed = True
         if changed:
             save_registry(entries)
         return entries
