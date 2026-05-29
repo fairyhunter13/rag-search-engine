@@ -33,15 +33,26 @@ class CallResolver:
 
     def __init__(self, nodes: list[NodeData]) -> None:
         from collections import defaultdict
-        # Build lookup indexes
+        # Build lookup indexes — all O(1) at query time
         self._by_qualified: dict[str, NodeData] = {}
         self._by_name: dict[str, list[NodeData]] = defaultdict(list)
         self._by_file: dict[str, list[NodeData]] = defaultdict(list)
+        self._by_suffix: dict[str, list[NodeData]] = defaultdict(list)  # last name segment → nodes
+        self._id_to_file: dict[str, str] = {}  # node_id → file path
 
         for n in nodes:
             self._by_qualified[n.qualified_name] = n
             self._by_name[n.name].append(n)
             self._by_file[n.file].append(n)
+            self._by_suffix[n.name].append(n)
+            # Also index by last segment of qualified_name for dotted names
+            last_seg = n.qualified_name.rsplit(".", 1)[-1]
+            if last_seg != n.name:
+                self._by_suffix[last_seg].append(n)
+            self._id_to_file[n.id] = n.file
+
+        # Pre-compute qualified name list for fuzzy matching — built once, not per edge
+        self._all_qualified: list[str] = list(self._by_qualified.keys())
 
     def resolve(self, raw_edges: list[_RawEdge]) -> list[EdgeData]:
         """Convert _RawEdge list to real EdgeData, dropping unresolvable ones."""
@@ -119,12 +130,9 @@ class CallResolver:
             if len(non_file) == 1:
                 return non_file[0].id, 0.75, "unique_name"
 
-        # 5. Suffix match
+        # 5. Suffix match — O(1) via pre-built suffix index
         target = callee.split(".")[-1]
-        suffix_candidates = [
-            n for n in self._by_qualified.values()
-            if n.qualified_name.endswith(f".{target}") or n.name == target
-        ]
+        suffix_candidates = self._by_suffix.get(target, [])
         if len(suffix_candidates) == 1:
             return suffix_candidates[0].id, 0.55, "suffix_match"
         if len(suffix_candidates) > 1 and caller_file:
@@ -132,18 +140,13 @@ class CallResolver:
                 if n.file == caller_file:
                     return n.id, 0.55, "suffix_match"
 
-        # 6. Fuzzy
-        all_qualified = list(self._by_qualified.keys())
-        close = difflib.get_close_matches(callee, all_qualified, n=1, cutoff=0.8)
+        # 6. Fuzzy — uses pre-computed list (not rebuilt per edge)
+        close = difflib.get_close_matches(callee, self._all_qualified, n=1, cutoff=0.8)
         if close:
             return self._by_qualified[close[0]].id, 0.30, "fuzzy"
 
         return None, 0.0, None
 
     def _file_for_id(self, node_id: str) -> str | None:
-        """Find the file path for a given node ID."""
-        for file_nodes in self._by_file.values():
-            for n in file_nodes:
-                if n.id == node_id:
-                    return n.file
-        return None
+        """Find the file path for a given node ID — O(1) via pre-built index."""
+        return self._id_to_file.get(node_id)
