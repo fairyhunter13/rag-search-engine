@@ -74,9 +74,8 @@ class CommunityDetector:
                 node_id_to_community[nid] = community_id
                 community_members[community_id].append(nid)
 
-        # Batch-write community assignments
-        for nid, cid in node_id_to_community.items():
-            storage.set_community(nid, cid)
+        # Batch-write all community assignments in a single SQLite transaction
+        storage.set_community_batch(node_id_to_community)
 
         # Write community records with entry points
         for cid, member_ids in community_members.items():
