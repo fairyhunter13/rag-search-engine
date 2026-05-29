@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from opencode_search.graph.storage import EdgeData, GraphStorage
+    from opencode_search.graph.storage import GraphStorage
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class CommunityDetector:
             seed=42,
         )
 
-        # Build mapping and write back
+        # Build mapping
         node_id_to_community: dict[str, int] = {}
         community_members: dict[int, list[str]] = defaultdict(list)
 
@@ -74,17 +74,38 @@ class CommunityDetector:
                 node_id_to_community[nid] = community_id
                 community_members[community_id].append(nid)
 
+        # Compute cross-community inbound counts in ONE pass over all edges
+        # (previously called _find_entry_points per community = O(communities × edges))
+        id_to_node = {n.id: n for n in nodes}
+        inbound: dict[str, int] = defaultdict(int)
+        for e in edges:
+            if e.kind == "CALLS":
+                fc = node_id_to_community.get(e.from_id)
+                tc = node_id_to_community.get(e.to_id)
+                if fc is not None and tc is not None and fc != tc:
+                    inbound[e.to_id] += 1
+
+        # Group top-5 entry points per community
+        entry_counts: dict[int, list[tuple[str, int]]] = defaultdict(list)
+        for nid, cnt in inbound.items():
+            cid = node_id_to_community.get(nid)
+            if cid is not None:
+                entry_counts[cid].append((nid, cnt))
+
         # Batch-write all community assignments in a single SQLite transaction
         storage.set_community_batch(node_id_to_community)
 
-        # Write community records with entry points
+        # Batch-write all community records in a single transaction
+        community_records = []
         for cid, member_ids in community_members.items():
-            entry_points = _find_entry_points(member_ids, set(member_ids), edges, storage)
-            storage.upsert_community(CommunityData(
+            top = sorted(entry_counts.get(cid, []), key=lambda x: -x[1])[:5]
+            ep = [id_to_node[nid].qualified_name for nid, _ in top if nid in id_to_node]
+            community_records.append(CommunityData(
                 id=cid,
                 node_count=len(member_ids),
-                key_entry_points=entry_points,
+                key_entry_points=ep,
             ))
+        storage.upsert_communities_batch(community_records)
 
         log.debug(
             "community detection: %d nodes → %d communities",
@@ -94,23 +115,3 @@ class CommunityDetector:
         return node_id_to_community
 
 
-def _find_entry_points(
-    member_ids: list[str],
-    member_set: set[str],
-    all_edges: list[EdgeData],
-    storage: GraphStorage,
-    top_n: int = 5,
-) -> list[str]:
-    """Find community entry points: nodes with most inbound edges from outside."""
-    inbound: dict[str, int] = defaultdict(int)
-    for e in all_edges:
-        if e.kind == "CALLS" and e.to_id in member_set and e.from_id not in member_set:
-            inbound[e.to_id] += 1
-
-    top_ids = sorted(inbound, key=lambda x: -inbound[x])[:top_n]
-    result = []
-    for nid in top_ids:
-        n = storage.get_node_by_id(nid)
-        if n:
-            result.append(n.qualified_name)
-    return result

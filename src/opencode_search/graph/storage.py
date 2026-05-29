@@ -254,6 +254,35 @@ class GraphStorage:
                 ),
             )
 
+    def upsert_communities_batch(self, communities: list[CommunityData]) -> None:
+        """Write all community records in a single transaction."""
+        import json
+        if not communities:
+            return
+        db = self._db()
+        now = _now()
+        with db:
+            db.executemany(
+                """INSERT INTO communities
+                   (id, title, summary, node_count, key_entry_points, generated_at, created_at)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     title=excluded.title,
+                     summary=excluded.summary,
+                     node_count=excluded.node_count,
+                     key_entry_points=excluded.key_entry_points,
+                     generated_at=excluded.generated_at
+                """,
+                [
+                    (
+                        c.id, c.title, c.summary, c.node_count,
+                        json.dumps(c.key_entry_points),
+                        c.generated_at, c.created_at or now,
+                    )
+                    for c in communities
+                ],
+            )
+
     def set_node_intent(self, node_id: str, intent: str, intent_at: str) -> None:
         db = self._db()
         with db:
