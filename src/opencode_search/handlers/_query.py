@@ -23,6 +23,7 @@ async def handle_search_code(
     project_paths: list[str] | None = None,
     top_k: int = FINAL_TOP_K,
     use_rerank: bool = True,
+    content_types: list[str] | None = None,
 ) -> dict[str, Any]:
     """Search indexed projects for code matching the query."""
     if not query.strip():
@@ -47,6 +48,11 @@ async def handle_search_code(
     except ValueError as exc:
         return {"error": str(exc)}
     elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    if content_types:
+        ct_set = set(content_types)
+        results = [r for r in results if r.language in ct_set]
+
     top_score = results[0].score if results else None
     record_search(elapsed_ms, len(results), top_score)
     with contextlib.suppress(Exception):
@@ -104,7 +110,6 @@ async def handle_project_status(path: str) -> dict[str, Any]:
     return {
         "indexed": True,
         "path": project_path,
-        "tier": entry.tier,
         "db_path": str(entry.db_path),
         "chunks": chunk_count,
         "watching": watching,
@@ -122,7 +127,6 @@ async def handle_list_indexed_projects() -> dict[str, Any]:
         "projects": [
             {
                 "path": p.path,
-                "tier": p.tier,
                 "db_path": str(p.db_path),
                 "watching": p.path in active or p.watch,
                 "indexed_at": p.indexed_at,

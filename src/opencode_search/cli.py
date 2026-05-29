@@ -49,7 +49,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-async def _index_and_wait(path, tier, watch, force, follow_symlinks):
+async def _index_and_wait(path, watch, force, follow_symlinks):
     """Call handle_index_project and block until the background task finishes.
 
     handle_index_project() is fire-and-forget (returns status=indexing
@@ -75,7 +75,7 @@ async def _index_and_wait(path, tier, watch, force, follow_symlinks):
         print(f"\r  {current}/{total} files ({pct}%)", end="", flush=True, file=sys.stderr)
 
     initial = await handle_index_project(
-        path=path, tier=tier, watch=watch, force=force,
+        path=path, watch=watch, force=force,
         follow_symlinks=follow_symlinks, on_complete=_capture, on_progress=_progress,
     )
 
@@ -105,7 +105,6 @@ def _print_index_result(result: dict) -> None:
         raise typer.Exit(code=1)
     typer.echo(
         f"Indexed {result['path']}\n"
-        f"  tier:          {result['tier']}\n"
         f"  files indexed: {result['files_indexed']}\n"
         f"  files skipped: {result.get('files_unchanged', 0)}\n"
         f"  chunks total:  {result.get('chunks_total', 0)}\n"
@@ -118,14 +117,13 @@ def _print_index_result(result: dict) -> None:
 @app.command()
 def init(
     path: str = typer.Argument(".", help="Project root directory to index. Defaults to current directory."),
-    tier: str = typer.Option("balanced", help="Embedding tier: budget | balanced | premium."),
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
     follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Initialize semantic indexing for a project, defaulting to the current directory."""
-    result = _run(_index_and_wait(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
+    result = _run(_index_and_wait(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks))
     if json_output:
         _print_json(result)
         return
@@ -135,14 +133,13 @@ def init(
 @app.command()
 def index(
     path: str = typer.Argument(..., help="Project root directory to index."),
-    tier: str = typer.Option("balanced", help="Embedding tier: budget | balanced | premium."),
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
     follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Index a project directory for semantic code search."""
-    result = _run(_index_and_wait(path=path, tier=tier, watch=watch, force=force, follow_symlinks=follow_symlinks))
+    result = _run(_index_and_wait(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks))
     if json_output:
         _print_json(result)
         return
@@ -237,7 +234,6 @@ def status(
             return
         typer.echo(
             f"Project: {result['path']}\n"
-            f"  tier:     {result['tier']}\n"
             f"  chunks:   {result.get('chunks', 'unknown')}\n"
             f"  watching: {result['watching']}\n"
             f"  indexed_at: {result.get('indexed_at', 'unknown')}"
@@ -254,7 +250,7 @@ def status(
             return
         for p in projects:
             watching = "watching" if p["watching"] else "idle"
-            typer.echo(f"  [{watching}] {p['path']}  tier={p['tier']}")
+            typer.echo(f"  [{watching}] {p['path']}")
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +277,7 @@ def list_cmd(
 
     for p in projects:
         watching = "watching" if p["watching"] else "idle"
-        typer.echo(f"  [{watching}] {p['path']}  tier={p['tier']}  indexed_at={p.get('indexed_at', '?')}")
+        typer.echo(f"  [{watching}] {p['path']}  indexed_at={p.get('indexed_at', '?')}")
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +288,6 @@ def list_cmd(
 @app.command()
 def watch(
     path: str = typer.Argument(..., help="Project root to watch for file changes."),
-    tier: str | None = typer.Option(None, help="Embedding tier. Defaults to the tier already in the registry, or 'budget' for new projects."),
 ) -> None:
     """Start a live file-watcher for a project (incremental re-indexing on change).
 
@@ -303,24 +298,17 @@ def watch(
     """
     from pathlib import Path
 
-    from opencode_search.config import load_registry
     from opencode_search.watcher import watcher_manager
 
     project_path = str(Path(path).expanduser().resolve())
-    # Use the persisted tier if the project is already indexed, so the watcher
-    # stays consistent with the existing index without requiring --tier on every call.
-    if tier is None:
-        registry = load_registry()
-        entry = registry.get(project_path)
-        tier = entry.tier if entry is not None else "budget"
-    typer.echo(f"Starting watcher for {path} (tier={tier}) — press Ctrl+C to stop.")
+    typer.echo(f"Starting watcher for {path} — press Ctrl+C to stop.")
 
     async def _watch_forever() -> None:
         # Use _index_and_wait so we block until the background task completes
         # and get the real {status: "ok"} result. handle_index_project() alone
         # returns {status: "indexing"} immediately, which would cause a
         # false-positive RuntimeError here before the watcher is started.
-        result = await _index_and_wait(path=path, tier=tier, watch=True, force=False, follow_symlinks=True)
+        result = await _index_and_wait(path=path, watch=True, force=False, follow_symlinks=True)
         if "error" in result or result.get("status") not in ("ok", "indexing"):
             raise RuntimeError(result.get("error", f"watch start failed: {result}"))
 
@@ -514,7 +502,7 @@ def clean_orphans(
         return
 
     orphans: list[str] = []
-    for candidate in sorted(index_root.glob("*/index_*")):
+    for candidate in sorted(index_root.glob("*/index*")):
         if str(candidate) not in known_dbs:
             orphans.append(str(candidate))
 

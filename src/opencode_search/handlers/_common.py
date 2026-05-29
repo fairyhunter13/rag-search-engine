@@ -16,7 +16,6 @@ from opencode_search.config import (
 log = logging.getLogger(__name__)
 
 _LAST_ACTIVE_UPDATE_INTERVAL_S: int = 3600  # throttle registry writes to once per hour
-_VALID_TIERS = {"premium", "balanced", "budget"}
 
 # Shared across _index.py (writer) and _query.py (reader)
 _indexing_status: dict[str, dict[str, Any]] = {}

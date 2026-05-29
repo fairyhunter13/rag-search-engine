@@ -14,6 +14,7 @@ pytest.importorskip("pyarrow")
 
 from opencode_search import config
 from opencode_search.chunker import Chunk
+from opencode_search.config import DEFAULT_DIMS
 from opencode_search.handlers import handle_search_code
 from opencode_search.search import clear_search_cache
 from opencode_search.storage import Storage
@@ -56,7 +57,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
 
-    dims = config.get_tier_dims("budget")
+    dims = DEFAULT_DIMS
 
     def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
@@ -73,7 +74,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        first = await index_and_wait(str(project_root), tier="budget")
+        first = await index_and_wait(str(project_root))
         assert first["status"] == "ok"
         assert first["chunks_total"] == 3
 
@@ -87,7 +88,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
 
         source_file.write_text("alpha\n")
 
-        second = await index_and_wait(str(project_root), tier="budget")
+        second = await index_and_wait(str(project_root))
         assert second["status"] == "ok"
         assert second["chunks_total"] == 1
 
@@ -100,7 +101,7 @@ async def test_reindex_shrinks_chunks_and_removes_searchable_stale_content(tmp_p
         assert not any(row["content"] == "gamma" for row in after["results"])
 
     storage = Storage(
-        db_path=config.get_project_db_path(project_root, "budget"),
+        db_path=config.get_project_db_path(project_root),
         dims=dims,
     )
     await storage.open()
@@ -122,9 +123,9 @@ async def test_legacy_local_index_is_migrated_to_centralized_root(tmp_path, monk
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
 
-    dims = config.get_tier_dims("budget")
-    legacy_db_path = project_root / ".opencode" / "index_budget"
-    canonical_db_path = Path(config.get_project_db_path(project_root, "budget"))
+    dims = DEFAULT_DIMS
+    legacy_db_path = project_root / ".opencode" / "index_old"
+    canonical_db_path = Path(config.get_project_db_path(project_root))
 
     def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
@@ -141,7 +142,7 @@ async def test_legacy_local_index_is_migrated_to_centralized_root(tmp_path, monk
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        indexed = await index_and_wait(str(project_root), tier="budget")
+        indexed = await index_and_wait(str(project_root))
         assert indexed["status"] == "ok"
         assert canonical_db_path.exists()
 
@@ -155,7 +156,6 @@ async def test_legacy_local_index_is_migrated_to_centralized_root(tmp_path, monk
                     str(project_root): {
                         "path": str(project_root),
                         "db_path": str(legacy_db_path),
-                        "tier": "budget",
                         "dims": dims,
                         "watch": False,
                     }
@@ -203,7 +203,7 @@ async def test_search_prefers_source_over_stale_docs(tmp_path, monkeypatch):
 
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
-    dims = config.get_tier_dims("budget")
+    dims = DEFAULT_DIMS
 
     def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
@@ -220,7 +220,7 @@ async def test_search_prefers_source_over_stale_docs(tmp_path, monkeypatch):
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        indexed = await index_and_wait(str(project_root), tier="budget")
+        indexed = await index_and_wait(str(project_root))
         assert indexed["status"] == "ok"
 
         clear_search_cache()
@@ -250,7 +250,7 @@ async def test_federated_and_symlinked_projects_return_valid_results(tmp_path, m
 
     registry_path = tmp_path / "registry.json"
     monkeypatch.setattr(config, "REGISTRY_PATH", registry_path)
-    dims = config.get_tier_dims("budget")
+    dims = DEFAULT_DIMS
 
     def fake_embed_passages(texts, *, model, dimensions, _return_numpy=False):
         assert dimensions == dims
@@ -267,8 +267,8 @@ async def test_federated_and_symlinked_projects_return_valid_results(tmp_path, m
     with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
          patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
          patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
-        indexed_root = await index_and_wait(str(root_project), tier="budget")
-        indexed_other = await index_and_wait(str(other_project), tier="budget")
+        indexed_root = await index_and_wait(str(root_project))
+        indexed_other = await index_and_wait(str(other_project))
         assert indexed_root["status"] == "ok"
         assert indexed_other["status"] == "ok"
 

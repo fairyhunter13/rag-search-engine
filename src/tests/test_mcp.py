@@ -100,8 +100,8 @@ async def test_index_project_tool_callable():
                                        "files_unchanged": 0, "files_removed": 0,
                                        "chunks_total": 0, "errors": 0,
                                        "elapsed_s": 0.1, "watching": False,
-                                       "path": "/tmp/x", "tier": "balanced"})):
-        result = await mod.index_project(path="/tmp/x", tier="balanced")
+                                       "path": "/tmp/x"})):
+        result = await mod.index_project(path="/tmp/x")
     assert result is not None
 
 
@@ -109,7 +109,7 @@ async def test_index_project_tool_callable():
 async def test_index_project_auto_starts_watch_for_matching_open_client():
     mod = _import_mcp()
 
-    async def _fake_handle(*, path, tier, watch, force, follow_symlinks, on_complete=None):
+    async def _fake_handle(*, path, watch, force, follow_symlinks, on_complete=None):
         ok_result = {"status": "ok", "path": "/tmp/proj", "watching": False}
         if on_complete:
             await on_complete(ok_result)
@@ -119,7 +119,7 @@ async def test_index_project_auto_starts_watch_for_matching_open_client():
          patch.object(mod.runtime_state, "bind_clients_to_project", return_value=1) as mock_bind, \
          patch("opencode_search.mcp.handle_ensure_project_watching",
                AsyncMock(return_value={"status": "ok"})) as mock_watch:
-        result = await mod.index_project(path="/tmp/proj", tier="balanced")
+        result = await mod.index_project(path="/tmp/proj")
 
     assert result["status"] == "indexing"
     mock_bind.assert_called_once_with("/tmp/proj")
@@ -208,8 +208,7 @@ async def test_resume_watchers_starts_watcher_for_watched_entries():
     mod = _import_mcp()
     entry = ProjectEntry(
         path="/tmp/watched",
-        db_path=get_project_db_path("/tmp/watched", "balanced"),
-        tier="balanced",
+        db_path=get_project_db_path("/tmp/watched"),
         dims=768,
         watch=True,
     )

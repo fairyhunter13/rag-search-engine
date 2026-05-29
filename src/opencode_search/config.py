@@ -63,27 +63,32 @@ REGISTRY_PATH: Path = Path(
 )
 
 # ---------------------------------------------------------------------------
-# Tier model definitions  (must match embeddings.py TIER_MODELS)
+# Single model pair — code-specific embedding + fast reranker
+# jina-v2-base-code: only code-specific ONNX model in FastEmbed (768 dims, 0.64 GB)
+# jina-reranker-v1-turbo-en: distilled, 5× smaller than bge-reranker-base (0.15 GB)
+# Combined VRAM: ~0.79 GB
 # ---------------------------------------------------------------------------
-_TIER_MODELS: dict[str, tuple[str, str]] = {
-    "premium": (
-        "jinaai/jina-embeddings-v2-base-code",
-        "jinaai/jina-reranker-v2-base-multilingual",
-    ),
-    "balanced": (
-        "jinaai/jina-embeddings-v2-base-en",
-        "jinaai/jina-reranker-v1-turbo-en",
-    ),
-    "budget": (
-        "jinaai/jina-embeddings-v2-small-en",
-        "Xenova/ms-marco-MiniLM-L-6-v2",
-    ),
-}
+DEFAULT_EMBED_MODEL: str = os.environ.get(
+    "OPENCODE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code"
+)
+DEFAULT_RERANK_MODEL: str = os.environ.get(
+    "OPENCODE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en"
+)
+DEFAULT_DIMS: int = 768
 
-_TIER_DIMS: dict[str, int] = {
-    "premium": 768,
-    "balanced": 768,
+# ---------------------------------------------------------------------------
+# LLM enrichment defaults (Ollama, phi4-mini is quiet and capable on 3 GB VRAM)
+# ---------------------------------------------------------------------------
+DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama")
+DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "phi4-mini:3.8b")
+DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "2048"))
+DEFAULT_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
+
+# Legacy tier suffix → dims mapping used only during migration
+_LEGACY_TIER_DIMS: dict[str, int] = {
     "budget": 512,
+    "balanced": 768,
+    "premium": 768,
 }
 
 
@@ -105,56 +110,49 @@ def get_project_index_dir(project_path: str | Path) -> Path:
     return get_index_root() / f"{slug}-{digest}"
 
 
-def get_project_db_path(project_path: str | Path, tier: str) -> str:
-    """Return the centralized LanceDB path for the project+tier pair."""
-    return str(get_project_index_dir(project_path) / f"index_{tier}")
+def get_project_db_path(project_path: str | Path) -> str:
+    """Return the centralized LanceDB path for the project."""
+    return str(get_project_index_dir(project_path) / "index")
 
 
-def get_legacy_project_db_path(project_path: str | Path, tier: str) -> str:
-    """Return the historical per-project LanceDB path for compatibility checks."""
-    resolved = Path(project_path).expanduser().resolve()
-    return str(resolved / ".opencode" / f"index_{tier}")
+def get_project_graph_db_path(project_path: str | Path) -> str:
+    """Return the SQLite graph DB path for a project."""
+    return str(get_project_index_dir(project_path) / "graph.db")
 
 
-def get_tier_models(tier: str) -> tuple[str, str]:
-    """Return (embed_model, rerank_model) for the given tier name.
-
-    Raises ValueError for unknown tiers.
-    """
-    try:
-        return _TIER_MODELS[tier]
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown tier {tier!r}. Valid tiers: {list(_TIER_MODELS)}"
-        ) from exc
+def get_project_wiki_dir(project_path: str | Path) -> Path:
+    """Return the wiki directory for a project (outside project root)."""
+    return get_project_index_dir(project_path) / "wiki"
 
 
-def get_tier_dims(tier: str) -> int:
-    """Return embedding dimensionality for the given tier name.
-
-    Raises ValueError for unknown tiers.
-    """
-    try:
-        return _TIER_DIMS[tier]
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown tier {tier!r}. Valid tiers: {list(_TIER_DIMS)}"
-        ) from exc
+def get_project_raw_dir(project_path: str | Path) -> Path:
+    """Return the raw/ directory for user-supplied docs for a project."""
+    return get_project_index_dir(project_path) / "raw"
 
 
 def migrate_project_entry(entry: "ProjectEntry") -> bool:
-    """Normalize a registry entry to the centralized index root.
+    """Normalize a registry entry to the tier-free centralized index root.
 
-    If the entry still points at the legacy per-project path and that directory
-    exists, move it into the centralized root so indexed data is preserved.
+    Handles two migration cases:
+    1. Old per-project path (.opencode/index_<tier>) → centralized root
+    2. Old tier-suffixed path (index_budget/balanced/premium) → tier-free "index"
+       In this case indexed_at is nulled because dims may have changed (512→768).
     """
-    canonical_db_path = get_project_db_path(entry.path, entry.tier)
+    canonical_db_path = get_project_db_path(entry.path)
     if entry.db_path == canonical_db_path:
         return False
 
     current_path = Path(entry.db_path).expanduser()
     canonical_path = Path(canonical_db_path).expanduser()
-    if current_path.exists() and not canonical_path.exists():
+
+    # Detect legacy tier-suffixed paths; these are dimensionally incompatible.
+    current_name = current_path.name
+    is_tier_suffixed = any(
+        current_name == f"index_{tier}" for tier in _LEGACY_TIER_DIMS
+    )
+
+    if current_path.exists() and not canonical_path.exists() and not is_tier_suffixed:
+        # Safe to move: same dims, different location only.
         canonical_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.move(str(current_path), str(canonical_path))
@@ -166,6 +164,10 @@ def migrate_project_entry(entry: "ProjectEntry") -> bool:
                 exc,
             )
             return False
+    elif is_tier_suffixed:
+        # Dims changed (budget=512 → new=768); old vectors are incompatible.
+        # Null indexed_at to force re-index; leave old data on disk for user to clean up.
+        entry.indexed_at = None
 
     entry.db_path = canonical_db_path
     return True
@@ -181,8 +183,7 @@ class ProjectEntry:
 
     path: str
     db_path: str
-    tier: str
-    dims: int
+    dims: int = DEFAULT_DIMS
     indexed_at: str | None = None    # ISO-8601 timestamp or None
     file_count: int = 0
     last_active: str | None = None   # ISO-8601 timestamp or None

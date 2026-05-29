@@ -55,13 +55,26 @@ from opencode_search.daemon import (
 )
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
+    handle_detect_impact,
+    handle_enrich_project,
     handle_ensure_project_watching,
+    handle_get_callers,
+    handle_get_callees,
+    handle_get_communities,
+    handle_get_symbol,
+    handle_get_symbol_intent,
+    handle_global_search,
     handle_index_project,
     handle_list_indexed_projects,
     handle_project_status,
     handle_release_project_watch,
     handle_search_code,
     handle_stop_watching,
+    handle_trace_path,
+    handle_wiki_generate,
+    handle_wiki_ingest,
+    handle_wiki_lint,
+    handle_wiki_query,
     resolve_indexed_project_path,
 )
 
@@ -150,7 +163,6 @@ mcp = FastMCP(**_mcp_kwargs)
 @mcp.tool()
 async def index_project(
     path: str,
-    tier: str = "balanced",
     watch: bool = False,
     force: bool = False,
     follow_symlinks: bool = True,
@@ -161,7 +173,6 @@ async def index_project(
 
     Args:
         path:            Absolute path to the project root directory.
-        tier:            Embedding quality — "budget" (fast), "balanced" (default), "premium" (best).
         watch:           Start a live file-watcher for incremental re-indexing.
         force:           Re-index all files even if unchanged (ignores hash cache).
         follow_symlinks: Follow symlinked directories during indexing (default True; required for
@@ -177,7 +188,7 @@ async def index_project(
                 await handle_ensure_project_watching(pp, persist=False)
 
     return await handle_index_project(
-        path=path, tier=tier, watch=watch, force=force,
+        path=path, watch=watch, force=force,
         follow_symlinks=follow_symlinks, on_complete=_post_index,
     )
 
@@ -232,6 +243,222 @@ async def search_metrics() -> dict[str, Any]:
 
     runtime_state.note_activity()
     return get_metrics()
+
+
+# ---------------------------------------------------------------------------
+# Graph / structural code intelligence tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_symbol(name: str, project_path: str) -> dict[str, Any]:
+    """Find a function, class, or method by name or qualified name.
+
+    Returns definition location, signature, docstring, community_id,
+    and caller/callee counts. Use project_path to scope the lookup to one project.
+    """
+    runtime_state.note_activity()
+    return await handle_get_symbol(name=name, project_path=project_path)
+
+
+@mcp.tool()
+async def get_callers(
+    symbol: str,
+    project_path: str,
+    depth: int = 5,
+) -> dict[str, Any]:
+    """Who calls this function? BFS upstream traversal up to `depth` hops.
+
+    Returns a call chain ordered by depth with confidence scores and file locations.
+    Useful for tracing data flow and understanding where a function is invoked.
+    """
+    runtime_state.note_activity()
+    return await handle_get_callers(symbol=symbol, project_path=project_path, depth=depth)
+
+
+@mcp.tool()
+async def get_callees(
+    symbol: str,
+    project_path: str,
+    depth: int = 5,
+) -> dict[str, Any]:
+    """What does this function call? BFS downstream traversal up to `depth` hops.
+
+    Returns all symbols reachable from this function's call graph.
+    Useful for understanding function dependencies and side effects.
+    """
+    runtime_state.note_activity()
+    return await handle_get_callees(symbol=symbol, project_path=project_path, depth=depth)
+
+
+@mcp.tool()
+async def trace_path(
+    from_symbol: str,
+    to_symbol: str,
+    project_path: str,
+) -> dict[str, Any]:
+    """Find the call path from one symbol to another.
+
+    Returns the shortest call path as an ordered step list.
+    Returns empty path if no connection exists.
+    """
+    runtime_state.note_activity()
+    return await handle_trace_path(
+        from_symbol=from_symbol, to_symbol=to_symbol, project_path=project_path,
+    )
+
+
+@mcp.tool()
+async def detect_impact(symbol: str, project_path: str) -> dict[str, Any]:
+    """Blast radius analysis: everything that transitively calls this symbol.
+
+    Returns all callers at any depth, grouped by depth level with file locations.
+    Useful before refactoring a function — shows full impact surface.
+    """
+    runtime_state.note_activity()
+    return await handle_detect_impact(symbol=symbol, project_path=project_path)
+
+
+@mcp.tool()
+async def get_communities(project_path: str) -> dict[str, Any]:
+    """Return Leiden community clusters for the project.
+
+    Each community is a group of densely-connected symbols (functions, classes, files).
+    Key entry points are the symbols most called from outside each community.
+    """
+    runtime_state.note_activity()
+    return await handle_get_communities(project_path=project_path)
+
+
+@mcp.tool()
+async def global_search(
+    query: str,
+    project_path: str,
+    top_k: int = 10,
+) -> dict[str, Any]:
+    """Search across architectural knowledge: community summaries and wiki pages.
+
+    Answers high-level questions like 'which layer handles authentication?'
+    or 'where is the billing logic?' by combining:
+    - Community title/summary text search (from Leiden clusters)
+    - Wiki page vector search (wiki_generate or wiki_ingest output)
+
+    Use search_code for finding specific functions/files.
+    Use global_search for understanding architecture and ownership.
+    """
+    runtime_state.note_activity()
+    return await handle_global_search(query=query, project_path=project_path, top_k=top_k)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — LLM enrichment + wiki tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def enrich_project(
+    project_path: str,
+    scope: str = "communities",
+) -> dict[str, Any]:
+    """Trigger LLM enrichment. scope: 'symbols'|'communities'|'wiki'|'all'.
+
+    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai. Results are cached
+    in the graph DB; re-run only re-enriches changed or unenriched content.
+    """
+    runtime_state.note_activity()
+    return await handle_enrich_project(project_path=project_path, scope=scope)
+
+
+@mcp.tool()
+async def get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:
+    """Get LLM-generated plain-English description of what a function or class does.
+
+    Returns cached result if available, otherwise calls the configured LLM.
+    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai.
+    """
+    runtime_state.note_activity()
+    return await handle_get_symbol_intent(name=name, project_path=project_path)
+
+
+@mcp.tool()
+async def wiki_generate(project_path: str) -> dict[str, Any]:
+    """Auto-generate wiki pages for all communities in the project.
+
+    Creates markdown pages in the project's wiki directory.
+    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai.
+    """
+    runtime_state.note_activity()
+    return await handle_wiki_generate(project_path=project_path)
+
+
+@mcp.tool()
+async def wiki_ingest(source_path: str, project_path: str) -> dict[str, Any]:
+    """Ingest a raw document (markdown notes, PDF, design doc) into the project wiki.
+
+    LLM extracts key information and creates/updates relevant wiki pages.
+    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai.
+    """
+    runtime_state.note_activity()
+    return await handle_wiki_ingest(source_path=source_path, project_path=project_path)
+
+
+@mcp.tool()
+async def wiki_query(
+    query: str,
+    project_path: str,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """Search wiki pages and community summaries.
+
+    Best for architectural questions like 'how does authentication work?'
+    Uses the same GPU-accelerated vector search pipeline as search_code.
+    """
+    runtime_state.note_activity()
+    return await handle_wiki_query(query=query, project_path=project_path, top_k=top_k)
+
+
+@mcp.tool()
+async def wiki_lint(project_path: str) -> dict[str, Any]:
+    """Health-check the wiki: find orphaned pages, stale content, empty pages."""
+    runtime_state.note_activity()
+    return await handle_wiki_lint(project_path=project_path)
+
+
+@mcp.tool()
+async def search_docs(
+    query: str,
+    project_paths: list[str] | None = None,
+    top_k: int = 10,
+) -> dict[str, Any]:
+    """Search only documentation files (markdown, rst, txt, wiki pages).
+
+    Wrapper around search_code that filters to documentation content types.
+    Useful when you want prose answers, not code snippets.
+    """
+    runtime_state.note_activity()
+    from opencode_search.handlers._query import handle_search_code as _search
+
+    paths = project_paths or []
+    result = await _search(
+        query=query,
+        project_paths=paths or None,
+        top_k=top_k,
+        use_rerank=False,
+    )
+    if "results" in result:
+        doc_langs = {"wiki", "knowledge_base", "markdown", "rst", "text"}
+        doc_results = [
+            r for r in result["results"]
+            if r.get("language", "").lower() in doc_langs
+            or r.get("path", "").endswith((".md", ".rst", ".txt"))
+        ]
+        return {
+            "query": query,
+            "results": doc_results,
+            "total": len(doc_results),
+            "elapsed_ms": result.get("elapsed_ms"),
+        }
+    return result
 
 
 # ---------------------------------------------------------------------------

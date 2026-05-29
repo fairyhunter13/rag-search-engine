@@ -185,3 +185,28 @@ def test_seconds_since_last_inference_increases_over_time():
     time.sleep(0.05)
     t2 = emb.seconds_since_last_inference()
     assert t2 > t1
+
+
+# ---------------------------------------------------------------------------
+# GPU enforcement tests
+# ---------------------------------------------------------------------------
+
+
+def test_embed_raises_gpu_not_available_when_no_providers(monkeypatch):
+    """GPU enforcement: embedding must raise GPUNotAvailableError when providers=None."""
+    import opencode_search.embeddings as emb
+    # Patch _get_onnx_providers to return empty list (simulates no GPU)
+    monkeypatch.setattr(emb, "_get_onnx_providers", lambda: [])
+    # Also patch _detected_providers to None to force re-detection
+    monkeypatch.setattr(emb, "_detected_providers", None)
+    with pytest.raises(emb.GPUNotAvailableError):
+        emb.assert_gpu_available()
+
+
+def test_reranker_raises_gpu_not_available_when_no_providers(monkeypatch):
+    """GPU enforcement: reranking must raise GPUNotAvailableError when providers=None."""
+    import opencode_search.embeddings as emb
+    monkeypatch.setattr(emb, "_get_onnx_providers", lambda: [])
+    monkeypatch.setattr(emb, "_detected_providers", None)
+    with pytest.raises(emb.GPUNotAvailableError):
+        emb.assert_gpu_available()

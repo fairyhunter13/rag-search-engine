@@ -24,20 +24,17 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 
 
-def test_index_invalid_tier(tmp_path):
-    fake_result = {"error": "Invalid tier 'bogus'. Choose: ['balanced', 'budget', 'premium']"}
-    with patch("opencode_search.handlers.handle_index_project",
-               AsyncMock(return_value=fake_result)):
-        result = runner.invoke(app, ["index", str(tmp_path), "--tier", "bogus"])
-    assert result.exit_code == 1
-    assert "Error" in result.output
+def test_index_no_tier_option(tmp_path):
+    """--tier option must not exist after tier removal."""
+    result = runner.invoke(app, ["index", str(tmp_path), "--tier", "balanced"])
+    assert result.exit_code == 2
+    assert "No such option" in result.output or "no such option" in result.output.lower()
 
 
 def test_index_success(tmp_path):
     fake_result = {
         "status": "ok",
         "path": str(tmp_path),
-        "tier": "balanced",
         "files_indexed": 5,
         "files_unchanged": 2,
         "chunks_total": 25,
@@ -55,7 +52,7 @@ def test_index_success(tmp_path):
 
 def test_index_json_output(tmp_path):
     fake_result = {
-        "status": "ok", "path": str(tmp_path), "tier": "budget",
+        "status": "ok", "path": str(tmp_path),
         "files_indexed": 1, "chunks_total": 3, "errors": 0,
         "elapsed_s": 0.1, "watching": False,
     }
@@ -74,18 +71,17 @@ def test_index_with_force_and_watch(tmp_path):
     async def capture(**kwargs):
         captured.update(kwargs)
         return {
-            "status": "ok", "path": str(tmp_path), "tier": "premium",
+            "status": "ok", "path": str(tmp_path),
             "files_indexed": 0, "chunks_total": 0, "errors": 0,
             "elapsed_s": 0.0, "watching": True,
         }
 
     with patch("opencode_search.handlers.handle_index_project", side_effect=capture):
         result = runner.invoke(app, [
-            "index", str(tmp_path), "--tier", "premium", "--force", "--watch"
+            "index", str(tmp_path), "--force", "--watch"
         ])
 
     assert result.exit_code == 0
-    assert captured.get("tier") == "premium"
     assert captured.get("force") is True
     assert captured.get("watch") is True
 
@@ -123,7 +119,6 @@ def test_init_defaults_to_current_directory(tmp_path, monkeypatch):
     fake_result = {
         "status": "ok",
         "path": str(tmp_path),
-        "tier": "balanced",
         "files_indexed": 1,
         "files_unchanged": 0,
         "chunks_total": 1,
@@ -143,7 +138,6 @@ def test_init_json_output(tmp_path):
     fake_result = {
         "status": "ok",
         "path": str(tmp_path),
-        "tier": "budget",
         "files_indexed": 1,
         "chunks_total": 2,
         "errors": 0,
@@ -267,15 +261,14 @@ def test_search_error_response():
 
 def test_status_with_path_indexed():
     fake = {
-        "indexed": True, "path": "/tmp/proj", "tier": "balanced",
-        "db_path": "/tmp/central/indexes/proj-abc123/index_balanced", "chunks": 42,
+        "indexed": True, "path": "/tmp/proj",
+        "db_path": "/tmp/central/indexes/proj-abc123/index", "chunks": 42,
         "watching": False, "indexed_at": "2026-01-01T00:00:00",
     }
     with patch("opencode_search.handlers.handle_project_status",
                AsyncMock(return_value=fake)):
         result = runner.invoke(app, ["status", "/tmp/proj"])
     assert result.exit_code == 0
-    assert "balanced" in result.output
     assert "42" in result.output
 
 
@@ -289,7 +282,7 @@ def test_status_with_path_not_indexed():
 
 def test_status_no_path_lists_all():
     fake = {"projects": [
-        {"path": "/tmp/a", "tier": "balanced", "db_path": "/tmp/a/db",
+        {"path": "/tmp/a", "db_path": "/tmp/a/db",
          "watching": True, "indexed_at": "2026-01-01"},
     ]}
     with patch("opencode_search.handlers.handle_list_indexed_projects",
@@ -309,7 +302,7 @@ def test_list_empty():
 
 def test_list_with_projects():
     fake = {"projects": [
-        {"path": "/tmp/x", "tier": "premium", "db_path": "/tmp/x/db",
+        {"path": "/tmp/x", "db_path": "/tmp/x/db",
          "watching": False, "indexed_at": "2026-01-01"},
     ]}
     with patch("opencode_search.handlers.handle_list_indexed_projects",
@@ -317,7 +310,6 @@ def test_list_with_projects():
         result = runner.invoke(app, ["list"])
     assert result.exit_code == 0
     assert "/tmp/x" in result.output
-    assert "premium" in result.output
 
 
 # ---------------------------------------------------------------------------

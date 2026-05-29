@@ -64,13 +64,14 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in dep-light envs
             self._entries.clear()
 
 from opencode_search.config import (
+    DEFAULT_DIMS,
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_RERANK_MODEL,
     FINAL_TOP_K,
     GLOBAL_RERANK_MAX,
     STAGE1_RERANK_K,
     STAGE1_VECTOR_K,
     ProjectEntry,
-    get_tier_dims,
-    get_tier_models,
 )
 from opencode_search.storage import Storage
 
@@ -183,7 +184,6 @@ def _get_cache_lock() -> asyncio.Lock:
 def _cache_key(
     query: str,
     projects: list[ProjectEntry],
-    tier: str,
     top_k: int,
     use_rerank: bool,
 ) -> tuple:
@@ -194,7 +194,6 @@ def _cache_key(
                     (
                         p.path,
                         p.db_path,
-                        p.tier,
                         str(p.dims),
                         str(p.indexed_at),
                         str(p.file_count),
@@ -204,7 +203,7 @@ def _cache_key(
             )
         ).encode()
     ).hexdigest()[:16]
-    return (query.lower().strip(), proj_sig, tier, top_k, use_rerank)
+    return (query.lower().strip(), proj_sig, top_k, use_rerank)
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +240,7 @@ async def _search_project(
     """Run hybrid search against one project's LanceDB table."""
     storage = Storage(
         db_path=str(project.db_path),
-        dims=get_tier_dims(project.tier),
+        dims=project.dims,
     )
     try:
         await storage.open()
@@ -403,20 +402,12 @@ async def search(
     if not query.strip() or not projects:
         return []
 
-    # All projects must use the same tier for embedding consistency.
-    # Use the tier of the first project; mixed-tier federations are unsupported.
-    tier = projects[0].tier
-    if any(p.tier != tier for p in projects):
-        tiers = sorted({p.tier for p in projects})
-        raise ValueError(
-            "Mixed-tier search is unsupported because embedding dimensions/models differ. "
-            f"Requested tiers: {tiers}. Search one tier at a time or re-index projects with the same tier."
-        )
-    embed_model, rerank_model = get_tier_models(tier)
-    dims = get_tier_dims(tier)
+    embed_model = DEFAULT_EMBED_MODEL
+    rerank_model = DEFAULT_RERANK_MODEL
+    dims = DEFAULT_DIMS
 
     # Cache lookup
-    key = _cache_key(query, projects, tier, top_k, use_rerank)
+    key = _cache_key(query, projects, top_k, use_rerank)
     async with _get_cache_lock():
         cached = _result_cache.get(key)
     if cached is not None:

@@ -86,7 +86,7 @@ async def test_search_code_p95_latency(tmp_path, monkeypatch):
     await watcher_manager.stop_all()
 
     try:
-        result = await index_project(path=str(project_root), tier="budget", watch=False)
+        result = await index_project(path=str(project_root), watch=False)
         assert result.get("status") == "indexing", f"unexpected: {result}"
         await _wait_indexed(str(project_root))
 

@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from opencode_search.config import get_tier_dims, get_tier_models
+from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL, DEFAULT_RERANK_MODEL
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, body: dict[str, Any]) -> None:
@@ -44,18 +44,6 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     except Exception:
         obj = {}
     return obj if isinstance(obj, dict) else {}
-
-
-def _tier_from_model(model: str | None) -> str:
-    # Default to balanced for quality; tests usually don't pin models.
-    if not model:
-        return "balanced"
-    model_l = model.lower()
-    if "small" in model_l:
-        return "budget"
-    if "base-code" in model_l or "multilingual" in model_l:
-        return "premium"
-    return "balanced"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -98,13 +86,10 @@ class _Handler(BaseHTTPRequestHandler):
             if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
                 _json_response(self, 400, {"error": "texts must be a list[str]"})
                 return
-            model = body.get("model")
             dims = body.get("dimensions")
-            tier = _tier_from_model(model if isinstance(model, str) else None)
-            embed_model, _ = get_tier_models(tier)
-            dimensions = int(dims) if isinstance(dims, int) else get_tier_dims(tier)
+            dimensions = int(dims) if isinstance(dims, int) else DEFAULT_DIMS
             from opencode_search.embeddings import embed_passages
-            vectors = embed_passages(texts, model=embed_model, dimensions=dimensions)
+            vectors = embed_passages(texts, model=DEFAULT_EMBED_MODEL, dimensions=dimensions)
             _json_response(self, 200, {"result": {"vectors": vectors}})
             return
 
@@ -113,13 +98,10 @@ class _Handler(BaseHTTPRequestHandler):
             if not isinstance(text, str) or not text.strip():
                 _json_response(self, 400, {"error": "text must be a non-empty string"})
                 return
-            model = body.get("model")
             dims = body.get("dimensions")
-            tier = _tier_from_model(model if isinstance(model, str) else None)
-            embed_model, _ = get_tier_models(tier)
-            dimensions = int(dims) if isinstance(dims, int) else get_tier_dims(tier)
+            dimensions = int(dims) if isinstance(dims, int) else DEFAULT_DIMS
             from opencode_search.embeddings import embed_query
-            vector = embed_query(text, model=embed_model, dimensions=dimensions)
+            vector = embed_query(text, model=DEFAULT_EMBED_MODEL, dimensions=dimensions)
             _json_response(self, 200, {"result": {"vector": vector}})
             return
 
@@ -148,13 +130,10 @@ class _Handler(BaseHTTPRequestHandler):
                 # Reject legacy wrong key 'documents' by returning 400 or empty scores.
                 _json_response(self, 400, {"error": "expected {'query': str, 'docs': list[str]}"} )
                 return
-            model = body.get("model")
             top_k = body.get("top_k")
-            tier = _tier_from_model(model if isinstance(model, str) else None)
-            _, rerank_model = get_tier_models(tier)
             k = int(top_k) if isinstance(top_k, int) else len(docs)
             from opencode_search.embeddings import rerank
-            ranked = rerank(query, docs, model=rerank_model, top_k=k)
+            ranked = rerank(query, docs, model=DEFAULT_RERANK_MODEL, top_k=k)
             # Return only scores in original order (tests just need numeric list).
             scores = [0.0] * len(docs)
             for idx, score in ranked:

@@ -14,6 +14,7 @@ pytest.importorskip("lancedb")
 pytest.importorskip("pyarrow")
 import pytest_asyncio
 
+from opencode_search.config import DEFAULT_DIMS
 from opencode_search.indexer import (
     IndexResult,
     _hash_file,
@@ -103,11 +104,9 @@ def test_index_result_creation():
 
 @pytest_asyncio.fixture
 async def real_storage(tmp_path):
-    # Use budget-tier dims (512) so embeddings produced by the budget tier fit.
     # DB lives in a sibling of the project_root subdir used by tests so that
     # iter_files() doesn't walk into LanceDB internals.
-    from opencode_search.config import get_tier_dims
-    s = Storage(db_path=str(tmp_path / "db"), dims=get_tier_dims("budget"))
+    s = Storage(db_path=str(tmp_path / "db"), dims=DEFAULT_DIMS)
     await s.open()
     yield s
     await s.close()
@@ -124,7 +123,7 @@ async def test_index_file_unchanged(real_storage, tmp_path):
     # Should not call embeddings or chunker
     with patch("opencode_search.chunker.chunk_file") as mock_chunk:
         result = await index_file(
-            real_storage, f, tier="budget",
+            real_storage, f,
             existing_hashes=existing,
         )
 
@@ -141,7 +140,7 @@ async def test_index_file_unreadable_returns_skipped(real_storage, tmp_path):
 
     with patch("opencode_search.indexer._read_file", return_value=None):
         result = await index_file(
-            real_storage, f, tier="budget",
+            real_storage, f,
             existing_hashes={},
         )
 
@@ -156,7 +155,7 @@ async def test_index_file_empty_chunks_returns_empty(real_storage, tmp_path):
 
     with patch("opencode_search.chunker.chunk_file", return_value=[]):
         result = await index_file(
-            real_storage, f, tier="budget",
+            real_storage, f,
             existing_hashes={},
         )
 
@@ -173,12 +172,12 @@ async def test_index_file_success(real_storage, tmp_path):
 
     fake_chunks = [Chunk(content="def hello(): pass", start_line=1, end_line=2,
                         chunk_type="code", language="python")]
-    fake_vectors = [[0.1] * 512]
+    fake_vectors = [[0.1] * DEFAULT_DIMS]
 
     with patch("opencode_search.chunker.chunk_file", return_value=fake_chunks), \
          patch("opencode_search.embeddings.embed_passages", return_value=fake_vectors):
         result = await index_file(
-            real_storage, f, tier="budget",
+            real_storage, f,
             existing_hashes={},
         )
 
@@ -210,7 +209,7 @@ async def test_index_file_replaces_stale_chunks_for_path(real_storage, tmp_path)
             content_hash=f"old{i}",
             start_line=i + 1,
             end_line=i + 1,
-            vector=[0.0] * 512,
+            vector=[0.0] * DEFAULT_DIMS,
             created_at=1,
         )
         for i in range(3)
@@ -220,8 +219,8 @@ async def test_index_file_replaces_stale_chunks_for_path(real_storage, tmp_path)
                         chunk_type="code", language="python")]
 
     with patch("opencode_search.chunker.chunk_file", return_value=fake_chunks), \
-         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
-        result = await index_file(real_storage, f, tier="budget", existing_hashes={})
+         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * DEFAULT_DIMS]):
+        result = await index_file(real_storage, f, existing_hashes={})
 
     assert result["status"] == "indexed"
     assert await real_storage.count() == 1
@@ -241,8 +240,8 @@ async def test_index_file_vector_count_mismatch_is_error(real_storage, tmp_path)
     ]
 
     with patch("opencode_search.chunker.chunk_file", return_value=fake_chunks), \
-         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
-        result = await index_file(real_storage, f, tier="budget", existing_hashes={})
+         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * DEFAULT_DIMS]):
+        result = await index_file(real_storage, f, existing_hashes={})
 
     assert result["status"] == "error"
     assert await real_storage.count() == 0
@@ -252,7 +251,7 @@ async def test_index_file_vector_count_mismatch_is_error(real_storage, tmp_path)
 async def test_index_file_hash_error_returns_error(real_storage, tmp_path):
     f = tmp_path / "missing.py"  # never created
     # _hash_file will raise FileNotFoundError; wrapped in error status
-    result = await index_file(real_storage, f, tier="budget", existing_hashes={})
+    result = await index_file(real_storage, f, existing_hashes={})
     assert result["status"] == "error"
 
 
@@ -266,7 +265,7 @@ async def test_index_project_empty_dir(real_storage, tmp_path):
     """Indexing an empty dir produces an IndexResult with zero counts."""
     project_root = tmp_path / "project"
     project_root.mkdir()
-    result = await index_project(real_storage, project_root, tier="budget")
+    result = await index_project(real_storage, project_root)
     assert isinstance(result, IndexResult)
     assert result.files_indexed == 0
     assert result.chunks_total == 0
@@ -289,8 +288,8 @@ async def test_index_project_indexes_files(real_storage, tmp_path):
 
     with patch("opencode_search.chunker.chunk_file", side_effect=fake_chunk), \
          patch("opencode_search.embeddings.embed_passages",
-               side_effect=lambda texts, **kw: [[0.5] * 512] * len(texts)):
-        result = await index_project(real_storage, project_root, tier="budget")
+               side_effect=lambda texts, **kw: [[0.5] * DEFAULT_DIMS] * len(texts)):
+        result = await index_project(real_storage, project_root)
 
     assert result.files_indexed == 2
     assert result.chunks_total == 2
@@ -314,8 +313,8 @@ async def test_index_project_progress_callback(real_storage, tmp_path):
                return_value=[Chunk(content="x=1", start_line=0, end_line=0,
                                    chunk_type="code", language="python")]), \
          patch("opencode_search.embeddings.embed_passages",
-               side_effect=lambda texts, **kw: [[0.1] * 512] * len(texts)):
-        await index_project(real_storage, project_root, tier="budget", progress_callback=cb)
+               side_effect=lambda texts, **kw: [[0.1] * DEFAULT_DIMS] * len(texts)):
+        await index_project(real_storage, project_root, progress_callback=cb)
 
     assert len(calls) >= 1
     assert calls[0][1] == 1  # total = 1 file
@@ -342,8 +341,8 @@ async def test_index_project_loads_existing_hashes_once(real_storage, tmp_path):
                return_value=[Chunk(content="x", start_line=0, end_line=0,
                                    chunk_type="code", language="python")]), \
          patch("opencode_search.embeddings.embed_passages",
-               side_effect=lambda texts, **kw: [[0.1] * 512] * len(texts)):
-        await index_project(real_storage, tmp_path, tier="budget")
+               side_effect=lambda texts, **kw: [[0.1] * DEFAULT_DIMS] * len(texts)):
+        await index_project(real_storage, tmp_path)
 
     # Should be called once for skip detection + once for stale cleanup = 2 max
     assert call_count["n"] <= 2, (
@@ -358,7 +357,7 @@ async def test_index_project_loads_existing_hashes_once(real_storage, tmp_path):
 
 @pytest.mark.asyncio
 async def test_index_files_empty_list(real_storage):
-    result = await index_files(real_storage, [], tier="budget")
+    result = await index_files(real_storage, [])
     assert result.files_indexed == 0
 
 
@@ -375,7 +374,7 @@ async def test_index_files_with_paths(real_storage, tmp_path):
     with patch("opencode_search.chunker.chunk_file",
                return_value=[Chunk(content="x", start_line=0, end_line=0,
                                    chunk_type="code", language="python")]), \
-         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * 512]):
-        result = await index_files(real_storage, paths, tier="budget")
+         patch("opencode_search.embeddings.embed_passages", return_value=[[0.1] * DEFAULT_DIMS]):
+        result = await index_files(real_storage, paths)
 
     assert result.files_indexed == 2

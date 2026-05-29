@@ -196,7 +196,6 @@ async def _default_scoped_project_paths() -> list[str] | None:
 @bridge.tool()
 async def index_project(
     path: str,
-    tier: str = "balanced",
     watch: bool = False,
     force: bool = False,
     follow_symlinks: bool = True,
@@ -207,7 +206,7 @@ async def index_project(
         return err
     return await _forward_tool(
         "index_project",
-        {"path": resolved, "tier": tier, "watch": watch, "force": force, "follow_symlinks": follow_symlinks},
+        {"path": resolved, "watch": watch, "force": force, "follow_symlinks": follow_symlinks},
     )
 
 
@@ -244,6 +243,127 @@ async def search_code(
             "use_rerank": use_rerank,
         },
     )
+
+
+@bridge.tool()
+async def get_symbol(name: str, project_path: str) -> dict[str, Any]:
+    """Find a function, class, or method by name or qualified name."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("get_symbol", {"name": name, "project_path": resolved})
+
+
+@bridge.tool()
+async def get_callers(
+    symbol: str,
+    project_path: str,
+    depth: int = 5,
+) -> dict[str, Any]:
+    """Who calls this function? BFS upstream traversal up to `depth` hops."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool(
+        "get_callers", {"symbol": symbol, "project_path": resolved, "depth": depth},
+    )
+
+
+@bridge.tool()
+async def get_callees(
+    symbol: str,
+    project_path: str,
+    depth: int = 5,
+) -> dict[str, Any]:
+    """What does this function call? BFS downstream traversal up to `depth` hops."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool(
+        "get_callees", {"symbol": symbol, "project_path": resolved, "depth": depth},
+    )
+
+
+@bridge.tool()
+async def trace_path(
+    from_symbol: str,
+    to_symbol: str,
+    project_path: str,
+) -> dict[str, Any]:
+    """Find the shortest call path from one symbol to another."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool(
+        "trace_path",
+        {"from_symbol": from_symbol, "to_symbol": to_symbol, "project_path": resolved},
+    )
+
+
+@bridge.tool()
+async def detect_impact(symbol: str, project_path: str) -> dict[str, Any]:
+    """Blast radius: everything that transitively calls this symbol."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("detect_impact", {"symbol": symbol, "project_path": resolved})
+
+
+@bridge.tool()
+async def get_communities(project_path: str) -> dict[str, Any]:
+    """Return Leiden community clusters for the project."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("get_communities", {"project_path": resolved})
+
+
+@bridge.tool()
+async def global_search(query: str, project_path: str, top_k: int = 10) -> dict[str, Any]:
+    """Search across architectural knowledge: community summaries and wiki pages."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("global_search", {"query": query, "project_path": resolved, "top_k": top_k})
+
+
+@bridge.tool()
+async def enrich_project(project_path: str, scope: str = "communities") -> dict[str, Any]:
+    """Trigger LLM enrichment via Ollama. scope: 'symbols'|'communities'|'wiki'|'all'."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("enrich_project", {"project_path": resolved, "scope": scope})
+
+
+@bridge.tool()
+async def get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:
+    """Get LLM-generated plain-English description of what a function or class does."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("get_symbol_intent", {"name": name, "project_path": resolved})
+
+
+@bridge.tool()
+async def wiki_generate(project_path: str) -> dict[str, Any]:
+    """Auto-generate wiki pages for all modules and communities in the project."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("wiki_generate", {"project_path": resolved})
+
+
+@bridge.tool()
+async def wiki_ingest(source_path: str, project_path: str) -> dict[str, Any]:
+    """Ingest a raw document (markdown notes, PDF, design doc) into the project wiki."""
+    resolved_project = _resolve_path_like(project_path)
+    return await _forward_tool("wiki_ingest", {"source_path": source_path, "project_path": resolved_project})
+
+
+@bridge.tool()
+async def wiki_query(query: str, project_path: str, top_k: int = 5) -> dict[str, Any]:
+    """Search wiki pages and community summaries."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("wiki_query", {"query": query, "project_path": resolved, "top_k": top_k})
+
+
+@bridge.tool()
+async def wiki_lint(project_path: str) -> dict[str, Any]:
+    """Health-check the wiki: find orphaned pages, stale content, missing cross-references."""
+    resolved = _resolve_path_like(project_path)
+    return await _forward_tool("wiki_lint", {"project_path": resolved})
+
+
+@bridge.tool()
+async def search_docs(
+    query: str,
+    project_paths: list[str] | None = None,
+    top_k: int = 10,
+) -> dict[str, Any]:
+    """Search only documentation files (markdown, rst, txt, wiki pages)."""
+    resolved = [_resolve_path_like(p) for p in project_paths] if project_paths else None
+    return await _forward_tool("search_docs", {"query": query, "project_paths": resolved, "top_k": top_k})
 
 
 def run_stdio_bridge() -> None:

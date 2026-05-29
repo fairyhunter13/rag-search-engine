@@ -25,26 +25,7 @@ _configure_cuda_paths()
 
 log = logging.getLogger(__name__)
 
-# Tier -> model mappings (must match Rust's cli.rs models_for_tier)
-# Budget tier is the default when model parameter is empty
-TIER_MODELS = {
-    "premium": {
-        "embed": "jinaai/jina-embeddings-v2-base-code",
-        "rerank": "jinaai/jina-reranker-v2-base-multilingual",
-    },
-    "balanced": {
-        "embed": "jinaai/jina-embeddings-v2-base-en",
-        "rerank": "jinaai/jina-reranker-v1-turbo-en",
-    },
-    "budget": {
-        "embed": "jinaai/jina-embeddings-v2-small-en",
-        "rerank": "Xenova/ms-marco-MiniLM-L-6-v2",
-    },
-}
-
-# Default models (budget tier - used when model parameter is empty)
-DEFAULT_EMBED_MODEL = TIER_MODELS["budget"]["embed"]
-DEFAULT_RERANK_MODEL = TIER_MODELS["budget"]["rerank"]
+from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL, DEFAULT_RERANK_MODEL
 
 # Check numpy availability once at module load (not in hot path)
 _HAS_NUMPY = True
@@ -743,7 +724,12 @@ def _embedder(model: str):
 
         # Bug fix: always inject provider options regardless of list length.
         # Previously guarded on len>=2 which skipped CUDA options for single-item lists.
-        provider_list = _build_provider_list_with_options(providers) if providers else None
+        if not providers:
+            _raise_no_gpu(
+                available=_onnx_available_providers(),
+                tested=list(_GPU_PROVIDERS),
+            )
+        provider_list = _build_provider_list_with_options(providers)
 
         import onnxruntime as _ort_ref
         embedder = TextEmbedding(
@@ -802,7 +788,12 @@ def _reranker(model: str):
             providers or "default (CPU)",
         )
 
-        provider_list = _build_provider_list_with_options(providers) if providers else None
+        if not providers:
+            _raise_no_gpu(
+                available=_onnx_available_providers(),
+                tested=list(_GPU_PROVIDERS),
+            )
+        provider_list = _build_provider_list_with_options(providers)
 
         import onnxruntime as _ort_ref
         reranker = TextCrossEncoder(

@@ -45,7 +45,6 @@ async def handle_ensure_project_watching(path: str, *, persist: bool = False) ->
         on_change=_build_incremental_on_change(
             db_path=str(entry.db_path),
             dims=entry.dims,
-            tier=entry.tier,
             project_root=Path(project_path),
         ),
     )

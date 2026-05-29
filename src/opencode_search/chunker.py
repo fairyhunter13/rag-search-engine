@@ -17,7 +17,6 @@ Recommendations:
 - Max 1 500 estimated tokens per chunk (hard safety limit)
 """
 
-import contextvars
 import json
 import logging
 from collections import OrderedDict
@@ -128,16 +127,6 @@ LARGE_FILE_CHARS = 1_000_000  # ~1MB / ~250K tokens
 # HTML semantic splitter is O(n²) on deeply-nested markup — use fast fallback
 # much sooner to prevent 60+ second chunker stalls that starve the GPU.
 LARGE_HTML_CHARS = 100_000  # ~25K tokens
-
-# Current tier for token counting (thread-safe via contextvars)
-_tier_var: contextvars.ContextVar[str] = contextvars.ContextVar("tier", default="premium")
-
-
-def set_tier(tier: str) -> None:
-    """Set the current tier for token counting"""
-    _tier_var.set(tier)
-
-
 
 @dataclass
 class Chunk:

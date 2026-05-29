@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from opencode_search.config import (
+    DEFAULT_DIMS,
     ProjectEntry,
     get_project_db_path,
-    get_tier_dims,
+    get_project_graph_db_path,
     load_registry,
     save_registry,
 )
@@ -24,7 +25,7 @@ from opencode_search.search import clear_search_cache
 from opencode_search.storage import Storage
 from opencode_search.watcher import watcher_manager
 
-from ._common import _VALID_TIERS, _indexing_lock, _indexing_status, _now_iso
+from ._common import _indexing_lock, _indexing_status, _now_iso
 
 log = logging.getLogger(__name__)
 
@@ -33,9 +34,10 @@ def _build_incremental_on_change(
     *,
     db_path: str,
     dims: int,
-    tier: str,
     project_root: Path,
 ) -> Any:
+    graph_db_path = get_project_graph_db_path(project_root)
+
     async def on_change(modified: list[Path], deleted: list[str]) -> None:
         st = Storage(db_path=db_path, dims=dims)
         await st.open()
@@ -47,6 +49,10 @@ def _build_incremental_on_change(
                     p for p in deleted if ".opencode" not in Path(p).parts
                 ]
                 await remove_chunks_for_paths(st, project_deleted)
+                await asyncio.to_thread(
+                    _update_graph_incremental,
+                    [], project_deleted, graph_db_path,
+                )
             if modified:
                 try:
                     project_cfg: ProjectConfig | None = load_project_config(project_root)
@@ -57,7 +63,11 @@ def _build_incremental_on_change(
                     for p in modified
                     if is_indexable_file_with_config(p, root=project_root, project_config=project_cfg)
                 ]
-                await _index_files(st, project_modified, tier=tier, project_root=project_root)
+                await _index_files(st, project_modified, project_root=project_root)
+                await asyncio.to_thread(
+                    _update_graph_incremental,
+                    [str(p) for p in project_modified], [], graph_db_path,
+                )
             clear_search_cache()
         finally:
             await st.close()
@@ -68,7 +78,6 @@ def _build_incremental_on_change(
 async def _run_index_project(
     path_str: str,
     project_path: Path,
-    tier: str,
     watch: bool,
     force: bool,
     follow_symlinks: bool,
@@ -78,8 +87,8 @@ async def _run_index_project(
     """Background task that performs the actual indexing work."""
     status: dict[str, Any] | None = None
     try:
-        dims = get_tier_dims(tier)
-        db_path = get_project_db_path(project_path, tier)
+        dims = DEFAULT_DIMS
+        db_path = get_project_db_path(project_path)
 
         # Start watcher before indexing so no file changes are missed during
         # the index scan. For large projects (20K files) hashing alone takes
@@ -90,7 +99,6 @@ async def _run_index_project(
                 on_change=_build_incremental_on_change(
                     db_path=db_path,
                     dims=dims,
-                    tier=tier,
                     project_root=project_path,
                 ),
             )
@@ -107,7 +115,7 @@ async def _run_index_project(
             t0 = time.perf_counter()
             result = await _index_project(
                 storage, project_path,
-                tier=tier, force=force, follow_symlinks=follow_symlinks,
+                force=force, follow_symlinks=follow_symlinks,
                 embed_workers=min(2, get_embed_workers_gpu()),
                 # 8 file workers: I/O-bound hashing/reading keeps GPU fed even
                 # when 2-3 slots are blocked by large files (>1MB).
@@ -118,20 +126,24 @@ async def _run_index_project(
         finally:
             await storage.close()
 
+        # Build structural code graph (CPU-only, runs after GPU pipeline)
+        graph_db_path = get_project_graph_db_path(project_path)
+        await asyncio.to_thread(
+            _build_graph_sync, project_path, graph_db_path, follow_symlinks,
+        )
+
         registry = load_registry()
         entry = registry.get(path_str)
         if entry is None:
             entry = ProjectEntry(
                 path=path_str,
                 db_path=db_path,
-                tier=tier,
                 dims=dims,
                 indexed_at=_now_iso(),
                 file_count=result.files_indexed + result.files_unchanged,
                 watch=watch,
             )
         else:
-            entry.tier = tier
             entry.db_path = db_path
             entry.dims = dims
             entry.indexed_at = _now_iso()
@@ -147,7 +159,6 @@ async def _run_index_project(
         status = {
             "status": "ok",
             "path": path_str,
-            "tier": tier,
             "files_indexed": result.files_indexed,
             "files_unchanged": result.files_unchanged,
             "files_removed": result.files_removed,
@@ -170,7 +181,6 @@ async def _run_index_project(
 
 async def handle_index_project(
     path: str,
-    tier: str = "balanced",
     watch: bool = False,
     force: bool = False,
     follow_symlinks: bool = True,
@@ -182,9 +192,6 @@ async def handle_index_project(
     Returns immediately with ``status="indexing"``; the actual work runs in
     the background.  Poll ``project_status`` to check for completion.
     """
-    if tier not in _VALID_TIERS:
-        return {"error": f"Invalid tier '{tier}'. Choose: {sorted(_VALID_TIERS)}"}
-
     project_path = Path(path).expanduser().resolve()
     if not project_path.is_dir():
         return {"error": f"Directory not found: {project_path}"}
@@ -201,7 +208,6 @@ async def handle_index_project(
         _run_index_project(
             path_str=path_str,
             project_path=project_path,
-            tier=tier,
             watch=watch,
             force=force,
             follow_symlinks=follow_symlinks,
@@ -212,3 +218,163 @@ async def handle_index_project(
     )
     _indexing_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
     return {"status": "indexing", "path": path_str, "started_at": started_at}
+
+
+# ---------------------------------------------------------------------------
+# Graph build helpers (CPU-only, called via asyncio.to_thread)
+# ---------------------------------------------------------------------------
+
+_GRAPH_RESOLVER_MAX_NODES = int(
+    __import__("os").environ.get("OPENCODE_GRAPH_RESOLVER_MAX_NODES", "500000")
+)
+
+
+def _build_graph_sync(
+    project_root: Path,
+    graph_db_path: str,
+    follow_symlinks: bool = True,
+) -> None:
+    """Build or rebuild the full structural graph for a project (blocking)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from os import cpu_count
+
+    from opencode_search.discover import iter_files
+    from opencode_search.graph.community import CommunityDetector
+    from opencode_search.graph.extractor import GraphExtractor, language_for_file
+    from opencode_search.graph.resolver import CallResolver
+    from opencode_search.graph.storage import GraphStorage
+
+    try:
+        extractor = GraphExtractor()
+        all_nodes: list = []
+        all_raw_edges: list = []
+
+        storage = GraphStorage(graph_db_path)
+        storage.open()
+        try:
+            files = list(iter_files(project_root, follow_symlinks=follow_symlinks))
+            max_workers = min(4, cpu_count() or 1)
+            batch_size = 200
+
+            def _extract_one(file_path: Path) -> tuple:
+                try:
+                    text = file_path.read_text(encoding="utf-8", errors="replace")
+                    lang = language_for_file(str(file_path))
+                    return extractor.extract_file(str(file_path), text, lang)
+                except Exception:  # noqa: BLE001
+                    return [], []
+
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                for i in range(0, len(files), batch_size):
+                    batch = files[i: i + batch_size]
+                    results = list(pool.map(_extract_one, batch))
+                    for nodes, raw_edges in results:
+                        all_nodes.extend(nodes)
+                        all_raw_edges.extend(raw_edges)
+
+            # Resolve calls (full graph pass when within memory cap)
+            if len(all_nodes) <= _GRAPH_RESOLVER_MAX_NODES:
+                resolver = CallResolver(all_nodes)
+                resolved_edges = resolver.resolve(all_raw_edges)
+            else:
+                log.warning(
+                    "graph resolver: %d nodes exceeds cap %d — per-file resolve only",
+                    len(all_nodes), _GRAPH_RESOLVER_MAX_NODES,
+                )
+                # Per-file resolve: only same_module strategy
+                resolved_edges = _per_file_resolve(all_nodes, all_raw_edges)
+
+            # Write in batches
+            batch_write = 500
+            for i in range(0, len(all_nodes), batch_write):
+                storage.upsert_nodes(all_nodes[i: i + batch_write])
+            for i in range(0, len(resolved_edges), batch_write):
+                storage.upsert_edges(resolved_edges[i: i + batch_write])
+
+            # Community detection
+            detector = CommunityDetector()
+            detector.detect_communities(storage)
+
+        finally:
+            storage.close()
+
+    except Exception:
+        log.exception("graph build failed for %s", project_root)
+
+
+def _update_graph_incremental(
+    modified_paths: list[str],
+    deleted_paths: list[str],
+    graph_db_path: str,
+) -> None:
+    """Incrementally update graph for changed/deleted files (blocking)."""
+    from opencode_search.graph.extractor import GraphExtractor, language_for_file
+    from opencode_search.graph.resolver import CallResolver
+    from opencode_search.graph.storage import GraphStorage
+
+    try:
+        storage = GraphStorage(graph_db_path)
+        storage.open()
+        try:
+            # Delete stale nodes (cascades to edges via FK)
+            for path in deleted_paths:
+                storage.delete_file(path)
+            for path in modified_paths:
+                storage.delete_file(path)
+
+            # Re-extract modified files
+            if modified_paths:
+                extractor = GraphExtractor()
+                new_nodes: list = []
+                new_raw_edges: list = []
+                for path in modified_paths:
+                    try:
+                        from pathlib import Path as _P
+                        text = _P(path).read_text(encoding="utf-8", errors="replace")
+                        lang = language_for_file(path)
+                        nodes, raw_edges = extractor.extract_file(path, text, lang)
+                        new_nodes.extend(nodes)
+                        new_raw_edges.extend(raw_edges)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                # Partial resolution: use existing nodes + new nodes
+                existing_nodes = storage.all_nodes()
+                resolver = CallResolver(existing_nodes + new_nodes)
+                resolved = resolver.resolve(new_raw_edges)
+
+                storage.upsert_nodes(new_nodes)
+                storage.upsert_edges(resolved)
+        finally:
+            storage.close()
+    except Exception:
+        log.exception("graph incremental update failed")
+
+
+def _per_file_resolve(all_nodes: list, all_raw_edges: list) -> list:
+    """Fallback: resolve only same-file calls (no cross-file strategies)."""
+    from collections import defaultdict
+    from opencode_search.graph.storage import EdgeData
+
+    file_to_nodes: dict[str, list] = defaultdict(list)
+    id_to_file: dict[str, str] = {}
+    for n in all_nodes:
+        file_to_nodes[n.file].append(n)
+        id_to_file[n.id] = n.file
+
+    result: list[EdgeData] = []
+    for raw in all_raw_edges:
+        caller_file = id_to_file.get(raw.from_id)
+        if not caller_file:
+            continue
+        for n in file_to_nodes[caller_file]:
+            if n.name == raw.raw_callee or n.qualified_name.endswith(f".{raw.raw_callee}"):
+                result.append(EdgeData(
+                    from_id=raw.from_id,
+                    to_id=n.id,
+                    kind=raw.kind,
+                    confidence=0.90,
+                    resolution_strategy="same_module",
+                ))
+                break
+    return result

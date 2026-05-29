@@ -8,10 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from opencode_search.config import (
-    get_tier_dims,
-    get_tier_models,
-)
+from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL
 from opencode_search.discover import detect_language, iter_files
 from opencode_search.storage import ChunkData, Storage
 
@@ -212,7 +209,6 @@ async def index_file(
     storage: Storage,
     path: Path,
     *,
-    tier: str,
     force: bool = False,
     embed_sem: asyncio.Semaphore | None = None,
     existing_hashes: dict[str, str] | None = None,
@@ -229,8 +225,8 @@ async def index_file(
     from opencode_search.chunker import chunk_file
     from opencode_search.embeddings import embed_passages
 
-    embed_model, _ = get_tier_models(tier)
-    dims = get_tier_dims(tier)
+    embed_model = DEFAULT_EMBED_MODEL
+    dims = DEFAULT_DIMS
     if embed_sem is None:
         embed_sem = asyncio.Semaphore(1)
 
@@ -316,7 +312,6 @@ async def index_project(
     storage: Storage,
     root: Path,
     *,
-    tier: str,
     force: bool = False,
     follow_symlinks: bool = True,
     progress_callback=None,
@@ -331,14 +326,14 @@ async def index_project(
     """
     from opencode_search.chunker import chunk_file
 
-    embed_model, _ = get_tier_models(tier)
-    dims = get_tier_dims(tier)
+    embed_model = DEFAULT_EMBED_MODEL
+    dims = DEFAULT_DIMS
     t_start = time.monotonic()
     file_sem = asyncio.Semaphore(max(1, file_workers))
 
     paths = list(iter_files(root, follow_symlinks=follow_symlinks))
     total = len(paths)
-    log.info("indexing %d files in %s (tier=%s)", total, root, tier)
+    log.info("indexing %d files in %s", total, root)
 
     existing_hashes = await storage.get_file_hashes()
     current_path_set = {str(p) for p in paths}
@@ -453,7 +448,6 @@ async def index_files(
     storage: Storage,
     paths: list[Path],
     *,
-    tier: str,
     project_root: Path | None = None,
     embed_workers: int = 2,
     file_workers: int = 8,
@@ -477,7 +471,6 @@ async def index_files(
         async with file_sem:
             r = await index_file(
                 storage, path,
-                tier=tier,
                 embed_sem=embed_sem,
                 existing_hashes=existing_hashes,
                 project_root=project_root,

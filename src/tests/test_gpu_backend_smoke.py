@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("fastembed")
 pytest.importorskip("onnxruntime")
 
-from opencode_search.config import get_tier_dims, get_tier_models
+from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL, DEFAULT_RERANK_MODEL
 from opencode_search.embeddings import assert_gpu_available, embed_passages, embed_query, rerank
 
 pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps, pytest.mark.gpu]
@@ -18,8 +18,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.runtime_deps, pytest.mark.gpu
 def test_real_gpu_embedding_and_rerank_smoke():
     assert_gpu_available()
 
-    embed_model, rerank_model = get_tier_models("budget")
-    dims = get_tier_dims("budget")
+    embed_model = DEFAULT_EMBED_MODEL
+    rerank_model = DEFAULT_RERANK_MODEL
+    dims = DEFAULT_DIMS
 
     vector = embed_query(
         "authorization bearer token refresh flow",

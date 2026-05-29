@@ -40,6 +40,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "gpu: test requires a real CUDA GPU")
     config.addinivalue_line("markers", "integration: test exercises real runtime integrations")
     config.addinivalue_line("markers", "runtime_deps: test requires optional runtime packages")
+    config.addinivalue_line("markers", "large: test requires OPENCODE_RUN_LARGE_TESTS=1 and large external repos")
     config.addinivalue_line("markers", "unit: fast logic-only test")
 
 

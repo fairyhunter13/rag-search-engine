@@ -127,7 +127,7 @@ async def test_mcp_tools_real_end_to_end(tmp_path, monkeypatch):
     await resume_watchers()
 
     try:
-        indexed = await _index_and_wait(str(project_root), tier="budget", watch=True)
+        indexed = await _index_and_wait(str(project_root), watch=True)
         assert indexed.get("watching") is True
 
         status = await project_status(path=str(project_root))
@@ -206,7 +206,7 @@ async def test_mcp_resumes_persisted_watcher_and_removes_deleted_files(tmp_path,
     await resume_watchers()
 
     try:
-        indexed = await _index_and_wait(str(project_root), tier="budget", watch=True)
+        indexed = await _index_and_wait(str(project_root), watch=True)
         assert indexed.get("watching") is True
 
         await _wait_for_search_result(
@@ -279,7 +279,7 @@ async def test_mcp_first_use_index_auto_watch_and_background_release(tmp_path, m
         )
         assert open_response.status_code == 200
 
-        await _index_and_wait(str(project_root), tier="budget", watch=False)
+        await _index_and_wait(str(project_root), watch=False)
 
         status = await project_status(path=str(project_root))
         assert status["indexed"] is True
@@ -326,10 +326,10 @@ async def test_mcp_migrates_legacy_registry_db_path_before_resuming_watchers(tmp
     await resume_watchers()
 
     try:
-        await _index_and_wait(str(project_root), tier="budget", watch=True)
+        await _index_and_wait(str(project_root), watch=True)
 
-        canonical_db_path = Path(config.get_project_db_path(project_root, "budget"))
-        legacy_db_path = project_root / ".opencode" / "index_budget"
+        canonical_db_path = Path(config.get_project_db_path(project_root))
+        legacy_db_path = project_root / ".opencode" / "index_old"
         canonical_db_path.parent.mkdir(parents=True, exist_ok=True)
         legacy_db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -343,8 +343,7 @@ async def test_mcp_migrates_legacy_registry_db_path_before_resuming_watchers(tmp
                     str(project_root): {
                         "path": str(project_root),
                         "db_path": str(legacy_db_path),
-                        "tier": "budget",
-                        "dims": config.get_tier_dims("budget"),
+                        "dims": config.DEFAULT_DIMS,
                         "watch": True,
                     }
                 },

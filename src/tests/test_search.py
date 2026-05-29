@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from opencode_search.config import (
+    DEFAULT_DIMS,
     STAGE1_RERANK_K,
     ProjectEntry,
     get_project_db_path,
-    get_tier_dims,
 )
 from opencode_search.search import (
     SearchResult,
@@ -29,13 +29,11 @@ from opencode_search.search import (
 # ---------------------------------------------------------------------------
 
 
-def _make_project(path: str = "/tmp/proj", tier: str = "balanced") -> ProjectEntry:
-    dims = get_tier_dims(tier)
+def _make_project(path: str = "/tmp/proj") -> ProjectEntry:
     return ProjectEntry(
         path=path,
-        db_path=get_project_db_path(path, tier),
-        tier=tier,
-        dims=dims,
+        db_path=get_project_db_path(path),
+        dims=DEFAULT_DIMS,
     )
 
 
@@ -59,44 +57,37 @@ def _make_row(path: str = "/tmp/foo.py", score: float = 0.9, project: str = "/tm
 
 def test_cache_key_consistent():
     projects = [_make_project("/tmp/a"), _make_project("/tmp/b")]
-    key1 = _cache_key("hello", projects, "balanced", 10, True)
-    key2 = _cache_key("hello", projects, "balanced", 10, True)
+    key1 = _cache_key("hello", projects, 10, True)
+    key2 = _cache_key("hello", projects, 10, True)
     assert key1 == key2
 
 
 def test_cache_key_query_case_insensitive():
     projects = [_make_project()]
-    key1 = _cache_key("Hello World", projects, "balanced", 10, True)
-    key2 = _cache_key("hello world", projects, "balanced", 10, True)
+    key1 = _cache_key("Hello World", projects, 10, True)
+    key2 = _cache_key("hello world", projects, 10, True)
     assert key1 == key2
-
-
-def test_cache_key_differs_by_tier():
-    projects = [_make_project()]
-    key1 = _cache_key("query", projects, "budget", 10, True)
-    key2 = _cache_key("query", projects, "premium", 10, True)
-    assert key1 != key2
 
 
 def test_cache_key_differs_by_top_k():
     projects = [_make_project()]
-    key1 = _cache_key("query", projects, "balanced", 5, True)
-    key2 = _cache_key("query", projects, "balanced", 10, True)
+    key1 = _cache_key("query", projects, 5, True)
+    key2 = _cache_key("query", projects, 10, True)
     assert key1 != key2
 
 
 def test_cache_key_differs_by_rerank():
     projects = [_make_project()]
-    key1 = _cache_key("query", projects, "balanced", 10, True)
-    key2 = _cache_key("query", projects, "balanced", 10, False)
+    key1 = _cache_key("query", projects, 10, True)
+    key2 = _cache_key("query", projects, 10, False)
     assert key1 != key2
 
 
 def test_cache_key_differs_by_project_set():
     p1 = [_make_project("/tmp/a")]
     p2 = [_make_project("/tmp/b")]
-    key1 = _cache_key("query", p1, "balanced", 10, True)
-    key2 = _cache_key("query", p2, "balanced", 10, True)
+    key1 = _cache_key("query", p1, 10, True)
+    key2 = _cache_key("query", p2, 10, True)
     assert key1 != key2
 
 
@@ -105,8 +96,8 @@ def test_cache_key_differs_by_index_metadata():
     p2 = [_make_project("/tmp/a")]
     p1[0].indexed_at = "2026-01-01T00:00:00Z"
     p2[0].indexed_at = "2026-01-02T00:00:00Z"
-    key1 = _cache_key("query", p1, "balanced", 10, True)
-    key2 = _cache_key("query", p2, "balanced", 10, True)
+    key1 = _cache_key("query", p1, 10, True)
+    key2 = _cache_key("query", p2, 10, True)
     assert key1 != key2
 
 
@@ -154,9 +145,15 @@ async def test_search_no_projects_returns_empty():
 
 
 @pytest.mark.asyncio
-async def test_search_rejects_mixed_tiers():
-    projects = [_make_project("/tmp/a", tier="budget"), _make_project("/tmp/b", tier="balanced")]
-    with pytest.raises(ValueError, match="Mixed-tier"):
+async def test_search_no_mixed_tier_error():
+    """After tier removal, searching across multiple projects never raises."""
+    projects = [_make_project("/tmp/a"), _make_project("/tmp/b")]
+    dims = DEFAULT_DIMS
+    with patch("opencode_search.search._embed_query_sync", return_value=[0.5] * dims), \
+         patch("opencode_search.search._rerank_sync", return_value=[]), \
+         patch("opencode_search.search.Storage") as MockStorage:
+        MockStorage.return_value = _make_mock_storage(rows=[])
+        # Should not raise
         await search("hello", projects=projects)
 
 

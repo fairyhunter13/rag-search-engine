@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from opencode_search.config import ProjectEntry, get_project_db_path, get_tier_dims
+from opencode_search.config import DEFAULT_DIMS, ProjectEntry, get_project_db_path
 
 _IDX = "opencode_search.handlers._index"
 _QRY = "opencode_search.handlers._query"
@@ -41,13 +41,11 @@ class _FakeIndexResult:
     elapsed_s: float = 0.5
 
 
-def _make_entry(path: str, tier: str = "balanced") -> ProjectEntry:
-    dims = get_tier_dims(tier)
+def _make_entry(path: str) -> ProjectEntry:
     return ProjectEntry(
         path=path,
-        db_path=get_project_db_path(path, tier),
-        tier=tier,
-        dims=dims,
+        db_path=get_project_db_path(path),
+        dims=DEFAULT_DIMS,
     )
 
 
@@ -57,17 +55,9 @@ def _make_entry(path: str, tier: str = "balanced") -> ProjectEntry:
 
 
 @pytest.mark.asyncio
-async def test_handle_index_project_invalid_tier(tmp_path):
-    from opencode_search.handlers import handle_index_project
-    result = await handle_index_project(path=str(tmp_path), tier="nonexistent")
-    assert "error" in result
-    assert "tier" in result["error"].lower()
-
-
-@pytest.mark.asyncio
 async def test_handle_index_project_missing_dir():
     from opencode_search.handlers import handle_index_project
-    result = await handle_index_project(path="/nonexistent/path/xyz", tier="balanced")
+    result = await handle_index_project(path="/nonexistent/path/xyz")
     assert "error" in result
     assert "not found" in result["error"].lower() or "directory" in result["error"].lower()
 
@@ -76,7 +66,7 @@ async def test_handle_index_project_missing_dir():
 async def test_handle_index_project_success(tmp_path):
     import asyncio
     from opencode_search.handlers import _indexing_status, handle_index_project
-    expected_db_path = get_project_db_path(tmp_path, "balanced")
+    expected_db_path = get_project_db_path(tmp_path)
 
     with patch(f"{_IDX}._index_project", AsyncMock(return_value=_FakeIndexResult())), \
          patch(f"{_IDX}.load_registry", return_value={}), \
@@ -91,7 +81,7 @@ async def test_handle_index_project_success(tmp_path):
         MockStorage.return_value = mock_st
         MockWatcher.is_active.return_value = False
 
-        result = await handle_index_project(path=str(tmp_path), tier="balanced")
+        result = await handle_index_project(path=str(tmp_path))
         assert result.get("status") == "indexing"
         assert "started_at" in result
 
@@ -99,7 +89,7 @@ async def test_handle_index_project_success(tmp_path):
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
-        MockStorage.assert_called_once_with(db_path=expected_db_path, dims=get_tier_dims("balanced"))
+        MockStorage.assert_called_once_with(db_path=expected_db_path, dims=DEFAULT_DIMS)
 
     path_str = str(tmp_path.resolve())
     assert _indexing_status[path_str]["running"] is False
@@ -116,7 +106,7 @@ async def test_handle_index_project_no_duplicate_run(tmp_path):
     path_str = str(tmp_path)
     _indexing_status[path_str] = {"running": True}
 
-    result = await handle_index_project(path=path_str, tier="balanced")
+    result = await handle_index_project(path=path_str)
     assert result.get("status") == "already_indexing"
 
     del _indexing_status[path_str]
@@ -133,7 +123,7 @@ async def test_handle_index_project_clears_running_on_exception(tmp_path):
         mock_st.close = AsyncMock()
         MockStorage.return_value = mock_st
 
-        result = await handle_index_project(path=str(tmp_path), tier="balanced")
+        result = await handle_index_project(path=str(tmp_path))
         assert result.get("status") == "indexing"
 
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
@@ -172,7 +162,7 @@ async def test_handle_index_project_preserves_existing_watch_on_plain_reindex(tm
         MockStorage.return_value = mock_st
         MockWatcher.is_active.return_value = True
 
-        result = await handle_index_project(path=path_str, tier="balanced", watch=False)
+        result = await handle_index_project(path=path_str, watch=False)
         assert result.get("status") == "indexing"
 
         import asyncio
@@ -191,9 +181,8 @@ async def test_handle_project_status_skips_missing_db_without_recreating(tmp_pat
     project_root.mkdir()
     entry = ProjectEntry(
         path=str(project_root),
-        db_path=str(tmp_path / "central-index" / "index_budget"),
-        tier="budget",
-        dims=get_tier_dims("budget"),
+        db_path=str(tmp_path / "central-index" / "index"),
+        dims=DEFAULT_DIMS,
     )
 
     with patch(f"{_QRY}.load_registry", return_value={str(project_root): entry}), \
@@ -290,19 +279,20 @@ async def test_handle_search_code_missing_project_paths():
 
 
 @pytest.mark.asyncio
-async def test_handle_search_code_returns_error_for_mixed_tiers():
+async def test_handle_search_code_no_tier_validation():
+    """search_code no longer raises mixed-tier errors — all projects use same model."""
     from opencode_search.handlers import handle_search_code
 
     registry = {
-        "/tmp/a": _make_entry("/tmp/a", tier="budget"),
-        "/tmp/b": _make_entry("/tmp/b", tier="balanced"),
+        "/tmp/a": _make_entry("/tmp/a"),
+        "/tmp/b": _make_entry("/tmp/b"),
     }
 
-    with patch(f"{_QRY}.load_registry", return_value=registry):
+    with patch(f"{_QRY}.load_registry", return_value=registry), \
+         patch(f"{_QRY}.search", AsyncMock(return_value=[])):
         result = await handle_search_code(query="test")
 
-    assert "error" in result
-    assert "Mixed-tier" in result["error"]
+    assert "error" not in result or "Mixed-tier" not in result.get("error", "")
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +333,7 @@ async def test_handle_project_status_indexed(tmp_path):
         result = await handle_project_status(path=str(project_root))
 
     assert result["indexed"] is True
-    assert result["tier"] == "balanced"
+    assert "tier" not in result, "tier key should not be in project_status result"
     assert result["chunks"] == 42
 
 
@@ -369,8 +359,8 @@ async def test_handle_list_indexed_projects_with_entries():
     from opencode_search.handlers import handle_list_indexed_projects
 
     registry = {
-        "/tmp/a": _make_entry("/tmp/a", tier="budget"),
-        "/tmp/b": _make_entry("/tmp/b", tier="premium"),
+        "/tmp/a": _make_entry("/tmp/a"),
+        "/tmp/b": _make_entry("/tmp/b"),
     }
 
     with patch(f"{_QRY}.load_registry", return_value=registry), \
@@ -384,6 +374,8 @@ async def test_handle_list_indexed_projects_with_entries():
     watching = {p["path"]: p["watching"] for p in result["projects"]}
     assert watching["/tmp/a"] is True
     assert watching["/tmp/b"] is False
+    for p in result["projects"]:
+        assert "tier" not in p, "tier key should not appear in list_indexed_projects"
 
 
 # ---------------------------------------------------------------------------

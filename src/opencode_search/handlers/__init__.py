@@ -6,6 +6,19 @@ from opencode_search.handlers._common import (
     _touch_projects_last_active,
     resolve_indexed_project_path,
 )
+from opencode_search.handlers._enrichment import (
+    handle_enrich_project,
+    handle_get_symbol_intent,
+)
+from opencode_search.handlers._graph import (
+    handle_detect_impact,
+    handle_get_callers,
+    handle_get_callees,
+    handle_get_communities,
+    handle_get_symbol,
+    handle_global_search,
+    handle_trace_path,
+)
 from opencode_search.handlers._index import (
     _build_incremental_on_change,
     handle_index_project,
@@ -20,6 +33,12 @@ from opencode_search.handlers._watch import (
     handle_release_project_watch,
     handle_stop_watching,
 )
+from opencode_search.handlers._wiki import (
+    handle_wiki_generate,
+    handle_wiki_ingest,
+    handle_wiki_lint,
+    handle_wiki_query,
+)
 
 __all__ = [
     "_build_incremental_on_change",
@@ -27,12 +46,25 @@ __all__ = [
     "_indexing_status",
     "_now_iso",
     "_touch_projects_last_active",
+    "handle_detect_impact",
+    "handle_enrich_project",
     "handle_ensure_project_watching",
+    "handle_get_callers",
+    "handle_get_callees",
+    "handle_get_communities",
+    "handle_get_symbol",
+    "handle_get_symbol_intent",
+    "handle_global_search",
     "handle_index_project",
     "handle_list_indexed_projects",
     "handle_project_status",
     "handle_release_project_watch",
     "handle_search_code",
     "handle_stop_watching",
+    "handle_trace_path",
+    "handle_wiki_generate",
+    "handle_wiki_ingest",
+    "handle_wiki_lint",
+    "handle_wiki_query",
     "resolve_indexed_project_path",
 ]
