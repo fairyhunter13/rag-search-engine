@@ -81,6 +81,7 @@ from opencode_search.handlers import (
     handle_wiki_ingest,
     handle_wiki_lint,
     handle_wiki_query,
+    handle_wiki_reindex,
     resolve_indexed_project_path,
 )
 
@@ -490,6 +491,19 @@ async def wiki_lint(project_path: str) -> dict[str, Any]:
     """Health-check the wiki: find orphaned pages, stale content, empty pages."""
     runtime_state.note_activity()
     return await handle_wiki_lint(project_path=project_path)
+
+
+@mcp.tool()
+async def wiki_reindex(project_path: str) -> dict[str, Any]:
+    """Embed all existing wiki pages into the vector index so wiki_query can find them.
+
+    Use this after wiki_generate to make the generated pages searchable, or to
+    repair a project where wiki pages exist on disk but are missing from the
+    vector index (e.g. pages created before auto-embedding was added).
+    Safe to call multiple times — uses upsert semantics.
+    """
+    runtime_state.note_activity()
+    return await handle_wiki_reindex(project_path=project_path)
 
 
 @mcp.tool()

@@ -452,6 +452,45 @@ class Storage:
             row.setdefault("_score", max(0.0, min(1.0, 1.0 - d)))
         return rows
 
+    async def search_vector_language(
+        self,
+        query_vec: list[float],
+        language: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Vector search pre-filtered to a specific language value.
+
+        Uses LanceDB's prefilter to search only within matching rows — much
+        more effective than post-filtering when the target language is a small
+        fraction of the total index (e.g. wiki pages among code chunks).
+        """
+        np_mod = _require_numpy()
+        query_arr = np_mod.array(query_vec, dtype=np_mod.float32)
+        where_expr = f"language = '{language}'"
+        try:
+            results = (
+                self._table
+                .search(query_arr)
+                .where(where_expr, prefilter=True)
+                .limit(limit)
+                .to_arrow()
+            )
+        except Exception:
+            # Older LanceDB or no prefilter support — fall back to post-filter
+            try:
+                all_rows = await self.search_vector(query_vec, limit=limit * 10)
+                results_list = [r for r in all_rows if r.get("language") == language][:limit]
+                return results_list
+            except Exception as exc2:
+                logger.debug("search_vector_language fallback failed: %s", exc2)
+                return []
+
+        rows = results.to_pylist()
+        for row in rows:
+            d = float(row.get("_distance", 0.0))
+            row.setdefault("_score", max(0.0, min(1.0, 1.0 - d)))
+        return rows
+
     async def search_fts(self, query: str, limit: int = 20) -> list[dict]:
         """Full-text search on the content field.
 

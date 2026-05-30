@@ -1,11 +1,22 @@
 """Wiki MCP handlers: generate, ingest, search, and lint wiki pages."""
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from opencode_search.config import get_project_graph_db_path, get_project_wiki_dir, get_project_raw_dir
+from opencode_search.config import (
+    DEFAULT_DIMS,
+    DEFAULT_EMBED_MODEL,
+    get_project_db_path,
+    get_project_graph_db_path,
+    get_project_wiki_dir,
+    get_project_raw_dir,
+    load_registry,
+)
 
 if TYPE_CHECKING:
     from opencode_search.enricher.client import LLMClient
@@ -37,6 +48,101 @@ def _make_wiki(project_path: str) -> WikiStorage:
         wiki_dir=get_project_wiki_dir(project_path),
         raw_dir=get_project_raw_dir(project_path),
     )
+
+
+def _chunk_id(path: str, position: int) -> int:
+    raw = f"{path}:{position}"
+    return int(hashlib.sha256(raw.encode()).hexdigest()[:16], 16) % (2**62)
+
+
+async def _embed_wiki_pages(project_path: str, page_paths: list[Path]) -> int:
+    """Embed wiki page files into the project's LanceDB vector index.
+
+    Makes pages searchable via wiki_query and search_code immediately after
+    generation or ingestion — without waiting for the file watcher.
+    """
+    from opencode_search.chunker import chunk_file
+    from opencode_search.embeddings import embed_passages
+    from opencode_search.storage import ChunkData, Storage
+
+    existing = [p for p in page_paths if p.exists()]
+    if not existing:
+        return 0
+
+    registry = load_registry()
+    entry = registry.get(project_path)
+    dims = entry.dims if entry else DEFAULT_DIMS
+    db_path = get_project_db_path(project_path)
+
+    all_chunks: list[ChunkData] = []
+    now_us = int(time.time() * 1_000_000)
+
+    for page_path in existing:
+        try:
+            content = page_path.read_text(encoding="utf-8", errors="replace")
+            if not content.strip():
+                continue
+            chunks = await asyncio.to_thread(chunk_file, content, page_path)
+            if not chunks:
+                continue
+            texts = [c.content for c in chunks]
+            vectors = await asyncio.to_thread(
+                embed_passages, texts, model=DEFAULT_EMBED_MODEL, dimensions=dims
+            )
+            if len(vectors) != len(chunks):
+                continue
+            page_str = str(page_path)
+            file_hash = hashlib.sha256(content.encode()).hexdigest()
+            for i, (c, vec) in enumerate(zip(chunks, vectors)):
+                all_chunks.append(ChunkData(
+                    chunk_id=_chunk_id(page_str, i),
+                    path=page_str,
+                    file_hash=file_hash,
+                    language="wiki",
+                    position=i,
+                    content=c.content,
+                    content_hash=hashlib.sha256(c.content.encode()).hexdigest()[:16],
+                    start_line=c.start_line,
+                    end_line=c.end_line,
+                    vector=vec,
+                    created_at=now_us,
+                ))
+        except Exception as exc:
+            log.debug("wiki embed failed for %s: %s", page_path, exc)
+
+    if not all_chunks:
+        return 0
+
+    storage = Storage(db_path=db_path, dims=dims)
+    await storage.open()
+    try:
+        await storage.write_chunks(all_chunks)
+    finally:
+        await storage.close()
+
+    return len(all_chunks)
+
+
+async def handle_wiki_reindex(project_path: str) -> dict[str, Any]:
+    """Embed all existing wiki pages into the vector index.
+
+    Use this to make wiki pages searchable after they were generated without
+    the embedding step (e.g. pages created before this feature was added).
+    Safe to call multiple times — uses merge_insert (upsert) semantics.
+    """
+    wiki_dir = get_project_wiki_dir(project_path)
+    if not wiki_dir.exists():
+        return {"status": "ok", "project_path": project_path, "pages_found": 0, "embedded_chunks": 0}
+
+    page_paths = sorted(wiki_dir.glob("*.md"))
+    embedded = await _embed_wiki_pages(project_path, page_paths)
+    log.info("wiki_reindex[%s]: embedded %d chunks from %d pages", project_path, embedded, len(page_paths))
+    return {
+        "status": "ok",
+        "project_path": project_path,
+        "pages_found": len(page_paths),
+        "embedded_chunks": embedded,
+    }
 
 
 async def handle_wiki_generate(
@@ -99,7 +205,18 @@ async def handle_wiki_generate(
         finally:
             gs.close()
         all_pages_created.extend(pages_created)
-        results_per_path.append({"path": path, "pages_created": len(pages_created)})
+
+        # Embed generated pages into LanceDB so wiki_query finds them immediately
+        wiki_dir = get_project_wiki_dir(path)
+        page_file_paths = [wiki_dir / f"{name}.md" for name in pages_created]
+        try:
+            embedded = await _embed_wiki_pages(path, page_file_paths)
+            log.info("wiki_generate[%s]: embedded %d wiki chunks", path, embedded)
+        except Exception as exc:
+            log.warning("wiki_generate[%s]: embedding failed: %s", path, exc)
+            embedded = 0
+
+        results_per_path.append({"path": path, "pages_created": len(pages_created), "embedded_chunks": embedded})
 
     result: dict = {
         "status": "ok",
@@ -141,17 +258,27 @@ async def handle_wiki_ingest(source_path: str, project_path: str) -> dict[str, A
 
     gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
 
+    pages: list[str] = []
     try:
         pages = await gen.ingest_raw_source(source_path, project_path)
-        return {
-            "status": "ok",
-            "source_path": source_path,
-            "pages_created": pages,
-        }
     except FileNotFoundError as exc:
         return {"error": str(exc), "source_path": source_path}
     finally:
         gs.close()
+
+    # Embed the ingested pages into LanceDB so wiki_query finds them immediately
+    wiki_dir = get_project_wiki_dir(project_path)
+    page_file_paths = [wiki_dir / f"{name}.md" for name in pages]
+    try:
+        await _embed_wiki_pages(project_path, page_file_paths)
+    except Exception as exc:
+        log.debug("wiki_ingest: embedding failed for %s: %s", source_path, exc)
+
+    return {
+        "status": "ok",
+        "source_path": source_path,
+        "pages_created": pages,
+    }
 
 
 async def handle_wiki_query(
@@ -159,28 +286,49 @@ async def handle_wiki_query(
     project_path: str,
     top_k: int = 5,
 ) -> dict[str, Any]:
-    """Search wiki pages using the existing vector search pipeline."""
-    from opencode_search.handlers._query import handle_search_code
+    """Search wiki pages using a language-filtered vector search.
 
-    result = await handle_search_code(
-        query=query,
-        project_paths=[project_path],
-        top_k=top_k,
-        use_rerank=False,
-    )
+    Searches only within wiki-language chunks so results are never buried
+    by the much larger code chunk population.
+    """
+    from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL, get_project_db_path, load_registry
+    from opencode_search.embeddings import embed_query
+    from opencode_search.storage import Storage
 
-    # Filter to wiki language only
-    if "results" in result:
-        wiki_results = [
-            r for r in result["results"]
-            if r.get("language") in ("wiki", "knowledge_base", "markdown")
-        ]
-        return {
-            "query": query,
-            "results": wiki_results,
-            "total": len(wiki_results),
+    registry = load_registry()
+    entry = registry.get(project_path)
+    if entry is None:
+        return {"query": query, "results": [], "total": 0, "error": "project not indexed"}
+
+    dims = entry.dims if entry else DEFAULT_DIMS
+    db_path = get_project_db_path(project_path)
+
+    try:
+        query_vec = await asyncio.to_thread(embed_query, query, model=DEFAULT_EMBED_MODEL, dimensions=dims)
+    except Exception as exc:
+        log.warning("wiki_query: embed failed: %s", exc)
+        return {"query": query, "results": [], "total": 0}
+
+    storage = Storage(db_path=db_path, dims=dims)
+    await storage.open()
+    try:
+        rows = await storage.search_vector_language(query_vec, language="wiki", limit=top_k)
+    finally:
+        await storage.close()
+
+    results = [
+        {
+            "path": r.get("path", ""),
+            "content": r.get("content", ""),
+            "language": r.get("language", "wiki"),
+            "start_line": int(r.get("start_line", 0)),
+            "end_line": int(r.get("end_line", 0)),
+            "score": round(float(r.get("_score", 0.0)), 4),
+            "project_path": project_path,
         }
-    return result
+        for r in rows
+    ]
+    return {"query": query, "results": results, "total": len(results)}
 
 
 async def handle_wiki_lint(project_path: str) -> dict[str, Any]:

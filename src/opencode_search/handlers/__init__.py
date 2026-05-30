@@ -47,6 +47,7 @@ from opencode_search.handlers._wiki import (
     handle_wiki_ingest,
     handle_wiki_lint,
     handle_wiki_query,
+    handle_wiki_reindex,
 )
 
 __all__ = [
@@ -82,5 +83,6 @@ __all__ = [
     "handle_wiki_ingest",
     "handle_wiki_lint",
     "handle_wiki_query",
+    "handle_wiki_reindex",
     "resolve_indexed_project_path",
 ]
