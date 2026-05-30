@@ -18,35 +18,17 @@ pytest.importorskip(
 )
 
 # ---------------------------------------------------------------------------
-# Expected tool catalogue
+# Expected tool catalogue — v2 intent API (7 tools)
 # ---------------------------------------------------------------------------
 
 EXPECTED_MCP_TOOLS: list[str] = [
-    # Core search / indexing
-    "search_code",
-    "index_project",
-    "project_status",
-    "list_indexed_projects",
-    "stop_watching",
-    "search_metrics",
-    # Graph / structural intelligence
-    "get_symbol",
-    "get_callers",
-    "get_callees",
-    "trace_path",
-    "detect_impact",
-    "get_communities",
-    "global_search",
-    # LLM enrichment
-    "enrich_project",
-    "get_symbol_intent",
-    # Wiki
-    "wiki_generate",
-    "wiki_ingest",
-    "wiki_query",
-    "wiki_lint",
-    # Docs search
-    "search_docs",
+    "search",       # find code/docs
+    "ask",          # architectural questions
+    "graph",        # callers/callees/impact/trace
+    "overview",     # structure/communities/status/projects/metrics
+    "build",        # index/pipeline/enrich/wiki/ingest
+    "federation",   # discover/list/add/remove/index members
+    "manage",       # stop_watching/wiki_lint
 ]
 
 
@@ -80,11 +62,11 @@ class TestMcpToolRegistration:
             f"Registered tools: {sorted(registered)}"
         )
 
-    def test_mcp_tool_count_is_at_least_20(self) -> None:
-        """The server must expose at least 20 tools."""
+    def test_mcp_tool_count_is_exactly_7(self) -> None:
+        """The server must expose exactly 7 intent tools (v2 API)."""
         registered = _get_registered_tool_names()
-        assert len(registered) >= 20, (
-            f"Expected >= 20 tools, got {len(registered)}: {sorted(registered)}"
+        assert len(registered) == 7, (
+            f"Expected exactly 7 intent tools, got {len(registered)}: {sorted(registered)}"
         )
 
     @pytest.mark.parametrize("tool_name", EXPECTED_MCP_TOOLS)

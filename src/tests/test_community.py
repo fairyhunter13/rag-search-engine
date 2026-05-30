@@ -245,9 +245,10 @@ async def test_handle_get_communities_returns_all(tmp_path):
     ):
         result = await handle_get_communities(project_path="/tmp/proj")
 
-    assert result["total"] == 3
+    # community 0 has node_count=1 which is below min_node_count=2 filter
+    assert result["total"] == 2
     titles = {c["title"] for c in result["communities"]}
-    assert "Community 0" in titles
+    assert "Community 1" in titles
 
 
 @pytest.mark.asyncio

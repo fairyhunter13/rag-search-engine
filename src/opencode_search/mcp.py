@@ -1,12 +1,13 @@
 """MCP server for opencode-search — stdio and streamable-HTTP transports via FastMCP.
 
-Exposes 6 tools:
-  index_project          — index a directory (GPU-accelerated)
-  search_code            — semantic + keyword hybrid search with reranking
-  project_status         — get indexing state for a directory
-  list_indexed_projects  — enumerate all registered projects
-  stop_watching          — stop the file-watcher for a project
-  search_metrics         — return cumulative search statistics
+Exposes 7 intent-focused tools (v2 API, May 2026):
+  search     — find code/docs by query (scope: code|docs|all|similar)
+  ask        — answer architectural questions (scope: architecture|wiki|all)
+  graph      — code graph: definition|callers|callees|impact|path
+  overview   — project structure|communities|status|projects|metrics
+  build      — index|pipeline|enrich|wiki|ingest|reindex_wiki|describe_symbol
+  federation — discover|list|add|remove|index federation members
+  manage     — stop_watching|wiki_lint
 
 Usage:
   opencode-search mcp           # stdio (for AI assistants)
@@ -33,7 +34,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Any, Literal
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -175,510 +176,290 @@ mcp = FastMCP(**_mcp_kwargs)
 
 
 # ---------------------------------------------------------------------------
-# Tool definitions
+# v2 Intent API — 7 outcome-focused tools (May 2026)
+# Each tool is one capability domain. Use these. Legacy tools are DEPRECATED.
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-async def index_project(
-    path: str,
-    watch: bool = False,
-    force: bool = False,
-    follow_symlinks: bool = True,
-) -> dict[str, Any]:
-    """Index a project directory for semantic code search.
-
-    GPU-accelerated embedding via ONNX Runtime (CUDAExecutionProvider).
-
-    Args:
-        path:            Absolute path to the project root directory.
-        watch:           Start a live file-watcher for incremental re-indexing.
-        force:           Re-index all files even if unchanged (ignores hash cache).
-        follow_symlinks: Follow symlinked directories during indexing (default True; required for
-                         monorepos that use symlinks to share code across services).
-    """
-    runtime_state.note_activity()
-
-    async def _post_index(result: dict) -> None:
-        pp = str(result.get("path", ""))
-        if result.get("status") == "ok" and pp:
-            bound_clients = runtime_state.bind_clients_to_project(pp)
-            if bound_clients > 0:
-                await handle_ensure_project_watching(pp, persist=False)
-
-    return await handle_index_project(
-        path=path, watch=watch, force=force,
-        follow_symlinks=follow_symlinks, on_complete=_post_index,
-    )
-
-
-@mcp.tool()
-async def search_code(
+async def search(
     query: str,
+    scope: Literal["code", "docs", "all", "similar"] = "code",
     project_paths: list[str] | None = None,
     top_k: int = 10,
-    use_rerank: bool = True,
     include_federation: bool = True,
 ) -> dict[str, Any]:
-    """Search indexed projects for code matching the query.
+    """Find code, documentation, or similar snippets matching a query.
 
-    Args:
-        include_federation: If True, also search all indexed federation members of
-            any project in project_paths. Federation members must be registered via
-            add_federation_member and indexed via index_federation.
+    Use this to find SPECIFIC code: functions, classes, files, patterns.
+    Do NOT use for 'how does X work?' — use `ask` for architectural questions.
+    Do NOT use for 'index/enrich/wiki' actions — use `build` for those.
+
+    scope: "code" (default) | "docs" (wiki/markdown only) | "all" | "similar"
     """
     runtime_state.note_activity()
-    return await handle_search_code(
+    valid = {"code", "docs", "all", "similar"}
+    if scope not in valid:
+        return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
+
+    result = await handle_search_code(
         query=query,
         project_paths=project_paths,
         top_k=top_k,
-        use_rerank=use_rerank,
+        use_rerank=True,
         include_federation=include_federation,
     )
-
-
-@mcp.tool()
-async def project_status(path: str) -> dict[str, Any]:
-    """Get the current indexing and watching status for a project."""
-    runtime_state.note_activity()
-    return await handle_project_status(path=path)
-
-
-@mcp.tool()
-async def list_indexed_projects() -> dict[str, Any]:
-    """List all projects that have been indexed."""
-    runtime_state.note_activity()
-    return await handle_list_indexed_projects()
-
-
-@mcp.tool()
-async def stop_watching(path: str) -> dict[str, Any]:
-    """Stop the live file-watcher for a project."""
-    runtime_state.note_activity()
-    return await handle_stop_watching(path=path)
-
-
-@mcp.tool()
-async def search_metrics() -> dict[str, Any]:
-    """Return cumulative search_code call statistics for this daemon session.
-
-    Tracks call count, zero-result rate, latency percentiles (p50/p95), and
-    average top-score distribution — useful for measuring how effectively
-    clients are using the search engine.
-    """
-    from opencode_search.metrics import get_metrics
-
-    runtime_state.note_activity()
-    return get_metrics()
-
-
-# ---------------------------------------------------------------------------
-# Graph / structural code intelligence tools
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def get_symbol(name: str, project_path: str) -> dict[str, Any]:
-    """Find a function, class, or method by name or qualified name.
-
-    Returns definition location, signature, docstring, community_id,
-    and caller/callee counts. Use project_path to scope the lookup to one project.
-    """
-    runtime_state.note_activity()
-    return await handle_get_symbol(name=name, project_path=project_path)
-
-
-@mcp.tool()
-async def get_callers(
-    symbol: str,
-    project_path: str,
-    depth: int = 5,
-) -> dict[str, Any]:
-    """Who calls this function? BFS upstream traversal up to `depth` hops.
-
-    Returns a call chain ordered by depth with confidence scores and file locations.
-    Useful for tracing data flow and understanding where a function is invoked.
-    """
-    runtime_state.note_activity()
-    return await handle_get_callers(symbol=symbol, project_path=project_path, depth=depth)
-
-
-@mcp.tool()
-async def get_callees(
-    symbol: str,
-    project_path: str,
-    depth: int = 5,
-) -> dict[str, Any]:
-    """What does this function call? BFS downstream traversal up to `depth` hops.
-
-    Returns all symbols reachable from this function's call graph.
-    Useful for understanding function dependencies and side effects.
-    """
-    runtime_state.note_activity()
-    return await handle_get_callees(symbol=symbol, project_path=project_path, depth=depth)
-
-
-@mcp.tool()
-async def trace_path(
-    from_symbol: str,
-    to_symbol: str,
-    project_path: str,
-) -> dict[str, Any]:
-    """Find the call path from one symbol to another.
-
-    Returns the shortest call path as an ordered step list.
-    Returns empty path if no connection exists.
-    """
-    runtime_state.note_activity()
-    return await handle_trace_path(
-        from_symbol=from_symbol, to_symbol=to_symbol, project_path=project_path,
-    )
-
-
-@mcp.tool()
-async def detect_impact(symbol: str, project_path: str) -> dict[str, Any]:
-    """Blast radius analysis: everything that transitively calls this symbol.
-
-    Returns all callers at any depth, grouped by depth level with file locations.
-    Useful before refactoring a function — shows full impact surface.
-    """
-    runtime_state.note_activity()
-    return await handle_detect_impact(symbol=symbol, project_path=project_path)
-
-
-@mcp.tool()
-async def get_communities(
-    project_path: str,
-    top_k: int = 100,
-) -> dict[str, Any]:
-    """Return top Leiden community clusters for the project, ordered by size.
-
-    Each community is a group of densely-connected symbols (functions, classes, files).
-    Key entry points are the symbols most called from outside each community.
-    Singleton communities (isolated symbols) are excluded automatically.
-
-    Args:
-        top_k: Maximum communities to return (default 100). Use a lower value
-               on large projects if the response is slow.
-    """
-    runtime_state.note_activity()
-    return await handle_get_communities(project_path=project_path, top_k=top_k)
-
-
-@mcp.tool()
-async def global_search(
-    query: str,
-    project_path: str,
-    top_k: int = 10,
-    include_federation: bool = True,
-) -> dict[str, Any]:
-    """Search across architectural knowledge: community summaries and wiki pages.
-
-    Answers high-level questions like 'which layer handles authentication?'
-    or 'where is the billing logic?' by combining:
-    - Community title/summary text search (from Leiden clusters)
-    - Wiki page vector search (wiki_generate or wiki_ingest output)
-
-    Use search_code for finding specific functions/files.
-    Use global_search for understanding architecture and ownership.
-
-    Args:
-        include_federation: If True, also search communities in all indexed
-            federation members of this project.
-    """
-    runtime_state.note_activity()
-    return await handle_global_search(
-        query=query,
-        project_path=project_path,
-        top_k=top_k,
-        include_federation=include_federation,
-    )
-
-
-@mcp.tool()
-async def project_structure(
-    project_path: str,
-    max_depth: int = 4,
-    include_graph_stats: bool = True,
-) -> dict[str, Any]:
-    """Return a structural overview of the project.
-
-    Produces:
-    - Directory tree (up to max_depth levels)
-    - Language breakdown by file extension
-    - Code graph statistics (total/enriched communities, node counts)
-    - Top 10 architectural communities with entry points
-
-    Use this to quickly understand how a project is organized before
-    diving into search_code or global_search.
-    """
-    runtime_state.note_activity()
-    return await handle_project_structure(
-        project_path=project_path,
-        max_depth=max_depth,
-        include_graph_stats=include_graph_stats,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Phase 3 — LLM enrichment + wiki tools
-# ---------------------------------------------------------------------------
-
-
-@mcp.tool()
-async def enrich_project(
-    project_path: str,
-    scope: str = "communities",
-    max_communities: int = 200,
-    include_federation: bool = True,
-) -> dict[str, Any]:
-    """Trigger LLM enrichment. scope: 'symbols'|'communities'|'wiki'|'all'.
-
-    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai (default: Ollama with
-    phi4-mini:3.8b). Results are cached in the graph DB; re-run only re-enriches
-    changed or unenriched content.
-
-    Args:
-        max_communities: Cap on communities enriched per call (default 200).
-        include_federation: If True, also enrich all indexed federation members.
-    """
-    runtime_state.note_activity()
-    return await handle_enrich_project(
-        project_path=project_path,
-        scope=scope,
-        max_communities=max_communities,
-        include_federation=include_federation,
-    )
-
-
-@mcp.tool()
-async def get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:
-    """Get LLM-generated plain-English description of what a function or class does.
-
-    Returns cached result if available, otherwise calls the configured LLM.
-    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai.
-    """
-    runtime_state.note_activity()
-    return await handle_get_symbol_intent(name=name, project_path=project_path)
-
-
-@mcp.tool()
-async def wiki_generate(
-    project_path: str,
-    max_communities: int = 200,
-    include_federation: bool = True,
-) -> dict[str, Any]:
-    """Auto-generate wiki pages for the top communities in the project.
-
-    Creates markdown pages in the project's wiki directory. Communities are
-    processed largest-first (singleton communities are excluded). Requires
-    OPENCODE_LLM_PROVIDER=ollama|anthropic|openai (default: Ollama phi4-mini:3.8b).
-
-    Args:
-        max_communities: Maximum communities to generate pages for (default 200).
-        include_federation: If True, also generate wiki for indexed federation members.
-    """
-    runtime_state.note_activity()
-    return await handle_wiki_generate(
-        project_path=project_path,
-        max_communities=max_communities,
-        include_federation=include_federation,
-    )
-
-
-@mcp.tool()
-async def wiki_ingest(source_path: str, project_path: str) -> dict[str, Any]:
-    """Ingest a raw document (markdown notes, PDF, design doc) into the project wiki.
-
-    LLM extracts key information and creates/updates relevant wiki pages.
-    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai.
-    """
-    runtime_state.note_activity()
-    return await handle_wiki_ingest(source_path=source_path, project_path=project_path)
-
-
-@mcp.tool()
-async def wiki_query(
-    query: str,
-    project_path: str,
-    top_k: int = 5,
-) -> dict[str, Any]:
-    """Search wiki pages and community summaries.
-
-    Best for architectural questions like 'how does authentication work?'
-    Uses the same GPU-accelerated vector search pipeline as search_code.
-    """
-    runtime_state.note_activity()
-    return await handle_wiki_query(query=query, project_path=project_path, top_k=top_k)
-
-
-@mcp.tool()
-async def wiki_lint(project_path: str) -> dict[str, Any]:
-    """Health-check the wiki: find orphaned pages, stale content, empty pages."""
-    runtime_state.note_activity()
-    return await handle_wiki_lint(project_path=project_path)
-
-
-@mcp.tool()
-async def wiki_reindex(project_path: str) -> dict[str, Any]:
-    """Embed all existing wiki pages into the vector index so wiki_query can find them.
-
-    Use this after wiki_generate to make the generated pages searchable, or to
-    repair a project where wiki pages exist on disk but are missing from the
-    vector index (e.g. pages created before auto-embedding was added).
-    Safe to call multiple times — uses upsert semantics.
-    """
-    runtime_state.note_activity()
-    return await handle_wiki_reindex(project_path=project_path)
-
-
-@mcp.tool()
-async def search_docs(
-    query: str,
-    project_paths: list[str] | None = None,
-    top_k: int = 10,
-) -> dict[str, Any]:
-    """Search only documentation files (markdown, rst, txt, wiki pages).
-
-    Wrapper around search_code that filters to documentation content types.
-    Useful when you want prose answers, not code snippets.
-    """
-    runtime_state.note_activity()
-    from opencode_search.handlers._query import handle_search_code as _search
-
-    paths = project_paths or []
-    result = await _search(
-        query=query,
-        project_paths=paths or None,
-        top_k=top_k,
-        use_rerank=False,
-    )
-    if "results" in result:
+    if scope == "docs" and "results" in result:
         doc_langs = {"wiki", "knowledge_base", "markdown", "rst", "text"}
-        doc_results = [
+        result["results"] = [
             r for r in result["results"]
-            if r.get("language", "").lower() in doc_langs
+            if r.get("language", "") in doc_langs
             or r.get("path", "").endswith((".md", ".rst", ".txt"))
         ]
-        return {
-            "query": query,
-            "results": doc_results,
-            "total": len(doc_results),
-            "elapsed_ms": result.get("elapsed_ms"),
-        }
+        result["total"] = len(result["results"])
     return result
 
 
-# ---------------------------------------------------------------------------
-# Phase 4 — Federation tools
-# ---------------------------------------------------------------------------
-
-
 @mcp.tool()
-async def discover_federation(project_path: str) -> dict[str, Any]:
-    """Auto-discover federation members from symlinks and workspace files.
-
-    Scans the project root for:
-    - Top-level symlinked directories (most common pattern in monorepos)
-    - go.work 'use' directives
-    - pnpm-workspace.yaml 'packages' entries
-    - package.json 'workspaces' entries
-
-    Returns the discovered paths without registering them. Use add_federation_member
-    to register discovered paths, then index_federation to index them.
-    """
-    runtime_state.note_activity()
-    return await handle_discover_federation(project_path=project_path)
-
-
-@mcp.tool()
-async def list_federation(project_path: str) -> dict[str, Any]:
-    """List all registered federation members for a project.
-
-    Shows each member's path, whether it has been indexed, and its file count.
-    """
-    runtime_state.note_activity()
-    return await handle_list_federation(project_path=project_path)
-
-
-@mcp.tool()
-async def add_federation_member(root_path: str, member_path: str) -> dict[str, Any]:
-    """Register a project path as a federation member of the root project.
-
-    Pre-registers the member in the registry (no indexing happens yet).
-    Use index_federation to index all registered members afterwards.
-    """
-    runtime_state.note_activity()
-    return await handle_add_federation_member(
-        root_path=root_path, member_path=member_path
-    )
-
-
-@mcp.tool()
-async def remove_federation_member(root_path: str, member_path: str) -> dict[str, Any]:
-    """Remove a project path from the federation members of the root project.
-
-    Does not delete the member's index or registry entry — only removes the
-    association so it is no longer included in federation-aware operations.
-    """
-    runtime_state.note_activity()
-    return await handle_remove_federation_member(
-        root_path=root_path, member_path=member_path
-    )
-
-
-@mcp.tool()
-async def index_federation(root_path: str, watch: bool = False) -> dict[str, Any]:
-    """Index all registered federation members of the root project.
-
-    Runs members sequentially (not concurrent) to avoid GPU contention during
-    embedding. Members already up-to-date are skipped (hash-based change detection).
-
-    After indexing, use search_code / enrich_project / wiki_generate with
-    include_federation=True to operate across the whole federation.
-    """
-    runtime_state.note_activity()
-    return await handle_index_federation(root_path=root_path, watch=watch)
-
-
-@mcp.tool()
-async def pipeline(
+async def ask(
+    query: str,
     project_path: str,
-    enrich_max_communities: int = 100,
-    wiki_max_communities: int = 100,
-    index_members: bool = False,
-    ingest_docs: bool = True,
+    scope: Literal["architecture", "wiki", "all"] = "all",
+    top_k: int = 10,
+    include_federation: bool = True,
+) -> dict[str, Any]:
+    """Answer architectural and conceptual questions about a project.
+
+    Use this for 'how does X work?', 'which layer handles Y?', 'where is Z?'.
+    Do NOT use to find specific functions/files — use `search` for that.
+    Do NOT use to index or build knowledge — use `build` for that.
+
+    scope: "all" (default) | "architecture" (communities only) | "wiki" (pages only)
+    """
+    runtime_state.note_activity()
+    valid = {"architecture", "wiki", "all"}
+    if scope not in valid:
+        return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
+
+    if scope == "wiki":
+        from opencode_search.handlers._wiki import handle_wiki_query
+        return await handle_wiki_query(query=query, project_path=project_path, top_k=top_k)
+    return await handle_global_search(
+        query=query, project_path=project_path, top_k=top_k,
+        include_federation=include_federation,
+    )
+
+
+@mcp.tool()
+async def graph(
+    symbol: str,
+    project_path: str,
+    relation: Literal["definition", "callers", "callees", "impact", "path"] = "definition",
+    to_symbol: str | None = None,
+    depth: int = 5,
+) -> dict[str, Any]:
+    """Explore the code graph: definition, callers, callees, impact, or call path.
+
+    Use this for call-graph analysis, tracing business flows, impact assessment.
+    Do NOT use for text search — use `search` or `ask` for that.
+
+    relation: "definition" (default) | "callers" | "callees" | "impact" | "path"
+    to_symbol: required when relation="path" (find call path from symbol to to_symbol)
+    depth: BFS depth for callers/callees (default 5)
+    """
+    runtime_state.note_activity()
+    valid = {"definition", "callers", "callees", "impact", "path"}
+    if relation not in valid:
+        return {"error": f"Invalid relation {relation!r}", "valid_relations": sorted(valid)}
+    if relation == "path" and not to_symbol:
+        return {"error": "relation='path' requires to_symbol parameter"}
+
+    if relation == "definition":
+        return await handle_get_symbol(name=symbol, project_path=project_path)
+    elif relation == "callers":
+        return await handle_get_callers(symbol=symbol, project_path=project_path, depth=depth)
+    elif relation == "callees":
+        return await handle_get_callees(symbol=symbol, project_path=project_path, depth=depth)
+    elif relation == "impact":
+        return await handle_detect_impact(symbol=symbol, project_path=project_path)
+    else:
+        return await handle_trace_path(
+            from_symbol=symbol, to_symbol=to_symbol, project_path=project_path,
+        )
+
+
+@mcp.tool()
+async def overview(
+    project_path: str | None = None,
+    what: Literal["structure", "communities", "status", "projects", "metrics"] = "structure",
+    max_depth: int = 4,
+    top_k: int = 100,
+) -> dict[str, Any]:
+    """Get a structural or status overview of a project or the search engine.
+
+    Use this to orient yourself before searching or building the knowledge base.
+    Do NOT use to search code — use `search` or `ask` for that.
+
+    what: "structure" (default) | "communities" | "status" | "projects" | "metrics"
+    project_path: not required for what="projects" or what="metrics"
+    """
+    runtime_state.note_activity()
+    valid = {"structure", "communities", "status", "projects", "metrics"}
+    if what not in valid:
+        return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
+
+    if what == "structure":
+        if not project_path:
+            return {"error": "project_path required for what='structure'"}
+        return await handle_project_structure(project_path=project_path, max_depth=max_depth)
+    elif what == "communities":
+        if not project_path:
+            return {"error": "project_path required for what='communities'"}
+        return await handle_get_communities(project_path=project_path, top_k=top_k)
+    elif what == "status":
+        if not project_path:
+            return {"error": "project_path required for what='status'"}
+        return await handle_project_status(path=project_path)
+    elif what == "projects":
+        return await handle_list_indexed_projects()
+    else:
+        from opencode_search.metrics import get_metrics
+        return get_metrics()
+
+
+@mcp.tool()
+async def build(
+    project_path: str,
+    action: Literal["index", "pipeline", "enrich", "wiki", "ingest", "reindex_wiki", "describe_symbol"] = "pipeline",
+    source_path: str | None = None,
+    symbol: str | None = None,
+    max_communities: int = 200,
+    include_federation: bool = True,
+    force: bool = False,
+    watch: bool = True,
+) -> dict[str, Any]:
+    """Index a project or build/update its knowledge base.
+
+    Use this to index a new project or build/refresh the knowledge base.
+    Start with action='pipeline' for a complete one-call setup.
+    Do NOT use for searching — use `search` or `ask` for that.
+
+    action: "pipeline" (default, recommended) | "index" | "enrich" | "wiki"
+            | "ingest" | "reindex_wiki" | "describe_symbol"
+    source_path: required for action="ingest"
+    symbol: required for action="describe_symbol"
+    max_communities: cap on communities to enrich/wiki (default 200)
+    """
+    runtime_state.note_activity()
+    valid = {"index", "pipeline", "enrich", "wiki", "ingest", "reindex_wiki", "describe_symbol"}
+    if action not in valid:
+        return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
+
+    if action == "index":
+        async def _post_index(result: dict) -> None:
+            pp = str(result.get("path", ""))
+            if result.get("status") == "ok" and pp:
+                if runtime_state.bind_clients_to_project(pp) > 0:
+                    await handle_ensure_project_watching(pp, persist=False)
+        return await handle_index_project(
+            path=project_path, watch=watch, force=force,
+            follow_symlinks=True, on_complete=_post_index,
+        )
+    elif action == "pipeline":
+        return await handle_pipeline(
+            project_path=project_path,
+            enrich_max_communities=max_communities,
+            wiki_max_communities=max_communities,
+            ingest_docs=True,
+            watch=watch,
+        )
+    elif action == "enrich":
+        return await handle_enrich_project(
+            project_path=project_path,
+            scope="communities",
+            max_communities=max_communities,
+            include_federation=include_federation,
+        )
+    elif action == "wiki":
+        return await handle_wiki_generate(
+            project_path=project_path,
+            max_communities=max_communities,
+            include_federation=include_federation,
+        )
+    elif action == "ingest":
+        if not source_path:
+            return {"error": "action='ingest' requires source_path parameter"}
+        return await handle_wiki_ingest(source_path=source_path, project_path=project_path)
+    elif action == "reindex_wiki":
+        return await handle_wiki_reindex(project_path=project_path)
+    else:
+        if not symbol:
+            return {"error": "action='describe_symbol' requires symbol parameter"}
+        return await handle_get_symbol_intent(name=symbol, project_path=project_path)
+
+
+@mcp.tool()
+async def federation(
+    root_path: str,
+    action: Literal["discover", "list", "add", "remove", "index"] = "list",
+    member_path: str | None = None,
     watch: bool = False,
 ) -> dict[str, Any]:
-    """Run the full knowledge-base pipeline for a project in one call.
+    """Manage multi-repo federation: discover, list, add, remove, or index members.
 
-    Executes all steps in order:
-    1. Discover + register federation members from symlinks and workspace files
-    2. Optionally index each federation member (index_members=True; skip when root
-       covers members via follow_symlinks=True to avoid duplicate indexing)
-    3. LLM-enrich top N communities with titles and summaries (skipped if LLM unavailable)
-    4. Generate wiki pages for top N communities (skipped if LLM unavailable)
-    5. Ingest markdown/rst documentation files found in the project root and docs/
+    Use this to manage which sub-repos are included in federation-aware operations.
+    Members are auto-discovered from symlinks, go.work, pnpm-workspace.yaml, package.json.
+    Do NOT use this to search or build KB — use `search`, `ask`, or `build` for that.
 
-    This is the recommended way to fully activate the knowledge base for any project.
-    Run it once after initial indexing; re-run to pick up new communities and docs.
-
-    Args:
-        enrich_max_communities: Communities to enrich per project (default 100).
-        wiki_max_communities: Wiki pages to generate per project (default 100).
-        index_members: Index each federation member as a separate project.
-        ingest_docs: Ingest documentation files from project root and docs/.
-        watch: Start file-watchers on indexed members (only if index_members=True).
+    action: "list" (default) | "discover" | "add" | "remove" | "index"
+    member_path: required for action="add" or "remove"
     """
     runtime_state.note_activity()
-    return await handle_pipeline(
-        project_path=project_path,
-        enrich_max_communities=enrich_max_communities,
-        wiki_max_communities=wiki_max_communities,
-        index_members=index_members,
-        ingest_docs=ingest_docs,
-        watch=watch,
-    )
+    valid = {"discover", "list", "add", "remove", "index"}
+    if action not in valid:
+        return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
+
+    if action == "discover":
+        return await handle_discover_federation(project_path=root_path)
+    elif action == "list":
+        return await handle_list_federation(project_path=root_path)
+    elif action == "add":
+        if not member_path:
+            return {"error": "action='add' requires member_path parameter"}
+        return await handle_add_federation_member(root_path=root_path, member_path=member_path)
+    elif action == "remove":
+        if not member_path:
+            return {"error": "action='remove' requires member_path parameter"}
+        return await handle_remove_federation_member(root_path=root_path, member_path=member_path)
+    else:
+        return await handle_index_federation(root_path=root_path, watch=watch)
+
+
+@mcp.tool()
+async def manage(
+    project_path: str,
+    action: Literal["stop_watching", "wiki_lint"] = "wiki_lint",
+) -> dict[str, Any]:
+    """Project lifecycle: stop file watchers or health-check the wiki.
+
+    action: "wiki_lint" (default) | "stop_watching"
+    """
+    runtime_state.note_activity()
+    valid = {"stop_watching", "wiki_lint"}
+    if action not in valid:
+        return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
+
+    if action == "stop_watching":
+        return await handle_stop_watching(path=project_path)
+    return await handle_wiki_lint(project_path=project_path)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard + API routes (browser-viewable at http://127.0.0.1:8765/dashboard)
+# ---------------------------------------------------------------------------
+
+from opencode_search.dashboard import register_dashboard_routes
+register_dashboard_routes(mcp)
 
 
 # ---------------------------------------------------------------------------

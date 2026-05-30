@@ -19,13 +19,20 @@ from opencode_search.mcp import (
     _release_stale_project_watches,
     client_close,
     client_open,
-    index_project,
-    list_indexed_projects,
-    project_status,
     resume_watchers,
-    search_code,
-    stop_watching,
+    # v2 intent tools
+    search,
+    build,
+    overview,
+    manage,
 )
+# Alias legacy names for test compatibility
+index_project = build
+search_code = search
+# project_status, list_indexed_projects, stop_watching now live in overview/manage
+async def list_indexed_projects(): return await overview(what="projects")
+async def project_status(path): return await overview(project_path=path, what="status")
+async def stop_watching(path): return await manage(project_path=path, action="stop_watching")
 from opencode_search.search import clear_search_cache
 from opencode_search.watcher import watcher_manager
 

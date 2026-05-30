@@ -22,10 +22,13 @@ pytest.importorskip("mcp")
 from opencode_search import config
 from opencode_search.mcp import (
     _release_stale_project_watches,
-    index_project,
-    project_status,
-    search_code,
+    search,
+    build,
+    overview,
 )
+index_project = build
+search_code = search
+async def project_status(path): return await overview(project_path=path, what="status")
 from opencode_search.search import clear_search_cache
 from opencode_search.watcher import watcher_manager
 
