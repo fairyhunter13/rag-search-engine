@@ -24,6 +24,7 @@ async def handle_search_code(
     top_k: int = FINAL_TOP_K,
     use_rerank: bool = True,
     content_types: list[str] | None = None,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Search indexed projects for code matching the query."""
     if not query.strip():
@@ -34,7 +35,11 @@ async def handle_search_code(
         return {"results": [], "note": "No indexed projects. Run index_project first."}
 
     if project_paths:
-        requested = {str(Path(p).expanduser().resolve()) for p in project_paths}
+        resolved = [str(Path(p).expanduser().resolve()) for p in project_paths]
+        if include_federation:
+            from opencode_search.handlers._federation import _expand_with_federation
+            resolved = _expand_with_federation(resolved, registry)
+        requested = set(resolved)
         projects = [v for k, v in registry.items() if k in requested]
         if not projects:
             return {"error": f"None of the requested paths are indexed: {project_paths}"}

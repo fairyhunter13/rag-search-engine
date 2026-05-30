@@ -43,6 +43,7 @@ async def handle_enrich_project(
     project_path: str,
     scope: str = "communities",
     max_communities: int | None = None,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Trigger LLM enrichment. scope: symbols|communities|wiki|all.
 
@@ -65,31 +66,53 @@ async def handle_enrich_project(
             "project_path": project_path,
         }
 
-    gs = _open_graph(project_path)
-    if gs is None:
-        return {"error": "graph not built", "project_path": project_path}
+    # Build effective project list (root + indexed federation members if requested)
+    from opencode_search.config import load_registry
+    registry = load_registry()
+    paths_to_enrich = [project_path]
+    if include_federation:
+        from opencode_search.handlers._federation import _expand_with_federation
+        paths_to_enrich = _expand_with_federation([project_path], registry)
 
     cap = max_communities if max_communities is not None else _DEFAULT_ENRICH_MAX_COMMUNITIES
     t0 = time.perf_counter()
-    enriched_symbols = 0
-    enriched_communities = 0
+    total_symbols = 0
+    total_communities = 0
+    results_per_path: list[dict[str, Any]] = []
 
-    try:
-        if scope in ("symbols", "all"):
-            enriched_symbols = await _enrich_symbols(gs, llm)
-        if scope in ("communities", "all"):
-            enriched_communities = await _enrich_communities(gs, llm, max_communities=cap)
-    finally:
-        gs.close()
+    for path in paths_to_enrich:
+        gs = _open_graph(path)
+        if gs is None:
+            results_per_path.append({"path": path, "error": "graph not built"})
+            continue
+        enriched_symbols = 0
+        enriched_communities = 0
+        try:
+            if scope in ("symbols", "all"):
+                enriched_symbols = await _enrich_symbols(gs, llm)
+            if scope in ("communities", "all"):
+                enriched_communities = await _enrich_communities(gs, llm, max_communities=cap)
+        finally:
+            gs.close()
+        total_symbols += enriched_symbols
+        total_communities += enriched_communities
+        results_per_path.append({
+            "path": path,
+            "enriched_symbols": enriched_symbols,
+            "enriched_communities": enriched_communities,
+        })
 
-    return {
+    result: dict[str, Any] = {
         "status": "ok",
         "project_path": project_path,
         "scope": scope,
-        "enriched_symbols": enriched_symbols,
-        "enriched_communities": enriched_communities,
+        "enriched_symbols": total_symbols,
+        "enriched_communities": total_communities,
         "elapsed_s": round(time.perf_counter() - t0, 2),
     }
+    if include_federation and len(paths_to_enrich) > 1:
+        result["federation_results"] = results_per_path
+    return result
 
 
 async def handle_get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:

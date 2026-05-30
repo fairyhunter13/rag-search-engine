@@ -42,6 +42,7 @@ def _make_wiki(project_path: str) -> WikiStorage:
 async def handle_wiki_generate(
     project_path: str,
     max_communities: int = 200,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Auto-generate wiki pages from code graph.
 
@@ -62,39 +63,53 @@ async def handle_wiki_generate(
     if not llm.is_available():
         return {"error": "LLM provider not reachable", "project_path": project_path}
 
-    gs = _open_graph(project_path)
-    if gs is None:
-        return {"error": "graph not built", "project_path": project_path}
-
-    wiki = _make_wiki(project_path)
     cap = int(_os.environ.get("OPENCODE_WIKI_MAX_COMMUNITIES", str(max_communities)))
 
+    # Build effective project list (root + indexed federation members if requested)
+    from opencode_search.config import load_registry
+    registry = load_registry()
+    paths_to_generate = [project_path]
+    if include_federation:
+        from opencode_search.handlers._federation import _expand_with_federation
+        paths_to_generate = _expand_with_federation([project_path], registry)
+
     from opencode_search.wiki.generator import WikiGenerator
-    gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
+    all_pages_created: list[str] = []
+    results_per_path: list[dict] = []
 
-    try:
-        # Use limit + min_node_count=2 + order_by_size to avoid loading all rows.
-        # On a 163k-community project this reduces the candidate set from 163k to ~600.
-        communities = gs.get_communities(
-            limit=cap, min_node_count=2, order_by_size=True
-        )
+    for path in paths_to_generate:
+        gs = _open_graph(path)
+        if gs is None:
+            results_per_path.append({"path": path, "error": "graph not built"})
+            continue
+        wiki = _make_wiki(path)
+        gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
         pages_created: list[str] = []
-        for c in communities:
-            try:
-                await gen.generate_community_page(c.id)
-                pages_created.append(f"community_{c.id}")
-            except Exception as exc:  # noqa: BLE001
-                log.debug("wiki gen failed for community %d: %s", c.id, exc)
+        try:
+            communities = gs.get_communities(
+                limit=cap, min_node_count=2, order_by_size=True
+            )
+            for c in communities:
+                try:
+                    await gen.generate_community_page(c.id)
+                    pages_created.append(f"community_{c.id}")
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("wiki gen failed for community %d in %s: %s", c.id, path, exc)
+            await gen.generate_index()
+        finally:
+            gs.close()
+        all_pages_created.extend(pages_created)
+        results_per_path.append({"path": path, "pages_created": len(pages_created)})
 
-        await gen.generate_index()
-        return {
-            "status": "ok",
-            "project_path": project_path,
-            "pages_created": pages_created,
-            "total": len(pages_created),
-        }
-    finally:
-        gs.close()
+    result: dict = {
+        "status": "ok",
+        "project_path": project_path,
+        "pages_created": all_pages_created,
+        "total": len(all_pages_created),
+    }
+    if include_federation and len(paths_to_generate) > 1:
+        result["federation_results"] = results_per_path
+    return result
 
 
 async def handle_wiki_ingest(source_path: str, project_path: str) -> dict[str, Any]:

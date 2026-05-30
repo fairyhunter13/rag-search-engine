@@ -7,7 +7,7 @@ import logging
 import os
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,7 @@ class ProjectEntry:
     file_count: int = 0
     last_active: str | None = None   # ISO-8601 timestamp or None
     watch: bool = False
+    federation: list[str] = field(default_factory=list)  # paths of federated member projects
 
     def to_dict(self) -> dict:
         return asdict(self)
