@@ -96,6 +96,11 @@ async def _stale_cleanup_loop() -> None:
     _watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
     _watchdog_every = max(1, int(_watchdog_usec / 2_000_000)) if _watchdog_usec else 0
     _tick = 0
+    # One-shot idle cleanup: once models are unloaded after the idle threshold,
+    # skip further cleanup_models calls until new inference resets the idle clock.
+    # This prevents the tight 5-second loop that caused 13k+ cleanup_models calls
+    # (each firing gc.collect×2 + torch.cuda.synchronize — pure CPU/GPU overhead).
+    _models_cleaned = False
     while True:
         try:
             await asyncio.sleep(interval_s)
@@ -108,9 +113,15 @@ async def _stale_cleanup_loop() -> None:
                     cleanup_models,
                     seconds_since_last_inference,
                 )
-                if seconds_since_last_inference() > DEFAULT_MODEL_IDLE_UNLOAD_S:
+                idle_s = seconds_since_last_inference()
+                if idle_s <= DEFAULT_MODEL_IDLE_UNLOAD_S:
+                    # Recent inference — reset so we'll clean again after next idle period
+                    _models_cleaned = False
+                elif not _models_cleaned:
                     log.info("models idle >%ds — unloading to free RAM/VRAM", DEFAULT_MODEL_IDLE_UNLOAD_S)
-                    await asyncio.to_thread(cleanup_models)
+                    released = await asyncio.to_thread(cleanup_models)
+                    if released:
+                        _models_cleaned = True
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -320,14 +331,22 @@ async def detect_impact(symbol: str, project_path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_communities(project_path: str) -> dict[str, Any]:
-    """Return Leiden community clusters for the project.
+async def get_communities(
+    project_path: str,
+    top_k: int = 100,
+) -> dict[str, Any]:
+    """Return top Leiden community clusters for the project, ordered by size.
 
     Each community is a group of densely-connected symbols (functions, classes, files).
     Key entry points are the symbols most called from outside each community.
+    Singleton communities (isolated symbols) are excluded automatically.
+
+    Args:
+        top_k: Maximum communities to return (default 100). Use a lower value
+               on large projects if the response is slow.
     """
     runtime_state.note_activity()
-    return await handle_get_communities(project_path=project_path)
+    return await handle_get_communities(project_path=project_path, top_k=top_k)
 
 
 @mcp.tool()
@@ -359,14 +378,26 @@ async def global_search(
 async def enrich_project(
     project_path: str,
     scope: str = "communities",
+    max_communities: int = 200,
 ) -> dict[str, Any]:
     """Trigger LLM enrichment. scope: 'symbols'|'communities'|'wiki'|'all'.
 
-    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai. Results are cached
-    in the graph DB; re-run only re-enriches changed or unenriched content.
+    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai (default: Ollama with
+    phi4-mini:3.8b). Results are cached in the graph DB; re-run only re-enriches
+    changed or unenriched content.
+
+    Args:
+        max_communities: Cap on communities enriched per call (default 200).
+            Communities are processed largest-first (most architectural coverage
+            per LLM call). Use 5-20 for a quick smoke-test on large projects.
+            Set OPENCODE_ENRICH_MAX_COMMUNITIES env var to change the default.
     """
     runtime_state.note_activity()
-    return await handle_enrich_project(project_path=project_path, scope=scope)
+    return await handle_enrich_project(
+        project_path=project_path,
+        scope=scope,
+        max_communities=max_communities,
+    )
 
 
 @mcp.tool()
@@ -381,14 +412,24 @@ async def get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def wiki_generate(project_path: str) -> dict[str, Any]:
-    """Auto-generate wiki pages for all communities in the project.
+async def wiki_generate(
+    project_path: str,
+    max_communities: int = 200,
+) -> dict[str, Any]:
+    """Auto-generate wiki pages for the top communities in the project.
 
-    Creates markdown pages in the project's wiki directory.
-    Requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai.
+    Creates markdown pages in the project's wiki directory. Communities are
+    processed largest-first (singleton communities are excluded). Requires
+    OPENCODE_LLM_PROVIDER=ollama|anthropic|openai (default: Ollama phi4-mini:3.8b).
+
+    Args:
+        max_communities: Maximum communities to generate pages for (default 200).
+            Use 5-20 for a quick smoke-test on large projects.
     """
     runtime_state.note_activity()
-    return await handle_wiki_generate(project_path=project_path)
+    return await handle_wiki_generate(
+        project_path=project_path, max_communities=max_communities
+    )
 
 
 @mcp.tool()

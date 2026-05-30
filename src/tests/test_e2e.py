@@ -770,7 +770,7 @@ def _acme_graph_has_data() -> bool:
     gs = GraphStorage(str(graph_db))
     gs.open()
     try:
-        return len(gs.all_nodes()) > 0
+        return gs.node_count() > 0  # COUNT(*) — far faster than all_nodes()
     except Exception:
         return False
     finally:
@@ -879,13 +879,15 @@ async def test_e2e_acme_project_global_search(tmp_path, monkeypatch):
 async def test_e2e_acme_project_search_code_p95_within_gate(tmp_path, monkeypatch):
     """search_code p95 latency stays within 5s gate on the indexed redacted-name-3.
 
-    Runs scripts/p95_check.py in a thread (via asyncio.to_thread) so the event
-    loop stays responsive.  The subprocess imports only the MCP bridge — no
-    lancedb in the child process.  This avoids:
-    1. A second in-process ONNX CUDA context (Blackwell SM 12.0 UVM deadlock)
-    2. SIGSEGV from lancedb's Rust background thread corrupting the heap when
-       the daemon concurrently holds lance files open (concurrent mmap writes)
-    Gate is 5s to accommodate MCP session init + LanceDB page-cache cold reads.
+    Runs scripts/p95_check.py as a subprocess.  The script imports ONLY the MCP
+    bridge (no lancedb, no onnxruntime) and exits via os._exit() to bypass
+    interpreter shutdown — this avoids:
+    1. SIGSEGV from lancedb heap corruption when daemon holds lance files open
+    2. Blackwell SM 12.0 CUDA UVM deadlock from two ONNX contexts on same GPU
+    3. asyncio.to_thread executor hang from CUDA library background threads
+
+    subprocess.run() is called directly (blocking the event loop for ~3s) — fine
+    for a single sequential test with no concurrent async tasks.
     """
     import subprocess
     import sys
@@ -895,13 +897,312 @@ async def test_e2e_acme_project_search_code_p95_within_gate(tmp_path, monkeypatc
         await index_and_wait(_ACME_PROJECT)
 
     repo_root = Path(__file__).parent.parent.parent
+    # Direct subprocess.run (not asyncio.to_thread) to avoid CUDA thread-pool hang
+    # during event loop shutdown.  The subprocess takes ~3s on a warm daemon.
+    result = subprocess.run(
+        [sys.executable, "scripts/p95_check.py", _ACME_PROJECT],
+        cwd=repo_root,
+        timeout=600,
+    )
+    assert result.returncode == 0, f"p95_check.py exited {result.returncode}"
 
-    def _run() -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, "scripts/p95_check.py", _ACME_PROJECT],
-            cwd=repo_root,
-            timeout=600,
+
+# ---------------------------------------------------------------------------
+# get_communities + enrich_project + wiki pipeline E2E (unit, mocked LLM)
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_get_communities_top_k_limits_results(indexed_project):
+    """handle_get_communities(top_k=N) returns at most N communities."""
+    from opencode_search.handlers._graph import handle_get_communities
+    project_root, _ = indexed_project
+
+    result = await handle_get_communities(project_path=str(project_root), top_k=2)
+    assert "error" not in result
+    assert len(result["communities"]) <= 2
+
+
+async def test_e2e_get_communities_filters_singletons(indexed_project):
+    """handle_get_communities never returns singleton communities (node_count < 2)."""
+    from opencode_search.handlers._graph import handle_get_communities
+    project_root, _ = indexed_project
+
+    result = await handle_get_communities(project_path=str(project_root), top_k=200)
+    assert "error" not in result
+    for c in result["communities"]:
+        assert c["node_count"] >= 2, (
+            f"Community {c['id']} has node_count={c['node_count']} — singletons must be excluded"
         )
 
-    result = await asyncio.to_thread(_run)
-    assert result.returncode == 0, f"p95_check.py exited {result.returncode}"
+
+async def test_e2e_enrich_project_with_mock_llm(indexed_project):
+    """handle_enrich_project enriches communities and persists titles to the graph DB."""
+    from opencode_search.graph.storage import GraphStorage
+    from opencode_search.handlers._enrichment import handle_enrich_project
+    project_root, _ = indexed_project
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    llm.community_summary.return_value = ("Auth Layer", "Handles authentication and token verification.")
+
+    with patch("opencode_search.handlers._enrichment._get_llm", return_value=llm):
+        result = await handle_enrich_project(
+            project_path=str(project_root),
+            scope="communities",
+            max_communities=2,
+        )
+
+    assert result.get("status") == "ok"
+    assert result["enriched_communities"] >= 1
+
+    # Verify titles were persisted to the graph DB
+    gs = GraphStorage(get_project_graph_db_path(str(project_root)))
+    gs.open()
+    try:
+        enriched = [c for c in gs.get_communities(min_node_count=2) if c.title]
+        assert len(enriched) >= 1, "At least one community should have a title after enrichment"
+    finally:
+        gs.close()
+
+
+async def test_e2e_wiki_generate_after_enrich_full_pipeline(indexed_project, tmp_path):
+    """Full pipeline: enrich communities → generate wiki pages → .md files exist."""
+    from opencode_search.handlers._enrichment import handle_enrich_project
+    from opencode_search.handlers._wiki import handle_wiki_generate
+    project_root, _ = indexed_project
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    llm.community_summary.return_value = ("Auth Layer", "Handles authentication.")
+
+    wiki_dir = tmp_path / "wiki"
+    raw_dir = tmp_path / "raw"
+
+    # Step 1: enrich
+    with patch("opencode_search.handlers._enrichment._get_llm", return_value=llm):
+        enrich_result = await handle_enrich_project(
+            project_path=str(project_root),
+            scope="communities",
+            max_communities=2,
+        )
+    assert enrich_result.get("status") == "ok"
+
+    # Step 2: wiki_generate
+    with patch("opencode_search.handlers._wiki._get_llm", return_value=llm), \
+         patch("opencode_search.handlers._wiki.get_project_graph_db_path",
+               return_value=get_project_graph_db_path(str(project_root))), \
+         patch("opencode_search.handlers._wiki.get_project_wiki_dir", return_value=wiki_dir), \
+         patch("opencode_search.handlers._wiki.get_project_raw_dir", return_value=raw_dir):
+        wiki_result = await handle_wiki_generate(
+            project_path=str(project_root),
+            max_communities=2,
+        )
+
+    assert wiki_result.get("status") == "ok"
+    assert wiki_result["total"] >= 1
+    md_files = list(wiki_dir.glob("*.md")) if wiki_dir.exists() else []
+    assert len(md_files) >= 1, "Wiki directory must contain at least one .md file"
+
+
+async def test_e2e_global_search_after_enrich_finds_results(indexed_project):
+    """After enrich_project populates community titles, global_search returns them."""
+    from opencode_search.handlers._enrichment import handle_enrich_project
+    from opencode_search.handlers._graph import handle_global_search
+    project_root, _ = indexed_project
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    # Use a distinctive title that global_search can match
+    llm.community_summary.return_value = ("JWT Token Verifier", "Handles JWT token verification and authentication.")
+
+    with patch("opencode_search.handlers._enrichment._get_llm", return_value=llm):
+        await handle_enrich_project(
+            project_path=str(project_root),
+            scope="communities",
+            max_communities=2,
+        )
+
+    with patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        result = await handle_global_search(
+            query="JWT token authentication",
+            project_path=str(project_root),
+        )
+
+    assert "error" not in result
+    assert result["community_matches"] >= 1, (
+        "global_search must find enriched communities by title/summary"
+    )
+
+
+async def test_e2e_wiki_query_returns_content(indexed_project, tmp_path):
+    """wiki_query returns wiki page content after wiki_generate creates pages."""
+    from opencode_search.handlers._wiki import handle_wiki_generate, handle_wiki_query
+    project_root, _ = indexed_project
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    llm.community_summary.return_value = ("Auth Layer", "Handles authentication and JWT tokens.")
+
+    wiki_dir = tmp_path / "wiki"
+    raw_dir = tmp_path / "raw"
+
+    with patch("opencode_search.handlers._wiki._get_llm", return_value=llm), \
+         patch("opencode_search.handlers._wiki.get_project_graph_db_path",
+               return_value=get_project_graph_db_path(str(project_root))), \
+         patch("opencode_search.handlers._wiki.get_project_wiki_dir", return_value=wiki_dir), \
+         patch("opencode_search.handlers._wiki.get_project_raw_dir", return_value=raw_dir):
+        wiki_result = await handle_wiki_generate(
+            project_path=str(project_root),
+            max_communities=2,
+        )
+
+    assert wiki_result.get("status") == "ok"
+    # wiki_query imports handle_search_code from _query at call time; patch source module.
+    with patch("opencode_search.handlers._query.handle_search_code",
+               return_value={"results": [], "elapsed_ms": 0}):
+        query_result = await handle_wiki_query(
+            query="authentication",
+            project_path=str(project_root),
+            top_k=3,
+        )
+    assert "query" in query_result or "results" in query_result
+
+
+# ---------------------------------------------------------------------------
+# Large project E2E: redacted-name-3 get_communities + enrich + wiki pipeline
+# ---------------------------------------------------------------------------
+
+
+def _ollama_phi4_available() -> bool:
+    """Return True if Ollama is running and phi4-mini:3.8b is installed."""
+    import urllib.request
+    import json
+    try:
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3) as resp:
+            data = json.loads(resp.read())
+        models = [m.get("name", "") for m in data.get("models", [])]
+        return any("phi4-mini" in m for m in models)
+    except Exception:
+        return False
+
+
+_large_llm = pytest.mark.skipif(
+    not _RUN_LARGE or not os.path.isdir(_ACME_PROJECT) or not _ollama_phi4_available(),
+    reason=(
+        "set OPENCODE_RUN_LARGE_TESTS=1, ensure redacted-name-3 is present, "
+        "and ensure Ollama is running with phi4-mini:3.8b installed"
+    ),
+)
+
+
+_REAL_REGISTRY = Path.home() / ".local" / "share" / "opencode-search" / "projects.json"
+
+
+def _use_real_registry(monkeypatch) -> None:
+    """Undo the per-test isolate_registry patch for large tests that need the real index."""
+    monkeypatch.setattr(config, "REGISTRY_PATH", _REAL_REGISTRY)
+
+
+@_large
+@pytest.mark.large
+async def test_e2e_acme_project_get_communities_no_hang(monkeypatch):
+    """get_communities(top_k=20) on the massive redacted-name-3 completes in < 5s."""
+    from opencode_search.handlers._graph import handle_get_communities
+
+    _use_real_registry(monkeypatch)
+    assert _acme_graph_has_data(), "redacted-name-3 graph.db must be pre-built"
+
+    t0 = time.perf_counter()
+    result = await handle_get_communities(project_path=_ACME_PROJECT, top_k=20)
+    elapsed = time.perf_counter() - t0
+
+    assert "error" not in result, f"handle_get_communities failed: {result.get('error')}"
+    assert len(result["communities"]) <= 20
+    assert all(c["node_count"] >= 2 for c in result["communities"]), "Singletons must be excluded"
+    assert elapsed < 5.0, f"get_communities took {elapsed:.1f}s — must complete in < 5s"
+
+
+@_large_llm
+@pytest.mark.large
+async def test_e2e_acme_project_enrich_top_communities(monkeypatch):
+    """enrich_project(max_communities=5) on redacted-name-3 completes in < 120s without hanging."""
+    from opencode_search.graph.storage import GraphStorage
+    from opencode_search.handlers._enrichment import handle_enrich_project
+
+    _use_real_registry(monkeypatch)
+    assert _acme_graph_has_data(), "redacted-name-3 graph.db must be pre-built"
+
+    t0 = time.perf_counter()
+    result = await handle_enrich_project(
+        project_path=_ACME_PROJECT,
+        scope="communities",
+        max_communities=5,
+    )
+    elapsed = time.perf_counter() - t0
+
+    assert result.get("status") == "ok", f"enrich_project failed: {result}"
+    # Communities may already be enriched from a prior run — that's fine; count >= 0
+    assert elapsed < 120.0, f"enrich_project took {elapsed:.1f}s — must complete in < 120s"
+
+    # Verify at least some titles exist (from this run or a previous one)
+    gs = GraphStorage(get_project_graph_db_path(_ACME_PROJECT))
+    gs.open()
+    try:
+        enriched = [c for c in gs.get_communities(min_node_count=2) if c.title]
+        assert len(enriched) >= 1, "At least one community must have a persisted title"
+    finally:
+        gs.close()
+
+
+@_large_llm
+@pytest.mark.large
+async def test_e2e_acme_project_wiki_pipeline(monkeypatch):
+    """Full wiki pipeline on redacted-name-3: enrich → wiki_generate → global_search.
+
+    Uses max_communities=5 to keep total runtime under 5 minutes.
+    Verifies: no crash, no hang, valid output structure at each stage.
+    """
+    from opencode_search.handlers._enrichment import handle_enrich_project
+    from opencode_search.handlers._wiki import handle_wiki_generate, handle_wiki_lint
+    from opencode_search.handlers._graph import handle_global_search
+
+    _use_real_registry(monkeypatch)
+    assert _acme_graph_has_data(), "redacted-name-3 graph.db must be pre-built"
+
+    # Step 1: Enrich top 5 communities (largest-first); skip if already done
+    enrich_result = await handle_enrich_project(
+        project_path=_ACME_PROJECT,
+        scope="communities",
+        max_communities=5,
+    )
+    assert enrich_result.get("status") == "ok", f"enrich_project failed: {enrich_result}"
+
+    # Step 2: Generate wiki pages (same 5-community cap)
+    wiki_result = await handle_wiki_generate(
+        project_path=_ACME_PROJECT,
+        max_communities=5,
+    )
+    assert wiki_result.get("status") == "ok", f"wiki_generate failed: {wiki_result}"
+    wiki_dir = get_project_wiki_dir(_ACME_PROJECT)
+    assert wiki_dir.exists(), "Wiki directory must be created"
+    md_files = list(wiki_dir.glob("community_*.md"))
+    assert len(md_files) >= 1, "At least one community wiki page must be created"
+
+    # Step 3: global_search should find enriched communities
+    search_result = await handle_global_search(
+        query="payment authentication service",
+        project_path=_ACME_PROJECT,
+        top_k=10,
+    )
+    assert "error" not in search_result
+    assert "results" in search_result
+    assert isinstance(search_result["community_matches"], int)
+    assert search_result["community_matches"] >= 1, (
+        "global_search must find enriched communities after enrich_project ran"
+    )
+
+    # Step 4: lint the wiki — should be healthy
+    lint_result = await handle_wiki_lint(project_path=_ACME_PROJECT)
+    assert "healthy" in lint_result or "pages" in lint_result, (
+        f"wiki_lint returned unexpected structure: {lint_result}"
+    )

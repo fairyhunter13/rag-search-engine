@@ -413,10 +413,35 @@ class GraphStorage:
             resolution_strategy=r["resolution_strategy"],
         ) for r in rows]
 
-    def get_communities(self) -> list[CommunityData]:
+    def get_communities(
+        self,
+        limit: int | None = None,
+        min_node_count: int = 1,
+        order_by_size: bool = False,
+    ) -> list[CommunityData]:
+        """Return communities from the graph DB.
+
+        Args:
+            limit: Maximum number of communities to return. None = no limit.
+            min_node_count: Only return communities with at least this many nodes.
+                            Use 2 to exclude singletons (isolated symbols).
+            order_by_size: If True, order by node_count DESC (largest first).
+                           Default False preserves historical id ASC order so
+                           existing callers like _enrich_communities are unaffected.
+        """
         import json
         db = self._db()
-        rows = db.execute("SELECT * FROM communities ORDER BY id").fetchall()
+        order = "node_count DESC" if order_by_size else "id"
+        if limit is not None:
+            rows = db.execute(
+                f"SELECT * FROM communities WHERE node_count >= ? ORDER BY {order} LIMIT ?",
+                (min_node_count, limit),
+            ).fetchall()
+        else:
+            rows = db.execute(
+                f"SELECT * FROM communities WHERE node_count >= ? ORDER BY {order}",
+                (min_node_count,),
+            ).fetchall()
         result = []
         for r in rows:
             ep = r["key_entry_points"]

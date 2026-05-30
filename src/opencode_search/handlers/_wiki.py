@@ -39,8 +39,19 @@ def _make_wiki(project_path: str) -> WikiStorage:
     )
 
 
-async def handle_wiki_generate(project_path: str) -> dict[str, Any]:
-    """Auto-generate wiki pages from code graph."""
+async def handle_wiki_generate(
+    project_path: str,
+    max_communities: int = 200,
+) -> dict[str, Any]:
+    """Auto-generate wiki pages from code graph.
+
+    Args:
+        max_communities: Cap on the number of community pages to generate.
+            Communities are selected largest-first (most architectural coverage).
+            Singleton communities are excluded. Default 200. Use a smaller value
+            (e.g. 10) for a quick smoke-test on large projects.
+    """
+    import os as _os
     llm = _get_llm()
     if llm is None:
         return {
@@ -56,12 +67,17 @@ async def handle_wiki_generate(project_path: str) -> dict[str, Any]:
         return {"error": "graph not built", "project_path": project_path}
 
     wiki = _make_wiki(project_path)
+    cap = int(_os.environ.get("OPENCODE_WIKI_MAX_COMMUNITIES", str(max_communities)))
 
     from opencode_search.wiki.generator import WikiGenerator
     gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
 
     try:
-        communities = gs.get_communities()
+        # Use limit + min_node_count=2 + order_by_size to avoid loading all rows.
+        # On a 163k-community project this reduces the candidate set from 163k to ~600.
+        communities = gs.get_communities(
+            limit=cap, min_node_count=2, order_by_size=True
+        )
         pages_created: list[str] = []
         for c in communities:
             try:

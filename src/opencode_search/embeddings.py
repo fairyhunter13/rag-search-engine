@@ -916,13 +916,18 @@ def _verify_reranker_iobinding(reranker_obj, model: str) -> None:
         log.debug("reranker IOBinding probe failed: %s", e)
 
 
-def cleanup_models() -> None:
+def cleanup_models() -> bool:
     """Release cached ONNX models to free VRAM and RAM.
 
     Models reload on next inference call (~2-5s cost).
     Safe to call from any thread — uses locks internally.
+
+    Returns True if any model was actually released, False if nothing was loaded.
+    Callers should use the return value to avoid redundant GC/CUDA-sync calls.
     """
     global _cached_embedder, _cached_embedder_model
+
+    released = False
 
     with _embedder_lock:
         if _cached_embedder is not None:
@@ -930,18 +935,26 @@ def cleanup_models() -> None:
             _cached_embedder = None
             _cached_embedder_model = None
             del old
+            released = True
 
     with _reranker_cache_lock:
         for model_name in list(_reranker_cache.keys()):
             old_r = _reranker_cache.pop(model_name, None)
             if old_r is not None:
                 del old_r
-        _reranker_lru.clear()
+                released = True
+        if released:
+            _reranker_lru.clear()
 
-    gc.collect()
-    gc.collect()  # second pass for objects with __del__
-    _cuda_sync_and_empty_cache()
-    log.info("cleanup_models: released cached embedder and all rerankers")
+    if released:
+        gc.collect()
+        gc.collect()  # second pass for objects with __del__
+        _cuda_sync_and_empty_cache()
+        log.info("cleanup_models: released cached embedder and all rerankers")
+    else:
+        log.debug("cleanup_models: no models loaded, nothing to release")
+
+    return released
 
 
 def _setup_migraphx_caching() -> None:

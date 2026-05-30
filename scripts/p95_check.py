@@ -5,8 +5,12 @@ Run from repo root:
 
 Exits 0 on pass, 1 on failure.
 Does NOT import lancedb — safe to run while daemon holds lance files open.
+Uses os._exit() at the end to skip Python interpreter shutdown cleanup.
+FastMCP's module-level bridge object hangs during normal GC after asyncio.run()
+closes the event loop (attempts to cancel async tasks with a dead loop).
 """
 import asyncio
+import os
 import sys
 import time
 
@@ -28,7 +32,7 @@ async def _search(project_path: str, query: str) -> float:
     return time.monotonic() - t0
 
 
-async def main(project_path: str) -> None:
+async def main(project_path: str) -> int:
     # Unmeasured warmup: loads ONNX models + warms LanceDB page cache in daemon.
     print("warmup...", flush=True)
     await _search(project_path, "warmup")
@@ -44,12 +48,17 @@ async def main(project_path: str) -> None:
     print(f"p95={p95*1000:.0f}ms gate={_GATE_S*1000:.0f}ms", flush=True)
     if p95 > _GATE_S:
         print(f"FAIL: p95 {p95*1000:.0f}ms exceeds {_GATE_S*1000:.0f}ms gate", flush=True)
-        sys.exit(1)
+        return 1
     print("PASS", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python scripts/p95_check.py <project_path>")
-        sys.exit(2)
-    asyncio.run(main(sys.argv[1]))
+        os._exit(2)
+    rc = asyncio.run(main(sys.argv[1]))
+    # os._exit skips Python interpreter shutdown (GC, atexit, __del__).
+    # FastMCP's module-level bridge object has async cleanup that deadlocks
+    # when the asyncio event loop is already closed by asyncio.run().
+    os._exit(rc)
