@@ -152,8 +152,17 @@ async def _run_index_project(
             entry.watch = entry.watch or watch
         entry.last_active = _now_iso()
         registry[path_str] = entry
-        save_registry(registry)
 
+        # Auto-discover federation members from symlinks and workspace files.
+        # This runs after every index so the registry stays up-to-date as the
+        # project grows. New members are pre-registered (not indexed) so they
+        # appear in list_federation and can be acted on later.
+        try:
+            _auto_update_federation(path_str, project_path, entry, registry)
+        except Exception as _fed_exc:
+            log.debug("federation auto-discovery failed for %s: %s", path_str, _fed_exc)
+
+        save_registry(registry)
         clear_search_cache()
 
         status = {
@@ -177,6 +186,50 @@ async def _run_index_project(
     finally:
         async with _indexing_lock:
             _indexing_status[path_str] = {"running": False, **(status or {})}
+
+
+def _auto_update_federation(
+    path_str: str,
+    project_path: Path,
+    entry: Any,
+    registry: dict,
+) -> None:
+    """Discover and register federation members in-place (no save — caller saves)."""
+    from opencode_search.config import get_project_db_path, ProjectEntry
+    from opencode_search.handlers._federation import (
+        _discover_go_work_members,
+        _discover_package_json_members,
+        _discover_pnpm_members,
+        _discover_symlink_members,
+    )
+
+    discovered: set[str] = set()
+    for fn in (_discover_symlink_members, _discover_go_work_members,
+               _discover_pnpm_members, _discover_package_json_members):
+        for m in fn(project_path):
+            if m != path_str:
+                discovered.add(m)
+
+    if not discovered:
+        return
+
+    existing = set(entry.federation)
+    new_members = discovered - existing
+    if not new_members:
+        return
+
+    for member in sorted(new_members):
+        if member not in registry:
+            registry[member] = ProjectEntry(
+                path=member,
+                db_path=get_project_db_path(member),
+            )
+        entry.federation.append(member)
+
+    log.info(
+        "auto-discovered %d new federation members for %s (total: %d)",
+        len(new_members), path_str, len(entry.federation),
+    )
 
 
 async def handle_index_project(

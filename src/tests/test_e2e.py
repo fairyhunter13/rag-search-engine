@@ -1492,3 +1492,177 @@ async def test_e2e_astro_project_discover_federation(monkeypatch):
     assert known in result["discovered"], (
         f"astro-golibs not found in discovered: {result['discovered'][:5]}..."
     )
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery: federation registered automatically on index_project
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_index_auto_discovers_federation(tmp_path, monkeypatch):
+    """index_project automatically discovers and registers federation members."""
+    monkeypatch.setattr(config, "REGISTRY_PATH", tmp_path / "registry.json")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "app.py").write_text("def main(): pass\n")
+
+    # Create a real member directory and symlink it into root
+    member = tmp_path / "member_service"
+    member.mkdir()
+    (member / "service.py").write_text("def serve(): pass\n")
+    (root / "link_member").symlink_to(member)
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        result = await index_and_wait(str(root))
+
+    assert result["status"] == "ok"
+
+    # Federation should be auto-discovered and persisted
+    registry = config.load_registry()
+    root_str = str(root.resolve())
+    assert root_str in registry, "Root project should be in registry"
+    entry = registry[root_str]
+    member_str = str(member.resolve())
+    assert member_str in entry.federation, (
+        f"Member not in federation. federation={entry.federation}"
+    )
+    # Member should also be pre-registered in registry
+    assert member_str in registry, "Member should be pre-registered in registry"
+
+
+async def test_e2e_index_auto_discovery_idempotent(tmp_path, monkeypatch):
+    """Re-indexing does not duplicate federation members."""
+    monkeypatch.setattr(config, "REGISTRY_PATH", tmp_path / "registry.json")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "app.py").write_text("x = 1\n")
+    member = tmp_path / "svc"
+    member.mkdir()
+    (root / "link_svc").symlink_to(member)
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        await index_and_wait(str(root))
+        await index_and_wait(str(root))  # second run
+
+    registry = config.load_registry()
+    entry = registry[str(root.resolve())]
+    member_str = str(member.resolve())
+    assert entry.federation.count(member_str) == 1, (
+        f"Member appears more than once in federation: {entry.federation}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline E2E tests
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_pipeline_discover_step(tmp_path, monkeypatch):
+    """pipeline() discovers and registers federation members."""
+    from opencode_search.handlers._pipeline import handle_pipeline
+
+    monkeypatch.setattr(config, "REGISTRY_PATH", tmp_path / "registry.json")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "app.py").write_text("def app(): pass\n")
+    member = tmp_path / "svc"
+    member.mkdir()
+    (root / "link_svc").symlink_to(member)
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        await index_and_wait(str(root))
+
+    # Run pipeline with LLM disabled (only discovery + skip steps)
+    with patch("opencode_search.handlers._pipeline.create_llm_client", return_value=None):
+        result = await handle_pipeline(project_path=str(root), ingest_docs=False)
+
+    assert result.get("status") == "ok"
+    steps = {s["step"]: s for s in result["steps"]}
+    assert steps["discover"]["status"] == "ok"
+    assert steps["discover"]["discovered"] >= 1
+    # enrich/wiki skipped when LLM unavailable
+    assert steps["enrich"]["status"] == "skipped"
+    assert steps["wiki"]["status"] == "skipped"
+
+
+async def test_e2e_pipeline_full_with_mock_llm(indexed_project, tmp_path, monkeypatch):
+    """pipeline() runs all steps including enrich and wiki with mocked LLM."""
+    from opencode_search.handlers._pipeline import handle_pipeline
+
+    project_root, _ = indexed_project
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    llm.community_summary.return_value = ("Auth Layer", "Handles authentication logic.")
+    llm.raw_doc_to_wiki.return_value = "# Doc\n\nExtracted content."
+
+    # Create a doc file to trigger ingest_docs
+    readme = project_root / "README.md"
+    readme.write_text("# My Project\n\nThis handles authentication.\n")
+
+    wiki_dir = tmp_path / "wiki"
+    raw_dir = tmp_path / "raw"
+
+    with patch("opencode_search.handlers._pipeline.create_llm_client", return_value=llm), \
+         patch("opencode_search.handlers._enrichment._get_llm", return_value=llm), \
+         patch("opencode_search.handlers._wiki._get_llm", return_value=llm), \
+         patch("opencode_search.handlers._wiki.get_project_graph_db_path",
+               return_value=get_project_graph_db_path(str(project_root))), \
+         patch("opencode_search.handlers._wiki.get_project_wiki_dir", return_value=wiki_dir), \
+         patch("opencode_search.handlers._wiki.get_project_raw_dir", return_value=raw_dir):
+        result = await handle_pipeline(
+            project_path=str(project_root),
+            enrich_max_communities=2,
+            wiki_max_communities=2,
+            ingest_docs=True,
+        )
+
+    assert result.get("status") == "ok"
+    steps = {s["step"]: s for s in result["steps"]}
+    assert steps["discover"]["status"] == "ok"
+    assert steps["enrich"].get("enriched_communities", 0) >= 1
+    assert steps["wiki"].get("total", 0) >= 1
+    assert steps["ingest_docs"]["status"] == "ok"
+    assert "README.md" in steps["ingest_docs"]["ingested"][0]
+
+
+@_large
+@pytest.mark.large
+async def test_e2e_astro_project_pipeline_discover(monkeypatch):
+    """pipeline() on astro-project discovers 24 federation members and registers them."""
+    from opencode_search.handlers._pipeline import handle_pipeline
+    from opencode_search.config import load_registry
+
+    _use_real_registry(monkeypatch)
+    assert _astro_graph_has_data(), "astro-project graph.db must be pre-built"
+
+    # Run pipeline with LLM disabled so it's fast (only discovery)
+    with patch("opencode_search.handlers._pipeline.create_llm_client", return_value=None):
+        result = await handle_pipeline(
+            project_path=_ASTRO_PROJECT,
+            ingest_docs=False,
+        )
+
+    assert result.get("status") == "ok"
+    steps = {s["step"]: s for s in result["steps"]}
+    assert steps["discover"]["status"] == "ok"
+    assert steps["discover"]["discovered"] >= 20, (
+        f"Expected 20+ members, got: {steps['discover']['discovered']}"
+    )
+
+    # Verify members are now registered in the real registry
+    registry = load_registry()
+    astro_entry = registry.get(_ASTRO_PROJECT)
+    assert astro_entry is not None
+    assert len(astro_entry.federation) >= 20, (
+        f"Federation should have 20+ members, got: {len(astro_entry.federation)}"
+    )

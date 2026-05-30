@@ -10,6 +10,7 @@ from opencode_search.handlers._enrichment import (
     handle_enrich_project,
     handle_get_symbol_intent,
 )
+from opencode_search.handlers._pipeline import handle_pipeline
 from opencode_search.handlers._federation import (
     _expand_with_federation,
     handle_add_federation_member,
@@ -70,6 +71,7 @@ __all__ = [
     "handle_index_project",
     "handle_list_federation",
     "handle_list_indexed_projects",
+    "handle_pipeline",
     "handle_project_status",
     "handle_release_project_watch",
     "handle_remove_federation_member",
