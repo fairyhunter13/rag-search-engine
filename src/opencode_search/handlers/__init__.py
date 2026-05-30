@@ -26,6 +26,7 @@ from opencode_search.handlers._graph import (
     handle_get_communities,
     handle_get_symbol,
     handle_global_search,
+    handle_project_structure,
     handle_trace_path,
 )
 from opencode_search.handlers._index import (
@@ -69,6 +70,7 @@ __all__ = [
     "handle_get_symbol_intent",
     "handle_global_search",
     "handle_index_federation",
+    "handle_project_structure",
     "handle_index_project",
     "handle_list_federation",
     "handle_list_indexed_projects",
