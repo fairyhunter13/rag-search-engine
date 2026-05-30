@@ -7,20 +7,14 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    import lancedb
-except ModuleNotFoundError:  # pragma: no cover - exercised via import-time fallback
-    lancedb = None
-
-try:
-    import numpy as np
-except ModuleNotFoundError:  # pragma: no cover - exercised via import-time fallback
-    np = None
-
-try:
-    import pyarrow as pa
-except ModuleNotFoundError:  # pragma: no cover - exercised via import-time fallback
-    pa = None
+# lancedb, numpy, and pyarrow are imported lazily (inside _require_* helpers below)
+# so that importing storage.py does NOT pull in lancedb's Rust extension at module
+# level.  Eager import caused SIGSEGV on Blackwell RTX 5080: lancedb's background
+# thread corrupts the glibc heap when the daemon concurrently holds lance files
+# open while the test process has lancedb imported but idle.
+lancedb = None  # set by _require_lancedb() on first use
+np = None       # set by _require_numpy() on first use
+pa = None       # set by _require_pyarrow() on first use
 
 from opencode_search.config import (
     FTS_THRESHOLD,
@@ -43,20 +37,35 @@ def _missing_dependency_error(package: str) -> ModuleNotFoundError:
 
 
 def _require_lancedb():
+    global lancedb
     if lancedb is None:
-        raise _missing_dependency_error("lancedb")
+        try:
+            import lancedb as _lancedb
+            lancedb = _lancedb
+        except ModuleNotFoundError:
+            raise _missing_dependency_error("lancedb")
     return lancedb
 
 
 def _require_numpy():
+    global np
     if np is None:
-        raise _missing_dependency_error("numpy")
+        try:
+            import numpy as _np
+            np = _np
+        except ModuleNotFoundError:
+            raise _missing_dependency_error("numpy")
     return np
 
 
 def _require_pyarrow():
+    global pa
     if pa is None:
-        raise _missing_dependency_error("pyarrow")
+        try:
+            import pyarrow as _pa
+            pa = _pa
+        except ModuleNotFoundError:
+            raise _missing_dependency_error("pyarrow")
     return pa
 
 # ---------------------------------------------------------------------------

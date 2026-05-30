@@ -22,9 +22,17 @@ import pytest
 
 
 def _gpu_available() -> bool:
+    # Use NVML (management-only) instead of ort.get_available_providers() to avoid
+    # loading libonnxruntime_providers_cuda.so which initializes the CUDA UVM subsystem
+    # in the test process.  On Blackwell (SM 12.0) two processes with active CUDA UVM
+    # contexts cause cross-process UVM page-fault serialization that stalls indefinitely.
+    # NVML only opens /dev/nvidiactl (management), never /dev/nvidia-uvm (compute).
     try:
-        import onnxruntime as ort
-        return "CUDAExecutionProvider" in ort.get_available_providers()
+        import pynvml
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        pynvml.nvmlShutdown()
+        return count > 0
     except Exception:
         return False
 

@@ -648,40 +648,80 @@ def _build_provider_list_with_options(providers: list[str]) -> list:
     return result
 
 
-# Monkey-patch FastEmbed to accept additional ORT SessionOptions not in default
-# EXPOSED_SESSION_OPTIONS. Reduces CPU memory when inference runs on GPU.
-try:
-    from fastembed.common.onnx_model import OnnxModel as _OnnxModel
-    if "enable_mem_pattern" not in _OnnxModel.EXPOSED_SESSION_OPTIONS:
-        _OnnxModel.EXPOSED_SESSION_OPTIONS = (
-            *_OnnxModel.EXPOSED_SESSION_OPTIONS,
-            "enable_mem_pattern", "execution_mode", "graph_optimization_level",
-            "log_severity_level",
-        )
-        _orig_add_extra = _OnnxModel.add_extra_session_options.__func__
-        @classmethod
-        def _patched_add_extra(cls, session_options, extra_options):
-            _orig_add_extra(cls, session_options, extra_options)
-            if "enable_mem_pattern" in extra_options:
-                session_options.enable_mem_pattern = extra_options["enable_mem_pattern"]
-            if "execution_mode" in extra_options:
-                session_options.execution_mode = extra_options["execution_mode"]
-            if "graph_optimization_level" in extra_options:
-                session_options.graph_optimization_level = extra_options["graph_optimization_level"]
-            if "log_severity_level" in extra_options:
-                session_options.log_severity_level = extra_options["log_severity_level"]
-            # Disable weight prepacking: ORT pre-packs MatMul weights into CPU-optimized
-            # layouts even when GPU handles inference. Disabling saves ~30-60MB CPU RSS.
-            if extra_options.get("enable_cpu_mem_arena") is False:
-                with contextlib.suppress(Exception):
-                    session_options.add_session_config_entry("session.disable_prepacking", "1")
-        _OnnxModel.add_extra_session_options = _patched_add_extra
-        del _patched_add_extra
-except ImportError:
-    pass
+_fastembed_patch_applied: bool = False
+
+
+def _apply_fastembed_patch() -> None:
+    """Monkey-patch FastEmbed to accept extra ORT SessionOptions.
+
+    Called once before the first TextEmbedding/TextCrossEncoder is created.
+    Kept lazy (not at module level) so that importing embeddings.py does NOT
+    pull in fastembed → onnxruntime → CUDA at import time.  Eager import
+    caused SIGSEGV on Blackwell (SM 12.0): two processes sharing CUDA UVM
+    (test process + daemon) deadlock or corrupt the heap.
+    """
+    global _fastembed_patch_applied
+    if _fastembed_patch_applied:
+        return
+    _fastembed_patch_applied = True
+    try:
+        from fastembed.common.onnx_model import OnnxModel as _OnnxModel
+        if "enable_mem_pattern" not in _OnnxModel.EXPOSED_SESSION_OPTIONS:
+            _OnnxModel.EXPOSED_SESSION_OPTIONS = (
+                *_OnnxModel.EXPOSED_SESSION_OPTIONS,
+                "enable_mem_pattern", "execution_mode", "graph_optimization_level",
+                "log_severity_level",
+            )
+            _orig_add_extra = _OnnxModel.add_extra_session_options.__func__
+            @classmethod
+            def _patched_add_extra(cls, session_options, extra_options):
+                _orig_add_extra(cls, session_options, extra_options)
+                if "enable_mem_pattern" in extra_options:
+                    session_options.enable_mem_pattern = extra_options["enable_mem_pattern"]
+                if "execution_mode" in extra_options:
+                    session_options.execution_mode = extra_options["execution_mode"]
+                if "graph_optimization_level" in extra_options:
+                    session_options.graph_optimization_level = extra_options["graph_optimization_level"]
+                if "log_severity_level" in extra_options:
+                    session_options.log_severity_level = extra_options["log_severity_level"]
+                # Disable weight prepacking: ORT pre-packs MatMul weights into CPU-optimized
+                # layouts even when GPU handles inference. Disabling saves ~30-60MB CPU RSS.
+                if extra_options.get("enable_cpu_mem_arena") is False:
+                    with contextlib.suppress(Exception):
+                        session_options.add_session_config_entry("session.disable_prepacking", "1")
+            _OnnxModel.add_extra_session_options = _patched_add_extra
+            del _patched_add_extra
+    except ImportError:
+        pass
 
 
 _ONNX_LOG_SEVERITY_LEVEL = int(os.environ.get("OPENCODE_ONNX_LOG_SEVERITY", "3"))
+
+# Circuit breaker: block ONNX session creation for _CUBLAS_COOLDOWN_S seconds
+# after a CUBLAS resource-allocation failure.  Without this, the daemon retries
+# on every incoming request, consuming CPU + RAM in a tight loop that can push
+# system load to 70+ and RAM to 50 GB within minutes.
+_cublas_fail_time: float = 0.0
+_cublas_fail_lock = threading.Lock()
+_CUBLAS_COOLDOWN_S: float = float(os.environ.get("OPENCODE_CUBLAS_COOLDOWN_S", "30"))
+
+
+def _record_cublas_failure() -> None:
+    global _cublas_fail_time
+    import time as _t
+    with _cublas_fail_lock:
+        _cublas_fail_time = _t.monotonic()
+    log.error(
+        "CUBLAS resource allocation failed — blocking ONNX session creation for %.0fs. "
+        "If this repeats, restart the daemon after freeing GPU memory.",
+        _CUBLAS_COOLDOWN_S,
+    )
+
+
+def _cublas_in_cooldown() -> bool:
+    import time as _t
+    with _cublas_fail_lock:
+        return (_t.monotonic() - _cublas_fail_time) < _CUBLAS_COOLDOWN_S
 
 
 def _embedder(model: str):
@@ -689,6 +729,11 @@ def _embedder(model: str):
     global _cached_embedder, _cached_embedder_model
     if not model:
         model = DEFAULT_EMBED_MODEL
+    if _cublas_in_cooldown():
+        raise RuntimeError(
+            f"ONNX session creation blocked: CUBLAS OOM cooldown ({_CUBLAS_COOLDOWN_S:.0f}s). "
+            "Free GPU memory and retry, or restart the daemon."
+        )
     with _embedder_lock:
         if _cached_embedder is not None and _cached_embedder_model == model:
             return _cached_embedder
@@ -713,6 +758,7 @@ def _embedder(model: str):
             # allocating VRAM for the next model load.
             _cuda_sync_and_empty_cache()
 
+        _apply_fastembed_patch()
         from fastembed import TextEmbedding
 
         providers = _get_onnx_providers()
@@ -732,13 +778,19 @@ def _embedder(model: str):
         provider_list = _build_provider_list_with_options(providers)
 
         import onnxruntime as _ort_ref
-        embedder = TextEmbedding(
-            model_name=model, providers=provider_list,
-            enable_cpu_mem_arena=False, enable_mem_pattern=False,
-            execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
-            graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
-            log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
-        )
+        try:
+            embedder = TextEmbedding(
+                model_name=model, providers=provider_list,
+                enable_cpu_mem_arena=False, enable_mem_pattern=False,
+                execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
+                graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+                log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
+            )
+        except Exception as _e:
+            _msg = str(_e)
+            if "CUBLAS" in _msg or "resource allocation" in _msg.lower() or "cublasCreate" in _msg:
+                _record_cublas_failure()
+            raise
 
         # Verify which provider the ONNX session actually selected
         _verify_onnx_session_provider(embedder, "embedder")
@@ -779,6 +831,7 @@ def _reranker(model: str):
                 _cuda_sync_and_empty_cache()
             log.info("reranker LRU evicted: %s", evict_model)
 
+        _apply_fastembed_patch()
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         providers = _get_onnx_providers()
@@ -796,13 +849,23 @@ def _reranker(model: str):
         provider_list = _build_provider_list_with_options(providers)
 
         import onnxruntime as _ort_ref
-        reranker = TextCrossEncoder(
-            model_name=model, providers=provider_list,
-            enable_cpu_mem_arena=False, enable_mem_pattern=False,
-            execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
-            graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
-            log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
-        )
+        if _cublas_in_cooldown():
+            raise RuntimeError(
+                f"Reranker blocked: CUBLAS OOM cooldown ({_CUBLAS_COOLDOWN_S:.0f}s)."
+            )
+        try:
+            reranker = TextCrossEncoder(
+                model_name=model, providers=provider_list,
+                enable_cpu_mem_arena=False, enable_mem_pattern=False,
+                execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
+                graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
+                log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
+            )
+        except Exception as _e:
+            _msg = str(_e)
+            if "CUBLAS" in _msg or "resource allocation" in _msg.lower() or "cublasCreate" in _msg:
+                _record_cublas_failure()
+            raise
 
         # Verify GPU provider and probe IOBinding for this model
         _verify_onnx_session_provider(reranker, "reranker")
@@ -927,10 +990,15 @@ def _limit_onnx_threads() -> None:
     # 1 OMP thread is sufficient — reduces per-thread stack memory (~8MB each).
     gpu_mode = os.environ.get("OPENCODE_ONNX_PROVIDER", "").lower() not in ("cpu", "")
     if not gpu_mode:
-        # Auto-detect: check if any GPU provider is available
+        # Auto-detect GPU presence via NVML (management-only, no CUDA UVM init).
+        # Using ort.get_available_providers() here would eagerly initialize the CUDA
+        # runtime in any process that imports embeddings.py — on Blackwell (SM 12.0)
+        # two processes with active CUDA UVM cause cross-process page-fault deadlocks.
         try:
-            import onnxruntime as _ort
-            gpu_mode = any(p in _GPU_PROVIDERS for p in _ort.get_available_providers())
+            import pynvml
+            pynvml.nvmlInit()
+            gpu_mode = pynvml.nvmlDeviceGetCount() > 0
+            pynvml.nvmlShutdown()
         except Exception:
             pass
     if low_memory or gpu_mode:
