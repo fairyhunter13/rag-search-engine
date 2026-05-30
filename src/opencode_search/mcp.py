@@ -70,6 +70,7 @@ from opencode_search.handlers import (
     handle_index_project,
     handle_list_federation,
     handle_list_indexed_projects,
+    handle_pipeline,
     handle_project_status,
     handle_release_project_watch,
     handle_remove_federation_member,
@@ -215,7 +216,7 @@ async def search_code(
     project_paths: list[str] | None = None,
     top_k: int = 10,
     use_rerank: bool = True,
-    include_federation: bool = False,
+    include_federation: bool = True,
 ) -> dict[str, Any]:
     """Search indexed projects for code matching the query.
 
@@ -367,7 +368,7 @@ async def global_search(
     query: str,
     project_path: str,
     top_k: int = 10,
-    include_federation: bool = False,
+    include_federation: bool = True,
 ) -> dict[str, Any]:
     """Search across architectural knowledge: community summaries and wiki pages.
 
@@ -402,7 +403,7 @@ async def enrich_project(
     project_path: str,
     scope: str = "communities",
     max_communities: int = 200,
-    include_federation: bool = False,
+    include_federation: bool = True,
 ) -> dict[str, Any]:
     """Trigger LLM enrichment. scope: 'symbols'|'communities'|'wiki'|'all'.
 
@@ -438,7 +439,7 @@ async def get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:
 async def wiki_generate(
     project_path: str,
     max_communities: int = 200,
-    include_federation: bool = False,
+    include_federation: bool = True,
 ) -> dict[str, Any]:
     """Auto-generate wiki pages for the top communities in the project.
 
@@ -585,6 +586,46 @@ async def index_federation(root_path: str, watch: bool = False) -> dict[str, Any
     """
     runtime_state.note_activity()
     return await handle_index_federation(root_path=root_path, watch=watch)
+
+
+@mcp.tool()
+async def pipeline(
+    project_path: str,
+    enrich_max_communities: int = 100,
+    wiki_max_communities: int = 100,
+    index_members: bool = False,
+    ingest_docs: bool = True,
+    watch: bool = False,
+) -> dict[str, Any]:
+    """Run the full knowledge-base pipeline for a project in one call.
+
+    Executes all steps in order:
+    1. Discover + register federation members from symlinks and workspace files
+    2. Optionally index each federation member (index_members=True; skip when root
+       covers members via follow_symlinks=True to avoid duplicate indexing)
+    3. LLM-enrich top N communities with titles and summaries (skipped if LLM unavailable)
+    4. Generate wiki pages for top N communities (skipped if LLM unavailable)
+    5. Ingest markdown/rst documentation files found in the project root and docs/
+
+    This is the recommended way to fully activate the knowledge base for any project.
+    Run it once after initial indexing; re-run to pick up new communities and docs.
+
+    Args:
+        enrich_max_communities: Communities to enrich per project (default 100).
+        wiki_max_communities: Wiki pages to generate per project (default 100).
+        index_members: Index each federation member as a separate project.
+        ingest_docs: Ingest documentation files from project root and docs/.
+        watch: Start file-watchers on indexed members (only if index_members=True).
+    """
+    runtime_state.note_activity()
+    return await handle_pipeline(
+        project_path=project_path,
+        enrich_max_communities=enrich_max_communities,
+        wiki_max_communities=wiki_max_communities,
+        index_members=index_members,
+        ingest_docs=ingest_docs,
+        watch=watch,
+    )
 
 
 # ---------------------------------------------------------------------------
