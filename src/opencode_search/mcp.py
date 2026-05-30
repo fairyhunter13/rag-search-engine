@@ -55,7 +55,9 @@ from opencode_search.daemon import (
 )
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
+    handle_add_federation_member,
     handle_detect_impact,
+    handle_discover_federation,
     handle_enrich_project,
     handle_ensure_project_watching,
     handle_get_callers,
@@ -64,10 +66,13 @@ from opencode_search.handlers import (
     handle_get_symbol,
     handle_get_symbol_intent,
     handle_global_search,
+    handle_index_federation,
     handle_index_project,
+    handle_list_federation,
     handle_list_indexed_projects,
     handle_project_status,
     handle_release_project_watch,
+    handle_remove_federation_member,
     handle_search_code,
     handle_stop_watching,
     handle_trace_path,
@@ -210,14 +215,22 @@ async def search_code(
     project_paths: list[str] | None = None,
     top_k: int = 10,
     use_rerank: bool = True,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
-    """Search indexed projects for code matching the query."""
+    """Search indexed projects for code matching the query.
+
+    Args:
+        include_federation: If True, also search all indexed federation members of
+            any project in project_paths. Federation members must be registered via
+            add_federation_member and indexed via index_federation.
+    """
     runtime_state.note_activity()
     return await handle_search_code(
         query=query,
         project_paths=project_paths,
         top_k=top_k,
         use_rerank=use_rerank,
+        include_federation=include_federation,
     )
 
 
@@ -354,6 +367,7 @@ async def global_search(
     query: str,
     project_path: str,
     top_k: int = 10,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Search across architectural knowledge: community summaries and wiki pages.
 
@@ -364,9 +378,18 @@ async def global_search(
 
     Use search_code for finding specific functions/files.
     Use global_search for understanding architecture and ownership.
+
+    Args:
+        include_federation: If True, also search communities in all indexed
+            federation members of this project.
     """
     runtime_state.note_activity()
-    return await handle_global_search(query=query, project_path=project_path, top_k=top_k)
+    return await handle_global_search(
+        query=query,
+        project_path=project_path,
+        top_k=top_k,
+        include_federation=include_federation,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +402,7 @@ async def enrich_project(
     project_path: str,
     scope: str = "communities",
     max_communities: int = 200,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Trigger LLM enrichment. scope: 'symbols'|'communities'|'wiki'|'all'.
 
@@ -388,15 +412,14 @@ async def enrich_project(
 
     Args:
         max_communities: Cap on communities enriched per call (default 200).
-            Communities are processed largest-first (most architectural coverage
-            per LLM call). Use 5-20 for a quick smoke-test on large projects.
-            Set OPENCODE_ENRICH_MAX_COMMUNITIES env var to change the default.
+        include_federation: If True, also enrich all indexed federation members.
     """
     runtime_state.note_activity()
     return await handle_enrich_project(
         project_path=project_path,
         scope=scope,
         max_communities=max_communities,
+        include_federation=include_federation,
     )
 
 
@@ -415,6 +438,7 @@ async def get_symbol_intent(name: str, project_path: str) -> dict[str, Any]:
 async def wiki_generate(
     project_path: str,
     max_communities: int = 200,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Auto-generate wiki pages for the top communities in the project.
 
@@ -424,11 +448,13 @@ async def wiki_generate(
 
     Args:
         max_communities: Maximum communities to generate pages for (default 200).
-            Use 5-20 for a quick smoke-test on large projects.
+        include_federation: If True, also generate wiki for indexed federation members.
     """
     runtime_state.note_activity()
     return await handle_wiki_generate(
-        project_path=project_path, max_communities=max_communities
+        project_path=project_path,
+        max_communities=max_communities,
+        include_federation=include_federation,
     )
 
 
@@ -500,6 +526,65 @@ async def search_docs(
             "elapsed_ms": result.get("elapsed_ms"),
         }
     return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Federation tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def discover_federation(project_path: str) -> dict[str, Any]:
+    """Auto-discover federation members from symlinks and workspace files.
+
+    Scans the project root for:
+    - Top-level symlinked directories (most common pattern in monorepos)
+    - go.work 'use' directives
+    - pnpm-workspace.yaml 'packages' entries
+    - package.json 'workspaces' entries
+
+    Returns the discovered paths without registering them. Use add_federation_member
+    to register discovered paths, then index_federation to index them.
+    """
+    runtime_state.note_activity()
+    return await handle_discover_federation(project_path=project_path)
+
+
+@mcp.tool()
+async def list_federation(project_path: str) -> dict[str, Any]:
+    """List all registered federation members for a project.
+
+    Shows each member's path, whether it has been indexed, and its file count.
+    """
+    runtime_state.note_activity()
+    return await handle_list_federation(project_path=project_path)
+
+
+@mcp.tool()
+async def add_federation_member(root_path: str, member_path: str) -> dict[str, Any]:
+    """Register a project path as a federation member of the root project.
+
+    Pre-registers the member in the registry (no indexing happens yet).
+    Use index_federation to index all registered members afterwards.
+    """
+    runtime_state.note_activity()
+    return await handle_add_federation_member(
+        root_path=root_path, member_path=member_path
+    )
+
+
+@mcp.tool()
+async def index_federation(root_path: str, watch: bool = False) -> dict[str, Any]:
+    """Index all registered federation members of the root project.
+
+    Runs members sequentially (not concurrent) to avoid GPU contention during
+    embedding. Members already up-to-date are skipped (hash-based change detection).
+
+    After indexing, use search_code / enrich_project / wiki_generate with
+    include_federation=True to operate across the whole federation.
+    """
+    runtime_state.note_activity()
+    return await handle_index_federation(root_path=root_path, watch=watch)
 
 
 # ---------------------------------------------------------------------------

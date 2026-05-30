@@ -10,6 +10,14 @@ from opencode_search.handlers._enrichment import (
     handle_enrich_project,
     handle_get_symbol_intent,
 )
+from opencode_search.handlers._federation import (
+    _expand_with_federation,
+    handle_add_federation_member,
+    handle_discover_federation,
+    handle_index_federation,
+    handle_list_federation,
+    handle_remove_federation_member,
+)
 from opencode_search.handlers._graph import (
     handle_detect_impact,
     handle_get_callers,
@@ -42,11 +50,14 @@ from opencode_search.handlers._wiki import (
 
 __all__ = [
     "_build_incremental_on_change",
+    "_expand_with_federation",
     "_indexing_lock",
     "_indexing_status",
     "_now_iso",
     "_touch_projects_last_active",
+    "handle_add_federation_member",
     "handle_detect_impact",
+    "handle_discover_federation",
     "handle_enrich_project",
     "handle_ensure_project_watching",
     "handle_get_callers",
@@ -55,10 +66,13 @@ __all__ = [
     "handle_get_symbol",
     "handle_get_symbol_intent",
     "handle_global_search",
+    "handle_index_federation",
     "handle_index_project",
+    "handle_list_federation",
     "handle_list_indexed_projects",
     "handle_project_status",
     "handle_release_project_watch",
+    "handle_remove_federation_member",
     "handle_search_code",
     "handle_stop_watching",
     "handle_trace_path",

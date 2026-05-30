@@ -1206,3 +1206,289 @@ async def test_e2e_astro_project_wiki_pipeline(monkeypatch):
     assert "healthy" in lint_result or "pages" in lint_result, (
         f"wiki_lint returned unexpected structure: {lint_result}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Federation E2E tests (unit, synthetic projects — no real indexing needed)
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_discover_federation_finds_symlinks(tmp_path, monkeypatch):
+    """handle_discover_federation returns symlinked directories at the project root."""
+    from opencode_search.handlers._federation import handle_discover_federation
+
+    root = tmp_path / "myproject"
+    root.mkdir()
+
+    # Create two real member directories and symlink them into the root
+    member_a = tmp_path / "member_a"
+    member_a.mkdir()
+    (member_a / "main.go").write_text("package main\n")
+
+    member_b = tmp_path / "member_b"
+    member_b.mkdir()
+    (member_b / "main.go").write_text("package main\n")
+
+    (root / "link_a").symlink_to(member_a)
+    (root / "link_b").symlink_to(member_b)
+    # A regular file — should NOT be discovered
+    (root / "README.md").write_text("# project\n")
+
+    result = await handle_discover_federation(project_path=str(root))
+
+    assert "error" not in result
+    assert result["total"] == 2
+    discovered = set(result["discovered"])
+    assert str(member_a) in discovered
+    assert str(member_b) in discovered
+    # Regular files must not appear
+    assert not any("README" in d for d in discovered)
+
+
+async def test_e2e_discover_federation_parses_go_work(tmp_path, monkeypatch):
+    """handle_discover_federation finds go.work 'use' directives."""
+    from opencode_search.handlers._federation import handle_discover_federation
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+
+    member = tmp_path / "mymodule"
+    member.mkdir()
+
+    (root / "go.work").write_text(
+        "go 1.24\n\nuse (\n\t../mymodule\n)\n"
+    )
+
+    result = await handle_discover_federation(project_path=str(root))
+
+    assert "error" not in result
+    assert str(member) in result["sources"]["go_work"]
+
+
+async def test_e2e_add_federation_member_persists(tmp_path, monkeypatch):
+    """add_federation_member saves to registry; list_federation returns it."""
+    from opencode_search.handlers._federation import (
+        handle_add_federation_member,
+        handle_list_federation,
+    )
+
+    monkeypatch.setattr(config, "REGISTRY_PATH", tmp_path / "registry.json")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    member = tmp_path / "member"
+    member.mkdir()
+
+    add_result = await handle_add_federation_member(
+        root_path=str(root), member_path=str(member)
+    )
+    assert add_result.get("status") == "ok"
+    assert add_result["total_members"] == 1
+
+    list_result = await handle_list_federation(project_path=str(root))
+    assert "error" not in list_result
+    assert list_result["total_members"] == 1
+    assert any(str(member) in m["path"] for m in list_result["members"])
+
+
+async def test_e2e_federation_search_includes_members(indexed_project, tmp_path, monkeypatch):
+    """search_code(include_federation=True) expands project list to federation members."""
+    from opencode_search.handlers._federation import handle_add_federation_member
+    from opencode_search.handlers._query import handle_search_code
+
+    project_root, registry_path = indexed_project
+
+    # Create a second indexed project and make it a federation member
+    member_root = tmp_path / "member_project"
+    member_root.mkdir()
+    (member_root / "billing.py").write_text("def charge_card(): pass\n")
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        await index_and_wait(str(member_root))
+
+    await handle_add_federation_member(
+        root_path=str(project_root), member_path=str(member_root)
+    )
+
+    # Search with federation: should include both root and member
+    with patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        result = await handle_search_code(
+            query="authenticate",
+            project_paths=[str(project_root)],
+            include_federation=True,
+        )
+
+    assert "error" not in result
+    # projects_searched should include the member
+    assert result["projects_searched"] >= 2
+
+
+async def test_e2e_federation_search_excludes_unindexed(tmp_path, monkeypatch):
+    """search_code(include_federation=True) skips federation members that are not indexed."""
+    from opencode_search.handlers._federation import handle_add_federation_member
+    from opencode_search.handlers._query import handle_search_code
+
+    monkeypatch.setattr(config, "REGISTRY_PATH", tmp_path / "registry.json")
+
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "app.py").write_text("def foo(): pass\n")
+    member = tmp_path / "unindexed_member"
+    member.mkdir()
+
+    # Index only the root
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        await index_and_wait(str(root))
+
+    # Add member to federation WITHOUT indexing it
+    await handle_add_federation_member(
+        root_path=str(root), member_path=str(member)
+    )
+
+    with patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        result = await handle_search_code(
+            query="foo",
+            project_paths=[str(root)],
+            include_federation=True,
+        )
+
+    # Should only search root (1 project), not the unindexed member
+    assert "error" not in result
+    assert result["projects_searched"] == 1
+
+
+async def test_e2e_federation_enrich_runs_on_members(indexed_project, tmp_path, monkeypatch):
+    """enrich_project(include_federation=True) enriches root and indexed member."""
+    from opencode_search.handlers._enrichment import handle_enrich_project
+    from opencode_search.handlers._federation import handle_add_federation_member
+
+    project_root, registry_path = indexed_project
+
+    # Create and index a member project
+    member_root = tmp_path / "member_enrich"
+    member_root.mkdir()
+    (member_root / "payment.py").write_text("def process_payment(): pass\n")
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        await index_and_wait(str(member_root))
+
+    await handle_add_federation_member(
+        root_path=str(project_root), member_path=str(member_root)
+    )
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    llm.community_summary.return_value = ("Test Module", "Handles test functionality.")
+
+    with patch("opencode_search.handlers._enrichment._get_llm", return_value=llm):
+        result = await handle_enrich_project(
+            project_path=str(project_root),
+            scope="communities",
+            max_communities=2,
+            include_federation=True,
+        )
+
+    assert result.get("status") == "ok"
+    # federation_results should list both root and member
+    assert "federation_results" in result
+    paths = [r["path"] for r in result["federation_results"]]
+    assert str(project_root) in paths
+    assert str(member_root) in paths
+
+
+async def test_e2e_federation_wiki_runs_on_members(indexed_project, tmp_path, monkeypatch):
+    """wiki_generate(include_federation=True) generates wiki for root and indexed member."""
+    from opencode_search.handlers._federation import handle_add_federation_member
+    from opencode_search.handlers._wiki import handle_wiki_generate
+
+    project_root, registry_path = indexed_project
+
+    member_root = tmp_path / "member_wiki"
+    member_root.mkdir()
+    (member_root / "service.py").write_text("def run(): pass\n")
+
+    with patch("opencode_search.chunker.chunk_file", side_effect=_split_lines), \
+         patch("opencode_search.embeddings.embed_passages", side_effect=fake_embed_passages), \
+         patch("opencode_search.search._embed_query_sync", side_effect=fake_embed_query):
+        await index_and_wait(str(member_root))
+
+    await handle_add_federation_member(
+        root_path=str(project_root), member_path=str(member_root)
+    )
+
+    llm = MagicMock()
+    llm.is_available.return_value = True
+    llm.community_summary.return_value = ("Service Layer", "Runs core services.")
+
+    wiki_root = tmp_path / "wiki_root"
+    wiki_root.mkdir()
+    wiki_member = tmp_path / "wiki_member"
+    wiki_member.mkdir()
+    raw_root = tmp_path / "raw_root"
+    raw_root.mkdir()
+    raw_member = tmp_path / "raw_member"
+    raw_member.mkdir()
+
+    def _wiki_dir_for(path):
+        return wiki_root if str(project_root) in path else wiki_member
+
+    def _raw_dir_for(path):
+        return raw_root if str(project_root) in path else raw_member
+
+    with patch("opencode_search.handlers._wiki._get_llm", return_value=llm), \
+         patch("opencode_search.handlers._wiki.get_project_graph_db_path",
+               side_effect=lambda p: get_project_graph_db_path(p)), \
+         patch("opencode_search.handlers._wiki.get_project_wiki_dir",
+               side_effect=_wiki_dir_for), \
+         patch("opencode_search.handlers._wiki.get_project_raw_dir",
+               side_effect=_raw_dir_for):
+        result = await handle_wiki_generate(
+            project_path=str(project_root),
+            max_communities=2,
+            include_federation=True,
+        )
+
+    assert result.get("status") == "ok"
+    assert "federation_results" in result
+    paths = [r["path"] for r in result["federation_results"]]
+    assert str(project_root) in paths
+    assert str(member_root) in paths
+
+
+# ---------------------------------------------------------------------------
+# Large test: discover federation from real astro-project
+# ---------------------------------------------------------------------------
+
+
+@_large
+@pytest.mark.large
+async def test_e2e_astro_project_discover_federation(monkeypatch):
+    """discover_federation finds all 24 symlinked sub-repos in astro-project."""
+    from opencode_search.handlers._federation import handle_discover_federation
+
+    _use_real_registry(monkeypatch)
+
+    result = await handle_discover_federation(project_path=_ASTRO_PROJECT)
+
+    assert "error" not in result, f"discover_federation failed: {result}"
+    # astro-project has 24 symlinks in repositories-ubuntu/
+    assert result["total"] >= 20, (
+        f"Expected at least 20 federation members, got {result['total']}: {result['discovered']}"
+    )
+    # go.work declares 3 workspace modules — verify they're also captured
+    sources = result["sources"]
+    assert len(sources["symlinks"]) >= 20
+    assert len(sources["go_work"]) >= 3, (
+        f"go.work should have at least 3 members, got: {sources['go_work']}"
+    )
+    # Verify the known astro-golibs path is discovered
+    known = "/home/user/go/src/github.com/example-org/astro-golibs"
+    assert known in result["discovered"], (
+        f"astro-golibs not found in discovered: {result['discovered'][:5]}..."
+    )

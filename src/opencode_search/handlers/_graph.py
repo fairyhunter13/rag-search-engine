@@ -273,6 +273,7 @@ async def handle_global_search(
     query: str,
     project_path: str,
     top_k: int = 10,
+    include_federation: bool = False,
 ) -> dict[str, Any]:
     """Search across architectural knowledge: community summaries + wiki pages.
 
@@ -287,14 +288,19 @@ async def handle_global_search(
 
     query_lower = query.lower()
 
-    def _search_communities() -> list[dict[str, Any]]:
-        gs = _open_graph(project_path)
+    # Build the effective list of project paths (root + federation if requested)
+    from opencode_search.config import load_registry
+    registry = load_registry()
+    effective_paths = [project_path]
+    if include_federation:
+        from opencode_search.handlers._federation import _expand_with_federation
+        effective_paths = _expand_with_federation([project_path], registry)
+
+    def _search_communities_for(path: str) -> list[dict[str, Any]]:
+        gs = _open_graph(path)
         if gs is None:
             return []
         try:
-            # Limit to top 500 meaningful communities (node_count >= 2) ordered by
-            # size. This bounds Python-side text matching: on a 163k-community
-            # project this goes from 163k rows to ~600 rows (a ~270x speedup).
             communities = gs.get_communities(
                 limit=500, min_node_count=2, order_by_size=True
             )
@@ -317,19 +323,27 @@ async def handle_global_search(
                         "node_count": c.node_count,
                         "key_entry_points": c.key_entry_points,
                         "score": round(score, 4),
+                        "project_path": path,
                     })
             matches.sort(key=lambda x: x["score"] or 0.0, reverse=True)
             return matches[:top_k]
         finally:
             gs.close()
 
+    def _search_all_communities() -> list[dict[str, Any]]:
+        all_matches: list[dict[str, Any]] = []
+        for path in effective_paths:
+            all_matches.extend(_search_communities_for(path))
+        all_matches.sort(key=lambda x: x["score"] or 0.0, reverse=True)
+        return all_matches[:top_k]
+
     from opencode_search.handlers._query import handle_search_code
 
     community_hits, wiki_result = await asyncio.gather(
-        asyncio.to_thread(_search_communities),
+        asyncio.to_thread(_search_all_communities),
         handle_search_code(
             query=query,
-            project_paths=[project_path],
+            project_paths=effective_paths,
             top_k=top_k,
             content_types=["wiki", "knowledge_base", "markdown"],
         ),
