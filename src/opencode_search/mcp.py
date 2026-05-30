@@ -67,6 +67,7 @@ from opencode_search.handlers import (
     handle_get_symbol_intent,
     handle_global_search,
     handle_index_federation,
+    handle_project_structure,
     handle_index_project,
     handle_list_federation,
     handle_list_indexed_projects,
@@ -394,6 +395,31 @@ async def global_search(
     )
 
 
+@mcp.tool()
+async def project_structure(
+    project_path: str,
+    max_depth: int = 4,
+    include_graph_stats: bool = True,
+) -> dict[str, Any]:
+    """Return a structural overview of the project.
+
+    Produces:
+    - Directory tree (up to max_depth levels)
+    - Language breakdown by file extension
+    - Code graph statistics (total/enriched communities, node counts)
+    - Top 10 architectural communities with entry points
+
+    Use this to quickly understand how a project is organized before
+    diving into search_code or global_search.
+    """
+    runtime_state.note_activity()
+    return await handle_project_structure(
+        project_path=project_path,
+        max_depth=max_depth,
+        include_graph_stats=include_graph_stats,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — LLM enrichment + wiki tools
 # ---------------------------------------------------------------------------
@@ -584,6 +610,19 @@ async def add_federation_member(root_path: str, member_path: str) -> dict[str, A
     """
     runtime_state.note_activity()
     return await handle_add_federation_member(
+        root_path=root_path, member_path=member_path
+    )
+
+
+@mcp.tool()
+async def remove_federation_member(root_path: str, member_path: str) -> dict[str, Any]:
+    """Remove a project path from the federation members of the root project.
+
+    Does not delete the member's index or registry entry — only removes the
+    association so it is no longer included in federation-aware operations.
+    """
+    runtime_state.note_activity()
+    return await handle_remove_federation_member(
         root_path=root_path, member_path=member_path
     )
 
