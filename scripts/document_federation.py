@@ -152,31 +152,52 @@ async def _enrich_until_complete(path: str) -> int:
 # ---------------------------------------------------------------------------
 
 async def _stage1_index(path: str, force: bool) -> None:
-    """Index + build graph. Holds _EMBED_SEM for the entire GPU phase."""
-    from opencode_search.handlers._index import _run_index_project
-    from opencode_search.embeddings import cleanup_models
+    """Index + build graph in a subprocess for CUDA state isolation.
 
+    Blackwell ONNX session resets accumulate CUDA driver state across sessions.
+    After the first reset, the next session is unstable (SIGSEGV within ~8
+    batches). Running each large stage1 in a subprocess gives it a completely
+    fresh CUDA context: crashes don't propagate and LanceDB writes are durable
+    so partial progress survives, enabling incremental retries.
+    """
     name = Path(path).name
     project_path_obj = Path(path).expanduser().resolve()
 
-    for k, v in _GPU_ENV.items():
-        os.environ[k] = v
+    # Inline Python for the subprocess: import, set env, run, cleanup.
+    _src = str(Path(__file__).parent.parent / "src")
+    script = (
+        f"import sys,asyncio,os; sys.path.insert(0,{_src!r});\n"
+        + "".join(f"os.environ.setdefault({k!r},{v!r});\n" for k, v in _GPU_ENV.items())
+        + f"from opencode_search.handlers._index import _run_index_project;\n"
+        f"from opencode_search.embeddings import cleanup_models;\n"
+        f"from pathlib import Path;\n"
+        f"async def _run():\n"
+        f"    p=Path({str(project_path_obj)!r}).expanduser().resolve();\n"
+        f"    await _run_index_project(str(p),p,watch=False,force={force!r},"
+        f"follow_symlinks=True,on_complete=None);\n"
+        f"    cleanup_models()\n"
+        f"asyncio.run(_run())\n"
+    )
 
     log.info("[%s] stage1: waiting for GPU slot…", name)
     async with _EMBED_SEM:
-        log.info("[%s] stage1: GPU slot acquired — indexing…", name)
+        log.info("[%s] stage1: GPU slot acquired — indexing (subprocess)…", name)
         t0 = time.perf_counter()
-        await _run_index_project(
-            path_str=str(project_path_obj),
-            project_path=project_path_obj,
-            watch=False, force=force, follow_symlinks=True,
-            on_complete=None,
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        # Release ONNX VRAM before handing slot to next member.
-        released = await asyncio.to_thread(cleanup_models)
-        if released:
-            log.info("[%s] ONNX session released — VRAM freed", name)
-        log.info("[%s] ✓ stage1: %.1fs", name, time.perf_counter() - t0)
+        stdout, stderr = await proc.communicate()
+        elapsed = time.perf_counter() - t0
+        rc = proc.returncode
+        if rc not in (0, -11):  # -11 = SIGSEGV — partial progress saved, retryable
+            err = stderr.decode(errors="replace")[-800:]
+            raise RuntimeError(f"stage1 subprocess rc={rc}: {err}")
+        if rc == -11:
+            log.warning("[%s] stage1 SIGSEGV in subprocess (%.1fs) — partial progress saved, registry not updated", name, elapsed)
+        else:
+            log.info("[%s] ✓ stage1: %.1fs", name, elapsed)
 
 
 # ---------------------------------------------------------------------------
