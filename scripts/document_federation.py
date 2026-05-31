@@ -57,7 +57,8 @@ _LLM_SEM:   asyncio.Semaphore | None = None
 
 # GPU environment: single ONNX session → can use full batch sizes.
 _GPU_ENV = {
-    "OPENCODE_ONNX_BATCH_SIZE":        "32",   # full per-pass throughput
+    "OPENCODE_ONNX_BATCH_SIZE":        "16",   # halved from 32 — cuts activation VRAM ~50% for
+                                                # coexistence with concurrent Ollama enrichment
     "OPENCODE_EMBED_BATCH_CHUNKS":     "64",   # smaller accumulation → fewer slow LanceDB writes
     "OPENCODE_LLM_CONCURRENCY":        "3",    # concurrent Ollama threads per member
     "OPENCODE_BLACKWELL_RESET_EVERY":  "50",   # fewer session resets for large repos (was 25)
