@@ -779,6 +779,37 @@ class TestT11IntentAPI:
         assert "error" in result
 
     @_LARGE
+    def test_t11_overview_graph_export_json(self, monkeypatch):
+        """P0: overview(what=graph_export) returns nodes/edges/communities JSON."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(
+            project_path=_ASTRO, what="graph_export",
+            export_format="json", max_nodes=200,
+        ))
+        assert result.get("status") == "ok", f"graph_export failed: {result}"
+        assert isinstance(result.get("nodes"), list), "nodes should be a list"
+        assert isinstance(result.get("edges"), list), "edges should be a list"
+        assert len(result["nodes"]) > 0, "expected at least 1 node"
+        node0 = result["nodes"][0]
+        assert "id" in node0 and "name" in node0 and "community_id" in node0
+
+    @_LARGE
+    def test_t11_overview_graph_export_graphml(self, monkeypatch):
+        """P0: overview(what=graph_export, format=graphml) returns valid GraphML."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(
+            project_path=_ASTRO, what="graph_export",
+            export_format="graphml", max_nodes=100,
+        ))
+        assert result.get("status") == "ok"
+        graphml = result.get("graphml", "")
+        assert "<?xml" in graphml
+        assert "<graphml" in graphml
+        assert "<node " in graphml
+
+    @_LARGE
     def test_t11_build_invalid_action_returns_error(self, monkeypatch):
         """P0: build with invalid action returns error dict."""
         _use_real_registry(monkeypatch)

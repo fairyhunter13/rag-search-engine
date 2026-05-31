@@ -26,8 +26,10 @@ from opencode_search.mcp import (
     build,
     overview,
 )
-index_project = build
-search_code = search
+async def index_project(path, watch=False, force=False, follow_symlinks=True):
+    return await build(project_path=path, action="index", watch=watch, force=force)
+async def search_code(query, project_paths=None, top_k=10, use_rerank=True):
+    return await search(query=query, project_paths=project_paths, top_k=top_k)
 async def project_status(path): return await overview(project_path=path, what="status")
 from opencode_search.search import clear_search_cache
 from opencode_search.watcher import watcher_manager

@@ -26,10 +26,11 @@ from opencode_search.mcp import (
     overview,
     manage,
 )
-# Alias legacy names for test compatibility
-index_project = build
-search_code = search
-# project_status, list_indexed_projects, stop_watching now live in overview/manage
+# Alias legacy names for test compatibility using proper signatures
+async def index_project(path, watch=False, force=False, follow_symlinks=True):
+    return await build(project_path=path, action="index", watch=watch, force=force)
+async def search_code(query, project_paths=None, top_k=10, use_rerank=True):
+    return await search(query=query, project_paths=project_paths, top_k=top_k)
 async def list_indexed_projects(): return await overview(what="projects")
 async def project_status(path): return await overview(project_path=path, what="status")
 async def stop_watching(path): return await manage(project_path=path, action="stop_watching")

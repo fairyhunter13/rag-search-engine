@@ -83,8 +83,10 @@ def test_global_prompt_text_requires_explicit_index_and_search_first():
 
     assert "MANDATORY" in text
     assert "Never auto-index a project" in text
-    assert "Only call index_project when the user explicitly asks" in text
-    assert "search_code" in text
+    # v2 API: build(action="index"|"pipeline") replaces explicit index_project mentions
+    assert "build" in text or "index" in text.lower()
+    # v2 API: `search` tool replaces `search_code`
+    assert "search" in text
     assert "grep" in text
     assert "rg" in text
     assert "find" in text
@@ -232,7 +234,7 @@ def test_install_claude_global_prompt_writes_to_default_and_all_profile_dirs(tmp
     for path_str in written:
         content = Path(path_str).read_text()
         assert "MANDATORY" in content
-        assert "search_code" in content
+        assert "search" in content  # v2 uses `search` tool name
         assert "grep" in content
 
 

@@ -67,6 +67,7 @@ from opencode_search.handlers import (
     handle_get_symbol,
     handle_get_symbol_intent,
     handle_global_search,
+    handle_graph_export,
     handle_index_federation,
     handle_project_structure,
     handle_index_project,
@@ -291,9 +292,11 @@ async def graph(
 @mcp.tool()
 async def overview(
     project_path: str | None = None,
-    what: Literal["structure", "communities", "status", "projects", "metrics"] = "structure",
+    what: Literal["structure", "communities", "status", "projects", "metrics", "graph_export"] = "structure",
     max_depth: int = 4,
     top_k: int = 100,
+    export_format: Literal["json", "graphml"] = "json",
+    max_nodes: int = 5000,
 ) -> dict[str, Any]:
     """Get a structural or status overview of a project or the search engine.
 
@@ -301,10 +304,13 @@ async def overview(
     Do NOT use to search code — use `search` or `ask` for that.
 
     what: "structure" (default) | "communities" | "status" | "projects" | "metrics"
+          | "graph_export" (download knowledge graph for Gephi/Cytoscape)
     project_path: not required for what="projects" or what="metrics"
+    export_format: "json" | "graphml" (only for what="graph_export")
+    max_nodes: cap for graph_export (default 5000)
     """
     runtime_state.note_activity()
-    valid = {"structure", "communities", "status", "projects", "metrics"}
+    valid = {"structure", "communities", "status", "projects", "metrics", "graph_export"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -322,6 +328,12 @@ async def overview(
         return await handle_project_status(path=project_path)
     elif what == "projects":
         return await handle_list_indexed_projects()
+    elif what == "graph_export":
+        if not project_path:
+            return {"error": "project_path required for what='graph_export'"}
+        return await handle_graph_export(
+            project_path=project_path, format=export_format, max_nodes=max_nodes,
+        )
     else:
         from opencode_search.metrics import get_metrics
         return get_metrics()
