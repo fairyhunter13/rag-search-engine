@@ -138,6 +138,78 @@ class LLMClient:
             max_tokens=512,
         )
 
+    def project_overview(self, file_samples: list[tuple[str, str]]) -> str:
+        """Step 1 of LLM-first pattern detection: high-level project overview.
+
+        Sends sampled source files to the LLM and asks for a structured JSON
+        overview: architecture, tech stack, observed patterns, primary language.
+        Returns a JSON string (parsed by caller).
+        """
+        files_text = "\n\n".join(
+            f"--- {rel} ---\n{content[:1500]}" for rel, content in file_samples[:8]
+        )
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a senior software architect. Analyse these source file samples "
+                        "and respond with a JSON object (no markdown fences) describing the project:\n"
+                        '{\n'
+                        '  "primary_language": "go|python|java|...",\n'
+                        '  "tech_stack": ["list of frameworks/libraries observed"],\n'
+                        '  "architecture_style": "microservices|monolith|clean_architecture|...",\n'
+                        '  "key_patterns": ["pattern1", "pattern2"],\n'
+                        '  "project_purpose": "one sentence describing what this does",\n'
+                        '  "confidence": "high|medium|low"\n'
+                        "}\n\nSource files:\n\n" + files_text
+                    ),
+                }
+            ],
+            max_tokens=512,
+        )
+
+    def project_synthesis(
+        self,
+        overview_json: str,
+        exact_facts: dict,
+    ) -> str:
+        """Step 3 of LLM-first pattern detection: synthesise deep semantic knowledge.
+
+        Takes the LLM overview (Step 1) + exact parsed facts (Step 2: tree-sitter
+        graph stats, manifest versions, language counts) and produces a rich
+        structured analysis. Returns a JSON string.
+        """
+        import json as _json
+        facts_text = _json.dumps(exact_facts, indent=2)[:3000]
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a senior software architect. Combine this LLM overview and "
+                        "these exact parsed facts to produce a comprehensive project analysis.\n\n"
+                        "LLM Overview:\n" + overview_json + "\n\n"
+                        "Exact Facts (tree-sitter graph, manifests, file counts):\n" + facts_text + "\n\n"
+                        "Respond with a JSON object (no markdown fences):\n"
+                        '{\n'
+                        '  "architecture_description": "paragraph describing architecture",\n'
+                        '  "primary_language": "go|python|java|...",\n'
+                        '  "coding_patterns": ["pattern1", "pattern2"],\n'
+                        '  "naming_conventions": "description of naming style",\n'
+                        '  "error_handling_style": "description",\n'
+                        '  "test_approach": "description of testing strategy",\n'
+                        '  "key_abstractions": ["top abstractions visible in code"],\n'
+                        '  "code_quality_signals": ["positive signals", "potential concerns"],\n'
+                        '  "version_highlights": {"pkg": "version"},\n'
+                        '  "confidence": "high|medium|low"\n'
+                        "}"
+                    ),
+                }
+            ],
+            max_tokens=1024,
+        )
+
     def raw_doc_to_wiki(self, content: str, source_name: str) -> str:
         """Convert a raw document into a wiki page."""
         truncated = content[:4000]

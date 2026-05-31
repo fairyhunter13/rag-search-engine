@@ -1,6 +1,7 @@
 """Tree-sitter AST extractor: emits NodeData + unresolved EdgeData.
 
-Supports: Python, TypeScript, JavaScript, Go, Java, Kotlin, Rust.
+Supports: Python, TypeScript, JavaScript, Go, Java, Kotlin, Rust,
+          Protobuf/proto, C, C++, Scala.
 Falls back to file-level node for unsupported languages.
 
 All edges produced here have to_id=<raw callee string> (pre-resolution).
@@ -16,7 +17,11 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Languages supported for deep extraction
-_DEEP_LANGS: set[str] = {"python", "typescript", "javascript", "go", "java", "kotlin", "rust"}
+_DEEP_LANGS: set[str] = {
+    "python", "typescript", "javascript", "go",
+    "java", "kotlin", "rust",
+    "proto", "c", "cpp", "scala",
+}
 
 # Map file extensions → language name used by tree_sitter_language_pack
 _EXT_TO_LANG: dict[str, str] = {
@@ -31,6 +36,14 @@ _EXT_TO_LANG: dict[str, str] = {
     ".kt": "kotlin",
     ".kts": "kotlin",
     ".rs": "rust",
+    ".proto": "proto",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".scala": "scala",
 }
 
 
@@ -120,6 +133,16 @@ class GraphExtractor:
             return _extract_ts_js(file_path, src, root, file_node, now)
         elif language == "go":
             return _extract_go(file_path, src, root, file_node, now)
+        elif language == "java":
+            return _extract_java(file_path, src, root, file_node, now)
+        elif language == "kotlin":
+            return _extract_kotlin(file_path, src, root, file_node, now)
+        elif language == "rust":
+            return _extract_rust(file_path, src, root, file_node, now)
+        elif language == "proto":
+            return _extract_proto(file_path, src, root, file_node, now)
+        elif language in ("c", "cpp"):
+            return _extract_c_cpp(file_path, src, root, file_node, now)
         else:
             return _extract_generic(file_path, src, root, file_node, now)
 
@@ -630,7 +653,435 @@ def _collect_go_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawE
 
 
 # ------------------------------------------------------------------
-# Generic fallback (Java, Kotlin, Rust, etc.)
+# Java extractor
+# ------------------------------------------------------------------
+
+def _extract_java(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/interface/method/import nodes from Java source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+
+    # Derive package/class context from file path
+    pkg_name = _basename(file_path).replace(".java", "")
+
+    def _walk_java(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind in ("import_declaration",):
+            # import com.example.Class;
+            path_node = node.named_child(0) if node.named_child_count() > 0 else None
+            if path_node:
+                raw_edges.append(_RawEdge(
+                    from_id=file_node.id,
+                    raw_callee=_text(src, path_node).rstrip(";").strip(),
+                    kind="IMPORTS",
+                ))
+
+        elif kind in ("class_declaration", "interface_declaration", "enum_declaration",
+                      "annotation_type_declaration"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node)
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{pkg_name}.{name}"
+                node_kind = "interface" if kind == "interface_declaration" else "class"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=node_kind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="java", created_at=now, updated_at=now,
+                ))
+                # Walk body with this class as context
+                body = node.child_by_field_name("body") or node
+                for i in range(body.named_child_count()):
+                    _walk_java(body.named_child(i), qualified)
+                return
+
+        elif kind in ("method_declaration", "constructor_declaration"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node)
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{pkg_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                node_kind = "constructor" if kind == "constructor_declaration" else "method"
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=node_kind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="java", created_at=now, updated_at=now,
+                ))
+                # Collect method invocations inside this method
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_java_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_java(node.named_child(i), class_ctx)
+
+    _walk_java(root)
+    return nodes, raw_edges
+
+
+def _collect_java_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "method_invocation":
+        name_node = node.child_by_field_name("name")
+        obj_node = node.child_by_field_name("object")
+        if name_node:
+            method_name = _text(src, name_node)
+            obj = _text(src, obj_node) if obj_node else ""
+            callee = f"{obj}.{method_name}" if obj else method_name
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=callee, kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_java_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# Kotlin extractor
+# ------------------------------------------------------------------
+
+def _extract_kotlin(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/function/import nodes from Kotlin source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    pkg_name = _basename(file_path).replace(".kt", "").replace(".kts", "")
+
+    def _walk_kt(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind == "import_header":
+            id_node = node.child_by_field_name("identifier") or (
+                node.named_child(0) if node.named_child_count() > 0 else None
+            )
+            if id_node:
+                raw_edges.append(_RawEdge(
+                    from_id=file_node.id, raw_callee=_text(src, id_node), kind="IMPORTS",
+                ))
+
+        elif kind in ("class_declaration", "object_declaration", "interface_declaration"):
+            name_node = node.child_by_field_name("name") or node.named_child(0)
+            if name_node and name_node.kind() in ("simple_identifier", "type_identifier"):
+                name = _text(src, name_node)
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{pkg_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nkind = "interface" if kind == "interface_declaration" else "class"
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=nkind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="kotlin", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("class_body") or node
+                for i in range(body.named_child_count()):
+                    _walk_kt(body.named_child(i), qualified)
+                return
+
+        elif kind in ("function_declaration", "secondary_constructor"):
+            name_node = node.child_by_field_name("name") or node.named_child(0)
+            if name_node and name_node.kind() == "simple_identifier":
+                name = _text(src, name_node)
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{pkg_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified,
+                    kind="method" if class_ctx else "function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="kotlin", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("function_body")
+                if body:
+                    _collect_kt_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_kt(node.named_child(i), class_ctx)
+
+    _walk_kt(root)
+    return nodes, raw_edges
+
+
+def _collect_kt_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "call_expression":
+        fn = node.child_by_field_name("calleeExpression") or node.named_child(0)
+        if fn:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, fn), kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_kt_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# Rust extractor
+# ------------------------------------------------------------------
+
+def _extract_rust(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract fn/struct/impl/trait/use nodes from Rust source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path).replace(".rs", "")
+
+    def _walk_rs(node: Any, impl_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind == "use_declaration":
+            tree_node = node.child_by_field_name("argument") or (
+                node.named_child(0) if node.named_child_count() > 0 else None
+            )
+            if tree_node:
+                raw_edges.append(_RawEdge(
+                    from_id=file_node.id, raw_callee=_text(src, tree_node), kind="IMPORTS",
+                ))
+
+        elif kind in ("struct_item", "enum_item", "trait_item", "type_item"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node)
+                qualified = f"{mod_name}::{name}"
+                nkind = "class" if kind in ("struct_item", "enum_item") else "interface"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=nkind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="rust", created_at=now, updated_at=now,
+                ))
+
+        elif kind == "impl_item":
+            type_node = node.child_by_field_name("type")
+            impl_type = _text(src, type_node) if type_node else impl_ctx
+            body = node.child_by_field_name("body")
+            if body:
+                for i in range(body.named_child_count()):
+                    _walk_rs(body.named_child(i), impl_type)
+            return
+
+        elif kind == "function_item":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node)
+                qualified = (f"{mod_name}::{impl_ctx}::{name}" if impl_ctx
+                             else f"{mod_name}::{name}")
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified,
+                    kind="method" if impl_ctx else "function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="rust", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_rust_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_rs(node.named_child(i), impl_ctx)
+
+    _walk_rs(root)
+    return nodes, raw_edges
+
+
+def _collect_rust_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind in ("call_expression", "macro_invocation"):
+        fn = node.child_by_field_name("function") or node.named_child(0)
+        if fn:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, fn), kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_rust_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# Protobuf extractor
+# ------------------------------------------------------------------
+
+def _extract_proto(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract message/service/rpc nodes from .proto files."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    pkg_name = _basename(file_path).replace(".proto", "")
+
+    def _walk_proto(node: Any, svc_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind == "import":
+            str_node = node.named_child(0) if node.named_child_count() > 0 else None
+            if str_node:
+                raw_edges.append(_RawEdge(
+                    from_id=file_node.id,
+                    raw_callee=_text(src, str_node).strip('"'),
+                    kind="IMPORTS",
+                ))
+
+        elif kind == "message":
+            name_node = node.named_child(0)
+            if name_node:
+                name = _text(src, name_node)
+                qualified = f"{pkg_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="class",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="proto", created_at=now, updated_at=now,
+                ))
+
+        elif kind == "service":
+            name_node = node.named_child(0)
+            if name_node:
+                name = _text(src, name_node)
+                qualified = f"{pkg_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="interface",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="proto", created_at=now, updated_at=now,
+                ))
+                # Walk RPCs inside service
+                for i in range(node.named_child_count()):
+                    _walk_proto(node.named_child(i), qualified)
+                return
+
+        elif kind == "rpc":
+            name_node = node.named_child(0)
+            if name_node and svc_ctx:
+                name = _text(src, name_node)
+                qualified = f"{svc_ctx}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="proto", created_at=now, updated_at=now,
+                ))
+                # Request/response types as IMPORTS-like edges
+                for i in range(node.named_child_count()):
+                    child = node.named_child(i)
+                    if child.kind() in ("message_type", "rpc_message_type"):
+                        raw_edges.append(_RawEdge(
+                            from_id=nid, raw_callee=_text(src, child), kind="IMPORTS",
+                        ))
+
+        for i in range(node.named_child_count()):
+            _walk_proto(node.named_child(i), svc_ctx)
+
+    _walk_proto(root)
+    return nodes, raw_edges
+
+
+# ------------------------------------------------------------------
+# C / C++ extractor
+# ------------------------------------------------------------------
+
+def _extract_c_cpp(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract function/struct/class nodes from C/C++ source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    lang = "cpp" if file_path.endswith((".cpp", ".cc", ".cxx", ".hpp")) else "c"
+    mod_name = _basename(file_path).rsplit(".", 1)[0]
+
+    def _walk_c(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind == "preproc_include":
+            path_node = node.named_child(0) if node.named_child_count() > 0 else None
+            if path_node:
+                raw_edges.append(_RawEdge(
+                    from_id=file_node.id,
+                    raw_callee=_text(src, path_node).strip('"<>'),
+                    kind="IMPORTS",
+                ))
+
+        elif kind in ("function_definition", "function_declaration"):
+            declarator = node.child_by_field_name("declarator")
+            if declarator:
+                name_node = declarator.child_by_field_name("declarator") or declarator
+                name = _text(src, name_node).split("(")[0].strip().split("::")[-1]
+                if name and name.isidentifier():
+                    qualified = (f"{class_ctx}::{name}" if class_ctx
+                                 else f"{mod_name}::{name}")
+                    nid = _node_id(file_path, qualified)
+                    nodes.append(NodeData(
+                        id=nid, name=name, qualified_name=qualified,
+                        kind="method" if class_ctx else "function",
+                        file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                        language=lang, created_at=now, updated_at=now,
+                    ))
+                    body = node.child_by_field_name("body")
+                    if body:
+                        _collect_c_calls(src, body, nid, raw_edges)
+                    return
+
+        elif kind in ("class_specifier", "struct_specifier"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node)
+                qualified = f"{class_ctx}::{name}" if class_ctx else f"{mod_name}::{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="class",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language=lang, created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    for i in range(body.named_child_count()):
+                        _walk_c(body.named_child(i), qualified)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_c(node.named_child(i), class_ctx)
+
+    _walk_c(root)
+    return nodes, raw_edges
+
+
+def _collect_c_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "call_expression":
+        fn = node.child_by_field_name("function")
+        if fn:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, fn), kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_c_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# Generic fallback (Scala and other languages not listed above)
 # ------------------------------------------------------------------
 
 def _extract_generic(

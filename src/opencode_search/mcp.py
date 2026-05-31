@@ -56,11 +56,13 @@ from opencode_search.daemon import (
 )
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
+    auto_pipeline_enabled,
     handle_add_federation_member,
     handle_analyze_patterns_llm,
     handle_detect_impact,
     handle_detect_patterns,
     handle_discover_federation,
+    schedule_auto_pipeline,
     handle_enrich_project,
     handle_ensure_project_watching,
     handle_get_callers,
@@ -388,6 +390,8 @@ async def build(
             if result.get("status") == "ok" and pp:
                 if runtime_state.bind_clients_to_project(pp) > 0:
                     await handle_ensure_project_watching(pp, persist=False)
+                # Auto-run full KB pipeline on first indexing (default-on)
+                schedule_auto_pipeline(pp)
         return await handle_index_project(
             path=project_path, watch=watch, force=force,
             follow_symlinks=True, on_complete=_post_index,

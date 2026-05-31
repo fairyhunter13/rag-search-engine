@@ -109,50 +109,12 @@ def _sample_source_files(root: Path) -> list[tuple[str, str]]:
     return samples
 
 
-def _build_analysis_prompt(
-    heuristic: dict[str, Any],
-    samples: list[tuple[str, str]],
-) -> str:
-    lang = heuristic.get("conventions", {}).get("language", "unknown")
-    frameworks = ", ".join(heuristic.get("key_frameworks", [])) or "none detected"
-    arch_hint = heuristic.get("architecture", "unknown")
-    manifest_manager = heuristic.get("dependencies", {}).get("manager", "unknown")
-
-    files_text = "\n\n".join(
-        f"--- {rel} ---\n{content}" for rel, content in samples
-    )
-
-    return (
-        f"You are an expert software architect analysing a {lang} project.\n"
-        f"Heuristic scan: frameworks=[{frameworks}], architecture={arch_hint}, "
-        f"package_manager={manifest_manager}.\n\n"
-        "Sample source files:\n\n"
-        f"{files_text}\n\n"
-        "Analyse these files and respond with a JSON object (no markdown fences) with EXACTLY these keys:\n"
-        "{\n"
-        '  "architecture_description": "one paragraph describing the overall architecture",\n'
-        '  "coding_patterns": ["list of detected patterns, e.g. repository pattern, functional options, builder"],\n'
-        '  "naming_conventions": "description of actual naming style observed in code",\n'
-        '  "error_handling_style": "description of error handling approach observed",\n'
-        '  "test_approach": "description of how tests are structured",\n'
-        '  "code_quality_signals": ["positive signals", "potential concerns"],\n'
-        '  "primary_language": "the single dominant language",\n'
-        '  "key_abstractions": ["top 3-5 key abstractions/modules visible in code"],\n'
-        '  "confidence": "high|medium|low based on sample quality"\n'
-        "}\n"
-        "Base your response ONLY on what you can actually observe in the code. "
-        "If you cannot determine something, use null for that field."
-    )
-
-
 def _parse_llm_json(raw: str) -> dict[str, Any]:
     """Extract JSON from LLM response, handling prose wrapping."""
     raw = raw.strip()
-    # Strip markdown fences if present
     if raw.startswith("```"):
         lines = raw.splitlines()
         raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    # Find first { ... } block
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start >= 0 and end > start:
@@ -160,22 +122,89 @@ def _parse_llm_json(raw: str) -> dict[str, Any]:
             return json.loads(raw[start:end])
         except json.JSONDecodeError:
             pass
-    return {"raw_response": raw, "confidence": "low"}
+    return {"raw_response": raw[:500], "confidence": "low"}
+
+
+def _gather_exact_facts(root: Path, project_path: str) -> dict[str, Any]:
+    """Step 2: Exact extraction using tree-sitter graph DB + manifest parsing.
+
+    Returns precise, verifiable facts to ground the LLM synthesis:
+    - Language file counts (from tree-sitter-aware discover.iter_files)
+    - Dependency versions (from manifest parsing)
+    - Graph statistics (node/edge/community counts)
+    - Top symbols by call frequency
+    - Module structure type
+    """
+    facts: dict[str, Any] = {}
+
+    # Language counts (reuse heuristic detector — already tree-sitter-aware)
+    try:
+        from opencode_search.handlers._graph import _count_languages_accurate, _detect_dependencies, _detect_module_structure
+        facts["language_counts"] = _count_languages_accurate(root, project_path)
+        deps = _detect_dependencies(root)
+        facts["package_manager"] = deps.get("manager", "unknown")
+        # Top pinned direct dependencies with versions
+        direct = [p for p in deps.get("packages", []) if p.get("direct")][:20]
+        facts["pinned_dependencies"] = {p["name"]: p["version"] for p in direct if p.get("version")}
+        facts["manifest_files"] = deps.get("manifest_files", [])[:10]
+        facts["module_structure_type"] = _detect_module_structure(root).get("type", "unknown")
+    except Exception:
+        pass
+
+    # Graph statistics from the code graph DB
+    try:
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+        from pathlib import Path as _Path
+        db_path = get_project_graph_db_path(project_path)
+        if _Path(db_path).exists():
+            gs = GraphStorage(db_path)
+            gs.open()
+            try:
+                all_nodes = gs.all_nodes()
+                all_edges = gs.all_edges()
+                communities = gs.get_communities()
+                facts["graph"] = {
+                    "node_count": len(all_nodes),
+                    "edge_count": len(all_edges),
+                    "community_count": len(communities),
+                    "enriched_communities": sum(1 for c in communities if c.title),
+                    "languages_in_graph": list({n.language for n in all_nodes if n.language}),
+                }
+                # Top 10 most-called symbols (highest in-degree)
+                from collections import Counter
+                call_counts: Counter = Counter()
+                for e in all_edges:
+                    if e.kind == "CALLS":
+                        call_counts[e.to_id] += 1
+                top_ids = [nid for nid, _ in call_counts.most_common(10)]
+                id_to_name = {n.id: n.qualified_name for n in all_nodes}
+                facts["top_symbols"] = [id_to_name[nid] for nid in top_ids if nid in id_to_name]
+            finally:
+                gs.close()
+    except Exception:
+        pass
+
+    return facts
 
 
 async def handle_analyze_patterns_llm(project_path: str, force: bool = False) -> dict[str, Any]:
-    """Run LLM-based pattern analysis and cache the result.
+    """Run 3-step LLM-first pattern analysis and cache the result.
 
-    Samples real source files, sends them to the configured local LLM
-    (OPENCODE_LLM_PROVIDER), and stores the structured result in the
-    project's index directory. Future calls to handle_detect_patterns()
-    automatically merge this cached analysis.
+    Architecture:
+        Step 1 — LLM Overview: sample real source files → LLM understands the
+                 project at high level (architecture, tech stack, key patterns)
+        Step 2 — Exact Extraction: tree-sitter graph stats + manifest parsing
+                 → precise verifiable facts (versions, node counts, top symbols)
+        Step 3 — LLM Synthesis: combine overview + exact facts → rich semantic
+                 knowledge (architecture description, patterns, conventions, quality)
+
+    Caches the result as patterns_cache.json next to the wiki directory.
+    Future calls to handle_detect_patterns() auto-merge the cached analysis.
 
     Args:
         project_path: Absolute path to the project root.
         force: Re-run even if a cached result exists.
-
-    Returns a dict with 'status', 'llm_analysis', and 'cached_at'.
     """
     root = Path(project_path).expanduser().resolve()
     if not root.is_dir():
@@ -190,19 +219,6 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
                 "cached_at": cached.get("cached_at"),
                 "project_path": str(root),
             }
-
-    # Get heuristic baseline first (fast)
-    from opencode_search.handlers._graph import handle_detect_patterns as _heuristic
-    heuristic = await _heuristic(project_path=project_path)
-
-    # Sample source files
-    samples = await asyncio.to_thread(_sample_source_files, root)
-    if not samples:
-        return {
-            "status": "error",
-            "error": "No source files found to analyse",
-            "project_path": str(root),
-        }
 
     # Create LLM client
     try:
@@ -221,18 +237,38 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
             "project_path": str(root),
         }
 
-    # Call LLM
-    prompt = _build_analysis_prompt(heuristic, samples)
-    try:
-        raw = await asyncio.to_thread(
-            llm.chat,
-            [{"role": "user", "content": prompt}],
-            max_tokens=1024,
-        )
-    except Exception as exc:
-        return {"status": "error", "error": f"LLM call failed: {exc}", "project_path": str(root)}
+    # ── Step 1: LLM Overview ────────────────────────────────────────────────
+    samples = await asyncio.to_thread(_sample_source_files, root)
+    if not samples:
+        return {
+            "status": "error",
+            "error": "No source files found to analyse",
+            "project_path": str(root),
+        }
 
-    llm_result = _parse_llm_json(raw)
+    log.info("patterns_llm[%s]: Step 1 — LLM overview (%d files)", root.name, len(samples))
+    try:
+        overview_raw = await asyncio.to_thread(llm.project_overview, samples)
+    except Exception as exc:
+        return {"status": "error", "error": f"LLM overview failed: {exc}", "project_path": str(root)}
+    overview_result = _parse_llm_json(overview_raw)
+
+    # ── Step 2: Exact Extraction ────────────────────────────────────────────
+    log.info("patterns_llm[%s]: Step 2 — exact extraction (tree-sitter + manifests)", root.name)
+    exact_facts = await asyncio.to_thread(_gather_exact_facts, root, project_path)
+
+    # ── Step 3: LLM Synthesis ────────────────────────────────────────────────
+    log.info("patterns_llm[%s]: Step 3 — LLM synthesis", root.name)
+    try:
+        synthesis_raw = await asyncio.to_thread(llm.project_synthesis, overview_raw, exact_facts)
+    except Exception as exc:
+        # Fall back to just the overview if synthesis fails
+        log.warning("patterns_llm[%s]: synthesis failed, using overview only: %s", root.name, exc)
+        synthesis_raw = overview_raw
+    llm_result = _parse_llm_json(synthesis_raw)
+    # Merge overview confidence if synthesis didn't set it
+    if "confidence" not in llm_result:
+        llm_result["confidence"] = overview_result.get("confidence", "medium")
 
     # Cache
     from datetime import datetime, timezone
@@ -241,15 +277,19 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
         "project_path": str(root),
         "cached_at": cached_at,
         "files_sampled": len(samples),
+        "steps": ["llm_overview", "exact_extraction", "llm_synthesis"],
+        "llm_overview": overview_result,
+        "exact_facts": exact_facts,
         "llm_analysis": llm_result,
     }
     await asyncio.to_thread(_save_patterns_cache, project_path, cache_data)
-    log.info("patterns_llm[%s]: cached LLM analysis (%d files sampled)", root.name, len(samples))
+    log.info("patterns_llm[%s]: 3-step analysis cached (%d files)", root.name, len(samples))
 
     return {
         "status": "ok",
         "project_path": str(root),
         "files_sampled": len(samples),
+        "steps_completed": ["llm_overview", "exact_extraction", "llm_synthesis"],
         "llm_analysis": llm_result,
         "cached_at": cached_at,
     }
