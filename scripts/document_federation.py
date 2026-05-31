@@ -328,6 +328,12 @@ async def run_status() -> None:
 async def main() -> None:
     global _EMBED_SEM, _LLM_SEM
 
+    # Apply GPU env vars BEFORE the first opencode_search import.
+    # _BLACKWELL_RESET_EVERY is a module-level constant read at import time;
+    # setting os.environ later (inside _stage1_index) has no effect.
+    for k, v in _GPU_ENV.items():
+        os.environ.setdefault(k, v)
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=2,
                         help="Concurrent LLM (Ollama) workers (default 2)")
