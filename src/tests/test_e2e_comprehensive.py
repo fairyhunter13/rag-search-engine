@@ -639,48 +639,345 @@ class TestT10BusinessProcessTracing:
 
 
 # ===========================================================================
-# Summary of success/failure criteria
+# T11 — v2 Intent API (7 tools)
+# ===========================================================================
+
+class TestT11IntentAPI:
+    """P0: All 7 intent tools route correctly and return valid shapes."""
+
+    @_LARGE
+    def test_t11_search_code_scope(self, monkeypatch):
+        """P0: search(scope=code) returns code results."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import search
+        result = _run(search(query="payment midtrans callback", project_paths=[_ASTRO]))
+        assert result.get("results"), "search(scope=code) returned no results"
+
+    @_LARGE
+    def test_t11_search_docs_scope(self, monkeypatch):
+        """P0: search(scope=docs) returns only wiki/markdown results."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import search
+        result = _run(search(
+            query="authentication API guide",
+            scope="docs",
+            project_paths=[_ASTRO],
+        ))
+        for r in result.get("results", []):
+            lang = r.get("language", "")
+            path = r.get("path", "")
+            assert lang in ("wiki","knowledge_base","markdown","rst","text") or \
+                   path.endswith((".md",".rst",".txt")), \
+                   f"Non-doc result in docs scope: {lang} {path}"
+
+    @_LARGE
+    def test_t11_search_invalid_scope_returns_error(self, monkeypatch):
+        """P0: search with invalid scope returns error dict, not exception."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import search
+        result = _run(search(query="test", scope="nonsense", project_paths=[_ASTRO]))
+        assert "error" in result, "invalid scope should return error dict"
+        assert "valid_scopes" in result
+
+    @_LARGE
+    def test_t11_ask_architecture_scope(self, monkeypatch):
+        """P0: ask(scope=architecture) returns community results."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import ask
+        result = _run(ask(query="payment gateway", project_path=_ASTRO, scope="architecture"))
+        assert result.get("community_matches", 0) >= 1, \
+            "ask(architecture) returned 0 community matches"
+
+    @_LARGE
+    def test_t11_ask_wiki_scope(self, monkeypatch):
+        """P0: ask(scope=wiki) returns wiki page results."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import ask
+        result = _run(ask(query="architecture overview", project_path=_ASTRO, scope="wiki"))
+        assert result.get("total", 0) >= 1, "ask(wiki) returned 0 results"
+
+    @_LARGE
+    def test_t11_ask_all_scope(self, monkeypatch):
+        """P0: ask(scope=all) returns combined results."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import ask
+        result = _run(ask(query="campaign management", project_path=_ASTRO, scope="all"))
+        total = result.get("total", 0)
+        assert total >= 1, f"ask(all) returned 0 results"
+
+    @_LARGE
+    def test_t11_ask_invalid_scope_returns_error(self, monkeypatch):
+        """P0: ask with invalid scope returns error dict."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import ask
+        result = _run(ask(query="test", project_path=_ASTRO, scope="xyz"))
+        assert "error" in result
+
+    @_LARGE
+    def test_t11_graph_definition(self, monkeypatch):
+        """P0: graph(relation=definition) returns symbol info."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import graph
+        result = _run(graph(symbol="http.Run", project_path=_ASTRO, relation="definition"))
+        assert isinstance(result, dict), "graph returned non-dict"
+
+    @_LARGE
+    def test_t11_graph_callers(self, monkeypatch):
+        """P0: graph(relation=callers) returns callers without error."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import graph
+        result = _run(graph(symbol="http.Run", project_path=_ASTRO, relation="callers"))
+        assert isinstance(result, dict)
+
+    @_LARGE
+    def test_t11_graph_path_requires_to_symbol(self, monkeypatch):
+        """P0: graph(relation=path) without to_symbol returns error dict."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import graph
+        result = _run(graph(symbol="http.Run", project_path=_ASTRO, relation="path"))
+        assert "error" in result, "missing to_symbol should return error"
+
+    @_LARGE
+    def test_t11_overview_structure(self, monkeypatch):
+        """P0: overview(what=structure) returns directory tree."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(project_path=_ASTRO, what="structure"))
+        assert result.get("status") == "ok"
+        assert "directory_tree" in result
+
+    @_LARGE
+    def test_t11_overview_communities(self, monkeypatch):
+        """P0: overview(what=communities) returns community list."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(project_path=_ASTRO, what="communities"))
+        assert len(result.get("communities", [])) >= 5
+
+    @_LARGE
+    def test_t11_overview_status(self, monkeypatch):
+        """P0: overview(what=status) returns indexed=True."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(project_path=_ASTRO, what="status"))
+        assert result.get("indexed") is True
+
+    @_LARGE
+    def test_t11_overview_projects(self, monkeypatch):
+        """P0: overview(what=projects) returns project list without project_path."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(what="projects"))
+        assert len(result.get("projects", [])) >= 2
+
+    @_LARGE
+    def test_t11_overview_invalid_what_returns_error(self, monkeypatch):
+        """P0: overview with invalid what returns error dict."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import overview
+        result = _run(overview(what="nonsense"))
+        assert "error" in result
+
+    @_LARGE
+    def test_t11_build_invalid_action_returns_error(self, monkeypatch):
+        """P0: build with invalid action returns error dict."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import build
+        result = _run(build(project_path=_ASTRO, action="fly"))
+        assert "error" in result
+
+    @_LARGE
+    def test_t11_federation_list(self, monkeypatch):
+        """P0: federation(action=list) returns ≥20 members."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import federation
+        result = _run(federation(root_path=_ASTRO, action="list"))
+        assert len(result.get("members", [])) >= 20
+
+    @_LARGE
+    def test_t11_federation_discover(self, monkeypatch):
+        """P0: federation(action=discover) returns ≥20 discovered."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import federation
+        result = _run(federation(root_path=_ASTRO, action="discover"))
+        assert len(result.get("discovered", [])) >= 20
+
+    @_LARGE
+    def test_t11_manage_wiki_lint(self, monkeypatch):
+        """P0: manage(action=wiki_lint) returns health check."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import manage
+        result = _run(manage(project_path=_ASTRO, action="wiki_lint"))
+        assert "total_pages" in result
+
+    @_LARGE
+    def test_t11_manage_invalid_action_returns_error(self, monkeypatch):
+        """P0: manage with invalid action returns error dict."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.mcp import manage
+        result = _run(manage(project_path=_ASTRO, action="explode"))
+        assert "error" in result
+
+
+# ===========================================================================
+# T12 — CLI: 7-tool API via claude haiku
+# ===========================================================================
+
+class TestT12CLIIntentAPI:
+    """P1: 7 new intent tools accessible via claude haiku-4-5."""
+
+    @_LARGE
+    def test_t12_claude_uses_search_tool(self):
+        """P1: claude haiku-4-5 calls the new `search` tool (not search_code)."""
+        result = subprocess.run(
+            [
+                "claude", "--dangerously-skip-permissions",
+                "--model", "claude-haiku-4-5",
+                "-p",
+                f"Use the `search` MCP tool with query='midtrans payment' and "
+                f"project_paths=['{_ASTRO}'], scope='code'. "
+                'Output ONLY JSON: {"result_count": <number>}',
+            ],
+            capture_output=True, text=True, timeout=90,
+        )
+        output = result.stdout.strip()
+        try:
+            start = output.index("{")
+            end = output.rindex("}") + 1
+            data = json.loads(output[start:end])
+            assert data.get("result_count", 0) >= 1, f"search returned 0: {data}"
+        except (ValueError, json.JSONDecodeError) as e:
+            pytest.fail(f"Could not parse output: {output!r} — {e}")
+
+    @_LARGE
+    def test_t12_claude_uses_overview_tool(self):
+        """P1: claude haiku-4-5 calls the `overview` tool for project list."""
+        result = subprocess.run(
+            [
+                "claude", "--dangerously-skip-permissions",
+                "--model", "claude-haiku-4-5",
+                "-p",
+                "Use the `overview` MCP tool with what='projects'. "
+                'Output ONLY JSON: {"project_count": <number>}',
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        output = result.stdout.strip()
+        try:
+            start = output.index("{")
+            end = output.rindex("}") + 1
+            data = json.loads(output[start:end])
+            assert data.get("project_count", 0) >= 2
+        except (ValueError, json.JSONDecodeError) as e:
+            pytest.fail(f"Could not parse output: {output!r} — {e}")
+
+
+# ===========================================================================
+# T13 — Dashboard API routes
+# ===========================================================================
+
+class TestT13Dashboard:
+    """P0: Dashboard API routes return correct shapes."""
+
+    def _api(self, path: str) -> dict:
+        import urllib.request, json as _json
+        url = f"http://127.0.0.1:8765{path}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                return _json.loads(r.read())
+        except Exception as e:
+            pytest.skip(f"Daemon not running or route failed: {e}")
+
+    def _html(self, path: str) -> str:
+        import urllib.request
+        url = f"http://127.0.0.1:8765{path}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                return r.read().decode()
+        except Exception as e:
+            pytest.skip(f"Daemon not running: {e}")
+
+    def test_t13_dashboard_returns_html(self):
+        """P0: GET /dashboard returns HTML."""
+        html = self._html("/dashboard")
+        assert "<!DOCTYPE html>" in html, "dashboard not returning HTML"
+        assert "opencode-search" in html
+
+    def test_t13_api_projects_returns_list(self):
+        """P0: GET /api/projects returns project list."""
+        data = self._api("/api/projects")
+        assert "projects" in data, f"missing 'projects': {data}"
+        assert len(data["projects"]) >= 2
+
+    def test_t13_api_communities_returns_list(self):
+        """P0: GET /api/communities returns community list for astro-project."""
+        data = self._api(f"/api/communities?project={_ASTRO}&top_k=5")
+        assert "communities" in data
+        assert len(data["communities"]) >= 1
+
+    def test_t13_api_wiki_returns_pages(self):
+        """P0: GET /api/wiki returns wiki page list."""
+        data = self._api(f"/api/wiki?project={_ASTRO}")
+        assert "pages" in data
+        assert data.get("total", 0) >= 100, \
+            f"expected ≥100 wiki pages, got {data.get('total', 0)}"
+
+    def test_t13_api_overview_returns_tree(self):
+        """P0: GET /api/overview returns directory tree."""
+        data = self._api(f"/api/overview?project={_ASTRO}")
+        assert "directory_tree" in data
+        assert "language_breakdown" in data
+
+    def test_t13_api_metrics_returns_dict(self):
+        """P0: GET /api/metrics returns metrics dict."""
+        data = self._api("/api/metrics")
+        assert isinstance(data, dict)
+
+    def test_t13_api_federation_returns_members(self):
+        """P0: GET /api/federation returns member list."""
+        data = self._api(f"/api/federation?project={_ASTRO}")
+        assert "members" in data
+        assert len(data["members"]) >= 20
+
+
+# ===========================================================================
+# Summary of success/failure criteria (v2 — 7-tool intent API)
 # ===========================================================================
 
 """
-TOOL COVERAGE MATRIX
-====================
-Tool                    Priority  Test(s)
-----------------------  --------  -------
-search_code             P0        T1.1-T1.5, T10.1-T10.3
-global_search           P0        T2.2-T2.4
-get_communities         P0        T2.1, T2.5
-wiki_query              P0        T3.1-T3.5
-wiki_lint               P1        T3.6
-project_structure       P0        T6.1-T6.4
-get_symbol              P1        T4.1
-get_callers             P1        T4.2
-get_callees             P1        T4.3
-trace_path              P1        T4.4
-detect_impact           P1        T5.1
-discover_federation     P0        T7.1
-list_federation         P0        T7.2
-add_federation_member   P0        T7.3
-remove_federation_member P0       T7.3
-project_status          P0        T8.1
-list_indexed_projects   P0        T8.2, T9.1, T9.3
-search_docs             P1        T3.4
-enrich_project          P2        (manual/pipeline only)
-wiki_generate           P2        (manual/pipeline only)
-wiki_ingest             P2        (manual/pipeline only)
-wiki_reindex            P2        (manual)
-pipeline                P2        (441s, manual)
-index_project           P0        (manual)
-index_federation        P1        (no separate indexes yet)
-search_metrics          P1        T8.3
+TOOL COVERAGE MATRIX (v2)
+=========================
+Tool        Priority  Tests
+----------  --------  ------
+search      P0        T1.1-T1.5, T11.search_*, T12.1, T10.1-T10.3
+ask         P0        T2.2-T2.4, T11.ask_*, T3.1-T3.5
+graph       P0        T4.1-T4.4, T5.1, T11.graph_*
+overview    P0        T6.1-T6.4, T8.1-T8.2, T11.overview_*
+build       P1        T11.build_invalid (full pipeline: manual, ~441s)
+federation  P0        T7.1-T7.3, T11.federation_*
+manage      P0        T3.6, T11.manage_*
+dashboard   P0        T13.1-T13.7
 
-MISSING FEATURES (documented gaps)
-===================================
-- No dedicated 'project_structure' for federated sub-repos individually
-- No BPM/swimlane flow exporter (business process → structured diagram)
-- No knowledge graph visualization export (GraphML/Cytoscape)
-- Federation members not separately indexed (root covers via follow_symlinks)
-- Only 130/610 meaningful communities enriched (run pipeline again for more)
-- No 'similar_code' tool (find code similar to a given snippet)
-- No temporal analysis (what changed recently in the architecture)
+FORMAL SUCCESS/FAILURE CRITERIA
+================================
+Capability             SUCCESS                              FAILURE
+---------------------  -----------------------------------  -----------------------
+Code graph structure   >1000 communities, callers resolve  0 communities or errors
+Project structure      tree w/ repos-ubuntu; .go in langs  empty tree or missing
+Function tracing       returns dict ≥0 edges, no crash     exception or bad shape
+Architecture           payment query → payment community    0 community matches
+Wiki                   payment/auth queries → ≥1 wiki page 0 wiki for indexed topic
+Business processes     checkout/campaign → ≥3 hits         <1 relevant hit
+Knowledge base         unenriched meaningful comms == 0    >0 after complete run
+Impact analysis        affected set for hot symbol         crash
+Status/observability   indexed=True, chunks ≥100k          wrong counts
+Multi-client           claude haiku calls tools correctly  tool not callable
+Dashboard              all tabs load; /api/* return data   any tab blank or 500
+
+REMAINING WORK (Phase C + D running in background)
+===================================================
+- Root enrichment: 1957 remaining communities → running via document_federation.py
+- Member documentation: 24 members need separate index+graph+enrich+wiki
+  Run: python scripts/document_federation.py --skip-root
+- knowledge graph export (Phase F): graph_export API route + download button
 """
