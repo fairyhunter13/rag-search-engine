@@ -115,21 +115,23 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
 
 
 def schedule_auto_pipeline(project_path: str) -> None:
-    """Schedule handle_auto_pipeline as a background task if enabled.
+    """Schedule handle_auto_pipeline as a background asyncio task.
 
-    Safe to call from any async context — creates an asyncio task without
-    awaiting it, so the caller (post_index callback) returns immediately.
+    Must be called from inside a running async context (e.g. _post_index callback).
+    Returns immediately — the pipeline runs in the background without blocking indexing.
     """
     if not auto_pipeline_enabled():
         log.debug("auto_pipeline disabled via OPENCODE_AUTO_PIPELINE=0")
         return
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(
-                handle_auto_pipeline(project_path),
-                name=f"auto_pipeline:{Path(project_path).name}",
-            )
-            log.info("auto_pipeline[%s]: scheduled as background task", Path(project_path).name)
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            handle_auto_pipeline(project_path),
+            name=f"auto_pipeline:{Path(project_path).name}",
+        )
+        log.info("auto_pipeline[%s]: scheduled as background task", Path(project_path).name)
+    except RuntimeError:
+        # No running event loop — skip (e.g. called from sync context or tests)
+        log.debug("auto_pipeline: no running event loop, skipped scheduling")
     except Exception as exc:
         log.warning("auto_pipeline: failed to schedule task: %s", exc)
