@@ -874,6 +874,7 @@ def _render_systemd_service(
             "TimeoutStopSec=15",
             "Environment=PYTHONUNBUFFERED=1",
             "Environment=OPENCODE_MCP_IDLE_SHUTDOWN_S=0",
+            "Environment=OPENCODE_AUTO_PIPELINE=1",
             *env_lines,
             "Nice=10",
             "IOSchedulingClass=best-effort",
