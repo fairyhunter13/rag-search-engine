@@ -195,6 +195,7 @@ async def _stage2_llm(path: str) -> tuple[int, int]:
         project_path=path,
         max_communities=_MAX_COMMUNITIES,
         include_federation=False,
+        embed=False,  # stage2_embed will embed under _EMBED_SEM — don't embed here
     )
     wiki_pages = wiki_result.get("total", 0)
     log.info("[%s] ✓ %d wiki pages generated", name, wiki_pages)
