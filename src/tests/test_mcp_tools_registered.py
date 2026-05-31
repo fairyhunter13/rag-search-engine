@@ -51,7 +51,7 @@ def _get_registered_tool_names() -> set[str]:
 
 
 class TestMcpToolRegistration:
-    """All 20 expected MCP tools must be registered."""
+    """All 7 expected MCP tools (v2 intent API) must be registered."""
 
     def test_all_expected_mcp_tools_are_registered(self) -> None:
         """Every name in EXPECTED_MCP_TOOLS must appear in mcp.list_tools()."""

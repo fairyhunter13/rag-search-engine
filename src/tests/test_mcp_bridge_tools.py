@@ -1,8 +1,7 @@
-"""Verify that the MCP bridge (mcp_bridge.py) exposes the expected tool surface.
+"""Verify that the MCP bridge (mcp_bridge.py) exposes the v2 7-tool intent API.
 
-The bridge intentionally omits the 4 daemon-internal tools
-(project_status, list_indexed_projects, stop_watching, search_metrics)
-and instead exposes 16 user-facing tools.
+The bridge forwards all calls to the HTTP daemon. It exposes the same 7 intent
+tools as mcp.py: search, ask, graph, overview, build, federation, manage.
 
 No running daemon or GPU is required — tool registration happens at import time.
 """
@@ -19,42 +18,17 @@ pytest.importorskip(
 )
 
 # ---------------------------------------------------------------------------
-# Expected tool catalogue for the bridge
+# Expected tool catalogue for the bridge (v2 intent API — 7 tools)
 # ---------------------------------------------------------------------------
 
-# Bridge exposes these 16 user-facing tools (omits the 4 daemon-admin tools
-# present in mcp.py: project_status, list_indexed_projects, stop_watching,
-# search_metrics — those are accessible only via the HTTP admin routes).
 EXPECTED_BRIDGE_TOOLS: list[str] = [
-    # Core
-    "search_code",
-    "index_project",
-    # Graph / structural
-    "get_symbol",
-    "get_callers",
-    "get_callees",
-    "trace_path",
-    "detect_impact",
-    "get_communities",
-    "global_search",
-    # LLM enrichment
-    "enrich_project",
-    "get_symbol_intent",
-    # Wiki
-    "wiki_generate",
-    "wiki_ingest",
-    "wiki_query",
-    "wiki_lint",
-    # Docs
-    "search_docs",
-]
-
-# Tools present in mcp.py but intentionally absent from the bridge
-DAEMON_ADMIN_TOOLS: list[str] = [
-    "project_status",
-    "list_indexed_projects",
-    "stop_watching",
-    "search_metrics",
+    "search",
+    "ask",
+    "graph",
+    "overview",
+    "build",
+    "federation",
+    "manage",
 ]
 
 
@@ -86,8 +60,8 @@ class TestBridgeToolRegistration:
         )
         assert bridge_mod.bridge is not None
 
-    def test_bridge_exposes_all_search_tools(self) -> None:
-        """All expected bridge tools must be registered."""
+    def test_bridge_exposes_all_intent_tools(self) -> None:
+        """All 7 v2 intent tools must be registered on the bridge."""
         registered = _get_bridge_tool_names()
         missing = [t for t in EXPECTED_BRIDGE_TOOLS if t not in registered]
         assert not missing, (
@@ -95,16 +69,16 @@ class TestBridgeToolRegistration:
             f"Registered: {sorted(registered)}"
         )
 
-    def test_bridge_tool_count_is_at_least_16(self) -> None:
-        """The bridge must expose at least 16 tools."""
+    def test_bridge_tool_count_is_exactly_7(self) -> None:
+        """The bridge must expose exactly 7 intent tools."""
         registered = _get_bridge_tool_names()
-        assert len(registered) >= 16, (
-            f"Expected >= 16 bridge tools, got {len(registered)}: {sorted(registered)}"
+        assert len(registered) == 7, (
+            f"Expected exactly 7 bridge tools, got {len(registered)}: {sorted(registered)}"
         )
 
     @pytest.mark.parametrize("tool_name", EXPECTED_BRIDGE_TOOLS)
     def test_individual_bridge_tool_registered(self, tool_name: str) -> None:
-        """Each tool appears as a separate parametrized test for clear output."""
+        """Each intent tool appears as a separate parametrized test for clear output."""
         registered = _get_bridge_tool_names()
         assert tool_name in registered, (
             f"Bridge tool '{tool_name}' not registered. "
@@ -122,22 +96,22 @@ class TestBridgeToolRegistration:
             func = getattr(bridge_mod, tool_name)
             assert callable(func), f"bridge.{tool_name} must be callable"
 
-    def test_bridge_search_code_has_workspace_scoping(self) -> None:
-        """search_code in bridge must accept project_paths kwarg (scoping)."""
+    def test_bridge_search_has_project_paths_scoping(self) -> None:
+        """search in bridge must accept project_paths kwarg (workspace auto-scoping)."""
         import inspect
         import opencode_search.mcp_bridge as bridge_mod
 
-        sig = inspect.signature(bridge_mod.search_code)
+        sig = inspect.signature(bridge_mod.search)
         assert "project_paths" in sig.parameters, (
-            "bridge.search_code must accept project_paths for workspace scoping"
+            "bridge.search must accept project_paths for workspace scoping"
         )
 
-    def test_bridge_index_project_has_workspace_guard(self) -> None:
-        """index_project in bridge must accept a path param (subject to workspace guard)."""
+    def test_bridge_build_has_workspace_guard(self) -> None:
+        """build in bridge must accept a project_path param (subject to workspace guard)."""
         import inspect
         import opencode_search.mcp_bridge as bridge_mod
 
-        sig = inspect.signature(bridge_mod.index_project)
-        assert "path" in sig.parameters, (
-            "bridge.index_project must accept a 'path' parameter"
+        sig = inspect.signature(bridge_mod.build)
+        assert "project_path" in sig.parameters, (
+            "bridge.build must accept a 'project_path' parameter"
         )

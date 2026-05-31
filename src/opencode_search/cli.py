@@ -562,6 +562,45 @@ def daemon_install_global(
 
 
 # ---------------------------------------------------------------------------
+# dashboard
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def dashboard(
+    no_open: bool = typer.Option(False, "--no-open", help="Print URL only, do not open browser."),
+) -> None:
+    """Open the search-engine dashboard in the browser.
+
+    The dashboard shows all indexed projects, their wiki, knowledge graph,
+    architecture, communities, and code search — globally across this device.
+    Requires the daemon to be running (opencode-search daemon start).
+    """
+    import urllib.request
+    import webbrowser
+    from opencode_search.daemon import DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT
+
+    host = DEFAULT_DAEMON_HOST
+    port = DEFAULT_DAEMON_PORT
+    url = f"http://{host}:{port}/dashboard"
+    health_url = f"http://{host}:{port}/healthz"
+
+    try:
+        urllib.request.urlopen(health_url, timeout=2)
+    except Exception:
+        typer.echo(
+            f"Daemon not running at {host}:{port}. "
+            "Start it with: opencode-search daemon start",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(f"Dashboard: {url}")
+    if not no_open:
+        webbrowser.open(url)
+
+
+# ---------------------------------------------------------------------------
 # health
 # ---------------------------------------------------------------------------
 

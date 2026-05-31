@@ -970,6 +970,358 @@ class TestT13Dashboard:
         assert "members" in data
         assert len(data["members"]) >= 20
 
+    def test_t13_api_wiki_page_returns_content(self):
+        """P0: GET /api/wiki/page returns markdown content for a known page."""
+        pages_data = self._api(f"/api/wiki?project={_ASTRO}")
+        pages = pages_data.get("pages", [])
+        if not pages:
+            pytest.skip("No wiki pages found in redacted-name-3")
+        name = pages[0] if isinstance(pages[0], str) else pages[0].get("name", "")
+        if not name:
+            pytest.skip("Could not determine wiki page name")
+        import urllib.parse
+        encoded = urllib.parse.quote(_ASTRO)
+        data = self._api(f"/api/wiki/page?project={encoded}&name={name}")
+        assert "content" in data, f"missing 'content': {data}"
+        assert isinstance(data["content"], str)
+        assert len(data["content"]) > 0
+
+    def test_t13_api_ask_wiki_scope_returns_hits(self):
+        """P0: GET /api/ask with scope=wiki returns wiki hits for a known topic."""
+        import urllib.parse
+        encoded = urllib.parse.quote(_ASTRO)
+        data = self._api(f"/api/ask?project={encoded}&q=payment&scope=wiki")
+        assert isinstance(data, dict), f"expected dict, got {type(data)}"
+        # Either wiki_matches key or results list (depending on handler)
+        has_results = "wiki_matches" in data or "results" in data or "community_matches" in data
+        assert has_results, f"no results key in response: {list(data.keys())}"
+
+    def test_t13_api_ask_all_scope_returns_results(self):
+        """P0: GET /api/ask with scope=all returns architecture or wiki results."""
+        import urllib.parse
+        encoded = urllib.parse.quote(_ASTRO)
+        data = self._api(f"/api/ask?project={encoded}&q=authentication&scope=all")
+        assert isinstance(data, dict)
+        # Must have at least one results-like key
+        has_results = any(k in data for k in ("results", "wiki_matches", "community_matches"))
+        assert has_results, f"empty response from /api/ask: {list(data.keys())}"
+
+    def test_t13_api_search_code_returns_results(self):
+        """P0: GET /api/search returns code search results with path/score/content."""
+        import urllib.parse
+        q = urllib.parse.quote("payment handler")
+        proj = urllib.parse.quote(_ASTRO)
+        data = self._api(f"/api/search?q={q}&project={proj}&scope=code")
+        assert "results" in data, f"missing 'results': {data}"
+        assert len(data["results"]) >= 1, "expected ≥1 code search result for 'payment handler'"
+        first = data["results"][0]
+        assert "path" in first
+        assert "score" in first
+        assert "content" in first
+
+    def test_t13_api_graph_callers_returns_dict(self):
+        """P0: GET /api/graph returns caller information for a known symbol."""
+        import urllib.parse
+        symbol = urllib.parse.quote("http.Run")
+        proj = urllib.parse.quote(_ASTRO)
+        data = self._api(f"/api/graph?project={proj}&symbol={symbol}&relation=callers")
+        assert isinstance(data, dict), f"expected dict from /api/graph: {type(data)}"
+        assert "error" not in data or data.get("callers") is not None, \
+            f"graph callers returned error: {data}"
+
+    def test_t13_api_graph_export_json_shape(self):
+        """P0: GET /api/graph_export returns JSON with nodes and edges."""
+        import urllib.parse
+        proj = urllib.parse.quote(_ASTRO)
+        data = self._api(f"/api/graph_export?project={proj}&format=json&max_nodes=100")
+        assert "nodes" in data, f"missing 'nodes' in graph export: {list(data.keys())}"
+        assert "edges" in data, f"missing 'edges' in graph export: {list(data.keys())}"
+        assert isinstance(data["nodes"], list)
+        assert isinstance(data["edges"], list)
+
+    def test_t13_api_graph_export_graphml_shape(self):
+        """P0: GET /api/graph_export?format=graphml returns GraphML XML."""
+        import urllib.request
+        url = f"http://127.0.0.1:8765/api/graph_export?project={_ASTRO}&format=graphml&max_nodes=100"
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:
+                body = r.read().decode(errors="replace")
+        except Exception as e:
+            pytest.skip(f"Daemon not running or route failed: {e}")
+        assert "<graphml" in body or "<?xml" in body, \
+            f"GraphML export does not look like XML: {body[:200]}"
+
+
+# ===========================================================================
+# T14 — Dashboard unit tests (Starlette TestClient, no live daemon required)
+# ===========================================================================
+
+class TestT14DashboardUnit:
+    """Dashboard routes tested via Starlette TestClient — no running daemon needed."""
+
+    @pytest.fixture(autouse=True)
+    def _client(self, monkeypatch, tmp_path):
+        pytest.importorskip("starlette", reason="starlette required")
+        from starlette.testclient import TestClient
+
+        # Patch registry to a real or empty registry so imports don't fail
+        import opencode_search.config as _cfg
+        monkeypatch.setattr(_cfg, "REGISTRY_PATH", tmp_path / "registry.json")
+
+        # Stub heavy handlers so TestClient responses are fast and deterministic
+        from unittest.mock import AsyncMock, patch
+        _empty_projects = {"projects": []}
+        _empty_struct = {"directory_tree": {}, "language_breakdown": {}, "graph_stats": {}, "top_communities": []}
+        _empty_communities = {"communities": [], "total": 0, "enriched": 0}
+        _empty_wiki = {"pages": [], "total": 0}
+        _empty_results = {"results": [], "elapsed_ms": 0.0, "query": "test", "projects_searched": 0}
+        _empty_graph = {"symbol": "test", "relation": "callers", "callers": []}
+        _empty_members = {"members": [], "total": 0}
+        _empty_metrics = {"p50_ms": 0.0, "p95_ms": 0.0, "total_searches": 0}
+        _empty_export = {"nodes": [], "edges": [], "communities": []}
+
+        from opencode_search import mcp as mcp_mod
+        patches = [
+            patch.object(mcp_mod, "handle_list_indexed_projects", AsyncMock(return_value=_empty_projects)),
+            patch.object(mcp_mod, "handle_project_structure", AsyncMock(return_value=_empty_struct)),
+            patch.object(mcp_mod, "handle_get_communities", AsyncMock(return_value=_empty_communities)),
+            patch.object(mcp_mod, "handle_search_code", AsyncMock(return_value=_empty_results)),
+            patch.object(mcp_mod, "handle_global_search", AsyncMock(return_value=_empty_results)),
+            patch.object(mcp_mod, "handle_wiki_query", AsyncMock(return_value=_empty_results)),
+            patch.object(mcp_mod, "handle_list_federation", AsyncMock(return_value=_empty_members)),
+            patch.object(mcp_mod, "handle_graph_export", AsyncMock(return_value=_empty_export)),
+        ]
+        import opencode_search.metrics as _metrics_mod
+        patches.append(patch.object(_metrics_mod, "get_metrics", return_value=_empty_metrics))
+
+        for p in patches:
+            p.start()
+
+        # Also stub wiki dir so /api/wiki doesn't crash on missing paths
+        import opencode_search.config as _cfg2
+        monkeypatch.setattr(_cfg2, "get_project_wiki_dir",
+                            lambda *a, **kw: tmp_path / "wiki")
+
+        client = TestClient(mcp_mod.mcp.streamable_http_app())
+        self._client = client
+        yield client
+
+        for p in patches:
+            p.stop()
+
+    def test_t14_dashboard_html_200(self):
+        r = self._client.get("/dashboard")
+        assert r.status_code == 200
+        assert "<!DOCTYPE html>" in r.text or "<html" in r.text.lower()
+
+    def test_t14_api_projects_200(self):
+        r = self._client.get("/api/projects")
+        assert r.status_code == 200
+        assert "projects" in r.json()
+
+    def test_t14_api_overview_200(self):
+        r = self._client.get(f"/api/overview?project={_ASTRO}")
+        assert r.status_code == 200
+        data = r.json()
+        assert "directory_tree" in data or "error" in data  # error ok if proj not indexed
+
+    def test_t14_api_communities_200(self):
+        r = self._client.get(f"/api/communities?project={_ASTRO}&top_k=5")
+        assert r.status_code == 200
+        data = r.json()
+        assert "communities" in data
+
+    def test_t14_api_wiki_200(self):
+        r = self._client.get(f"/api/wiki?project={_ASTRO}")
+        assert r.status_code == 200
+        data = r.json()
+        assert "pages" in data
+
+    def test_t14_api_ask_200(self):
+        r = self._client.get(f"/api/ask?project={_ASTRO}&q=payment&scope=wiki")
+        assert r.status_code == 200
+        assert isinstance(r.json(), dict)
+
+    def test_t14_api_search_200(self):
+        r = self._client.get("/api/search?q=handler&scope=code")
+        assert r.status_code == 200
+        assert "results" in r.json()
+
+    def test_t14_api_graph_200(self):
+        r = self._client.get(f"/api/graph?project={_ASTRO}&symbol=main&relation=callers")
+        assert r.status_code == 200
+        assert isinstance(r.json(), dict)
+
+    def test_t14_api_federation_200(self):
+        r = self._client.get(f"/api/federation?project={_ASTRO}")
+        assert r.status_code == 200
+        assert "members" in r.json()
+
+    def test_t14_api_metrics_200(self):
+        r = self._client.get("/api/metrics")
+        assert r.status_code == 200
+        assert isinstance(r.json(), dict)
+
+    def test_t14_api_graph_export_json_200(self):
+        r = self._client.get(f"/api/graph_export?project={_ASTRO}&format=json&max_nodes=10")
+        assert r.status_code == 200
+        data = r.json()
+        assert "nodes" in data
+        assert "edges" in data
+
+    def test_t14_api_graph_export_graphml_200(self):
+        r = self._client.get(f"/api/graph_export?project={_ASTRO}&format=graphml&max_nodes=10")
+        assert r.status_code == 200
+        # GraphML returns XML as plain text or attachment
+        body = r.text
+        assert "graphml" in body.lower() or "xml" in body.lower() or "nodes" in body.lower()
+
+
+# ===========================================================================
+# T15 — Wiki embedding validation (LanceDB, LARGE)
+# ===========================================================================
+
+class TestT15WikiEmbedding:
+    """Validate that wiki pages are actually embedded in LanceDB, not just on disk."""
+
+    @_LARGE
+    def test_t15_acme_wiki_chunks_in_lancedb(self, monkeypatch):
+        """Root redacted-name-3 must have ≥500 wiki chunks in LanceDB with language='wiki'."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.config import get_project_db_path
+        from opencode_search.storage import Storage
+
+        storage = Storage(db_path=get_project_db_path(_ASTRO), dims=768)
+        _run(storage.open())
+        try:
+            tbl = storage._chunks_table()
+            # Count rows with language = 'wiki'
+            df = tbl.to_pandas(columns=["language"]) if hasattr(tbl, "to_pandas") else None
+            if df is not None:
+                wiki_count = int((df["language"] == "wiki").sum())
+            else:
+                wiki_count = tbl.count_rows(filter="language = 'wiki'")
+            assert wiki_count >= 500, \
+                f"Expected ≥500 wiki chunks in LanceDB, found {wiki_count}"
+        finally:
+            _run(storage.close())
+
+    @_LARGE
+    def test_t15_member_wiki_chunks_in_lancedb(self, monkeypatch):
+        """Well-enriched federation members must have wiki chunks in their own LanceDB."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.config import get_project_db_path, load_registry
+        from opencode_search.storage import Storage
+
+        registry = load_registry()
+        # Check members known to be fully enriched after the documentation run
+        well_enriched = [
+            "/home/user/go/src/github.com/example-org/acme-loyalty-be",
+            "/home/user/go/src/github.com/example-org/acme-platform-notification",
+            "/home/user/go/src/github.com/example-org/acme-campaign-be",
+        ]
+        for path in well_enriched:
+            if path not in registry:
+                continue
+            storage = Storage(db_path=get_project_db_path(path), dims=768)
+            _run(storage.open())
+            try:
+                tbl = storage._chunks_table()
+                df = tbl.to_pandas(columns=["language"]) if hasattr(tbl, "to_pandas") else None
+                if df is not None:
+                    wiki_count = int((df["language"] == "wiki").sum())
+                else:
+                    wiki_count = tbl.count_rows(filter="language = 'wiki'")
+                member_name = path.split("/")[-1]
+                assert wiki_count >= 1, \
+                    f"{member_name}: expected ≥1 wiki chunk in LanceDB, found {wiki_count}"
+            finally:
+                _run(storage.close())
+
+
+# ===========================================================================
+# T16 — Federation member completeness (LARGE)
+# ===========================================================================
+
+class TestT16FederationMemberCompleteness:
+    """Validate that each federation member is indexed, graphed, enriched, and wiki'd."""
+
+    @_LARGE
+    def test_t16_each_member_is_indexed_with_communities(self, monkeypatch):
+        """Every federation member must be indexed and have a code graph (communities > 0)."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.handlers._federation import handle_list_federation
+        from opencode_search.config import get_project_graph_db_path, load_registry
+        from opencode_search.graph.storage import GraphStorage
+
+        result = _run(handle_list_federation(project_path=_ASTRO))
+        members = [
+            m["path"] if isinstance(m, dict) else m
+            for m in result.get("members", [])
+        ]
+        assert len(members) >= 20, f"Expected ≥20 federation members, got {len(members)}"
+
+        registry = load_registry()
+        failures = []
+        for path in members:
+            member_name = path.split("/")[-1]
+            if path not in registry:
+                failures.append(f"{member_name}: not in registry (not indexed)")
+                continue
+            graph_db = get_project_graph_db_path(path)
+            if not __import__("pathlib").Path(graph_db).exists():
+                failures.append(f"{member_name}: no graph DB")
+                continue
+            try:
+                gs = GraphStorage(graph_db)
+                gs.open()
+                comms = gs.get_communities()
+                gs.close()
+                if len(comms) == 0:
+                    failures.append(f"{member_name}: 0 communities")
+            except Exception as exc:
+                failures.append(f"{member_name}: graph error: {exc}")
+
+        assert not failures, "Federation member completeness failures:\n" + "\n".join(failures)
+
+    @_LARGE
+    def test_t16_enriched_members_have_wiki(self, monkeypatch):
+        """Members with enriched communities must also have wiki pages on disk."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.handlers._federation import handle_list_federation
+        from opencode_search.config import get_project_wiki_dir, get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+        import pathlib
+
+        result = _run(handle_list_federation(project_path=_ASTRO))
+        members = [
+            m["path"] if isinstance(m, dict) else m
+            for m in result.get("members", [])
+        ]
+
+        failures = []
+        for path in members:
+            member_name = path.split("/")[-1]
+            graph_db = get_project_graph_db_path(path)
+            if not pathlib.Path(graph_db).exists():
+                continue  # not indexed, skip
+            try:
+                gs = GraphStorage(graph_db)
+                gs.open()
+                enriched = sum(1 for c in gs.get_communities() if c.title)
+                gs.close()
+            except Exception:
+                continue
+            if enriched == 0:
+                continue  # not enriched, skip wiki check
+            # Has enrichment → must have wiki pages
+            wiki_dir = get_project_wiki_dir(path)
+            wiki_pages = list(wiki_dir.glob("*.md")) if wiki_dir.exists() else []
+            if len(wiki_pages) == 0:
+                failures.append(f"{member_name}: enriched={enriched} but 0 wiki pages")
+
+        assert not failures, "Members with enrichment missing wiki:\n" + "\n".join(failures)
+
 
 # ===========================================================================
 # Summary of success/failure criteria (v2 — 7-tool intent API)
