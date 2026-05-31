@@ -15,6 +15,7 @@ Routes:
   GET /api/graph?project=…&symbol=…&relation= — callers/callees/impact/trace
   GET /api/federation?project=…         — federation member list
   GET /api/metrics                      — daemon session statistics
+  GET /api/patterns?project=…           — languages, deps, conventions, architecture
 """
 from __future__ import annotations
 
@@ -108,6 +109,7 @@ pre{background:#0a0c14;border:1px solid #2d3048;border-radius:6px;padding:14px;f
 <nav>
   <button class="active" onclick="showTab('projects',this)">Projects</button>
   <button onclick="showTab('structure',this)">Structure</button>
+  <button onclick="showTab('patterns',this)">Patterns</button>
   <button onclick="showTab('architecture',this)">Architecture</button>
   <button onclick="showTab('graph',this)">Graph / Trace</button>
   <button onclick="showTab('wiki',this)">Wiki / KB</button>
@@ -128,6 +130,22 @@ pre{background:#0a0c14;border:1px solid #2d3048;border-radius:6px;padding:14px;f
   <div class="card"><h2>Directory Tree</h2><pre id="structure-tree" class="tree">Select a project…</pre></div>
   <div class="card"><h2>Language Breakdown</h2><div id="lang-breakdown"></div></div>
   <div class="card"><h2>Graph Stats</h2><div id="graph-stats" class="stat-grid"></div></div>
+</div>
+
+<!-- PATTERNS TAB -->
+<div id="tab-patterns" class="tab">
+  <div class="card"><h2>Architecture &amp; Module Structure</h2>
+    <div id="patterns-arch" class="stat-grid" style="margin-bottom:12px"></div>
+    <div id="patterns-frameworks"></div>
+  </div>
+  <div class="card"><h2>Languages</h2><div id="patterns-langs"></div></div>
+  <div class="card"><h2>Code Conventions</h2><div id="patterns-conventions" class="stat-grid"></div></div>
+  <div class="card"><h2>Dependencies &amp; Versions</h2>
+    <div id="patterns-dep-meta" style="margin-bottom:10px;font-size:.78rem;color:#64748b"></div>
+    <div id="patterns-deps" style="max-height:420px;overflow-y:auto">
+      <div class="loader">Select a project and click Patterns tab.</div>
+    </div>
+  </div>
 </div>
 
 <!-- ARCHITECTURE TAB -->
@@ -221,6 +239,7 @@ function showTab(name, btn) {
   $('tab-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'structure') loadStructure();
+  if (name === 'patterns') loadPatterns();
   if (name === 'architecture') loadCommunities();
   if (name === 'wiki') loadWikiList();
   if (name === 'status') loadStatus();
@@ -282,6 +301,78 @@ async function loadStructure() {
     {val: gs.enriched_communities?.toLocaleString() || '—', lbl:'Enriched'},
     {val: total ? (enriched/total*100).toFixed(0)+'%' : '—', lbl:'Enriched %'},
   ].map(s => `<div class="stat-box"><div class="val">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
+}
+
+// ── Patterns ─────────────────────────────────────────────────────────────────
+async function loadPatterns() {
+  if (!currentProject) return;
+  $('patterns-arch').innerHTML = '<div class="loader">Detecting patterns…</div>';
+  $('patterns-langs').innerHTML = '';
+  $('patterns-conventions').innerHTML = '';
+  $('patterns-deps').innerHTML = '<div class="loader">Loading…</div>';
+
+  let data;
+  try {
+    data = await api('/patterns?project=' + encodeURIComponent(currentProject));
+  } catch(e) {
+    $('patterns-arch').innerHTML = '<div style="color:#f87171;padding:10px">Error: ' + escHtml(e.message) + '</div>';
+    return;
+  }
+
+  // Architecture + module structure
+  const arch = data.architecture || 'unknown';
+  const ms = data.module_structure || {};
+  $('patterns-arch').innerHTML = [
+    {val: escHtml(arch), lbl: 'Architecture'},
+    {val: escHtml(ms.type || 'unknown'), lbl: 'Module Layout'},
+    {val: (data.version_summary?.total || 0).toLocaleString(), lbl: 'Total Deps'},
+    {val: (data.version_summary?.pinned || 0).toLocaleString(), lbl: 'Pinned Deps'},
+  ].map(s => `<div class="stat-box"><div class="val" style="font-size:1rem">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
+
+  const fws = data.key_frameworks || [];
+  $('patterns-frameworks').innerHTML = fws.length
+    ? '<div style="margin-top:10px">' + fws.map(f => `<span class="badge ok" style="margin-right:6px;margin-bottom:4px">${escHtml(f)}</span>`).join('') + '</div>'
+    : '';
+
+  // Languages
+  const langs = data.languages || [];
+  const maxFiles = langs[0]?.files || 1;
+  $('patterns-langs').innerHTML = langs.slice(0, 15).map(l => `
+    <div class="lang-bar">
+      <span class="name" style="width:90px">${escHtml(l.name)}</span>
+      <div class="bar"><div class="fill" style="width:${(l.files/maxFiles*100).toFixed(1)}%"></div></div>
+      <span class="count">${l.files?.toLocaleString()} <span style="color:#64748b">(${l.percentage}%)</span></span>
+    </div>`).join('') || '<div style="color:#64748b;font-size:.82rem">No language data.</div>';
+
+  // Conventions
+  const conv = data.conventions || {};
+  const convItems = [
+    {val: escHtml(conv.language || '—'), lbl: 'Primary Lang'},
+    {val: escHtml(conv.naming || '—'), lbl: 'Naming'},
+    {val: escHtml(conv.test_style || '—'), lbl: 'Test Style'},
+    {val: escHtml(conv.error_handling || '—'), lbl: 'Error Handling'},
+    {val: escHtml(conv.logging_lib || '—'), lbl: 'Logging'},
+    {val: (conv.common_struct_tags || []).join(', ') || '—', lbl: 'Struct Tags'},
+  ];
+  $('patterns-conventions').innerHTML = convItems.map(s =>
+    `<div class="stat-box"><div class="val" style="font-size:.9rem">${s.val}</div><div class="lbl">${s.lbl}</div></div>`
+  ).join('');
+
+  // Dependencies
+  const dep = data.dependencies || {};
+  const pkgs = dep.packages || [];
+  const manifests = dep.manifest_files || [];
+  $('patterns-dep-meta').textContent =
+    `Manager: ${dep.manager || '—'} · Manifests: ${manifests.join(', ') || '—'} · Packages shown: ${pkgs.length}`;
+  $('patterns-deps').innerHTML = pkgs.length
+    ? `<table><thead><tr><th>Package</th><th>Version</th><th>Type</th></tr></thead><tbody>${
+        pkgs.slice(0, 150).map(p =>
+          `<tr><td style="font-family:monospace;font-size:.78rem">${escHtml(p.name)}</td>` +
+          `<td style="font-family:monospace;font-size:.78rem;color:#4ade80">${escHtml(p.version)}</td>` +
+          `<td>${p.direct ? '<span class="badge ok">direct</span>' : '<span class="badge none">indirect</span>'}</td></tr>`
+        ).join('')
+      }</tbody></table>`
+    : '<div style="color:#64748b;font-size:.82rem;padding:10px">No dependency manifests found.</div>';
 }
 
 // ── Architecture ─────────────────────────────────────────────────────────────
@@ -574,6 +665,15 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
     async def api_metrics(_request: Request) -> JSONResponse:
         from opencode_search.metrics import get_metrics
         return JSONResponse(get_metrics())
+
+    @mcp.custom_route("/api/patterns", methods=["GET"], include_in_schema=False)
+    async def api_patterns(request: Request) -> JSONResponse:
+        from opencode_search.handlers import handle_detect_patterns
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_detect_patterns(project_path=project)
+        return JSONResponse(result)
 
     @mcp.custom_route("/api/graph_export", methods=["GET"], include_in_schema=False)
     async def api_graph_export(request: Request):

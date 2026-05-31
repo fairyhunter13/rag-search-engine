@@ -44,3 +44,25 @@ Rules (no exceptions):
 - If the current project is not indexed and the user did not explicitly ask to index it, say that the project is not indexed yet and ask before indexing.
 - After a project has been explicitly indexed, rely on the daemon's automatic watch behavior while the client remains open.
 [opencode-search-global-instructions:end]
+
+<!-- >>> opencode-search global instructions >>> -->
+MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.
+
+7-tool intent API (v2) — pick the right tool:
+- `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: "code" (default)|"docs"|"all"
+- `ask(query, project_path, scope)` — 'how does X work?', architecture, business process. scope: "all" (default)|"architecture"|"wiki"
+- `graph(symbol, project_path, relation)` — callers, callees, impact, call path. relation: "definition"|"callers"|"callees"|"impact"|"path"
+- `overview(project_path, what)` — structure, communities, status, project list, metrics. what: "structure"|"communities"|"status"|"projects"|"metrics"
+- `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs. action: "pipeline" (default, recommended first-run)
+- `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
+- `manage(project_path, action)` — stop_watching, wiki_lint
+
+Rules (no exceptions):
+- Before running ANY Bash command that searches code or text — grep, rg, ag, find -name/-exec, glob, fd, or similar — FIRST call `search` with a natural language query. Only fall back to bash search commands if `search` returns no useful results or the project is not indexed.
+- Before reading, editing, or answering questions about ANY file or codebase topic: call `search` first. Do NOT go straight to Bash/grep/find/Read for codebase exploration.
+- When answering a user question, prefer using the user's question text verbatim as the initial `search` query. For architectural questions, use `ask` instead.
+- In your final answer, reference specific file paths and identifiers found in search results so the answer is grounded and unambiguous.
+- Do NOT delegate codebase questions to sub-agents via the Agent tool — sub-agents do not inherit these instructions. Call the tools yourself, directly.
+- Never auto-index a project. Only call `build(action="index")` or `build(action="pipeline")` when the user explicitly asks to index/setup the project.
+- After a project has been explicitly indexed, rely on the daemon's automatic watch behavior.
+<!-- <<< opencode-search global instructions <<< -->

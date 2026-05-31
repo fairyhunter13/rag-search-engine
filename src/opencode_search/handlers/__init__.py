@@ -21,6 +21,7 @@ from opencode_search.handlers._federation import (
 )
 from opencode_search.handlers._graph import (
     handle_detect_impact,
+    handle_detect_patterns,
     handle_get_callers,
     handle_get_callees,
     handle_get_communities,
@@ -61,6 +62,7 @@ __all__ = [
     "_touch_projects_last_active",
     "handle_add_federation_member",
     "handle_detect_impact",
+    "handle_detect_patterns",
     "handle_discover_federation",
     "handle_enrich_project",
     "handle_ensure_project_watching",

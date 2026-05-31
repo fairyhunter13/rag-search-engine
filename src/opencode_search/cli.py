@@ -538,8 +538,8 @@ def daemon_install_global(
     host: str | None = typer.Option(None, help="Daemon host to register in client configs."),
     port: int | None = typer.Option(None, help="Daemon port to register in client configs."),
     transport: str = typer.Option(
-        "http",
-        help="How clients should connect (http or stdio). http is recommended (singleton, no client-side process).",
+        "stdio",
+        help="How clients should connect (stdio or http). stdio gives per-project scoping via cwd.",
     ),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:

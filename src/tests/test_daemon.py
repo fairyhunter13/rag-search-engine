@@ -7,6 +7,8 @@ from pathlib import Path
 import json
 
 from opencode_search.daemon import (
+    _HERMES_MARKER_END,
+    _HERMES_MARKER_START,
     _SYSTEMD_NOTIFY_SERVICE_NAME,
     _bridge_command,
     _disable_codex_fast_mode,
@@ -14,6 +16,7 @@ from opencode_search.daemon import (
     _install_claude_global_prompt,
     _install_init_wrapper,
     _install_opencode_configs,
+    _install_opencode_global_prompt,
     _render_systemd_notify_failure_service,
     _render_systemd_service,
     _replace_managed_block,
@@ -21,6 +24,7 @@ from opencode_search.daemon import (
     _strip_marker_block,
     _update_codex_config_text,
     discover_claude_config_dirs,
+    install_global_integration,
 )
 
 
@@ -81,16 +85,20 @@ def test_render_systemd_notify_failure_service_fires_notify_send():
 def test_global_prompt_text_requires_explicit_index_and_search_first():
     text = _global_prompt_text()
 
-    assert "MANDATORY" in text
-    assert "Never auto-index a project" in text
-    # v2 API: build(action="index"|"pipeline") replaces explicit index_project mentions
-    assert "build" in text or "index" in text.lower()
-    # v2 API: `search` tool replaces `search_code`
+    # Concise decision-tree format — must mention all 7 tools
     assert "search" in text
-    assert "grep" in text
-    assert "rg" in text
-    assert "find" in text
-    assert "Agent" in text  # anti-delegation rule must be present
+    assert "ask" in text
+    assert "graph" in text
+    assert "overview" in text
+    assert "build" in text
+    assert "federation" in text
+    assert "manage" in text
+    # Must contain no-auto-index rule
+    assert "auto-index" in text.lower() or "NEVER auto-index" in text or "explicitly" in text
+    # Must contain search-before-bash rule
+    assert "grep" in text or "bash" in text.lower()
+    # Anti-delegation rule
+    assert "sub-agent" in text.lower() or "Agent" in text
 
 
 def test_replace_managed_block_replaces_existing_section():
@@ -233,7 +241,7 @@ def test_install_claude_global_prompt_writes_to_default_and_all_profile_dirs(tmp
     assert len(written) == 3
     for path_str in written:
         content = Path(path_str).read_text()
-        assert "MANDATORY" in content
+        assert "search" in content and "overview" in content
         assert "search" in content  # v2 uses `search` tool name
         assert "grep" in content
 
@@ -265,7 +273,7 @@ def test_install_claude_global_prompt_updates_existing_managed_block(tmp_path):
 
     content = target.read_text()
     assert "old content" not in content
-    assert "MANDATORY" in content
+    assert "search" in content and "overview" in content
     assert "before" in content
     assert "after" in content
 
@@ -277,7 +285,7 @@ def test_install_claude_global_prompt_creates_file_when_absent(tmp_path):
 
     target = tmp_path / ".claude" / "CLAUDE.md"
     assert target.exists()
-    assert "MANDATORY" in target.read_text()
+    assert "search" in target.read_text() and "overview" in target.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -380,3 +388,94 @@ def test_install_opencode_configs_strips_jsonc_comments(tmp_path, monkeypatch):
     assert updated == [str(cfg)]
     data = json.loads(cfg.read_text())
     assert "opencode-search" in data["mcp"]
+
+
+# ---------------------------------------------------------------------------
+# _install_opencode_global_prompt
+# ---------------------------------------------------------------------------
+
+def test_install_opencode_global_prompt_writes_managed_block(tmp_path, monkeypatch):
+    """Writes the opencode-search prompt into AGENTS.md inside managed markers."""
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True)
+    agents_md = opencode_dir / "AGENTS.md"
+    agents_md.write_text("# My Instructions\n\nDo things.\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    written = _install_opencode_global_prompt()
+
+    assert str(agents_md) in written
+    content = agents_md.read_text(encoding="utf-8")
+    assert _HERMES_MARKER_START in content
+    assert _HERMES_MARKER_END in content
+    assert "opencode-search" in content.lower()
+    # Original content must be preserved
+    assert "My Instructions" in content
+
+
+def test_install_opencode_global_prompt_is_idempotent(tmp_path, monkeypatch):
+    """Running twice does not duplicate the block."""
+    opencode_dir = tmp_path / "opencode"
+    opencode_dir.mkdir(parents=True)
+    agents_md = opencode_dir / "AGENTS.md"
+    agents_md.write_text("", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    _install_opencode_global_prompt()
+    content_first = agents_md.read_text(encoding="utf-8")
+
+    _install_opencode_global_prompt()
+    content_second = agents_md.read_text(encoding="utf-8")
+
+    # Block should appear exactly once
+    assert content_first.count(_HERMES_MARKER_START) == 1
+    assert content_second.count(_HERMES_MARKER_START) == 1
+
+
+def test_install_opencode_global_prompt_picks_up_named_profiles(tmp_path, monkeypatch):
+    """Also writes to ~/.config/opencode-personal/opencode/AGENTS.md."""
+    for profile in ("opencode", "opencode-personal/opencode"):
+        d = tmp_path / profile
+        d.mkdir(parents=True)
+        (d / "AGENTS.md").write_text("", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    written = _install_opencode_global_prompt()
+
+    assert len(written) == 2
+    for path in written:
+        content = Path(path).read_text(encoding="utf-8")
+        assert _HERMES_MARKER_START in content
+
+
+def test_install_opencode_global_prompt_skips_missing_dirs(tmp_path, monkeypatch):
+    """Skips silently if the opencode config dir does not exist."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    # No opencode/ dir created → nothing to write
+    written = _install_opencode_global_prompt()
+    assert written == []
+
+
+# ---------------------------------------------------------------------------
+# install_global_integration default transport
+# ---------------------------------------------------------------------------
+
+def test_install_global_integration_default_transport_is_stdio():
+    """install_global_integration() defaults to transport='stdio' not 'http'."""
+    import inspect
+    sig = inspect.signature(install_global_integration)
+    default = sig.parameters.get("transport")
+    assert default is not None, "transport param not found"
+    assert default.default == "stdio", (
+        f"Expected default transport='stdio', got {default.default!r}. "
+        "Update plan: all profiles should use the stdio bridge."
+    )
+
+
+def test_global_prompt_text_mentions_patterns():
+    """_global_prompt_text() mentions what='patterns' for dependency/style queries."""
+    text = _global_prompt_text()
+    assert "patterns" in text, (
+        "_global_prompt_text does not mention 'patterns' — "
+        "assistants won't know to use overview(what='patterns')"
+    )

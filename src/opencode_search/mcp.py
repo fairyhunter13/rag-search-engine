@@ -58,6 +58,7 @@ from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_add_federation_member,
     handle_detect_impact,
+    handle_detect_patterns,
     handle_discover_federation,
     handle_enrich_project,
     handle_ensure_project_watching,
@@ -292,7 +293,7 @@ async def graph(
 @mcp.tool()
 async def overview(
     project_path: str | None = None,
-    what: Literal["structure", "communities", "status", "projects", "metrics", "graph_export"] = "structure",
+    what: Literal["structure", "communities", "status", "projects", "metrics", "graph_export", "patterns"] = "structure",
     max_depth: int = 4,
     top_k: int = 100,
     export_format: Literal["json", "graphml"] = "json",
@@ -305,12 +306,13 @@ async def overview(
 
     what: "structure" (default) | "communities" | "status" | "projects" | "metrics"
           | "graph_export" (download knowledge graph for Gephi/Cytoscape)
+          | "patterns" (languages, dependencies, conventions, frameworks, architecture)
     project_path: not required for what="projects" or what="metrics"
     export_format: "json" | "graphml" (only for what="graph_export")
     max_nodes: cap for graph_export (default 5000)
     """
     runtime_state.note_activity()
-    valid = {"structure", "communities", "status", "projects", "metrics", "graph_export"}
+    valid = {"structure", "communities", "status", "projects", "metrics", "graph_export", "patterns"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -318,6 +320,10 @@ async def overview(
         if not project_path:
             return {"error": "project_path required for what='structure'"}
         return await handle_project_structure(project_path=project_path, max_depth=max_depth)
+    elif what == "patterns":
+        if not project_path:
+            return {"error": "project_path required for what='patterns'"}
+        return await handle_detect_patterns(project_path=project_path)
     elif what == "communities":
         if not project_path:
             return {"error": "project_path required for what='communities'"}

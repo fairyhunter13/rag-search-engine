@@ -281,7 +281,8 @@ async def overview(
 ) -> dict[str, Any]:
     """Get a structural or status overview of a project or the search engine.
 
-    what: "structure" (default) | "communities" | "status" | "projects" | "metrics" | "graph_export"
+    what: "structure" (default) | "communities" | "status" | "projects" | "metrics"
+          | "graph_export" | "patterns" (languages, deps, conventions, frameworks, architecture)
     project_path: not required for what="projects" or what="metrics".
     Do NOT use to search code — use `search` or `ask` for that.
     """

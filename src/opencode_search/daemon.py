@@ -357,34 +357,37 @@ def _bridge_command(python_bin: Path | None = None) -> list[str]:
 
 def _global_prompt_text() -> str:
     return (
-        "MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.\n"
+        "opencode-search: GPU-accelerated code intelligence. 7 tools — pick the right one:\n"
         "\n"
-        "7-tool intent API — pick the right tool:\n"
-        "- `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: \"code\" (default)|\"docs\"|\"all\"\n"
-        "- `ask(query, project_path, scope)` — 'how does X work?', architecture, business process. scope: \"all\" (default)|\"architecture\"|\"wiki\"\n"
-        "- `graph(symbol, project_path, relation)` — callers, callees, impact, call path. relation: \"definition\"|\"callers\"|\"callees\"|\"impact\"|\"path\"\n"
-        "- `overview(project_path, what)` — structure, communities, status, project list, metrics. what: \"structure\"|\"communities\"|\"status\"|\"projects\"|\"metrics\"\n"
-        "- `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs. action: \"pipeline\" (default, recommended first-run)\n"
-        "- `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos\n"
-        "- `manage(project_path, action)` — stop_watching, wiki_lint\n"
+        "WHICH TOOL TO CALL:\n"
+        "  search(query)              → find specific code, files, functions\n"
+        "  ask(query, project_path)   → 'how does X work?', architecture, conventions, business logic\n"
+        "  graph(symbol, project_path, relation)  → callers|callees|impact|path for a symbol\n"
+        "  overview(project_path)     → project structure, dependencies, languages, style, communities\n"
+        "  build(project_path)        → index/enrich/wiki (ONLY when user explicitly asks)\n"
+        "  federation(root_path)      → list/manage sub-repositories\n"
+        "  manage(project_path)       → stop watching, wiki health check\n"
         "\n"
-        "Rules (no exceptions):\n"
-        "- Before running ANY Bash command that searches code or text — grep, rg, ag, find -name/-exec, glob, fd, or similar — "
-        "FIRST call `search` with a natural language query. "
-        "Only fall back to bash search commands if `search` returns no useful results or the project is not indexed.\n"
-        "- Before reading, editing, or answering questions about ANY file or codebase topic: "
-        "call `search` first. For architectural questions use `ask`. "
-        "Do NOT go straight to Bash/grep/find/Read for codebase exploration.\n"
-        "- When answering a user question, prefer using the user's question text verbatim as the initial query. "
-        "For 'how does X work?' questions use `ask`; for finding specific code use `search`.\n"
-        "- In your final answer, reference specific file paths and identifiers found in search results "
-        "so the answer is grounded and unambiguous.\n"
-        "- Do NOT delegate codebase questions to sub-agents via the Agent tool — "
-        "sub-agents do not inherit these instructions. Call the tools yourself, directly.\n"
-        "- Never auto-index a project. Only call `build(action=\"index\")` or `build(action=\"pipeline\")` "
-        "when the user explicitly asks to index/setup the project.\n"
-        "- If the current project is not indexed and the user did not explicitly ask to index it, say that the project is not indexed yet and ask before indexing.\n"
-        "- After a project has been explicitly indexed, rely on the daemon's automatic watch behavior while the client remains open.\n"
+        "QUICK DECISION GUIDE:\n"
+        "  'find the payment handler'           → search('payment handler')\n"
+        "  'how does auth work?'                → ask('how does auth work', project_path)\n"
+        "  'what calls ProcessOrder?'           → graph('ProcessOrder', project_path, relation='callers')\n"
+        "  'tell me about this project'         → overview(project_path, what='structure')\n"
+        "  'what packages/dependencies?'        → overview(project_path, what='patterns')\n"
+        "  'what coding style does it use?'     → overview(project_path, what='patterns')\n"
+        "  'what architecture does it use?'     → overview(project_path, what='patterns')\n"
+        "  'list all indexed projects'          → overview(what='projects')\n"
+        "  'index this project' [explicit ask]  → build(project_path, action='index')\n"
+        "\n"
+        "RULES:\n"
+        "- Call search BEFORE grep/find/Read for any code lookup. Only fall back to bash if search returns nothing.\n"
+        "- Use ask for 'how does X work' questions; use search to find specific code.\n"
+        "- overview(what='structure') returns the project tree, language breakdown, graph stats, and top communities.\n"
+        "- overview(what='patterns') returns languages, dependencies, package versions, coding conventions, frameworks, architecture, and module structure.\n"
+        "- NEVER auto-index. Only call build(action='index'|'pipeline') when the user explicitly asks.\n"
+        "- If the project is not indexed, say so and ask before indexing.\n"
+        "- Do NOT delegate codebase questions to sub-agents — they don't inherit these instructions.\n"
+        "- After indexing, the daemon watches files automatically — no need to re-index on every change.\n"
     )
 
 
@@ -538,19 +541,82 @@ def _strip_marker_block(text: str, start: str, end: str) -> str:
     return pattern.sub("\n", text).strip()
 
 
+def _yaml_dump_literal(data: dict) -> str:
+    """Dump YAML using literal block scalars (|) for multiline strings to prevent parse errors."""
+    class _LiteralStr(str):
+        pass
+
+    def _literal_representer(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+        if "\n" in data:
+            return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+    _dumper = yaml.Dumper
+    _dumper.add_representer(_LiteralStr, _literal_representer)
+
+    def _convert(obj: object) -> object:
+        if isinstance(obj, dict):
+            return {k: _convert(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_convert(v) for v in obj]
+        if isinstance(obj, str) and "\n" in obj:
+            return _LiteralStr(obj)
+        return obj
+
+    return yaml.dump(_convert(data), Dumper=_dumper, sort_keys=False, allow_unicode=True)
+
+
 def _install_hermes_global_prompt() -> str:
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
         return str(config_path)
 
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        # Recover from a malformed config written by a previous round-trip.
+        # Attempt a lenient re-parse by stripping the system_prompt field first.
+        raw = config_path.read_text(encoding="utf-8")
+        try:
+            # Remove the broken system_prompt line and everything indented under it
+            import re as _re
+            cleaned = _re.sub(r"\nagent:\s*\n  system_prompt:.*?(?=\n\S|\Z)", "\nagent: {}", raw, flags=_re.DOTALL)
+            data = yaml.safe_load(cleaned) or {}
+        except Exception:
+            data = {}
+
     agent = data.setdefault("agent", {})
+    if not isinstance(agent, dict):
+        agent = {}
+        data["agent"] = agent
     existing = str(agent.get("system_prompt", "") or "")
     unmanaged = _strip_marker_block(existing, _HERMES_MARKER_START, _HERMES_MARKER_END).strip()
     managed = _global_prompt_with_markers(_HERMES_MARKER_START, _HERMES_MARKER_END)
     agent["system_prompt"] = f"{unmanaged}\n\n{managed}".strip() if unmanaged else managed
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    config_path.write_text(_yaml_dump_literal(data), encoding="utf-8")
     return str(config_path)
+
+
+def _install_opencode_global_prompt() -> list[str]:
+    """Write the 7-tool intent prompt into AGENTS.md for every opencode profile."""
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    candidates: list[Path] = []
+    candidates.append(config_home / "opencode" / "AGENTS.md")
+    for entry in sorted(config_home.iterdir()) if config_home.exists() else []:
+        if entry.is_dir() and entry.name.startswith("opencode-"):
+            candidates.append(entry / "opencode" / "AGENTS.md")
+
+    block = _global_prompt_with_markers(_HERMES_MARKER_START, _HERMES_MARKER_END)
+    written: list[str] = []
+    for target in candidates:
+        if not target.parent.exists():
+            continue
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        updated = _replace_managed_block(existing, _HERMES_MARKER_START, _HERMES_MARKER_END, block)
+        if updated != existing:
+            target.write_text(updated, encoding="utf-8")
+        written.append(str(target))
+    return written
 
 
 def _install_init_wrapper(python_bin: Path) -> str:
@@ -730,7 +796,10 @@ def _update_hermes_config_for_global_servers(
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
         return
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        data = {}
     legacy_mcp = data.get("mcp")
     if isinstance(legacy_mcp, dict):
         legacy_servers = legacy_mcp.get("servers")
@@ -748,7 +817,7 @@ def _update_hermes_config_for_global_servers(
     # url-based entry behind an opt-in flag; for now keep behavior stable.
     _ = (transport, host, port)  # reserved for future url transport support
     servers["opencode-search"] = {"command": bridge_command[0], "args": bridge_command[1:], "enabled": True}
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    config_path.write_text(_yaml_dump_literal(data), encoding="utf-8")
 
 
 def _detect_cuda_env_lines() -> list[str]:
@@ -976,13 +1045,11 @@ def install_global_integration(
     host: str = DEFAULT_DAEMON_HOST,
     port: int = DEFAULT_DAEMON_PORT,
     *,
-    transport: str = "http",
+    transport: str = "stdio",
 ) -> dict[str, object]:
     helper_python = Path(sys.executable)
 
-    # Prefer connecting clients directly to the singleton daemon over HTTP so no
-    # per-client wrapper is needed and no extra stdio server processes are spawned.
-    transport = (transport or "http").strip().lower()
+    transport = (transport or "stdio").strip().lower()
     if transport not in {"http", "stdio"}:
         raise ValueError("transport must be 'http' or 'stdio'")
 
@@ -997,6 +1064,7 @@ def install_global_integration(
     claude_prompt_paths = _install_claude_global_prompt(claude_dirs)
     codex_prompt_path = _install_codex_global_prompt()
     hermes_prompt_path = _install_hermes_global_prompt()
+    opencode_prompt_paths = _install_opencode_global_prompt()
     systemd_result = install_systemd_user_service(host=host, port=port)
 
     return {
@@ -1011,6 +1079,7 @@ def install_global_integration(
         "claude_prompt_paths": claude_prompt_paths,
         "codex_prompt_path": codex_prompt_path,
         "hermes_prompt_path": hermes_prompt_path,
+        "opencode_prompt_paths": opencode_prompt_paths,
         "systemd": systemd_result,
     }
 

@@ -1,7 +1,11 @@
 """Graph MCP handlers: symbol lookup, call traversal, impact analysis."""
 from __future__ import annotations
 
+import collections
+import json
 import logging
+import re
+import xml.etree.ElementTree as _ET
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +15,600 @@ if TYPE_CHECKING:
     from opencode_search.graph.storage import GraphStorage
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Pattern-detection helpers (called from handle_project_structure)
+# ---------------------------------------------------------------------------
+
+_FRAMEWORK_MAP: dict[str, str] = {
+    "github.com/gin-gonic/gin": "gin",
+    "github.com/labstack/echo": "echo",
+    "github.com/gorilla/mux": "gorilla/mux",
+    "github.com/go-chi/chi": "chi",
+    "google.golang.org/grpc": "gRPC",
+    "gorm.io/gorm": "gorm",
+    "github.com/jmoiron/sqlx": "sqlx",
+    "github.com/go-redis/redis": "redis",
+    "github.com/redis/go-redis": "redis",
+    "github.com/confluentinc/confluent-kafka-go": "kafka",
+    "github.com/segmentio/kafka-go": "kafka",
+    "github.com/elastic/go-elasticsearch": "elasticsearch",
+    "github.com/prometheus/client_golang": "prometheus",
+    "go.uber.org/zap": "zap",
+    "github.com/sirupsen/logrus": "logrus",
+    "go.opentelemetry.io": "OpenTelemetry",
+    "github.com/spf13/cobra": "cobra",
+    "github.com/spf13/viper": "viper",
+    "react": "React",
+    "next": "Next.js",
+    "vue": "Vue",
+    "angular": "Angular",
+    "svelte": "Svelte",
+    "django": "Django",
+    "flask": "Flask",
+    "fastapi": "FastAPI",
+    "spring": "Spring",
+    "javax.persistence": "JPA",
+    "hibernate": "Hibernate",
+    "lombok": "Lombok",
+    "sqlalchemy": "SQLAlchemy",
+    "pydantic": "Pydantic",
+}
+
+
+def _detect_dependencies(root: Path) -> dict[str, Any]:
+    """Parse dependency manifest files to extract package names and versions."""
+    packages: list[dict[str, Any]] = []
+    files_found: list[str] = []
+    manager = "unknown"
+
+    def _try_go_mod(p: Path) -> None:
+        nonlocal manager
+        try:
+            text = p.read_text(errors="replace")
+            if manager == "unknown":
+                manager = "go_modules"
+            in_require = False
+            for line in text.splitlines():
+                line = line.strip()
+                if line.startswith("require ("):
+                    in_require = True
+                    continue
+                if in_require and line == ")":
+                    in_require = False
+                    continue
+                if in_require or line.startswith("require "):
+                    cleaned = line.removeprefix("require ").strip()
+                    if cleaned.startswith("(") or not cleaned:
+                        continue
+                    # github.com/pkg/name v1.2.3 // indirect
+                    m = re.match(r"^(\S+)\s+(v\S+)(.*)$", cleaned)
+                    if m:
+                        indirect = "indirect" in m.group(3)
+                        packages.append({"name": m.group(1), "version": m.group(2), "direct": not indirect})
+        except Exception:
+            pass
+
+    def _try_requirements(p: Path) -> None:
+        nonlocal manager
+        try:
+            if manager == "unknown":
+                manager = "pip"
+            for line in p.read_text(errors="replace").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("-"):
+                    continue
+                m = re.match(r"^([A-Za-z0-9_\-\.]+)\s*[=><!~]{1,2}=?\s*([^\s;#]+)", line)
+                if m:
+                    packages.append({"name": m.group(1), "version": m.group(2), "direct": True})
+        except Exception:
+            pass
+
+    def _try_package_json(p: Path) -> None:
+        nonlocal manager
+        try:
+            data = json.loads(p.read_text(errors="replace"))
+            if manager == "unknown":
+                manager = "npm"
+            for dep, ver in (data.get("dependencies") or {}).items():
+                packages.append({"name": dep, "version": ver, "direct": True})
+            for dep, ver in (data.get("devDependencies") or {}).items():
+                packages.append({"name": dep, "version": ver, "direct": False})
+        except Exception:
+            pass
+
+    def _try_cargo_toml(p: Path) -> None:
+        nonlocal manager
+        try:
+            if manager == "unknown":
+                manager = "cargo"
+            text = p.read_text(errors="replace")
+            in_deps = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("[dependencies]") or stripped.startswith("[dev-dependencies]"):
+                    in_deps = True
+                    continue
+                if stripped.startswith("[") and in_deps:
+                    in_deps = False
+                if in_deps and "=" in stripped and not stripped.startswith("#"):
+                    name, _, rest = stripped.partition("=")
+                    name = name.strip()
+                    rest = rest.strip().strip('"').strip("'")
+                    # version = { version = "1.0" } or version = "1.0"
+                    vm = re.search(r'"([^"]+)"', rest)
+                    if vm and name:
+                        packages.append({"name": name, "version": vm.group(1), "direct": True})
+        except Exception:
+            pass
+
+    def _try_pyproject(p: Path) -> None:
+        nonlocal manager
+        try:
+            text = p.read_text(errors="replace")
+            if manager == "unknown":
+                manager = "poetry" if "[tool.poetry]" in text else "pip"
+            # PEP 621: [project] dependencies = [...]
+            in_deps = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped in ('[project.dependencies]', 'dependencies = ['):
+                    in_deps = True
+                    continue
+                if in_deps:
+                    if stripped.startswith("[") or stripped == "]":
+                        in_deps = False
+                        continue
+                    m = re.match(r'"?([A-Za-z0-9_\-\.]+)\s*[>=<!~]{0,2}=?\s*([^",\]]*)', stripped.strip('"').strip("'"))
+                    if m and m.group(1):
+                        packages.append({"name": m.group(1), "version": m.group(2).strip() or "*", "direct": True})
+        except Exception:
+            pass
+
+    def _try_pom_xml(p: Path) -> None:
+        nonlocal manager
+        try:
+            if manager == "unknown":
+                manager = "maven"
+            tree = _ET.parse(p)
+            ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+            deps_list = tree.findall(".//m:dependency", ns)
+            if not deps_list:
+                deps_list = tree.findall(".//dependency")
+            for dep in deps_list:
+                gid = dep.find("m:groupId", ns) if dep.find("m:groupId", ns) is not None else dep.find("groupId")
+                aid = dep.find("m:artifactId", ns) if dep.find("m:artifactId", ns) is not None else dep.find("artifactId")
+                ver = dep.find("m:version", ns) if dep.find("m:version", ns) is not None else dep.find("version")
+                if gid is not None and aid is not None:
+                    name = f"{gid.text}:{aid.text}"
+                    version = ver.text if ver is not None else "*"
+                    packages.append({"name": name, "version": version, "direct": True})
+        except Exception:
+            pass
+
+    def _try_go_work(p: Path) -> None:
+        nonlocal manager
+        try:
+            text = p.read_text(errors="replace")
+            manager = "go_workspace"
+            in_use = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("use ("):
+                    in_use = True
+                    continue
+                if in_use and stripped == ")":
+                    in_use = False
+                    continue
+                if in_use and stripped and not stripped.startswith("//"):
+                    packages.append({"name": stripped, "version": "workspace", "direct": True})
+                elif stripped.startswith("use ") and not stripped.startswith("use ("):
+                    mod = stripped[4:].strip()
+                    if mod:
+                        packages.append({"name": mod, "version": "workspace", "direct": True})
+        except Exception:
+            pass
+
+    def _try_gradle(p: Path) -> None:
+        nonlocal manager
+        try:
+            if manager == "unknown":
+                manager = "gradle"
+            text = p.read_text(errors="replace")
+            # Spring Boot version from plugin block (handles both quote styles)
+            m = re.search(r"['\"']org\.springframework\.boot['\"].*?version\s+['\"]([^'\"]+)['\"]", text)
+            if not m:
+                m = re.search(r"org\.springframework\.boot['\"]?\s+version\s+['\"]([^'\"]+)['\"]", text)
+            if m:
+                packages.append({"name": "org.springframework.boot", "version": m.group(1), "direct": True})
+            # Standard dependency declarations
+            in_deps = False
+            brace_depth = 0
+            for line in text.splitlines():
+                stripped = line.strip()
+                if re.match(r"dependencies\s*\{", stripped):
+                    in_deps = True
+                    brace_depth = 1
+                    continue
+                if in_deps:
+                    brace_depth += stripped.count("{") - stripped.count("}")
+                    if brace_depth <= 0:
+                        in_deps = False
+                        continue
+                    if stripped.startswith("//"):
+                        continue
+                    dep_m = re.search(
+                        r"['\"]([a-zA-Z0-9][\w.\-]*:[a-zA-Z0-9][\w.\-]*):([^'\"]+)['\"]",
+                        stripped,
+                    )
+                    if dep_m:
+                        packages.append({
+                            "name": dep_m.group(1),
+                            "version": dep_m.group(2).strip(),
+                            "direct": True,
+                        })
+        except Exception:
+            pass
+
+    manifest_handlers: dict[str, Any] = {
+        "go.work": _try_go_work,
+        "go.mod": _try_go_mod,
+        "requirements.txt": _try_requirements,
+        "requirements-dev.txt": _try_requirements,
+        "requirements-test.txt": _try_requirements,
+        "package.json": _try_package_json,
+        "Cargo.toml": _try_cargo_toml,
+        "pyproject.toml": _try_pyproject,
+        "pom.xml": _try_pom_xml,
+        "build.gradle": _try_gradle,
+    }
+
+    # Build search dirs: root + 1st-level dirs + symlinked repos inside container dirs.
+    # Symlinked entries (federation members) are added first so they aren't squeezed
+    # out by non-repo subdirs when the cap is reached.
+    _SKIP_SCAN = {".git", ".venv", "venv", "node_modules", "__pycache__", "target", "dist", "build"}
+    search_dirs: list[Path] = [root]
+    first_level: list[Path] = []
+    try:
+        for d in root.iterdir():
+            if d.is_dir() and not d.name.startswith(".") and d.name not in _SKIP_SCAN:
+                search_dirs.append(d)
+                first_level.append(d)
+    except PermissionError:
+        pass
+
+    # Second level: scan non-symlink first-level dirs for federation member repos.
+    # Symlinked sub-entries (federation members) are prioritised over plain dirs.
+    for d in first_level:
+        if d.is_symlink():
+            continue
+        try:
+            subs = sorted(d.iterdir())
+        except PermissionError:
+            continue
+        for sub in subs:  # symlinked repos first (federation pattern)
+            if sub.is_symlink() and sub.is_dir() and len(search_dirs) < 80:
+                search_dirs.append(sub)
+        for sub in subs:  # then plain dirs
+            if not sub.is_symlink() and sub.is_dir() and len(search_dirs) < 80:
+                search_dirs.append(sub)
+
+    seen_rel: set[str] = set()
+    for d in search_dirs:
+        for fname, handler in manifest_handlers.items():
+            candidate = d / fname
+            if not candidate.exists():
+                continue
+            try:
+                rel = str(candidate.relative_to(root))
+            except ValueError:
+                rel = str(candidate)
+            if rel not in seen_rel:
+                seen_rel.add(rel)
+                files_found.append(rel)
+                handler(candidate)
+
+    return {
+        "manager": manager,
+        "packages": packages[:200],
+        "manifest_files": files_found,
+    }
+
+
+_DOC_LANGS = frozenset({"markdown", "text", "unknown"})
+
+
+def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, Any]]:
+    """Count source-code files per language using detect_language() + iter_files().
+
+    Uses follow_symlinks=True so federation member repos (symlinked dirs) are
+    included. Caps on recognized-source-file count, not total files visited, so
+    the 10k limit isn't exhausted by documentation or config files.
+    """
+    try:
+        from opencode_search.discover import detect_language, iter_files
+        counter: collections.Counter = collections.Counter()
+        source_total = 0
+        for path in iter_files(root, follow_symlinks=True):
+            lang = detect_language(path)
+            if lang in _DOC_LANGS:
+                continue  # skip docs/unknown — don't count toward cap
+            counter[lang] += 1
+            source_total += 1
+            if source_total >= 10_000:
+                break
+        if source_total == 0:
+            return []
+        result = []
+        for lang, count in counter.most_common(10):
+            result.append({"name": lang, "files": count, "percentage": round(count / source_total * 100, 1)})
+        return result
+    except Exception:
+        return []
+
+
+def _detect_conventions(root: Path) -> dict[str, Any]:
+    """Detect code style conventions by sampling source files."""
+    try:
+        from opencode_search.discover import detect_language, iter_files, SOURCE_EXTENSIONS
+
+        # Prefer main application source files; skip SQL/migrations/generated code
+        _PREFERRED_EXTS = {'.go', '.py', '.java', '.kt', '.ts', '.tsx', '.js', '.jsx',
+                           '.rs', '.rb', '.cs', '.swift', '.scala', '.cpp', '.c'}
+        sample_files: list[Path] = []
+        overflow_files: list[Path] = []
+        for path in iter_files(root):
+            ext = path.suffix.lower()
+            if ext not in SOURCE_EXTENSIONS:
+                continue
+            if ext in _PREFERRED_EXTS and len(sample_files) < 40:
+                sample_files.append(path)
+            elif len(overflow_files) < 10:
+                overflow_files.append(path)
+            if len(sample_files) >= 40:
+                break
+        if not sample_files:
+            sample_files = overflow_files
+
+        if not sample_files:
+            return {}
+
+        # Detect primary language
+        lang_counter: collections.Counter = collections.Counter()
+        for p in sample_files:
+            lang_counter[detect_language(p)] += 1
+        primary_lang = lang_counter.most_common(1)[0][0] if lang_counter else "unknown"
+
+        # Read samples for heuristics (800 chars captures package + imports + first functions)
+        combined = ""
+        for p in sample_files[:20]:
+            try:
+                combined += p.read_text(errors="replace")[:800]
+            except Exception:
+                pass
+
+        # Error handling
+        err_handling = "unknown"
+        if primary_lang == "go":
+            if "if err != nil" in combined:
+                err_handling = "if_err_nil"
+            elif re.search(r"errors\.As|errors\.Is", combined):
+                err_handling = "errors_as_is"
+            elif "Result[" in combined or "errors.Wrap(" in combined:
+                err_handling = "wrapped_errors"
+        elif primary_lang == "python":
+            err_handling = "try_except" if "try:" in combined else "unknown"
+        elif primary_lang in ("java", "kotlin"):
+            err_handling = "try_catch" if "try {" in combined else "unknown"
+        elif primary_lang == "rust":
+            err_handling = "result_type" if "Result<" in combined else "unknown"
+
+        # Test style
+        test_style = "unknown"
+        if primary_lang == "go":
+            if "t.Run(" in combined:
+                test_style = "table_driven"
+            elif "testify" in combined or "assert.Equal(" in combined or "require.Equal(" in combined:
+                test_style = "testify"
+            elif "func Test" in combined:
+                test_style = "stdlib_testing"
+        elif primary_lang == "python":
+            test_style = "pytest" if "def test_" in combined else "unknown"
+        elif primary_lang == "java":
+            test_style = "junit" if "@Test" in combined else "unknown"
+
+        # Logging library
+        logging_lib = "unknown"
+        if "go.uber.org/zap" in combined or '"zap"' in combined or "zap.L()." in combined:
+            logging_lib = "zap"
+        elif "logrus" in combined:
+            logging_lib = "logrus"
+        elif "slog." in combined:
+            logging_lib = "slog"
+        elif "log.Printf(" in combined or "log.Println(" in combined or "log.Fatal(" in combined:
+            logging_lib = "stdlib_log"
+        elif "logging." in combined:
+            logging_lib = "python_logging"
+        elif "zerolog" in combined:
+            logging_lib = "zerolog"
+
+        # Naming convention (sample identifier names)
+        naming = "unknown"
+        if primary_lang == "go":
+            naming = "camelCase"  # Go always uses camelCase/PascalCase
+        elif primary_lang == "python":
+            naming = "snake_case"  # Python convention
+        elif primary_lang in ("java", "kotlin"):
+            naming = "camelCase"
+
+        # Struct/annotation tags
+        common_tags: list[str] = []
+        if 'json:"' in combined:
+            common_tags.append("json")
+        if 'db:"' in combined or 'column:"' in combined:
+            common_tags.append("db")
+        if 'validate:"' in combined:
+            common_tags.append("validate")
+        if 'yaml:"' in combined:
+            common_tags.append("yaml")
+        if '@JsonProperty' in combined or '@Column' in combined:
+            common_tags.append("java_annotations")
+
+        return {
+            "language": primary_lang,
+            "error_handling": err_handling,
+            "test_style": test_style,
+            "logging_lib": logging_lib,
+            "naming": naming,
+            "common_struct_tags": common_tags,
+        }
+    except Exception:
+        return {}
+
+
+def _detect_frameworks_from_dependencies(deps: dict[str, Any]) -> list[str]:
+    """Identify key frameworks from dependency manifest packages."""
+    packages = deps.get("packages", [])
+    if not packages:
+        return []
+    frameworks: list[str] = []
+    seen: set[str] = set()
+    for pkg in packages:
+        name = pkg.get("name", "")
+        for prefix, framework in _FRAMEWORK_MAP.items():
+            if prefix in name and framework not in seen:
+                seen.add(framework)
+                frameworks.append(framework)
+    return frameworks[:10]
+
+
+def _detect_module_structure(root: Path) -> dict[str, Any]:
+    """Detect the module/package organization pattern from directory layout."""
+    try:
+        top_dirs = sorted(
+            [d.name for d in root.iterdir() if d.is_dir() and not d.name.startswith(".") and d.name not in {
+                ".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build",
+            }]
+        )
+
+        # Detect known patterns
+        dir_set = set(top_dirs)
+        pattern = "unknown"
+        if {"cmd", "internal"}.issubset(dir_set) or {"cmd", "pkg"}.issubset(dir_set):
+            pattern = "go_standard"
+        elif {"domain", "usecase", "infrastructure"}.issubset(dir_set) or {"domain", "usecase", "interface"}.issubset(dir_set):
+            pattern = "clean_architecture"
+        elif {"controller", "service", "repository"}.issubset(dir_set) or {"controllers", "services", "models"}.issubset(dir_set):
+            pattern = "layered_mvc"
+        elif "features" in dir_set or "modules" in dir_set:
+            pattern = "feature_sliced"
+        elif len(top_dirs) > 8 and all((root / d).is_dir() for d in top_dirs):
+            pattern = "monorepo"
+        elif {"src", "lib", "test"}.issubset(dir_set) or "src" in dir_set:
+            pattern = "src_layout"
+
+        # Top packages: second-level directories of important top-level dirs
+        top_packages: list[str] = []
+        priority_dirs = [d for d in ("internal", "src", "lib", "pkg", "app") if d in dir_set]
+        for pdir in priority_dirs[:3]:
+            sub = root / pdir
+            try:
+                for sd in sorted(sub.iterdir()):
+                    if sd.is_dir() and not sd.name.startswith("."):
+                        top_packages.append(f"{pdir}/{sd.name}")
+            except Exception:
+                pass
+        if not top_packages:
+            top_packages = [d for d in top_dirs[:8]]
+
+        return {
+            "type": pattern,
+            "top_packages": top_packages[:10],
+            "detected_dirs": top_dirs[:20],
+        }
+    except Exception:
+        return {"type": "unknown", "top_packages": [], "detected_dirs": []}
+
+
+def _detect_architecture(frameworks: list[str], module_structure: dict[str, Any]) -> str:
+    """Synthesize a high-level architecture label from detected frameworks and structure."""
+    struct_type = module_structure.get("type", "unknown")
+    fw_lower = {f.lower() for f in frameworks}
+
+    has_grpc = "grpc" in fw_lower
+    has_spring = any("spring" in f for f in fw_lower)
+    has_proto = "protobuf" in fw_lower
+    has_react = "react" in fw_lower or "next.js" in fw_lower
+
+    if struct_type == "monorepo":
+        return "microservices_federation" if (has_grpc or has_proto) else "monorepo"
+    if struct_type == "clean_architecture":
+        return "clean_architecture_grpc_microservice" if has_grpc else "clean_architecture_ddd"
+    if struct_type == "go_standard":
+        return "go_grpc_service" if has_grpc else "go_standard"
+    if struct_type == "layered_mvc":
+        return "spring_boot_mvc" if has_spring else "layered_mvc"
+    if has_react:
+        return "frontend_spa"
+    return struct_type if struct_type != "unknown" else "unknown"
+
+
+async def handle_detect_patterns(project_path: str) -> dict[str, Any]:
+    """Detect code style, architecture, dependencies, and module organization.
+
+    Returns comprehensive pattern analysis:
+    - languages: file counts by language name (accurate, gitignore-aware)
+    - dependencies: manifests + packages with versions (go.work, go.mod, build.gradle, ...)
+    - package_versions: flat {name: version} convenience map
+    - version_summary: count of pinned vs floating dependencies
+    - conventions: indent, naming, test style, logging, struct tags
+    - key_frameworks: detected frameworks (gRPC, Spring Boot, React, ...)
+    - module_structure: layout pattern (clean_architecture, monorepo, go_standard, ...)
+    - architecture: synthesized high-level label (microservices_federation, ...)
+    """
+    import asyncio
+
+    root = Path(project_path).expanduser().resolve()
+    if not root.is_dir():
+        return {"error": f"Not a directory: {project_path}", "project_path": project_path}
+
+    def _run() -> dict[str, Any]:
+        languages = _count_languages_accurate(root, project_path)
+        dependencies = _detect_dependencies(root)
+        conventions = _detect_conventions(root)
+        key_frameworks = _detect_frameworks_from_dependencies(dependencies)
+        module_structure = _detect_module_structure(root)
+        architecture = _detect_architecture(key_frameworks, module_structure)
+
+        package_versions: dict[str, str] = {}
+        for pkg in dependencies.get("packages", []):
+            name = pkg.get("name", "")
+            ver = pkg.get("version", "")
+            if name and ver and name not in package_versions:
+                package_versions[name] = ver
+
+        pinned = sum(
+            1 for v in package_versions.values()
+            if v and v not in ("*", "workspace", "latest")
+        )
+        return {
+            "status": "ok",
+            "project_path": str(root),
+            "languages": languages,
+            "dependencies": dependencies,
+            "package_versions": package_versions,
+            "version_summary": {
+                "pinned": pinned,
+                "floating": len(package_versions) - pinned,
+                "total": len(package_versions),
+            },
+            "conventions": conventions,
+            "key_frameworks": key_frameworks,
+            "module_structure": module_structure,
+            "architecture": architecture,
+        }
+
+    return await asyncio.to_thread(_run)
 
 
 def _open_graph(project_path: str) -> GraphStorage | None:
