@@ -57,9 +57,10 @@ _LLM_SEM:   asyncio.Semaphore | None = None
 
 # GPU environment: single ONNX session → can use full batch sizes.
 _GPU_ENV = {
-    "OPENCODE_ONNX_BATCH_SIZE":    "32",   # full per-pass throughput
-    "OPENCODE_EMBED_BATCH_CHUNKS": "128",  # max accumulation (safe: 1 session)
-    "OPENCODE_LLM_CONCURRENCY":    "3",    # concurrent Ollama threads per member
+    "OPENCODE_ONNX_BATCH_SIZE":        "32",   # full per-pass throughput
+    "OPENCODE_EMBED_BATCH_CHUNKS":     "64",   # smaller accumulation → fewer slow LanceDB writes
+    "OPENCODE_LLM_CONCURRENCY":        "3",    # concurrent Ollama threads per member
+    "OPENCODE_BLACKWELL_RESET_EVERY":  "50",   # fewer session resets for large repos (was 25)
 }
 _MAX_COMMUNITIES = 200
 
@@ -331,6 +332,8 @@ async def main() -> None:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--members", nargs="*")
+    parser.add_argument("--exclude", nargs="*",
+                        help="Member names to skip (for crash-isolating large repos)")
     args = parser.parse_args()
 
     if args.status:
@@ -350,6 +353,10 @@ async def main() -> None:
     if args.members:
         all_members = [m for m in all_members
                        if Path(m).name in args.members or m in args.members]
+
+    if args.exclude:
+        all_members = [m for m in all_members
+                       if Path(m).name not in args.exclude and m not in args.exclude]
 
     chk = _checkpoint_load()
     completed: set = set(chk.get("completed", []))

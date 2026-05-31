@@ -925,7 +925,7 @@ def cleanup_models() -> bool:
     Returns True if any model was actually released, False if nothing was loaded.
     Callers should use the return value to avoid redundant GC/CUDA-sync calls.
     """
-    global _cached_embedder, _cached_embedder_model
+    global _cached_embedder, _cached_embedder_model, _embed_batch_count
 
     released = False
 
@@ -945,6 +945,12 @@ def cleanup_models() -> bool:
                 released = True
         if released:
             _reranker_lru.clear()
+
+    # Reset the Blackwell session-reset counter so the next member starts fresh.
+    # Without this, accumulated resets from a large member's indexing carry over
+    # and the counter fires too early in the next session.
+    with _embed_batch_count_lock:
+        _embed_batch_count = 0
 
     if released:
         gc.collect()
