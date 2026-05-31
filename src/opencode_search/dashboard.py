@@ -155,6 +155,13 @@ pre{background:#0a0c14;border:1px solid #2d3048;border-radius:6px;padding:14px;f
     </div>
     <pre id="graph-result">Enter a symbol above…</pre>
   </div>
+  <div class="card"><h2>Knowledge Graph Export</h2>
+    <p style="font-size:.8rem;color:#64748b;margin-bottom:12px">Export nodes, edges, and communities for external visualization (Gephi, Cytoscape, NetworkX). Up to 5,000 nodes from the largest communities.</p>
+    <div style="display:flex;gap:8px">
+      <button onclick="exportGraph('json')" style="background:#0d4429;color:#4ade80;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">⬇ Export JSON</button>
+      <button onclick="exportGraph('graphml')" style="background:#1e3a5f;color:#7c9fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">⬇ Export GraphML</button>
+    </div>
+  </div>
 </div>
 
 <!-- WIKI TAB -->
@@ -310,8 +317,22 @@ async function runGraph() {
   if (!sym || !currentProject) return;
   $('graph-result').textContent = 'Querying…';
   const url = `/api/graph?project=${encodeURIComponent(currentProject)}&symbol=${encodeURIComponent(sym)}&relation=${rel}${to ? '&to='+encodeURIComponent(to) : ''}`;
-  const data = await api(url.slice(4)); // strip leading '/api'
+  const data = await api(url.slice(4));
   $('graph-result').textContent = JSON.stringify(data, null, 2);
+}
+
+async function exportGraph(fmt) {
+  if (!currentProject) return;
+  $('graph-result').textContent = `Exporting graph as ${fmt}… (may take 10–30s for large projects)`;
+  const data = await api('/graph_export?project=' + encodeURIComponent(currentProject) + '&format=' + fmt + '&max_nodes=5000');
+  if (data.error) { $('graph-result').textContent = 'Error: ' + data.error; return; }
+  const content = fmt === 'graphml' ? data.graphml : JSON.stringify(data, null, 2);
+  const blob = new Blob([content], {type: fmt === 'graphml' ? 'application/xml' : 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `knowledge_graph.${fmt === 'graphml' ? 'graphml' : 'json'}`;
+  a.click();
+  $('graph-result').textContent = `Exported ${data.node_count || data.nodes?.length || '?'} nodes, ${data.edge_count || data.edges?.length || '?'} edges as ${fmt}.`;
 }
 
 // ── Wiki ─────────────────────────────────────────────────────────────────────
@@ -553,3 +574,21 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
     async def api_metrics(_request: Request) -> JSONResponse:
         from opencode_search.metrics import get_metrics
         return JSONResponse(get_metrics())
+
+    @mcp.custom_route("/api/graph_export", methods=["GET"], include_in_schema=False)
+    async def api_graph_export(request: Request):
+        from opencode_search.handlers import handle_graph_export
+        from starlette.responses import Response
+        project = request.query_params.get("project", "")
+        fmt = request.query_params.get("format", "json")
+        max_nodes = int(request.query_params.get("max_nodes", "5000"))
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_graph_export(project_path=project, format=fmt, max_nodes=max_nodes)
+        if fmt == "graphml" and "graphml" in result:
+            return Response(
+                content=result["graphml"],
+                media_type="application/xml",
+                headers={"Content-Disposition": "attachment; filename=knowledge_graph.graphml"},
+            )
+        return JSONResponse(result)

@@ -482,3 +482,148 @@ async def handle_project_structure(
         "graph_stats": graph_stats,
         "top_communities": top_communities,
     }
+
+
+async def handle_graph_export(
+    project_path: str,
+    format: str = "json",
+    max_nodes: int = 5000,
+    min_community_size: int = 2,
+) -> dict[str, Any]:
+    """Export the code knowledge graph for external visualization.
+
+    Returns nodes, edges, and communities as JSON or GraphML suitable for
+    Gephi, Cytoscape, NetworkX, or any graph analysis tool.
+
+    format: "json" (default) | "graphml"
+    max_nodes: cap on nodes exported (largest communities first, default 5000)
+    min_community_size: minimum node_count to include a community (default 2)
+    """
+    import asyncio
+
+    gs = _open_graph(project_path)
+    if gs is None:
+        return {"error": f"Graph not built for {project_path}. Run build(action='index') first."}
+
+    try:
+        communities = await asyncio.to_thread(
+            gs.get_communities, None, min_community_size, True  # limit=None, order_by_size=True
+        )
+        # Collect nodes from largest communities until we hit max_nodes
+        included_node_ids: set = set()
+        selected_communities = []
+        for c in communities:
+            if len(included_node_ids) >= max_nodes:
+                break
+            nodes = await asyncio.to_thread(gs.get_community_nodes, c.id)
+            for n in nodes:
+                included_node_ids.add(n.id)
+            selected_communities.append((c, nodes))
+
+        # Build full node + edge lists for included nodes
+        all_nodes = await asyncio.to_thread(gs.all_nodes)
+        all_edges = await asyncio.to_thread(gs.all_edges)
+
+        nodes_out = [
+            {
+                "id": n.id,
+                "name": n.name,
+                "qualified_name": n.qualified_name,
+                "kind": n.kind,
+                "file": n.file,
+                "language": n.language,
+                "community_id": n.community_id,
+            }
+            for n in all_nodes if n.id in included_node_ids
+        ]
+
+        edges_out = [
+            {"from": e.from_id, "to": e.to_id, "kind": e.kind}
+            for e in all_edges
+            if e.from_id in included_node_ids and e.to_id in included_node_ids
+        ]
+
+        communities_out = [
+            {
+                "id": c.id,
+                "title": c.title,
+                "summary": c.summary,
+                "node_count": c.node_count,
+            }
+            for c, _ in selected_communities
+        ]
+
+    finally:
+        gs.close()
+
+    if format == "graphml":
+        graphml = _to_graphml(nodes_out, edges_out, communities_out)
+        return {
+            "status": "ok",
+            "format": "graphml",
+            "project_path": project_path,
+            "nodes": len(nodes_out),
+            "edges": len(edges_out),
+            "communities": len(communities_out),
+            "graphml": graphml,
+        }
+
+    return {
+        "status": "ok",
+        "format": "json",
+        "project_path": project_path,
+        "nodes": nodes_out,
+        "edges": edges_out,
+        "communities": communities_out,
+        "stats": {
+            "node_count": len(nodes_out),
+            "edge_count": len(edges_out),
+            "community_count": len(communities_out),
+        },
+    }
+
+
+def _to_graphml(nodes: list[dict], edges: list[dict], communities: list[dict]) -> str:
+    """Minimal GraphML serialization for Gephi/Cytoscape compatibility."""
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<graphml xmlns="http://graphml.graphdrawing.org/graphml">',
+        '  <key id="name" for="node" attr.name="name" attr.type="string"/>',
+        '  <key id="kind" for="node" attr.name="kind" attr.type="string"/>',
+        '  <key id="file" for="node" attr.name="file" attr.type="string"/>',
+        '  <key id="language" for="node" attr.name="language" attr.type="string"/>',
+        '  <key id="community" for="node" attr.name="community_id" attr.type="int"/>',
+        '  <key id="community_title" for="node" attr.name="community_title" attr.type="string"/>',
+        '  <key id="edge_kind" for="edge" attr.name="kind" attr.type="string"/>',
+        '  <graph id="G" edgedefault="directed">',
+    ]
+
+    # Build community title lookup
+    comm_titles = {c["id"]: (c.get("title") or f"Community {c['id']}") for c in communities}
+
+    def _esc(s: str) -> str:
+        return str(s).replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
+
+    for n in nodes:
+        comm_id = n.get("community_id", -1)
+        title = comm_titles.get(comm_id, "")
+        lines.append(
+            f'    <node id="{_esc(str(n["id"]))}">'
+            f'<data key="name">{_esc(n.get("name",""))}</data>'
+            f'<data key="kind">{_esc(n.get("kind",""))}</data>'
+            f'<data key="file">{_esc(n.get("file",""))}</data>'
+            f'<data key="language">{_esc(n.get("language",""))}</data>'
+            f'<data key="community">{comm_id}</data>'
+            f'<data key="community_title">{_esc(title)}</data>'
+            f'</node>'
+        )
+
+    for i, e in enumerate(edges):
+        lines.append(
+            f'    <edge id="e{i}" source="{_esc(str(e["from"]))}" target="{_esc(str(e["to"]))}">'
+            f'<data key="edge_kind">{_esc(e.get("kind",""))}</data>'
+            f'</edge>'
+        )
+
+    lines += ["  </graph>", "</graphml>"]
+    return "\n".join(lines)

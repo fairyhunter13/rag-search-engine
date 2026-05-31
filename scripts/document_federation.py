@@ -229,7 +229,8 @@ async def run_status() -> None:
     """Print status of all members."""
     from opencode_search.handlers import handle_list_federation
     result = await handle_list_federation(project_path=_ASTRO)
-    members = result.get("members", [])
+    raw = result.get("members", [])
+    members = [m["path"] if isinstance(m, dict) else m for m in raw]
     print(f"\nastro-project federation: {len(members)} members\n")
     print(f"{'Path':<60} {'Idx':>4} {'Comms':>6} {'Enrich':>7} {'Wiki':>5}")
     print("-" * 85)
@@ -270,7 +271,9 @@ async def main() -> None:
     log.info("=== Phase C: Document all federation members ===")
     from opencode_search.handlers import handle_list_federation
     result = await handle_list_federation(project_path=_ASTRO)
-    all_members = result.get("members", [])
+    raw_members = result.get("members", [])
+    # handle_list_federation returns dicts {"path": ..., "indexed": ..., "file_count": ...}
+    all_members = [m["path"] if isinstance(m, dict) else m for m in raw_members]
 
     if args.members:
         members = [m for m in all_members if Path(m).name in args.members or m in args.members]
