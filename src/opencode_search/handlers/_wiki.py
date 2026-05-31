@@ -149,6 +149,7 @@ async def handle_wiki_generate(
     project_path: str,
     max_communities: int = 200,
     include_federation: bool = False,
+    embed: bool = True,
 ) -> dict[str, Any]:
     """Auto-generate wiki pages from code graph.
 
@@ -157,6 +158,9 @@ async def handle_wiki_generate(
             Communities are selected largest-first (most architectural coverage).
             Singleton communities are excluded. Default 200. Use a smaller value
             (e.g. 10) for a quick smoke-test on large projects.
+        embed: If True (default), embed generated pages into LanceDB immediately.
+            Pass False when the caller will handle embedding separately (e.g. the
+            document_federation script, which embeds under _EMBED_SEM in stage2).
     """
     import os as _os
     llm = _get_llm()
@@ -206,15 +210,17 @@ async def handle_wiki_generate(
             gs.close()
         all_pages_created.extend(pages_created)
 
-        # Embed generated pages into LanceDB so wiki_query finds them immediately
+        # Embed generated pages into LanceDB so wiki_query finds them immediately.
+        # Skip when embed=False — caller will embed under a GPU semaphore instead.
         wiki_dir = get_project_wiki_dir(path)
         page_file_paths = [wiki_dir / f"{name}.md" for name in pages_created]
-        try:
-            embedded = await _embed_wiki_pages(path, page_file_paths)
-            log.info("wiki_generate[%s]: embedded %d wiki chunks", path, embedded)
-        except Exception as exc:
-            log.warning("wiki_generate[%s]: embedding failed: %s", path, exc)
-            embedded = 0
+        embedded = 0
+        if embed:
+            try:
+                embedded = await _embed_wiki_pages(path, page_file_paths)
+                log.info("wiki_generate[%s]: embedded %d wiki chunks", path, embedded)
+            except Exception as exc:
+                log.warning("wiki_generate[%s]: embedding failed: %s", path, exc)
 
         results_per_path.append({"path": path, "pages_created": len(pages_created), "embedded_chunks": embedded})
 
