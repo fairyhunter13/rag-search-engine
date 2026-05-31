@@ -2,7 +2,7 @@
 
 These tests verify that:
 - FastMCP server imports cleanly
-- All 6 tools are registered
+- All 7 v2 intent tools are registered
 - Tool names are correct
 - run_mcp_server / run_mcp_http_server enforce the GPU guard
 
@@ -56,29 +56,39 @@ def test_mcp_server_instance():
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_has_index_project_tool():
+def test_mcp_has_search_tool():
     mod = _import_mcp()
-    assert hasattr(mod, "index_project")
+    assert hasattr(mod, "search"), "v2 `search` tool must exist"
 
 
-def test_mcp_has_search_code_tool():
+def test_mcp_has_ask_tool():
     mod = _import_mcp()
-    assert hasattr(mod, "search_code")
+    assert hasattr(mod, "ask"), "v2 `ask` tool must exist"
 
 
-def test_mcp_has_project_status_tool():
+def test_mcp_has_graph_tool():
     mod = _import_mcp()
-    assert hasattr(mod, "project_status")
+    assert hasattr(mod, "graph"), "v2 `graph` tool must exist"
 
 
-def test_mcp_has_list_indexed_projects_tool():
+def test_mcp_has_overview_tool():
     mod = _import_mcp()
-    assert hasattr(mod, "list_indexed_projects")
+    assert hasattr(mod, "overview"), "v2 `overview` tool must exist"
 
 
-def test_mcp_has_stop_watching_tool():
+def test_mcp_has_build_tool():
     mod = _import_mcp()
-    assert hasattr(mod, "stop_watching")
+    assert hasattr(mod, "build"), "v2 `build` tool must exist"
+
+
+def test_mcp_has_federation_tool():
+    mod = _import_mcp()
+    assert hasattr(mod, "federation"), "v2 `federation` tool must exist"
+
+
+def test_mcp_has_manage_tool():
+    mod = _import_mcp()
+    assert hasattr(mod, "manage"), "v2 `manage` tool must exist"
 
 
 def test_mcp_has_run_mcp_server():
@@ -92,21 +102,18 @@ def test_mcp_has_run_mcp_server():
 
 
 @pytest.mark.asyncio
-async def test_index_project_tool_callable():
-    """index_project tool should be callable as an async function."""
+async def test_build_index_callable():
+    """build(action=index) tool should be callable and trigger handle_index_project."""
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_index_project",
-               AsyncMock(return_value={"status": "ok", "files_indexed": 0,
-                                       "files_unchanged": 0, "files_removed": 0,
-                                       "chunks_total": 0, "errors": 0,
-                                       "elapsed_s": 0.1, "watching": False,
-                                       "path": "/tmp/x"})):
-        result = await mod.index_project(path="/tmp/x")
+               AsyncMock(return_value={"status": "indexing", "path": "/tmp/x",
+                                       "started_at": "2026-01-01T00:00:00"})):
+        result = await mod.build(project_path="/tmp/x", action="index")
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_index_project_auto_starts_watch_for_matching_open_client():
+async def test_build_index_auto_starts_watch_for_matching_open_client():
     mod = _import_mcp()
 
     async def _fake_handle(*, path, watch, force, follow_symlinks, on_complete=None):
@@ -119,7 +126,7 @@ async def test_index_project_auto_starts_watch_for_matching_open_client():
          patch.object(mod.runtime_state, "bind_clients_to_project", return_value=1) as mock_bind, \
          patch("opencode_search.mcp.handle_ensure_project_watching",
                AsyncMock(return_value={"status": "ok"})) as mock_watch:
-        result = await mod.index_project(path="/tmp/proj")
+        result = await mod.build(project_path="/tmp/proj", action="index")
 
     assert result["status"] == "indexing"
     mock_bind.assert_called_once_with("/tmp/proj")
@@ -127,40 +134,43 @@ async def test_index_project_auto_starts_watch_for_matching_open_client():
 
 
 @pytest.mark.asyncio
-async def test_search_code_tool_callable():
-    """search_code tool should be callable as an async function."""
+async def test_search_tool_callable():
+    """search tool (v2) should be callable as an async function."""
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_search_code",
                AsyncMock(return_value={"results": [], "elapsed_ms": 0.0,
                                        "query": "test", "projects_searched": 0})):
-        result = await mod.search_code(query="test")
+        result = await mod.search(query="test")
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_project_status_tool_callable():
+async def test_overview_status_callable():
+    """overview(what=status) tool (v2) should be callable."""
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_project_status",
                AsyncMock(return_value={"indexed": False, "path": "/tmp/x"})):
-        result = await mod.project_status(path="/tmp/x")
+        result = await mod.overview(project_path="/tmp/x", what="status")
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_list_indexed_projects_tool_callable():
+async def test_overview_projects_callable():
+    """overview(what=projects) tool (v2) should be callable."""
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_list_indexed_projects",
                AsyncMock(return_value={"projects": []})):
-        result = await mod.list_indexed_projects()
+        result = await mod.overview(what="projects")
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_stop_watching_tool_callable():
+async def test_manage_stop_watching_callable():
+    """manage(action=stop_watching) tool (v2) should be callable."""
     mod = _import_mcp()
     with patch("opencode_search.mcp.handle_stop_watching",
                AsyncMock(return_value={"was_watching": False, "status": "stopped", "path": "/tmp/x"})):
-        result = await mod.stop_watching(path="/tmp/x")
+        result = await mod.manage(project_path="/tmp/x", action="stop_watching")
     assert result is not None
 
 
