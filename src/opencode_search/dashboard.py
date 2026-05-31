@@ -16,6 +16,7 @@ Routes:
   GET /api/federation?project=…         — federation member list
   GET /api/metrics                      — daemon session statistics
   GET /api/patterns?project=…           — languages, deps, conventions, architecture
+  POST /api/analyze_patterns?project=…  — trigger LLM deep pattern analysis (async)
 """
 from __future__ import annotations
 
@@ -140,6 +141,16 @@ pre{background:#0a0c14;border:1px solid #2d3048;border-radius:6px;padding:14px;f
   </div>
   <div class="card"><h2>Languages</h2><div id="patterns-langs"></div></div>
   <div class="card"><h2>Code Conventions</h2><div id="patterns-conventions" class="stat-grid"></div></div>
+  <div class="card"><h2>LLM Deep Analysis</h2>
+    <div id="patterns-llm-meta" style="margin-bottom:10px;font-size:.78rem;color:#64748b">
+      No LLM analysis cached. Click "Analyse with LLM" to run deep pattern detection using the local LLM.
+    </div>
+    <div id="patterns-llm-result"></div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button onclick="runLLMAnalysis(false)" style="background:#1e3a5f;color:#7c9fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">Analyse with LLM</button>
+      <button onclick="runLLMAnalysis(true)" style="background:#2d1f4e;color:#a78bfa;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">Force Re-analyse</button>
+    </div>
+  </div>
   <div class="card"><h2>Dependencies &amp; Versions</h2>
     <div id="patterns-dep-meta" style="margin-bottom:10px;font-size:.78rem;color:#64748b"></div>
     <div id="patterns-deps" style="max-height:420px;overflow-y:auto">
@@ -362,6 +373,32 @@ async function loadPatterns() {
   const dep = data.dependencies || {};
   const pkgs = dep.packages || [];
   const manifests = dep.manifest_files || [];
+  // LLM cached analysis
+  const llm = data.llm_analysis;
+  const llmAt = data.llm_cached_at;
+  if (llm && typeof llm === 'object' && !llm.raw_response) {
+    $('patterns-llm-meta').textContent = `LLM analysis cached at: ${llmAt || 'unknown'} · Confidence: ${llm.confidence || '—'}`;
+    const llmItems = [
+      llm.primary_language && {label: 'Primary Language', val: llm.primary_language},
+      llm.architecture_description && {label: 'Architecture', val: llm.architecture_description},
+      llm.naming_conventions && {label: 'Naming', val: llm.naming_conventions},
+      llm.error_handling_style && {label: 'Error Handling', val: llm.error_handling_style},
+      llm.test_approach && {label: 'Test Approach', val: llm.test_approach},
+    ].filter(Boolean);
+    const patterns = (llm.coding_patterns || []).map(p => `<span class="badge ok" style="margin:2px">${escHtml(p)}</span>`).join('');
+    const abstractions = (llm.key_abstractions || []).map(a => `<li style="font-size:.8rem;color:#94a3b8">${escHtml(a)}</li>`).join('');
+    const signals = (llm.code_quality_signals || []).map(s => `<li style="font-size:.8rem;color:#94a3b8">${escHtml(s)}</li>`).join('');
+    $('patterns-llm-result').innerHTML = llmItems.map(i =>
+      `<div style="margin-bottom:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">${i.label}</div><div style="font-size:.82rem;color:#e2e8f0;margin-top:2px">${escHtml(i.val)}</div></div>`
+    ).join('') +
+    (patterns ? `<div style="margin-top:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Coding Patterns</div><div style="margin-top:4px">${patterns}</div></div>` : '') +
+    (abstractions ? `<div style="margin-top:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Key Abstractions</div><ul style="margin-left:16px;margin-top:4px">${abstractions}</ul></div>` : '') +
+    (signals ? `<div style="margin-top:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Quality Signals</div><ul style="margin-left:16px;margin-top:4px">${signals}</ul></div>` : '');
+  } else if (llm && llm.raw_response) {
+    $('patterns-llm-meta').textContent = `LLM analysis cached (raw) at: ${llmAt || 'unknown'}`;
+    $('patterns-llm-result').innerHTML = `<pre style="font-size:.72rem">${escHtml(llm.raw_response.slice(0,500))}</pre>`;
+  }
+
   $('patterns-dep-meta').textContent =
     `Manager: ${dep.manager || '—'} · Manifests: ${manifests.join(', ') || '—'} · Packages shown: ${pkgs.length}`;
   $('patterns-deps').innerHTML = pkgs.length
@@ -373,6 +410,27 @@ async function loadPatterns() {
         ).join('')
       }</tbody></table>`
     : '<div style="color:#64748b;font-size:.82rem;padding:10px">No dependency manifests found.</div>';
+}
+
+async function runLLMAnalysis(force) {
+  if (!currentProject) return;
+  $('patterns-llm-meta').textContent = 'Running LLM analysis… this may take 30–120s. Please wait.';
+  $('patterns-llm-result').innerHTML = '<div class="loader">Calling local LLM…</div>';
+  try {
+    const url = `/api/analyze_patterns?project=${encodeURIComponent(currentProject)}${force ? '&force=true' : ''}`;
+    const r = await fetch(url, {method: 'POST'});
+    const data = await r.json();
+    if (data.error) {
+      $('patterns-llm-meta').textContent = 'LLM analysis failed: ' + data.error;
+      $('patterns-llm-result').innerHTML = '';
+      return;
+    }
+    // Reload the full patterns panel to merge the new cache
+    await loadPatterns();
+  } catch(e) {
+    $('patterns-llm-meta').textContent = 'LLM analysis error: ' + escHtml(e.message);
+    $('patterns-llm-result').innerHTML = '';
+  }
 }
 
 // ── Architecture ─────────────────────────────────────────────────────────────
@@ -673,6 +731,16 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_detect_patterns(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/analyze_patterns", methods=["POST"], include_in_schema=False)
+    async def api_analyze_patterns(request: Request) -> JSONResponse:
+        from opencode_search.handlers import handle_analyze_patterns_llm
+        project = request.query_params.get("project", "")
+        force = request.query_params.get("force", "").lower() in ("1", "true", "yes")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_analyze_patterns_llm(project_path=project, force=force)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/graph_export", methods=["GET"], include_in_schema=False)

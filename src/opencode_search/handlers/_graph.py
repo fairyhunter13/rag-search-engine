@@ -608,7 +608,23 @@ async def handle_detect_patterns(project_path: str) -> dict[str, Any]:
             "architecture": architecture,
         }
 
-    return await asyncio.to_thread(_run)
+    result = await asyncio.to_thread(_run)
+
+    # Merge cached LLM analysis if available (non-blocking — never slows the fast path)
+    try:
+        from opencode_search.handlers._patterns import load_patterns_cache
+        cached = load_patterns_cache(project_path)
+        if cached:
+            result["llm_analysis"] = cached.get("llm_analysis")
+            result["llm_cached_at"] = cached.get("cached_at")
+        else:
+            result["llm_analysis"] = None
+            result["llm_cached_at"] = None
+    except Exception:
+        result["llm_analysis"] = None
+        result["llm_cached_at"] = None
+
+    return result
 
 
 def _open_graph(project_path: str) -> GraphStorage | None:

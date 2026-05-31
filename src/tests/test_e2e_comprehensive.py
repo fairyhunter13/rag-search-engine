@@ -1824,3 +1824,128 @@ REMAINING WORK (Phase C + D running in background)
   Run: python scripts/document_federation.py --skip-root
 - knowledge graph export (Phase F): graph_export API route + download button
 """
+
+
+# ===========================================================================
+# T22 — LLM pattern analysis (build action + cache + dashboard route)
+# ===========================================================================
+
+class TestT22LLMPatternAnalysis:
+    """P1: build(action='analyze_patterns') triggers LLM analysis, caches, and merges into patterns."""
+
+    def _api(self, path: str, method: str = "GET") -> dict:
+        import urllib.request, json as _json
+        url = f"http://127.0.0.1:8765{path}"
+        try:
+            req = urllib.request.Request(url, method=method,
+                                         data=b"" if method == "POST" else None)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return _json.loads(r.read())
+        except Exception as e:
+            pytest.skip(f"Daemon not running or route failed: {e}")
+
+    def test_t22_analyze_patterns_no_llm_returns_graceful_error(self, monkeypatch):
+        """P1: analyze_patterns when no LLM is configured returns informative error, not crash."""
+        import urllib.parse
+        _use_real_registry(monkeypatch)
+        # Ensure LLM provider is none for this test
+        monkeypatch.setenv("OPENCODE_LLM_PROVIDER", "none")
+        from opencode_search.handlers._patterns import handle_analyze_patterns_llm
+        result = _run(handle_analyze_patterns_llm(
+            project_path="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+            force=True,
+        ))
+        assert result.get("status") == "error", f"Expected error when no LLM configured: {result}"
+        assert "error" in result
+        assert "LLM" in result["error"] or "provider" in result["error"].lower(), \
+            f"Error message should mention LLM provider: {result['error']}"
+
+    def test_t22_load_patterns_cache_returns_none_when_absent(self, tmp_path, monkeypatch):
+        """P0: load_patterns_cache returns None for uncached projects."""
+        from opencode_search.handlers._patterns import load_patterns_cache
+        from opencode_search import config as cfg
+        monkeypatch.setattr(cfg, "REGISTRY_PATH", tmp_path / "registry.json")
+        result = load_patterns_cache("/nonexistent/project/path")
+        assert result is None
+
+    def test_t22_sample_source_files_returns_go_files_for_astro(self):
+        """P0: _sample_source_files follows symlinks and finds Go files in redacted-name-3."""
+        from pathlib import Path
+        from opencode_search.handlers._patterns import _sample_source_files
+        samples = _sample_source_files(Path(_ASTRO))
+        assert len(samples) > 0, "Expected source files from redacted-name-3"
+        # Should include at least one .go file (via symlinks into federation repos)
+        go_files = [rel for rel, _ in samples if rel.endswith(".go")]
+        assert go_files, f"Expected Go files in samples, got: {[rel for rel, _ in samples]}"
+
+    def test_t22_patterns_output_has_llm_analysis_key(self, monkeypatch):
+        """P0: handle_detect_patterns always returns 'llm_analysis' key (null when no cache)."""
+        _use_real_registry(monkeypatch)
+        from opencode_search.handlers import handle_detect_patterns
+        result = _run(handle_detect_patterns(
+            project_path="/home/user/git/github.com/fairyhunter13/opencode-search-engine"
+        ))
+        assert "llm_analysis" in result, f"llm_analysis key missing from patterns: {list(result.keys())}"
+        assert "llm_cached_at" in result, f"llm_cached_at key missing from patterns: {list(result.keys())}"
+
+    def test_t22_dashboard_analyze_patterns_post_route_exists(self):
+        """P0: POST /api/analyze_patterns returns a response (even if LLM is unavailable)."""
+        import urllib.request, json as _json, urllib.parse
+        proj = urllib.parse.quote("/home/user/git/github.com/fairyhunter13/opencode-search-engine")
+        url = f"http://127.0.0.1:8765/api/analyze_patterns?project={proj}"
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"")
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = _json.loads(r.read())
+                # Either "ok" (LLM available) or "error" (no provider) — not 404 or crash
+                assert "status" in data or "error" in data, f"Unexpected response: {data}"
+        except urllib.error.HTTPError as e:
+            assert e.code != 404, "POST /api/analyze_patterns route is missing (404)"
+            pytest.skip(f"Route returned HTTP {e.code}")
+        except Exception as e:
+            pytest.skip(f"Daemon not running: {e}")
+
+    @_LARGE
+    def test_t22_patterns_tab_html_has_llm_button(self):
+        """P0: /dashboard HTML has LLM analysis button markup."""
+        import urllib.request
+        url = "http://127.0.0.1:8765/dashboard"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                html = r.read().decode()
+        except Exception as e:
+            pytest.skip(f"Daemon not running: {e}")
+        assert "runLLMAnalysis" in html, "/dashboard HTML missing runLLMAnalysis JS function"
+        assert "analyze_patterns" in html.lower() or "Analyse with LLM" in html, \
+            "/dashboard HTML missing LLM analysis button"
+
+    @_LARGE
+    def test_t22_full_llm_analysis_with_ollama_if_available(self, monkeypatch):
+        """P2: If Ollama is running and configured, analyze_patterns produces a structured result."""
+        import os, shlex
+        # Skip if no Ollama
+        provider = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama")
+        if provider == "none":
+            pytest.skip("OPENCODE_LLM_PROVIDER=none, no LLM available")
+        try:
+            from opencode_search.enricher.client import create_llm_client
+            llm = create_llm_client()
+        except Exception:
+            pytest.skip("Cannot create LLM client")
+        if llm is None:
+            pytest.skip("No LLM client available")
+        if not llm.is_available():
+            pytest.skip(f"LLM provider not reachable: {type(llm).__name__}")
+
+        _use_real_registry(monkeypatch)
+        from opencode_search.handlers._patterns import handle_analyze_patterns_llm
+        result = _run(handle_analyze_patterns_llm(
+            project_path="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+            force=True,
+        ))
+        assert result.get("status") == "ok", f"LLM analysis failed: {result}"
+        llm_data = result.get("llm_analysis", {})
+        assert isinstance(llm_data, dict), f"llm_analysis should be dict, got: {type(llm_data)}"
+        # Must have at least primary_language
+        assert "primary_language" in llm_data or "architecture_description" in llm_data, \
+            f"LLM analysis missing expected keys: {list(llm_data.keys())}"

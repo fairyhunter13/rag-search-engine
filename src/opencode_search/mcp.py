@@ -57,6 +57,7 @@ from opencode_search.daemon import (
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_add_federation_member,
+    handle_analyze_patterns_llm,
     handle_detect_impact,
     handle_detect_patterns,
     handle_discover_federation,
@@ -348,7 +349,10 @@ async def overview(
 @mcp.tool()
 async def build(
     project_path: str,
-    action: Literal["index", "pipeline", "enrich", "wiki", "ingest", "reindex_wiki", "describe_symbol"] = "pipeline",
+    action: Literal[
+        "index", "pipeline", "enrich", "wiki", "ingest",
+        "reindex_wiki", "describe_symbol", "analyze_patterns",
+    ] = "pipeline",
     source_path: str | None = None,
     symbol: str | None = None,
     max_communities: int = 200,
@@ -364,12 +368,17 @@ async def build(
 
     action: "pipeline" (default, recommended) | "index" | "enrich" | "wiki"
             | "ingest" | "reindex_wiki" | "describe_symbol"
+            | "analyze_patterns" (LLM-powered deep code pattern analysis; requires LLM provider)
     source_path: required for action="ingest"
     symbol: required for action="describe_symbol"
     max_communities: cap on communities to enrich/wiki (default 200)
+    force: for analyze_patterns, re-run even if cached result exists
     """
     runtime_state.note_activity()
-    valid = {"index", "pipeline", "enrich", "wiki", "ingest", "reindex_wiki", "describe_symbol"}
+    valid = {
+        "index", "pipeline", "enrich", "wiki", "ingest",
+        "reindex_wiki", "describe_symbol", "analyze_patterns",
+    }
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
@@ -410,6 +419,8 @@ async def build(
         return await handle_wiki_ingest(source_path=source_path, project_path=project_path)
     elif action == "reindex_wiki":
         return await handle_wiki_reindex(project_path=project_path)
+    elif action == "analyze_patterns":
+        return await handle_analyze_patterns_llm(project_path=project_path, force=force)
     else:
         if not symbol:
             return {"error": "action='describe_symbol' requires symbol parameter"}

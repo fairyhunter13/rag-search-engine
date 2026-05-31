@@ -311,7 +311,8 @@ async def build(
     """Index, enrich, or generate the knowledge base for a project.
 
     action: "pipeline" (default, full KB build) | "index" | "enrich" | "wiki" |
-            "ingest" | "reindex_wiki" | "describe_symbol"
+            "ingest" | "reindex_wiki" | "describe_symbol" |
+            "analyze_patterns" (LLM deep pattern analysis, requires LLM provider)
     Only call index/pipeline when the user explicitly asks to index the project.
     """
     resolved = _resolve_path_like(project_path)

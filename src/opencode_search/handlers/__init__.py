@@ -10,6 +10,7 @@ from opencode_search.handlers._enrichment import (
     handle_enrich_project,
     handle_get_symbol_intent,
 )
+from opencode_search.handlers._patterns import handle_analyze_patterns_llm
 from opencode_search.handlers._pipeline import handle_pipeline
 from opencode_search.handlers._federation import (
     _expand_with_federation,
@@ -61,6 +62,7 @@ __all__ = [
     "_now_iso",
     "_touch_projects_last_active",
     "handle_add_federation_member",
+    "handle_analyze_patterns_llm",
     "handle_detect_impact",
     "handle_detect_patterns",
     "handle_discover_federation",
