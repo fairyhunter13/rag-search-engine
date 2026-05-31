@@ -347,37 +347,59 @@ def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, A
         return []
 
 
-def _detect_conventions(root: Path) -> dict[str, Any]:
-    """Detect code style conventions by sampling source files."""
+def _detect_conventions(root: Path, primary_language: str | None = None) -> dict[str, Any]:
+    """Detect code style conventions by sampling source files.
+
+    primary_language: hint from _count_languages_accurate so the sampler
+    biases toward files of the dominant language (avoids misdetection in
+    federation/monorepo projects where many languages are present).
+    """
     try:
         from opencode_search.discover import detect_language, iter_files, SOURCE_EXTENSIONS
 
-        # Prefer main application source files; skip SQL/migrations/generated code
-        _PREFERRED_EXTS = {'.go', '.py', '.java', '.kt', '.ts', '.tsx', '.js', '.jsx',
-                           '.rs', '.rb', '.cs', '.swift', '.scala', '.cpp', '.c'}
-        sample_files: list[Path] = []
-        overflow_files: list[Path] = []
-        for path in iter_files(root):
+        # Extension sets per language — ordered most-preferred first
+        _LANG_EXTS: dict[str, tuple[str, ...]] = {
+            "go":         (".go",),
+            "python":     (".py",),
+            "java":       (".java",),
+            "kotlin":     (".kt", ".kts"),
+            "typescript": (".ts", ".tsx"),
+            "javascript": (".js", ".jsx", ".mjs"),
+            "rust":       (".rs",),
+        }
+        _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}
+
+        # Bias toward files matching primary_language hint
+        primary_exts: set[str] = set()
+        if primary_language and primary_language in _LANG_EXTS:
+            primary_exts = set(_LANG_EXTS[primary_language])
+
+        # Two-pass: first fill with primary-language files, then any preferred
+        primary_files: list[Path] = []
+        other_files: list[Path] = []
+        for path in iter_files(root, follow_symlinks=True):
             ext = path.suffix.lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
-            if ext in _PREFERRED_EXTS and len(sample_files) < 40:
-                sample_files.append(path)
-            elif len(overflow_files) < 10:
-                overflow_files.append(path)
-            if len(sample_files) >= 40:
+            if ext in primary_exts and len(primary_files) < 40:
+                primary_files.append(path)
+            elif ext in _ALL_PREFERRED and len(other_files) < 20:
+                other_files.append(path)
+            if len(primary_files) >= 40 and len(other_files) >= 20:
                 break
-        if not sample_files:
-            sample_files = overflow_files
 
+        # Prefer primary-language files; fall back to mixed if too few
+        sample_files = primary_files if len(primary_files) >= 5 else primary_files + other_files
         if not sample_files:
             return {}
 
-        # Detect primary language
+        # Detect primary language from sample (confirms or corrects the hint)
         lang_counter: collections.Counter = collections.Counter()
         for p in sample_files:
             lang_counter[detect_language(p)] += 1
-        primary_lang = lang_counter.most_common(1)[0][0] if lang_counter else "unknown"
+        primary_lang = primary_language or (
+            lang_counter.most_common(1)[0][0] if lang_counter else "unknown"
+        )
 
         # Read samples for heuristics (800 chars captures package + imports + first functions)
         combined = ""
@@ -574,8 +596,10 @@ async def handle_detect_patterns(project_path: str) -> dict[str, Any]:
 
     def _run() -> dict[str, Any]:
         languages = _count_languages_accurate(root, project_path)
+        # Pass primary language hint so convention sampler biases toward dominant language
+        primary_lang = languages[0]["name"] if languages else None
         dependencies = _detect_dependencies(root)
-        conventions = _detect_conventions(root)
+        conventions = _detect_conventions(root, primary_language=primary_lang)
         key_frameworks = _detect_frameworks_from_dependencies(dependencies)
         module_structure = _detect_module_structure(root)
         architecture = _detect_architecture(key_frameworks, module_structure)
