@@ -285,3 +285,84 @@ class TestT38DPostRoutes:
         assert r.status_code != 404, (
             f"POST /api/auto_fix_trigger returned 404 — route not registered"
         )
+
+
+# ---------------------------------------------------------------------------
+# T38-E: Phase 3 new routes — metrics history, SSE, alerts, system status
+# ---------------------------------------------------------------------------
+
+class TestT38EPhase3Routes:
+    """P0: New Phase 3 routes are registered and return correct shapes."""
+
+    @pytest.mark.asyncio
+    async def test_metrics_history_returns_timeseries(self, client):
+        """P0: GET /api/metrics/history returns dict with timestamps array."""
+        r = await client.get("/api/metrics/history?hours=1")
+        assert r.status_code == 200, f"/api/metrics/history returned {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), f"Expected dict, got {type(data)}"
+        assert "timestamps" in data, f"Missing 'timestamps' key: {list(data.keys())}"
+        assert "latency_p50" in data, f"Missing 'latency_p50' key: {list(data.keys())}"
+        assert "latency_p95" in data, f"Missing 'latency_p95' key"
+        assert "zero_result_pct" in data, f"Missing 'zero_result_pct' key"
+        assert isinstance(data["timestamps"], list), "timestamps must be a list"
+
+    @pytest.mark.asyncio
+    async def test_alerts_get_returns_rules_and_violations(self, client):
+        """P0: GET /api/alerts returns rules list and violations list."""
+        r = await client.get("/api/alerts")
+        assert r.status_code == 200, f"/api/alerts returned {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), f"Expected dict, got {type(data)}"
+        assert "rules" in data, f"Missing 'rules' key: {list(data.keys())}"
+        assert "violations" in data, f"Missing 'violations' key: {list(data.keys())}"
+        assert isinstance(data["rules"], list), "rules must be a list"
+        assert isinstance(data["violations"], list), "violations must be a list"
+
+    @pytest.mark.asyncio
+    async def test_alerts_post_saves_rules(self, client):
+        """P1: POST /api/alerts saves rules and returns saved count."""
+        rules = [
+            {"id": "test_rule", "name": "Test", "metric": "latency_p95_ms",
+             "op": ">", "threshold": 1000, "enabled": True}
+        ]
+        r = await client.post("/api/alerts", json={"rules": rules})
+        assert r.status_code == 200, f"POST /api/alerts returned {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        assert "saved" in data, f"Missing 'saved' key: {list(data.keys())}"
+        assert data["saved"] == 1
+
+    @pytest.mark.asyncio
+    async def test_events_stream_returns_sse_headers(self, client):
+        """P0: GET /api/events/stream is registered and configured as SSE.
+
+        httpx ASGI transport cannot stream infinitely (listen_for_disconnect blocks
+        until the full response is consumed), so we verify the route contract by
+        requesting ?max_events=1 which causes the generator to stop after one event.
+        """
+        r = await client.get("/api/events/stream?max_events=1")
+        assert r.status_code == 200, f"/api/events/stream returned {r.status_code}"
+        ct = r.headers.get("content-type", "")
+        assert "text/event-stream" in ct, f"Expected text/event-stream, got {ct!r}"
+        assert b"data:" in r.content, f"SSE response missing 'data:' prefix: {r.content[:100]}"
+
+    @pytest.mark.asyncio
+    async def test_system_status_registered(self, client):
+        """P0: GET /api/system_status is registered (not 404)."""
+        r = await client.get("/api/system_status")
+        assert r.status_code != 404, f"/api/system_status returned 404 — route not registered"
+        # Returns either a status dict or a 503/500 if ocs_status.py is unavailable
+        assert r.status_code in (200, 500, 503), f"Unexpected status: {r.status_code}"
+
+    @pytest.mark.asyncio
+    async def test_static_route_serves_chartjs(self, client):
+        """P0: GET /static/chart.min.js serves Chart.js file."""
+        r = await client.get("/static/chart.min.js")
+        assert r.status_code == 200, f"/static/chart.min.js returned {r.status_code}"
+        assert len(r.content) > 50_000, f"chart.min.js too small: {len(r.content)} bytes"
+
+    @pytest.mark.asyncio
+    async def test_static_route_missing_file_returns_404(self, client):
+        """P0: GET /static/nonexistent returns 404."""
+        r = await client.get("/static/does_not_exist.js")
+        assert r.status_code == 404

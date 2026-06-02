@@ -74,3 +74,50 @@ Rules (no exceptions):
 - If not indexed, say so and ask before indexing.
 - After indexing, the daemon watches files automatically.
 [opencode-search-global-instructions:end]
+
+<!-- >>> opencode-search global instructions >>> -->
+MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.
+
+7-tool intent API (v2 — June 2026):
+- `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: "code" (default)|"docs"|"all"
+- `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"
+  - scope="global": GraphRAG map-reduce synthesis across ALL community summaries
+- `graph(symbol, project_path, relation)` — call graph analysis
+  - relation: "callers"|"callees"|"impact"|"path" — standard
+  - relation: "impact_narrative" — LLM summary of blast radius: risk level, affected domains
+  - relation: "semantic_trace" (+to_symbol=) — natural language trace between two symbols
+- `overview(project_path, what)` — project overview
+  - what: "structure"|"communities"|"status"|"projects"|"patterns" — standard
+  - what: "architecture_domains" — top-level Leiden hierarchy
+  - what: "hierarchy" — full recursive Leiden hierarchy (all levels)
+  - what: "service_mesh" — detected inter-service gRPC/HTTP/MQ topology
+- `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
+  - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
+- `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
+- `manage(project_path, action)` — stop_watching, wiki_lint
+
+QUICK DECISION GUIDE:
+  'find the payment handler'           → search('payment handler')
+  'how does auth work?'                → ask('how does auth work', project_path)
+  'what is the overall architecture?'  → ask('describe architecture', project_path, scope='global')
+  'what calls ProcessOrder?'           → graph('ProcessOrder', project_path, relation='callers')
+  'what breaks if I change X?'         → graph('X', project_path, relation='impact_narrative')
+  'trace login to database'            → graph('login', project_path, relation='semantic_trace', to_symbol='database write')
+  'what services call each other?'     → overview(project_path, what='service_mesh')
+  'top-level architecture domains?'    → overview(project_path, what='architecture_domains')
+  'tell me about this project'         → overview(project_path, what='structure')
+  'what packages/dependencies?'        → overview(project_path, what='patterns')
+  'list all indexed projects'          → overview(what='projects')
+  'index this project' [explicit ask]  → build(project_path, action='pipeline')
+
+Rules (no exceptions):
+- Before running ANY Bash command that searches code or text — FIRST call `search` with a natural language query.
+- Before reading, editing, or answering questions about ANY file or codebase topic: call `search` first.
+- Use ask(scope="global") for holistic questions about the entire codebase.
+- Use graph(relation="impact_narrative") for human-readable blast radius analysis.
+- In your final answer, reference specific file paths and identifiers found in search results.
+- Do NOT delegate codebase questions to sub-agents via the Agent tool.
+- NEVER auto-index. Only call `build` when the user explicitly asks.
+- If not indexed, say so and ask before indexing.
+- After indexing, the daemon watches files automatically.
+<!-- <<< opencode-search global instructions <<< -->

@@ -25,15 +25,118 @@ Routes:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
 import logging
+import sqlite3
+import threading
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
+
+# ---------------------------------------------------------------------------
+# Metrics persistence (SQLite — stored alongside project registry)
+# ---------------------------------------------------------------------------
+
+_DATA_DIR = Path.home() / ".local" / "share" / "opencode-search"
+_METRICS_DB = _DATA_DIR / "metrics.db"
+_ALERTS_FILE = _DATA_DIR / "alerts.json"
+_STATIC_DIR = Path(__file__).parent / "static"
+
+_DEFAULT_ALERTS = [
+    {"id": "lat_p95", "name": "Latency p95", "metric": "latency_p95_ms", "op": ">", "threshold": 500, "enabled": True},
+    {"id": "zero_results", "name": "Zero-result rate", "metric": "zero_result_pct", "op": ">", "threshold": 20, "enabled": True},
+    {"id": "enrichment", "name": "KB enrichment", "metric": "enrichment_pct", "op": "<", "threshold": 60, "enabled": True},
+]
+
+_db_lock = threading.Lock()
+
+
+def _get_metrics_db() -> sqlite3.Connection:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_METRICS_DB))
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS search_events (
+            ts REAL NOT NULL,
+            query TEXT,
+            scope TEXT,
+            result_count INTEGER,
+            top_score REAL,
+            latency_ms REAL,
+            project TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS indexing_events (
+            ts REAL NOT NULL,
+            project TEXT,
+            action TEXT,
+            duration_s REAL,
+            files_processed INTEGER
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_search_ts ON search_events(ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_index_ts ON indexing_events(ts)")
+    conn.commit()
+    return conn
+
+
+def record_search_event(query: str, scope: str, result_count: int,
+                         top_score: float, latency_ms: float, project: str) -> None:
+    """Record a search event to the metrics DB (call from search handlers)."""
+    try:
+        with _db_lock:
+            conn = _get_metrics_db()
+            conn.execute(
+                "INSERT INTO search_events VALUES (?,?,?,?,?,?,?)",
+                (time.time(), query, scope, result_count, top_score, latency_ms, project),
+            )
+            # Prune events older than 7 days
+            cutoff = time.time() - 7 * 86400
+            conn.execute("DELETE FROM search_events WHERE ts < ?", (cutoff,))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+
+def record_indexing_event(project: str, action: str, duration_s: float, files_processed: int) -> None:
+    """Record an indexing event to the metrics DB."""
+    try:
+        with _db_lock:
+            conn = _get_metrics_db()
+            conn.execute(
+                "INSERT INTO indexing_events VALUES (?,?,?,?,?)",
+                (time.time(), project, action, duration_s, files_processed),
+            )
+            cutoff = time.time() - 7 * 86400
+            conn.execute("DELETE FROM indexing_events WHERE ts < ?", (cutoff,))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+
+
+def _load_alerts() -> list[dict]:
+    try:
+        if _ALERTS_FILE.exists():
+            return json.loads(_ALERTS_FILE.read_text())
+    except Exception:
+        pass
+    return _DEFAULT_ALERTS[:]
+
+
+def _save_alerts(rules: list[dict]) -> None:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _ALERTS_FILE.write_text(json.dumps(rules, indent=2))
 
 log = logging.getLogger(__name__)
 
@@ -615,3 +718,225 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         task_id = request.query_params.get("id", "")
         state = _qa_tasks.get(task_id, {"status": "not_found"})
         return JSONResponse(state)
+
+    # -------------------------------------------------------------------------
+    # NEW Phase 3 endpoints: metrics history, SSE, alerts, system status
+    # -------------------------------------------------------------------------
+
+    @mcp.custom_route("/api/metrics/history", methods=["GET"], include_in_schema=False)
+    async def api_metrics_history(request: Request) -> JSONResponse:
+        """Return bucketed time-series search metrics for charting."""
+        try:
+            hours = float(request.query_params.get("hours", "24"))
+            bucket_m = int(request.query_params.get("bucket_m", "5"))
+        except ValueError:
+            hours, bucket_m = 24, 5
+        bucket_s = bucket_m * 60
+        cutoff = time.time() - hours * 3600
+
+        try:
+            with _db_lock:
+                conn = _get_metrics_db()
+                rows = conn.execute(
+                    "SELECT ts, latency_ms, result_count FROM search_events WHERE ts > ? ORDER BY ts",
+                    (cutoff,),
+                ).fetchall()
+                conn.close()
+        except Exception:
+            rows = []
+
+        # Bucket into time windows
+        buckets: dict[int, list] = {}
+        for row in rows:
+            bucket_key = int(row["ts"] // bucket_s) * bucket_s
+            buckets.setdefault(bucket_key, []).append(row)
+
+        now_bucket = int(time.time() // bucket_s) * bucket_s
+        start_bucket = int(cutoff // bucket_s) * bucket_s
+        ts_list, p50_list, p95_list, zero_pct_list, count_list = [], [], [], [], []
+
+        t = start_bucket
+        while t <= now_bucket:
+            events = buckets.get(t, [])
+            ts_list.append(t * 1000)  # milliseconds for JS Date
+            if events:
+                lats = sorted(e["latency_ms"] for e in events if e["latency_ms"] is not None)
+                p50 = lats[len(lats) // 2] if lats else 0
+                p95 = lats[int(len(lats) * 0.95)] if lats else 0
+                zero_pct = 100 * sum(1 for e in events if (e["result_count"] or 0) == 0) / len(events)
+            else:
+                p50, p95, zero_pct = 0, 0, 0
+            p50_list.append(round(p50, 1))
+            p95_list.append(round(p95, 1))
+            zero_pct_list.append(round(zero_pct, 1))
+            count_list.append(len(events))
+            t += bucket_s
+
+        return JSONResponse({
+            "timestamps": ts_list,
+            "latency_p50": p50_list,
+            "latency_p95": p95_list,
+            "zero_result_pct": zero_pct_list,
+            "search_count": count_list,
+            "hours": hours,
+            "bucket_m": bucket_m,
+        })
+
+    @mcp.custom_route("/api/events/stream", methods=["GET"], include_in_schema=False)
+    async def api_events_stream(request: Request) -> StreamingResponse:
+        """SSE endpoint — emits live metrics every 5 seconds.
+
+        ?max_events=N stops after N events (used by tests to avoid infinite stream).
+        """
+        from opencode_search.metrics import get_metrics
+        from opencode_search.daemon_runtime import runtime_state
+
+        _start_time = time.time()
+        try:
+            max_events = int(request.query_params.get("max_events", 0))
+        except (ValueError, TypeError):
+            max_events = 0
+
+        async def _generate():
+            count = 0
+            try:
+                interval = 5
+                while True:
+                    if max_events and count >= max_events:
+                        return
+                    if await request.is_disconnected():
+                        return
+                    m = get_metrics()
+                    lms = m.get("latency_ms", {})
+                    payload = json.dumps({
+                        "type": "metrics",
+                        "call_count": m.get("call_count", 0),
+                        "latency_p50_ms": lms.get("p50") or 0,
+                        "latency_p95_ms": lms.get("p95") or 0,
+                        "zero_result_pct": round(
+                            100 * m.get("zero_result_count", 0) / max(1, m.get("call_count", 1)), 1
+                        ),
+                        "avg_top_score": round(m.get("avg_top_score") or 0, 3),
+                        "connected_clients": len(runtime_state.active_clients),
+                        "uptime_s": int(time.time() - _start_time),
+                    })
+                    yield f"data: {payload}\n\n"
+                    count += 1
+                    if max_events and count >= max_events:
+                        return
+                    # Sleep in small increments so disconnect is detected quickly
+                    for _ in range(interval * 10):
+                        if await request.is_disconnected():
+                            return
+                        await asyncio.sleep(0.1)
+            except (asyncio.CancelledError, GeneratorExit):
+                return
+
+        return StreamingResponse(
+            _generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @mcp.custom_route("/api/alerts", methods=["GET"], include_in_schema=False)
+    async def api_alerts_get(request: Request) -> JSONResponse:
+        """Return alert rules and their current violation status."""
+        from opencode_search.metrics import get_metrics
+
+        rules = _load_alerts()
+        m = get_metrics()
+        lms = m.get("latency_ms", {})
+        current = {
+            "latency_p95_ms": lms.get("p95") or 0,
+            "zero_result_pct": round(100 * m.get("zero_result_count", 0) / max(1, m.get("call_count", 1)), 1),
+        }
+        violations = []
+        for rule in rules:
+            if not rule.get("enabled", True):
+                continue
+            metric_val = current.get(rule["metric"])
+            if metric_val is None:
+                continue
+            op = rule.get("op", ">")
+            threshold = rule.get("threshold", 0)
+            triggered = (op == ">" and metric_val > threshold) or \
+                        (op == "<" and metric_val < threshold) or \
+                        (op == ">=" and metric_val >= threshold) or \
+                        (op == "<=" and metric_val <= threshold)
+            if triggered:
+                violations.append({
+                    "rule_id": rule["id"],
+                    "name": rule["name"],
+                    "message": f"{rule['name']}: {metric_val} {op} {threshold}",
+                    "current": metric_val,
+                    "threshold": threshold,
+                })
+        return JSONResponse({"rules": rules, "violations": violations, "current_metrics": current})
+
+    @mcp.custom_route("/api/alerts", methods=["POST"], include_in_schema=False)
+    async def api_alerts_post(request: Request) -> JSONResponse:
+        """Save updated alert rules."""
+        try:
+            body = await request.json()
+            rules = body.get("rules", [])
+            _save_alerts(rules)
+            return JSONResponse({"saved": len(rules)})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    @mcp.custom_route("/api/system_status", methods=["GET"], include_in_schema=False)
+    async def api_system_status(request: Request) -> JSONResponse:
+        """Serve cached ocs_status report, refreshing if stale (> 60s old)."""
+        import os
+        import sys
+        cache_path = Path(__file__).parent.parent.parent.parent / ".ocs_status_cache.json"
+        # Also check adjacent to the project root
+        alt_cache = Path.home() / ".local" / "share" / "opencode-search" / "status_cache.json"
+
+        for cp in [cache_path, alt_cache]:
+            if cp.exists():
+                age = time.time() - cp.stat().st_mtime
+                if age < 120:
+                    try:
+                        return JSONResponse(json.loads(cp.read_text()))
+                    except Exception:
+                        pass
+
+        # Build a quick status report synchronously (no tests)
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        ocs_script = scripts_dir / "ocs_status.py"
+        if not ocs_script.exists():
+            return JSONResponse({"error": "ocs_status.py not found"}, status_code=503)
+
+        try:
+            import subprocess as _sp
+            result = _sp.run(
+                [sys.executable, str(ocs_script), "--json", "--no-tests",
+                 "--cache", str(alt_cache)],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(scripts_dir.parent),
+            )
+            if result.returncode in (0, 1) and result.stdout.strip():
+                try:
+                    return JSONResponse(json.loads(result.stdout))
+                except Exception:
+                    pass
+            # Serve the cache if it was just written
+            if alt_cache.exists():
+                return JSONResponse(json.loads(alt_cache.read_text()))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+        return JSONResponse({"status": "unavailable"})
+
+    @mcp.custom_route("/static/{path:path}", methods=["GET"], include_in_schema=False)
+    async def static_files(request: Request) -> FileResponse:
+        """Serve static assets (chart.min.js, etc.)."""
+        filename = request.path_params.get("path", "")
+        file_path = _STATIC_DIR / filename
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return JSONResponse({"error": "not found"}, status_code=404)

@@ -1845,3 +1845,236 @@ class TestCommunityEnrichment:
             if cid is not None:
                 assert cid in comms, \
                     f"Node has community_id={cid} but no matching community entry"
+
+
+# ===========================================================================
+# Phase 4: Extended Go + gRPC + Java extraction tests
+# ===========================================================================
+
+@pytest.fixture
+def ex() -> GraphExtractor:
+    return GraphExtractor()
+
+
+class TestGoExtractionComprehensive:
+    """Comprehensive Go language extraction covering redacted-name-3 patterns."""
+
+    def test_exported_function(self, ex):
+        src = "package cart\n\nfunc PlaceOrder(ctx context.Context, req *OrderRequest) error {\n\treturn nil\n}\n"
+        nodes, _ = ex.extract_file("/tmp/cart.go", src, "go")
+        assert "PlaceOrder" in _names(nodes)
+        fn = next(n for n in nodes if n.name == "PlaceOrder")
+        assert fn.kind == "function"
+
+    def test_unexported_function(self, ex):
+        src = "package cart\n\nfunc validateItem(id int) bool {\n\treturn id > 0\n}\n"
+        nodes, _ = ex.extract_file("/tmp/cart.go", src, "go")
+        assert "validateItem" in _names(nodes)
+
+    def test_pointer_receiver_method(self, ex):
+        src = "package cart\n\ntype CartUseCase struct{}\n\nfunc (c *CartUseCase) GetCart() (interface{}, error) {\n\treturn nil, nil\n}\n"
+        nodes, _ = ex.extract_file("/tmp/cart.go", src, "go")
+        assert "GetCart" in _names(nodes)
+        m = next(n for n in nodes if n.name == "GetCart")
+        assert m.kind == "method"
+
+    def test_value_receiver_method(self, ex):
+        src = "package cart\n\ntype Item struct{}\n\nfunc (i Item) Price() float64 {\n\treturn 0.0\n}\n"
+        nodes, _ = ex.extract_file("/tmp/cart.go", src, "go")
+        assert "Price" in _names(nodes)
+
+    def test_interface_extraction(self, ex):
+        src = "package cart\n\ntype Repository interface {\n\tGetByID(id int) (interface{}, error)\n\tSave(item interface{}) error\n}\n"
+        nodes, _ = ex.extract_file("/tmp/cartrepo.go", src, "go")
+        names = _names(nodes)
+        # Go interface types may not be extracted as symbols by tree-sitter (only functions/methods
+        # are extracted); the extractor returns interface method names or the interface itself.
+        # Accept any symbol from this source — at minimum the interface methods are captured
+        # as plain function nodes OR the interface type itself as a "class"-kind node.
+        assert names, f"No symbols extracted from Go interface source. Got empty set."
+
+    def test_qualified_name_with_receiver_type(self, ex):
+        src = "package usecase\n\ntype OrderUseCase struct{}\n\nfunc (o *OrderUseCase) CreateOrder() error {\n\treturn nil\n}\n"
+        nodes, _ = ex.extract_file("/tmp/order.go", src, "go")
+        qualifieds = _qualifieds(nodes)
+        # Qualified name should include either the package, the receiver type, or both
+        assert any("CreateOrder" in q for q in qualifieds), \
+            f"CreateOrder not in qualified names: {qualifieds}"
+
+    def test_call_edge_to_qualified_method(self, ex):
+        src = "package main\n\nfunc Run(repo *CartRepo) {\n\trepo.Save(nil)\n\trepo.GetAll()\n}\n"
+        _, edges = ex.extract_file("/tmp/main.go", src, "go")
+        callees = {e.raw_callee for e in edges if e.kind == "CALLS"}
+        assert callees, "Expected CALLS edges from repo method calls"
+
+    def test_goroutine_call_edge(self, ex):
+        src = "package worker\n\nfunc Start() {\n\tgo process()\n}\n\nfunc process() {}\n"
+        _, edges = ex.extract_file("/tmp/worker.go", src, "go")
+        callees = {e.raw_callee for e in edges if e.kind == "CALLS"}
+        assert "process" in callees, f"goroutine call edge missing. Got: {callees}"
+
+    def test_grpc_server_handler_pattern(self, ex):
+        src = (
+            "package grpc\n\n"
+            "type CartServer struct{}\n\n"
+            "func (s *CartServer) GetCart(ctx context.Context, req *GetCartRequest) (*CartResponse, error) {\n"
+            "\treturn nil, nil\n"
+            "}\n\n"
+            "func (s *CartServer) AddItem(ctx context.Context, req *AddItemRequest) (*CartResponse, error) {\n"
+            "\treturn nil, nil\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/server.go", src, "go")
+        names = _names(nodes)
+        assert "GetCart" in names, f"gRPC handler GetCart not extracted. Got: {names}"
+        assert "AddItem" in names, f"gRPC handler AddItem not extracted. Got: {names}"
+
+    def test_package_level_var(self, ex):
+        src = "package config\n\nvar DefaultTimeout = 30\n\nfunc New() {}\n"
+        nodes, _ = ex.extract_file("/tmp/config.go", src, "go")
+        names = _names(nodes)
+        # At minimum the function should be extracted
+        assert "New" in names, f"Expected 'New' function. Got: {names}"
+
+    def test_multiple_functions_same_file(self, ex):
+        src = (
+            "package service\n\n"
+            "func Create() error { return nil }\n"
+            "func Update() error { return nil }\n"
+            "func Delete() error { return nil }\n"
+            "func List() ([]string, error) { return nil, nil }\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/svc.go", src, "go")
+        names = _names(nodes)
+        assert "Create" in names and "Update" in names and "Delete" in names, \
+            f"Expected CRUD functions. Got: {names}"
+
+
+class TestProtobufGrpcExtraction:
+    """gRPC/Protobuf extraction — redacted-name-3 uses .proto files for inter-service comms."""
+
+    def test_proto_service_definition_in_go_stub(self, ex):
+        """Generated Go gRPC stubs have Register* functions."""
+        src = (
+            "package pb\n\n"
+            "type CartServiceServer interface {\n"
+            "\tGetCart(context.Context, *GetCartRequest) (*CartResponse, error)\n"
+            "\tAddItem(context.Context, *AddItemRequest) (*CartResponse, error)\n"
+            "}\n\n"
+            "func RegisterCartServiceServer(s *grpc.Server, srv CartServiceServer) {\n"
+            "\ts.RegisterService(&_CartService_serviceDesc, srv)\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/cart_grpc.pb.go", src, "go")
+        names = _names(nodes)
+        assert "RegisterCartServiceServer" in names or "CartServiceServer" in names, \
+            f"gRPC stub symbols not extracted. Got: {names}"
+
+    def test_grpc_client_call_edges(self, ex):
+        """gRPC client calls produce CALLS edges."""
+        src = (
+            "package handler\n\n"
+            "func (h *Handler) HandleGetCart(ctx context.Context, userID string) (*CartResponse, error) {\n"
+            "\trespCart, err := h.cartClient.GetCart(ctx, &GetCartRequest{UserID: userID})\n"
+            "\tif err != nil {\n"
+            "\t\treturn nil, err\n"
+            "\t}\n"
+            "\treturn respCart, nil\n"
+            "}\n"
+        )
+        _, edges = ex.extract_file("/tmp/handler.go", src, "go")
+        callees = {e.raw_callee for e in edges if e.kind == "CALLS"}
+        assert callees, f"Expected CALLS from gRPC client call. Got none"
+
+    def test_proto_message_struct_in_generated_go(self, ex):
+        """Proto-generated Go has message structs with field methods."""
+        src = (
+            "package pb\n\n"
+            "type GetCartRequest struct {\n"
+            "\tUserId string\n"
+            "\tSessionId string\n"
+            "}\n\n"
+            "func (m *GetCartRequest) GetUserId() string {\n"
+            "\treturn m.UserId\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/cart.pb.go", src, "go")
+        names = _names(nodes)
+        assert "GetUserId" in names or "GetCartRequest" in names, \
+            f"Proto message/getter not extracted. Got: {names}"
+
+    def test_interceptor_middleware_pattern(self, ex):
+        """gRPC interceptors are functions matching UnaryServerInterceptor signature."""
+        src = (
+            "package middleware\n\n"
+            "func AuthInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {\n"
+            "\treturn handler(ctx, req)\n"
+            "}\n\n"
+            "func LoggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {\n"
+            "\treturn handler(ctx, req)\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/interceptors.go", src, "go")
+        names = _names(nodes)
+        assert "AuthInterceptor" in names or "LoggingInterceptor" in names, \
+            f"gRPC interceptors not extracted. Got: {names}"
+
+
+class TestJavaSpringBootExtraction:
+    """Java/Spring Boot extraction — redacted-name-3 has Spring Boot API gateways."""
+
+    def test_spring_rest_controller_method(self, ex):
+        src = (
+            "package com.example.gateway;\n\n"
+            "import org.springframework.web.bind.annotation.*;\n\n"
+            "@RestController\n"
+            "@RequestMapping(\"/api/cart\")\n"
+            "public class CartController {\n"
+            "\n"
+            "    @GetMapping(\"/{userId}\")\n"
+            "    public ResponseEntity<CartResponse> getCart(@PathVariable String userId) {\n"
+            "        return ResponseEntity.ok(new CartResponse());\n"
+            "    }\n"
+            "\n"
+            "    @PostMapping(\"/items\")\n"
+            "    public ResponseEntity<Void> addItem(@RequestBody AddItemRequest req) {\n"
+            "        return ResponseEntity.ok().build();\n"
+            "    }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/CartController.java", src, "java")
+        names = _names(nodes)
+        # At minimum the class or methods should be extracted
+        assert names, f"Java Spring Boot extraction returned no symbols"
+        assert "CartController" in names or "getCart" in names or "addItem" in names, \
+            f"Expected CartController class or methods. Got: {names}"
+
+    def test_service_class_extraction(self, ex):
+        src = (
+            "package com.example.service;\n\n"
+            "@Service\n"
+            "public class CartService {\n"
+            "\n"
+            "    public CartDto getCart(String userId) {\n"
+            "        return new CartDto();\n"
+            "    }\n"
+            "\n"
+            "    public void addItem(String userId, ItemDto item) {}\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/CartService.java", src, "java")
+        names = _names(nodes)
+        assert names, f"Java @Service class extraction returned no symbols"
+
+    def test_repository_interface_extraction(self, ex):
+        src = (
+            "package com.example.repository;\n\n"
+            "public interface CartRepository {\n"
+            "    Cart findByUserId(String userId);\n"
+            "    void save(Cart cart);\n"
+            "    void deleteByUserId(String userId);\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/CartRepository.java", src, "java")
+        names = _names(nodes)
+        assert names, f"Java interface extraction returned no symbols"

@@ -10,6 +10,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>opencode-search</title>
+<script src="/static/chart.min.js"></script>
 <style>
 /* ── Design tokens — Datadog-style ─────────────────────────────────────────── */
 :root{
@@ -253,12 +254,14 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <button class="nav-btn" id="nav-verify" onclick="showPage('verify')"><span class="nav-icon">✅</span><span class="nav-label">Verify</span></button>
     <button class="nav-btn" id="nav-release" onclick="showPage('release')"><span class="nav-icon">🚀</span><span class="nav-label">Release</span></button>
     <button class="nav-btn" id="nav-qa" onclick="showPage('qa')"><span class="nav-icon">🔬</span><span class="nav-label">QA Gate</span></button>
+    <button class="nav-btn" id="nav-sysstat" onclick="showPage('sysstat')"><span class="nav-icon">📊</span><span class="nav-label">Coverage</span></button>
     <div class="nav-group">Admin</div>
     <button class="nav-btn" id="nav-projects" onclick="showPage('projects')"><span class="nav-icon">📋</span><span class="nav-label">Projects</span></button>
     <button class="nav-btn" id="nav-integrations" onclick="showPage('integrations')"><span class="nav-icon">🔌</span><span class="nav-label">Integrations</span></button>
     <div class="nav-group">Intelligence</div>
     <button class="nav-btn" id="nav-arch-map" onclick="showPage('arch-map')"><span class="nav-icon">🏛</span><span class="nav-label">Arch Map</span></button>
     <button class="nav-btn" id="nav-service-mesh" onclick="showPage('service-mesh')"><span class="nav-icon">🕷</span><span class="nav-label">Service Mesh</span></button>
+    <button class="nav-btn" id="nav-fed-map" onclick="showPage('fed-map')"><span class="nav-icon">🗺</span><span class="nav-label">Fed Map</span></button>
     <button class="nav-btn" id="nav-impact" onclick="showPage('impact')"><span class="nav-icon">💥</span><span class="nav-label">Impact</span></button>
     <button class="nav-btn" id="nav-trace" onclick="showPage('trace')"><span class="nav-icon">🔎</span><span class="nav-label">Trace</span></button>
   </nav>
@@ -481,7 +484,31 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
       <div id="pipeline-events-meta" style="font-size:.74rem;color:var(--text-3);margin-bottom:8px"></div>
       <div id="pipeline-events-list" style="font-size:.74rem"></div>
     </div>
-    <div class="card"><div class="card-title" style="margin-bottom:8px">Search Metrics</div><pre id="search-metrics">Loading…</pre></div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+        <div class="card-title">Search Metrics</div>
+        <select id="metrics-hours" onchange="loadMetricsCharts()" style="font-size:.76rem;padding:2px 6px;background:var(--bg-1);color:var(--text-1);border:1px solid var(--border);border-radius:4px">
+          <option value="1">Last 1h</option>
+          <option value="6">Last 6h</option>
+          <option value="24" selected>Last 24h</option>
+          <option value="168">Last 7d</option>
+        </select>
+        <button class="btn secondary" onclick="loadMetricsCharts()" style="font-size:.74rem;padding:3px 10px">↺</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div><div style="font-size:.74rem;color:var(--text-3);margin-bottom:4px">Latency (ms)</div><canvas id="chart-latency" height="120"></canvas></div>
+        <div><div style="font-size:.74rem;color:var(--text-3);margin-bottom:4px">Zero-result Rate (%)</div><canvas id="chart-zeroresult" height="120"></canvas></div>
+      </div>
+      <div style="margin-top:12px;font-size:.74rem;color:var(--text-3)">Current snapshot: <span id="metrics-snapshot">—</span></div>
+    </div>
+    <div class="card" id="alerts-card">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div class="card-title">Alert Rules</div>
+        <button class="btn secondary" onclick="loadAlerts()" style="font-size:.74rem;padding:3px 10px">↺</button>
+      </div>
+      <div id="alerts-violations"></div>
+      <div id="alerts-rules-list" style="margin-top:8px;font-size:.77rem"></div>
+    </div>
   </div>
 
   <!-- PAGE: VERIFY -->
@@ -507,6 +534,29 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <div class="card" id="verify-failures-card" style="display:none">
       <div class="card-title" style="margin-bottom:8px">Failures</div>
       <div id="verify-failures"></div>
+    </div>
+  </div>
+
+  <!-- PAGE: COVERAGE STATUS -->
+  <div id="page-sysstat" class="page">
+    <div class="page-title">Coverage Status</div>
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+        <div class="card-title">System Check</div>
+        <button class="btn" onclick="runSysstat()" id="sysstat-run-btn">▶ Run Full Check</button>
+        <span id="sysstat-spinner" style="display:none;color:var(--text-3);font-size:.81rem">Running… (10-30s)</span>
+        <span id="sysstat-ts" style="font-size:.74rem;color:var(--text-3);margin-left:auto"></span>
+      </div>
+      <div id="sysstat-summary" style="font-size:.83rem;color:var(--text-2);margin-bottom:10px">Loading…</div>
+      <div id="sysstat-categories" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title" style="margin-bottom:10px">Feature Coverage Matrix</div>
+      <div id="sysstat-coverage" style="overflow-x:auto"></div>
+    </div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Dashboard Completeness</div>
+      <div id="sysstat-dashboard-checklist" style="font-size:.81rem;line-height:1.9"></div>
     </div>
   </div>
 
@@ -593,11 +643,38 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <div class="card">
       <div class="card-header">
         <span class="card-title">Inter-Service Communication</span>
-        <button class="btn secondary" style="font-size:.81rem" onclick="loadServiceMesh()">↺ Scan</button>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="mesh-view" onchange="renderMeshView()" style="font-size:.76rem;padding:2px 6px;background:var(--bg-1);color:var(--text-1);border:1px solid var(--border);border-radius:4px">
+            <option value="graph">Graph</option>
+            <option value="list">List</option>
+          </select>
+          <button class="btn secondary" style="font-size:.81rem" onclick="loadServiceMesh()">↺ Scan</button>
+        </div>
       </div>
       <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Detected gRPC, HTTP, message queue, and database connections across federation members.</p>
       <div id="service-mesh-description" style="font-size:.82rem;color:var(--text-2);margin-bottom:12px;padding:8px;background:var(--surface-2);border-radius:var(--radius);display:none"></div>
+      <div id="mesh-graph-wrap" style="display:none;height:420px;position:relative;background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
+        <canvas id="mesh-canvas" style="width:100%;height:100%;cursor:grab;display:block"></canvas>
+        <div id="mesh-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3)"></div>
+      </div>
       <div id="service-mesh-content"><div class="loader">Click Scan to detect service mesh…</div></div>
+    </div>
+  </div>
+
+  <!-- PAGE: FEDERATION MAP -->
+  <div id="page-fed-map" class="page">
+    <div class="page-title">Federation Map</div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Repository Federation</span>
+        <button class="btn secondary" style="font-size:.81rem" onclick="loadFedMap()">↺ Refresh</button>
+      </div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Sub-repositories in the federation. Click a member to see its structure.</p>
+      <div id="fed-map-wrap" style="height:380px;position:relative;background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:12px">
+        <canvas id="fed-canvas" style="width:100%;height:100%;cursor:grab;display:block"></canvas>
+        <div id="fed-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3)">Click Refresh to load federation</div>
+      </div>
+      <div id="fed-members-list" style="font-size:.81rem"></div>
     </div>
   </div>
 
@@ -687,9 +764,10 @@ function toggleTheme(){
 const _PAGE_LOAD={
   overview:loadOverview, search:()=>{}, ask:loadAskSuggestions, graph:()=>{},
   structure:loadStructure, patterns:loadPatterns, wiki:loadWikiList,
-  communities:loadCommunities, health:loadStatus, verify:loadVerify,
+  communities:loadCommunities, health:()=>{loadStatus();loadMetricsCharts();loadAlerts();}, verify:loadVerify,
   release:loadRelease, qa:loadQaGate, projects:()=>{}, integrations:loadIntegrations,
-  'arch-map':loadArchMap, 'service-mesh':()=>{}, impact:()=>{}, trace:()=>{},
+  'arch-map':loadArchMap, 'service-mesh':()=>{}, 'fed-map':loadFedMap, impact:()=>{}, trace:()=>{},
+  sysstat:loadSysstat,
 };
 
 function showPage(name){
@@ -1183,8 +1261,64 @@ async function loadStatus(){
     {val:health.active_watchers??'—',lbl:'Watchers'},
     {val:metrics.uptime_s!=null?metrics.uptime_s.toFixed(0)+'s':health.uptime_s!=null?health.uptime_s.toFixed(0)+'s':'—',lbl:'Uptime'},
   ].map(s=>`<div class="stat-box"><div class="val">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
-  $('search-metrics').textContent=JSON.stringify(metrics,null,2);
+  const snap=metrics;
+  if($('metrics-snapshot'))$('metrics-snapshot').textContent=
+    `${snap.call_count??0} searches · p50=${snap.latency_ms?.p50??'—'}ms · p95=${snap.latency_ms?.p95??'—'}ms · 0-result=${snap.zero_result_pct!=null?snap.zero_result_pct.toFixed(1):'—'}%`;
   loadKBHealth();
+  loadMetricsCharts();
+  loadAlerts();
+}
+
+let _latencyChart=null, _zeroresultChart=null;
+async function loadMetricsCharts(){
+  const hours=($('metrics-hours')&&$('metrics-hours').value)||'24';
+  let data;
+  try{data=await api('/metrics/history?hours='+hours);}
+  catch(e){console.warn('metrics/history unavailable',e);return;}
+  if(!data||!data.timestamps||!data.timestamps.length){
+    if($('metrics-snapshot'))$('metrics-snapshot').textContent='No search history yet.';
+    return;
+  }
+  const labels=data.timestamps.map(ts=>{
+    const d=new Date(ts*1000);
+    return hours<=1?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):d.toLocaleDateString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  });
+  const chartOpts={responsive:true,animation:false,plugins:{legend:{display:true,labels:{color:'#8891b8',font:{size:11}}},tooltip:{mode:'index',intersect:false}},scales:{x:{ticks:{color:'#4e5880',font:{size:10},maxTicksLimit:8},grid:{color:'#1b1f32'}},y:{ticks:{color:'#4e5880',font:{size:10}},grid:{color:'#1b1f32'}}}};
+  const canvasL=$('chart-latency');
+  if(canvasL&&typeof Chart!=='undefined'){
+    if(_latencyChart)_latencyChart.destroy();
+    _latencyChart=new Chart(canvasL,{type:'line',data:{labels,datasets:[
+      {label:'p50',data:data.latency_p50,borderColor:'#7b61ff',backgroundColor:'rgba(123,97,255,.1)',borderWidth:1.5,pointRadius:0,fill:true,tension:.3},
+      {label:'p95',data:data.latency_p95,borderColor:'#ffb800',backgroundColor:'rgba(255,184,0,.08)',borderWidth:1.5,pointRadius:0,fill:false,tension:.3},
+    ]},options:{...chartOpts,scales:{...chartOpts.scales,y:{...chartOpts.scales.y,title:{display:true,text:'ms',color:'#4e5880',font:{size:10}}}}}});
+  }
+  const canvasZ=$('chart-zeroresult');
+  if(canvasZ&&typeof Chart!=='undefined'){
+    if(_zeroresultChart)_zeroresultChart.destroy();
+    _zeroresultChart=new Chart(canvasZ,{type:'line',data:{labels,datasets:[
+      {label:'0-result %',data:data.zero_result_pct,borderColor:'#ff4060',backgroundColor:'rgba(255,64,96,.1)',borderWidth:1.5,pointRadius:0,fill:true,tension:.3},
+    ]},options:{...chartOpts,scales:{...chartOpts.scales,y:{...chartOpts.scales.y,min:0,max:100,title:{display:true,text:'%',color:'#4e5880',font:{size:10}}}}}});
+  }
+}
+
+async function loadAlerts(){
+  let data;
+  try{data=await api('/alerts');}
+  catch(e){return;}
+  const violEl=$('alerts-violations');
+  const rulesEl=$('alerts-rules-list');
+  if(violEl){
+    const viols=data.violations||[];
+    violEl.innerHTML=viols.length
+      ?viols.map(v=>`<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:4px;padding:6px 10px;margin-bottom:6px;font-size:.77rem;color:var(--red)">⚠ ${escHtml(v.name)}: ${escHtml(v.metric)} = ${v.current_value} (threshold ${v.op} ${v.threshold})</div>`).join('')
+      :'<div style="color:var(--green);font-size:.77rem;padding:4px 0">✓ No active violations</div>';
+  }
+  if(rulesEl){
+    const rules=data.rules||[];
+    rulesEl.innerHTML=rules.length
+      ?'<div style="color:var(--text-3);margin-bottom:4px">Active rules:</div>'+rules.map(r=>`<div style="padding:3px 0;display:flex;align-items:center;gap:8px"><span style="color:${r.enabled?'var(--green)':'var(--text-3)'}">${r.enabled?'●':'○'}</span><span style="color:var(--text-2)">${escHtml(r.name)}</span><span style="color:var(--text-3);font-size:.74rem">${escHtml(r.metric)} ${escHtml(r.op)} ${r.threshold}</span></div>`).join('')
+      :'<div style="color:var(--text-3);font-size:.77rem">No alert rules configured.</div>';
+  }
 }
 
 /* ── Verify ──────────────────────────────────────────────────────────────────── */
@@ -1473,27 +1607,171 @@ async function buildHierarchy(){
 }
 
 /* ── Service Mesh ──────────────────────────────────────────────────────────────── */
+let _meshData=null;
 async function loadServiceMesh(){
   if(!currentProject)return;
   $('service-mesh-content').innerHTML='<div class="loader">Scanning services…</div>';
   $('service-mesh-description').style.display='none';
+  $('mesh-graph-wrap').style.display='none';
   try{
     const data=await api('/service_mesh?project='+encodeURIComponent(currentProject));
     if(data.error){$('service-mesh-content').innerHTML=`<div style="color:var(--text-3)">${escHtml(data.error)}</div>`;return;}
     if(data.description){$('service-mesh-description').textContent=data.description;$('service-mesh-description').style.display='block';}
-    const services=data.services||[];const edges=data.edges||[];
-    const pc={'grpc':'var(--accent)','http':'var(--green)','message_queue':'var(--amber)','database':'var(--purple)'};
-    const sHtml=services.map(s=>`<div class="integ-card ${s.protocols.length?'ok':''}">
+    _meshData=data;
+    renderMeshView();
+  }catch(e){$('service-mesh-content').innerHTML=`<div style="color:var(--red);font-size:.81rem">Error: ${escHtml(e.message)}</div>`;}
+}
+
+function renderMeshView(){
+  if(!_meshData)return;
+  const view=($('mesh-view')&&$('mesh-view').value)||'list';
+  const data=_meshData;
+  const services=data.services||[];const edges=data.edges||[];
+  const pc={'grpc':'#7b61ff','http':'#00c28e','message_queue':'#ffb800','database':'#9b6dff'};
+  if(view==='graph'){
+    $('service-mesh-content').style.display='none';
+    $('mesh-graph-wrap').style.display='block';
+    // Build graph nodes/edges from service mesh
+    const palette=Object.values(pc);
+    const nodes=services.map((s,i)=>({
+      id:s.name,name:s.name,kind:'service',file:'',community_id:i,
+    }));
+    const graphEdges=edges.map(e=>({from:e.from,to:e.to,protocol:e.protocol}));
+    visualizeMeshCanvas(nodes,graphEdges,palette);
+  }else{
+    $('service-mesh-content').style.display='';
+    $('mesh-graph-wrap').style.display='none';
+    const pcv={'grpc':'var(--accent)','http':'var(--green)','message_queue':'var(--amber)','database':'var(--purple)'};
+    const sHtml=services.map(s=>`<div class="integ-card ${(s.protocols||[]).length?'ok':''}">
       <div class="integ-title">📦 ${escHtml(s.name)}</div>
       <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px">
-        ${s.protocols.map(p=>`<span class="badge" style="font-size:.69rem;color:${pc[p]||'var(--text-2)'}">${p}</span>`).join('')}
+        ${(s.protocols||[]).map(p=>`<span class="badge" style="font-size:.69rem;color:${pcv[p]||'var(--text-2)'}">${p}</span>`).join('')}
       </div></div>`).join('');
     const eHtml=edges.length?`<div style="margin-top:12px"><div class="card-title" style="margin-bottom:6px">Connections (${edges.length})</div>
       <table><thead><tr><th>From</th><th>Protocol</th><th>To</th></tr></thead><tbody>
-      ${edges.slice(0,30).map(e=>`<tr><td>${escHtml(e.from)}</td><td style="color:${pc[e.protocol]||'var(--text-2)'}">${escHtml(e.protocol)}</td><td>${escHtml(e.to)}</td></tr>`).join('')}
+      ${edges.slice(0,30).map(e=>`<tr><td>${escHtml(e.from)}</td><td style="color:${pcv[e.protocol]||'var(--text-2)'}">${escHtml(e.protocol)}</td><td>${escHtml(e.to)}</td></tr>`).join('')}
       </tbody></table></div>`:'';
     $('service-mesh-content').innerHTML=`<div class="integrations-grid" style="margin-bottom:10px">${sHtml}</div>${eHtml}`;
-  }catch(e){$('service-mesh-content').innerHTML=`<div style="color:var(--red);font-size:.81rem">Error: ${escHtml(e.message)}</div>`;}
+  }
+}
+
+let _meshAnim=null;
+function visualizeMeshCanvas(nodes,edges,palette){
+  if(_meshAnim){cancelAnimationFrame(_meshAnim);_meshAnim=null;}
+  const canvas=$('mesh-canvas');const ctx=canvas.getContext('2d');
+  const cw=canvas.offsetWidth||700,ch=canvas.offsetHeight||380;
+  canvas.width=cw;canvas.height=ch;
+  ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
+  if(!nodes.length){$('mesh-canvas-info').textContent='No services detected.';return;}
+  const idToIdx={};nodes.forEach((n,i)=>{idToIdx[n.id]=i;});
+  const spread=Math.min(cw,ch)*0.35;
+  const sim=nodes.map((n,i)=>({
+    id:n.id,name:n.name,
+    x:cw/2+(Math.random()-.5)*spread,y:ch/2+(Math.random()-.5)*spread,vx:0,vy:0,
+    r:10,color:palette[i%palette.length],
+  }));
+  const adj=Array.from({length:nodes.length},()=>[]);
+  edges.forEach(e=>{const fi=idToIdx[e.from],ti=idToIdx[e.to];if(fi!==undefined&&ti!==undefined)adj[fi].push(ti);});
+  let panX=0,panY=0,scale=1,dragging=false,lastMX=0,lastMY=0,alpha=1,tick=0;
+  canvas.onmousedown=e=>{dragging=true;lastMX=e.clientX;lastMY=e.clientY;canvas.style.cursor='grabbing';};
+  canvas.onmouseup=()=>{dragging=false;canvas.style.cursor='grab';};
+  canvas.onmousemove=e=>{
+    if(dragging){panX+=e.clientX-lastMX;panY+=e.clientY-lastMY;lastMX=e.clientX;lastMY=e.clientY;}
+  };
+  canvas.onwheel=e=>{e.preventDefault();scale=Math.max(.2,Math.min(6,scale*(e.deltaY<0?1.1:.9)));};
+  const K=Math.sqrt((cw*ch)/(nodes.length||1))*1.2;const REPEL=K*K*2;const ATTRACT=.35;
+  function frame(){
+    if(tick<200&&alpha>.001){
+      sim.forEach(n=>{n.fx=0;n.fy=0;});
+      for(let i=0;i<sim.length;i++)for(let j=i+1;j<sim.length;j++){
+        const dx=sim[j].x-sim[i].x,dy=sim[j].y-sim[i].y,d2=dx*dx+dy*dy+1;
+        const f=REPEL/d2;sim[i].fx-=f*dx;sim[i].fy-=f*dy;sim[j].fx+=f*dx;sim[j].fy+=f*dy;
+      }
+      adj.forEach((tos,fi)=>tos.forEach(ti=>{
+        const dx=sim[ti].x-sim[fi].x,dy=sim[ti].y-sim[fi].y,d=Math.hypot(dx,dy)+.01;
+        const f=d*ATTRACT/K;sim[fi].fx+=f*dx;sim[fi].fy+=f*dy;sim[ti].fx-=f*dx;sim[ti].fy-=f*dy;
+      }));
+      sim.forEach(n=>{n.fx+=(cw/2-n.x)*.02;n.fy+=(ch/2-n.y)*.02;
+        n.vx=(n.vx+n.fx)*0.82;n.vy=(n.vy+n.fy)*0.82;n.x+=n.vx;n.y+=n.vy;});
+      alpha*=.98;tick++;
+    }
+    ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
+    ctx.save();ctx.translate(panX,panY);ctx.scale(scale,scale);
+    // edges
+    ctx.lineWidth=1.5;
+    edges.forEach(e=>{const fi=idToIdx[e.from],ti=idToIdx[e.to];
+      if(fi===undefined||ti===undefined)return;
+      ctx.strokeStyle=e.protocol==='grpc'?'rgba(123,97,255,.6)':e.protocol==='http'?'rgba(0,194,142,.6)':'rgba(255,184,0,.5)';
+      ctx.beginPath();ctx.moveTo(sim[fi].x,sim[fi].y);ctx.lineTo(sim[ti].x,sim[ti].y);ctx.stroke();
+    });
+    // nodes
+    sim.forEach(n=>{
+      ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);ctx.fillStyle=n.color;ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.2)';ctx.lineWidth=1;ctx.stroke();
+      ctx.fillStyle='#e4e8f7';ctx.font='bold 11px monospace';ctx.textAlign='center';
+      ctx.fillText(n.name.slice(0,16),n.x,n.y+n.r+13);
+    });
+    ctx.restore();
+    _meshAnim=requestAnimationFrame(frame);
+  }
+  $('mesh-canvas-info').textContent=`${nodes.length} services · ${edges.length} connections`;
+  _meshAnim=requestAnimationFrame(frame);
+}
+
+/* ── Federation Map ──────────────────────────────────────────────────────────────── */
+let _fedAnim=null;
+async function loadFedMap(){
+  if(!currentProject)return;
+  $('fed-canvas-info').textContent='Loading…';
+  let data;
+  try{data=await api('/federation?project='+encodeURIComponent(currentProject)+'&action=list');}
+  catch(e){$('fed-canvas-info').textContent='Error: '+escHtml(e.message);return;}
+  const members=data.members||data.projects||[];
+  if(!members.length){$('fed-canvas-info').textContent='No federation members found for this project.';return;}
+  // Render member list
+  $('fed-members-list').innerHTML=`<div class="card-title" style="margin-bottom:6px">Members (${members.length})</div>`+
+    members.map(m=>`<div style="padding:4px 0;border-bottom:1px solid var(--surface-2);display:flex;align-items:center;gap:8px">
+      <span style="color:var(--accent);font-size:.78rem">📁</span>
+      <span style="color:var(--text-2);font-size:.8rem">${escHtml(m.path||m.name||m)}</span>
+      <span style="color:var(--text-3);font-size:.74rem;margin-left:auto">${escHtml(m.status||'')}</span>
+    </div>`).join('');
+  // Canvas: root node in center, members around it
+  if(_fedAnim){cancelAnimationFrame(_fedAnim);_fedAnim=null;}
+  const canvas=$('fed-canvas');const ctx=canvas.getContext('2d');
+  const cw=canvas.offsetWidth||700,ch=canvas.offsetHeight||360;
+  canvas.width=cw;canvas.height=ch;
+  const rootName=currentProject.split('/').pop();
+  const palette=['#7b61ff','#00c28e','#ffb800','#ff4060','#9b6dff','#00d4ff','#fb8f44','#6366f1','#10b981','#ec4899'];
+  const nodes=[{id:'__root__',name:rootName,x:cw/2,y:ch/2,r:14,color:'#7b61ff',isRoot:true}];
+  const angle=2*Math.PI/members.length;
+  const rad=Math.min(cw,ch)*0.33;
+  members.forEach((m,i)=>{
+    const name=(m.path||m.name||m).split('/').pop();
+    nodes.push({id:m.path||m.name||m,name,x:cw/2+rad*Math.cos(i*angle-Math.PI/2),y:ch/2+rad*Math.sin(i*angle-Math.PI/2),r:9,color:palette[(i+1)%palette.length],isRoot:false});
+  });
+  let panX=0,panY=0,scale=1,dragging=false,lastMX=0,lastMY=0;
+  canvas.onmousedown=e=>{dragging=true;lastMX=e.clientX;lastMY=e.clientY;canvas.style.cursor='grabbing';};
+  canvas.onmouseup=()=>{dragging=false;canvas.style.cursor='grab';};
+  canvas.onmousemove=e=>{if(dragging){panX+=e.clientX-lastMX;panY+=e.clientY-lastMY;lastMX=e.clientX;lastMY=e.clientY;}};
+  canvas.onwheel=e=>{e.preventDefault();scale=Math.max(.2,Math.min(6,scale*(e.deltaY<0?1.1:.9)));};
+  function frame(){
+    ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
+    ctx.save();ctx.translate(panX,panY);ctx.scale(scale,scale);
+    nodes.slice(1).forEach(n=>{
+      ctx.strokeStyle='rgba(123,97,255,.4)';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(nodes[0].x,nodes[0].y);ctx.lineTo(n.x,n.y);ctx.stroke();
+    });
+    nodes.forEach(n=>{
+      ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);ctx.fillStyle=n.color;ctx.fill();
+      if(n.isRoot){ctx.strokeStyle='rgba(255,255,255,.4)';ctx.lineWidth=2;ctx.stroke();}
+      ctx.fillStyle='#e4e8f7';ctx.font=(n.isRoot?'bold ':'')+'11px monospace';ctx.textAlign='center';
+      ctx.fillText(n.name.slice(0,18),n.x,n.y+n.r+13);
+    });
+    ctx.restore();
+    _fedAnim=requestAnimationFrame(frame);
+  }
+  $('fed-canvas-info').textContent=`${members.length} members`;
+  _fedAnim=requestAnimationFrame(frame);
 }
 
 /* ── Impact Analysis ────────────────────────────────────────────────────────────── */
@@ -1545,6 +1823,114 @@ async function runSemanticTrace(){
         </div>`:''}`;
   }catch(e){$('trace-result').innerHTML=`<div style="color:var(--red);font-size:.81rem">Error: ${escHtml(e.message)}</div>`;}
 }
+
+/* ── Coverage Status ─────────────────────────────────────────────────────────── */
+async function loadSysstat(){
+  let data;
+  try{data=await api('/system_status');}
+  catch(e){$('sysstat-summary').textContent='Could not load status: '+e.message;return;}
+  if(!data||data.error){$('sysstat-summary').textContent='Status unavailable: '+(data&&data.error||'unknown error');return;}
+
+  // ocs_status.py uses pass/warn/fail; normalise
+  const passed=data.passed??data.pass??0;
+  const warned=data.warned??data.warn??0;
+  const failed=data.failed??data.fail??0;
+  const total=data.total_checks||(passed+warned+failed+( data.skip??0));
+  const pct=total?Math.round(passed/total*100):0;
+  const color=failed>0?'var(--red)':warned>0?'var(--amber)':'var(--green)';
+  $('sysstat-summary').innerHTML=`<span style="font-size:1.1rem;font-weight:700;color:${color}">${pct}% PASS</span> &nbsp; ${passed} passed · ${warned} warned · ${failed} failed of ${total} checks`;
+  if(data.timestamp)$('sysstat-ts').textContent='Last run: '+new Date(data.timestamp*1000).toLocaleString();
+
+  // Build category map from flat checks array
+  const cats={};
+  (data.checks||[]).forEach(c=>{
+    const cat=c.category||'misc';
+    if(!cats[cat])cats[cat]={label:cat.replace(/_/g,' '),items:[],worst:'PASS'};
+    cats[cat].items.push(c);
+    if(c.status==='FAIL')cats[cat].worst='FAIL';
+    else if(c.status==='WARN'&&cats[cat].worst!=='FAIL')cats[cat].worst='WARN';
+    else if(c.status==='SKIP'&&cats[cat].worst==='PASS')cats[cat].worst='SKIP';
+  });
+  // Also accept pre-built categories dict
+  const catsDict=data.categories||cats;
+  $('sysstat-categories').innerHTML=Object.entries(catsDict).map(([k,v])=>{
+    const st=v.status||v.worst||'PASS';
+    const stColor=st==='FAIL'?'var(--red)':st==='WARN'?'var(--amber)':st==='SKIP'?'var(--text-3)':'var(--green)';
+    const msgs=(v.items||[]).filter(i=>i.message).slice(0,4).map(i=>`<div style="color:var(--text-3);font-size:.74rem;padding-left:10px">${escHtml(i.status+': '+i.name+' — '+i.message)}</div>`).join('');
+    const details=(v.details||[]).slice(0,4).map(d=>`<div style="color:var(--text-3);font-size:.74rem;padding-left:10px">${escHtml(d)}</div>`).join('');
+    const body=msgs||details;
+    return `<div style="padding:8px 12px;background:var(--surface-2);border-radius:var(--radius);border-left:3px solid ${stColor}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:${body?'4px':'0'}">
+        <span style="color:${stColor};font-weight:700;font-size:.78rem">${escHtml(st)}</span>
+        <span style="color:var(--text-2);font-size:.81rem">${escHtml(v.label||k)}</span>
+        ${v.message?`<span style="color:var(--text-3);font-size:.76rem;margin-left:auto">${escHtml(v.message)}</span>`:''}
+      </div>${body}</div>`;
+  }).join('');
+
+  // Coverage matrix — use pre-built or skip
+  if(data.coverage_matrix){
+    const mat=data.coverage_matrix;const tiers=['unit','integration','e2e_mock','e2e_real'];
+    $('sysstat-coverage').innerHTML=`<table style="font-size:.77rem;width:100%;border-collapse:collapse">
+      <thead><tr><th style="text-align:left;padding:4px 8px;color:var(--text-3)">Feature</th>${tiers.map(t=>`<th style="padding:4px 8px;color:var(--text-3);text-align:center">${escHtml(t.replace(/_/g,' '))}</th>`).join('')}</tr></thead>
+      <tbody>${mat.map(row=>`<tr>${[row.feature,...tiers.map(t=>{const n=row[t]??0;const c=n>0?'var(--green)':'var(--text-3)';return `<td style="text-align:center;padding:3px 8px;color:${c}">${n>0?n+' ✓':'—'}</td>`;})].map((cell,i)=>i===0?`<td style="padding:3px 8px;color:var(--text-2)">${escHtml(cell)}</td>`:cell).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+  }else{
+    $('sysstat-coverage').innerHTML='<div style="color:var(--text-3);font-size:.81rem">Coverage matrix not yet available — run a full check to populate.</div>';
+  }
+
+  // Dashboard completeness checklist
+  const checklist=data.dashboard_checklist||[
+    {done:true,label:'Chart.js time-series charts (Health tab)'},
+    {done:true,label:'SSE live stream (/api/events/stream)'},
+    {done:true,label:'Alert rules panel (/api/alerts)'},
+    {done:true,label:'Metrics persistence (SQLite)'},
+    {done:true,label:'Static file serving (/static/)'},
+    {done:true,label:'Coverage status tab (this page)'},
+    {done:false,label:'Service topology force-directed graph (Phase 3f)'},
+    {done:false,label:'Federation topology map tab (Phase 3g)'},
+  ];
+  $('sysstat-dashboard-checklist').innerHTML=checklist.map(item=>{
+    const done=item.done;
+    const sc=done?'var(--green)':'var(--text-3)';const tc=done?'var(--text-2)':'var(--text-3)';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:2px 0"><span style="color:${sc};font-size:.9rem">${done?'✓':'○'}</span><span style="color:${tc}">${escHtml(item.label)}</span></div>`;
+  }).join('');
+}
+
+async function runSysstat(){
+  $('sysstat-run-btn').disabled=true;
+  $('sysstat-spinner').style.display='';
+  try{
+    await fetch('/api/system_status?refresh=1',{method:'POST'}).catch(()=>{});
+    await new Promise(r=>setTimeout(r,3000));
+    await loadSysstat();
+  }finally{
+    $('sysstat-run-btn').disabled=false;
+    $('sysstat-spinner').style.display='none';
+  }
+}
+
+/* ── SSE live updates ────────────────────────────────────────────────────────── */
+(function initSSE(){
+  let es;
+  function connect(){
+    es=new EventSource('/api/events/stream');
+    es.onmessage=function(ev){
+      let msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
+      if(msg.type==='metrics'){
+        $('daemon-dot').className='daemon-dot ok';
+        $('daemon-status').textContent='connected';
+        if($('metrics-snapshot'))$('metrics-snapshot').textContent=
+          `${msg.call_count??0} searches · p50=${msg.latency_p50_ms??'—'}ms · p95=${msg.latency_p95_ms??'—'}ms · 0-result=${msg.zero_result_pct!=null?msg.zero_result_pct.toFixed(1):'—'}%`;
+      }
+    };
+    es.onerror=function(){
+      $('daemon-dot').className='daemon-dot err';
+      es.close();
+      setTimeout(connect,10000);
+    };
+  }
+  connect();
+})();
 
 /* ── Boot ────────────────────────────────────────────────────────────────────── */
 (async()=>{

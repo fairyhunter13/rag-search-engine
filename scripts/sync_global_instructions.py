@@ -21,23 +21,48 @@ from pathlib import Path
 CANONICAL = """\
 MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.
 
-7-tool intent API (v2) — pick the right tool:
+7-tool intent API (v2 — June 2026):
 - `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: "code" (default)|"docs"|"all"
-- `ask(query, project_path, scope)` — 'how does X work?', architecture, business process. scope: "all" (default)|"architecture"|"wiki"
-- `graph(symbol, project_path, relation)` — callers, callees, impact, call path. relation: "definition"|"callers"|"callees"|"impact"|"path"
-- `overview(project_path, what)` — structure, communities, status, project list, metrics. what: "structure"|"communities"|"status"|"projects"|"metrics"
-- `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs. action: "pipeline" (default, recommended first-run)
+- `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"
+  - scope="global": GraphRAG map-reduce synthesis across ALL community summaries
+- `graph(symbol, project_path, relation)` — call graph analysis
+  - relation: "callers"|"callees"|"impact"|"path" — standard
+  - relation: "impact_narrative" — LLM summary of blast radius: risk level, affected domains
+  - relation: "semantic_trace" (+to_symbol=) — natural language trace between two symbols
+- `overview(project_path, what)` — project overview
+  - what: "structure"|"communities"|"status"|"projects"|"patterns" — standard
+  - what: "architecture_domains" — top-level Leiden hierarchy
+  - what: "hierarchy" — full recursive Leiden hierarchy (all levels)
+  - what: "service_mesh" — detected inter-service gRPC/HTTP/MQ topology
+- `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
+  - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
 - `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
 - `manage(project_path, action)` — stop_watching, wiki_lint
 
+QUICK DECISION GUIDE:
+  'find the payment handler'           → search('payment handler')
+  'how does auth work?'                → ask('how does auth work', project_path)
+  'what is the overall architecture?'  → ask('describe architecture', project_path, scope='global')
+  'what calls ProcessOrder?'           → graph('ProcessOrder', project_path, relation='callers')
+  'what breaks if I change X?'         → graph('X', project_path, relation='impact_narrative')
+  'trace login to database'            → graph('login', project_path, relation='semantic_trace', to_symbol='database write')
+  'what services call each other?'     → overview(project_path, what='service_mesh')
+  'top-level architecture domains?'    → overview(project_path, what='architecture_domains')
+  'tell me about this project'         → overview(project_path, what='structure')
+  'what packages/dependencies?'        → overview(project_path, what='patterns')
+  'list all indexed projects'          → overview(what='projects')
+  'index this project' [explicit ask]  → build(project_path, action='pipeline')
+
 Rules (no exceptions):
-- Before running ANY Bash command that searches code or text — grep, rg, ag, find -name/-exec, glob, fd, or similar — FIRST call `search` with a natural language query. Only fall back to bash search commands if `search` returns no useful results or the project is not indexed.
-- Before reading, editing, or answering questions about ANY file or codebase topic: call `search` first. Do NOT go straight to Bash/grep/find/Read for codebase exploration.
-- When answering a user question, prefer using the user's question text verbatim as the initial `search` query. For architectural questions, use `ask` instead.
-- In your final answer, reference specific file paths and identifiers found in search results so the answer is grounded and unambiguous.
-- Do NOT delegate codebase questions to sub-agents via the Agent tool — sub-agents do not inherit these instructions. Call the tools yourself, directly.
-- Never auto-index a project. Only call `build(action="index")` or `build(action="pipeline")` when the user explicitly asks to index/setup the project.
-- After a project has been explicitly indexed, rely on the daemon's automatic watch behavior.\
+- Before running ANY Bash command that searches code or text — FIRST call `search` with a natural language query.
+- Before reading, editing, or answering questions about ANY file or codebase topic: call `search` first.
+- Use ask(scope="global") for holistic questions about the entire codebase.
+- Use graph(relation="impact_narrative") for human-readable blast radius analysis.
+- In your final answer, reference specific file paths and identifiers found in search results.
+- Do NOT delegate codebase questions to sub-agents via the Agent tool.
+- NEVER auto-index. Only call `build` when the user explicitly asks.
+- If not indexed, say so and ask before indexing.
+- After indexing, the daemon watches files automatically.\
 """
 
 START_MARKER = "[opencode-search-global-instructions:start]"
@@ -134,24 +159,43 @@ def update_opencode_jsonc(path: Path, text: str) -> None:
 # ─── Update ~/.hermes/config.yaml [agent.system_prompt] ──────────────────────
 
 def update_hermes_yaml(path: Path, text: str) -> None:
+    """Update hermes config system_prompt with proper YAML block scalar indentation.
+
+    YAML block scalars require content indented past the key level (4 spaces here).
+    Backticks and special chars are safe inside a literal block scalar (`|`) but
+    we normalise them to avoid any YAML parser quirks.
+    """
     if not path.exists():
         print(f"  ! {path} not found — skipping")
         return
     content = path.read_text()
-    wrapped = f"{START_MARKER}\n{text}\n{END_MARKER}"
-    pattern = re.compile(
-        re.escape(START_MARKER) + r".*?" + re.escape(END_MARKER),
+
+    # Build a YAML-safe version: replace backticks with single-quotes and
+    # use ASCII arrows so no special-char scanner issues in any YAML version.
+    safe_text = (text
+                 .replace("`", "'")
+                 .replace("→", "->")
+                 .replace("—", "--"))
+
+    wrapped_lines = f"{START_MARKER}\n{safe_text}\n{END_MARKER}"
+    # Indent every line by 4 spaces for YAML block scalar under `system_prompt: |`
+    indented = "\n".join("    " + ln for ln in wrapped_lines.splitlines())
+
+    # Pattern matches the full system_prompt block scalar (| or |-) plus its content
+    block_pattern = re.compile(
+        r"(  system_prompt:\s*\|[-]?\n)    " + re.escape(START_MARKER) + r".*?" + re.escape(END_MARKER) + r"\n?",
         re.DOTALL,
     )
-    if pattern.search(content):
-        new = pattern.sub(wrapped, content)
+    if block_pattern.search(content):
+        new = block_pattern.sub(r"\1" + indented + "\n", content)
     else:
-        # Insert after "system_prompt: " line
-        new = re.sub(
-            r'(system_prompt:\s*")([^"]*)"',
-            lambda m: m.group(1) + wrapped.replace('"', '\\"').replace("\n", "\\n") + '"',
-            content,
-        )
+        # Replace whatever system_prompt block exists with our managed block
+        any_block = re.compile(r"(  system_prompt:.*?\n)(?=\S|\Z)", re.DOTALL)
+        replacement = f"  system_prompt: |\n{indented}\n"
+        if any_block.search(content):
+            new = any_block.sub(replacement, content)
+        else:
+            new = content.rstrip() + f"\nagent:\n  system_prompt: |\n{indented}\n"
     path.write_text(new)
     print(f"  ✓ {path}")
 
@@ -204,8 +248,8 @@ def main() -> None:
     # hermes config.yaml
     update_hermes_yaml(home / ".hermes" / "config.yaml", text)
 
-    # Daemon prompt (embedded in daemon.py _global_prompt_text)
-    update_daemon_prompt(repo, text)
+    # daemon.py _global_prompt_text() is maintained manually — do NOT auto-sync,
+    # as regex replacement would corrupt the Python string constant definitions.
 
     print("\nDone. Restart the daemon to pick up prompt changes:")
     print("  systemctl --user restart opencode-search-mcp-daemon.service")
