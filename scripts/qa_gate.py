@@ -344,25 +344,36 @@ def pillar_infrastructure(project_path: str) -> PillarResult:
     try:
         config_text = (_REPO / "src" / "opencode_search" / "config.py").read_text()
         model_ok = "gpt-5.4-mini" in config_text
-        # Also check env var override
+        # Also check env var override — only a P1 if config.py is also wrong.
+        # If config.py is correct but the session env overrides it, that's a P2
+        # (user needs to re-source ~/.bash_aliases in their shell session).
         env_model = os.environ.get("OPENCODE_LLM_MODEL", "")
-        env_override_wrong = env_model and "gpt-5.4-mini" not in env_model and env_model != ""
+        env_override_wrong = bool(env_model) and "gpt-5.4-mini" not in env_model
         provider = os.environ.get("OPENCODE_LLM_PROVIDER", "codex")
-        if env_override_wrong and provider == "codex":
+        if not model_ok:
+            # Config.py itself has the wrong model — P1
             checks.append(_check(
                 "llm_model_correct", "P1", False,
-                f"LLM model OK in config.py",
+                "LLM model: codex/gpt-5.4-mini (config OK)",
+                "config.py still has old model (should be gpt-5.4-mini)",
+                duration_s=time.monotonic() - t0,
+                fix_fn=fix_llm_model,
+            ))
+        elif env_override_wrong and provider == "codex":
+            # Config is correct but session env overrides — P2 (re-source fix)
+            checks.append(_check(
+                "llm_model_correct", "P2", False,
+                "LLM model: codex/gpt-5.4-mini (config OK)",
                 f"Shell env OPENCODE_LLM_MODEL={env_model!r} overrides config default "
                 f"(re-source ~/.bash_aliases to get gpt-5.4-mini)",
                 duration_s=time.monotonic() - t0,
             ))
         else:
             checks.append(_check(
-                "llm_model_correct", "P1", model_ok,
+                "llm_model_correct", "P1", True,
                 "LLM model: codex/gpt-5.4-mini (config OK)",
                 "config.py still has old model (should be gpt-5.4-mini)",
                 duration_s=time.monotonic() - t0,
-                fix_fn=fix_llm_model if not model_ok else None,
             ))
     except Exception as exc:
         checks.append(CheckResult("llm_model_correct", "P1", "skip",
@@ -839,7 +850,7 @@ def pillar_kb_completeness(project_path: str) -> PillarResult:
         wiki_count = body.get("wiki_page_count", body.get("wiki_pages", body.get("wiki_count", 0)))
         # hierarchy_levels not in kb_health — query communities endpoint for max level
         hierarchy_count = 1
-        c_status, c_body = _get(f"/api/communities?project={pp_enc}&limit=200", timeout=15)
+        c_status, c_body = _get(f"/api/communities?project={pp_enc}&top_k=200", timeout=15)
         if c_status == 200 and isinstance(c_body, dict):
             all_levels = [c.get("level", 1) for c in c_body.get("communities", []) if isinstance(c, dict)]
             hierarchy_count = max(all_levels) if all_levels else 1

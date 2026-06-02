@@ -219,10 +219,10 @@ class TestCreateLlmClientFactory:
         with pytest.raises(ValueError, match="Unknown OPENCODE_LLM_PROVIDER"):
             create_llm_client()
 
-    def test_factory_returns_ollama_when_env_unset(
+    def test_factory_returns_codex_when_env_unset(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("OPENCODE_LLM_PROVIDER", raising=False)
-        from opencode_search.enricher.client import OllamaClient, create_llm_client
+        from opencode_search.enricher.client import CodexClient, create_llm_client
         client = create_llm_client()
-        assert isinstance(client, OllamaClient)
+        assert isinstance(client, CodexClient)

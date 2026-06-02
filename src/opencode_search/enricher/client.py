@@ -802,29 +802,44 @@ class CodexClient(LLMClient):
 def create_llm_client() -> LLMClient | None:
     """Create the appropriate LLM client from environment variables.
 
-    Returns None when OPENCODE_LLM_PROVIDER=none (default).
+    Returns None when OPENCODE_LLM_PROVIDER=none.
+
+    Default provider is codex (gpt-5.4-mini) since Jun 2026.
+    Override with OPENCODE_LLM_PROVIDER env var.
 
     Supported providers:
+      codex       — locally installed OpenAI `codex` CLI (default)
       ollama      — local Ollama instance
       anthropic   — Anthropic Claude API (requires ANTHROPIC_API_KEY)
       openai      — OpenAI Chat API (requires OPENAI_API_KEY)
       claude-code — locally installed `claude` CLI (no separate API key needed)
-      codex       — locally installed OpenAI `codex` CLI
     """
-    provider = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama").strip().lower()
+    from opencode_search.config import DEFAULT_LLM_MODEL, DEFAULT_LLM_PROVIDER
+    provider = os.environ.get("OPENCODE_LLM_PROVIDER", DEFAULT_LLM_PROVIDER).strip().lower()
     if provider == "none" or not provider:
         return None
+    # Read shared params once — each branch uses these rather than re-reading env.
+    model = os.environ.get("OPENCODE_LLM_MODEL", DEFAULT_LLM_MODEL)
+    timeout = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
+    if provider == "codex":
+        return CodexClient(
+            model=model,
+            timeout=timeout,
+            pass_model_flag=bool(os.environ.get("OPENCODE_CODEX_PASS_MODEL", "")),
+        )
     if provider == "ollama":
-        return OllamaClient.from_env()
+        return OllamaClient(
+            base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
+            model=model,
+            timeout=timeout,
+        )
     if provider == "anthropic":
         return AnthropicClient.from_env()
     if provider == "openai":
         return OpenAIClient.from_env()
     if provider == "claude-code":
         return ClaudeCodeClient.from_env()
-    if provider == "codex":
-        return CodexClient.from_env()
     raise ValueError(
         f"Unknown OPENCODE_LLM_PROVIDER={provider!r}. "
-        "Valid values: none, ollama, anthropic, openai, claude-code, codex"
+        "Valid values: none, codex, ollama, anthropic, openai, claude-code"
     )

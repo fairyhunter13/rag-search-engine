@@ -492,8 +492,8 @@ class GraphStorage:
                 key_entry_points=json.loads(ep) if ep else [],
                 generated_at=r["generated_at"],
                 created_at=r["created_at"] or "",
-                level=r["level"] if "level" in r else 1,  # noqa: SIM401
-                parent_community_id=r["parent_community_id"] if "parent_community_id" in r else None,  # noqa: SIM401
+                level=_col(r, "level", 1),
+                parent_community_id=_col(r, "parent_community_id", None),
             ))
         return result
 
@@ -541,6 +541,18 @@ class GraphStorage:
 def _now() -> str:
     from datetime import datetime
     return datetime.now(UTC).isoformat()
+
+
+def _col(row: sqlite3.Row, col: str, default: object = None) -> object:
+    """Read a column from a sqlite3.Row by name, falling back to default.
+
+    sqlite3.Row.__contains__ checks VALUES not column names, so the common
+    `if "col" in row` pattern is always False. Use this helper instead.
+    """
+    try:
+        return row[col]
+    except IndexError:
+        return default
 
 
 def _row_to_node(r: sqlite3.Row) -> NodeData:

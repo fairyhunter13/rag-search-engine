@@ -30,10 +30,10 @@ def test_create_llm_client_returns_none_when_provider_none(monkeypatch):
     assert create_llm_client() is None
 
 
-def test_create_llm_client_returns_ollama_when_provider_unset(monkeypatch):
+def test_create_llm_client_returns_codex_when_provider_unset(monkeypatch):
     monkeypatch.delenv("OPENCODE_LLM_PROVIDER", raising=False)
     client = create_llm_client()
-    assert isinstance(client, OllamaClient)
+    assert isinstance(client, CodexClient)
 
 
 def test_create_llm_client_raises_on_unknown_provider(monkeypatch):
