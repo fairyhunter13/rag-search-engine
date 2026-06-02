@@ -901,7 +901,14 @@ async def handle_get_communities(
                     "level": c.level,
                     "parent_community_id": c.parent_community_id,
                 })
-            return {"communities": result, "total": len(result)}
+            god_nodes = gs.get_god_nodes(top_n=10)
+            bridges = gs.get_cross_community_bridges(top_n=10)
+            return {
+                "communities": result,
+                "total": len(result),
+                "god_nodes": god_nodes,
+                "cross_community_bridges": bridges,
+            }
         finally:
             gs.close()
 

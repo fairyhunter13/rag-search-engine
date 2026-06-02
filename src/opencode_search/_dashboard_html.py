@@ -11,6 +11,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>opencode-search</title>
 <script src="/static/chart.min.js"></script>
+<script src="/static/sigma-graph.min.js"></script>
 <style>
 /* ── Design tokens — Datadog-style ─────────────────────────────────────────── */
 :root{
@@ -369,15 +370,21 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
           <pre id="graph-result" style="height:100%;overflow:auto;margin:0">Enter a symbol above…</pre>
         </div>
         <div class="graph-panel">
-          <div class="graph-canvas-wrap">
-            <canvas id="graph-canvas"></canvas>
+          <div class="graph-canvas-wrap" id="sigma-wrap" style="position:relative">
+            <div id="sigma-container" style="width:100%;height:100%"></div>
             <div id="graph-legend" class="graph-legend"></div>
+            <div id="sigma-tooltip" style="position:fixed;display:none;background:rgba(13,17,23,.95);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:.76rem;pointer-events:none;z-index:9999;max-width:260px"></div>
           </div>
           <div id="graph-canvas-info" style="font-size:.71rem;color:var(--text-3);padding:3px 0"></div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
             <button class="btn secondary" style="font-size:.77rem;padding:5px 12px" onclick="visualizeFullGraph(500)">Visualize 500</button>
             <button class="btn secondary" style="font-size:.77rem;padding:5px 12px" onclick="visualizeFullGraph(2000)">Visualize 2K</button>
+            <button class="btn secondary" style="font-size:.77rem;padding:5px 12px" onclick="visualizeFullGraph(5000)">Visualize 5K</button>
             <button class="btn danger" style="font-size:.77rem;padding:5px 12px" onclick="stopGraph()">Stop</button>
+            <select id="graph-layout" onchange="switchGraphLayout()" style="font-size:.75rem;padding:2px 6px;background:var(--bg-1);color:var(--text-1);border:1px solid var(--border);border-radius:4px">
+              <option value="fa2">ForceAtlas2</option>
+              <option value="circular">Circular</option>
+            </select>
           </div>
         </div>
       </div>
@@ -467,6 +474,16 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
       <div class="card-title" style="margin-bottom:8px">Knowledge Semantics — Top Communities</div>
       <div id="enrichment-progress" style="margin-bottom:14px"></div>
       <div id="communities-list"></div>
+    </div>
+    <div class="card" id="god-nodes-panel" style="display:none">
+      <div class="card-title" style="margin-bottom:8px">God Nodes — Top Hub Symbols</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:10px">Symbols with the most connections (in + out degree). These are architectural pivot points — changing them has the widest blast radius.</p>
+      <div id="god-nodes-list"></div>
+    </div>
+    <div class="card" id="bridges-panel" style="display:none">
+      <div class="card-title" style="margin-bottom:8px">Surprising Cross-Community Connections</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:10px">High-confidence edges that span different architectural communities — potential hidden coupling between domains.</p>
+      <div id="bridges-list"></div>
     </div>
   </div>
 
@@ -654,8 +671,8 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
       <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Detected gRPC, HTTP, message queue, and database connections across federation members.</p>
       <div id="service-mesh-description" style="font-size:.82rem;color:var(--text-2);margin-bottom:12px;padding:8px;background:var(--surface-2);border-radius:var(--radius);display:none"></div>
       <div id="mesh-graph-wrap" style="display:none;height:420px;position:relative;background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden">
-        <canvas id="mesh-canvas" style="width:100%;height:100%;cursor:grab;display:block"></canvas>
-        <div id="mesh-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3)"></div>
+        <div id="mesh-sigma-container" style="width:100%;height:100%"></div>
+        <div id="mesh-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3);z-index:10;pointer-events:none"></div>
       </div>
       <div id="service-mesh-content"><div class="loader">Click Scan to detect service mesh…</div></div>
     </div>
@@ -671,8 +688,8 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
       </div>
       <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Sub-repositories in the federation. Click a member to see its structure.</p>
       <div id="fed-map-wrap" style="height:380px;position:relative;background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:12px">
-        <canvas id="fed-canvas" style="width:100%;height:100%;cursor:grab;display:block"></canvas>
-        <div id="fed-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3)">Click Refresh to load federation</div>
+        <div id="fed-sigma-container" style="width:100%;height:100%"></div>
+        <div id="fed-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3);z-index:10;pointer-events:none">Click Refresh to load federation</div>
       </div>
       <div id="fed-members-list" style="font-size:.81rem"></div>
     </div>
@@ -1037,6 +1054,30 @@ async function loadCommunities(){
       <p style="font-size:.77rem;color:var(--text-2);margin-top:6px;line-height:1.5">${escHtml((c.summary||'').slice(0,300))}</p>
       ${c.key_entry_points?.length?`<div style="margin-top:6px;font-size:.71rem;color:var(--text-3)">Entry: ${c.key_entry_points.slice(0,3).map(e=>escHtml(typeof e==='string'?e.split('/').pop():'')).join(', ')}</div>`:''}
     </div>`).join('');
+  // God nodes panel
+  const godNodes=data.god_nodes||[];
+  if(godNodes.length&&$('god-nodes-panel')){
+    $('god-nodes-panel').style.display='';
+    $('god-nodes-list').innerHTML=godNodes.map(n=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--surface-2)">
+        <span style="color:var(--amber);font-size:.7rem;min-width:36px;text-align:right">×${n.degree}</span>
+        <span style="color:var(--text);font-size:.78rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(n.qualified_name)}">${escHtml(n.qualified_name.split('/').pop().split('::').pop())}</span>
+        <span style="color:var(--text-3);font-size:.7rem">${escHtml(n.kind)}</span>
+        <span style="color:var(--text-3);font-size:.68rem">↑${n.in_degree} ↓${n.out_degree}</span>
+      </div>`).join('');
+  }
+  // Cross-community bridges panel
+  const bridges=data.cross_community_bridges||[];
+  if(bridges.length&&$('bridges-panel')){
+    $('bridges-panel').style.display='';
+    $('bridges-list').innerHTML=bridges.map(b=>`
+      <div style="padding:4px 0;border-bottom:1px solid var(--surface-2);font-size:.76rem">
+        <span style="color:var(--accent)">${escHtml(b.from.split('::').pop())}</span>
+        <span style="color:var(--text-3);margin:0 4px">→</span>
+        <span style="color:var(--green)">${escHtml(b.to.split('::').pop())}</span>
+        <span style="color:var(--text-3);font-size:.68rem;margin-left:6px">[${escHtml(b.from_community+'→'+b.to_community)}]</span>
+      </div>`).join('');
+  }
 }
 
 /* ── Graph ───────────────────────────────────────────────────────────────────── */
@@ -1063,91 +1104,124 @@ async function exportGraph(fmt){
   $('graph-export-info').textContent=`Exported ${nc} nodes, ${ec} edges as ${fmt}.`;
 }
 
-function stopGraph(){if(_graphAnim){cancelAnimationFrame(_graphAnim);_graphAnim=null;}}
+/* ── Sigma.js graph renderer ─────────────────────────────────────────────────── */
+let _sigmaInst=null,_sigmaFA2=null,_sigmaGraph=null;
+const _PALETTE=['#7b61ff','#00c28e','#ffb800','#ff4060','#9b6dff','#00d4ff','#fb8f44','#6366f1','#10b981','#ec4899'];
+
+function stopGraph(){
+  if(_sigmaFA2){try{_sigmaFA2.stop();}catch(e){}  _sigmaFA2=null;}
+  if(_sigmaInst){try{_sigmaInst.kill();}catch(e){}  _sigmaInst=null;}
+  _sigmaGraph=null;
+}
+
+function switchGraphLayout(){
+  if(!_sigmaGraph||!_sigmaInst)return;
+  const layout=($('graph-layout')&&$('graph-layout').value)||'fa2';
+  if(_sigmaFA2){try{_sigmaFA2.stop();}catch(e){} _sigmaFA2=null;}
+  if(layout==='circular'&&window.circularLayout){
+    window.circularLayout.assign(_sigmaGraph,{scale:200});
+    _sigmaInst.refresh();
+  }else if(layout==='fa2'&&window.FA2Layout){
+    _sigmaFA2=new window.FA2Layout(_sigmaGraph,{settings:{gravity:1,scalingRatio:10,slowDown:8,barnesHutOptimize:_sigmaGraph.order>500}});
+    _sigmaFA2.start();
+    setTimeout(()=>{if(_sigmaFA2)_sigmaFA2.stop();},4000);
+  }
+}
 
 async function visualizeFullGraph(maxNodes){
   if(!currentProject)return;
   stopGraph();
   $('graph-canvas-info').textContent='Loading graph data…';
-  const canvas=$('graph-canvas');const ctx=canvas.getContext('2d');
-  ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // Check Sigma available
+  if(!window.Sigma||!window.Graph){
+    $('graph-canvas-info').textContent='Sigma.js not loaded — check /static/sigma-graph.min.js';
+    return;
+  }
+
   let data;
   try{data=await api('/graph_export?project='+encodeURIComponent(currentProject)+'&format=json&max_nodes='+maxNodes);}
   catch(e){$('graph-canvas-info').textContent='Error: '+escHtml(e.message);return;}
-  if(data.error){$('graph-canvas-info').textContent='Error: '+data.error;return;}
+  if(data.error){$('graph-canvas-info').textContent='Error: '+escHtml(data.error);return;}
+
   const nodes=data.nodes||[];const edges=data.edges||[];const communities=data.communities||[];
   if(!nodes.length){$('graph-canvas-info').textContent='No graph data. Build the project index first.';return;}
 
+  // Build community color map
   const commColors={};
-  const palette=['#7b61ff','#00c28e','#ffb800','#ff4060','#9b6dff','#00d4ff','#fb8f44','#6366f1','#10b981','#ec4899'];
-  communities.forEach((c,i)=>{commColors[c.id]=palette[i%palette.length];});
+  communities.forEach((c,i)=>{commColors[c.id]=_PALETTE[i%_PALETTE.length];});
 
-  const idToIdx={};nodes.forEach((n,i)=>{idToIdx[n.id]=i;});
-  const cw=canvas.offsetWidth||800,ch=canvas.offsetHeight||460;
-  canvas.width=cw;canvas.height=ch;
-  const spread=Math.min(cw,ch)*0.4;
-  const sim=nodes.map(n=>({
-    id:n.id,name:n.name,kind:n.kind,file:n.file,community_id:n.community_id,
-    x:cw/2+(Math.random()-.5)*spread,y:ch/2+(Math.random()-.5)*spread,vx:0,vy:0,
-    r:n.kind==='file'?4:5,color:commColors[n.community_id]||'#484f58',
-  }));
-  const adjOut=Array.from({length:nodes.length},()=>[]);
-  edges.forEach(e=>{const fi=idToIdx[e.from],ti=idToIdx[e.to];if(fi!==undefined&&ti!==undefined)adjOut[fi].push(ti);});
+  // Build graphology graph
+  const g=new window.Graph({multi:false,allowSelfLoops:false});
+  nodes.forEach(n=>{
+    const color=commColors[n.community_id]||'#484f58';
+    const size=n.kind==='file'?3:n.kind==='function'||n.kind==='method'?5:4;
+    g.addNode(n.id,{
+      label:n.name,x:Math.random()*2-1,y:Math.random()*2-1,
+      size,color,
+      nodeType:n.kind,file:n.file||'',communityId:n.community_id,
+    });
+  });
+  const edgeSet=new Set();
+  edges.forEach(e=>{
+    const k=e.from+'→'+e.to;
+    if(!edgeSet.has(k)&&g.hasNode(e.from)&&g.hasNode(e.to)){
+      edgeSet.add(k);
+      g.addEdge(e.from,e.to,{color:'rgba(72,79,88,.4)',size:.5});
+    }
+  });
 
   // Legend
-  const legHtml=communities.slice(0,8).map((c,i)=>
-    `<div class="legend-item"><div class="legend-dot" style="background:${palette[i%palette.length]}"></div>${escHtml((c.title||'Community '+c.id).slice(0,20))}</div>`
+  const legHtml=communities.slice(0,10).map((c,i)=>
+    `<div class="legend-item"><div class="legend-dot" style="background:${_PALETTE[i%_PALETTE.length]}"></div>${escHtml((c.title||'Community '+c.id).slice(0,22))}</div>`
   ).join('');
   $('graph-legend').innerHTML=legHtml;
 
-  let panX=0,panY=0,scale=1,dragging=false,lastMX=0,lastMY=0;
-  canvas.onmousedown=e=>{dragging=true;lastMX=e.clientX;lastMY=e.clientY;canvas.style.cursor='grabbing';};
-  canvas.onmouseup=()=>{dragging=false;canvas.style.cursor='grab';};
-  canvas.onmouseleave=()=>{dragging=false;$('graph-canvas-tooltip').style.display='none';};
-  canvas.onmousemove=e=>{
-    if(dragging){panX+=e.clientX-lastMX;panY+=e.clientY-lastMY;lastMX=e.clientX;lastMY=e.clientY;return;}
-    const rect=canvas.getBoundingClientRect();
-    const mx=(e.clientX-rect.left-panX)/scale,my=(e.clientY-rect.top-panY)/scale;
-    let best=null,bestD=20;
-    sim.forEach(n=>{const d=Math.hypot(n.x-mx,n.y-my);if(d<bestD){bestD=d;best=n;}});
-    const tip=$('graph-canvas-tooltip');
-    if(best){tip.innerHTML=`<strong>${escHtml(best.name)}</strong><br>${escHtml(best.kind)} · ${escHtml((best.file||'').split('/').slice(-2).join('/'))}`;
-      tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+8)+'px';
-    }else tip.style.display='none';
-  };
-  canvas.onwheel=e=>{e.preventDefault();const f=e.deltaY<0?1.1:.9;scale=Math.max(.1,Math.min(10,scale*f));};
+  // Mount Sigma
+  const container=$('sigma-container');
+  container.innerHTML='';
+  const isDark=document.documentElement.dataset.theme!=='light';
+  _sigmaGraph=g;
+  _sigmaInst=new window.Sigma(g,container,{
+    renderEdgeLabels:false,
+    labelRenderedSizeThreshold:6,
+    defaultEdgeColor:'rgba(72,79,88,.35)',
+    defaultNodeColor:'#7b61ff',
+    labelColor:{color:isDark?'#8891b8':'#4a5280'},
+    labelSize:10,
+    nodeProgramClasses:{},
+    stagePadding:30,
+    zIndex:true,
+  });
 
-  const K=Math.sqrt((cw*ch)/(nodes.length||1));
-  const REPEL=K*K*1.5,ATTRACT=.4;
-  let alpha=1,tick=0;const MAX_TICKS=300;
+  // Tooltip on hover
+  const tip=$('sigma-tooltip');
+  _sigmaInst.on('enterNode',({node,event})=>{
+    const attrs=g.getNodeAttributes(node);
+    tip.innerHTML=`<strong style="color:var(--accent)">${escHtml(attrs.label)}</strong><br>`+
+      `<span style="color:var(--text-3)">${escHtml(attrs.nodeType||'')} · degree ${g.degree(node)}</span><br>`+
+      `<span style="color:var(--text-3);font-size:.71rem">${escHtml((attrs.file||'').split('/').slice(-2).join('/'))}</span>`;
+    tip.style.display='block';
+    tip.style.left=(event.original.clientX+14)+'px';
+    tip.style.top=(event.original.clientY+10)+'px';
+  });
+  _sigmaInst.on('leaveNode',()=>{tip.style.display='none';});
+  _sigmaInst.on('clickNode',({node})=>{
+    const attrs=g.getNodeAttributes(node);
+    $('graph-symbol').value=attrs.label;
+  });
 
-  function frame(){
-    if(tick>=MAX_TICKS)alpha=0;
-    if(alpha>.001){
-      sim.forEach(n=>{n.fx=0;n.fy=0;});
-      const step=nodes.length>500?4:1;
-      for(let i=0;i<sim.length;i+=step)for(let j=i+1;j<sim.length;j+=step){
-        const dx=sim[j].x-sim[i].x,dy=sim[j].y-sim[i].y,d2=dx*dx+dy*dy+.01;
-        const f=REPEL/d2;sim[i].fx-=f*dx;sim[i].fy-=f*dy;sim[j].fx+=f*dx;sim[j].fy+=f*dy;
-      }
-      adjOut.forEach((tos,fi)=>tos.forEach(ti=>{
-        const dx=sim[ti].x-sim[fi].x,dy=sim[ti].y-sim[fi].y,d=Math.hypot(dx,dy)+.01;
-        const f=d*ATTRACT/K;sim[fi].fx+=f*dx;sim[fi].fy+=f*dy;sim[ti].fx-=f*dx;sim[ti].fy-=f*dy;
-      }));
-      sim.forEach(n=>{n.fx+=(cw/2-n.x)*.015;n.fy+=(ch/2-n.y)*.015;});
-      sim.forEach(n=>{n.vx=(n.vx+n.fx)*.85;n.vy=(n.vy+n.fy)*.85;n.x=Math.max(10,Math.min(cw-10,n.x+n.vx*alpha));n.y=Math.max(10,Math.min(ch-10,n.y+n.vy*alpha));});
-      alpha*=.98;tick++;
-    }
-    ctx.save();ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
-    ctx.translate(panX,panY);ctx.scale(scale,scale);
-    ctx.strokeStyle='rgba(37,45,74,.6)';ctx.lineWidth=.6/scale;
-    adjOut.forEach((tos,fi)=>tos.forEach(ti=>{ctx.beginPath();ctx.moveTo(sim[fi].x,sim[fi].y);ctx.lineTo(sim[ti].x,sim[ti].y);ctx.stroke();}));
-    sim.forEach(n=>{ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,2*Math.PI);ctx.fillStyle=n.color;ctx.fill();});
-    ctx.restore();
-    _graphAnim=requestAnimationFrame(frame);
+  // ForceAtlas2 layout via Web Worker
+  if(window.FA2Layout){
+    _sigmaFA2=new window.FA2Layout(g,{settings:{gravity:1,scalingRatio:10,slowDown:8,barnesHutOptimize:g.order>500,strongGravityMode:false}});
+    _sigmaFA2.start();
+    setTimeout(()=>{if(_sigmaFA2)_sigmaFA2.stop();},5000);
+  }else if(window.circularLayout){
+    window.circularLayout.assign(g,{scale:200});
+    _sigmaInst.refresh();
   }
-  $('graph-canvas-info').textContent=`${nodes.length} nodes · ${edges.length} edges · ${communities.length} communities${data.truncated?' (truncated)':''} — drag pan, scroll zoom, hover details`;
-  _graphAnim=requestAnimationFrame(frame);
+
+  $('graph-canvas-info').textContent=`${nodes.length} nodes · ${edges.length} edges · ${communities.length} communities${data.truncated?' (truncated)':''} — scroll to zoom · drag to pan · click node to inspect`;
 }
 
 /* ── Wiki ────────────────────────────────────────────────────────────────────── */
@@ -1655,71 +1729,48 @@ function renderMeshView(){
   }
 }
 
-let _meshAnim=null;
+let _meshSigma=null,_meshSigmaFA2=null,_meshSigmaGraph=null;
 function visualizeMeshCanvas(nodes,edges,palette){
-  if(_meshAnim){cancelAnimationFrame(_meshAnim);_meshAnim=null;}
-  const canvas=$('mesh-canvas');const ctx=canvas.getContext('2d');
-  const cw=canvas.offsetWidth||700,ch=canvas.offsetHeight||380;
-  canvas.width=cw;canvas.height=ch;
-  ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
+  if(_meshSigmaFA2){try{_meshSigmaFA2.stop();}catch(e){} _meshSigmaFA2=null;}
+  if(_meshSigma){try{_meshSigma.kill();}catch(e){} _meshSigma=null;}
+  _meshSigmaGraph=null;
+  const container=$('mesh-sigma-container');
+  if(!container)return;
   if(!nodes.length){$('mesh-canvas-info').textContent='No services detected.';return;}
-  const idToIdx={};nodes.forEach((n,i)=>{idToIdx[n.id]=i;});
-  const spread=Math.min(cw,ch)*0.35;
-  const sim=nodes.map((n,i)=>({
-    id:n.id,name:n.name,
-    x:cw/2+(Math.random()-.5)*spread,y:ch/2+(Math.random()-.5)*spread,vx:0,vy:0,
-    r:10,color:palette[i%palette.length],
-  }));
-  const adj=Array.from({length:nodes.length},()=>[]);
-  edges.forEach(e=>{const fi=idToIdx[e.from],ti=idToIdx[e.to];if(fi!==undefined&&ti!==undefined)adj[fi].push(ti);});
-  let panX=0,panY=0,scale=1,dragging=false,lastMX=0,lastMY=0,alpha=1,tick=0;
-  canvas.onmousedown=e=>{dragging=true;lastMX=e.clientX;lastMY=e.clientY;canvas.style.cursor='grabbing';};
-  canvas.onmouseup=()=>{dragging=false;canvas.style.cursor='grab';};
-  canvas.onmousemove=e=>{
-    if(dragging){panX+=e.clientX-lastMX;panY+=e.clientY-lastMY;lastMX=e.clientX;lastMY=e.clientY;}
-  };
-  canvas.onwheel=e=>{e.preventDefault();scale=Math.max(.2,Math.min(6,scale*(e.deltaY<0?1.1:.9)));};
-  const K=Math.sqrt((cw*ch)/(nodes.length||1))*1.2;const REPEL=K*K*2;const ATTRACT=.35;
-  function frame(){
-    if(tick<200&&alpha>.001){
-      sim.forEach(n=>{n.fx=0;n.fy=0;});
-      for(let i=0;i<sim.length;i++)for(let j=i+1;j<sim.length;j++){
-        const dx=sim[j].x-sim[i].x,dy=sim[j].y-sim[i].y,d2=dx*dx+dy*dy+1;
-        const f=REPEL/d2;sim[i].fx-=f*dx;sim[i].fy-=f*dy;sim[j].fx+=f*dx;sim[j].fy+=f*dy;
-      }
-      adj.forEach((tos,fi)=>tos.forEach(ti=>{
-        const dx=sim[ti].x-sim[fi].x,dy=sim[ti].y-sim[fi].y,d=Math.hypot(dx,dy)+.01;
-        const f=d*ATTRACT/K;sim[fi].fx+=f*dx;sim[fi].fy+=f*dy;sim[ti].fx-=f*dx;sim[ti].fy-=f*dy;
-      }));
-      sim.forEach(n=>{n.fx+=(cw/2-n.x)*.02;n.fy+=(ch/2-n.y)*.02;
-        n.vx=(n.vx+n.fx)*0.82;n.vy=(n.vy+n.fy)*0.82;n.x+=n.vx;n.y+=n.vy;});
-      alpha*=.98;tick++;
+  if(!window.Sigma||!window.Graph){$('mesh-canvas-info').textContent='Graph renderer not loaded.';return;}
+  const PROTO_COLOR={grpc:'#7b61ff',http:'#00c28e',message_queue:'#ffb800',database:'#9b6dff'};
+  const g=new window.Graph({multi:true,type:'directed'});
+  nodes.forEach((n,i)=>{
+    g.addNode(n.id,{label:n.name,size:12,color:palette[i%palette.length],x:Math.random(),y:Math.random()});
+  });
+  edges.forEach((e,i)=>{
+    if(g.hasNode(e.from)&&g.hasNode(e.to)){
+      try{g.addEdge(e.from,e.to,{color:PROTO_COLOR[e.protocol]||'#888',size:1.5,label:e.protocol||''});}catch(_){}
     }
-    ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
-    ctx.save();ctx.translate(panX,panY);ctx.scale(scale,scale);
-    // edges
-    ctx.lineWidth=1.5;
-    edges.forEach(e=>{const fi=idToIdx[e.from],ti=idToIdx[e.to];
-      if(fi===undefined||ti===undefined)return;
-      ctx.strokeStyle=e.protocol==='grpc'?'rgba(123,97,255,.6)':e.protocol==='http'?'rgba(0,194,142,.6)':'rgba(255,184,0,.5)';
-      ctx.beginPath();ctx.moveTo(sim[fi].x,sim[fi].y);ctx.lineTo(sim[ti].x,sim[ti].y);ctx.stroke();
-    });
-    // nodes
-    sim.forEach(n=>{
-      ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);ctx.fillStyle=n.color;ctx.fill();
-      ctx.strokeStyle='rgba(255,255,255,.2)';ctx.lineWidth=1;ctx.stroke();
-      ctx.fillStyle='#e4e8f7';ctx.font='bold 11px monospace';ctx.textAlign='center';
-      ctx.fillText(n.name.slice(0,16),n.x,n.y+n.r+13);
-    });
-    ctx.restore();
-    _meshAnim=requestAnimationFrame(frame);
+  });
+  _meshSigmaGraph=g;
+  _meshSigma=new window.Sigma(g,container,{
+    renderEdgeLabels:true,
+    labelFont:'monospace',labelSize:11,
+    defaultEdgeType:'arrow',
+    labelColor:{color:'#c8d0f0'},
+    defaultNodeColor:'#7b61ff',
+    backgroundColor:'#0b0e1a',
+    stagePadding:30,
+  });
+  if(window.FA2Layout){
+    _meshSigmaFA2=new window.FA2Layout(g,{settings:{gravity:1,scalingRatio:6,slowDown:10}});
+    _meshSigmaFA2.start();
+    setTimeout(()=>{if(_meshSigmaFA2)_meshSigmaFA2.stop();},3000);
+  }else if(window.circularLayout){
+    window.circularLayout.assign(g,{scale:150});
+    _meshSigma.refresh();
   }
   $('mesh-canvas-info').textContent=`${nodes.length} services · ${edges.length} connections`;
-  _meshAnim=requestAnimationFrame(frame);
 }
 
 /* ── Federation Map ──────────────────────────────────────────────────────────────── */
-let _fedAnim=null;
+let _fedSigma=null,_fedSigmaFA2=null;
 async function loadFedMap(){
   if(!currentProject)return;
   $('fed-canvas-info').textContent='Loading…';
@@ -1735,43 +1786,32 @@ async function loadFedMap(){
       <span style="color:var(--text-2);font-size:.8rem">${escHtml(m.path||m.name||m)}</span>
       <span style="color:var(--text-3);font-size:.74rem;margin-left:auto">${escHtml(m.status||'')}</span>
     </div>`).join('');
-  // Canvas: root node in center, members around it
-  if(_fedAnim){cancelAnimationFrame(_fedAnim);_fedAnim=null;}
-  const canvas=$('fed-canvas');const ctx=canvas.getContext('2d');
-  const cw=canvas.offsetWidth||700,ch=canvas.offsetHeight||360;
-  canvas.width=cw;canvas.height=ch;
+  // Sigma.js: root node in center, members around it (circular layout)
+  if(_fedSigmaFA2){try{_fedSigmaFA2.stop();}catch(e){} _fedSigmaFA2=null;}
+  if(_fedSigma){try{_fedSigma.kill();}catch(e){} _fedSigma=null;}
+  const container=$('fed-sigma-container');
+  if(!container||!window.Sigma||!window.Graph){$('fed-canvas-info').textContent=`${members.length} members`;return;}
   const rootName=currentProject.split('/').pop();
   const palette=['#7b61ff','#00c28e','#ffb800','#ff4060','#9b6dff','#00d4ff','#fb8f44','#6366f1','#10b981','#ec4899'];
-  const nodes=[{id:'__root__',name:rootName,x:cw/2,y:ch/2,r:14,color:'#7b61ff',isRoot:true}];
-  const angle=2*Math.PI/members.length;
-  const rad=Math.min(cw,ch)*0.33;
+  const g=new window.Graph({type:'undirected'});
+  const angle=2*Math.PI/(members.length||1);
+  g.addNode('__root__',{label:rootName,size:18,color:'#7b61ff',x:0,y:0});
   members.forEach((m,i)=>{
     const name=(m.path||m.name||m).split('/').pop();
-    nodes.push({id:m.path||m.name||m,name,x:cw/2+rad*Math.cos(i*angle-Math.PI/2),y:ch/2+rad*Math.sin(i*angle-Math.PI/2),r:9,color:palette[(i+1)%palette.length],isRoot:false});
+    const id=m.path||m.name||m;
+    const rad=1.0;
+    g.addNode(id,{label:name,size:10,color:palette[(i+1)%palette.length],
+      x:rad*Math.cos(i*angle-Math.PI/2),y:rad*Math.sin(i*angle-Math.PI/2)});
+    try{g.addEdge('__root__',id,{color:'rgba(123,97,255,.4)',size:1});}catch(_){}
   });
-  let panX=0,panY=0,scale=1,dragging=false,lastMX=0,lastMY=0;
-  canvas.onmousedown=e=>{dragging=true;lastMX=e.clientX;lastMY=e.clientY;canvas.style.cursor='grabbing';};
-  canvas.onmouseup=()=>{dragging=false;canvas.style.cursor='grab';};
-  canvas.onmousemove=e=>{if(dragging){panX+=e.clientX-lastMX;panY+=e.clientY-lastMY;lastMX=e.clientX;lastMY=e.clientY;}};
-  canvas.onwheel=e=>{e.preventDefault();scale=Math.max(.2,Math.min(6,scale*(e.deltaY<0?1.1:.9)));};
-  function frame(){
-    ctx.fillStyle='#0b0e1a';ctx.fillRect(0,0,cw,ch);
-    ctx.save();ctx.translate(panX,panY);ctx.scale(scale,scale);
-    nodes.slice(1).forEach(n=>{
-      ctx.strokeStyle='rgba(123,97,255,.4)';ctx.lineWidth=1.5;
-      ctx.beginPath();ctx.moveTo(nodes[0].x,nodes[0].y);ctx.lineTo(n.x,n.y);ctx.stroke();
-    });
-    nodes.forEach(n=>{
-      ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);ctx.fillStyle=n.color;ctx.fill();
-      if(n.isRoot){ctx.strokeStyle='rgba(255,255,255,.4)';ctx.lineWidth=2;ctx.stroke();}
-      ctx.fillStyle='#e4e8f7';ctx.font=(n.isRoot?'bold ':'')+'11px monospace';ctx.textAlign='center';
-      ctx.fillText(n.name.slice(0,18),n.x,n.y+n.r+13);
-    });
-    ctx.restore();
-    _fedAnim=requestAnimationFrame(frame);
-  }
+  _fedSigma=new window.Sigma(g,container,{
+    labelFont:'monospace',labelSize:11,
+    labelColor:{color:'#c8d0f0'},
+    defaultNodeColor:'#7b61ff',
+    backgroundColor:'#0b0e1a',
+    stagePadding:30,
+  });
   $('fed-canvas-info').textContent=`${members.length} members`;
-  _fedAnim=requestAnimationFrame(frame);
 }
 
 /* ── Impact Analysis ────────────────────────────────────────────────────────────── */

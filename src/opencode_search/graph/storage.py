@@ -533,6 +533,81 @@ class GraphStorage:
     def edge_count(self) -> int:
         return self._db().execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
+    def get_god_nodes(self, top_n: int = 10) -> list[dict]:
+        """Return the top-N highest-degree nodes (most total edges in+out).
+
+        These are the 'hub' symbols that the rest of the codebase depends on.
+        A high in-degree means many callers; a high out-degree means many
+        dependencies — together they flag architectural pivot points.
+        """
+        db = self._db()
+        rows = db.execute(
+            """
+            SELECT n.id, n.qualified_name, n.kind, n.file, n.community_id,
+                   COUNT(DISTINCT e_in.from_id)  AS in_degree,
+                   COUNT(DISTINCT e_out.to_id)   AS out_degree,
+                   COUNT(DISTINCT e_in.from_id) + COUNT(DISTINCT e_out.to_id) AS degree
+            FROM nodes n
+            LEFT JOIN edges e_in  ON e_in.to_id   = n.id
+            LEFT JOIN edges e_out ON e_out.from_id = n.id
+            WHERE n.community_id IS NOT NULL
+            GROUP BY n.id
+            ORDER BY degree DESC
+            LIMIT ?
+            """,
+            (top_n,),
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "qualified_name": r["qualified_name"],
+                "kind": r["kind"],
+                "file": r["file"],
+                "community_id": r["community_id"],
+                "in_degree": r["in_degree"],
+                "out_degree": r["out_degree"],
+                "degree": r["degree"],
+            }
+            for r in rows
+        ]
+
+    def get_cross_community_bridges(self, top_n: int = 10) -> list[dict]:
+        """Return the top-N cross-community edges by combined node degree.
+
+        A bridge is an edge whose endpoints belong to different communities.
+        High-degree bridges are 'surprising connections' — tightly-coupled
+        symbols that span architectural boundaries.
+        """
+        db = self._db()
+        rows = db.execute(
+            """
+            SELECT e.from_id, e.to_id, e.kind, e.confidence,
+                   nf.qualified_name AS from_name, nf.community_id AS from_comm,
+                   nt.qualified_name AS to_name,   nt.community_id AS to_comm
+            FROM edges e
+            JOIN nodes nf ON nf.id = e.from_id
+            JOIN nodes nt ON nt.id = e.to_id
+            WHERE nf.community_id IS NOT NULL
+              AND nt.community_id IS NOT NULL
+              AND nf.community_id != nt.community_id
+              AND e.kind IN ('CALLS', 'IMPORTS')
+            ORDER BY e.confidence DESC
+            LIMIT ?
+            """,
+            (top_n,),
+        ).fetchall()
+        return [
+            {
+                "from": r["from_name"],
+                "to": r["to_name"],
+                "kind": r["kind"],
+                "confidence": r["confidence"],
+                "from_community": r["from_comm"],
+                "to_community": r["to_comm"],
+            }
+            for r in rows
+        ]
+
 
 # ------------------------------------------------------------------
 # Helpers
