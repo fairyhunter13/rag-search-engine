@@ -581,18 +581,40 @@ class Storage:
             logger.warning("FTS index creation failed: %s", exc)
 
     async def ensure_ivf_pq_index(self) -> None:
-        """Create an IVF-PQ ANN index once >= IVF_PQ_THRESHOLD rows exist."""
+        """Create an ANN index once >= IVF_PQ_THRESHOLD rows exist.
+
+        Prefers IVF_HNSW_SQ (IVF + HNSW graph + int8 scalar quantization):
+        - int8 quantization cuts index RAM by ~4× vs float32 IVF_FLAT
+        - HNSW navigation gives better recall/latency than pure IVF probing
+        - Falls back to legacy IVF_PQ for older LanceDB installations
+        """
         n = await self.count()
         if n < IVF_PQ_THRESHOLD:
             return
         n_partitions = min(IVF_NUM_PARTITIONS_MAX, max(1, n // 10))
+        table = self._table
+        # Try IVF_HNSW_SQ first (available since LanceDB 0.12, preferred Jun 2026)
+        try:
+            await asyncio.to_thread(
+                table.create_index,
+                metric="cosine",
+                vector_column_name="vector",
+                index_type="IVF_HNSW_SQ",
+                num_partitions=n_partitions,
+                replace=True,
+            )
+            logger.info(
+                "IVF_HNSW_SQ index created/refreshed (rows=%d, partitions=%d)",
+                n, n_partitions,
+            )
+            return
+        except Exception as exc:
+            logger.debug("IVF_HNSW_SQ unavailable, falling back to IVF_PQ: %s", exc)
+        # Legacy fallback: IVF_PQ
         n_sub_vectors = min(IVF_NUM_SUB_VECTORS_MAX, max(1, self.dims // 4))
-        # LanceDB requires num_sub_vectors to evenly divide vector dimensions.
-        # Round down to the nearest valid divisor (avoids silent index failure).
         while n_sub_vectors > 1 and self.dims % n_sub_vectors != 0:
             n_sub_vectors -= 1
         try:
-            table = self._table
             await asyncio.to_thread(
                 table.create_index,
                 metric="cosine",
@@ -604,12 +626,10 @@ class Storage:
             )
             logger.info(
                 "IVF-PQ index created/refreshed (rows=%d, partitions=%d, sub_vectors=%d)",
-                n,
-                n_partitions,
-                n_sub_vectors,
+                n, n_partitions, n_sub_vectors,
             )
         except Exception as exc:
-            logger.warning("IVF-PQ index creation failed: %s", exc)
+            logger.warning("Vector index creation failed: %s", exc)
 
     async def maybe_create_indexes(self) -> None:
         """Compact then ensure both FTS and IVF-PQ indexes are created/updated."""
@@ -666,20 +686,25 @@ class Storage:
     async def compact(self) -> None:
         """Compact the chunks table to remove fragmentation.
 
-        Prefers `Table.optimize()` (new API since LanceDB 0.21). Falls back to
-        the deprecated `compact_files()` for older installations.
-        Runs the sync LanceDB call off the event loop to avoid blocking.
+        Calls `Table.optimize()` (LanceDB 0.21+) which merges small fragment
+        files AND prunes old dataset versions older than 1 day.  Version pruning
+        is the largest storage win: every merge_insert creates a new version;
+        without pruning these accumulate indefinitely.  Falls back to the
+        deprecated `compact_files()` for older installations.
         """
         try:
+            from datetime import timedelta
             table = self._table
             optimize = getattr(table, "optimize", None)
             if callable(optimize):
                 async with self._write_lock:
-                    await asyncio.to_thread(optimize)
+                    await asyncio.to_thread(
+                        optimize, cleanup_older_than=timedelta(days=1)
+                    )
             else:
                 async with self._write_lock:
                     await asyncio.to_thread(table.compact_files)
-            logger.info("Chunks table compacted")
+            logger.info("Chunks table compacted (versions pruned)")
         except Exception as exc:
             logger.warning("Compaction failed: %s", exc)
 
@@ -706,3 +731,40 @@ class Storage:
             txn_count, txn_threshold,
         )
         await self.compact()
+
+    async def vacuum(self) -> dict:
+        """Deep storage cleanup: compact + prune versions older than 7 days.
+
+        Run after a full pipeline build. Returns a dict with before/after
+        stats so callers can log the reclaimed space.
+        """
+        import os as _os
+        from datetime import timedelta
+
+        def _du(path: str) -> int:
+            total = 0
+            for root, _, files in _os.walk(path):
+                for f in files:
+                    try:
+                        total += _os.path.getsize(_os.path.join(root, f))
+                    except OSError:
+                        pass
+            return total
+
+        before = _du(self.db_path)
+        try:
+            table = self._table
+            optimize = getattr(table, "optimize", None)
+            if callable(optimize):
+                async with self._write_lock:
+                    await asyncio.to_thread(
+                        optimize, cleanup_older_than=timedelta(days=7)
+                    )
+            logger.info("Vacuum complete (7-day version cleanup)")
+        except Exception as exc:
+            logger.warning("Vacuum failed: %s", exc)
+            return {"status": "error", "error": str(exc)}
+        after = _du(self.db_path)
+        saved_mb = round((before - after) / 1024 / 1024, 1)
+        logger.info("Vacuum: %d MB → %d MB (saved %.1f MB)", before // 1024 // 1024, after // 1024 // 1024, saved_mb)
+        return {"status": "ok", "before_mb": round(before / 1024 / 1024, 1), "after_mb": round(after / 1024 / 1024, 1), "saved_mb": saved_mb}

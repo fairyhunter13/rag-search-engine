@@ -533,6 +533,31 @@ class GraphStorage:
     def edge_count(self) -> int:
         return self._db().execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
+    def vacuum(self) -> dict:
+        """Run SQLite VACUUM + WAL checkpoint to reclaim free pages.
+
+        Call after large deletes or a full pipeline rebuild. Returns before/after
+        file size so the caller can log reclaimed bytes.
+        """
+        import os as _os
+        db = self._db()
+        try:
+            before = _os.path.getsize(self._db_path)
+        except OSError:
+            before = 0
+        try:
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            db.execute("VACUUM")
+            db.commit()
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+        try:
+            after = _os.path.getsize(self._db_path)
+        except OSError:
+            after = before
+        saved_mb = round((before - after) / 1024 / 1024, 1)
+        return {"status": "ok", "before_mb": round(before / 1024 / 1024, 1), "after_mb": round(after / 1024 / 1024, 1), "saved_mb": saved_mb}
+
     def get_god_nodes(self, top_n: int = 10) -> list[dict]:
         """Return the top-N highest-degree nodes (most total edges in+out).
 

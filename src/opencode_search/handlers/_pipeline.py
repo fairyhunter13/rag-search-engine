@@ -264,6 +264,42 @@ async def handle_pipeline(
     else:
         steps.append({"step": "enrich_hierarchy", "status": "skipped", "reason": "LLM not available"})
 
+    # ── Step 8: Vacuum storage (LanceDB version pruning + SQLite VACUUM) ────
+    # Runs at end of every full pipeline build to reclaim disk space.
+    # LanceDB accumulates old dataset versions on every write transaction;
+    # vacuum() prunes versions older than 7 days — the single biggest
+    # storage win, often 20-40% of index directory size.
+    vacuum_results: dict[str, Any] = {}
+    try:
+        from opencode_search.config import get_project_db_path, get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+        from opencode_search.storage import Storage
+
+        storage = Storage(db_path=get_project_db_path(root), dims=768)
+        await storage.open()
+        try:
+            ldb_vac = await storage.vacuum()
+            vacuum_results["lancedb"] = ldb_vac
+        finally:
+            await storage.close()
+
+        gs = GraphStorage(get_project_graph_db_path(root))
+        gs.open()
+        try:
+            sqlite_vac = gs.vacuum()
+            vacuum_results["graph_db"] = sqlite_vac
+        finally:
+            gs.close()
+
+        steps.append({"step": "vacuum", "status": "ok", **vacuum_results})
+        log.info("pipeline[%s]: vacuum complete — LanceDB saved %.1f MB, graph.db saved %.1f MB",
+                 root,
+                 ldb_vac.get("saved_mb", 0),
+                 sqlite_vac.get("saved_mb", 0))
+    except Exception as exc:
+        log.info("pipeline[%s]: vacuum skipped: %s", root, exc)
+        steps.append({"step": "vacuum", "status": "skipped", "reason": str(exc)})
+
     return {
         "status": "ok",
         "project_path": root,
