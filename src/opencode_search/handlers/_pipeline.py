@@ -1,6 +1,7 @@
 """Full knowledge-base pipeline: discover → enrich → wiki → ingest docs."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -23,7 +24,6 @@ _DOC_MAX_BYTES = 200 * 1024  # skip files > 200 KB
 
 def _find_doc_files(root: Path) -> list[Path]:
     """Return up to _MAX_DOCS_TO_INGEST doc files from the project root."""
-    import fnmatch
     found: list[Path] = []
     seen: set[str] = set()
 
@@ -95,7 +95,10 @@ async def handle_pipeline(
     steps: list[dict[str, Any]] = []
 
     # ── Step 1: Discover + register federation members ──────────────────────
-    from opencode_search.handlers._federation import handle_discover_federation, handle_add_federation_member
+    from opencode_search.handlers._federation import (
+        handle_add_federation_member,
+        handle_discover_federation,
+    )
 
     discover_result = await handle_discover_federation(project_path=root)
     discovered = discover_result.get("discovered", [])
@@ -190,7 +193,7 @@ async def handle_pipeline(
                     ingested.append(str(doc.relative_to(root_path)))
                 else:
                     failed_docs.append(str(doc.name))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.debug("doc ingest failed for %s: %s", doc, exc)
                 failed_docs.append(str(doc.name))
 
@@ -205,6 +208,61 @@ async def handle_pipeline(
     else:
         reason = "LLM not available" if (llm is None or not llm.is_available()) else "ingest_docs=False"
         steps.append({"step": "ingest_docs", "status": "skipped", "reason": reason})
+
+    # ── Step 6: Build recursive community hierarchy ──────────────────────────
+    # Requires ≥5 level-1 communities to be meaningful.
+    # Skipped silently for small test projects.
+    try:
+        from opencode_search.graph.community import CommunityDetector
+        from opencode_search.handlers._graph import _open_graph
+
+        gs = _open_graph(root)
+        if gs is None:
+            steps.append({"step": "hierarchy", "status": "skipped", "reason": "graph not built"})
+        else:
+            try:
+                n_level1 = len(gs.get_communities(level=1, min_node_count=2))
+                if n_level1 >= 5:
+                    levels_built = await asyncio.to_thread(
+                        CommunityDetector().build_hierarchy, gs
+                    )
+                    steps.append({
+                        "step": "hierarchy",
+                        "status": "ok",
+                        "levels_built": levels_built,
+                        "max_level": gs.get_max_community_level(),
+                    })
+                    log.info("pipeline[%s]: hierarchy built (%d levels)", root, levels_built)
+                else:
+                    steps.append({
+                        "step": "hierarchy",
+                        "status": "skipped",
+                        "reason": f"too few communities ({n_level1} < 5)",
+                    })
+            finally:
+                import contextlib
+                with contextlib.suppress(Exception):
+                    gs.close()
+    except Exception as exc:
+        log.warning("pipeline[%s]: hierarchy build failed: %s", root, exc)
+        steps.append({"step": "hierarchy", "status": "error", "error": str(exc)})
+
+    # ── Step 7: Enrich hierarchy macro-communities ───────────────────────────
+    # Generates LLM titles/summaries for level-2+ communities (architecture domains).
+    if llm is not None and llm.is_available():
+        try:
+            from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+            h_result = await handle_enrich_hierarchy(project_path=root)
+            steps.append({"step": "enrich_hierarchy", **h_result})
+            log.info(
+                "pipeline[%s]: enriched %d hierarchy communities",
+                root, h_result.get("enriched", 0),
+            )
+        except Exception as exc:
+            log.warning("pipeline[%s]: hierarchy enrichment failed: %s", root, exc)
+            steps.append({"step": "enrich_hierarchy", "status": "skipped", "reason": str(exc)})
+    else:
+        steps.append({"step": "enrich_hierarchy", "status": "skipped", "reason": "LLM not available"})
 
     return {
         "status": "ok",

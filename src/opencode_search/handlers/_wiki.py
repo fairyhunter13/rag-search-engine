@@ -13,8 +13,8 @@ from opencode_search.config import (
     DEFAULT_EMBED_MODEL,
     get_project_db_path,
     get_project_graph_db_path,
-    get_project_wiki_dir,
     get_project_raw_dir,
+    get_project_wiki_dir,
     load_registry,
 )
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _get_llm() -> "LLMClient | None":
+def _get_llm() -> LLMClient | None:
     from opencode_search.enricher.client import create_llm_client
     return create_llm_client()
 
@@ -93,7 +93,7 @@ async def _embed_wiki_pages(project_path: str, page_paths: list[Path]) -> int:
                 continue
             page_str = str(page_path)
             file_hash = hashlib.sha256(content.encode()).hexdigest()
-            for i, (c, vec) in enumerate(zip(chunks, vectors)):
+            for i, (c, vec) in enumerate(zip(chunks, vectors, strict=False)):
                 all_chunks.append(ChunkData(
                     chunk_id=_chunk_id(page_str, i),
                     path=page_str,
@@ -203,7 +203,7 @@ async def handle_wiki_generate(
                 try:
                     await gen.generate_community_page(c.id)
                     pages_created.append(f"community_{c.id}")
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.debug("wiki gen failed for community %d in %s: %s", c.id, path, exc)
             await gen.generate_index()
         finally:
@@ -297,7 +297,12 @@ async def handle_wiki_query(
     Searches only within wiki-language chunks so results are never buried
     by the much larger code chunk population.
     """
-    from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL, get_project_db_path, load_registry
+    from opencode_search.config import (
+        DEFAULT_DIMS,
+        DEFAULT_EMBED_MODEL,
+        get_project_db_path,
+        load_registry,
+    )
     from opencode_search.embeddings import embed_query
     from opencode_search.storage import Storage
 

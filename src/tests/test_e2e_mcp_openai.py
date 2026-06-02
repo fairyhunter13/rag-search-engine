@@ -7,6 +7,7 @@ Run manually:
 """
 from __future__ import annotations
 
+import os
 import shutil
 
 import pytest
@@ -16,7 +17,11 @@ import pytest
 # ---------------------------------------------------------------------------
 
 _claude_available = shutil.which("claude") is not None
-_codex_available = shutil.which("codex") is not None
+# codex integration tests require both the CLI and OPENCODE_RUN_CODEX_TESTS=1
+# to prevent CI failures when the codex session has expired.
+_codex_available = shutil.which("codex") is not None and bool(
+    os.environ.get("OPENCODE_RUN_CODEX_TESTS", "")
+)
 
 _skip_claude = pytest.mark.skipif(
     not _claude_available,
@@ -24,7 +29,7 @@ _skip_claude = pytest.mark.skipif(
 )
 _skip_codex = pytest.mark.skipif(
     not _codex_available,
-    reason="codex CLI not installed — install from https://github.com/openai/codex",
+    reason="codex CLI not installed or OPENCODE_RUN_CODEX_TESTS not set (set env var and ensure 'codex login' is done)",
 )
 
 

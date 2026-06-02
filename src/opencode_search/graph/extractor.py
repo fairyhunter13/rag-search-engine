@@ -1,8 +1,14 @@
 """Tree-sitter AST extractor: emits NodeData + unresolved EdgeData.
 
-Supports: Python, TypeScript, JavaScript, Go, Java, Kotlin, Rust,
-          Protobuf/proto, C, C++, Scala.
-Falls back to file-level node for unsupported languages.
+Tier-1 (dedicated extractors with call-edge tracking):
+    Python, TypeScript, JavaScript, Go, Java, Kotlin, Rust, Protobuf, C, C++
+
+Tier-2 (generic AST traversal, functions + classes, no call edges):
+    Scala, Ruby, PHP, Swift, C#, Dart, Lua, Elixir, Bash, R, Zig,
+    Haskell, SQL, Groovy, Perl, OCaml — and any other tree-sitter-supported
+    language added to _DEEP_LANGS.
+
+Unsupported extensions → file-level node only (no symbols).
 
 All edges produced here have to_id=<raw callee string> (pre-resolution).
 CallResolver in resolver.py maps them to real node IDs.
@@ -12,38 +18,88 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import UTC
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-# Languages supported for deep extraction
+# Languages with deep extraction (specific or generic AST traversal via tree-sitter)
 _DEEP_LANGS: set[str] = {
+    # Tier-1: dedicated extractors
     "python", "typescript", "javascript", "go",
-    "java", "kotlin", "rust",
-    "proto", "c", "cpp", "scala",
+    "java", "kotlin", "rust", "proto", "c", "cpp",
+    # Tier-2: comprehensive generic extractor (tree-sitter AST, all node kinds below)
+    "scala", "ruby", "php", "swift", "c_sharp", "dart",
+    "lua", "elixir", "bash", "r", "zig", "haskell",
+    "sql", "groovy", "perl", "ocaml",
 }
 
 # Map file extensions → language name used by tree_sitter_language_pack
 _EXT_TO_LANG: dict[str, str] = {
+    # Python
     ".py": "python",
+    # TypeScript / JavaScript
     ".ts": "typescript",
     ".tsx": "typescript",
     ".js": "javascript",
     ".jsx": "javascript",
     ".mjs": "javascript",
+    ".cjs": "javascript",
+    # Go
     ".go": "go",
+    # JVM
     ".java": "java",
     ".kt": "kotlin",
     ".kts": "kotlin",
+    ".scala": "scala",
+    ".groovy": "groovy",
+    # Rust
     ".rs": "rust",
-    ".proto": "proto",
+    # C family
     ".c": "c",
     ".h": "c",
     ".cpp": "cpp",
     ".cc": "cpp",
     ".cxx": "cpp",
     ".hpp": "cpp",
-    ".scala": "scala",
+    ".hxx": "cpp",
+    # C#
+    ".cs": "c_sharp",
+    # Proto
+    ".proto": "proto",
+    # Ruby
+    ".rb": "ruby",
+    ".rake": "ruby",
+    # PHP
+    ".php": "php",
+    # Swift
+    ".swift": "swift",
+    # Dart
+    ".dart": "dart",
+    # Lua
+    ".lua": "lua",
+    # Shell
+    ".sh": "bash",
+    ".bash": "bash",
+    # R
+    ".r": "r",
+    ".R": "r",
+    # Zig
+    ".zig": "zig",
+    # Elixir
+    ".ex": "elixir",
+    ".exs": "elixir",
+    # Haskell
+    ".hs": "haskell",
+    ".lhs": "haskell",
+    # SQL
+    ".sql": "sql",
+    # Perl
+    ".pl": "perl",
+    ".pm": "perl",
+    # OCaml
+    ".ml": "ocaml",
+    ".mli": "ocaml",
 }
 
 
@@ -106,7 +162,7 @@ class GraphExtractor:
 
         try:
             return self._extract_deep(file_path, content, language, file_node, now)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("graph extractor error in %s: %s", file_path, exc)
             return [file_node], []
 
@@ -143,8 +199,16 @@ class GraphExtractor:
             return _extract_proto(file_path, src, root, file_node, now)
         elif language in ("c", "cpp"):
             return _extract_c_cpp(file_path, src, root, file_node, now)
+        elif language == "ruby":
+            return _extract_ruby(file_path, src, root, file_node, now)
+        elif language == "php":
+            return _extract_php(file_path, src, root, file_node, now)
+        elif language == "swift":
+            return _extract_swift(file_path, src, root, file_node, now)
+        elif language == "c_sharp":
+            return _extract_c_sharp(file_path, src, root, file_node, now)
         else:
-            return _extract_generic(file_path, src, root, file_node, now)
+            return _extract_generic(file_path, src, root, file_node, now, language=language)
 
 
 # ------------------------------------------------------------------
@@ -169,8 +233,8 @@ def _basename(file_path: str) -> str:
 
 
 def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()
 
 
 def _extract_docstring(src: bytes, body_node: Any) -> str | None:
@@ -222,7 +286,7 @@ def _extract_python(
     _collect_py_imports(src, root, imports)
 
     # Emit file-level IMPORTS edges
-    for alias, qualified in imports:
+    for _alias, qualified in imports:
         raw_edges.append(_RawEdge(
             from_id=file_node.id,
             raw_callee=qualified,
@@ -1081,7 +1145,344 @@ def _collect_c_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEd
 
 
 # ------------------------------------------------------------------
-# Generic fallback (Scala and other languages not listed above)
+# Ruby (Tier-1: method/singleton_method + call edges)
+# ------------------------------------------------------------------
+
+def _extract_ruby(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/module/method nodes and call edges from Ruby source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path)
+
+    def _walk_rb(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind in ("class", "module"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{mod_name}::{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="class",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="ruby", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body") or node
+                for i in range(body.named_child_count()):
+                    _walk_rb(body.named_child(i), qualified)
+                return
+
+        elif kind == "method":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}#{name}" if class_ctx else f"{mod_name}#{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified,
+                    kind="method" if class_ctx else "function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="ruby", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_ruby_calls(src, body, nid, raw_edges)
+                return
+
+        elif kind == "singleton_method":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="ruby", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_ruby_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_rb(node.named_child(i), class_ctx)
+
+    _walk_rb(root)
+    return nodes, raw_edges
+
+
+def _collect_ruby_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "call":
+        # Receiver-based call: obj.method(...)
+        method_node = node.child_by_field_name("method")
+        if method_node:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, method_node), kind="CALLS"))
+    elif kind == "identifier":
+        # Bare method call: validate, save, etc. — top-level identifiers in method body
+        name = _text(src, node).strip()
+        if name:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=name, kind="CALLS"))
+        return  # identifiers have no named children
+    for i in range(node.named_child_count()):
+        _collect_ruby_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# PHP (Tier-1: function/method + call edges)
+# ------------------------------------------------------------------
+
+def _extract_php(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/interface/function nodes and call edges from PHP source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path)
+
+    def _walk_php(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind in ("class_declaration", "interface_declaration", "trait_declaration"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{mod_name}\\{name}"
+                nid = _node_id(file_path, qualified)
+                nkind = "interface" if kind == "interface_declaration" else "class"
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=nkind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="php", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body") or node
+                for i in range(body.named_child_count()):
+                    _walk_php(body.named_child(i), qualified)
+                return
+
+        elif kind == "function_definition":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}::{name}" if class_ctx else f"{mod_name}::{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified,
+                    kind="method" if class_ctx else "function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="php", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_php_calls(src, body, nid, raw_edges)
+                return
+
+        elif kind == "method_declaration":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}::{name}" if class_ctx else f"{mod_name}::{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind="method",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="php", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_php_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_php(node.named_child(i), class_ctx)
+
+    _walk_php(root)
+    return nodes, raw_edges
+
+
+def _collect_php_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "function_call_expression":
+        fn = node.child_by_field_name("function")
+        if fn:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, fn), kind="CALLS"))
+    elif kind == "member_call_expression":
+        name_node = node.child_by_field_name("name")
+        if name_node:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, name_node), kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_php_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# Swift (Tier-1: function/class/struct + call edges)
+# ------------------------------------------------------------------
+
+def _extract_swift(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/struct/protocol/function nodes and call edges from Swift source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path)
+
+    def _walk_swift(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind in ("class_declaration", "struct_declaration", "protocol_declaration",
+                    "enum_declaration", "extension_declaration"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nkind = "interface" if kind == "protocol_declaration" else "class"
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=nkind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="swift", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body") or node
+                for i in range(body.named_child_count()):
+                    _walk_swift(body.named_child(i), qualified)
+                return
+
+        elif kind == "function_declaration":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified,
+                    kind="method" if class_ctx else "function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="swift", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_swift_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_swift(node.named_child(i), class_ctx)
+
+    _walk_swift(root)
+    return nodes, raw_edges
+
+
+def _collect_swift_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "call_expression":
+        # Swift call_expression: first named child is the callee (simple_identifier or
+        # member access), second child is call_suffix with arguments.
+        fn = node.child_by_field_name("function") or (
+            node.named_child(0) if node.named_child_count() > 0 else None
+        )
+        if fn and fn.kind() not in ("call_suffix", "value_arguments"):
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, fn), kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_swift_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# C# (Tier-1: class/struct/method + call edges)
+# ------------------------------------------------------------------
+
+def _extract_c_sharp(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/struct/interface/method nodes and call edges from C# source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path)
+
+    def _walk_cs(node: Any, class_ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind in ("class_declaration", "struct_declaration", "interface_declaration",
+                    "enum_declaration", "record_declaration"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nkind = "interface" if kind == "interface_declaration" else "class"
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=nkind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="c_sharp", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body") or node
+                for i in range(body.named_child_count()):
+                    _walk_cs(body.named_child(i), qualified)
+                return
+
+        elif kind in ("method_declaration", "constructor_declaration", "local_function_statement"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{class_ctx}.{name}" if class_ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nkind = "constructor" if kind == "constructor_declaration" else "method"
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=nkind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="c_sharp", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_c_sharp_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk_cs(node.named_child(i), class_ctx)
+
+    _walk_cs(root)
+    return nodes, raw_edges
+
+
+def _collect_c_sharp_calls(src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]) -> None:
+    kind = node.kind()
+    if kind == "invocation_expression":
+        fn = node.child_by_field_name("function")
+        if fn:
+            raw_edges.append(_RawEdge(from_id=from_id, raw_callee=_text(src, fn), kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_c_sharp_calls(src, node.named_child(i), from_id, raw_edges)
+
+
+# ------------------------------------------------------------------
+# Generic Tier-2 extractor (Scala, Ruby, PHP, Swift, C#, Dart, Lua,
+# Elixir, Bash, R, Zig, Haskell, SQL, Groovy, Perl, OCaml, …)
 # ------------------------------------------------------------------
 
 def _extract_generic(
@@ -1090,20 +1491,50 @@ def _extract_generic(
     root: Any,
     file_node: Any,
     now: str,
+    language: str | None = None,
 ) -> tuple[list[Any], list[_RawEdge]]:
-    """Basic extraction: function and class nodes, no call edges."""
+    """Broad tree-sitter extraction: function/method/class nodes, no call edges.
+
+    Covers all tree-sitter node kinds used by Tier-2 languages. Call-edge
+    resolution is skipped (raw_edges stays empty); the graph still gives
+    community detection and symbol lookup for these languages.
+    """
     from .storage import NodeData
 
     nodes: list[NodeData] = [file_node]
     raw_edges: list[_RawEdge] = []
     module_name = _basename(file_path)
+    lang = language or file_node.language  # preserve for NodeData
 
     func_kinds = {
-        "function_declaration", "function_definition", "method_declaration",
-        "method_definition", "fn_item",
-        "function_item",  # Rust
+        # Standard across many languages
+        "function_declaration", "function_definition",
+        "method_declaration", "method_definition",
+        "fn_item", "function_item",  # Rust alt names
+        # Ruby: def foo / def self.foo
+        "method", "singleton_method",
+        # Lua: local function foo() …
+        "local_function",
+        # Zig: fn foo(…) …
+        "fn_declaration",
+        # Haskell / some others
+        "function",
+        # SQL stored procedures
+        "create_function_statement", "create_procedure_statement",
     }
-    class_kinds = {"class_declaration", "class_definition", "struct_item"}
+    class_kinds = {
+        # Standard
+        "class_declaration", "class_definition", "struct_item",
+        # Ruby: class Foo … / module Bar …
+        "class", "module",
+        # Swift, C#, PHP, Dart
+        "struct_declaration", "interface_declaration", "protocol_declaration",
+        "enum_declaration", "extension_declaration",
+        # Elixir: defmodule Foo do … end
+        "defmodule",
+        # SQL table
+        "create_table_statement",
+    }
 
     def walk(node: Any, class_ctx: str | None = None) -> None:
         kind = node.kind()
@@ -1117,7 +1548,7 @@ def _extract_generic(
                     name=name, qualified_name=qualified,
                     kind="method" if class_ctx else "function",
                     file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
-                    language=None, created_at=now, updated_at=now,
+                    language=lang, created_at=now, updated_at=now,
                 ))
         elif kind in class_kinds:
             name_node = node.child_by_field_name("name")
@@ -1129,7 +1560,7 @@ def _extract_generic(
                     name=name, qualified_name=qualified,
                     kind="class",
                     file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
-                    language=None, created_at=now, updated_at=now,
+                    language=lang, created_at=now, updated_at=now,
                 ))
                 for i in range(node.named_child_count()):
                     walk(node.named_child(i), name)

@@ -3,7 +3,6 @@
 Embed_passages is mocked out so no GPU is required.
 @pytest.mark.gpu tests run the real GPU pipeline (skipped without CUDA).
 """
-# ruff: noqa: E402
 from __future__ import annotations
 
 from unittest.mock import patch

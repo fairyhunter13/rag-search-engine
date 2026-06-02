@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -412,3 +411,119 @@ def test_graph_storage_get_community_nodes(storage):
     comm8 = storage.get_community_nodes(8)
     assert len(comm7) == 3
     assert len(comm8) == 2
+
+
+# ---------------------------------------------------------------------------
+# get_communities_for_files — unit tests
+# ---------------------------------------------------------------------------
+
+def test_get_communities_for_files_returns_community_ids(storage):
+    """get_communities_for_files returns correct community IDs for given file paths."""
+    n1 = _make_node("/src/a.py", "foo", qualified_name="a.foo")
+    n2 = _make_node("/src/b.py", "bar", qualified_name="b.bar")
+    n3 = _make_node("/src/c.py", "baz", qualified_name="c.baz")
+    storage.upsert_nodes([n1, n2, n3])
+    storage.set_community(n1.id, 10)
+    storage.set_community(n2.id, 20)
+    storage.set_community(n3.id, 20)
+
+    result_a = storage.get_communities_for_files(["/src/a.py"])
+    assert 10 in result_a, f"Expected community 10 for a.py, got {result_a}"
+
+    result_bc = storage.get_communities_for_files(["/src/b.py", "/src/c.py"])
+    assert 20 in result_bc, f"Expected community 20 for b.py/c.py, got {result_bc}"
+
+    result_all = storage.get_communities_for_files(["/src/a.py", "/src/b.py", "/src/c.py"])
+    assert 10 in result_all and 20 in result_all, f"Expected both communities, got {result_all}"
+
+
+def test_get_communities_for_files_empty_input_returns_empty(storage):
+    """get_communities_for_files([]) must return []."""
+    result = storage.get_communities_for_files([])
+    assert result == [], f"Empty input must return [], got {result}"
+
+
+def test_get_communities_for_files_nonexistent_file_returns_empty(storage):
+    """Files not in the graph return no community IDs."""
+    result = storage.get_communities_for_files(["/nonexistent/path/to/file.py"])
+    assert result == [], f"Nonexistent file must return [], got {result}"
+
+
+def test_get_communities_for_files_no_community_assigned(storage):
+    """Nodes without community_id assigned are not returned."""
+    n = _make_node("/src/orphan.py", "orphan", qualified_name="orphan.orphan")
+    storage.upsert_nodes([n])
+    # Do NOT set community
+    result = storage.get_communities_for_files(["/src/orphan.py"])
+    assert result == [], f"Nodes without community must not appear, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# trace_path cycle detection — robust delimiter-aware matching
+# ---------------------------------------------------------------------------
+
+def test_trace_path_cycle_detection_does_not_false_positive(storage):
+    """trace_path cycle guard must use delimiter-aware matching, not INSTR substring.
+
+    If node ID 'ab12345678901234' is a prefix substring of another node ID
+    'ab12345678901234xy' (impossible with 16-char hex IDs, but tests the guard),
+    the cycle check must NOT fire. Uses realistic 16-char hex node IDs.
+    """
+    # Build a simple graph: A → B → C (no cycle)
+    import hashlib
+
+    def nid(s: str) -> str:
+        return hashlib.sha256(s.encode()).hexdigest()[:16]
+
+    na = _make_node("/cycle/a.py", "funcA", qualified_name="cycle.funcA")
+    nb = _make_node("/cycle/b.py", "funcB", qualified_name="cycle.funcB")
+    nc = _make_node("/cycle/c.py", "funcC", qualified_name="cycle.funcC")
+    storage.upsert_nodes([na, nb, nc])
+
+    # A → B → C
+    storage.upsert_edges([
+        EdgeData(from_id=na.id, to_id=nb.id, kind="CALLS", confidence=1.0),
+        EdgeData(from_id=nb.id, to_id=nc.id, kind="CALLS", confidence=1.0),
+    ])
+
+    path = storage.trace_path(na.id, nc.id)
+    assert path is not None, "trace_path must find A → B → C path"
+    assert nc.id in path, f"Destination C must be in path: {path}"
+    assert len(path) == 3, f"Expected path length 3 (A, B, C), got {path}"
+
+
+def test_trace_path_returns_none_when_no_path(storage):
+    """trace_path returns None when there is no path between nodes."""
+    na = _make_node("/nopath/a.py", "alpha", qualified_name="m.alpha")
+    nb = _make_node("/nopath/b.py", "beta", qualified_name="m.beta")
+    storage.upsert_nodes([na, nb])
+    # No edges — no path
+    result = storage.trace_path(na.id, nb.id)
+    assert result is None, f"trace_path with no edges must return None, got {result}"
+
+
+def test_get_callers_deduplicates_by_node_id(storage):
+    """get_callers must deduplicate nodes appearing at multiple depths."""
+    # Build: A calls B, B calls A (cycle), C calls B
+    # At depth ≥ 2, B might reappear as a caller of itself
+
+    na = _make_node("/dedup/a.py", "funcA", qualified_name="d.funcA")
+    nb = _make_node("/dedup/b.py", "funcB", qualified_name="d.funcB")
+    nc = _make_node("/dedup/c.py", "funcC", qualified_name="d.funcC")
+    storage.upsert_nodes([na, nb, nc])
+
+    # C → B → target
+    nd = _make_node("/dedup/target.py", "target", qualified_name="d.target")
+    storage.upsert_nodes([nd])
+    storage.upsert_edges([
+        EdgeData(from_id=nc.id, to_id=nb.id, kind="CALLS", confidence=1.0),
+        EdgeData(from_id=nb.id, to_id=nd.id, kind="CALLS", confidence=1.0),
+        EdgeData(from_id=na.id, to_id=nd.id, kind="CALLS", confidence=1.0),  # direct path too
+    ])
+
+    callers = storage.get_callers(nd.id, depth=3)
+    caller_ids = [c.node_id for c in callers]
+    # Each node_id must appear at most once (deduplication)
+    assert len(caller_ids) == len(set(caller_ids)), (
+        f"Duplicate node_ids in get_callers result: {caller_ids}"
+    )

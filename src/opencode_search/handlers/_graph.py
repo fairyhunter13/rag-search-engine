@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import collections
+import contextlib
 import json
 import logging
 import re
-import xml.etree.ElementTree as _ET
+import xml.etree.ElementTree as _ET  # noqa: N814
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -266,7 +267,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
     # Build search dirs: root + 1st-level dirs + symlinked repos inside container dirs.
     # Symlinked entries (federation members) are added first so they aren't squeezed
     # out by non-repo subdirs when the cap is reached.
-    _SKIP_SCAN = {".git", ".venv", "venv", "node_modules", "__pycache__", "target", "dist", "build"}
+    _SKIP_SCAN = {".git", ".venv", "venv", "node_modules", "__pycache__", "target", "dist", "build"}  # noqa: N806
     search_dirs: list[Path] = [root]
     first_level: list[Path] = []
     try:
@@ -355,10 +356,10 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
     federation/monorepo projects where many languages are present).
     """
     try:
-        from opencode_search.discover import detect_language, iter_files, SOURCE_EXTENSIONS
+        from opencode_search.discover import SOURCE_EXTENSIONS, detect_language, iter_files
 
         # Extension sets per language — ordered most-preferred first
-        _LANG_EXTS: dict[str, tuple[str, ...]] = {
+        _LANG_EXTS: dict[str, tuple[str, ...]] = {  # noqa: N806
             "go":         (".go",),
             "python":     (".py",),
             "java":       (".java",),
@@ -367,7 +368,7 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
             "javascript": (".js", ".jsx", ".mjs"),
             "rust":       (".rs",),
         }
-        _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}
+        _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}  # noqa: N806
 
         # Bias toward files matching primary_language hint
         primary_exts: set[str] = set()
@@ -404,10 +405,8 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
         # Read samples for heuristics (800 chars captures package + imports + first functions)
         combined = ""
         for p in sample_files[:20]:
-            try:
+            with contextlib.suppress(Exception):
                 combined += p.read_text(errors="replace")[:800]
-            except Exception:
-                pass
 
         # Error handling
         err_handling = "unknown"
@@ -541,7 +540,7 @@ def _detect_module_structure(root: Path) -> dict[str, Any]:
             except Exception:
                 pass
         if not top_packages:
-            top_packages = [d for d in top_dirs[:8]]
+            top_packages = list(top_dirs[:8])
 
         return {
             "type": pattern,
@@ -899,6 +898,8 @@ async def handle_get_communities(
                     "node_count": c.node_count,
                     "key_entry_points": c.key_entry_points,
                     "generated_at": c.generated_at,
+                    "level": c.level,
+                    "parent_community_id": c.parent_community_id,
                 })
             return {"communities": result, "total": len(result)}
         finally:
@@ -1035,7 +1036,7 @@ async def handle_project_structure(
     if not root.is_dir():
         return {"error": f"Not a directory: {project_path}"}
 
-    _SKIP_DIRS = {
+    _SKIP_DIRS = {  # noqa: N806
         ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
         ".pytest_cache", "dist", "build", "target", ".idea", ".vscode",
         "vendor", ".tox", "coverage", ".coverage", "htmlcoverage",
@@ -1059,14 +1060,14 @@ async def handle_project_structure(
                 lines.extend(_tree(entry, depth - 1, prefix + extension))
         return lines
 
-    tree_lines = [f"{root.name}/"] + _tree(root, max_depth)
+    tree_lines = [f"{root.name}/", *_tree(root, max_depth)]
     tree_str = "\n".join(tree_lines[:200])  # cap output size
 
     # Language breakdown from file walk
     lang_counts: Counter = Counter()
     file_count = 0
     try:
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        for _dirpath, dirnames, filenames in os.walk(root, followlinks=True):
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
             for fname in filenames:
                 ext = Path(fname).suffix.lower()
@@ -1147,39 +1148,45 @@ async def handle_graph_export(
         communities = await asyncio.to_thread(
             gs.get_communities, None, min_community_size, True  # limit=None, order_by_size=True
         )
-        # Collect nodes from largest communities until we hit max_nodes
-        included_node_ids: set = set()
+        # Collect nodes from largest communities until we hit max_nodes.
+        # Build nodes_out directly from already-fetched community node lists —
+        # avoids loading the entire graph (all_nodes / all_edges) into memory.
+        nodes_out: list[dict] = []
         selected_communities = []
+        node_id_set: set[str] = set()
+        truncated = False
         for c in communities:
-            if len(included_node_ids) >= max_nodes:
+            if len(node_id_set) >= max_nodes:
+                truncated = True
                 break
-            nodes = await asyncio.to_thread(gs.get_community_nodes, c.id)
-            for n in nodes:
-                included_node_ids.add(n.id)
-            selected_communities.append((c, nodes))
+            cnodes = await asyncio.to_thread(gs.get_community_nodes, c.id)
+            for n in cnodes:
+                if len(node_id_set) >= max_nodes:
+                    truncated = True
+                    break
+                node_id_set.add(n.id)
+                nodes_out.append({
+                    "id": n.id,
+                    "name": n.name,
+                    "qualified_name": n.qualified_name,
+                    "kind": n.kind,
+                    "file": n.file,
+                    "language": n.language,
+                    "community_id": n.community_id,
+                })
+            selected_communities.append(c)
 
-        # Build full node + edge lists for included nodes
-        all_nodes = await asyncio.to_thread(gs.all_nodes)
-        all_edges = await asyncio.to_thread(gs.all_edges)
+        # Fetch only edges whose both endpoints are in the included node set.
+        # Use targeted SQL instead of loading the entire edge table.
+        def _fetch_edges() -> list[dict]:
+            db = gs._db()
+            out = []
+            for e in db.execute("SELECT from_id, to_id, kind FROM edges").fetchall():
+                if e[0] in node_id_set and e[1] in node_id_set:
+                    out.append({"from": e[0], "to": e[1], "kind": e[2]})
+            return out
 
-        nodes_out = [
-            {
-                "id": n.id,
-                "name": n.name,
-                "qualified_name": n.qualified_name,
-                "kind": n.kind,
-                "file": n.file,
-                "language": n.language,
-                "community_id": n.community_id,
-            }
-            for n in all_nodes if n.id in included_node_ids
-        ]
-
-        edges_out = [
-            {"from": e.from_id, "to": e.to_id, "kind": e.kind}
-            for e in all_edges
-            if e.from_id in included_node_ids and e.to_id in included_node_ids
-        ]
+        edges_out = await asyncio.to_thread(_fetch_edges)
 
         communities_out = [
             {
@@ -1188,7 +1195,7 @@ async def handle_graph_export(
                 "summary": c.summary,
                 "node_count": c.node_count,
             }
-            for c, _ in selected_communities
+            for c in selected_communities
         ]
 
     finally:
@@ -1203,6 +1210,8 @@ async def handle_graph_export(
             "nodes": len(nodes_out),
             "edges": len(edges_out),
             "communities": len(communities_out),
+            "truncated": truncated,
+            "max_nodes_limit": max_nodes,
             "graphml": graphml,
         }
 
@@ -1213,6 +1222,8 @@ async def handle_graph_export(
         "nodes": nodes_out,
         "edges": edges_out,
         "communities": communities_out,
+        "truncated": truncated,
+        "max_nodes_limit": max_nodes,
         "stats": {
             "node_count": len(nodes_out),
             "edge_count": len(edges_out),

@@ -5,7 +5,8 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _get_llm() -> "LLMClient | None":
+def _get_llm() -> LLMClient | None:
     from opencode_search.enricher.client import create_llm_client
     return create_llm_client()
 
@@ -43,6 +44,7 @@ async def handle_enrich_project(
     project_path: str,
     scope: str = "communities",
     max_communities: int | None = None,
+    community_ids: list[int] | None = None,
     include_federation: bool = False,
 ) -> dict[str, Any]:
     """Trigger LLM enrichment. scope: symbols|communities|wiki|all.
@@ -80,6 +82,7 @@ async def handle_enrich_project(
     total_communities = 0
     results_per_path: list[dict[str, Any]] = []
 
+    root_path = paths_to_enrich[0] if paths_to_enrich else project_path
     for path in paths_to_enrich:
         gs = _open_graph(path)
         if gs is None:
@@ -87,11 +90,17 @@ async def handle_enrich_project(
             continue
         enriched_symbols = 0
         enriched_communities = 0
+        # community_ids is scoped to the root project — federation members
+        # use different community ID namespaces, so pass None for them
+        # to get a full unenriched-communities refresh.
+        this_community_ids = community_ids if path == root_path else None
         try:
             if scope in ("symbols", "all"):
                 enriched_symbols = await _enrich_symbols(gs, llm)
             if scope in ("communities", "all"):
-                enriched_communities = await _enrich_communities(gs, llm, max_communities=cap)
+                enriched_communities = await _enrich_communities(
+                    gs, llm, max_communities=cap, community_ids=this_community_ids,
+                )
         finally:
             gs.close()
         total_symbols += enriched_symbols
@@ -153,7 +162,7 @@ async def handle_get_symbol_intent(name: str, project_path: str) -> dict[str, An
             node.signature or node.qualified_name,
             node.docstring,
         )
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         gs.set_node_intent(node.id, intent, now)
 
         return {
@@ -179,10 +188,10 @@ async def _enrich_symbols(gs: Any, llm: Any) -> int:
                 node.signature or node.qualified_name,
                 node.docstring,
             )
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             gs.set_node_intent(node.id, intent, now)
             count += 1
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug("intent generation failed for %s: %s", node.name, exc)
     return count
 
@@ -190,34 +199,43 @@ async def _enrich_symbols(gs: Any, llm: Any) -> int:
 _LLM_CONCURRENCY: int = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", "2"))
 
 
-async def _enrich_communities(gs: Any, llm: Any, max_communities: int = 200) -> int:
-    """Generate titles and summaries for communities without them.
+async def _enrich_communities(
+    gs: Any,
+    llm: Any,
+    max_communities: int = 200,
+    community_ids: list[int] | None = None,
+) -> int:
+    """Generate titles and summaries for communities.
 
     Args:
         max_communities: Hard cap on communities processed per call. Communities
-            are selected largest-first (by node_count) to maximize architectural
-            coverage per LLM call. Singletons (node_count == 1) are skipped
-            as they carry no structural information.
+            are selected largest-first (by node_count).  Singletons are skipped.
+        community_ids: When set, only enrich these specific community IDs (used
+            for incremental refresh after file changes). Already-enriched
+            communities in this set are re-enriched to pick up code changes.
     """
-    # Fetch only unenriched, non-singleton communities largest-first.
-    # This replaces the old get_communities() that loaded ALL rows (including
-    # 163k singletons on large projects) and filtered in Python.
-    all_unenriched = [
-        c for c in gs.get_communities(min_node_count=2, order_by_size=True)
-        if not c.title
-    ]
-    communities = all_unenriched[:max_communities]
+    all_communities = gs.get_communities(min_node_count=2, order_by_size=True)
+
+    if community_ids is not None:
+        # Selective incremental refresh: include target communities regardless
+        # of whether they were previously enriched.
+        id_set = set(community_ids)
+        communities = [c for c in all_communities if c.id in id_set][:max_communities]
+    else:
+        # Default: only unenriched communities, largest-first.
+        communities = [c for c in all_communities if not c.title][:max_communities]
+
     if not communities:
         return 0
 
     log.info(
-        "enriching %d communities (max=%d, total unenriched=%d)",
-        len(communities), max_communities, len(all_unenriched),
+        "enriching %d communities (max=%d, selective=%s)",
+        len(communities), max_communities, community_ids is not None,
     )
 
-    # Pre-fetch all node summaries on the current thread — SQLite connections
-    # are not thread-safe across threads, so graph reads must stay here.
-    community_summaries: list[tuple[Any, list[str]]] = []
+    # Pre-fetch node summaries and sample actual code — SQLite reads must stay
+    # on this thread; code file reads happen in the same loop.
+    community_data: list[tuple[Any, list[str], list[tuple[str, str]]]] = []
     for community in communities:
         nodes = gs.get_community_nodes(community.id)
         summaries = [
@@ -225,31 +243,35 @@ async def _enrich_communities(gs: Any, llm: Any, max_communities: int = 200) -> 
             + (f": {n.docstring[:80]}" if n.docstring else "")
             for n in nodes[:20]
         ]
+        code_samples = _sample_community_code(nodes[:5])
         if summaries:
-            community_summaries.append((community, summaries))
+            community_data.append((community, summaries, code_samples))
 
-    if not community_summaries:
+    if not community_data:
         return 0
 
-    # Run LLM calls concurrently — they are the only blocking I/O here.
-    # All SQLite writes happen after gather() on the calling thread to avoid
-    # concurrent-write races on the shared connection.
+    # Run LLM calls concurrently (semaphore limits parallelism).
     sem = asyncio.Semaphore(_LLM_CONCURRENCY)
 
-    async def _call_llm(community: Any, summaries: list[str]) -> tuple[Any, str, str] | None:
+    async def _call_llm(
+        community: Any,
+        summaries: list[str],
+        code_samples: list[tuple[str, str]],
+    ) -> tuple[Any, str, str] | None:
         async with sem:
             try:
-                title, summary = await asyncio.to_thread(llm.community_summary, summaries)
+                title, summary = await asyncio.to_thread(
+                    llm.community_summary, summaries, code_samples,
+                )
                 return community, title, summary
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.debug("community LLM call failed for %d: %s", community.id, exc)
                 return None
 
-    results = await asyncio.gather(*[_call_llm(c, s) for c, s in community_summaries])
+    results = await asyncio.gather(*[_call_llm(c, s, cs) for c, s, cs in community_data])
 
-    # Serialize all DB writes on the calling thread (no concurrency needed here)
     count = 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     for item in results:
         if item is None:
             continue
@@ -260,3 +282,131 @@ async def _enrich_communities(gs: Any, llm: Any, max_communities: int = 200) -> 
         gs.upsert_community(community)
         count += 1
     return count
+
+
+async def handle_enrich_hierarchy(
+    project_path: str,
+    max_level: int | None = None,
+) -> dict:
+    """Enrich all hierarchy levels above level-1 using their children's summaries.
+
+    Generates LLM titles+summaries for macro-communities by synthesizing
+    from their children's summaries (bottom-up, like GraphRAG's rollup).
+    Call after build(action="hierarchy") to get enriched architecture domains.
+    """
+    from opencode_search.enricher import create_llm_client
+    from opencode_search.graph.storage import CommunityData
+    from opencode_search.handlers._graph import _open_graph
+
+    gs = _open_graph(project_path)
+    if gs is None:
+        return {"error": "Project not indexed"}
+
+    try:
+        top_level = gs.get_max_community_level()
+        if top_level <= 1:
+            return {"status": "ok", "message": "No hierarchy built yet. Run build(action='hierarchy') first.", "enriched": 0}
+
+        llm = await asyncio.to_thread(create_llm_client)
+        total_enriched = 0
+        effective_max = max_level or top_level
+
+        for level in range(2, effective_max + 1):
+            level_comms = gs.get_communities(level=level, order_by_size=True)
+            unenriched = [c for c in level_comms if not c.title]
+            if not unenriched:
+                continue
+
+            # Pre-load child communities ONCE per level (not per-community)
+            # to avoid O(n×m) repeated full-table scans.
+            child_level = level - 1
+            child_comms = gs.get_communities(level=child_level)
+            children_by_parent: dict[int, list[CommunityData]] = defaultdict(list)
+            for c in child_comms:
+                if c.parent_community_id is not None and c.title and c.summary:
+                    children_by_parent[c.parent_community_id].append(c)
+
+            _sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+
+            async def _enrich_macro(
+                comm: CommunityData,
+                _map: dict = children_by_parent,
+                _s: asyncio.Semaphore = _sem,
+            ) -> tuple[CommunityData, str, str] | None:
+                children = _map.get(comm.id, [])
+                if not children:
+                    return None
+                child_summaries = [
+                    f"[{c.title}] {c.summary}" for c in children[:15]
+                ]
+                if not child_summaries:
+                    return None
+                async with _s:
+                    try:
+                        title, summary = await asyncio.to_thread(
+                            llm.community_summary,
+                            child_summaries,
+                            None,
+                        )
+                        return comm, title, summary
+                    except Exception as exc:
+                        log.debug("macro community LLM failed for %d: %s", comm.id, exc)
+                        return None
+
+            results = await asyncio.gather(*[_enrich_macro(c) for c in unenriched])
+            now = datetime.now(UTC).isoformat()
+            updated_batch: list[CommunityData] = []
+            for item in results:
+                if item is None:
+                    continue
+                comm, title, summary = item
+                comm.title = title
+                comm.summary = summary
+                comm.generated_at = now
+                updated_batch.append(comm)
+                total_enriched += 1
+            if updated_batch:
+                gs.upsert_communities_batch(updated_batch)
+
+        return {"status": "ok", "enriched": total_enriched, "max_level": top_level}
+    finally:
+        import contextlib
+        with contextlib.suppress(Exception):
+            gs.close()
+
+
+_MAX_CODE_SAMPLE_FILES = 3
+_MAX_CODE_SAMPLE_BYTES = 800
+
+
+def _sample_community_code(nodes: list[Any]) -> list[tuple[str, str]]:
+    """Read code snippets from the top nodes' source files for LLM context.
+
+    Returns a list of (relative_path, code_snippet) tuples — at most
+    _MAX_CODE_SAMPLE_FILES entries, each capped at _MAX_CODE_SAMPLE_BYTES.
+    """
+    seen_files: dict[str, str] = {}  # file_path → snippet
+    for node in nodes:
+        if len(seen_files) >= _MAX_CODE_SAMPLE_FILES:
+            break
+        if not node.file or node.file in seen_files:
+            continue
+        try:
+            file_path = Path(node.file)
+            if not file_path.is_file():
+                continue
+            text = file_path.read_text(encoding="utf-8", errors="replace")
+            # Extract the relevant block by line range if available
+            if node.start_line and node.end_line:
+                lines = text.splitlines()
+                start = max(0, node.start_line - 1)
+                end = min(len(lines), node.end_line)
+                snippet = "\n".join(lines[start:end])
+            else:
+                snippet = text
+            snippet = snippet[:_MAX_CODE_SAMPLE_BYTES]
+            # Use a short relative name for readability in the prompt
+            seen_files[node.file] = snippet
+        except Exception:
+            continue
+    return list(seen_files.items())

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .extractor import _RawEdge
-    from .storage import NodeData, EdgeData
+    from .storage import EdgeData, NodeData
 
 log = logging.getLogger(__name__)
 

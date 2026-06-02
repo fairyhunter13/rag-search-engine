@@ -515,7 +515,7 @@ async def test_search_does_not_rewrite_or_augment_query():
 
     captured: dict[str, object] = {}
 
-    async def capture_search_hybrid(query, query_vec, limit):  # noqa: ANN001
+    async def capture_search_hybrid(query, query_vec, limit):
         captured["query"] = query
         captured["limit"] = limit
         return [_make_row()]

@@ -65,6 +65,7 @@ async def test_handle_index_project_missing_dir():
 @pytest.mark.asyncio
 async def test_handle_index_project_success(tmp_path):
     import asyncio
+
     from opencode_search.handlers import _indexing_status, handle_index_project
     expected_db_path = get_project_db_path(tmp_path)
 
@@ -115,6 +116,7 @@ async def test_handle_index_project_no_duplicate_run(tmp_path):
 @pytest.mark.asyncio
 async def test_handle_index_project_clears_running_on_exception(tmp_path):
     import asyncio
+
     from opencode_search.handlers import _indexing_status, handle_index_project
 
     with patch(f"{_IDX}.Storage") as MockStorage:

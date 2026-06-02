@@ -1,5 +1,4 @@
 """Tests for opencode_search.cli — typer command dispatch with mocked handlers."""
-# ruff: noqa: E402
 from __future__ import annotations
 
 import json

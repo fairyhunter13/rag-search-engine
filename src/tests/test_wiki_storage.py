@@ -1,8 +1,6 @@
 """Tests for opencode_search.wiki.storage — WikiStorage."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from opencode_search.wiki.storage import WikiStorage

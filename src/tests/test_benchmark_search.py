@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import statistics
 import time
-from pathlib import Path
 
 import pytest
 
@@ -22,17 +21,19 @@ pytest.importorskip("mcp")
 from opencode_search import config
 from opencode_search.mcp import (
     _release_stale_project_watches,
-    search,
     build,
     overview,
+    search,
 )
+
+
 async def index_project(path, watch=False, force=False, follow_symlinks=True):
     return await build(project_path=path, action="index", watch=watch, force=force)
 async def search_code(query, project_paths=None, top_k=10, use_rerank=True):
     return await search(query=query, project_paths=project_paths, top_k=top_k)
 async def project_status(path): return await overview(project_path=path, what="status")
-from opencode_search.search import clear_search_cache
-from opencode_search.watcher import watcher_manager
+from opencode_search.search import clear_search_cache  # noqa: E402
+from opencode_search.watcher import watcher_manager  # noqa: E402
 
 pytestmark = [pytest.mark.perf, pytest.mark.integration, pytest.mark.runtime_deps, pytest.mark.gpu]
 

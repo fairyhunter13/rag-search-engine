@@ -358,7 +358,7 @@ async def handle_index_federation(
             else:
                 indexed.append(member)
                 log.info("federation: started indexing %s", member)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failed.append({"path": member, "reason": str(exc)})
             log.warning("federation: failed to index %s: %s", member, exc)
 

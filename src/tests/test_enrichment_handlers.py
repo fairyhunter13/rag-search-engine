@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import hashlib
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from opencode_search.graph.storage import CommunityData, EdgeData, GraphStorage, NodeData
+from opencode_search.graph.storage import CommunityData, GraphStorage, NodeData
 from opencode_search.handlers._enrichment import handle_enrich_project, handle_get_symbol_intent
-from opencode_search.handlers._wiki import handle_wiki_generate, handle_wiki_ingest, handle_wiki_lint
+from opencode_search.handlers._wiki import (
+    handle_wiki_generate,
+    handle_wiki_ingest,
+    handle_wiki_lint,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -29,7 +33,6 @@ def _make_node(file: str, name: str, qn: str | None = None) -> NodeData:
 
 @pytest.fixture
 def project_with_graph(tmp_path):
-    from opencode_search.config import get_project_graph_db_path
 
     project_root = tmp_path / "project"
     project_root.mkdir()
@@ -88,7 +91,7 @@ async def test_handle_enrich_project_returns_error_when_ollama_not_available(pro
 
 
 async def test_handle_enrich_project_communities_scope(project_with_graph):
-    project_path, _, graph_db_path = project_with_graph
+    project_path, _, _graph_db_path = project_with_graph
     llm = MagicMock()
     llm.is_available.return_value = True
     llm.community_summary.return_value = ("Auth Layer", "Handles auth.")
@@ -126,14 +129,14 @@ async def test_handle_enrich_project_returns_elapsed_s(project_with_graph):
 
 
 async def test_handle_get_symbol_intent_returns_error_when_no_llm(project_with_graph):
-    project_path, nodes, _ = project_with_graph
+    project_path, _nodes, _ = project_with_graph
     with patch("opencode_search.handlers._enrichment._get_llm", return_value=None):
         result = await handle_get_symbol_intent(name="authenticate", project_path=project_path)
     assert "error" in result
 
 
 async def test_handle_get_symbol_intent_calls_llm_when_stale(project_with_graph):
-    project_path, nodes, _ = project_with_graph
+    project_path, _nodes, _ = project_with_graph
     llm = MagicMock()
     llm.is_available.return_value = True
     llm.symbol_intent.return_value = "Authenticates a user by token."
@@ -146,7 +149,7 @@ async def test_handle_get_symbol_intent_calls_llm_when_stale(project_with_graph)
 
 
 async def test_handle_get_symbol_intent_caches_result_in_db(project_with_graph):
-    project_path, nodes, graph_db_path = project_with_graph
+    project_path, _nodes, _graph_db_path = project_with_graph
     llm = MagicMock()
     llm.is_available.return_value = True
     llm.symbol_intent.return_value = "Cached intent value."

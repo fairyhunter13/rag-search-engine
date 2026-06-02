@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -64,7 +63,7 @@ async def test_wiki_generate_module_page_creates_file(setup):
 
 
 async def test_wiki_generate_module_page_content_not_empty(setup):
-    gen, wiki, _, llm = setup
+    gen, wiki, _, _llm = setup
     await gen.generate_module_page("auth", "/project")
     pages = wiki.list_wiki_pages()
     page = next(p for p in pages if "auth" in p)
@@ -147,13 +146,13 @@ async def test_wiki_ingest_raw_markdown_appends_to_log(setup, tmp_path):
 
 
 async def test_wiki_ingest_nonexistent_file_raises_error(setup):
-    gen, wiki, _, _ = setup
+    gen, _wiki, _, _ = setup
     with pytest.raises(FileNotFoundError):
         await gen.ingest_raw_source("/nonexistent/path/doc.md", "/project")
 
 
 async def test_wiki_lint_empty_wiki_no_issues(setup):
-    gen, wiki, _, _ = setup
+    gen, _wiki, _, _ = setup
     result = await gen.lint()
     assert result["healthy"] is True
     assert result["total_pages"] == 0
@@ -183,3 +182,65 @@ async def test_wiki_lint_referenced_page_not_orphan(setup):
     wiki.write_index("# Index\n- [documented_page](documented_page.md)")
     result = await gen.lint()
     assert "documented_page" not in result["orphans"]
+
+
+# ---------------------------------------------------------------------------
+# New tests: empty community guard + code_samples wiring
+# ---------------------------------------------------------------------------
+
+async def test_generate_community_page_empty_community_returns_empty(setup):
+    """generate_community_page returns '' (no wiki file) if community has no nodes."""
+    gen, wiki, gs, _llm = setup
+    # Create a community with no nodes
+    gs.upsert_community(CommunityData(id=99, node_count=0, key_entry_points=[]))
+    # Do NOT assign any nodes to community 99
+
+    content = await gen.generate_community_page(99)
+    assert content == "", (
+        "generate_community_page must return '' for empty communities, "
+        "not call the LLM with empty summaries."
+    )
+    # LLM must NOT have been called for this empty community
+    # (it may have been called for earlier tests in this session — check call count didn't increase)
+    assert "community_99" not in wiki.list_wiki_pages(), (
+        "No wiki page should be created for empty community 99"
+    )
+
+
+async def test_generate_community_page_passes_code_samples_to_llm(setup, tmp_path):
+    """generate_community_page passes code_samples to community_summary."""
+    gen, _wiki, gs, llm = setup
+
+    # Write a real source file so _sample_community_code can read it
+    src_file = tmp_path / "realfile.py"
+    src_file.write_text("def process():\n    return True\n", encoding="utf-8")
+
+    # Create node pointing to the real file
+    import datetime
+    import hashlib
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    nid = hashlib.sha256(b"realfile::process").hexdigest()[:16]
+    from opencode_search.graph.storage import NodeData as ND  # noqa: N817
+    n = ND(
+        id=nid, name="process", qualified_name="realfile.process",
+        kind="function", file=str(src_file),
+        start_line=1, end_line=2,
+        language="python", created_at=now, updated_at=now,
+    )
+    gs.upsert_nodes([n])
+    gs.upsert_community(CommunityData(id=77, node_count=1, key_entry_points=["realfile.process"]))
+    gs.set_community(nid, 77)
+
+    # Reset call tracking
+    llm.community_summary.reset_mock()
+
+    await gen.generate_community_page(77)
+
+    assert llm.community_summary.called, "community_summary must be called for community 77"
+    args, kwargs = llm.community_summary.call_args
+    # Either positional or keyword code_samples
+    code_samples = kwargs.get("code_samples") if kwargs else (args[1] if len(args) > 1 else None)
+    assert code_samples is not None, (
+        "generate_community_page must pass code_samples to community_summary. "
+        "Import _sample_community_code from handlers._enrichment and pass result."
+    )

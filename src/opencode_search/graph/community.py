@@ -114,4 +114,170 @@ class CommunityDetector:
         )
         return node_id_to_community
 
+    def build_hierarchy(
+        self,
+        storage: GraphStorage,
+        max_levels: int = 10,
+        max_communities: int = 2000,
+    ) -> int:
+        """Build a recursive Leiden hierarchy on top of the level-1 communities.
+
+        Starting from the existing level-1 communities, iteratively constructs
+        higher-level meta-communities by treating each community as a node and
+        inter-community CALLS edges as edges between those nodes.
+
+        Stops when:
+        - The meta-graph has fewer than 5 nodes (too small to partition further)
+        - The resulting partition has only 1 community (fully connected)
+        - max_levels is reached
+
+        Args:
+            max_communities: Cap on level-1 communities used. For large projects
+                (e.g. >2000 communities) the meta-graph becomes impractical to run
+                Leiden on — cap to the largest communities (most connected/important).
+
+        Returns the number of additional levels built (0 if none were possible).
+        """
+        import igraph as ig
+        import leidenalg
+
+        from .storage import CommunityData
+
+        # Load the original node→community mapping from the DB
+        edges = storage.all_edges()
+
+        # Get level-1 communities — sort by node_count desc, cap at max_communities
+        level1_all = storage.get_communities(level=1)
+        if len(level1_all) < 5:
+            log.debug("hierarchy: only %d level-1 communities, skipping hierarchy", len(level1_all))
+            return 0
+        level1 = sorted(level1_all, key=lambda c: c.node_count, reverse=True)[:max_communities]
+        if len(level1_all) > max_communities:
+            log.info(
+                "hierarchy: capping to top-%d communities (project has %d total)",
+                max_communities, len(level1_all),
+            )
+
+        # current_level_membership: {community_id (at current_level) → parent_id (level+1)}
+        # Start with level-1 community IDs as "nodes" in the meta-graph
+        current_communities = {c.id: c for c in level1}
+        levels_built = 0
+
+        # Build a mapping from node_id → community_id (level 1)
+        # We need the nodes table for this
+        all_nodes = storage.all_nodes()
+        node_to_community: dict[str, int] = {}
+        for n in all_nodes:
+            if n.community_id is not None:
+                node_to_community[n.id] = n.community_id
+
+        for current_level in range(1, max_levels):
+            next_level = current_level + 1
+
+            # Build meta-graph: nodes = current-level community IDs,
+            # edges = cross-community CALLS (weighted by count)
+            comm_ids = sorted(current_communities.keys())
+            if len(comm_ids) < 5:
+                break
+
+            comm_to_idx = {cid: i for i, cid in enumerate(comm_ids)}
+
+            # Count cross-community edges
+            edge_weights: dict[tuple[int, int], float] = defaultdict(float)
+            for e in edges:
+                if e.kind not in ("CALLS", "IMPORTS"):
+                    continue
+                fc = node_to_community.get(e.from_id)
+                tc = node_to_community.get(e.to_id)
+                if fc is None or tc is None or fc == tc:
+                    continue
+                fi = comm_to_idx.get(fc)
+                ti = comm_to_idx.get(tc)
+                if fi is None or ti is None:
+                    continue
+                key = (min(fi, ti), max(fi, ti))
+                edge_weights[key] += e.confidence
+
+            if not edge_weights:
+                log.debug("hierarchy level %d: no cross-community edges, stopping", next_level)
+                break
+
+            g_edges = list(edge_weights.keys())
+            g_weights = [edge_weights[k] for k in g_edges]
+            meta_g = ig.Graph(n=len(comm_ids), edges=g_edges, directed=False)
+            meta_g.es["weight"] = g_weights
+
+            partition = leidenalg.find_partition(
+                meta_g,
+                leidenalg.ModularityVertexPartition,
+                n_iterations=-1,
+                seed=42,
+                weights="weight",
+            )
+
+            if len(partition) <= 1:
+                log.debug("hierarchy level %d: single partition, stopping", next_level)
+                break
+
+            # Build new community data for this level
+            new_communities: dict[int, CommunityData] = {}
+            # Assign IDs: use offset to avoid collision with level-1 IDs
+            # Use negative or large offset: level_N_id = level * 10_000_000 + partition_idx
+            id_offset = current_level * 10_000_000
+            child_to_parent: dict[int, int] = {}  # child community_id → parent community_id
+
+            for partition_idx, member_indices in enumerate(partition):
+                parent_id = id_offset + partition_idx
+                child_ids = [comm_ids[i] for i in member_indices]
+                total_nodes = sum(current_communities[cid].node_count for cid in child_ids)
+                new_comm = CommunityData(
+                    id=parent_id,
+                    node_count=total_nodes,
+                    level=next_level,
+                    parent_community_id=None,  # set in the next iteration
+                )
+                new_communities[parent_id] = new_comm
+                for cid in child_ids:
+                    child_to_parent[cid] = parent_id
+
+            # Update the child communities' parent_community_id
+            updated_children = []
+            for cid, child in current_communities.items():
+                parent_id = child_to_parent.get(cid)
+                if parent_id is not None:
+                    updated_children.append(CommunityData(
+                        id=child.id,
+                        title=child.title,
+                        summary=child.summary,
+                        node_count=child.node_count,
+                        key_entry_points=child.key_entry_points,
+                        generated_at=child.generated_at,
+                        created_at=child.created_at,
+                        level=current_level,
+                        parent_community_id=parent_id,
+                    ))
+            if updated_children:
+                storage.upsert_communities_batch(updated_children)
+
+            # Write new level communities
+            storage.upsert_communities_batch(list(new_communities.values()))
+            levels_built += 1
+
+            log.info(
+                "hierarchy: level %d → %d communities from %d",
+                next_level, len(new_communities), len(current_communities),
+            )
+
+            # Prepare for next iteration: the new level becomes the current level
+            current_communities = new_communities
+            # Update node_to_community to map to new higher-level IDs
+            new_node_to_community: dict[str, int] = {}
+            for node_id, old_cid in node_to_community.items():
+                parent = child_to_parent.get(old_cid)
+                new_node_to_community[node_id] = parent if parent is not None else old_cid
+            node_to_community = new_node_to_community
+
+        log.info("hierarchy: built %d additional levels", levels_built)
+        return levels_built
+
 

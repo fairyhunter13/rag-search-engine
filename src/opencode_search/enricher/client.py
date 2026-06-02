@@ -30,7 +30,6 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Ollama module-level defaults (inline to avoid circular imports with config.py)
 # ---------------------------------------------------------------------------
@@ -85,24 +84,39 @@ class LLMClient:
             max_tokens=128,
         )
 
-    def community_summary(self, node_summaries: list[str]) -> tuple[str, str]:
-        """Generate title + 2-3 sentence summary for a community cluster."""
+    def community_summary(
+        self,
+        node_summaries: list[str],
+        code_samples: list[tuple[str, str]] | None = None,
+    ) -> tuple[str, str]:
+        """Generate title + 2-3 sentence summary for a community cluster.
+
+        LLM-first approach: when code_samples are provided the LLM sees actual
+        source code in addition to symbol names, producing richer and more
+        accurate descriptions.
+        """
         nodes_text = "\n".join(f"- {s}" for s in node_summaries[:30])
+        code_text = ""
+        if code_samples:
+            snippets = "\n\n".join(
+                f"--- {path} ---\n{snippet[:800]}"
+                for path, snippet in code_samples[:3]
+            )
+            code_text = f"\n\nCode samples from this cluster:\n{snippets}"
         text = self.chat(
             [
                 {
                     "role": "user",
                     "content": (
-                        "You are a software architect. Given a list of functions and classes "
-                        "that form a code cluster, respond with:\n"
-                        "TITLE: <short title>\n"
-                        "SUMMARY: <2-3 sentence summary>\n"
+                        "You are a software architect. Given this code cluster, respond with:\n"
+                        "TITLE: <short descriptive title>\n"
+                        "SUMMARY: <2-3 sentence summary of what this cluster does>\n"
                         "No other text.\n\n"
-                        f"Code cluster members:\n{nodes_text}"
+                        f"Cluster symbols:\n{nodes_text}{code_text}"
                     ),
                 }
             ],
-            max_tokens=256,
+            max_tokens=300,
         )
         title = summary = ""
         for line in text.splitlines():
@@ -210,6 +224,140 @@ class LLMClient:
             max_tokens=1024,
         )
 
+    def map_query(self, query: str, community_summaries: list[str]) -> str:
+        """MAP phase of global synthesis: extract query-relevant info from a batch of communities.
+
+        Called once per batch of ~8 community summaries. Returns a partial answer
+        string that the REDUCE phase will synthesize into a final response.
+        """
+        batch_text = "\n\n".join(
+            f"[Community {i+1}] {s}" for i, s in enumerate(community_summaries[:10])
+        )
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a software architect analyzing a codebase. Given the following "
+                        "code community descriptions, extract any information relevant to answering "
+                        "the query. If none are relevant, say 'No relevant information.'\n\n"
+                        f"Query: {query}\n\n"
+                        f"Community descriptions:\n{batch_text}\n\n"
+                        "Respond concisely with only the relevant findings:"
+                    ),
+                }
+            ],
+            max_tokens=400,
+        )
+
+    def reduce_answers(self, query: str, partial_answers: list[str]) -> str:
+        """REDUCE phase of global synthesis: synthesize partial answers into a final response.
+
+        Takes all the MAP outputs and combines them into a coherent, complete answer.
+        """
+        answers_text = "\n\n---\n\n".join(
+            f"Finding {i+1}:\n{a}" for i, a in enumerate(partial_answers[:20])
+            if a.strip() and "no relevant information" not in a.lower()
+        )
+        if not answers_text:
+            return "No relevant information found across the codebase communities."
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a senior software architect. Synthesize these partial findings "
+                        "from different parts of a codebase into a single comprehensive answer. "
+                        "Be specific, reference component names, and avoid repetition.\n\n"
+                        f"Original query: {query}\n\n"
+                        f"Partial findings:\n{answers_text}\n\n"
+                        "Provide a complete, well-structured answer:"
+                    ),
+                }
+            ],
+            max_tokens=800,
+        )
+
+    def impact_narrative(
+        self,
+        symbol: str,
+        callers: list[str],
+        affected_domains: list[str],
+        impact_count: int,
+    ) -> str:
+        """Generate a natural-language impact analysis for a code change."""
+        callers_text = "\n".join(f"- {c}" for c in callers[:20])
+        domains_text = ", ".join(affected_domains[:10]) or "unknown"
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a senior software engineer. Analyze the blast radius of changing "
+                        "the given symbol and provide a concise impact summary.\n\n"
+                        f"Symbol: {symbol}\n"
+                        f"Direct/transitive callers ({impact_count} total):\n{callers_text}\n"
+                        f"Affected architecture domains: {domains_text}\n\n"
+                        "Respond with:\n"
+                        "RISK: <low|medium|high>\n"
+                        "SUMMARY: <2-3 sentences describing who is affected and why>\n"
+                        "ACTION: <one sentence recommending what to test or review>"
+                    ),
+                }
+            ],
+            max_tokens=300,
+        )
+
+    def trace_narrative(
+        self,
+        from_symbol: str,
+        to_symbol: str,
+        path: list[dict],
+    ) -> str:
+        """Generate a natural-language narrative for a call chain trace."""
+        steps = "\n".join(
+            f"  {i+1}. {n.get('qualified_name', n.get('name', '?'))} "
+            f"({n.get('kind', '?')}) in {(n.get('file','?') or '?').rsplit('/', 1)[-1]}"
+            for i, n in enumerate(path[:20])
+        )
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a software architect. Explain this call chain in plain English, "
+                        "describing what each step does and the overall flow.\n\n"
+                        f"From: {from_symbol}\n"
+                        f"To: {to_symbol}\n"
+                        f"Call chain ({len(path)} hops):\n{steps}\n\n"
+                        "Write a concise narrative (3-5 sentences) describing the flow:"
+                    ),
+                }
+            ],
+            max_tokens=400,
+        )
+
+    def service_mesh_description(self, service_edges: list[dict]) -> str:
+        """Describe a detected service mesh topology in natural language."""
+        edges_text = "\n".join(
+            f"- {e.get('from','?')} → {e.get('to','?')} via {e.get('protocol','?')}"
+            for e in service_edges[:30]
+        )
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a software architect. Describe this microservice topology in 2-3 sentences, "
+                        "noting the main communication patterns and any critical services.\n\n"
+                        f"Detected service calls:\n{edges_text}\n\n"
+                        "Provide a concise architectural description:"
+                    ),
+                }
+            ],
+            max_tokens=300,
+        )
+
     def raw_doc_to_wiki(self, content: str, source_name: str) -> str:
         """Convert a raw document into a wiki page."""
         truncated = content[:4000]
@@ -250,7 +398,7 @@ class OllamaClient(LLMClient):
         self.num_ctx = num_ctx
 
     @classmethod
-    def from_env(cls) -> "OllamaClient | None":
+    def from_env(cls) -> OllamaClient | None:
         """Returns None unless OPENCODE_LLM_PROVIDER=ollama."""
         provider = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama").strip().lower()
         if provider != "ollama":
@@ -267,7 +415,7 @@ class OllamaClient(LLMClient):
             req = urllib.request.Request(f"{self.base_url}/api/tags")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status == 200
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     def chat(
@@ -329,7 +477,7 @@ class AnthropicClient(LLMClient):
         self.timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "AnthropicClient | None":
+    def from_env(cls) -> AnthropicClient | None:
         """Returns None unless OPENCODE_LLM_PROVIDER=anthropic."""
         provider = os.environ.get("OPENCODE_LLM_PROVIDER", "none").strip().lower()
         if provider != "anthropic":
@@ -415,7 +563,7 @@ class OpenAIClient(LLMClient):
         self.timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "OpenAIClient | None":
+    def from_env(cls) -> OpenAIClient | None:
         """Returns None unless OPENCODE_LLM_PROVIDER=openai."""
         provider = os.environ.get("OPENCODE_LLM_PROVIDER", "none").strip().lower()
         if provider != "openai":
@@ -515,7 +663,7 @@ class ClaudeCodeClient(LLMClient):
         self.timeout = timeout
 
     @classmethod
-    def from_env(cls) -> "ClaudeCodeClient | None":
+    def from_env(cls) -> ClaudeCodeClient | None:
         """Returns None unless OPENCODE_LLM_PROVIDER=claude-code."""
         provider = os.environ.get("OPENCODE_LLM_PROVIDER", "none").strip().lower()
         if provider != "claude-code":
@@ -596,7 +744,7 @@ class CodexClient(LLMClient):
         )
 
     @classmethod
-    def from_env(cls) -> "CodexClient | None":
+    def from_env(cls) -> CodexClient | None:
         """Returns None unless OPENCODE_LLM_PROVIDER=codex."""
         provider = os.environ.get("OPENCODE_LLM_PROVIDER", "none").strip().lower()
         if provider != "codex":

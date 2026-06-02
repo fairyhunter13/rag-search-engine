@@ -227,8 +227,9 @@ def test_leiden_large_graph_500_nodes_under_30s(storage):
 @pytest.mark.asyncio
 async def test_handle_get_communities_returns_all(tmp_path):
     from unittest.mock import patch
-    from opencode_search.handlers._graph import handle_get_communities
+
     from opencode_search.graph.storage import CommunityData
+    from opencode_search.handlers._graph import handle_get_communities
 
     graph_db_path = str(tmp_path / "graph.db")
     gs = GraphStorage(graph_db_path)
@@ -254,6 +255,7 @@ async def test_handle_get_communities_returns_all(tmp_path):
 @pytest.mark.asyncio
 async def test_handle_get_communities_before_detection_returns_empty(tmp_path):
     from unittest.mock import patch
+
     from opencode_search.handlers._graph import handle_get_communities
 
     graph_db_path = str(tmp_path / "graph.db")

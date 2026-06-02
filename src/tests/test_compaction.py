@@ -1,5 +1,4 @@
 """Tests for opencode_search.compaction — gated and forced compaction."""
-# ruff: noqa: E402
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
