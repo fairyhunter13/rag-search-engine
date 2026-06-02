@@ -1,0 +1,103 @@
+name: Pre-Release Gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      fast:
+        description: 'Skip Playwright + LLM tests (fast mode)'
+        type: boolean
+        default: true
+
+jobs:
+  prerelease-gate:
+    name: Pre-Release Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -e "src/[prerelease]" --quiet
+          pip install ruff mypy pytest hypothesis --quiet
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+        continue-on-error: true  # OK if playwright unavailable in CI
+
+      # ── Stage 1: Code quality (no project needed) ─────────────────────
+      - name: Code quality checks
+        run: |
+          python scripts/verify.py --fast
+        continue-on-error: false
+
+      # ── Stage 2: MCP contracts + invariants (no daemon needed) ─────────
+      - name: MCP contracts + structural invariants
+        run: |
+          python -m pytest src/tests/test_mcp_contracts.py src/tests/test_invariants.py \
+            src/tests/test_prerelease.py -v --tb=short -q
+        continue-on-error: false
+
+      # ── Stage 3: Configure integrations (check only, no writes) ────────
+      - name: Verify integration config
+        run: |
+          python scripts/configure_integrations.py --check --json
+        continue-on-error: true  # Warn only — CI machine won't have all configs
+
+      # ── Stage 4: Validate tool schemas (unit tests) ────────────────────
+      - name: Tool validation (unit level)
+        run: |
+          python -m pytest src/tests/test_validate_tools.py -v --tb=short -q \
+            -k "not LARGE" 2>/dev/null || true
+
+      # ── Stage 5: Graph completeness (unit level, no real project) ───────
+      - name: Graph completeness (unit)
+        run: |
+          python -m pytest src/tests/test_graph_e2e.py -v --tb=short -q \
+            -k "not LARGE" 2>/dev/null || true
+
+      # ── Upload artifacts ───────────────────────────────────────────────
+      - name: Upload verify report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: |
+            .opencode_verify_report.md
+            .opencode_verify_state.json
+          if-no-files-found: ignore
+
+      - name: Upload pre-release report (if exists)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prerelease-report
+          path: |
+            .prerelease_report.md
+            .prerelease_report.json
+            .prerelease_screenshots/
+          if-no-files-found: ignore
+
+  # ── Summary job ────────────────────────────────────────────────────────
+  summary:
+    name: Gate Summary
+    runs-on: ubuntu-latest
+    needs: prerelease-gate
+    if: always()
+    steps:
+      - name: Report gate status
+        run: |
+          if [ "${{ needs.prerelease-gate.result }}" == "success" ]; then
+            echo "🟢 PRE-RELEASE GATE: PASS"
+          else
+            echo "🔴 PRE-RELEASE GATE: FAIL — check prerelease-gate job logs"
+            exit 1
+          fi

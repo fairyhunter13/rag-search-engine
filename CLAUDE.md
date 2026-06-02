@@ -15,36 +15,22 @@ This rule applies to EVERY codebase question, even ones that seem simple. Traini
 
 opencode-search is the tool under test. Every call to `overview` and `search` validates that the MCP toolchain works end-to-end. Skipping them defeats the purpose of this project.
 
-## Autonomous Verification System
+## Running tests and quality checks
 
-**ALWAYS start a session by reading the verification report:**
 ```bash
-cat .opencode_verify_report.md      # last run results (human-readable)
-cat .opencode_verify_state.json     # machine-readable state + history
+# All fast tests (no GPU, no live services)
+.venv/bin/pytest src/tests/ -m "not (gpu or runtime_deps or large or embedder or indexer or slow)" -q
+
+# Full test suite (all non-GPU)
+.venv/bin/pytest src/tests/ -m "not (gpu or embedder or indexer)" -q
+
+# MCP contracts + invariants only
+.venv/bin/pytest src/tests/integration/test_mcp.py src/tests/integration/test_invariants.py -v
+
+# Code quality
+ruff check src/opencode_search src/tests
+python -m compileall -q src/opencode_search
 ```
-
-**Run verification:**
-```bash
-# Fast check: code quality + unit tests + structural invariants (~2min)
-.venv/bin/python scripts/verify.py --fast
-
-# Full check including KB artifacts against indexed project (~5min)
-.venv/bin/python scripts/verify.py --project ~/git/github.com/fairyhunter13/redacted-name-3
-
-# Single category
-.venv/bin/python scripts/verify.py --category tests
-.venv/bin/python scripts/verify.py --category kb --project <path>
-.venv/bin/python scripts/verify.py --category mcp_contracts
-
-# Analyze failures and get fix suggestions (uses Claude API)
-.venv/bin/python scripts/selfheal.py
-```
-
-**State files** (gitignored):
-- `.opencode_verify_state.json` — machine-readable, last 10 runs
-- `.opencode_verify_report.md` — human-readable, Claude reads this in sessions
-
-**Invariants library** (`scripts/invariants.py`): 40+ verifiable conditions organized by category. Import and use in tests or scripts.
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
@@ -52,10 +38,9 @@ cat .opencode_verify_state.json     # machine-readable state + history
 
 - Entry points: `src/opencode_search/mcp.py` (MCP server), `src/opencode_search/handlers/` (tool handlers), `src/opencode_search/daemon.py` (singleton daemon + installer), `src/opencode_search/cli.py` (CLI)
 - Registry: `~/.local/share/opencode-search/projects.json`
-- Tests: `src/tests/` — run with `.venv/bin/pytest src/tests/`
-- Verification: `scripts/verify.py` — autonomous quality checker
-- Benchmark: `scripts/benchmark_mcp.py`
+- Tests: `src/tests/` — `unit/`, `integration/`, `e2e/` subdirs
 - LLM provider: codex with gpt-5.4-mini (set in `src/opencode_search/config.py` and `~/.bash_aliases`)
+- Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 
 [opencode-search-global-instructions:start]
 MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.

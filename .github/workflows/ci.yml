@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Code quality (ruff + mypy + compile)
+  # ──────────────────────────────────────────────
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dev dependencies
+        run: |
+          pip install -e 'src[dev]' --no-deps 2>/dev/null || true
+          pip install ruff mypy hypothesis
+
+      - name: Ruff lint
+        run: ruff check src/opencode_search src/tests
+
+      - name: Compile check
+        run: python -m compileall -q src/opencode_search
+
+  # ──────────────────────────────────────────────
+  # Job 2: Unit + integration tests
+  # ──────────────────────────────────────────────
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: quality
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e 'src[dev]'
+
+      - name: Run tests
+        run: |
+          pytest src/tests/ -x -q \
+            -m "not (gpu or runtime_deps or large or embedder or indexer or slow)" \
+            --tb=short
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results-${{ matrix.python-version }}
+          path: .pytest_cache/
+
+  # ──────────────────────────────────────────────
+  # Job 3: MCP contracts + invariants
+  # ──────────────────────────────────────────────
+  contracts:
+    name: MCP Contracts & Invariants
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e 'src[dev]' hypothesis
+
+      - name: Run MCP contract and invariant tests
+        run: |
+          pytest src/tests/integration/test_mcp.py \
+                 src/tests/integration/test_invariants.py \
+                 -v --tb=short \
+                 -m "not (gpu or runtime_deps or large)"
+
+  # ──────────────────────────────────────────────
+  # Job 4: Property-based tests (Hypothesis)
+  # ──────────────────────────────────────────────
+  property_tests:
+    name: Property-Based Tests
+    runs-on: ubuntu-latest
+    needs: quality
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -e 'src[dev]' hypothesis
+
+      - name: Run Hypothesis tests
+        env:
+          HYPOTHESIS_MAX_EXAMPLES: "50"
+        run: |
+          pytest src/tests/integration/test_invariants.py -v --tb=short \
+            --hypothesis-seed=0

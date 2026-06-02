@@ -131,6 +131,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": "project and q params required"}, status_code=400)
         if scope == "wiki":
             result = await handle_wiki_query(query=q, project_path=project, top_k=10)
+        elif scope == "global":
+            from opencode_search.handlers._global_search import handle_global_synthesis
+            result = await handle_global_synthesis(query=q, project_path=project)
         else:
             result = await handle_global_search(query=q, project_path=project, top_k=10)
         return JSONResponse(result)
@@ -367,7 +370,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
         prerelease_script = scripts_dir / "prerelease.py"
         if not prerelease_script.exists():
-            return JSONResponse({"error": "prerelease.py not found"}, status_code=404)
+            return JSONResponse({"error": "prerelease.py not found"}, status_code=503)
 
         cmd = [_sys.executable, str(prerelease_script), "--fast", "--json"]
         if project:
@@ -447,7 +450,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
         selfheal_script = scripts_dir / "selfheal.py"
         if not selfheal_script.exists():
-            return JSONResponse({"error": "selfheal.py not found"}, status_code=404)
+            return JSONResponse({"error": "selfheal.py not found"}, status_code=503)
         cmd = [_sys.executable, str(selfheal_script), "--apply"]
         if project:
             cmd += ["--project", project]
@@ -587,7 +590,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
         qa_script = scripts_dir / "qa_gate.py"
         if not qa_script.exists():
-            return JSONResponse({"error": "qa_gate.py not found"}, status_code=404)
+            return JSONResponse({"error": "qa_gate.py not found"}, status_code=503)
         cmd = [_sys.executable, str(qa_script), "--fix"]
         if project:
             cmd += ["--project", project]

@@ -141,14 +141,16 @@ ignore_errors = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["src/tests", "tests"]
+testpaths = ["src/tests"]
 markers = [
     "unit: fast logic-only test",
     "integration: test exercises real runtime integrations",
     "runtime_deps: test requires optional runtime packages",
     "gpu: test requires a real CUDA GPU",
     "perf: performance benchmark tests",
+    "large: requires OPENCODE_RUN_LARGE_TESTS=1 and large external repos (e.g. redacted-name-3 indexed)",
     "embedder: tests that require the Python embedder service",
     "indexer: tests that require the Rust indexer service",
     "slow: tests that run for more than 30 seconds",
+    "timeout: mark a test with a custom timeout in seconds",
 ]

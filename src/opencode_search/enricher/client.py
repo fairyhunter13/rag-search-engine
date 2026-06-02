@@ -4,7 +4,7 @@ Uses stdlib urllib and subprocess — no new dependencies.
 
 Environment variables:
   OPENCODE_LLM_PROVIDER=ollama|none|anthropic|openai|claude-code|codex
-                              (default: ollama)
+                              (default: codex)
   OPENCODE_LLM_MODEL          model name (provider-specific defaults below)
   OPENCODE_LLM_API_KEY        API key for anthropic/openai
                               Falls back to ANTHROPIC_API_KEY or OPENAI_API_KEY.
@@ -12,6 +12,7 @@ Environment variables:
   OPENCODE_LLM_TIMEOUT        request timeout in seconds (default: 120)
   OPENCODE_LLM_NUM_CTX        Ollama context window size (default: 2048)
   OPENCODE_LLM_ENRICH_ON_INDEX=false  run enrichment automatically after index
+  OPENCODE_LLM_NO_FALLBACK=1  disable automatic rate-limit fallback to claude-haiku-4.5
 
 Provider defaults:
   ollama:      base_url=http://localhost:11434  model=phi4-mini:3.8b
@@ -19,6 +20,11 @@ Provider defaults:
   openai:      base_url=https://api.openai.com  model=gpt-4o-mini
   claude-code: uses locally installed `claude` CLI; model=claude-haiku-4-5-20251001
   codex:       uses locally installed `codex` CLI; model=gpt-5.4-mini
+
+Rate-limit fallback:
+  When codex returns a rate-limit error (429 / quota exceeded), the client
+  automatically retries with claude-code (claude-haiku-4-5-20251001) if the
+  `claude` CLI is installed.  Disable with OPENCODE_LLM_NO_FALLBACK=1.
 """
 from __future__ import annotations
 
@@ -36,6 +42,20 @@ from typing import Any
 _OLLAMA_DEFAULT_MODEL = os.environ.get("OPENCODE_LLM_MODEL", "phi4-mini:3.8b")
 _OLLAMA_DEFAULT_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "2048"))
 _OLLAMA_DEFAULT_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+class RateLimitError(RuntimeError):
+    """Raised when the LLM provider returns a rate-limit / quota-exceeded error."""
+
+
+def _is_rate_limit(msg: str) -> bool:
+    low = msg.lower()
+    return any(k in low for k in ("rate limit", "429", "quota exceeded", "too many requests",
+                                   "ratelimit", "rate_limit"))
 
 
 # ---------------------------------------------------------------------------
@@ -532,9 +552,10 @@ class AnthropicClient(LLMClient):
                         return block["text"]
                 raise RuntimeError(f"Anthropic returned no text block: {body}")
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(
-                f"Anthropic HTTP {exc.code}: {exc.read().decode()}"
-            ) from exc
+            body = exc.read().decode()
+            if exc.code == 429 or _is_rate_limit(body):
+                raise RateLimitError(f"Anthropic rate-limited (HTTP {exc.code}): {body[:200]}") from exc
+            raise RuntimeError(f"Anthropic HTTP {exc.code}: {body}") from exc
         except urllib.error.URLError as exc:
             raise ConnectionError(f"Anthropic connection error: {exc.reason}") from exc
 
@@ -616,9 +637,10 @@ class OpenAIClient(LLMClient):
                     raise RuntimeError(f"OpenAI returned no choices: {body}")
                 return choices[0]["message"]["content"]
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(
-                f"OpenAI HTTP {exc.code}: {exc.read().decode()}"
-            ) from exc
+            body = exc.read().decode()
+            if exc.code == 429 or _is_rate_limit(body):
+                raise RateLimitError(f"OpenAI rate-limited (HTTP {exc.code}): {body[:200]}") from exc
+            raise RuntimeError(f"OpenAI HTTP {exc.code}: {body}") from exc
         except urllib.error.URLError as exc:
             raise ConnectionError(f"OpenAI connection error: {exc.reason}") from exc
 
@@ -785,13 +807,55 @@ class CodexClient(LLMClient):
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(f"codex CLI timed out after {self.timeout}s") from exc
         if result.returncode != 0:
-            raise RuntimeError(
-                f"codex CLI exited {result.returncode}: {result.stderr.strip()}"
-            )
+            err = result.stderr.strip() or result.stdout.strip()
+            if _is_rate_limit(err):
+                raise RateLimitError(f"codex rate-limited: {err[:200]}")
+            raise RuntimeError(f"codex CLI exited {result.returncode}: {err}")
         output = result.stdout.strip()
         if not output:
             raise RuntimeError("codex CLI returned empty output")
+        # stdout may contain rate-limit JSON event even on exit 0 in some versions
+        if _is_rate_limit(output):
+            raise RateLimitError(f"codex rate-limited (stdout): {output[:200]}")
         return output
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit fallback wrapper
+# ---------------------------------------------------------------------------
+
+class FallbackLLMClient(LLMClient):
+    """Wraps a primary client and retries with a fallback on RateLimitError.
+
+    When the primary raises RateLimitError (429 / quota exceeded), the call is
+    transparently retried against the fallback client.  All other errors from
+    the primary propagate as-is without touching the fallback.
+    """
+
+    def __init__(self, primary: LLMClient, fallback: LLMClient) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.model = primary.model
+
+    def is_available(self) -> bool:
+        return self.primary.is_available()
+
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1024,
+    ) -> str:
+        try:
+            return self.primary.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        except RateLimitError:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Primary LLM (%s) rate-limited — falling back to %s",
+                type(self.primary).__name__, type(self.fallback).__name__,
+            )
+            return self.fallback.chat(messages, temperature=temperature, max_tokens=max_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -822,11 +886,16 @@ def create_llm_client() -> LLMClient | None:
     model = os.environ.get("OPENCODE_LLM_MODEL", DEFAULT_LLM_MODEL)
     timeout = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
     if provider == "codex":
-        return CodexClient(
+        primary = CodexClient(
             model=model,
             timeout=timeout,
             pass_model_flag=bool(os.environ.get("OPENCODE_CODEX_PASS_MODEL", "")),
         )
+        # Auto-fallback to claude-haiku-4.5 on rate-limit unless disabled.
+        if not os.environ.get("OPENCODE_LLM_NO_FALLBACK") and shutil.which("claude"):
+            fallback = ClaudeCodeClient(model=_CLAUDE_CODE_DEFAULT_MODEL, timeout=timeout)
+            return FallbackLLMClient(primary=primary, fallback=fallback)
+        return primary
     if provider == "ollama":
         return OllamaClient(
             base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
