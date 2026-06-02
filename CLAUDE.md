@@ -15,11 +15,45 @@ This rule applies to EVERY codebase question, including questions that seem simp
 
 opencode-search is the tool under test. Every call to `list_indexed_projects` and `search_code` validates that the MCP toolchain works end-to-end. Skipping them defeats the purpose of this project.
 
+## Autonomous Verification System
+
+**ALWAYS start a session by reading the verification report:**
+```bash
+cat .opencode_verify_report.md      # last run results (human-readable)
+cat .opencode_verify_state.json     # machine-readable state + history
+```
+
+**Run verification:**
+```bash
+# Fast check: code quality + unit tests + structural invariants (~2min)
+.venv/bin/python scripts/verify.py --fast
+
+# Full check including KB artifacts against indexed project (~5min)
+.venv/bin/python scripts/verify.py --project ~/git/github.com/fairyhunter13/astro-project
+
+# Single category
+.venv/bin/python scripts/verify.py --category tests
+.venv/bin/python scripts/verify.py --category kb --project <path>
+.venv/bin/python scripts/verify.py --category mcp_contracts
+
+# Analyze failures and get fix suggestions (uses Claude API)
+.venv/bin/python scripts/selfheal.py
+```
+
+**State files** (gitignored):
+- `.opencode_verify_state.json` — machine-readable, last 10 runs
+- `.opencode_verify_report.md` — human-readable, Claude reads this in sessions
+
+**Invariants library** (`scripts/invariants.py`): 40+ verifiable conditions organized by category. Import and use in tests or scripts.
+
+**CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
+
 ## Project quick reference
 
 - Entry points: `src/opencode_search/mcp.py` (MCP server), `src/opencode_search/handlers.py` (tool handlers), `src/opencode_search/daemon.py` (singleton daemon + installer), `src/opencode_search/cli.py` (CLI)
 - Registry: `~/.local/share/opencode-search/projects.json`
 - Tests: `src/tests/` — run with `.venv/bin/pytest src/tests/`
+- Verification: `scripts/verify.py` — autonomous quality checker
 - Benchmark: `scripts/benchmark_mcp.py`
 
 [opencode-search-global-instructions:start]

@@ -7,7 +7,6 @@ LLM enrichment, wiki generation) work correctly in concert.
 Tests marked @pytest.mark.large are skipped unless OPENCODE_RUN_LARGE_TESTS=1
 and require ~/git/github.com/fairyhunter13/astro-project to be present.
 """
-# ruff: noqa: E402
 from __future__ import annotations
 
 import asyncio
@@ -1075,8 +1074,8 @@ async def test_e2e_wiki_query_returns_content(indexed_project, tmp_path):
 
 def _ollama_phi4_available() -> bool:
     """Return True if Ollama is running and phi4-mini:3.8b is installed."""
-    import urllib.request
     import json
+    import urllib.request
     try:
         with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3) as resp:
             data = json.loads(resp.read())
@@ -1163,8 +1162,8 @@ async def test_e2e_astro_project_wiki_pipeline(monkeypatch):
     Verifies: no crash, no hang, valid output structure at each stage.
     """
     from opencode_search.handlers._enrichment import handle_enrich_project
-    from opencode_search.handlers._wiki import handle_wiki_generate, handle_wiki_lint
     from opencode_search.handlers._graph import handle_global_search
+    from opencode_search.handlers._wiki import handle_wiki_generate, handle_wiki_lint
 
     _use_real_registry(monkeypatch)
     assert _astro_graph_has_data(), "astro-project graph.db must be pre-built"
@@ -1296,7 +1295,7 @@ async def test_e2e_federation_search_includes_members(indexed_project, tmp_path,
     from opencode_search.handlers._federation import handle_add_federation_member
     from opencode_search.handlers._query import handle_search_code
 
-    project_root, registry_path = indexed_project
+    project_root, _registry_path = indexed_project
 
     # Create a second indexed project and make it a federation member
     member_root = tmp_path / "member_project"
@@ -1366,7 +1365,7 @@ async def test_e2e_federation_enrich_runs_on_members(indexed_project, tmp_path, 
     from opencode_search.handlers._enrichment import handle_enrich_project
     from opencode_search.handlers._federation import handle_add_federation_member
 
-    project_root, registry_path = indexed_project
+    project_root, _registry_path = indexed_project
 
     # Create and index a member project
     member_root = tmp_path / "member_enrich"
@@ -1407,7 +1406,7 @@ async def test_e2e_federation_wiki_runs_on_members(indexed_project, tmp_path, mo
     from opencode_search.handlers._federation import handle_add_federation_member
     from opencode_search.handlers._wiki import handle_wiki_generate
 
-    project_root, registry_path = indexed_project
+    project_root, _registry_path = indexed_project
 
     member_root = tmp_path / "member_wiki"
     member_root.mkdir()
@@ -1639,8 +1638,8 @@ async def test_e2e_pipeline_full_with_mock_llm(indexed_project, tmp_path, monkey
 @pytest.mark.large
 async def test_e2e_astro_project_pipeline_discover(monkeypatch):
     """pipeline() on astro-project discovers 24 federation members and registers them."""
-    from opencode_search.handlers._pipeline import handle_pipeline
     from opencode_search.config import load_registry
+    from opencode_search.handlers._pipeline import handle_pipeline
 
     _use_real_registry(monkeypatch)
     assert _astro_graph_has_data(), "astro-project graph.db must be pre-built"

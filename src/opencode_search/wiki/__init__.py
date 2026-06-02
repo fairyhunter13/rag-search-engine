@@ -1,7 +1,7 @@
 """Wiki storage and generation for code knowledge base."""
 from __future__ import annotations
 
-from .storage import WikiStorage
 from .generator import WikiGenerator
+from .storage import WikiStorage
 
-__all__ = ["WikiStorage", "WikiGenerator"]
+__all__ = ["WikiGenerator", "WikiStorage"]

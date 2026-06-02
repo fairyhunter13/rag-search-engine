@@ -12,10 +12,9 @@ modules importing it are importable even without a real GPU.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -120,10 +119,8 @@ def patch_embeddings_for_no_gpu():
             "opencode_search.search",
         ]:
             if mod_name not in sys.modules:
-                try:
+                with contextlib.suppress(Exception):
                     __import__(mod_name)
-                except Exception:
-                    pass
         yield
 
     emb._provider_detection_done = _orig_done
@@ -144,7 +141,8 @@ async def index_and_wait(path: str, **kwargs) -> dict:
     """
     import asyncio
     from pathlib import Path as _Path
-    from opencode_search.handlers import handle_index_project, _indexing_status
+
+    from opencode_search.handlers import _indexing_status, handle_index_project
 
     result = await handle_index_project(path=path, **kwargs)
     # Drain the background task while the caller's patches are still active.

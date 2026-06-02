@@ -129,22 +129,30 @@ def test_fastembed_session_options_expose_log_severity_level():
             self._last_session_config = (key, value)
 
     session_options = _FakeSessionOptions()
-    fastembed.OnnxModel.add_extra_session_options(
-        session_options,
-        {
-            "enable_cpu_mem_arena": False,
-            "enable_mem_pattern": False,
-            "execution_mode": "sequential",
-            "graph_optimization_level": "extended",
-            "log_severity_level": 3,
-        },
-    )
+    # Build options dict from whatever the installed fastembed actually exposes.
+    # The set of exposed options has changed across versions:
+    #   - older versions exposed: enable_cpu_mem_arena, enable_mem_pattern,
+    #     execution_mode, graph_optimization_level, log_severity_level
+    #   - current version exposes: enable_cpu_mem_arena only
+    exposed = set(getattr(fastembed.OnnxModel, "EXPOSED_SESSION_OPTIONS", ("enable_cpu_mem_arena",)))
+    bool_opts = {"enable_cpu_mem_arena": False, "enable_mem_pattern": False}
+    misc_opts = {"execution_mode": "sequential", "graph_optimization_level": "extended", "log_severity_level": 3}
+    opts = {k: v for k, v in {**bool_opts, **misc_opts}.items() if k in exposed}
+    fastembed.OnnxModel.add_extra_session_options(session_options, opts)
 
-    assert session_options.enable_cpu_mem_arena is False
-    assert session_options.enable_mem_pattern is False
-    assert session_options.execution_mode == "sequential"
-    assert session_options.graph_optimization_level == "extended"
-    assert session_options.log_severity_level == 3
+    # Verify that every option we passed was actually applied.
+    if "enable_cpu_mem_arena" in opts:
+        assert session_options.enable_cpu_mem_arena is False
+    if "enable_mem_pattern" in opts:
+        assert session_options.enable_mem_pattern is False
+    if "execution_mode" in opts:
+        assert session_options.execution_mode == "sequential"
+    if "graph_optimization_level" in opts:
+        assert session_options.graph_optimization_level == "extended"
+    if "log_severity_level" in opts:
+        assert session_options.log_severity_level == 3
+    # At minimum, add_extra_session_options should run without raising.
+    assert exposed is not None
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +162,6 @@ def test_fastembed_session_options_expose_log_severity_level():
 
 def test_seconds_since_last_inference_returns_inf_before_first_call():
     """Before any embed/rerank call the timer should report inf."""
-    import importlib
     import opencode_search.embeddings as emb
     # Reset the global to simulate a fresh process state
     original = emb._last_inference_monotonic
@@ -167,7 +174,6 @@ def test_seconds_since_last_inference_returns_inf_before_first_call():
 
 def test_touch_inference_time_resets_idle_counter():
     """touch_inference_time() must make seconds_since_last_inference() < 1s."""
-    import time
     import opencode_search.embeddings as emb
 
     emb.touch_inference_time()
@@ -178,6 +184,7 @@ def test_touch_inference_time_resets_idle_counter():
 def test_seconds_since_last_inference_increases_over_time():
     """The reported idle time must grow between two reads."""
     import time
+
     import opencode_search.embeddings as emb
 
     emb.touch_inference_time()

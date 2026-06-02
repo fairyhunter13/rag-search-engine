@@ -574,7 +574,7 @@ _cached_embedder_model: str | None = None
 
 # Idle inference tracking — used by the daemon cleanup loop to unload models
 # after a configurable period of no embed/rerank calls.
-import time as _time_module  # noqa: E402 — placed here to keep with related state
+import time as _time_module
 
 _last_inference_monotonic: float = 0.0
 _inference_time_lock = threading.Lock()

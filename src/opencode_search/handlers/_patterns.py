@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -56,10 +57,10 @@ def _sample_source_files(root: Path) -> list[tuple[str, str]]:
     """
     import os
 
-    _SKIP_DIRS = {"vendor", "node_modules", ".git", ".venv", "venv",
+    _SKIP_DIRS = {"vendor", "node_modules", ".git", ".venv", "venv",  # noqa: N806
                   "target", "dist", "build", "__pycache__"}
-    _SKIP_NAME_PARTS = {"generated", "pb", "mock", "mocks"}
-    _PRIMARY_EXTS = {".go", ".py", ".java", ".kt", ".ts", ".tsx", ".rs", ".rb",
+    _SKIP_NAME_PARTS = {"generated", "pb", "mock", "mocks"}  # noqa: N806
+    _PRIMARY_EXTS = {".go", ".py", ".java", ".kt", ".ts", ".tsx", ".rs", ".rb",  # noqa: N806
                      ".cs", ".swift", ".cpp", ".c", ".scala"}
 
     def _is_ok(path: Path) -> bool:
@@ -139,7 +140,11 @@ def _gather_exact_facts(root: Path, project_path: str) -> dict[str, Any]:
 
     # Language counts (reuse heuristic detector — already tree-sitter-aware)
     try:
-        from opencode_search.handlers._graph import _count_languages_accurate, _detect_dependencies, _detect_module_structure
+        from opencode_search.handlers._graph import (
+            _count_languages_accurate,
+            _detect_dependencies,
+            _detect_module_structure,
+        )
         facts["language_counts"] = _count_languages_accurate(root, project_path)
         deps = _detect_dependencies(root)
         facts["package_manager"] = deps.get("manager", "unknown")
@@ -153,9 +158,10 @@ def _gather_exact_facts(root: Path, project_path: str) -> dict[str, Any]:
 
     # Graph statistics from the code graph DB
     try:
+        from pathlib import Path as _Path
+
         from opencode_search.config import get_project_graph_db_path
         from opencode_search.graph.storage import GraphStorage
-        from pathlib import Path as _Path
         db_path = get_project_graph_db_path(project_path)
         if _Path(db_path).exists():
             gs = GraphStorage(db_path)
@@ -271,8 +277,8 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
         llm_result["confidence"] = overview_result.get("confidence", "medium")
 
     # Cache
-    from datetime import datetime, timezone
-    cached_at = datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    cached_at = datetime.now(UTC).isoformat()
     cache_data = {
         "project_path": str(root),
         "cached_at": cached_at,

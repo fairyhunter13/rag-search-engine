@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,8 @@ class CommunityData:
     key_entry_points: list[str] = field(default_factory=list)
     generated_at: str | None = None
     created_at: str = ""
+    level: int = 1                        # 1=micro (default), 2+=macro hierarchy levels
+    parent_community_id: int | None = None  # ID of the level+1 community this belongs to
 
 
 @dataclass
@@ -101,8 +104,13 @@ CREATE TABLE IF NOT EXISTS communities (
     node_count INTEGER NOT NULL DEFAULT 0,
     key_entry_points TEXT DEFAULT '[]',
     generated_at TEXT,
-    created_at TEXT NOT NULL DEFAULT ''
+    created_at TEXT NOT NULL DEFAULT '',
+    level INTEGER NOT NULL DEFAULT 1,
+    parent_community_id INTEGER REFERENCES communities(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_communities_level  ON communities(level);
+CREATE INDEX IF NOT EXISTS idx_communities_parent ON communities(parent_community_id);
 
 CREATE INDEX IF NOT EXISTS idx_nodes_file      ON nodes(file);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind      ON nodes(kind);
@@ -128,13 +136,28 @@ class GraphStorage:
             if stmt:
                 self._conn.execute(stmt)
         self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply additive schema migrations for databases created before hierarchy support."""
+        db = self._conn
+        assert db is not None
+        cols = {r[1] for r in db.execute("PRAGMA table_info(communities)").fetchall()}
+        with db:
+            if "level" not in cols:
+                db.execute("ALTER TABLE communities ADD COLUMN level INTEGER NOT NULL DEFAULT 1")
+            if "parent_community_id" not in cols:
+                db.execute("ALTER TABLE communities ADD COLUMN parent_community_id INTEGER")
+            # Add indexes if they don't exist yet (CREATE INDEX IF NOT EXISTS is idempotent)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_communities_level  ON communities(level)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_communities_parent ON communities(parent_community_id)")
 
     def close(self) -> None:
         if self._conn:
             self._conn.close()
             self._conn = None
 
-    def __enter__(self) -> "GraphStorage":
+    def __enter__(self) -> GraphStorage:
         self.open()
         return self
 
@@ -151,7 +174,6 @@ class GraphStorage:
     # ------------------------------------------------------------------
 
     def upsert_nodes(self, nodes: list[NodeData]) -> None:
-        import json
         if not nodes:
             return
         db = self._db()
@@ -236,14 +258,17 @@ class GraphStorage:
         with db:
             db.execute(
                 """INSERT INTO communities
-                   (id, title, summary, node_count, key_entry_points, generated_at, created_at)
-                   VALUES (?,?,?,?,?,?,?)
+                   (id, title, summary, node_count, key_entry_points, generated_at, created_at,
+                    level, parent_community_id)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title,
                      summary=excluded.summary,
                      node_count=excluded.node_count,
                      key_entry_points=excluded.key_entry_points,
-                     generated_at=excluded.generated_at
+                     generated_at=excluded.generated_at,
+                     level=excluded.level,
+                     parent_community_id=excluded.parent_community_id
                 """,
                 (
                     community.id, community.title, community.summary,
@@ -251,6 +276,8 @@ class GraphStorage:
                     json.dumps(community.key_entry_points),
                     community.generated_at,
                     community.created_at or now,
+                    community.level,
+                    community.parent_community_id,
                 ),
             )
 
@@ -264,20 +291,24 @@ class GraphStorage:
         with db:
             db.executemany(
                 """INSERT INTO communities
-                   (id, title, summary, node_count, key_entry_points, generated_at, created_at)
-                   VALUES (?,?,?,?,?,?,?)
+                   (id, title, summary, node_count, key_entry_points, generated_at, created_at,
+                    level, parent_community_id)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title,
                      summary=excluded.summary,
                      node_count=excluded.node_count,
                      key_entry_points=excluded.key_entry_points,
-                     generated_at=excluded.generated_at
+                     generated_at=excluded.generated_at,
+                     level=excluded.level,
+                     parent_community_id=excluded.parent_community_id
                 """,
                 [
                     (
                         c.id, c.title, c.summary, c.node_count,
                         json.dumps(c.key_entry_points),
                         c.generated_at, c.created_at or now,
+                        c.level, c.parent_community_id,
                     )
                     for c in communities
                 ],
@@ -323,7 +354,7 @@ class GraphStorage:
     # ------------------------------------------------------------------
 
     def get_callers(self, node_id: str, depth: int = 5) -> list[CallChainRow]:
-        """BFS upstream: who calls this node."""
+        """BFS upstream: who calls this node. Deduplicates by node_id (keeps min depth)."""
         db = self._db()
         rows = db.execute(
             """WITH RECURSIVE callers(id, depth, confidence) AS (
@@ -335,18 +366,19 @@ class GraphStorage:
                  JOIN callers c ON e.to_id=c.id
                  WHERE c.depth < ? AND e.kind='CALLS'
                )
-               SELECT DISTINCT c.id, c.depth, c.confidence,
+               SELECT c.id, MIN(c.depth) AS depth, MAX(c.confidence) AS confidence,
                       n.name, n.qualified_name, n.file, n.kind
                FROM callers c
                LEFT JOIN nodes n ON n.id=c.id
-               ORDER BY c.depth, n.qualified_name
+               GROUP BY c.id
+               ORDER BY depth, n.qualified_name
             """,
             (node_id, depth),
         ).fetchall()
         return [_row_to_chain(r) for r in rows]
 
     def get_callees(self, node_id: str, depth: int = 5) -> list[CallChainRow]:
-        """BFS downstream: what does this node call."""
+        """BFS downstream: what does this node call. Deduplicates by node_id (keeps min depth)."""
         db = self._db()
         rows = db.execute(
             """WITH RECURSIVE callees(id, depth, confidence) AS (
@@ -358,11 +390,12 @@ class GraphStorage:
                  JOIN callees c ON e.from_id=c.id
                  WHERE c.depth < ? AND e.kind='CALLS'
                )
-               SELECT DISTINCT c.id, c.depth, c.confidence,
+               SELECT c.id, MIN(c.depth) AS depth, MAX(c.confidence) AS confidence,
                       n.name, n.qualified_name, n.file, n.kind
                FROM callees c
                LEFT JOIN nodes n ON n.id=c.id
-               ORDER BY c.depth, n.qualified_name
+               GROUP BY c.id
+               ORDER BY depth, n.qualified_name
             """,
             (node_id, depth),
         ).fetchall()
@@ -381,7 +414,7 @@ class GraphStorage:
                  FROM edges e
                  JOIN path ON e.from_id=path.id
                  WHERE path.depth < 20
-                   AND INSTR(path.trail, e.to_id) = 0
+                   AND INSTR(',' || path.trail || ',', ',' || e.to_id || ',') = 0
                )
                SELECT trail FROM path WHERE id=? LIMIT 1
             """,
@@ -418,6 +451,7 @@ class GraphStorage:
         limit: int | None = None,
         min_node_count: int = 1,
         order_by_size: bool = False,
+        level: int | None = None,
     ) -> list[CommunityData]:
         """Return communities from the graph DB.
 
@@ -428,19 +462,26 @@ class GraphStorage:
             order_by_size: If True, order by node_count DESC (largest first).
                            Default False preserves historical id ASC order so
                            existing callers like _enrich_communities are unaffected.
+            level: Filter by hierarchy level (1=micro, 2+=macro). None = all levels.
         """
         import json
         db = self._db()
         order = "node_count DESC" if order_by_size else "id"
+        conds = ["node_count >= ?"]
+        params: list = [min_node_count]
+        if level is not None:
+            conds.append("level = ?")
+            params.append(level)
+        where = " AND ".join(conds)
         if limit is not None:
             rows = db.execute(
-                f"SELECT * FROM communities WHERE node_count >= ? ORDER BY {order} LIMIT ?",
-                (min_node_count, limit),
+                f"SELECT * FROM communities WHERE {where} ORDER BY {order} LIMIT ?",
+                (*params, limit),
             ).fetchall()
         else:
             rows = db.execute(
-                f"SELECT * FROM communities WHERE node_count >= ? ORDER BY {order}",
-                (min_node_count,),
+                f"SELECT * FROM communities WHERE {where} ORDER BY {order}",
+                params,
             ).fetchall()
         result = []
         for r in rows:
@@ -451,8 +492,40 @@ class GraphStorage:
                 key_entry_points=json.loads(ep) if ep else [],
                 generated_at=r["generated_at"],
                 created_at=r["created_at"] or "",
+                level=r["level"] if "level" in r.keys() else 1,
+                parent_community_id=r["parent_community_id"] if "parent_community_id" in r.keys() else None,
             ))
         return result
+
+    def get_max_community_level(self) -> int:
+        """Return the highest hierarchy level present in this graph (1 if no hierarchy built)."""
+        db = self._db()
+        row = db.execute("SELECT MAX(level) AS max_level FROM communities").fetchone()
+        return int(row["max_level"] or 1)
+
+    def get_community_hierarchy(self, root_level: int | None = None) -> dict[int, list[CommunityData]]:
+        """Return all communities grouped by level, from highest (root) to lowest (micro).
+
+        If root_level is None, uses the maximum level present.
+        Returns {level: [CommunityData, ...]} ordered level DESC.
+        """
+        max_level = self.get_max_community_level()
+        result: dict[int, list[CommunityData]] = {}
+        for lvl in range(max_level, 0, -1):
+            result[lvl] = self.get_communities(level=lvl, order_by_size=True)
+        return result
+
+    def get_communities_for_files(self, file_paths: list[str]) -> list[int]:
+        """Return IDs of communities containing any nodes from the given file paths."""
+        if not file_paths:
+            return []
+        placeholders = ",".join("?" * len(file_paths))
+        rows = self._db().execute(
+            f"SELECT DISTINCT community_id FROM nodes "
+            f"WHERE file IN ({placeholders}) AND community_id IS NOT NULL",
+            file_paths,
+        ).fetchall()
+        return [r[0] for r in rows if r[0] is not None]
 
     def node_count(self) -> int:
         return self._db().execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
@@ -466,8 +539,8 @@ class GraphStorage:
 # ------------------------------------------------------------------
 
 def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()
 
 
 def _row_to_node(r: sqlite3.Row) -> NodeData:

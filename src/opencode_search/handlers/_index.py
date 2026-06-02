@@ -68,6 +68,17 @@ def _build_incremental_on_change(
                     _update_graph_incremental,
                     [str(p) for p in project_modified], [], graph_db_path,
                 )
+                # Re-enrich communities affected by these file changes.
+                # Fires from the indexer — not triggered by any MCP request.
+                try:
+                    from opencode_search.handlers._autopipeline import (
+                        schedule_incremental_enrichment,
+                    )
+                    schedule_incremental_enrichment(
+                        str(project_root), [str(p) for p in project_modified],
+                    )
+                except Exception as _ie:
+                    log.debug("incremental enrichment scheduling failed: %s", _ie)
             clear_search_cache()
         finally:
             await st.close()
@@ -177,6 +188,15 @@ async def _run_index_project(
             "watching": watcher_manager.is_active(path_str),
         }
 
+        # Trigger knowledge-base build automatically after embedding and graph
+        # are complete. This fires from the indexer itself — not from any MCP
+        # request handler — so the pipeline runs regardless of the call site.
+        try:
+            from opencode_search.handlers._autopipeline import schedule_auto_pipeline
+            schedule_auto_pipeline(path_str)
+        except Exception as _ap_exc:
+            log.debug("auto_pipeline: could not schedule: %s", _ap_exc)
+
         if on_complete is not None:
             with contextlib.suppress(Exception):
                 await on_complete(status)
@@ -195,7 +215,7 @@ def _auto_update_federation(
     registry: dict,
 ) -> None:
     """Discover and register federation members in-place (no save — caller saves)."""
-    from opencode_search.config import get_project_db_path, ProjectEntry
+    from opencode_search.config import ProjectEntry, get_project_db_path
     from opencode_search.handlers._federation import (
         _discover_go_work_members,
         _discover_package_json_members,
@@ -309,7 +329,7 @@ def _build_graph_sync(
             max_workers = min(4, cpu_count() or 1)
             batch_size = 200
 
-            _GRAPH_EXTRACT_MAX_BYTES = 512 * 1024  # skip files larger than 512 KB
+            _GRAPH_EXTRACT_MAX_BYTES = 512 * 1024  # noqa: N806  # skip files larger than 512 KB
 
             def _extract_one(file_path: Path) -> tuple:
                 try:
@@ -318,7 +338,7 @@ def _build_graph_sync(
                     text = file_path.read_text(encoding="utf-8", errors="replace")
                     lang = language_for_file(str(file_path))
                     return extractor.extract_file(str(file_path), text, lang)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     return [], []
 
             total_files = len(files)
@@ -394,13 +414,13 @@ def _update_graph_incremental(
                 new_raw_edges: list = []
                 for path in modified_paths:
                     try:
-                        from pathlib import Path as _P
+                        from pathlib import Path as _P  # noqa: N814
                         text = _P(path).read_text(encoding="utf-8", errors="replace")
                         lang = language_for_file(path)
                         nodes, raw_edges = extractor.extract_file(path, text, lang)
                         new_nodes.extend(nodes)
                         new_raw_edges.extend(raw_edges)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                 # Partial resolution: use existing nodes + new nodes
@@ -419,6 +439,7 @@ def _update_graph_incremental(
 def _per_file_resolve(all_nodes: list, all_raw_edges: list) -> list:
     """Fallback: resolve only same-file calls (no cross-file strategies)."""
     from collections import defaultdict
+
     from opencode_search.graph.storage import EdgeData
 
     file_to_nodes: dict[str, list] = defaultdict(list)

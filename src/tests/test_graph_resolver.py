@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import hashlib
 
-import pytest
-
 from opencode_search.graph.extractor import _RawEdge
 from opencode_search.graph.resolver import CallResolver
 from opencode_search.graph.storage import NodeData

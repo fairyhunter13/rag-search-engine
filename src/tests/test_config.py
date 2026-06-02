@@ -6,8 +6,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from opencode_search.config import (
     DEFAULT_DIMS,
     DEFAULT_EMBED_MODEL,
@@ -27,7 +25,6 @@ from opencode_search.config import (
     migrate_project_entry,
     save_registry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Phase 0: single model pair constants
@@ -331,7 +328,7 @@ def test_old_registry_multiple_projects_all_migrate(tmp_path):
         proj = f"/tmp/proj_{tier_name}"
         projects[proj] = {
             "path": proj,
-            "db_path": str(tmp_path / "indexes" / f"proj-xyz-abc" / f"index_{tier_name}"),
+            "db_path": str(tmp_path / "indexes" / "proj-xyz-abc" / f"index_{tier_name}"),
             "tier": tier_name,
             "dims": 512 if tier_name == "budget" else 768,
             "indexed_at": "2025-01-01T00:00:00Z",

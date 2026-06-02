@@ -1,10 +1,9 @@
 """Tests for the singleton MCP daemon helpers."""
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
-
-import json
 
 from opencode_search.daemon import (
     _HERMES_MARKER_END,

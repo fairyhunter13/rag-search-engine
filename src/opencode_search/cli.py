@@ -304,6 +304,7 @@ def watch(
     typer.echo(f"Starting watcher for {path} — press Ctrl+C to stop.")
 
     async def _watch_forever() -> None:
+        from opencode_search.config import load_registry  # lazy import — avoids top-level cycle
         # Use _index_and_wait so we block until the background task completes
         # and get the real {status: "ok"} result. handle_index_project() alone
         # returns {status: "indexing"} immediately, which would cause a
@@ -578,6 +579,7 @@ def dashboard(
     """
     import urllib.request
     import webbrowser
+
     from opencode_search.daemon import DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT
 
     host = DEFAULT_DAEMON_HOST
@@ -587,13 +589,13 @@ def dashboard(
 
     try:
         urllib.request.urlopen(health_url, timeout=2)
-    except Exception:
+    except Exception as _dash_exc:
         typer.echo(
             f"Daemon not running at {host}:{port}. "
             "Start it with: opencode-search daemon start",
             err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from _dash_exc
 
     typer.echo(f"Dashboard: {url}")
     if not no_open:

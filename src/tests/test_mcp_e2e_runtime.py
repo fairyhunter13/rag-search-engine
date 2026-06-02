@@ -13,19 +13,20 @@ pytest.importorskip("lancedb")
 pytest.importorskip("pyarrow")
 pytest.importorskip("mcp")
 
-import opencode_search.mcp as mcp_mod
 from opencode_search import config
 from opencode_search.mcp import (
     _release_stale_project_watches,
+    build,
     client_close,
     client_open,
+    manage,
+    overview,
     resume_watchers,
     # v2 intent tools
     search,
-    build,
-    overview,
-    manage,
 )
+
+
 # Alias legacy names for test compatibility using proper signatures
 async def index_project(path, watch=False, force=False, follow_symlinks=True):
     return await build(project_path=path, action="index", watch=watch, force=force)
@@ -81,8 +82,9 @@ async def _index_and_wait(path: str, timeout_s: float = 120.0, **kwargs) -> dict
             return st
         if not st.get("indexing_running") and st.get("indexed") is False:
             # Check _indexing_status directly for the error case
+            from pathlib import Path as _P  # noqa: N814
+
             from opencode_search.handlers import _indexing_status
-            from pathlib import Path as _P
             ps = str(_P(path).expanduser().resolve())
             final = _indexing_status.get(ps, {})
             if final.get("status") == "error":

@@ -1,6 +1,7 @@
 """Tests for opencode_search.enricher.client — multi-provider LLM client."""
 from __future__ import annotations
 
+import contextlib
 import json
 import unittest.mock as mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,7 +19,6 @@ from opencode_search.enricher.client import (
     _format_messages_as_prompt,
     create_llm_client,
 )
-
 
 # ---------------------------------------------------------------------------
 # create_llm_client factory
@@ -383,11 +383,8 @@ def test_anthropic_chat_sends_api_key_header(mock_anthropic_server):
             captured_headers.update(req.headers)
         return orig_urlopen(req, timeout=timeout)
 
-    with mock.patch("urllib.request.urlopen", side_effect=capturing_urlopen):
-        try:
-            client.chat([{"role": "user", "content": "hi"}])
-        except Exception:
-            pass
+    with mock.patch("urllib.request.urlopen", side_effect=capturing_urlopen), contextlib.suppress(Exception):
+        client.chat([{"role": "user", "content": "hi"}])
 
     assert captured_headers.get("X-api-key") == "my-api-key" or True  # liberal: just ensure no crash
 
@@ -747,3 +744,59 @@ def test_codex_chat_raises_on_nonzero_exit(monkeypatch):
     client = CodexClient()
     with pytest.raises(RuntimeError, match="exited 1"):
         client.chat([{"role": "user", "content": "test"}])
+
+
+# ---------------------------------------------------------------------------
+# community_summary: code_samples parameter
+# ---------------------------------------------------------------------------
+
+def test_community_summary_with_code_samples_includes_samples_in_prompt(mock_ollama_server):
+    """community_summary(code_samples=...) includes actual code in the LLM prompt."""
+    from unittest.mock import patch
+
+    client = OllamaClient(base_url=mock_ollama_server)
+    captured_messages = []
+
+    def capture_chat(messages, **kw):
+        captured_messages.extend(messages)
+        return "TITLE: Auth Layer\nSUMMARY: Handles authentication."
+    with patch.object(client, "chat", side_effect=capture_chat):
+        title, _summary = client.community_summary(
+            ["auth.login (function)"],
+            code_samples=[("/src/auth.go", "func login(u, p string) bool { return check(u, p) }")],
+        )
+
+    assert title == "Auth Layer"
+    assert "Auth Layer" in title
+    # The prompt must include the code snippet
+    prompt_text = " ".join(m.get("content", "") for m in captured_messages)
+    assert "login" in prompt_text or "auth.go" in prompt_text, (
+        "community_summary with code_samples must include code content in prompt"
+    )
+
+
+def test_community_summary_without_code_samples_still_works(mock_ollama_server):
+    """community_summary(code_samples=None) is backward compatible."""
+    client = OllamaClient(base_url=mock_ollama_server)
+    title, summary = client.community_summary(["db.Query (function)"], code_samples=None)
+    assert isinstance(title, str)
+    assert isinstance(summary, str)
+
+
+def test_project_overview_returns_json_parseable_string(mock_ollama_server):
+    """project_overview() returns a string that contains JSON-like content."""
+    client = OllamaClient(base_url=mock_ollama_server)
+    result = client.project_overview([("main.go", "package main\nfunc main() {}")])
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+def test_project_synthesis_returns_string(mock_ollama_server):
+    """project_synthesis() combines overview + exact facts and returns a string."""
+    client = OllamaClient(base_url=mock_ollama_server)
+    result = client.project_synthesis(
+        '{"primary_language": "go", "confidence": "high"}',
+        {"language_counts": [{"name": "go", "files": 42}]},
+    )
+    assert isinstance(result, str)
+    assert len(result) > 0

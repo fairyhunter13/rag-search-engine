@@ -63,6 +63,12 @@ gpu = [
     # GPU matrix ops (L2 normalization)
     "cupy-cuda12x>=13.0.0",
 ]
+prerelease = [
+    # Headless browser for human-simulation UI tests
+    "playwright>=1.44",
+    # TOML writer for codex config.toml patching
+    "tomli-w>=1.0",
+]
 
 [dependency-groups]
 dev = [
@@ -92,7 +98,13 @@ ignore = [
     "E501",   # line too long — typer help strings are unavoidably long
     "B008",   # typer.Option/Argument in default args is the intended typer API
     "RUF002", # × (MULTIPLICATION SIGN) in docstrings is intentional math notation
+    "RUF001", # en-dash/em-dash in JS strings embedded in Python raw strings
+    "RUF003", # ambiguous characters in comments (mathematical notation)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"opencode_search/embeddings.py" = ["E402", "F401", "I001"]  # ONNX monkey-patching: unusual import order intentional
+"opencode_search/storage.py" = ["E402", "F401", "I001"]     # lancedb dynamic API: unusual import order intentional
 
 [tool.mypy]
 python_version = "3.11"

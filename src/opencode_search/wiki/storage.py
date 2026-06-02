@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -43,7 +43,7 @@ class WikiStorage:
         )
 
     def append_log(self, entry: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self.log_path().open("a", encoding="utf-8") as f:
             f.write(f"[{now}] {entry}\n")
 

@@ -99,6 +99,7 @@ class TestBridgeToolRegistration:
     def test_bridge_search_has_project_paths_scoping(self) -> None:
         """search in bridge must accept project_paths kwarg (workspace auto-scoping)."""
         import inspect
+
         import opencode_search.mcp_bridge as bridge_mod
 
         sig = inspect.signature(bridge_mod.search)
@@ -109,6 +110,7 @@ class TestBridgeToolRegistration:
     def test_bridge_build_has_workspace_guard(self) -> None:
         """build in bridge must accept a project_path param (subject to workspace guard)."""
         import inspect
+
         import opencode_search.mcp_bridge as bridge_mod
 
         sig = inspect.signature(bridge_mod.build)

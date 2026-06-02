@@ -1,6 +1,7 @@
 """Tests for opencode_search.enricher.client — OllamaClient."""
 from __future__ import annotations
 
+import contextlib
 import json
 import unittest.mock as mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -9,7 +10,6 @@ from threading import Thread
 import pytest
 
 from opencode_search.enricher.client import OllamaClient
-
 
 # ---------------------------------------------------------------------------
 # from_env
@@ -149,11 +149,8 @@ def test_ollama_chat_sends_correct_request_format(mock_ollama_server):
             captured["data"] = json.loads(req.data.decode())
         return orig_urlopen(req, timeout=timeout)
 
-    with mock.patch("urllib.request.urlopen", side_effect=mock_urlopen):
-        try:
-            client.chat([{"role": "user", "content": "test"}])
-        except Exception:
-            pass
+    with mock.patch("urllib.request.urlopen", side_effect=mock_urlopen), contextlib.suppress(Exception):
+        client.chat([{"role": "user", "content": "test"}])
 
     if "data" in captured:
         assert captured["data"]["model"] == "test-model"

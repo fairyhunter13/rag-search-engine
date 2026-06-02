@@ -56,29 +56,28 @@ from opencode_search.daemon import (
 )
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
-    auto_pipeline_enabled,
     handle_add_federation_member,
     handle_analyze_patterns_llm,
     handle_detect_impact,
     handle_detect_patterns,
     handle_discover_federation,
-    schedule_auto_pipeline,
     handle_enrich_project,
     handle_ensure_project_watching,
-    handle_get_callers,
     handle_get_callees,
+    handle_get_callers,
     handle_get_communities,
     handle_get_symbol,
     handle_get_symbol_intent,
     handle_global_search,
+    handle_global_synthesis,
     handle_graph_export,
     handle_index_federation,
-    handle_project_structure,
     handle_index_project,
     handle_list_federation,
     handle_list_indexed_projects,
     handle_pipeline,
     handle_project_status,
+    handle_project_structure,
     handle_release_project_watch,
     handle_remove_federation_member,
     handle_search_code,
@@ -229,7 +228,7 @@ async def search(
 async def ask(
     query: str,
     project_path: str,
-    scope: Literal["architecture", "wiki", "all"] = "all",
+    scope: Literal["architecture", "wiki", "all", "global"] = "all",
     top_k: int = 10,
     include_federation: bool = True,
 ) -> dict[str, Any]:
@@ -240,14 +239,19 @@ async def ask(
     Do NOT use to index or build knowledge — use `build` for that.
 
     scope: "all" (default) | "architecture" (communities only) | "wiki" (pages only)
+           | "global" (map-reduce over ALL community summaries — GraphRAG-style holistic answer)
     """
     runtime_state.note_activity()
-    valid = {"architecture", "wiki", "all"}
+    valid = {"architecture", "wiki", "all", "global"}
     if scope not in valid:
         return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
 
+    if scope == "global":
+        return await handle_global_synthesis(
+            query=query, project_path=project_path,
+            include_federation=include_federation,
+        )
     if scope == "wiki":
-        from opencode_search.handlers._wiki import handle_wiki_query
         return await handle_wiki_query(query=query, project_path=project_path, top_k=top_k)
     return await handle_global_search(
         query=query, project_path=project_path, top_k=top_k,
@@ -259,9 +263,11 @@ async def ask(
 async def graph(
     symbol: str,
     project_path: str,
-    relation: Literal["definition", "callers", "callees", "impact", "path"] = "definition",
+    relation: Literal["definition", "callers", "callees", "impact", "path",
+                       "impact_narrative", "semantic_trace"] = "definition",
     to_symbol: str | None = None,
     depth: int = 5,
+    include_federation: bool = True,
 ) -> dict[str, Any]:
     """Explore the code graph: definition, callers, callees, impact, or call path.
 
@@ -269,15 +275,22 @@ async def graph(
     Do NOT use for text search — use `search` or `ask` for that.
 
     relation: "definition" (default) | "callers" | "callees" | "impact" | "path"
-    to_symbol: required when relation="path" (find call path from symbol to to_symbol)
+              | "impact_narrative" (LLM summary of blast radius — risk level, affected domains)
+              | "semantic_trace" (find path from one concept to another using natural language)
+    to_symbol: required when relation="path" or "semantic_trace"
+               For "semantic_trace": to_symbol is the exit concept (e.g. "database write")
+    symbol: For "semantic_trace": the entry concept (e.g. "HTTP request handler")
     depth: BFS depth for callers/callees (default 5)
     """
     runtime_state.note_activity()
-    valid = {"definition", "callers", "callees", "impact", "path"}
+    valid = {"definition", "callers", "callees", "impact", "path",
+             "impact_narrative", "semantic_trace"}
     if relation not in valid:
         return {"error": f"Invalid relation {relation!r}", "valid_relations": sorted(valid)}
     if relation == "path" and not to_symbol:
         return {"error": "relation='path' requires to_symbol parameter"}
+    if relation == "semantic_trace" and not to_symbol:
+        return {"error": "relation='semantic_trace' requires to_symbol (exit concept)"}
 
     if relation == "definition":
         return await handle_get_symbol(name=symbol, project_path=project_path)
@@ -287,6 +300,18 @@ async def graph(
         return await handle_get_callees(symbol=symbol, project_path=project_path, depth=depth)
     elif relation == "impact":
         return await handle_detect_impact(symbol=symbol, project_path=project_path)
+    elif relation == "impact_narrative":
+        from opencode_search.handlers._impact import handle_impact_narrative
+        return await handle_impact_narrative(
+            symbol=symbol, project_path=project_path,
+            depth=depth, include_federation=include_federation,
+        )
+    elif relation == "semantic_trace":
+        from opencode_search.handlers._trace import handle_semantic_trace
+        return await handle_semantic_trace(
+            from_query=symbol, to_query=to_symbol,
+            project_path=project_path, include_federation=include_federation,
+        )
     else:
         return await handle_trace_path(
             from_symbol=symbol, to_symbol=to_symbol, project_path=project_path,
@@ -296,7 +321,7 @@ async def graph(
 @mcp.tool()
 async def overview(
     project_path: str | None = None,
-    what: Literal["structure", "communities", "status", "projects", "metrics", "graph_export", "patterns"] = "structure",
+    what: Literal["structure", "communities", "status", "projects", "metrics", "graph_export", "patterns", "architecture_domains", "hierarchy", "service_mesh"] = "structure",
     max_depth: int = 4,
     top_k: int = 100,
     export_format: Literal["json", "graphml"] = "json",
@@ -310,12 +335,15 @@ async def overview(
     what: "structure" (default) | "communities" | "status" | "projects" | "metrics"
           | "graph_export" (download knowledge graph for Gephi/Cytoscape)
           | "patterns" (languages, dependencies, conventions, frameworks, architecture)
+          | "architecture_domains" (top-level Leiden hierarchy = highest-level communities)
+          | "hierarchy" (full community hierarchy tree, all levels)
     project_path: not required for what="projects" or what="metrics"
     export_format: "json" | "graphml" (only for what="graph_export")
     max_nodes: cap for graph_export (default 5000)
     """
     runtime_state.note_activity()
-    valid = {"structure", "communities", "status", "projects", "metrics", "graph_export", "patterns"}
+    valid = {"structure", "communities", "status", "projects", "metrics", "graph_export",
+             "patterns", "architecture_domains", "hierarchy", "service_mesh"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -343,6 +371,66 @@ async def overview(
         return await handle_graph_export(
             project_path=project_path, format=export_format, max_nodes=max_nodes,
         )
+    elif what == "service_mesh":
+        if not project_path:
+            return {"error": "project_path required for what='service_mesh'"}
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+        return await handle_detect_service_mesh(project_path=project_path)
+    elif what == "architecture_domains":
+        if not project_path:
+            return {"error": "project_path required for what='architecture_domains'"}
+        import contextlib
+
+        from opencode_search.handlers._graph import _open_graph
+        def _get_top_level(path: str) -> dict:
+            gs = _open_graph(path)
+            if gs is None:
+                return {"error": "Project not indexed"}
+            try:
+                max_level = gs.get_max_community_level()
+                top = gs.get_communities(level=max_level, order_by_size=True)
+                return {
+                    "hierarchy_levels": max_level,
+                    "architecture_domains": [
+                        {"id": c.id, "title": c.title, "summary": c.summary,
+                         "node_count": c.node_count, "level": c.level}
+                        for c in top
+                    ],
+                    "domain_count": len(top),
+                }
+            finally:
+                with contextlib.suppress(Exception):
+                    gs.close()
+        import asyncio
+        return await asyncio.to_thread(_get_top_level, project_path)
+    elif what == "hierarchy":
+        if not project_path:
+            return {"error": "project_path required for what='hierarchy'"}
+        import contextlib
+
+        from opencode_search.handlers._graph import _open_graph
+        def _get_hierarchy(path: str) -> dict:
+            gs = _open_graph(path)
+            if gs is None:
+                return {"error": "Project not indexed"}
+            try:
+                hierarchy = gs.get_community_hierarchy()
+                return {
+                    "levels": {
+                        str(lvl): [
+                            {"id": c.id, "title": c.title, "summary": c.summary,
+                             "node_count": c.node_count, "parent_community_id": c.parent_community_id}
+                            for c in comms
+                        ]
+                        for lvl, comms in hierarchy.items()
+                    },
+                    "max_level": gs.get_max_community_level(),
+                }
+            finally:
+                with contextlib.suppress(Exception):
+                    gs.close()
+        import asyncio
+        return await asyncio.to_thread(_get_hierarchy, project_path)
     else:
         from opencode_search.metrics import get_metrics
         return get_metrics()
@@ -353,7 +441,7 @@ async def build(
     project_path: str,
     action: Literal[
         "index", "pipeline", "enrich", "wiki", "ingest",
-        "reindex_wiki", "describe_symbol", "analyze_patterns",
+        "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
     ] = "pipeline",
     source_path: str | None = None,
     symbol: str | None = None,
@@ -371,6 +459,7 @@ async def build(
     action: "pipeline" (default, recommended) | "index" | "enrich" | "wiki"
             | "ingest" | "reindex_wiki" | "describe_symbol"
             | "analyze_patterns" (LLM-powered deep code pattern analysis; requires LLM provider)
+            | "hierarchy" (build recursive Leiden hierarchy — run after pipeline for GraphRAG-like levels)
     source_path: required for action="ingest"
     symbol: required for action="describe_symbol"
     max_communities: cap on communities to enrich/wiki (default 200)
@@ -379,7 +468,7 @@ async def build(
     runtime_state.note_activity()
     valid = {
         "index", "pipeline", "enrich", "wiki", "ingest",
-        "reindex_wiki", "describe_symbol", "analyze_patterns",
+        "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
     }
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
@@ -387,11 +476,10 @@ async def build(
     if action == "index":
         async def _post_index(result: dict) -> None:
             pp = str(result.get("path", ""))
-            if result.get("status") == "ok" and pp:
-                if runtime_state.bind_clients_to_project(pp) > 0:
-                    await handle_ensure_project_watching(pp, persist=False)
-                # Auto-run full KB pipeline on first indexing (default-on)
-                schedule_auto_pipeline(pp)
+            if result.get("status") == "ok" and pp and runtime_state.bind_clients_to_project(pp) > 0:
+                await handle_ensure_project_watching(pp, persist=False)
+                # schedule_auto_pipeline is now called from within _run_index_project
+                # so the pipeline fires regardless of who called handle_index_project.
         return await handle_index_project(
             path=project_path, watch=watch, force=force,
             follow_symlinks=True, on_complete=_post_index,
@@ -425,6 +513,28 @@ async def build(
         return await handle_wiki_reindex(project_path=project_path)
     elif action == "analyze_patterns":
         return await handle_analyze_patterns_llm(project_path=project_path, force=force)
+    elif action == "hierarchy":
+        import contextlib
+
+        from opencode_search.graph.community import CommunityDetector
+        from opencode_search.handlers._graph import _open_graph
+        def _build_hierarchy(path: str) -> dict:
+            gs = _open_graph(path)
+            if gs is None:
+                return {"error": "Project not indexed or graph DB not found"}
+            try:
+                levels = CommunityDetector().build_hierarchy(gs)
+                return {
+                    "status": "ok",
+                    "levels_built": levels,
+                    "max_level": gs.get_max_community_level(),
+                    "project_path": path,
+                }
+            finally:
+                with contextlib.suppress(Exception):
+                    gs.close()
+        import asyncio
+        return await asyncio.to_thread(_build_hierarchy, project_path)
     else:
         if not symbol:
             return {"error": "action='describe_symbol' requires symbol parameter"}
@@ -491,7 +601,8 @@ async def manage(
 # Dashboard + API routes (browser-viewable at http://127.0.0.1:8765/dashboard)
 # ---------------------------------------------------------------------------
 
-from opencode_search.dashboard import register_dashboard_routes
+from opencode_search.dashboard import register_dashboard_routes  # noqa: E402
+
 register_dashboard_routes(mcp)
 
 

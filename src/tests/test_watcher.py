@@ -4,7 +4,6 @@ These tests exercise the real watchdog Observer against tmp_path filesystems.
 The Observer thread dispatches events back into the test's asyncio loop, so
 we keep timing assertions loose (≥ DEBOUNCE_DELAY_MS, ≤ several seconds).
 """
-# ruff: noqa: E402
 from __future__ import annotations
 
 import asyncio
@@ -156,7 +155,7 @@ async def test_watcher_dispatches_modified_event(fresh_manager, tmp_path, monkey
         pytest.fail("watcher never fired on_change after file create")
 
     assert len(received) >= 1
-    modified, deleted = received[0]
+    modified, _deleted = received[0]
     assert any("newfile.py" in str(p) for p in modified)
 
 

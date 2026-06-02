@@ -1,5 +1,4 @@
 """Integration regression tests for indexing and search state transitions."""
-# ruff: noqa: E402
 
 from __future__ import annotations
 

@@ -1,5 +1,4 @@
 """Tests for opencode_search.cleaner — stale chunk removal."""
-# ruff: noqa: E402
 from __future__ import annotations
 
 import time

@@ -65,7 +65,7 @@ REGISTRY_PATH: Path = Path(
 # ---------------------------------------------------------------------------
 # Single model pair — code-specific embedding + fast reranker
 # jina-v2-base-code: only code-specific ONNX model in FastEmbed (768 dims, 0.64 GB)
-# jina-reranker-v1-turbo-en: distilled, 5× smaller than bge-reranker-base (0.15 GB)
+# jina-reranker-v1-turbo-en: distilled, 5x smaller than bge-reranker-base (0.15 GB)
 # Combined VRAM: ~0.79 GB
 # ---------------------------------------------------------------------------
 DEFAULT_EMBED_MODEL: str = os.environ.get(
@@ -77,10 +77,11 @@ DEFAULT_RERANK_MODEL: str = os.environ.get(
 DEFAULT_DIMS: int = 768
 
 # ---------------------------------------------------------------------------
-# LLM enrichment defaults (Ollama, phi4-mini is quiet and capable on 3 GB VRAM)
+# LLM enrichment defaults — codex (ChatGPT gpt-4o-mini) is the default since Jun 2026.
+# Ollama local inference was replaced to avoid GPU VRAM contention during indexing.
 # ---------------------------------------------------------------------------
-DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama")
-DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "phi4-mini:3.8b")
+DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "codex")
+DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "gpt-4o-mini")
 DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "2048"))
 DEFAULT_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 

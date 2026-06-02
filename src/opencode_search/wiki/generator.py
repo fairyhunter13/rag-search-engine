@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from opencode_search.enricher.client import LLMClient
     from opencode_search.graph.storage import GraphStorage
+
     from .storage import WikiStorage
 
 log = logging.getLogger(__name__)
@@ -18,9 +20,9 @@ class WikiGenerator:
 
     def __init__(
         self,
-        llm: "LLMClient",
-        wiki: "WikiStorage",
-        graph: "GraphStorage",
+        llm: LLMClient,
+        wiki: WikiStorage,
+        graph: GraphStorage,
     ) -> None:
         self.llm = llm
         self.wiki = wiki
@@ -51,15 +53,22 @@ class WikiGenerator:
         """Generate wiki page for a Leiden community cluster."""
         import asyncio
 
+        from opencode_search.handlers._enrichment import _sample_community_code
+
         nodes = self.graph.get_community_nodes(community_id)
+        if not nodes:
+            log.debug("generate_community_page: community %d has no nodes, skipping", community_id)
+            return ""
+
         summaries = [
             f"{n.qualified_name} ({n.kind})"
             + (f": {n.docstring[:80]}" if n.docstring else "")
             for n in nodes[:30]
         ]
+        code_samples = _sample_community_code(nodes[:5])
 
         title, summary = await asyncio.to_thread(
-            self.llm.community_summary, summaries
+            self.llm.community_summary, summaries, code_samples
         )
         content = f"# {title}\n\n{summary}\n\n## Members\n\n"
         content += "\n".join(f"- `{n.qualified_name}` ({n.kind})" for n in nodes)
@@ -72,10 +81,10 @@ class WikiGenerator:
         communities = self.graph.get_communities()
         for c in communities:
             if c.id == community_id:
-                from datetime import datetime, timezone
+                from datetime import datetime
                 c.title = title
                 c.summary = summary
-                c.generated_at = datetime.now(timezone.utc).isoformat()
+                c.generated_at = datetime.now(UTC).isoformat()
                 self.graph.upsert_community(c)
                 break
 
@@ -101,7 +110,7 @@ class WikiGenerator:
         if not src.exists():
             raise FileNotFoundError(f"Source not found: {source_path}")
 
-        name = self.wiki.register_raw_source(source_path)
+        self.wiki.register_raw_source(source_path)
         content = src.read_text(encoding="utf-8", errors="replace")
 
         wiki_content = await asyncio.to_thread(

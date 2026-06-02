@@ -42,8 +42,8 @@ def _require_lancedb():
         try:
             import lancedb as _lancedb
             lancedb = _lancedb
-        except ModuleNotFoundError:
-            raise _missing_dependency_error("lancedb")
+        except ModuleNotFoundError as err:
+            raise _missing_dependency_error("lancedb") from err
     return lancedb
 
 
@@ -53,8 +53,8 @@ def _require_numpy():
         try:
             import numpy as _np
             np = _np
-        except ModuleNotFoundError:
-            raise _missing_dependency_error("numpy")
+        except ModuleNotFoundError as err:
+            raise _missing_dependency_error("numpy") from err
     return np
 
 
@@ -64,8 +64,8 @@ def _require_pyarrow():
         try:
             import pyarrow as _pa
             pa = _pa
-        except ModuleNotFoundError:
-            raise _missing_dependency_error("pyarrow")
+        except ModuleNotFoundError as err:
+            raise _missing_dependency_error("pyarrow") from err
     return pa
 
 # ---------------------------------------------------------------------------

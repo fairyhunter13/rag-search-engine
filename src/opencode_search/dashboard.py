@@ -17,14 +17,20 @@ Routes:
   GET /api/metrics                      — daemon session statistics
   GET /api/patterns?project=…           — languages, deps, conventions, architecture
   POST /api/analyze_patterns?project=…  — trigger LLM deep pattern analysis (async)
+  GET /api/kb_health?project=…          — KB completeness: enrichment %, wiki count, patterns cache
+  GET /api/auto_pipeline_status         — pipeline enabled flag + last 20 events
+  GET /api/prerelease_status            — last pre-release go/no-go report
+  POST /api/run_prerelease              — trigger pre-release check (background subprocess)
+  GET /api/prerelease_poll?id=          — poll background pre-release task status
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -32,560 +38,25 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# HTML template (single self-contained page, no build step, no CDN)
+# HTML template — lives in _dashboard_html.py for maintainability
 # ---------------------------------------------------------------------------
 
-_DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>opencode-search dashboard</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;height:100vh;display:flex;flex-direction:column}
-header{background:#1a1d2e;padding:12px 20px;border-bottom:1px solid #2d3048;display:flex;align-items:center;gap:16px}
-header h1{font-size:1.1rem;font-weight:600;color:#7c9fff}
-header .status{font-size:.75rem;color:#64748b}
-header .ok{color:#4ade80}
-#project-select{margin-left:auto;background:#0f1117;color:#e2e8f0;border:1px solid #2d3048;border-radius:6px;padding:4px 10px;font-size:.85rem}
-nav{background:#1a1d2e;border-bottom:1px solid #2d3048;display:flex;gap:2px;padding:0 12px}
-nav button{background:none;border:none;color:#94a3b8;padding:10px 16px;font-size:.82rem;cursor:pointer;border-bottom:2px solid transparent}
-nav button.active{color:#7c9fff;border-bottom-color:#7c9fff}
-nav button:hover{color:#e2e8f0}
-main{flex:1;overflow:auto;padding:20px}
-.card{background:#1a1d2e;border:1px solid #2d3048;border-radius:8px;padding:16px;margin-bottom:14px}
-.card h2{font-size:.85rem;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px}
-table{width:100%;border-collapse:collapse;font-size:.82rem}
-th{text-align:left;padding:6px 10px;color:#64748b;border-bottom:1px solid #2d3048}
-td{padding:6px 10px;border-bottom:1px solid #1e2234}
-tr:hover td{background:#1e2234}
-.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600}
-.badge.ok{background:#064e3b;color:#4ade80}
-.badge.warn{background:#451a03;color:#fb923c}
-.badge.none{background:#1e2234;color:#64748b}
-pre{background:#0a0c14;border:1px solid #2d3048;border-radius:6px;padding:14px;font-size:.78rem;overflow:auto;max-height:420px;white-space:pre-wrap}
-.search-row{display:flex;gap:8px;margin-bottom:14px}
-.search-row input{flex:1;background:#0f1117;border:1px solid #2d3048;border-radius:6px;color:#e2e8f0;padding:8px 12px;font-size:.85rem}
-.search-row select{background:#0f1117;border:1px solid #2d3048;border-radius:6px;color:#e2e8f0;padding:8px 10px;font-size:.85rem}
-.search-row button{background:#2d3560;color:#7c9fff;border:none;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:.85rem}
-.search-row button:hover{background:#3d4570}
-.result-item{margin-bottom:10px;border-left:2px solid #2d3048;padding-left:12px}
-.result-item .path{font-size:.75rem;color:#64748b;margin-bottom:4px}
-.result-item .score{float:right;font-size:.72rem;color:#4ade80}
-.result-item pre{max-height:120px}
-.wiki-list{list-style:none}
-.wiki-list li{padding:6px 0;border-bottom:1px solid #1e2234}
-.wiki-list li a{color:#7c9fff;cursor:pointer;text-decoration:none;font-size:.83rem}
-.wiki-list li a:hover{text-decoration:underline}
-.progress-bar{background:#0f1117;border-radius:4px;height:8px;overflow:hidden;margin-top:6px}
-.progress-fill{height:100%;background:#3b82f6;transition:width .3s}
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
-.stat-box{background:#0f1117;border:1px solid #2d3048;border-radius:6px;padding:12px}
-.stat-box .val{font-size:1.4rem;font-weight:700;color:#7c9fff}
-.stat-box .lbl{font-size:.72rem;color:#64748b;margin-top:2px}
-.tree{font-family:monospace;font-size:.78rem;white-space:pre;color:#94a3b8}
-.lang-bar{display:flex;align-items:center;gap:8px;margin-bottom:4px}
-.lang-bar .name{width:60px;font-size:.75rem;color:#94a3b8;text-align:right}
-.lang-bar .bar{flex:1;background:#0f1117;border-radius:3px;height:6px}
-.lang-bar .fill{height:100%;background:#3b82f6;border-radius:3px}
-.lang-bar .count{width:40px;font-size:.72rem;color:#64748b}
-.graph-tree{font-family:monospace;font-size:.78rem;line-height:1.6;color:#94a3b8}
-.graph-tree .symbol{color:#7c9fff}
-#wiki-content h1,#wiki-content h2,#wiki-content h3{margin:1em 0 .5em;color:#7c9fff}
-#wiki-content p{margin:.5em 0;line-height:1.6;font-size:.85rem;color:#cbd5e1}
-#wiki-content ul,#wiki-content ol{margin:.5em 0 .5em 1.5em;font-size:.85rem;color:#cbd5e1}
-#wiki-content code{background:#0a0c14;padding:1px 5px;border-radius:3px;font-size:.82em}
-#wiki-content pre{margin:.5em 0}
-.tab{display:none}.tab.active{display:block}
-.loader{color:#64748b;padding:20px;text-align:center;font-size:.82rem}
-</style>
-</head>
-<body>
-<header>
-  <h1>opencode-search</h1>
-  <span class="status" id="daemon-status">connecting…</span>
-  <select id="project-select" onchange="switchProject(this.value)"><option value="">Loading projects…</option></select>
-</header>
-<nav>
-  <button class="active" onclick="showTab('projects',this)">Projects</button>
-  <button onclick="showTab('structure',this)">Structure</button>
-  <button onclick="showTab('patterns',this)">Patterns</button>
-  <button onclick="showTab('architecture',this)">Architecture</button>
-  <button onclick="showTab('graph',this)">Graph / Trace</button>
-  <button onclick="showTab('wiki',this)">Wiki / KB</button>
-  <button onclick="showTab('search',this)">Search</button>
-  <button onclick="showTab('status',this)">Status</button>
-</nav>
-<main>
+from opencode_search._dashboard_html import _DASHBOARD_HTML  # noqa: E402
 
-<!-- PROJECTS TAB -->
-<div id="tab-projects" class="tab active">
-  <div class="card"><h2>Indexed Projects</h2>
-    <div id="projects-table"><div class="loader">Loading…</div></div>
-  </div>
-</div>
-
-<!-- STRUCTURE TAB -->
-<div id="tab-structure" class="tab">
-  <div class="card"><h2>Directory Tree</h2><pre id="structure-tree" class="tree">Select a project…</pre></div>
-  <div class="card"><h2>Language Breakdown</h2><div id="lang-breakdown"></div></div>
-  <div class="card"><h2>Graph Stats</h2><div id="graph-stats" class="stat-grid"></div></div>
-</div>
-
-<!-- PATTERNS TAB -->
-<div id="tab-patterns" class="tab">
-  <div class="card"><h2>Architecture &amp; Module Structure</h2>
-    <div id="patterns-arch" class="stat-grid" style="margin-bottom:12px"></div>
-    <div id="patterns-frameworks"></div>
-  </div>
-  <div class="card"><h2>Languages</h2><div id="patterns-langs"></div></div>
-  <div class="card"><h2>Code Conventions</h2><div id="patterns-conventions" class="stat-grid"></div></div>
-  <div class="card"><h2>LLM Deep Analysis</h2>
-    <div id="patterns-llm-meta" style="margin-bottom:10px;font-size:.78rem;color:#64748b">
-      No LLM analysis cached. Click "Analyse with LLM" to run deep pattern detection using the local LLM.
-    </div>
-    <div id="patterns-llm-result"></div>
-    <div style="margin-top:12px;display:flex;gap:8px">
-      <button onclick="runLLMAnalysis(false)" style="background:#1e3a5f;color:#7c9fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">Analyse with LLM</button>
-      <button onclick="runLLMAnalysis(true)" style="background:#2d1f4e;color:#a78bfa;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">Force Re-analyse</button>
-    </div>
-  </div>
-  <div class="card"><h2>Dependencies &amp; Versions</h2>
-    <div id="patterns-dep-meta" style="margin-bottom:10px;font-size:.78rem;color:#64748b"></div>
-    <div id="patterns-deps" style="max-height:420px;overflow-y:auto">
-      <div class="loader">Select a project and click Patterns tab.</div>
-    </div>
-  </div>
-</div>
-
-<!-- ARCHITECTURE TAB -->
-<div id="tab-architecture" class="tab">
-  <div class="card"><h2>Knowledge Semantics — Top Communities</h2>
-    <div id="enrichment-progress" style="margin-bottom:14px"></div>
-    <div id="communities-list"></div>
-  </div>
-</div>
-
-<!-- GRAPH TAB -->
-<div id="tab-graph" class="tab">
-  <div class="card"><h2>Code Graph / Tracing</h2>
-    <div class="search-row">
-      <input id="graph-symbol" placeholder="Symbol name (e.g. http.Run)"/>
-      <select id="graph-relation">
-        <option value="definition">definition</option>
-        <option value="callers">callers</option>
-        <option value="callees">callees</option>
-        <option value="impact">impact</option>
-        <option value="path">path (enter to_symbol below)</option>
-      </select>
-      <input id="graph-to" placeholder="to_symbol (for path only)" style="max-width:220px"/>
-      <button onclick="runGraph()">Run</button>
-    </div>
-    <pre id="graph-result">Enter a symbol above…</pre>
-  </div>
-  <div class="card"><h2>Knowledge Graph Export</h2>
-    <p style="font-size:.8rem;color:#64748b;margin-bottom:12px">Export nodes, edges, and communities for external visualization (Gephi, Cytoscape, NetworkX). Up to 5,000 nodes from the largest communities.</p>
-    <div style="display:flex;gap:8px">
-      <button onclick="exportGraph('json')" style="background:#0d4429;color:#4ade80;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">⬇ Export JSON</button>
-      <button onclick="exportGraph('graphml')" style="background:#1e3a5f;color:#7c9fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.82rem">⬇ Export GraphML</button>
-    </div>
-  </div>
-</div>
-
-<!-- WIKI TAB -->
-<div id="tab-wiki" class="tab">
-  <div class="card"><h2>Wiki Search</h2>
-    <div class="search-row">
-      <input id="wiki-search-q" placeholder="Ask an architectural question…"/>
-      <select id="wiki-scope"><option value="all">all</option><option value="wiki">wiki only</option><option value="architecture">architecture only</option></select>
-      <button onclick="runWikiSearch()">Ask</button>
-    </div>
-    <div id="wiki-search-results"></div>
-  </div>
-  <div class="card" style="display:flex;gap:16px">
-    <div style="width:240px;flex-shrink:0">
-      <h2 style="margin-bottom:10px">Pages</h2>
-      <ul id="wiki-page-list" class="wiki-list"><li style="color:#64748b;font-size:.82rem">Loading…</li></ul>
-    </div>
-    <div style="flex:1;overflow:auto">
-      <h2 style="margin-bottom:10px">Page Content</h2>
-      <div id="wiki-content" style="color:#94a3b8;font-size:.82rem">Click a page to view it.</div>
-    </div>
-  </div>
-</div>
-
-<!-- SEARCH TAB -->
-<div id="tab-search" class="tab">
-  <div class="card"><h2>Code Search</h2>
-    <div class="search-row">
-      <input id="search-q" placeholder="Search code, functions, patterns…"/>
-      <select id="search-scope"><option value="code">code</option><option value="docs">docs</option><option value="all">all</option></select>
-      <button onclick="runSearch()">Search</button>
-    </div>
-    <div id="search-results"></div>
-  </div>
-</div>
-
-<!-- STATUS TAB -->
-<div id="tab-status" class="tab">
-  <div class="card"><h2>Daemon Status</h2><div id="daemon-metrics" class="stat-grid"></div></div>
-  <div class="card"><h2>Search Metrics</h2><pre id="search-metrics">Loading…</pre></div>
-</div>
-
-</main>
-<script>
-let currentProject = '';
-const $ = id => document.getElementById(id);
-
-async function api(path) {
-  const r = await fetch('/api' + path);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-function showTab(name, btn) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  $('tab-' + name).classList.add('active');
-  btn.classList.add('active');
-  if (name === 'structure') loadStructure();
-  if (name === 'patterns') loadPatterns();
-  if (name === 'architecture') loadCommunities();
-  if (name === 'wiki') loadWikiList();
-  if (name === 'status') loadStatus();
-}
-
-function switchProject(p) {
-  currentProject = p;
-  // Reload current tab
-  const active = document.querySelector('nav button.active');
-  if (active) active.click();
-}
-
-// ── Projects ─────────────────────────────────────────────────────────────────
-async function loadProjects() {
-  const data = await api('/projects');
-  const projects = data.projects || [];
-  const sel = $('project-select');
-  sel.innerHTML = projects.map(p =>
-    `<option value="${p.path}">${p.path.split('/').slice(-2).join('/')}</option>`
-  ).join('');
-  if (projects.length) { currentProject = projects[0].path; sel.value = currentProject; }
-
-  const rows = projects.map(p => `<tr>
-    <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.path}">${p.path}</td>
-    <td>${p.indexed_at ? '<span class="badge ok">indexed</span>' : '<span class="badge none">not indexed</span>'}</td>
-    <td>${(p.file_count||0).toLocaleString()}</td>
-    <td>${p.chunks != null ? p.chunks.toLocaleString() : '—'}</td>
-    <td>${p.watching ? '<span class="badge ok">watching</span>' : '<span class="badge none">—</span>'}</td>
-  </tr>`).join('');
-  $('projects-table').innerHTML = `<table>
-    <thead><tr><th>Path</th><th>Status</th><th>Files</th><th>Chunks</th><th>Watching</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
-
-  $('daemon-status').innerHTML = '<span class="ok">● connected</span>';
-}
-
-// ── Structure ────────────────────────────────────────────────────────────────
-async function loadStructure() {
-  if (!currentProject) return;
-  $('structure-tree').textContent = 'Loading…';
-  const data = await api('/overview?project=' + encodeURIComponent(currentProject));
-  $('structure-tree').textContent = data.directory_tree || '';
-
-  const langs = data.language_breakdown || [];
-  const maxCount = langs[0]?.count || 1;
-  $('lang-breakdown').innerHTML = langs.slice(0,20).map(l => `
-    <div class="lang-bar">
-      <span class="name">${l.extension}</span>
-      <div class="bar"><div class="fill" style="width:${(l.count/maxCount*100).toFixed(1)}%"></div></div>
-      <span class="count">${l.count.toLocaleString()}</span>
-    </div>`).join('');
-
-  const gs = data.graph_stats || {};
-  const enriched = gs.enriched_communities || 0;
-  const total = gs.total_communities || 0;
-  $('graph-stats').innerHTML = [
-    {val: data.file_count?.toLocaleString() || '—', lbl:'Files'},
-    {val: gs.total_communities?.toLocaleString() || '—', lbl:'Communities'},
-    {val: gs.enriched_communities?.toLocaleString() || '—', lbl:'Enriched'},
-    {val: total ? (enriched/total*100).toFixed(0)+'%' : '—', lbl:'Enriched %'},
-  ].map(s => `<div class="stat-box"><div class="val">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
-}
-
-// ── Patterns ─────────────────────────────────────────────────────────────────
-async function loadPatterns() {
-  if (!currentProject) return;
-  $('patterns-arch').innerHTML = '<div class="loader">Detecting patterns…</div>';
-  $('patterns-langs').innerHTML = '';
-  $('patterns-conventions').innerHTML = '';
-  $('patterns-deps').innerHTML = '<div class="loader">Loading…</div>';
-
-  let data;
-  try {
-    data = await api('/patterns?project=' + encodeURIComponent(currentProject));
-  } catch(e) {
-    $('patterns-arch').innerHTML = '<div style="color:#f87171;padding:10px">Error: ' + escHtml(e.message) + '</div>';
-    return;
-  }
-
-  // Architecture + module structure
-  const arch = data.architecture || 'unknown';
-  const ms = data.module_structure || {};
-  $('patterns-arch').innerHTML = [
-    {val: escHtml(arch), lbl: 'Architecture'},
-    {val: escHtml(ms.type || 'unknown'), lbl: 'Module Layout'},
-    {val: (data.version_summary?.total || 0).toLocaleString(), lbl: 'Total Deps'},
-    {val: (data.version_summary?.pinned || 0).toLocaleString(), lbl: 'Pinned Deps'},
-  ].map(s => `<div class="stat-box"><div class="val" style="font-size:1rem">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
-
-  const fws = data.key_frameworks || [];
-  $('patterns-frameworks').innerHTML = fws.length
-    ? '<div style="margin-top:10px">' + fws.map(f => `<span class="badge ok" style="margin-right:6px;margin-bottom:4px">${escHtml(f)}</span>`).join('') + '</div>'
-    : '';
-
-  // Languages
-  const langs = data.languages || [];
-  const maxFiles = langs[0]?.files || 1;
-  $('patterns-langs').innerHTML = langs.slice(0, 15).map(l => `
-    <div class="lang-bar">
-      <span class="name" style="width:90px">${escHtml(l.name)}</span>
-      <div class="bar"><div class="fill" style="width:${(l.files/maxFiles*100).toFixed(1)}%"></div></div>
-      <span class="count">${l.files?.toLocaleString()} <span style="color:#64748b">(${l.percentage}%)</span></span>
-    </div>`).join('') || '<div style="color:#64748b;font-size:.82rem">No language data.</div>';
-
-  // Conventions
-  const conv = data.conventions || {};
-  const convItems = [
-    {val: escHtml(conv.language || '—'), lbl: 'Primary Lang'},
-    {val: escHtml(conv.naming || '—'), lbl: 'Naming'},
-    {val: escHtml(conv.test_style || '—'), lbl: 'Test Style'},
-    {val: escHtml(conv.error_handling || '—'), lbl: 'Error Handling'},
-    {val: escHtml(conv.logging_lib || '—'), lbl: 'Logging'},
-    {val: (conv.common_struct_tags || []).join(', ') || '—', lbl: 'Struct Tags'},
-  ];
-  $('patterns-conventions').innerHTML = convItems.map(s =>
-    `<div class="stat-box"><div class="val" style="font-size:.9rem">${s.val}</div><div class="lbl">${s.lbl}</div></div>`
-  ).join('');
-
-  // Dependencies
-  const dep = data.dependencies || {};
-  const pkgs = dep.packages || [];
-  const manifests = dep.manifest_files || [];
-  // LLM cached analysis
-  const llm = data.llm_analysis;
-  const llmAt = data.llm_cached_at;
-  if (llm && typeof llm === 'object' && !llm.raw_response) {
-    $('patterns-llm-meta').textContent = `LLM analysis cached at: ${llmAt || 'unknown'} · Confidence: ${llm.confidence || '—'}`;
-    const llmItems = [
-      llm.primary_language && {label: 'Primary Language', val: llm.primary_language},
-      llm.architecture_description && {label: 'Architecture', val: llm.architecture_description},
-      llm.naming_conventions && {label: 'Naming', val: llm.naming_conventions},
-      llm.error_handling_style && {label: 'Error Handling', val: llm.error_handling_style},
-      llm.test_approach && {label: 'Test Approach', val: llm.test_approach},
-    ].filter(Boolean);
-    const patterns = (llm.coding_patterns || []).map(p => `<span class="badge ok" style="margin:2px">${escHtml(p)}</span>`).join('');
-    const abstractions = (llm.key_abstractions || []).map(a => `<li style="font-size:.8rem;color:#94a3b8">${escHtml(a)}</li>`).join('');
-    const signals = (llm.code_quality_signals || []).map(s => `<li style="font-size:.8rem;color:#94a3b8">${escHtml(s)}</li>`).join('');
-    $('patterns-llm-result').innerHTML = llmItems.map(i =>
-      `<div style="margin-bottom:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">${i.label}</div><div style="font-size:.82rem;color:#e2e8f0;margin-top:2px">${escHtml(i.val)}</div></div>`
-    ).join('') +
-    (patterns ? `<div style="margin-top:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Coding Patterns</div><div style="margin-top:4px">${patterns}</div></div>` : '') +
-    (abstractions ? `<div style="margin-top:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Key Abstractions</div><ul style="margin-left:16px;margin-top:4px">${abstractions}</ul></div>` : '') +
-    (signals ? `<div style="margin-top:8px"><div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Quality Signals</div><ul style="margin-left:16px;margin-top:4px">${signals}</ul></div>` : '');
-  } else if (llm && llm.raw_response) {
-    $('patterns-llm-meta').textContent = `LLM analysis cached (raw) at: ${llmAt || 'unknown'}`;
-    $('patterns-llm-result').innerHTML = `<pre style="font-size:.72rem">${escHtml(llm.raw_response.slice(0,500))}</pre>`;
-  }
-
-  $('patterns-dep-meta').textContent =
-    `Manager: ${dep.manager || '—'} · Manifests: ${manifests.join(', ') || '—'} · Packages shown: ${pkgs.length}`;
-  $('patterns-deps').innerHTML = pkgs.length
-    ? `<table><thead><tr><th>Package</th><th>Version</th><th>Type</th></tr></thead><tbody>${
-        pkgs.slice(0, 150).map(p =>
-          `<tr><td style="font-family:monospace;font-size:.78rem">${escHtml(p.name)}</td>` +
-          `<td style="font-family:monospace;font-size:.78rem;color:#4ade80">${escHtml(p.version)}</td>` +
-          `<td>${p.direct ? '<span class="badge ok">direct</span>' : '<span class="badge none">indirect</span>'}</td></tr>`
-        ).join('')
-      }</tbody></table>`
-    : '<div style="color:#64748b;font-size:.82rem;padding:10px">No dependency manifests found.</div>';
-}
-
-async function runLLMAnalysis(force) {
-  if (!currentProject) return;
-  $('patterns-llm-meta').textContent = 'Running LLM analysis… this may take 30–120s. Please wait.';
-  $('patterns-llm-result').innerHTML = '<div class="loader">Calling local LLM…</div>';
-  try {
-    const url = `/api/analyze_patterns?project=${encodeURIComponent(currentProject)}${force ? '&force=true' : ''}`;
-    const r = await fetch(url, {method: 'POST'});
-    const data = await r.json();
-    if (data.error) {
-      $('patterns-llm-meta').textContent = 'LLM analysis failed: ' + data.error;
-      $('patterns-llm-result').innerHTML = '';
-      return;
-    }
-    // Reload the full patterns panel to merge the new cache
-    await loadPatterns();
-  } catch(e) {
-    $('patterns-llm-meta').textContent = 'LLM analysis error: ' + escHtml(e.message);
-    $('patterns-llm-result').innerHTML = '';
-  }
-}
-
-// ── Architecture ─────────────────────────────────────────────────────────────
-async function loadCommunities() {
-  if (!currentProject) return;
-  $('communities-list').innerHTML = '<div class="loader">Loading…</div>';
-  const data = await api('/communities?project=' + encodeURIComponent(currentProject) + '&top_k=50');
-  const cs = data.communities || [];
-  const enriched = cs.filter(c => c.title && c.title !== `Community ${c.id}`).length;
-  $('enrichment-progress').innerHTML = `
-    <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#64748b">
-      <span>Enriched ${enriched} of ${cs.length} top communities shown</span>
-      <span>${data.total || cs.length} total</span>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" style="width:${cs.length ? (enriched/cs.length*100).toFixed(0) : 0}%"></div></div>`;
-
-  $('communities-list').innerHTML = cs.slice(0,30).map(c => `
-    <div class="card" style="margin-bottom:8px;padding:12px">
-      <div style="display:flex;justify-content:space-between;align-items:start">
-        <strong style="color:#7c9fff;font-size:.85rem">${escHtml(c.title || 'Community ' + c.id)}</strong>
-        <span style="font-size:.72rem;color:#64748b">${c.node_count} nodes</span>
-      </div>
-      <p style="font-size:.78rem;color:#94a3b8;margin-top:6px;line-height:1.5">${escHtml((c.summary||'').slice(0,300))}</p>
-      ${c.key_entry_points?.length ? `<div style="margin-top:6px;font-size:.72rem;color:#64748b">Entry: ${c.key_entry_points.slice(0,3).map(e=>escHtml(typeof e==='string'?e.split('/').pop():'')).join(', ')}</div>` : ''}
-    </div>`).join('');
-}
-
-// ── Graph ────────────────────────────────────────────────────────────────────
-async function runGraph() {
-  const sym = $('graph-symbol').value.trim();
-  const rel = $('graph-relation').value;
-  const to  = $('graph-to').value.trim();
-  if (!sym || !currentProject) return;
-  $('graph-result').textContent = 'Querying…';
-  const url = `/api/graph?project=${encodeURIComponent(currentProject)}&symbol=${encodeURIComponent(sym)}&relation=${rel}${to ? '&to='+encodeURIComponent(to) : ''}`;
-  const data = await api(url.slice(4));
-  $('graph-result').textContent = JSON.stringify(data, null, 2);
-}
-
-async function exportGraph(fmt) {
-  if (!currentProject) return;
-  $('graph-result').textContent = `Exporting graph as ${fmt}… (may take 10–30s for large projects)`;
-  const data = await api('/graph_export?project=' + encodeURIComponent(currentProject) + '&format=' + fmt + '&max_nodes=5000');
-  if (data.error) { $('graph-result').textContent = 'Error: ' + data.error; return; }
-  const content = fmt === 'graphml' ? data.graphml : JSON.stringify(data, null, 2);
-  const blob = new Blob([content], {type: fmt === 'graphml' ? 'application/xml' : 'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `knowledge_graph.${fmt === 'graphml' ? 'graphml' : 'json'}`;
-  a.click();
-  $('graph-result').textContent = `Exported ${data.node_count || data.nodes?.length || '?'} nodes, ${data.edge_count || data.edges?.length || '?'} edges as ${fmt}.`;
-}
-
-// ── Wiki ─────────────────────────────────────────────────────────────────────
-async function loadWikiList() {
-  if (!currentProject) return;
-  const data = await api('/wiki?project=' + encodeURIComponent(currentProject));
-  const pages = data.pages || [];
-  $('wiki-page-list').innerHTML = pages.length
-    ? pages.map(p => `<li><a onclick="loadWikiPage('${escAttr(p)}')">${escHtml(p)}</a></li>`).join('')
-    : '<li style="color:#64748b;font-size:.82rem">No wiki pages yet. Run build(action=&quot;wiki&quot;).</li>';
-}
-
-async function loadWikiPage(name) {
-  const data = await api('/wiki/page?project=' + encodeURIComponent(currentProject) + '&name=' + encodeURIComponent(name));
-  const md = data.content || '';
-  // Very lightweight markdown rendering (no library needed for basic structure)
-  $('wiki-content').innerHTML = simpleMarkdown(md);
-}
-
-async function runWikiSearch() {
-  const q = $('wiki-search-q').value.trim();
-  const scope = $('wiki-scope').value;
-  if (!q || !currentProject) return;
-  const data = await api('/ask?project=' + encodeURIComponent(currentProject) + '&q=' + encodeURIComponent(q) + '&scope=' + scope);
-  const results = data.results || [];
-  $('wiki-search-results').innerHTML = results.length
-    ? results.map(r => `<div class="result-item">
-        <div class="path">${escHtml(r.path?.split('/').slice(-2).join('/') || '')}<span class="score">${(r.score||0).toFixed(3)}</span></div>
-        <pre>${escHtml((r.content||'').slice(0,300))}</pre>
-      </div>`).join('')
-    : '<div style="color:#64748b;font-size:.82rem;padding:10px">No results.</div>';
-}
-
-// ── Search ───────────────────────────────────────────────────────────────────
-async function runSearch() {
-  const q = $('search-q').value.trim();
-  const scope = $('search-scope').value;
-  if (!q) return;
-  const data = await api('/search?project=' + encodeURIComponent(currentProject) + '&q=' + encodeURIComponent(q) + '&scope=' + scope);
-  const results = data.results || [];
-  $('search-results').innerHTML = results.length
-    ? results.map(r => `<div class="result-item">
-        <div class="path">${escHtml(r.path?.split('/').slice(-3).join('/') || '')}:${r.start_line||0}–${r.end_line||0}
-          <span class="score">${(r.score||0).toFixed(3)}</span>
-        </div>
-        <pre>${escHtml((r.content||'').slice(0,400))}</pre>
-      </div>`).join('')
-    : '<div style="color:#64748b;font-size:.82rem;padding:10px">No results.</div>';
-}
-
-// ── Status ───────────────────────────────────────────────────────────────────
-async function loadStatus() {
-  const [health, metrics] = await Promise.all([
-    fetch('/healthz').then(r=>r.json()),
-    api('/metrics'),
-  ]);
-  const snap = health;
-  $('daemon-metrics').innerHTML = [
-    {val: snap.connected_clients ?? '—', lbl:'Clients'},
-    {val: snap.active_watchers ?? '—', lbl:'Watchers'},
-    {val: snap.uptime_s != null ? snap.uptime_s.toFixed(0)+'s' : '—', lbl:'Uptime'},
-  ].map(s => `<div class="stat-box"><div class="val">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
-  $('search-metrics').textContent = JSON.stringify(metrics, null, 2);
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function escAttr(s) { return String(s).replace(/'/g,"\\'"); }
-
-function simpleMarkdown(md) {
-  return md
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^```[\s\S]*?```$/gm, m => `<pre>${escHtml(m.slice(3,-3).replace(/^[a-z]+\\n/,''))}</pre>`)
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-    .replace(/\\n{2,}/g, '</p><p>')
-    .replace(/^(?!<[hup])(.+)$/gm, '<p>$1</p>');
-}
-
-// ── Boot ──────────────────────────────────────────────────────────────────────
-(async () => {
-  try {
-    await loadProjects();
-  } catch(e) {
-    $('daemon-status').innerHTML = '<span style="color:#f87171">● error: ' + escHtml(e.message) + '</span>';
-    $('projects-table').innerHTML = '<div style="color:#f87171;padding:10px">Failed to connect to daemon: ' + escHtml(e.message) + '</div>';
-  }
-})();
-</script>
-</body>
-</html>
-"""
+# Keep a small shim so old code that directly accesses this module still works.
+# _DASHBOARD_HTML is imported above.
 
 # ---------------------------------------------------------------------------
 # API route handlers
 # ---------------------------------------------------------------------------
 
 
-def register_dashboard_routes(mcp: "FastMCP") -> None:
+def register_dashboard_routes(mcp: FastMCP) -> None:
     """Attach all dashboard routes to the FastMCP instance."""
+
+    @mcp.custom_route("/", methods=["GET"], include_in_schema=False)
+    async def root_redirect(_request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/dashboard", status_code=307)
 
     @mcp.custom_route("/dashboard", methods=["GET"], include_in_schema=False)
     async def dashboard(_request: Request) -> HTMLResponse:
@@ -686,8 +157,11 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
     @mcp.custom_route("/api/graph", methods=["GET"], include_in_schema=False)
     async def api_graph(request: Request) -> JSONResponse:
         from opencode_search.handlers import (
-            handle_get_symbol, handle_get_callers, handle_get_callees,
-            handle_detect_impact, handle_trace_path,
+            handle_detect_impact,
+            handle_get_callees,
+            handle_get_callers,
+            handle_get_symbol,
+            handle_trace_path,
         )
         project = request.query_params.get("project", "")
         symbol = request.query_params.get("symbol", "")
@@ -721,8 +195,23 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
 
     @mcp.custom_route("/api/metrics", methods=["GET"], include_in_schema=False)
     async def api_metrics(_request: Request) -> JSONResponse:
+        import json as _json
+        import time
+
+        from opencode_search.daemon import _META_PATH
+        from opencode_search.daemon_runtime import runtime_state
         from opencode_search.metrics import get_metrics
-        return JSONResponse(get_metrics())
+        data = get_metrics()
+        snap = runtime_state.snapshot()
+        data["connected_clients"] = snap.get("active_clients", 0)
+        data["client_ids"] = snap.get("client_ids", [])
+        try:
+            info = _json.loads(_META_PATH.read_text(encoding="utf-8"))
+            started_at = info.get("started_at")
+            data["uptime_s"] = round(time.time() - started_at, 1) if started_at else None
+        except Exception:
+            data["uptime_s"] = None
+        return JSONResponse(data)
 
     @mcp.custom_route("/api/patterns", methods=["GET"], include_in_schema=False)
     async def api_patterns(request: Request) -> JSONResponse:
@@ -732,6 +221,17 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_detect_patterns(project_path=project)
         return JSONResponse(result)
+
+    @mcp.custom_route("/api/auto_pipeline_status", methods=["GET"], include_in_schema=False)
+    async def api_auto_pipeline_status(_request: Request) -> JSONResponse:
+        from opencode_search.handlers._autopipeline import (
+            auto_pipeline_enabled,
+            get_pipeline_events,
+        )
+        return JSONResponse({
+            "enabled": auto_pipeline_enabled(),
+            "events": get_pipeline_events()[-20:],  # last 20 events
+        })
 
     @mcp.custom_route("/api/analyze_patterns", methods=["POST"], include_in_schema=False)
     async def api_analyze_patterns(request: Request) -> JSONResponse:
@@ -745,8 +245,9 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
 
     @mcp.custom_route("/api/graph_export", methods=["GET"], include_in_schema=False)
     async def api_graph_export(request: Request):
-        from opencode_search.handlers import handle_graph_export
         from starlette.responses import Response
+
+        from opencode_search.handlers import handle_graph_export
         project = request.query_params.get("project", "")
         fmt = request.query_params.get("format", "json")
         max_nodes = int(request.query_params.get("max_nodes", "5000"))
@@ -760,3 +261,292 @@ def register_dashboard_routes(mcp: "FastMCP") -> None:
                 headers={"Content-Disposition": "attachment; filename=knowledge_graph.graphml"},
             )
         return JSONResponse(result)
+
+    @mcp.custom_route("/api/kb_health", methods=["GET"], include_in_schema=False)
+    async def api_kb_health(request: Request) -> JSONResponse:
+        """KB completeness snapshot: enrichment %, wiki count, patterns cache, last pipeline event."""
+        from pathlib import Path
+
+        from opencode_search.config import get_project_graph_db_path, get_project_wiki_dir
+        from opencode_search.handlers._autopipeline import (
+            auto_pipeline_enabled,
+            get_pipeline_events,
+        )
+        from opencode_search.handlers._patterns import load_patterns_cache
+
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+
+        result: dict = {"project_path": project, "auto_pipeline_enabled": auto_pipeline_enabled()}
+
+        # Enrichment stats from graph DB
+        try:
+            from opencode_search.graph.storage import GraphStorage
+            db_path = get_project_graph_db_path(project)
+            if Path(db_path).exists():
+                gs = GraphStorage(db_path)
+                gs.open()
+                try:
+                    communities = gs.get_communities(min_node_count=2)
+                    total = len(communities)
+                    enriched = sum(1 for c in communities if c.title and f"Community {c.id}" != c.title)
+                    result["total_communities"] = total
+                    result["enriched_communities"] = enriched
+                    result["enrichment_pct"] = round(enriched / total * 100, 1) if total else 0.0
+                finally:
+                    gs.close()
+        except Exception:
+            result["total_communities"] = None
+            result["enriched_communities"] = None
+            result["enrichment_pct"] = None
+
+        # Wiki page count
+        try:
+            wiki_dir = get_project_wiki_dir(project)
+            md_files = list(wiki_dir.glob("*.md")) if wiki_dir.exists() else []
+            result["wiki_page_count"] = len(md_files)
+        except Exception:
+            result["wiki_page_count"] = None
+
+        # Patterns cache
+        try:
+            cached = load_patterns_cache(project)
+            result["patterns_cached"] = cached is not None
+            result["patterns_cached_at"] = cached.get("cached_at") if cached else None
+            result["patterns_steps"] = cached.get("steps", []) if cached else []
+        except Exception:
+            result["patterns_cached"] = False
+            result["patterns_cached_at"] = None
+            result["patterns_steps"] = []
+
+        # Last pipeline event
+        events = get_pipeline_events()
+        proj_events = [e for e in events if project in e.get("project_path", "")]
+        result["last_pipeline_event"] = proj_events[-1] if proj_events else None
+
+        return JSONResponse(result)
+
+    # ── Pre-release status & trigger ─────────────────────────────────────
+
+    @mcp.custom_route("/api/prerelease_status", methods=["GET"], include_in_schema=False)
+    async def api_prerelease_status(_request: Request) -> JSONResponse:
+        """Return last pre-release report JSON, or 404 if none exists."""
+        import json as _json
+        from pathlib import Path as _Path
+        # Look for report adjacent to scripts dir
+        candidates = [
+            _Path(__file__).parent.parent.parent / ".prerelease_report.json",
+            _Path(".prerelease_report.json").resolve(),
+        ]
+        for report_path in candidates:
+            if report_path.exists():
+                try:
+                    data = _json.loads(report_path.read_text())
+                    return JSONResponse(data)
+                except Exception as exc:
+                    return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
+        return JSONResponse({"error": "No pre-release report found"}, status_code=404)
+
+    _prerelease_tasks: dict = {}
+
+    @mcp.custom_route("/api/run_prerelease", methods=["POST"], include_in_schema=False)
+    async def api_run_prerelease(request: Request) -> JSONResponse:
+        """Spawn prerelease.py as a background subprocess. Returns task_id."""
+        import asyncio as _aio
+        import sys as _sys
+        import uuid as _uuid
+        from pathlib import Path as _Path
+
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        task_id = str(_uuid.uuid4())[:8]
+
+        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
+        prerelease_script = scripts_dir / "prerelease.py"
+        if not prerelease_script.exists():
+            return JSONResponse({"error": "prerelease.py not found"}, status_code=404)
+
+        cmd = [_sys.executable, str(prerelease_script), "--fast", "--json"]
+        if project:
+            cmd += ["--project", project]
+
+        async def _run_bg():
+            try:
+                proc = await _aio.create_subprocess_exec(
+                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
+                )
+                _prerelease_tasks[task_id] = {"status": "running", "pid": proc.pid}
+                await proc.wait()
+                _prerelease_tasks[task_id] = {"status": "done", "returncode": proc.returncode}
+            except Exception as exc:
+                _prerelease_tasks[task_id] = {"status": "error", "error": str(exc)}
+
+        _prerelease_tasks[f"_task_{task_id}"] = _aio.create_task(_run_bg())
+        _prerelease_tasks[task_id] = {"status": "running"}
+        return JSONResponse({"task_id": task_id, "status": "started"})
+
+    @mcp.custom_route("/api/prerelease_poll", methods=["GET"], include_in_schema=False)
+    async def api_prerelease_poll(request: Request) -> JSONResponse:
+        """Poll status of a running pre-release task."""
+        task_id = request.query_params.get("id", "")
+        state = _prerelease_tasks.get(task_id, {"status": "not_found"})
+        return JSONResponse(state)
+
+    @mcp.custom_route("/api/verify_status", methods=["GET"], include_in_schema=False)
+    async def api_verify_status(_request: Request) -> JSONResponse:
+        """Return last verification run results + history from .opencode_verify_state.json."""
+        import json as _json
+        from pathlib import Path as _Path
+        state_path = _Path(__file__).parent.parent.parent / ".opencode_verify_state.json"
+        if not state_path.exists():
+            return JSONResponse({"last_run": None, "history": [], "verdict": "unknown"})
+        try:
+            state = _json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        runs = state.get("run_history", [])
+        last = runs[-1] if runs else None
+        history = [
+            {"ts": r.get("timestamp"), "passed": r.get("passed", 0), "failed": r.get("failed", 0)}
+            for r in runs[-30:]
+        ]
+        verdict = "unknown"
+        if last:
+            p0 = last.get("p0_failures", 0)
+            failed = last.get("failed", 0)
+            verdict = "NO-GO" if p0 > 0 else ("WARNINGS" if failed > 0 else "GO")
+        # Per-category breakdown is in last_results, not run_history
+        categories = state.get("last_results", {})
+        failures = state.get("known_failures", []) or state.get("failures", [])
+        return JSONResponse({
+            "last_run": last,
+            "history": history,
+            "verdict": verdict,
+            "failures": failures,
+            "categories": categories,
+        })
+
+    # Background job store for auto-fix tasks
+    _autofix_tasks: dict[str, dict] = {}
+
+    @mcp.custom_route("/api/auto_fix_trigger", methods=["POST"], include_in_schema=False)
+    async def api_auto_fix_trigger(request: Request) -> JSONResponse:
+        """Trigger selfheal.py --apply to auto-fix known issues."""
+        import asyncio as _aio
+        import sys as _sys
+        import uuid as _uuid
+        from pathlib import Path as _Path
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        task_id = str(_uuid.uuid4())[:8]
+        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
+        selfheal_script = scripts_dir / "selfheal.py"
+        if not selfheal_script.exists():
+            return JSONResponse({"error": "selfheal.py not found"}, status_code=404)
+        cmd = [_sys.executable, str(selfheal_script), "--apply"]
+        if project:
+            cmd += ["--project", project]
+
+        async def _run_bg():
+            try:
+                proc = await _aio.create_subprocess_exec(
+                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
+                )
+                stdout, _ = await proc.communicate()
+                _autofix_tasks[task_id] = {
+                    "status": "done",
+                    "returncode": proc.returncode,
+                    "output": (stdout or b"").decode(errors="replace")[-4000:],
+                }
+            except Exception as exc:
+                _autofix_tasks[task_id] = {"status": "error", "error": str(exc)}
+
+        _autofix_tasks[f"_task_{task_id}"] = _aio.create_task(_run_bg())
+        _autofix_tasks[task_id] = {"status": "running"}
+        return JSONResponse({"task_id": task_id, "status": "started"})
+
+    @mcp.custom_route("/api/service_mesh", methods=["GET"], include_in_schema=False)
+    async def api_service_mesh(request: Request) -> JSONResponse:
+        """Detect inter-service communication patterns for a project."""
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_detect_service_mesh(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/impact_narrative", methods=["GET"], include_in_schema=False)
+    async def api_impact_narrative(request: Request) -> JSONResponse:
+        """Generate natural-language impact analysis for a symbol."""
+        from opencode_search.handlers._impact import handle_impact_narrative
+        project = request.query_params.get("project", "")
+        symbol = request.query_params.get("symbol", "")
+        if not project or not symbol:
+            return JSONResponse({"error": "project and symbol params required"}, status_code=400)
+        result = await handle_impact_narrative(symbol=symbol, project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/semantic_trace", methods=["GET"], include_in_schema=False)
+    async def api_semantic_trace(request: Request) -> JSONResponse:
+        """Trace a call flow from one concept to another."""
+        from opencode_search.handlers._trace import handle_semantic_trace
+        project = request.query_params.get("project", "")
+        from_q = request.query_params.get("from", "")
+        to_q = request.query_params.get("to", "")
+        if not project or not from_q or not to_q:
+            return JSONResponse({"error": "project, from, and to params required"}, status_code=400)
+        result = await handle_semantic_trace(from_query=from_q, to_query=to_q, project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/build_hierarchy", methods=["POST"], include_in_schema=False)
+    async def api_build_hierarchy(request: Request) -> JSONResponse:
+        """Trigger recursive Leiden hierarchy build for a project."""
+        import contextlib
+
+        from opencode_search.graph.community import CommunityDetector
+        from opencode_search.handlers._graph import _open_graph
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        def _build(path: str) -> dict:
+            gs = _open_graph(path)
+            if gs is None:
+                return {"error": "Project not indexed"}
+            try:
+                levels = CommunityDetector().build_hierarchy(gs)
+                return {"status": "ok", "levels_built": levels, "max_level": gs.get_max_community_level()}
+            finally:
+                with contextlib.suppress(Exception):
+                    gs.close()
+        import asyncio
+        result = await asyncio.to_thread(_build, project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/integrations_status", methods=["GET"], include_in_schema=False)
+    async def api_integrations_status(_request: Request) -> JSONResponse:
+        """Return all integration states by running configure_integrations.py --check --json."""
+        import asyncio as _aio
+        import sys as _sys
+        from pathlib import Path as _Path
+        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
+        cfg_script = scripts_dir / "configure_integrations.py"
+        if not cfg_script.exists():
+            return JSONResponse({"error": "configure_integrations.py not found"}, status_code=404)
+        try:
+            proc = await _aio.create_subprocess_exec(
+                _sys.executable, str(cfg_script), "--check", "--json",
+                stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE,
+            )
+            stdout, _ = await _aio.wait_for(proc.communicate(), timeout=15.0)
+            import json as _json
+            return JSONResponse(_json.loads(stdout.decode(errors="replace")))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
