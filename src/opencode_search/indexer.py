@@ -162,6 +162,10 @@ class _GpuBatcher:
         self.total_indexed = 0
         self.total_chunks = 0
         self.errors = 0
+        # Per-session content_hash → vector cache: skip re-embedding identical
+        # boilerplate chunks (proto-generated code, shared middleware, etc.)
+        self._content_vec_cache: dict[str, "np.ndarray"] = {}
+        self.total_cache_hits = 0
 
     async def add(self, fr: _FileReady) -> None:
         self._pending_files.append(fr)
@@ -176,21 +180,41 @@ class _GpuBatcher:
         files, texts = self._pending_files, self._pending_texts
         self._pending_files, self._pending_texts = [], []
 
+        # Build per-chunk content_hashes and partition into cache-hits vs misses
+        # so identical boilerplate chunks (proto stubs, shared middleware) are
+        # not re-embedded — saves GPU time proportional to dedup rate.
+        all_content_hashes = [
+            hashlib.sha256(t.encode()).hexdigest()[:16] for t in texts
+        ]
+        miss_indices: list[int] = []
+        miss_texts: list[str] = []
+        for idx, (text, ch) in enumerate(zip(texts, all_content_hashes)):
+            if ch not in self._content_vec_cache:
+                miss_indices.append(idx)
+                miss_texts.append(text)
+
+        cache_hits = len(texts) - len(miss_texts)
+        self.total_cache_hits += cache_hits
+
         try:
-            # _return_numpy=True skips the O(N·dims) mat.tolist() Python float
-            # allocation — vectors stay as a float32 numpy matrix until LanceDB
-            # writes them via np.stack in write_chunks (one C-level allocation).
-            vectors = await asyncio.to_thread(
-                embed_passages, texts, model=self._embed_model, dimensions=self._dims,
-                _return_numpy=True,
-            )
+            import numpy as _np
+            if miss_texts:
+                # _return_numpy=True skips the O(N·dims) mat.tolist() allocation
+                miss_vectors = await asyncio.to_thread(
+                    embed_passages, miss_texts, model=self._embed_model, dimensions=self._dims,
+                    _return_numpy=True,
+                )
+                for mi, mv in zip(miss_indices, miss_vectors):
+                    self._content_vec_cache[all_content_hashes[mi]] = mv
+                await _thermal_yield()
+            # Build full vectors array (cache hits reuse cached numpy array)
+            vectors = _np.stack([
+                self._content_vec_cache[ch] for ch in all_content_hashes
+            ])
         except Exception as exc:
             log.error("GPU batch embed failed (%d chunks): %s", len(texts), exc)
             self.errors += len(files)
             return
-
-        # Let GPU cool if it is running hot — keeps laptop fans silent.
-        await _thermal_yield()
 
         now_us = int(time.time() * 1_000_000)
         vi = 0
@@ -210,7 +234,7 @@ class _GpuBatcher:
                     language=fr.language,
                     position=i,
                     content=c.content,
-                    content_hash=hashlib.sha256(c.content.encode()).hexdigest()[:16],
+                    content_hash=all_content_hashes[vi - n + i],
                     start_line=c.start_line,
                     end_line=c.end_line,
                     vector=fv[i],  # 1D numpy array — passed directly to storage
@@ -224,7 +248,13 @@ class _GpuBatcher:
             self.total_indexed += 1
             self.total_chunks += len(chunk_data)
 
-        log.debug("GPU batch: %d chunks from %d files embedded", len(texts), len(files))
+        if cache_hits:
+            log.debug(
+                "GPU batch: %d embedded, %d cache hits from %d files",
+                len(miss_texts), cache_hits, len(files),
+            )
+        else:
+            log.debug("GPU batch: %d chunks from %d files embedded", len(texts), len(files))
 
     async def finalize(self) -> None:
         await self._flush()
