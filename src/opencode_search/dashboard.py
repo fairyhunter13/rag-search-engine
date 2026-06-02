@@ -550,3 +550,65 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse(_json.loads(stdout.decode(errors="replace")))
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+    # ── QA Gate status & trigger ──────────────────────────────────────────────
+
+    @mcp.custom_route("/api/qa_status", methods=["GET"], include_in_schema=False)
+    async def api_qa_status(_request: Request) -> JSONResponse:
+        import json as _json
+        from pathlib import Path as _Path
+        candidates = [
+            _Path(__file__).parent.parent.parent / ".qa_report.json",
+            _Path(".qa_report.json").resolve(),
+        ]
+        for report_path in candidates:
+            if report_path.exists():
+                try:
+                    data = _json.loads(report_path.read_text())
+                    return JSONResponse(data)
+                except Exception as exc:
+                    return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
+        return JSONResponse({"error": "No QA report found"}, status_code=404)
+
+    _qa_tasks: dict = {}
+
+    @mcp.custom_route("/api/run_qa", methods=["POST"], include_in_schema=False)
+    async def api_run_qa(request: Request) -> JSONResponse:
+        import asyncio as _aio
+        import sys as _sys
+        import uuid as _uuid
+        from pathlib import Path as _Path
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        task_id = str(_uuid.uuid4())[:8]
+        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
+        qa_script = scripts_dir / "qa_gate.py"
+        if not qa_script.exists():
+            return JSONResponse({"error": "qa_gate.py not found"}, status_code=404)
+        cmd = [_sys.executable, str(qa_script), "--fix"]
+        if project:
+            cmd += ["--project", project]
+
+        async def _run_bg() -> None:
+            try:
+                proc = await _aio.create_subprocess_exec(
+                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
+                )
+                _qa_tasks[task_id] = {"status": "running", "pid": proc.pid}
+                await proc.wait()
+                _qa_tasks[task_id] = {"status": "done", "returncode": proc.returncode}
+            except Exception as exc:
+                _qa_tasks[task_id] = {"status": "error", "error": str(exc)}
+
+        _qa_tasks[f"_bg_{task_id}"] = _aio.create_task(_run_bg())
+        _qa_tasks[task_id] = {"status": "running"}
+        return JSONResponse({"task_id": task_id, "status": "started"})
+
+    @mcp.custom_route("/api/qa_poll", methods=["GET"], include_in_schema=False)
+    async def api_qa_poll(request: Request) -> JSONResponse:
+        task_id = request.query_params.get("id", "")
+        state = _qa_tasks.get(task_id, {"status": "not_found"})
+        return JSONResponse(state)

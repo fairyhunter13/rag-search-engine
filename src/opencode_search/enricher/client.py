@@ -18,7 +18,7 @@ Provider defaults:
   anthropic:   base_url=https://api.anthropic.com  model=claude-haiku-4-5-20251001
   openai:      base_url=https://api.openai.com  model=gpt-4o-mini
   claude-code: uses locally installed `claude` CLI; model=claude-haiku-4-5-20251001
-  codex:       uses locally installed `codex` CLI; model=gpt-4o-mini
+  codex:       uses locally installed `codex` CLI; model=gpt-5.4-mini
 """
 from __future__ import annotations
 
@@ -713,7 +713,7 @@ class ClaudeCodeClient(LLMClient):
 # Codex CLI provider  (shells out to `codex`)
 # ---------------------------------------------------------------------------
 
-_CODEX_DEFAULT_MODEL = "gpt-4o-mini"
+_CODEX_DEFAULT_MODEL = "gpt-5.4-mini"
 
 
 class CodexClient(LLMClient):

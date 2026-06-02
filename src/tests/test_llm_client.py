@@ -658,12 +658,12 @@ def test_codex_from_env_uses_model(monkeypatch):
     assert client.model == "gpt-4o"
 
 
-def test_codex_default_model_is_gpt4o_mini(monkeypatch):
+def test_codex_default_model_is_gpt54_mini(monkeypatch):
     monkeypatch.setenv("OPENCODE_LLM_PROVIDER", "codex")
     monkeypatch.delenv("OPENCODE_LLM_MODEL", raising=False)
     client = CodexClient.from_env()
     assert client is not None
-    assert "gpt-4o-mini" in client.model
+    assert "gpt-5.4-mini" in client.model
 
 
 def test_codex_is_available_false_when_cli_not_found(monkeypatch):
@@ -693,7 +693,7 @@ def test_codex_chat_calls_subprocess(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/codex" if name == "codex" else None)
     monkeypatch.setattr("subprocess.run", fake_run)
 
-    client = CodexClient(model="gpt-4o-mini")
+    client = CodexClient(model="gpt-5.4-mini")
     result = client.chat([{"role": "user", "content": "describe index_project()"}])
 
     assert result == "Indexes project files into the vector store."
@@ -718,11 +718,11 @@ def test_codex_chat_passes_model_flag_when_enabled(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/codex" if name == "codex" else None)
     monkeypatch.setattr("subprocess.run", fake_run)
 
-    client = CodexClient(model="gpt-4o-mini", pass_model_flag=True)
+    client = CodexClient(model="gpt-5.4-mini", pass_model_flag=True)
     client.chat([{"role": "user", "content": "test"}])
 
     assert "--model" in captured_cmd[0]
-    assert "gpt-4o-mini" in captured_cmd[0]
+    assert "gpt-5.4-mini" in captured_cmd[0]
 
 
 def test_codex_chat_raises_when_cli_not_found(monkeypatch):

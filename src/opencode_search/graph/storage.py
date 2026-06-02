@@ -492,8 +492,8 @@ class GraphStorage:
                 key_entry_points=json.loads(ep) if ep else [],
                 generated_at=r["generated_at"],
                 created_at=r["created_at"] or "",
-                level=r["level"] if "level" in r.keys() else 1,
-                parent_community_id=r["parent_community_id"] if "parent_community_id" in r.keys() else None,
+                level=r["level"] if "level" in r else 1,  # noqa: SIM401
+                parent_community_id=r["parent_community_id"] if "parent_community_id" in r else None,  # noqa: SIM401
             ))
         return result
 

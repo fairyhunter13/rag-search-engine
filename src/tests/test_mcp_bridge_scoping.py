@@ -75,6 +75,7 @@ async def test_bridge_build_rejects_paths_outside_workspace_root(tmp_path, monke
     deep = repo / "src"
     deep.mkdir(parents=True)
     monkeypatch.setenv("OPENCODE_BRIDGE_WORKSPACE_ROOT", str(repo))
+    monkeypatch.delenv("OPENCODE_ALLOW_INDEX_OUTSIDE_CWD", raising=False)
     monkeypatch.chdir(deep)
 
     from opencode_search import mcp_bridge
@@ -117,6 +118,7 @@ async def test_bridge_search_rejects_explicit_project_paths_outside_workspace(tm
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setenv("OPENCODE_BRIDGE_WORKSPACE_ROOT", str(repo))
+    monkeypatch.delenv("OPENCODE_ALLOW_INDEX_OUTSIDE_CWD", raising=False)
     monkeypatch.chdir(repo)
 
     from opencode_search import mcp_bridge

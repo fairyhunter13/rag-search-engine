@@ -1,4 +1,4 @@
-"""E2E tests using Claude Code CLI (Haiku) and Codex CLI (gpt-4o-mini).
+"""E2E tests using Claude Code CLI (Haiku) and Codex CLI (gpt-5.4-mini).
 
 No API keys required — authentication is managed by the installed CLIs.
 
@@ -109,18 +109,18 @@ class TestClaudeCodeClientHaiku:
 
 
 # ---------------------------------------------------------------------------
-# CodexClient (gpt-4o-mini) tests — replaces direct OpenAI API tests
+# CodexClient (gpt-5.4-mini) tests — replaces direct OpenAI API tests
 # ---------------------------------------------------------------------------
 
 
 @_skip_codex
 class TestCodexClientGptMini:
-    """Full integration tests using `codex exec` with gpt-4o-mini."""
+    """Full integration tests using `codex exec` with gpt-5.4-mini."""
 
     @pytest.fixture(scope="class")
     def client(self):
         from opencode_search.enricher.client import CodexClient
-        return CodexClient(model="gpt-4o-mini", timeout=90)
+        return CodexClient(model="gpt-5.4-mini", timeout=90)
 
     def test_codex_can_describe_function(self, client) -> None:
         result = client.symbol_intent(

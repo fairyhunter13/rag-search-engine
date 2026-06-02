@@ -1,0 +1,25 @@
+name: MVP QA Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Install dependencies
+        run: uv pip install --system -e "src[prerelease]"
+      - name: Run QA gate (CI pillars only)
+        run: |
+          python scripts/qa_gate.py \
+            --pillar code_quality \
+            --pillar api_contracts \
+            --pillar cli_smoke
+        env:
+          OPENCODE_LLM_PROVIDER: codex
+          OPENCODE_LLM_MODEL: gpt-5.4-mini
