@@ -1019,7 +1019,6 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/system_status", methods=["GET"], include_in_schema=False)
     async def api_system_status(request: Request) -> JSONResponse:
         """Serve cached ocs_status report, refreshing if stale (> 60s old)."""
-        import os
         import sys
         cache_path = Path(__file__).parent.parent.parent.parent / ".ocs_status_cache.json"
         # Also check adjacent to the project root

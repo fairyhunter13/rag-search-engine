@@ -1252,7 +1252,7 @@ async def handle_graph_export(
     Returns nodes, edges, and communities as JSON or GraphML suitable for
     Gephi, Cytoscape, NetworkX, or any graph analysis tool.
 
-    format: "json" (default) | "graphml"
+    format: "json" (default) | "graphml" | "mermaid"
     max_nodes: cap on nodes exported (largest communities first, default 5000)
     min_community_size: minimum node_count to include a community (default 2)
     """
@@ -1295,7 +1295,6 @@ async def handle_graph_export(
 
         nodes_out, communities_out, truncated = await asyncio.to_thread(_fetch_nodes_and_comms)
         node_id_set = {n["id"] for n in nodes_out}
-        selected_communities = communities_out
 
         # Fetch only edges whose both endpoints are in the included node set.
         # Use SQL IN clause — avoids full table scan on large graphs.
@@ -1338,6 +1337,20 @@ async def handle_graph_export(
             "truncated": truncated,
             "max_nodes_limit": max_nodes,
             "graphml": graphml,
+        }
+
+    if format == "mermaid":
+        diagram = _graph_to_mermaid(nodes_out, edges_out, communities_out)
+        return {
+            "status": "ok",
+            "format": "mermaid",
+            "project_path": project_path,
+            "nodes": len(nodes_out),
+            "edges": len(edges_out),
+            "communities": len(communities_out),
+            "truncated": truncated,
+            "max_nodes_limit": max_nodes,
+            "mermaid": diagram,
         }
 
     return {
@@ -1400,6 +1413,47 @@ def _to_graphml(nodes: list[dict], edges: list[dict], communities: list[dict]) -
         )
 
     lines += ["  </graph>", "</graphml>"]
+    return "\n".join(lines)
+
+
+def _graph_to_mermaid(
+    nodes: list[dict], edges: list[dict], communities: list[dict]
+) -> str:
+    """Convert full graph export to a Mermaid flowchart (community-grouped subgraphs)."""
+    comm_title: dict[int, str] = {c["id"]: c.get("title", f"C{c['id']}") for c in communities}
+    comm_nodes: dict[int, list[dict]] = {}
+    orphan_nodes: list[dict] = []
+    for n in nodes:
+        cid = n.get("community_id")
+        if cid is not None:
+            comm_nodes.setdefault(cid, []).append(n)
+        else:
+            orphan_nodes.append(n)
+
+    lines = ["flowchart TD"]
+    node_ids = {n["id"] for n in nodes}
+
+    for cid, cnodes in comm_nodes.items():
+        safe = f"C{cid}"
+        title = comm_title.get(cid, safe).replace('"', "'")[:40]
+        lines.append(f'  subgraph {safe}["{title}"]')
+        for n in cnodes:
+            mid = _mermaid_id(n["id"])
+            label = n.get("name", n["id"])[:30].replace('"', "'")
+            lines.append(f'    {mid}["{label}"]')
+        lines.append("  end")
+
+    for n in orphan_nodes:
+        mid = _mermaid_id(n["id"])
+        label = n.get("name", n["id"])[:30].replace('"', "'")
+        lines.append(f'  {mid}["{label}"]')
+
+    for e in edges:
+        if e["from"] in node_ids and e["to"] in node_ids:
+            fid = _mermaid_id(e["from"])
+            tid = _mermaid_id(e["to"])
+            lines.append(f"  {fid} --> {tid}")
+
     return "\n".join(lines)
 
 

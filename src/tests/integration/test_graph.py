@@ -1367,14 +1367,30 @@ def test_resolve_prefers_same_file_over_unique_name():
 
 
 def test_resolve_ambiguous_callee_returns_one_edge():
-    """Multiple matches should return exactly one edge (not duplicate)."""
+    """Multiple matches should return exactly one edge (not duplicate) labelled AMBIGUOUS."""
     n1 = _node("/a.py", "process", qualified_name="a.process")
     n2 = _node("/b.py", "process", qualified_name="b.process")
     caller = _node("/main.py", "run", qualified_name="main.run")
     resolver = CallResolver([n1, n2, caller])
     raw = _raw(caller.id, "process")
     edges = resolver.resolve([raw])
-    assert len(edges) <= 1
+    assert len(edges) == 1
+    assert edges[0].confidence_label == "AMBIGUOUS"
+    assert edges[0].confidence <= 0.30
+
+
+def test_resolve_ambiguous_confidence_score_stored():
+    """AMBIGUOUS edges have a non-None confidence_score (the low confidence value)."""
+    n1 = _node("/x.py", "helper", qualified_name="x.helper")
+    n2 = _node("/y.py", "helper", qualified_name="y.helper")
+    caller = _node("/main.py", "main", qualified_name="main.main")
+    resolver = CallResolver([n1, n2, caller])
+    edges = resolver.resolve([_raw(caller.id, "helper")])
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge.confidence_label == "AMBIGUOUS"
+    assert edge.confidence_score is not None
+    assert edge.confidence_score <= 0.30
 
 
 # ============================================================

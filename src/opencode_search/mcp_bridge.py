@@ -283,6 +283,10 @@ async def overview(
 
     what: "structure" (default) | "communities" | "status" | "projects" | "metrics"
           | "graph_export" | "patterns" (languages, deps, conventions, frameworks, architecture)
+          | "architecture_domains" (top-level Leiden hierarchy)
+          | "hierarchy" (full recursive Leiden hierarchy, all levels)
+          | "service_mesh" (detected inter-service gRPC/HTTP/MQ topology)
+          | "import_cycles" | "suggested_questions" | "graph_diff" | "surprising_connections"
     project_path: not required for what="projects" or what="metrics".
     Do NOT use to search code — use `search` or `ask` for that.
     """
@@ -351,16 +355,21 @@ async def federation(
 async def manage(
     project_path: str,
     action: str = "wiki_lint",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Project lifecycle management: stop watching or lint the wiki.
+    """Project lifecycle management: lifecycle actions for a project.
 
-    action: "wiki_lint" (default) | "stop_watching"
+    action: "wiki_lint" (default) | "stop_watching" | "install_hooks" | "uninstall_hooks"
+            | "dedup" (entity deduplication via MinHash/LSH; use dry_run=True to preview)
+    dry_run: when True (for action="dedup"), preview merges without applying them.
     """
     resolved = _resolve_path_like(project_path)
     err = _ensure_within_workspace(resolved, what="manage")
     if err is not None:
         return err
-    return await _forward_tool("manage", {"project_path": resolved, "action": action})
+    return await _forward_tool("manage", {
+        "project_path": resolved, "action": action, "dry_run": dry_run,
+    })
 
 
 def run_stdio_bridge() -> None:

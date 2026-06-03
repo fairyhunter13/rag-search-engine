@@ -1268,3 +1268,76 @@ async def test_handle_dedup_nodes_no_duplicates_is_noop(tmp_path):
 
     assert result["merged_count"] == 0
     assert not result["errors"]
+
+
+# ============================================================
+# _graph_to_mermaid unit tests (no graph storage needed)
+# ============================================================
+
+def test_graph_to_mermaid_basic_structure():
+    """_graph_to_mermaid returns a flowchart TD string with nodes and edges."""
+    from opencode_search.handlers._graph import _graph_to_mermaid
+    nodes = [
+        {"id": "n1", "name": "alpha", "community_id": 1},
+        {"id": "n2", "name": "beta", "community_id": 1},
+        {"id": "n3", "name": "gamma", "community_id": None},
+    ]
+    edges = [
+        {"from": "n1", "to": "n2", "kind": "calls"},
+        {"from": "n2", "to": "n3", "kind": "calls"},
+    ]
+    communities = [{"id": 1, "title": "Core", "node_count": 2}]
+    diagram = _graph_to_mermaid(nodes, edges, communities)
+    assert diagram.startswith("flowchart TD")
+    assert "alpha" in diagram
+    assert "beta" in diagram
+    assert "gamma" in diagram
+    assert "-->" in diagram
+
+
+def test_graph_to_mermaid_empty_graph():
+    """Empty graph produces a minimal flowchart header."""
+    from opencode_search.handlers._graph import _graph_to_mermaid
+    diagram = _graph_to_mermaid([], [], [])
+    assert diagram.startswith("flowchart TD")
+
+
+def test_graph_to_mermaid_no_cross_boundary_edges():
+    """Edges referencing nodes not in the export set are omitted."""
+    from opencode_search.handlers._graph import _graph_to_mermaid
+    nodes = [{"id": "n1", "name": "only_node", "community_id": None}]
+    edges = [
+        {"from": "n1", "to": "outside_node", "kind": "calls"},
+        {"from": "n1", "to": "n1", "kind": "self"},
+    ]
+    diagram = _graph_to_mermaid(nodes, edges, [])
+    arrow_count = diagram.count("-->")
+    assert arrow_count == 1  # only the self-edge (n1 → n1 is in-set)
+
+
+@pytest.mark.asyncio
+async def test_handle_graph_export_mermaid_format(tmp_path):
+    """handle_graph_export with format=mermaid returns a mermaid key."""
+    import unittest.mock as mock
+    from opencode_search.graph.storage import GraphStorage
+    from opencode_search.handlers._graph import handle_graph_export
+
+    graph_db_path = str(tmp_path / "graph.db")
+    gs = GraphStorage(graph_db_path)
+    gs.open()
+    na = _make_node_graph(str(tmp_path / "a.py"), "func_a", "mod.func_a")
+    nb = _make_node_graph(str(tmp_path / "b.py"), "func_b", "mod.func_b")
+    gs.upsert_nodes([na, nb])
+    gs.close()
+
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=graph_db_path,
+    ):
+        result = await handle_graph_export(
+            project_path=str(tmp_path / "proj"), format="mermaid", max_nodes=100
+        )
+
+    assert result.get("format") == "mermaid"
+    assert "mermaid" in result
+    assert result["mermaid"].startswith("flowchart TD")
