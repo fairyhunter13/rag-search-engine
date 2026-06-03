@@ -250,7 +250,8 @@ async def ask(
 ) -> dict[str, Any]:
     """Answer 'how does X work?', architecture, or business-process questions.
 
-    scope: "all" (default) | "architecture" | "wiki"
+    scope: "all" (default) | "architecture" | "wiki" | "global"
+           | "feature" (entry points + call chain + algorithm + design rationale)
     For finding specific code use `search` instead.
     """
     resolved = _resolve_path_like(project_path)
@@ -330,7 +331,9 @@ async def build(
 
     action: "pipeline" (default, full KB build) | "index" | "enrich" | "wiki" |
             "ingest" | "reindex_wiki" | "describe_symbol" |
-            "analyze_patterns" (LLM deep pattern analysis, requires LLM provider)
+            "analyze_patterns" (LLM deep pattern analysis, requires LLM provider) |
+            "hierarchy" (build recursive community hierarchy) |
+            "enrich_hierarchy" (LLM-enrich level-2+ macro-communities)
     Only call index/pipeline when the user explicitly asks to index the project.
     """
     resolved = _resolve_path_like(project_path)

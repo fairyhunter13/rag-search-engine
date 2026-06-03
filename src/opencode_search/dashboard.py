@@ -59,7 +59,8 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _DEFAULT_ALERTS = [
     {"id": "lat_p95", "name": "Latency p95", "metric": "latency_p95_ms", "op": ">", "threshold": 500, "enabled": True},
     {"id": "zero_results", "name": "Zero-result rate", "metric": "zero_result_pct", "op": ">", "threshold": 20, "enabled": True},
-    {"id": "enrichment", "name": "KB enrichment", "metric": "enrichment_pct", "op": "<", "threshold": 60, "enabled": True},
+    {"id": "enrichment", "name": "KB enrichment", "metric": "enrichment_pct", "op": "<", "threshold": 80, "enabled": True},
+    {"id": "load_avg_1m", "name": "System load 1m", "metric": "load_avg_1m", "op": ">", "threshold": 18, "enabled": True},
 ]
 
 _db_lock = threading.Lock()
@@ -134,7 +135,14 @@ def record_indexing_event(project: str, action: str, duration_s: float, files_pr
 def _load_alerts() -> list[dict]:
     try:
         if _ALERTS_FILE.exists():
-            return json.loads(_ALERTS_FILE.read_text())
+            saved = json.loads(_ALERTS_FILE.read_text())
+            # Merge in any new default rules not yet in the saved file
+            saved_ids = {r["id"] for r in saved}
+            merged = list(saved)
+            for rule in _DEFAULT_ALERTS:
+                if rule["id"] not in saved_ids:
+                    merged.append(rule)
+            return merged
     except Exception:
         pass
     return _DEFAULT_ALERTS[:]
@@ -243,8 +251,23 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         elif scope == "global":
             from opencode_search.handlers._global_search import handle_global_synthesis
             result = await handle_global_synthesis(query=q, project_path=project)
+        elif scope == "feature":
+            from opencode_search.handlers._feature import handle_ask_feature
+            result = await handle_ask_feature(query=q, project_path=project)
         else:
             result = await handle_global_search(query=q, project_path=project, top_k=10)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/feature", methods=["GET"], include_in_schema=False)
+    async def api_feature(request: Request) -> JSONResponse:
+        """Feature trace: entry points + call chain + algorithm + design rationale."""
+        from opencode_search.handlers._feature import handle_ask_feature
+        project = request.query_params.get("project", "")
+        q = request.query_params.get("q", "")
+        top_k = int(request.query_params.get("top_k", "15"))
+        if not project or not q:
+            return JSONResponse({"error": "project and q params required"}, status_code=400)
+        result = await handle_ask_feature(query=q, project_path=project, top_k=top_k)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/search", methods=["GET"], include_in_schema=False)
@@ -402,10 +425,27 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                 try:
                     communities = gs.get_communities(min_node_count=2)
                     total = len(communities)
-                    enriched = sum(1 for c in communities if c.title and f"Community {c.id}" != c.title)
+                    all_enriched = sum(
+                        1 for c in communities if c.title and f"Community {c.id}" != c.title
+                    )
                     result["total_communities"] = total
-                    result["enriched_communities"] = enriched
-                    result["enrichment_pct"] = round(enriched / total * 100, 1) if total else 0.0
+                    result["enriched_communities"] = all_enriched
+                    result["enrichment_pct"] = round(all_enriched / total * 100, 1) if total else 0.0
+                    # Per-level breakdown so users can see if only level-1 is enriched
+                    max_level = gs.get_max_community_level()
+                    levels_data: dict[str, dict] = {}
+                    for lvl in range(1, max_level + 1):
+                        lvl_comms = [c for c in communities if c.level == lvl]
+                        e = sum(
+                            1 for c in lvl_comms
+                            if c.title and f"Community {c.id}" != c.title
+                        )
+                        levels_data[str(lvl)] = {
+                            "total": len(lvl_comms),
+                            "enriched": e,
+                            "pct": round(e / len(lvl_comms) * 100, 1) if lvl_comms else 0.0,
+                        }
+                    result["enrichment_by_level"] = levels_data
                 finally:
                     gs.close()
         except Exception:
@@ -641,6 +681,31 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         import asyncio
         result = await asyncio.to_thread(_build, project)
         return JSONResponse(result)
+
+    @mcp.custom_route("/api/enrich_hierarchy", methods=["POST"], include_in_schema=False)
+    async def api_enrich_hierarchy(request: Request) -> JSONResponse:
+        """Submit background job to LLM-enrich level-2+ macro-communities."""
+        import contextlib
+
+        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+        from opencode_search.jobs import submit_job
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        job = submit_job(
+            handle_enrich_hierarchy(project_path=project),
+            action="enrich_hierarchy",
+            project_path=project,
+        )
+        return JSONResponse({
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Hierarchy enrichment running in background.",
+        })
 
     @mcp.custom_route("/api/surprising_connections", methods=["GET"], include_in_schema=False)
     async def api_surprising_connections(request: Request) -> JSONResponse:
@@ -1061,9 +1126,15 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         rules = _load_alerts()
         m = get_metrics()
         lms = m.get("latency_ms", {})
+        import os as _os
+        try:
+            _load1, _, _ = _os.getloadavg()
+        except OSError:
+            _load1 = 0.0
         current = {
             "latency_p95_ms": lms.get("p95") or 0,
             "zero_result_pct": round(100 * m.get("zero_result_count", 0) / max(1, m.get("call_count", 1)), 1),
+            "load_avg_1m": round(_load1, 2),
         }
         violations = []
         for rule in rules:

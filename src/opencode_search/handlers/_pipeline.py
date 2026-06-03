@@ -267,8 +267,8 @@ async def handle_pipeline(
     # ── Step 8: Vacuum storage (LanceDB version pruning + SQLite VACUUM) ────
     # Runs at end of every full pipeline build to reclaim disk space.
     # LanceDB accumulates old dataset versions on every write transaction;
-    # vacuum() prunes versions older than 7 days — the single biggest
-    # storage win, often 20-40% of index directory size.
+    # vacuum() compacts fragmented files and prunes old versions — major
+    # storage win (up to 75%), especially after incremental writes accumulate.
     vacuum_results: dict[str, Any] = {}
     try:
         from opencode_search.config import get_project_db_path, get_project_graph_db_path

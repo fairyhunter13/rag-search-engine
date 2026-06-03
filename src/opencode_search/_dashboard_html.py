@@ -5,7 +5,7 @@ Single file, no CDN, no build step.  All CSS and JS are inline.
 from __future__ import annotations
 
 _DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -104,9 +104,12 @@ body{font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;backgroun
 .kpi-val{font-size:2.4rem;font-weight:700;color:var(--text);line-height:1;margin:4px 0 6px;letter-spacing:-.02em}
 .kpi-label{font-size:.7rem;color:var(--text-3);text-transform:uppercase;letter-spacing:.09em;font-weight:600}
 .kpi-icon{position:absolute;right:14px;top:14px;font-size:1.4rem;opacity:.15}
-.kpi-card.ok{border-top-color:var(--green)}.kpi-card.ok .kpi-val{color:var(--green)}
-.kpi-card.warn{border-top-color:var(--amber)}.kpi-card.warn .kpi-val{color:var(--amber)}
-.kpi-card.crit{border-top-color:var(--red)}.kpi-card.crit .kpi-val{color:var(--red)}
+.kpi-card.ok{border-top-color:var(--green);box-shadow:0 0 0 1px rgba(0,194,142,.12),0 4px 16px rgba(0,194,142,.06)}.kpi-card.ok .kpi-val{color:var(--green)}
+.kpi-card.warn{border-top-color:var(--amber);box-shadow:0 0 0 1px rgba(255,184,0,.12),0 4px 16px rgba(255,184,0,.06)}.kpi-card.warn .kpi-val{color:var(--amber)}
+.kpi-card.crit{border-top-color:var(--red);box-shadow:0 0 0 1px rgba(255,64,96,.18),0 4px 16px rgba(255,64,96,.1)}.kpi-card.crit .kpi-val{color:var(--red)}
+.kpi-sparkline{margin-top:8px;height:30px;opacity:.7}
+.kpi-trend{font-size:.69rem;color:var(--text-3);margin-top:2px}
+.kpi-trend.up{color:var(--green)}.kpi-trend.down{color:var(--red)}
 /* ── Tables ─────────────────────────────────────────────────────────────────── */
 table{width:100%;border-collapse:collapse;font-size:.81rem}
 th{text-align:left;padding:7px 12px;color:var(--text-3);border-bottom:1px solid var(--border);font-weight:700;font-size:.69rem;text-transform:uppercase;letter-spacing:.09em;background:rgba(0,0,0,.15)}
@@ -166,6 +169,12 @@ code{background:var(--surface-2);padding:1px 6px;border-radius:3px;font-size:.84
 .activity-dot{width:8px;height:8px;border-radius:50%;background:var(--text-3);flex-shrink:0;box-shadow:0 0 4px currentColor}
 .activity-dot.ok{background:var(--green);color:var(--green)}.activity-dot.error{background:var(--red);color:var(--red)}.activity-dot.scheduled{background:var(--accent);color:var(--accent)}
 .activity-text{flex:1;color:var(--text-2)}.activity-time{color:var(--text-3);font-size:.72rem;white-space:nowrap}
+/* ── Live feed ticker ───────────────────────────────────────────────────────── */
+.live-feed{height:120px;overflow-y:auto;display:flex;flex-direction:column-reverse;gap:3px;padding:4px 0;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.live-feed-item{display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--surface-2);border-radius:4px;font-size:.76rem;animation:feedIn .25s ease-out;flex-shrink:0}
+@keyframes feedIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.live-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.live-dot.green{background:var(--green)}.live-dot.red{background:var(--red)}.live-dot.blue{background:var(--accent)}.live-dot.gray{background:var(--text-3)}
 /* ── Wiki ───────────────────────────────────────────────────────────────────── */
 .wiki-layout{display:grid;grid-template-columns:220px 1fr;gap:14px;height:calc(100vh - 290px);min-height:380px}
 .wiki-sidebar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow-y:auto;padding:10px}
@@ -219,9 +228,33 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
 .toast{background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-lg);padding:11px 18px;font-size:.81rem;min-width:220px;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,.5);animation:slideIn .2s cubic-bezier(.4,0,.2,1);pointer-events:auto;backdrop-filter:blur(8px)}
 .toast.success{border-left:3px solid var(--green)}.toast.error{border-left:3px solid var(--red)}.toast.warn{border-left:3px solid var(--amber)}.toast.info{border-left:3px solid var(--accent)}
 @keyframes slideIn{from{transform:translateX(20px);opacity:0}to{transform:translateX(0);opacity:1}}
+/* ── More nav drawer ────────────────────────────────────────────────────────── */
+.more-toggle{display:flex;align-items:center;gap:8px;width:100%;background:none;border:none;
+  color:var(--text-3);padding:7px 14px;font-size:.78rem;cursor:pointer;border-radius:0;
+  transition:background var(--trans),color var(--trans);text-align:left;white-space:nowrap;
+  border-top:1px solid var(--border);margin-top:4px;justify-content:space-between}
+.more-toggle:hover{background:var(--surface-2);color:var(--text)}
+.more-toggle .more-label{display:flex;align-items:center;gap:8px;font-size:.78rem;letter-spacing:.02em}
+.more-toggle .more-caret{font-size:.65rem;transition:transform 200ms ease;opacity:.6}
+.more-toggle.open .more-caret{transform:rotate(180deg)}
+.more-drawer{overflow:hidden;max-height:0;transition:max-height 300ms cubic-bezier(.4,0,.2,1)}
+.more-drawer.open{max-height:600px}
+.more-drawer .nav-btn{padding-left:24px;font-size:.78rem;color:var(--text-3)}
+.more-drawer .nav-btn:hover{color:var(--text-2)}
+.more-drawer .nav-group{padding-left:24px;font-size:.6rem}
+/* ── Alert dot on nav ───────────────────────────────────────────────────────── */
+.nav-alert-dot{width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:auto;
+  flex-shrink:0;box-shadow:0 0 5px var(--red);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+/* ── Topbar alert badge ─────────────────────────────────────────────────────── */
+#alert-badge{display:none;align-items:center;gap:5px;background:rgba(255,64,96,.12);
+  border:1px solid rgba(255,64,96,.35);border-radius:99px;padding:3px 10px;font-size:.73rem;
+  color:var(--red);cursor:pointer;transition:background var(--trans)}
+#alert-badge:hover{background:rgba(255,64,96,.22)}
+#alert-badge.visible{display:flex}
 /* ── Responsive ─────────────────────────────────────────────────────────────── */
 @media(max-width:768px){
-  .sidebar{width:48px}.brand-name,.nav-group,.sb-project{display:none}
+  .sidebar{width:48px}.brand-name,.nav-group,.sb-project,.more-toggle .more-label span:last-child{display:none}
   .two-col,.graph-layout,.wiki-layout{grid-template-columns:1fr;height:auto}
   .kpi-row{grid-template-columns:repeat(2,1fr)}
 }
@@ -240,39 +273,55 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <select id="project-select" onchange="switchProject(this.value)"><option value="">Loading projects…</option></select>
   </div>
   <nav class="sb-nav">
+    <!-- Primary: always visible (11 items) -->
     <button class="nav-btn active" id="nav-overview" onclick="showPage('overview')"><span class="nav-icon">⬡</span><span class="nav-label">Overview</span></button>
+
     <div class="nav-group">Explore</div>
-    <button class="nav-btn" id="nav-search" onclick="showPage('search')"><span class="nav-icon">⚡</span><span class="nav-label">Search</span></button>
-    <button class="nav-btn" id="nav-saved-queries" onclick="showPage('saved-queries')"><span class="nav-icon">🔖</span><span class="nav-label">Saved Queries</span></button>
-    <button class="nav-btn" id="nav-ask" onclick="showPage('ask')"><span class="nav-icon">💬</span><span class="nav-label">Ask</span></button>
-    <button class="nav-btn" id="nav-graph" onclick="showPage('graph')"><span class="nav-icon">🕸</span><span class="nav-label">Graph</span></button>
-    <div class="nav-group">Knowledge</div>
-    <button class="nav-btn" id="nav-structure" onclick="showPage('structure')"><span class="nav-icon">📁</span><span class="nav-label">Structure</span></button>
-    <button class="nav-btn" id="nav-patterns" onclick="showPage('patterns')"><span class="nav-icon">🎯</span><span class="nav-label">Patterns</span></button>
-    <button class="nav-btn" id="nav-wiki" onclick="showPage('wiki')"><span class="nav-icon">📖</span><span class="nav-label">Wiki</span></button>
-    <button class="nav-btn" id="nav-communities" onclick="showPage('communities')"><span class="nav-icon">🏘</span><span class="nav-label">Communities</span></button>
-    <div class="nav-group">Monitor</div>
-    <button class="nav-btn" id="nav-health" onclick="showPage('health')"><span class="nav-icon">💓</span><span class="nav-label">Health</span></button>
-    <button class="nav-btn" id="nav-verify" onclick="showPage('verify')"><span class="nav-icon">✅</span><span class="nav-label">Verify</span></button>
-    <button class="nav-btn" id="nav-release" onclick="showPage('release')"><span class="nav-icon">🚀</span><span class="nav-label">Release</span></button>
-    <button class="nav-btn" id="nav-qa" onclick="showPage('qa')"><span class="nav-icon">🔬</span><span class="nav-label">QA Gate</span></button>
-    <button class="nav-btn" id="nav-sysstat" onclick="showPage('sysstat')"><span class="nav-icon">📊</span><span class="nav-label">Coverage</span></button>
-    <div class="nav-group">Admin</div>
-    <button class="nav-btn" id="nav-projects" onclick="showPage('projects')"><span class="nav-icon">📋</span><span class="nav-label">Projects</span></button>
-    <button class="nav-btn" id="nav-integrations" onclick="showPage('integrations')"><span class="nav-icon">🔌</span><span class="nav-label">Integrations</span></button>
-    <button class="nav-btn" id="nav-jobs" onclick="showPage('jobs')"><span class="nav-icon">⚙</span><span class="nav-label">Jobs</span></button>
+    <button class="nav-btn" id="nav-search"  onclick="showPage('search')"><span class="nav-icon">⚡</span><span class="nav-label">Search</span></button>
+    <button class="nav-btn" id="nav-ask"     onclick="showPage('ask')"><span class="nav-icon">💬</span><span class="nav-label">Ask</span></button>
+    <button class="nav-btn" id="nav-feature" onclick="showPage('feature')"><span class="nav-icon">🧩</span><span class="nav-label">Feature</span></button>
+    <button class="nav-btn" id="nav-graph"   onclick="showPage('graph')"><span class="nav-icon">🕸</span><span class="nav-label">Graph</span></button>
+
     <div class="nav-group">Intelligence</div>
-    <button class="nav-btn" id="nav-arch-map" onclick="showPage('arch-map')"><span class="nav-icon">🏛</span><span class="nav-label">Arch Map</span></button>
+    <button class="nav-btn" id="nav-arch-map"     onclick="showPage('arch-map')"><span class="nav-icon">🏛</span><span class="nav-label">Architecture</span></button>
+    <button class="nav-btn" id="nav-communities"  onclick="showPage('communities')"><span class="nav-icon">🏘</span><span class="nav-label">Communities</span></button>
     <button class="nav-btn" id="nav-service-mesh" onclick="showPage('service-mesh')"><span class="nav-icon">🕷</span><span class="nav-label">Service Mesh</span></button>
-    <button class="nav-btn" id="nav-fed-map" onclick="showPage('fed-map')"><span class="nav-icon">🗺</span><span class="nav-label">Fed Map</span></button>
-    <button class="nav-btn" id="nav-impact" onclick="showPage('impact')"><span class="nav-icon">💥</span><span class="nav-label">Impact</span></button>
-    <button class="nav-btn" id="nav-trace" onclick="showPage('trace')"><span class="nav-icon">🔎</span><span class="nav-label">Trace</span></button>
-    <button class="nav-btn" id="nav-import-cycles" onclick="showPage('import-cycles')"><span class="nav-icon">🔄</span><span class="nav-label">Import Cycles</span></button>
-    <button class="nav-btn" id="nav-callflow" onclick="showPage('callflow')"><span class="nav-icon">📊</span><span class="nav-label">Callflow</span></button>
-    <button class="nav-btn" id="nav-dedup" onclick="showPage('dedup')"><span class="nav-icon">🧹</span><span class="nav-label">Dedup</span></button>
-    <button class="nav-btn" id="nav-file-tree" onclick="showPage('file-tree')"><span class="nav-icon">🌲</span><span class="nav-label">File Tree</span></button>
-    <button class="nav-btn" id="nav-pr-impact" onclick="showPage('pr-impact')"><span class="nav-icon">🎯</span><span class="nav-label">PR Impact</span></button>
-    <button class="nav-btn" id="nav-vacuum" onclick="showPage('vacuum')"><span class="nav-icon">💾</span><span class="nav-label">Vacuum</span></button>
+    <button class="nav-btn" id="nav-impact"       onclick="showPage('impact')"><span class="nav-icon">💥</span><span class="nav-label">Impact</span></button>
+
+    <div class="nav-group">Monitor</div>
+    <button class="nav-btn" id="nav-health"  onclick="showPage('health')" title="Health &amp; Alerts"><span class="nav-icon">💓</span><span class="nav-label">Health</span><span id="nav-health-alert" class="nav-alert-dot" style="display:none"></span></button>
+    <button class="nav-btn" id="nav-wiki"    onclick="showPage('wiki')"><span class="nav-icon">📖</span><span class="nav-label">Wiki</span></button>
+    <button class="nav-btn" id="nav-patterns" onclick="showPage('patterns')"><span class="nav-icon">🎯</span><span class="nav-label">Patterns</span></button>
+
+    <!-- More drawer: secondary tools (collapsed by default) -->
+    <button class="more-toggle" id="more-toggle" onclick="toggleMoreNav()">
+      <span class="more-label"><span class="nav-icon" style="font-size:.8rem">⋯</span><span class="nav-label">More tools</span></span>
+      <span class="more-caret">▼</span>
+    </button>
+    <div class="more-drawer" id="more-drawer">
+      <div class="nav-group">Knowledge</div>
+      <button class="nav-btn" id="nav-structure"     onclick="showPage('structure')"><span class="nav-icon">📁</span><span class="nav-label">Structure</span></button>
+      <button class="nav-btn" id="nav-saved-queries" onclick="showPage('saved-queries')"><span class="nav-icon">🔖</span><span class="nav-label">Saved Queries</span></button>
+      <div class="nav-group">Analysis</div>
+      <button class="nav-btn" id="nav-trace"        onclick="showPage('trace')"><span class="nav-icon">🔎</span><span class="nav-label">Trace</span></button>
+      <button class="nav-btn" id="nav-import-cycles" onclick="showPage('import-cycles')"><span class="nav-icon">🔄</span><span class="nav-label">Import Cycles</span></button>
+      <button class="nav-btn" id="nav-callflow"     onclick="showPage('callflow')"><span class="nav-icon">📊</span><span class="nav-label">Callflow</span></button>
+      <button class="nav-btn" id="nav-fed-map"      onclick="showPage('fed-map')"><span class="nav-icon">🗺</span><span class="nav-label">Fed Map</span></button>
+      <button class="nav-btn" id="nav-pr-impact"    onclick="showPage('pr-impact')"><span class="nav-icon">🎯</span><span class="nav-label">PR Impact</span></button>
+      <div class="nav-group">Admin</div>
+      <button class="nav-btn" id="nav-projects"     onclick="showPage('projects')"><span class="nav-icon">📋</span><span class="nav-label">Projects</span></button>
+      <button class="nav-btn" id="nav-integrations" onclick="showPage('integrations')"><span class="nav-icon">🔌</span><span class="nav-label">Integrations</span></button>
+      <button class="nav-btn" id="nav-jobs"         onclick="showPage('jobs')"><span class="nav-icon">⚙</span><span class="nav-label">Jobs</span></button>
+      <div class="nav-group">Quality</div>
+      <button class="nav-btn" id="nav-verify"  onclick="showPage('verify')"><span class="nav-icon">✅</span><span class="nav-label">Verify</span></button>
+      <button class="nav-btn" id="nav-release" onclick="showPage('release')"><span class="nav-icon">🚀</span><span class="nav-label">Release</span></button>
+      <button class="nav-btn" id="nav-qa"      onclick="showPage('qa')"><span class="nav-icon">🔬</span><span class="nav-label">QA Gate</span></button>
+      <button class="nav-btn" id="nav-sysstat" onclick="showPage('sysstat')"><span class="nav-icon">📊</span><span class="nav-label">Coverage</span></button>
+      <div class="nav-group">Maintenance</div>
+      <button class="nav-btn" id="nav-dedup"     onclick="showPage('dedup')"><span class="nav-icon">🧹</span><span class="nav-label">Dedup</span></button>
+      <button class="nav-btn" id="nav-file-tree" onclick="showPage('file-tree')"><span class="nav-icon">🌲</span><span class="nav-label">File Tree</span></button>
+      <button class="nav-btn" id="nav-vacuum"    onclick="showPage('vacuum')"><span class="nav-icon">💾</span><span class="nav-label">Vacuum</span></button>
+    </div>
   </nav>
 </aside>
 
@@ -288,9 +337,12 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
       <button class="btn" onclick="quickSearch()">Search</button>
     </div>
     <div class="top-right">
+      <div id="alert-badge" onclick="showPage('health')" title="Active alert violations">
+        <span>⚠</span><span id="alert-badge-count">0</span><span style="font-size:.68rem">alerts</span>
+      </div>
       <span id="daemon-dot" class="daemon-dot" title="Daemon status">●</span>
       <span id="daemon-status" style="font-size:.8rem;color:var(--text-3)">connecting…</span>
-      <button class="icon-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">☀</button>
+      <button class="icon-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">🌙</button>
     </div>
   </header>
 
@@ -304,7 +356,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
 
   <!-- PAGE: OVERVIEW -->
   <div id="page-overview" class="page active">
-    <div class="page-title">Overview</div>
+    <div class="page-title">Overview <span id="overview-last-updated" style="font-size:.72rem;color:var(--text-3);font-weight:400;margin-left:8px"></span></div>
     <div id="overview-kpi" class="kpi-row"></div>
     <div class="two-col">
       <div>
@@ -313,16 +365,34 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
           <div id="overview-health"><div class="loader">Loading…</div></div>
         </div>
         <div class="card">
+          <div class="card-header"><span class="card-title">System Load</span><span id="load-badge" class="badge none">—</span></div>
+          <div id="overview-load"><div class="loader">Loading…</div></div>
+        </div>
+        <div class="card">
           <div class="card-header"><span class="card-title">KB Completeness</span></div>
           <div id="overview-kb"><div class="loader">Loading…</div></div>
         </div>
       </div>
       <div>
         <div class="card">
-          <div class="card-header"><span class="card-title">Recent Pipeline Events</span></div>
+          <div class="card-header">
+            <span class="card-title">Recent Pipeline Events</span>
+            <button class="btn secondary" style="font-size:.75rem;padding:3px 8px" onclick="loadOverview()">↺</button>
+          </div>
           <div id="overview-events" class="activity-list"><div class="loader">Loading…</div></div>
         </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Active Alerts</span></div>
+          <div id="overview-alerts"><div class="loader">Loading…</div></div>
+        </div>
       </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="card-header">
+        <span class="card-title">Live Event Feed</span>
+        <span id="live-feed-badge" class="badge info" style="font-size:.67rem">SSE</span>
+      </div>
+      <div id="live-feed" class="live-feed"><div style="font-size:.76rem;color:var(--text-3);padding:4px">Waiting for events…</div></div>
     </div>
   </div>
 
@@ -500,8 +570,13 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <div class="page-title">Health &amp; Monitoring</div>
     <div class="card"><div class="card-title" style="margin-bottom:8px">Daemon Status</div><div id="daemon-metrics" class="stat-grid"></div></div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:8px">Knowledge Base Health</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <div class="card-title" style="flex:1">Knowledge Base Health</div>
+        <button class="btn secondary" id="enrich-hier-btn" onclick="triggerEnrichHierarchy()" style="font-size:.74rem;padding:4px 12px">⚡ Re-enrich Hierarchy</button>
+      </div>
       <div id="kb-health-grid" class="stat-grid" style="margin-bottom:14px"></div>
+      <div id="kb-enrich-level-detail" style="margin-bottom:10px"></div>
+      <div id="kb-enrich-job-status" style="font-size:.76rem;color:var(--text-3);display:none"></div>
       <div id="kb-health-detail" style="font-size:.77rem;color:var(--text-3)"></div>
     </div>
     <div class="card">
@@ -682,7 +757,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
         <div id="mesh-sigma-container" style="width:100%;height:100%"></div>
         <div id="mesh-canvas-info" style="position:absolute;bottom:6px;left:8px;font-size:.7rem;color:var(--text-3);z-index:10;pointer-events:none"></div>
       </div>
-      <div id="service-mesh-content"><div class="loader">Click Scan to detect service mesh…</div></div>
+      <div id="service-mesh-content"><div class="loader">Loading service mesh…</div></div>
     </div>
   </div>
 
@@ -712,7 +787,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
         <input id="impact-symbol" placeholder="Symbol name (e.g. ProcessOrder, http.HandleFunc)" onkeydown="if(event.key==='Enter')runImpactAnalysis()"/>
         <button class="btn" onclick="runImpactAnalysis()">Analyze</button>
       </div>
-      <div id="impact-result"><div style="color:var(--text-3);font-size:.82rem">Enter a symbol name to see its blast radius and risk level.</div></div>
+      <div id="impact-result"><div class="loader">Loading top impactful symbols…</div></div>
     </div>
   </div>
 
@@ -733,6 +808,29 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     </div>
   </div>
 
+  <!-- PAGE: FEATURE TRACE -->
+  <div id="page-feature" class="page">
+    <div class="page-title">Feature Trace</div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:6px">Understand a Feature or Functionality</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Ask <em>how</em> a feature works and <em>why</em> it was built that way. Returns entry points, call chain, algorithm overview, and design rationale.</p>
+      <div class="search-row">
+        <input id="feature-q" placeholder="e.g. How does cart checkout work? Why does auth use JWT?" onkeydown="if(event.key==='Enter')runFeatureTrace()"/>
+        <button class="btn" onclick="runFeatureTrace()">Trace</button>
+      </div>
+      <div id="feature-result"><div style="color:var(--text-3);font-size:.82rem">Ask a feature question to see entry points, call chain, algorithm, and design rationale.</div></div>
+    </div>
+    <div class="card" id="feature-suggestions-card">
+      <div class="card-title" style="margin-bottom:8px">Example questions</div>
+      <div id="feature-suggestions" style="display:flex;flex-wrap:wrap;gap:6px">
+        <button class="btn secondary" style="font-size:.77rem;padding:4px 10px" onclick="$('feature-q').value='How does user authentication work?';runFeatureTrace()">How does user authentication work?</button>
+        <button class="btn secondary" style="font-size:.77rem;padding:4px 10px" onclick="$('feature-q').value='How does the payment flow work?';runFeatureTrace()">How does the payment flow work?</button>
+        <button class="btn secondary" style="font-size:.77rem;padding:4px 10px" onclick="$('feature-q').value='How is data indexed and searched?';runFeatureTrace()">How is data indexed and searched?</button>
+        <button class="btn secondary" style="font-size:.77rem;padding:4px 10px" onclick="$('feature-q').value='Why is the caching layer designed this way?';runFeatureTrace()">Why is the caching layer designed this way?</button>
+      </div>
+    </div>
+  </div>
+
   <!-- PAGE: IMPORT CYCLES -->
   <div id="page-import-cycles" class="page">
     <div class="page-title">Import Cycles</div>
@@ -742,7 +840,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
         <button class="btn secondary" style="font-size:.81rem" onclick="loadImportCycles()">↺ Refresh</button>
       </div>
       <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Circular import chains detected by Tarjan SCC on the file-level import graph. High-severity cycles have length ≤ 3.</p>
-      <div id="import-cycles-result"><div style="color:var(--text-3);font-size:.82rem">Click Refresh to scan for circular imports.</div></div>
+      <div id="import-cycles-result"><div class="loader">Scanning for circular imports…</div></div>
     </div>
   </div>
 
@@ -785,8 +883,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <div class="card">
       <div class="card-title" style="margin-bottom:10px">Interactive File Tree</div>
       <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Collapsible file tree generated from the graph's indexed file nodes.</p>
-      <button class="btn secondary" onclick="loadFileTree()">Load Tree</button>
-      <div id="file-tree-wrap" style="margin-top:12px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;min-height:60px"></div>
+      <div id="file-tree-wrap" style="margin-top:4px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;min-height:60px"><div class="loader">Loading file tree…</div></div>
     </div>
   </div>
 
@@ -920,9 +1017,16 @@ function toggleSidebar(){
 
 function toggleTheme(){
   const html=document.documentElement;
-  const isDark=html.dataset.theme!=='light';
-  html.dataset.theme=isDark?'light':'dark';
-  $('theme-btn').textContent=isDark?'🌙':'☀';
+  const isLight=html.dataset.theme==='light';
+  html.dataset.theme=isLight?'dark':'light';
+  $('theme-btn').textContent=isLight?'☀':'🌙';
+}
+
+function toggleMoreNav(){
+  const drawer=$('more-drawer');
+  const toggle=$('more-toggle');
+  const open=drawer.classList.toggle('open');
+  toggle.classList.toggle('open',open);
 }
 
 /* ── Navigation ──────────────────────────────────────────────────────────────── */
@@ -933,17 +1037,25 @@ const _PAGE_LOAD={
   communities:loadCommunities, health:()=>{loadStatus();loadMetricsCharts();loadAlerts();}, verify:loadVerify,
   release:loadRelease, qa:loadQaGate, projects:()=>{}, integrations:loadIntegrations,
   jobs:loadJobs,
-  'arch-map':loadArchMap, 'service-mesh':()=>{}, 'fed-map':loadFedMap, impact:()=>{}, trace:()=>{},
+  'arch-map':loadArchMap, 'service-mesh':loadServiceMesh, 'fed-map':loadFedMap,
+  impact:loadTopImpact, trace:()=>{},
   sysstat:loadSysstat,
-  'file-tree':()=>{}, 'pr-impact':()=>{}, vacuum:()=>{},
-  'import-cycles':()=>{}, callflow:()=>{}, dedup:()=>{},
+  'file-tree':loadFileTree, 'pr-impact':loadPrImpactAuto, vacuum:loadVacuumStatus,
+  'import-cycles':loadImportCycles, callflow:()=>{}, dedup:loadDedupStatus,
+  feature:()=>{},
 };
 
 function showPage(name){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const page=$('page-'+name);if(page)page.classList.add('active');
-  const btn=$('nav-'+name);if(btn)btn.classList.add('active');
+  const btn=$('nav-'+name);if(btn){btn.classList.add('active');
+    // Auto-expand More drawer if the target page lives inside it
+    if(btn.closest('#more-drawer')){
+      $('more-drawer').classList.add('open');
+      $('more-toggle').classList.add('open');
+    }
+  }
   if(_PAGE_LOAD[name])_PAGE_LOAD[name]();
 }
 
@@ -991,76 +1103,193 @@ async function loadProjects(){
 async function loadOverview(){
   if(!currentProject)return;
   try{
-    const[health,kbh,aps,over]=await Promise.all([
+    const[health,kbh,aps,over,alerts]=await Promise.all([
       fetch('/healthz').then(r=>r.ok?r.json():{}),
       api('/kb_health?project='+encodeURIComponent(currentProject)),
       api('/auto_pipeline_status'),
       api('/overview?project='+encodeURIComponent(currentProject)),
+      fetch('/api/alerts').then(r=>r.ok?r.json():{violations:[],rules:[]}),
     ]);
     const gs=over.graph_stats||{};
     const pctRaw=kbh.enrichment_pct!=null?kbh.enrichment_pct:null;
     const pct=pctRaw!=null?pctRaw.toFixed(0):'—';
+    const load=health.load_avg||{};
+    const load1=load['1m']??null;
+    const cpus=health.cpu_count||1;
 
-    // KPI cards
+    // Last updated timestamp
+    const lu=$('overview-last-updated');
+    if(lu)lu.textContent='Updated '+new Date().toLocaleTimeString();
+
+    // KPI cards — include load indicator
+    const loadCls=load1===null?'':load1>18?'err':load1>cpus*2?'warn':'ok';
     const kpis=[
       {val:(gs.node_count||0).toLocaleString(),lbl:'Graph Nodes',icon:'🕸',cls:gs.node_count>0?'ok':''},
       {val:(gs.edge_count||0).toLocaleString(),lbl:'Graph Edges',icon:'➜',cls:''},
       {val:(kbh.wiki_page_count||0).toLocaleString(),lbl:'Wiki Pages',icon:'📖',cls:kbh.wiki_page_count>0?'ok':''},
       {val:(gs.total_communities||0).toLocaleString(),lbl:'Communities',icon:'🏘',cls:''},
       {val:pct+'%',lbl:'Enriched',icon:'✨',cls:pctRaw>=90?'ok':pctRaw>=50?'warn':''},
-      {val:health.connected_clients!=null?String(health.connected_clients):'—',lbl:'Clients',icon:'👁',cls:''},
+      {val:load1!==null?load1.toFixed(2):'—',lbl:'Load avg 1m',icon:'⚡',cls:loadCls},
+      {val:health.active_clients!=null?String(health.active_clients):'—',lbl:'Active Clients',icon:'👁',cls:''},
     ];
-    $('overview-kpi').innerHTML=kpis.map(k=>`<div class="kpi-card ${k.cls}"><div class="kpi-val">${escHtml(k.val)}</div><div class="kpi-label">${k.lbl}</div><div class="kpi-icon">${k.icon}</div></div>`).join('');
+    $('overview-kpi').innerHTML=kpis.map((k,i)=>`<div class="kpi-card ${k.cls}" id="kpi-card-${i}"><div class="kpi-val">${escHtml(k.val)}</div><div class="kpi-label">${k.lbl}</div><div class="kpi-icon">${k.icon}</div><canvas class="kpi-sparkline" id="kpi-spark-${i}" height="30"></canvas></div>`).join('');
+    _drawKpiSparklines(kpis);
 
     updateMetricStrip(kbh,gs,health);
 
-    // Health
+    // System Health card
     const daemonOk=health.ok===true||health.healthy===true;
     const kbOk=pctRaw!=null&&pctRaw>80&&kbh.wiki_page_count>0;
     const hb=$('health-badge');
     hb.className='badge '+(daemonOk&&kbOk?'ok':'warn');
     hb.textContent=daemonOk&&kbOk?'Healthy':'Degraded';
+    const uptimeStr=health.uptime_s!=null?_fmtUptime(health.uptime_s):'—';
     $('overview-health').innerHTML=[
       {label:'Daemon',val:daemonOk?'● Running':'○ Down',cls:daemonOk?'ok':'err'},
-      {label:'Uptime',val:health.uptime_s!=null?health.uptime_s.toFixed(0)+'s':'—',cls:''},
+      {label:'Uptime',val:uptimeStr,cls:''},
+      {label:'Active clients',val:health.active_clients??'—',cls:''},
       {label:'Port',val:health.port||8765,cls:''},
-    ].map(r=>`<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:.81rem;border-bottom:1px solid var(--surface-2)">
+    ].map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:.81rem;border-bottom:1px solid var(--surface-2)">
       <span style="color:var(--text-3)">${r.label}</span>
-      <span style="color:${r.cls==='ok'?'var(--green)':r.cls==='err'?'var(--red)':'var(--text-2)'}">${escHtml(String(r.val))}</span></div>`).join('');
+      <span style="color:${r.cls==='ok'?'var(--green)':r.cls==='err'?'var(--red)':'var(--text-2)'};font-weight:${r.cls?'600':'400'}">${escHtml(String(r.val))}</span></div>`).join('');
+
+    // System Load card
+    const lb=$('load-badge');
+    if(lb){
+      lb.className='badge '+(load1===null?'none':load1>18?'err':load1>cpus*2?'warn':'ok');
+      lb.textContent=load1===null?'—':load1>18?'Critical':load1>cpus*2?'High':'Normal';
+    }
+    if($('overview-load')){
+      const loadBar=(v,max)=>{
+        const pctV=Math.min(100,Math.round((v/max)*100));
+        const barCls=v>18?'var(--red)':v>cpus*2?'var(--amber)':'var(--green)';
+        return `<div class="progress-bar" style="margin-bottom:2px"><div class="progress-fill" style="width:${pctV}%;background:${barCls}"></div></div>`;
+      };
+      const maxLoad=Math.max(cpus*3,load1||0,load['5m']||0,load['15m']||0,20);
+      $('overview-load').innerHTML=`
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+          ${[['1m',load['1m']],['5m',load['5m']],['15m',load['15m']]].map(([lbl,v])=>{
+            const vv=v!=null?v.toFixed(2):'—';
+            const vCls=v>18?'var(--red)':v!=null&&v>cpus*2?'var(--amber)':'var(--text-1)';
+            return `<div style="text-align:center;background:var(--surface-2);border-radius:var(--radius);padding:10px 6px">
+              <div style="font-size:1.3rem;font-weight:700;color:${vCls};font-variant-numeric:tabular-nums">${vv}</div>
+              <div style="font-size:.72rem;color:var(--text-3);margin-top:2px">Load ${lbl}</div>
+              ${v!=null?loadBar(v,maxLoad):''}
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="font-size:.77rem;color:var(--text-3)">${cpus} CPU core${cpus!==1?'s':''} · Threshold: >18 = Critical, >${(cpus*2).toFixed(0)} = High</div>
+        ${load1>18?`<div style="margin-top:8px;padding:6px 10px;background:var(--red-bg,rgba(255,64,96,.12));border:1px solid var(--red);border-radius:var(--radius);font-size:.79rem;color:var(--red)">⚠ Load 1m (${load1.toFixed(2)}) exceeds critical threshold (18). System may be overloaded.</div>`:''}`;
+    }
 
     // KB completeness
+    const byLevel=kbh.enrichment_by_level||{};
+    const levelKeys=Object.keys(byLevel).sort((a,b)=>+a-+b);
+    const levelRows=levelKeys.map(lvl=>{
+      const d=byLevel[lvl];
+      const lpct=d.pct||0;
+      const cls=lpct>=90?'var(--green)':lpct>=50?'var(--orange)':'var(--red)';
+      return `<tr style="font-size:.76rem">
+        <td style="color:var(--text-3);padding:2px 6px 2px 0">L${lvl}</td>
+        <td style="color:var(--text-2);padding:2px 4px">${d.enriched}/${d.total}</td>
+        <td><div style="width:80px;height:6px;background:var(--surface-3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${lpct}%;background:${cls}"></div></div></td>
+        <td style="color:${cls};padding:2px 0 2px 6px;font-weight:600">${lpct.toFixed(0)}%</td>
+      </tr>`;
+    }).join('');
     $('overview-kb').innerHTML=`
       <div style="display:flex;justify-content:space-between;font-size:.79rem;color:var(--text-3);margin-bottom:4px">
-        <span>${kbh.enriched_communities||0}/${kbh.total_communities||0} communities enriched</span>
-        <span>${pct}%</span>
+        <span>${kbh.enriched_communities||0}/${kbh.total_communities||0} enriched</span>
+        <span style="font-weight:700;color:${pctRaw>=90?'var(--green)':pctRaw>=50?'var(--amber)':'var(--red)'}">${pct}%</span>
       </div>
-      <div class="progress-bar"><div class="progress-fill" style="width:${pctRaw||0}%"></div></div>
-      <div style="margin-top:8px;font-size:.77rem;color:var(--text-3)">${kbh.wiki_page_count||0} wiki pages · Patterns: ${kbh.patterns_cached?'✓ cached':'✗ none'}</div>`;
+      <div class="progress-bar" style="margin-bottom:8px"><div class="progress-fill" style="width:${pctRaw||0}%;background:${pctRaw>=90?'var(--green)':pctRaw>=50?'var(--amber)':'var(--red)'}"></div></div>
+      ${levelKeys.length>1?`<table style="border-collapse:collapse;width:100%">${levelRows}</table>`:''}
+      <div style="margin-top:8px;font-size:.77rem;color:var(--text-3);display:flex;gap:12px;flex-wrap:wrap">
+        <span>📖 ${kbh.wiki_page_count||0} wiki pages</span>
+        <span>${kbh.patterns_cached?'✓ Patterns cached':'✗ No patterns'}</span>
+      </div>`;
 
     // Recent events
-    const events=(aps.events||[]).slice(-8).reverse();
+    const events=(aps.events||[]).slice(-10).reverse();
     $('overview-events').innerHTML=events.length
       ?events.map(e=>{
         const dotCls=e.status==='ok'?'ok':e.status==='error'?'error':'scheduled';
         const at=e.at?new Date(e.at).toLocaleTimeString():'';
+        const proj=(e.project||'').split('/').pop();
         return `<div class="activity-item"><div class="activity-dot ${dotCls}"></div>
-          <div class="activity-text">${escHtml(e.project||'')} <span style="color:var(--text-3)">${escHtml(e.status)}</span></div>
+          <div class="activity-text"><span style="color:var(--text-2)">${escHtml(proj)}</span> <span style="color:var(--text-3)">${escHtml(e.step||e.action||'')} ${escHtml(e.status)}</span></div>
           <div class="activity-time">${at}</div></div>`;
       }).join('')
-      :'<div class="loader">No events this session</div>';
+      :'<div style="color:var(--text-3);font-size:.81rem;padding:10px">No events yet this session.</div>';
+
+    // Active alerts panel on overview
+    const viols=(alerts&&alerts.violations)||[];
+    if($('overview-alerts')){
+      $('overview-alerts').innerHTML=viols.length
+        ?viols.map(v=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:rgba(255,64,96,.08);border:1px solid rgba(255,64,96,.3);border-radius:var(--radius);margin-bottom:6px">
+            <span style="color:var(--red);font-size:.9rem">⚠</span>
+            <div style="flex:1">
+              <div style="font-size:.81rem;font-weight:600;color:var(--red)">${escHtml(v.name)}</div>
+              <div style="font-size:.76rem;color:var(--text-3)">${escHtml(v.message||'')}</div>
+            </div>
+          </div>`).join('')
+        :`<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;color:var(--green);font-size:.81rem"><span>✓</span><span>All clear — no active violations</span></div>`;
+    }
   }catch(e){
     $('overview-kpi').innerHTML=`<div style="color:var(--red);font-size:.81rem;padding:10px">Failed: ${escHtml(e.message)}</div>`;
   }
 }
 
+function _fmtUptime(s){
+  if(s<60)return s.toFixed(0)+'s';
+  if(s<3600)return Math.floor(s/60)+'m '+Math.floor(s%60)+'s';
+  return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
+}
+
+let _kpiSparkCharts=[];
+async function _drawKpiSparklines(kpis){
+  if(typeof Chart==='undefined')return;
+  // Fetch last 1h bucketed metrics for sparklines
+  let hist;
+  try{hist=await fetch('/api/metrics/history?hours=1&bucket_m=2').then(r=>r.ok?r.json():null);}
+  catch(e){return;}
+  if(!hist||!hist.timestamps||!hist.timestamps.length)return;
+  // Destroy old sparkline charts
+  _kpiSparkCharts.forEach(c=>{try{c.destroy();}catch(e){}});
+  _kpiSparkCharts=[];
+  // Map: kpi index → dataset. We only draw latency+search count sparklines.
+  const sparkData={
+    0:hist.search_count||[], // nodes → use search count as proxy activity
+    4:hist.latency_p50||[],  // enriched% → show latency trend as gauge of activity
+    5:hist.latency_p95||[],  // load avg → p95 latency
+  };
+  const labels=hist.timestamps;
+  kpis.forEach((_,i)=>{
+    const canvas=$('kpi-spark-'+i);
+    if(!canvas||!sparkData[i])return;
+    const data=sparkData[i];
+    if(!data.some(v=>v>0))return;
+    const color=kpis[i].cls==='ok'?'#00c28e':kpis[i].cls==='warn'?'#ffb800':kpis[i].cls==='crit'?'#ff4060':'#7b61ff';
+    try{
+      const c=new Chart(canvas,{type:'line',data:{labels,datasets:[{data,borderColor:color,backgroundColor:color+'22',borderWidth:1.2,pointRadius:0,fill:true,tension:.4}]},
+        options:{animation:false,responsive:true,plugins:{legend:{display:false},tooltip:{enabled:false}},
+          scales:{x:{display:false},y:{display:false}}}});
+      _kpiSparkCharts.push(c);
+    }catch(e){}
+  });
+}
+
 function updateMetricStrip(kbh,gs,health){
   const daemonOk=health&&(health.ok===true||health.healthy===true);
   const pct=kbh&&kbh.enrichment_pct!=null?kbh.enrichment_pct:null;
+  const load=health&&health.load_avg;
+  const load1=load?load['1m']:null;
+  const loadCls=load1===null?'':load1>18?'err':load1>((health&&health.cpu_count||1)*2)?'warn':'ok';
   const pills=[
     {val:daemonOk?'● Daemon up':'○ Daemon down',cls:daemonOk?'ok':'err'},
     {val:(gs&&gs.node_count?gs.node_count.toLocaleString():'0')+' nodes',cls:gs&&gs.node_count>0?'ok':''},
     {val:(kbh&&kbh.wiki_page_count?kbh.wiki_page_count.toLocaleString():'0')+' wiki',cls:kbh&&kbh.wiki_page_count>0?'ok':''},
     {val:(pct!=null?pct.toFixed(0):'—')+'% enriched',cls:pct>=90?'ok':pct>=50?'warn':''},
+    {val:'Load '+( load1!==null?load1.toFixed(2):'—'),cls:loadCls},
   ];
   $('metric-strip').innerHTML=pills.map(p=>`<div class="metric-pill ${p.cls}"><span class="pill-val">${escHtml(p.val)}</span></div>`).join('');
 }
@@ -1458,6 +1687,28 @@ async function loadKBHealth(){
       {val:kbh.wiki_page_count??'—',lbl:'Wiki Pages'},
       {val:kbh.patterns_cached?'✓ cached':'✗ none',lbl:'Patterns'},
     ].map(s=>`<div class="stat-box"><div class="val" style="font-size:.88rem">${s.val}</div><div class="lbl">${s.lbl}</div></div>`).join('');
+    // Per-level enrichment breakdown
+    const byLevel=kbh.enrichment_by_level||{};
+    const lvlKeys=Object.keys(byLevel).sort((a,b)=>+a-+b);
+    if(lvlKeys.length>0&&$('kb-enrich-level-detail')){
+      const pctRaw=kbh.enrichment_pct||0;
+      $('kb-enrich-level-detail').innerHTML=`
+        <div style="font-size:.74rem;color:var(--text-3);margin-bottom:6px;font-weight:700;text-transform:uppercase;letter-spacing:.08em">Per-level Enrichment</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+        ${lvlKeys.map(lvl=>{
+          const d=byLevel[lvl];const lpct=d.pct||0;
+          const c=lpct>=90?'var(--green)':lpct>=60?'var(--amber)':'var(--red)';
+          return `<div>
+            <div style="display:flex;justify-content:space-between;font-size:.77rem;margin-bottom:3px">
+              <span style="color:var(--text-3)">Level ${lvl}</span>
+              <span style="color:var(--text-2)">${d.enriched}/${d.total} <span style="color:${c};font-weight:700">${lpct.toFixed(0)}%</span></span>
+            </div>
+            <div style="height:5px;background:var(--surface-3);border-radius:3px;overflow:hidden">
+              <div style="height:100%;width:${lpct}%;background:${c};transition:width .4s ease"></div>
+            </div></div>`;
+        }).join('')}
+        </div>`;
+    }
     const steps=(kbh.patterns_steps||[]).join(' → ');
     const cachedAt=kbh.patterns_cached_at?new Date(kbh.patterns_cached_at).toLocaleString():'—';
     const lastEv=kbh.last_pipeline_event;
@@ -1478,6 +1729,43 @@ async function loadKBHealth(){
       }).join('')
       :'<div style="color:var(--text-3)">No events.</div>';
   }catch(e){$('kb-health-grid').innerHTML=`<div style="color:var(--text-3);font-size:.81rem">KB health unavailable: ${escHtml(e.message)}</div>`;}
+}
+
+let _enrichHierJobId=null,_enrichHierTimer=null;
+async function triggerEnrichHierarchy(){
+  if(!currentProject){toast('No project selected','error');return;}
+  const btn=$('enrich-hier-btn');
+  const statusEl=$('kb-enrich-job-status');
+  if(btn)btn.disabled=true;
+  if(statusEl){statusEl.style.display='block';statusEl.textContent='Starting enrichment…';}
+  try{
+    const r=await fetch('/api/enrich_hierarchy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:currentProject})});
+    const d=await r.json();
+    if(d.error){toast('Enrich error: '+d.error,'error');if(btn)btn.disabled=false;return;}
+    _enrichHierJobId=d.job_id;
+    toast('Hierarchy enrichment started (job '+d.job_id.slice(0,8)+'…)','info');
+    _pollEnrichJob();
+  }catch(e){toast('Failed: '+e.message,'error');if(btn)btn.disabled=false;}
+}
+function _pollEnrichJob(){
+  if(!_enrichHierJobId)return;
+  clearTimeout(_enrichHierTimer);
+  _enrichHierTimer=setTimeout(async()=>{
+    try{
+      const j=await fetch('/api/jobs/'+_enrichHierJobId).then(r=>r.json());
+      const statusEl=$('kb-enrich-job-status');
+      const running=j.status==='running'||j.status==='pending';
+      const msg=j.result?.enriched!=null?` (${j.result.enriched} enriched)`:j.result?.error?` error: ${j.result.error}`:'';
+      if(statusEl)statusEl.textContent=`Enrichment: ${j.status}${msg}`;
+      if(running){_pollEnrichJob();}
+      else{
+        const btn=$('enrich-hier-btn');if(btn)btn.disabled=false;
+        _enrichHierJobId=null;
+        if(j.status==='done'){toast('Hierarchy enrichment complete!','success');loadKBHealth();}
+        else{toast('Enrichment ended: '+j.status,'error');}
+      }
+    }catch(e){const statusEl=$('kb-enrich-job-status');if(statusEl)statusEl.textContent='Poll error: '+e.message;}
+  },5000);
 }
 
 async function loadStatus(){
@@ -1531,12 +1819,25 @@ async function loadAlerts(){
   let data;
   try{data=await api('/alerts');}
   catch(e){return;}
+  const viols=data.violations||[];
+
+  // ── Topbar alert badge + nav dot ──
+  const badge=$('alert-badge');
+  const navDot=$('nav-health-alert');
+  if(viols.length){
+    $('alert-badge-count').textContent=viols.length;
+    badge.classList.add('visible');
+    if(navDot) navDot.style.display='block';
+  } else {
+    badge.classList.remove('visible');
+    if(navDot) navDot.style.display='none';
+  }
+
   const violEl=$('alerts-violations');
   const rulesEl=$('alerts-rules-list');
   if(violEl){
-    const viols=data.violations||[];
     violEl.innerHTML=viols.length
-      ?viols.map(v=>`<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:4px;padding:6px 10px;margin-bottom:6px;font-size:.77rem;color:var(--red)">⚠ ${escHtml(v.name)}: ${escHtml(v.metric)} = ${v.current_value} (threshold ${v.op} ${v.threshold})</div>`).join('')
+      ?viols.map(v=>`<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:4px;padding:6px 10px;margin-bottom:6px;font-size:.77rem;color:var(--red)">⚠ ${escHtml(v.name)}: ${escHtml(v.message||v.metric)}</div>`).join('')
       :'<div style="color:var(--green);font-size:.77rem;padding:4px 0">✓ No active violations</div>';
   }
   if(rulesEl){
@@ -2016,6 +2317,61 @@ async function runSemanticTrace(){
   }catch(e){$('trace-result').innerHTML=`<div style="color:var(--red);font-size:.81rem">Error: ${escHtml(e.message)}</div>`;}
 }
 
+/* ── Feature Trace ───────────────────────────────────────────────────────────── */
+async function runFeatureTrace(){
+  const q=$('feature-q').value.trim();
+  if(!q||!currentProject)return;
+  $('feature-result').innerHTML='<div class="loader">Tracing feature…</div>';
+  try{
+    const data=await api('/feature?project='+encodeURIComponent(currentProject)+'&q='+encodeURIComponent(q));
+    if(data.error){$('feature-result').innerHTML=`<div style="color:var(--text-3)">${escHtml(data.error)}</div>`;return;}
+    const eps=(data.entry_points||[]);
+    const chain=(data.call_chain||[]);
+    const services=(data.involved_services||[]);
+    const decisions=(data.key_design_decisions||[]);
+    $('feature-result').innerHTML=`
+      ${data.algorithm?`<div class="card" style="margin:0 0 12px;padding:14px 16px">
+        <div class="card-title" style="margin-bottom:6px;font-size:.83rem">Algorithm Overview</div>
+        <div style="font-size:.82rem;line-height:1.7;color:var(--text-2)">${simpleMarkdown(escHtml(data.algorithm))}</div>
+      </div>`:''}
+      ${data.design_rationale?`<div class="card" style="margin:0 0 12px;padding:14px 16px;border-left:3px solid var(--accent)">
+        <div class="card-title" style="margin-bottom:6px;font-size:.83rem">Design Rationale</div>
+        <div style="font-size:.82rem;line-height:1.7;color:var(--text-2)">${simpleMarkdown(escHtml(data.design_rationale))}</div>
+      </div>`:''}
+      ${decisions.length?`<div class="card" style="margin:0 0 12px;padding:14px 16px">
+        <div class="card-title" style="margin-bottom:8px;font-size:.83rem">Key Design Decisions</div>
+        <ul style="margin:0;padding-left:18px">${decisions.map(d=>`<li style="font-size:.81rem;line-height:1.6;color:var(--text-2);margin-bottom:4px">${simpleMarkdown(escHtml(String(d)))}</li>`).join('')}</ul>
+      </div>`:''}
+      ${eps.length?`<div class="card" style="margin:0 0 12px;padding:14px 16px">
+        <div class="card-title" style="margin-bottom:8px;font-size:.83rem">Entry Points</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${eps.slice(0,8).map(e=>`<div style="font-size:.79rem;padding:4px 8px;background:var(--surface-2);border-radius:4px;font-family:monospace">
+            <span style="color:var(--accent)">${escHtml(e.qualified_name||e.name||'?')}</span>
+            <span style="color:var(--text-3);margin-left:8px">${escHtml(e.kind||'')}</span>
+            <span style="color:var(--text-3);margin-left:8px;font-size:.72rem">${escHtml((e.file||'').split('/').slice(-2).join('/'))}</span>
+          </div>`).join('')}
+        </div>
+      </div>`:''}
+      ${chain.length?`<div class="card" style="margin:0 0 12px;padding:14px 16px">
+        <div class="card-title" style="margin-bottom:8px;font-size:.83rem">Call Chain (${chain.length} nodes)</div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          ${chain.slice(0,20).map((n,i)=>`<div style="display:flex;align-items:center;gap:8px;font-size:.78rem;padding:3px 0;border-bottom:1px solid var(--surface-2)">
+            <span style="color:var(--text-3);min-width:22px;font-variant-numeric:tabular-nums">${i+1}.</span>
+            <span style="color:var(--accent);font-family:monospace">${escHtml(n.qualified_name||n.name||'?')}</span>
+            <span style="color:var(--text-3)">${escHtml(n.kind||'')}</span>
+            <span style="color:var(--text-3);font-size:.71rem;margin-left:auto">${escHtml((n.file||'').split('/').slice(-2).join('/'))}</span>
+          </div>`).join('')}
+          ${chain.length>20?`<div style="font-size:.75rem;color:var(--text-3);padding-top:6px">…and ${chain.length-20} more</div>`:''}
+        </div>
+      </div>`:''}
+      ${services.length?`<div class="card" style="margin:0 0 12px;padding:14px 16px">
+        <div class="card-title" style="margin-bottom:8px;font-size:.83rem">Involved Services / Layers</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${services.map(s=>`<span style="font-size:.78rem;padding:3px 10px;background:var(--surface-2);border-radius:12px;color:var(--text-2)">${escHtml(String(s))}</span>`).join('')}</div>
+      </div>`:''}
+    `;
+  }catch(e){$('feature-result').innerHTML=`<div style="color:var(--red);font-size:.81rem">Error: ${escHtml(e.message)}</div>`;}
+}
+
 /* ── Coverage Status ─────────────────────────────────────────────────────────── */
 async function loadSysstat(){
   let data;
@@ -2359,7 +2715,99 @@ function deleteSavedQuery(i){
   loadSavedQueries();
 }
 
+/* ── Auto-load: Impact top nodes ─────────────────────────────────────────────── */
+/* trigger on page load — show top-10 impactful nodes automatically */
+async function _autoLoadImpact(){
+  if(!currentProject)return;
+  const el=$('impact-result');
+  if(!el)return;
+  el.innerHTML='<div class="loader">Loading top impactful symbols…</div>';
+  try{
+    const data=await api('/graph?project='+encodeURIComponent(currentProject)+'&symbol=*&relation=impact&max_nodes=12');
+    const nodes=(data.nodes||data.results||[]).slice(0,12);
+    if(!nodes.length){el.innerHTML='<div style="color:var(--text-3);font-size:.81rem">No graph data yet. Index the project first.</div>';return;}
+    el.innerHTML=`<div style="margin-bottom:10px;font-size:.79rem;color:var(--text-3)">Top impactful symbols — click any to analyze blast radius</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${nodes.map(n=>{
+          const sym=n.qualified_name||n.name||n.symbol||String(n);
+          const sym_e=typeof sym==='string'?sym:JSON.stringify(sym);
+          const deg=n.out_degree??n.degree??'';
+          return `<div onclick="$('impact-symbol').value=${JSON.stringify(sym_e)};runImpactAnalysis()" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:7px 10px;background:var(--surface-2);border-radius:var(--radius);border:1px solid transparent;transition:border .15s" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='transparent'">
+            <span style="color:var(--accent);font-family:monospace;font-size:.82rem;flex:1">${escHtml(sym_e)}</span>
+            ${deg!==''?`<span style="font-size:.75rem;color:var(--text-3);background:var(--surface-3);padding:1px 7px;border-radius:99px">${deg} edges</span>`:''}
+          </div>`;
+        }).join('')}
+      </div>`;
+  }catch(e){
+    el.innerHTML=`<div style="color:var(--text-3);font-size:.82rem">Enter a symbol name to see its blast radius and risk level.</div>`;
+  }
+}
+function loadTopImpact(){_autoLoadImpact();}
+
+/* ── Auto-load: PR Impact git diff ──────────────────────────────────────────── */
+async function loadPrImpactAuto(){
+  if(!currentProject)return;
+  const ta=$('pr-files-input');
+  if(ta&&ta.value.trim())return; // user already typed something
+  const el=$('pr-result');if(!el)return;
+  el.innerHTML='<div class="loader">Auto-detecting changed files from git…</div>';
+  // trigger run with empty files → backend does git diff
+  try{
+    const branch=($('pr-base-branch')&&$('pr-base-branch').value)||'main';
+    const r=await fetch('/api/pr_impact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:currentProject,base_branch:branch,files:[]})});
+    const d=await r.json();
+    _renderPrImpact(d);
+  }catch(e){
+    if(el)el.innerHTML=`<div style="color:var(--text-3);font-size:.82rem">Paste changed file paths above or click Analyze to detect from git diff.</div>`;
+  }
+}
+
+/* ── Auto-load: Vacuum status ────────────────────────────────────────────────── */
+async function loadVacuumStatus(){
+  if(!currentProject)return;
+  const el=$('vacuum-result');if(!el)return;
+  // Only auto-load if placeholder is showing
+  if(!el.textContent.includes('Dry Run'))return;
+  el.innerHTML='<div class="loader">Scanning for orphan dirs (dry run)…</div>';
+  try{
+    await runVacuum(true);
+  }catch(e){
+    if(el)el.innerHTML='<div style="color:var(--text-3);font-size:.82rem">Click "Dry Run" to preview what would be removed.</div>';
+  }
+}
+
+/* ── Auto-load: Dedup status ─────────────────────────────────────────────────── */
+async function loadDedupStatus(){
+  if(!currentProject)return;
+  const el=$('dedup-result');if(!el)return;
+  // Only auto-run if placeholder is showing
+  if(!el.textContent.includes('Dry Run'))return;
+  el.innerHTML='<div class="loader">Scanning for duplicate nodes (dry run)…</div>';
+  try{
+    await runDedup(true);
+  }catch(e){
+    if(el)el.innerHTML='<div style="color:var(--text-3);font-size:.82rem">Click "Dry Run" to preview what would be merged.</div>';
+  }
+}
+
 /* ── SSE live updates ────────────────────────────────────────────────────────── */
+let _liveFeedInit=false;
+const _MAX_FEED=50;
+function _pushLiveFeed(dotCls,text,subtext){
+  const feed=$('live-feed');if(!feed)return;
+  if(!_liveFeedInit){feed.innerHTML='';_liveFeedInit=true;}
+  const now=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const item=document.createElement('div');
+  item.className='live-feed-item';
+  item.innerHTML=`<span class="live-dot ${dotCls}"></span><span style="flex:1;color:var(--text-2)">${escHtml(text)}</span>${subtext?`<span style="color:var(--text-3);font-size:.72rem">${escHtml(subtext)}</span>`:''}
+    <span style="color:var(--text-3);font-size:.71rem;flex-shrink:0;margin-left:6px">${now}</span>`;
+  feed.insertBefore(item,feed.firstChild);
+  // Keep at most _MAX_FEED items
+  while(feed.children.length>_MAX_FEED)feed.removeChild(feed.lastChild);
+  const badge=$('live-feed-badge');
+  if(badge){badge.textContent='● LIVE';badge.className='badge ok';}
+}
+
 (function initSSE(){
   let es;
   function connect(){
@@ -2371,14 +2819,39 @@ function deleteSavedQuery(i){
         $('daemon-status').textContent='connected';
         if($('metrics-snapshot'))$('metrics-snapshot').textContent=
           `${msg.call_count??0} searches · p50=${msg.latency_p50_ms??'—'}ms · p95=${msg.latency_p95_ms??'—'}ms · 0-result=${msg.zero_result_pct!=null?msg.zero_result_pct.toFixed(1):'—'}%`;
+        // Push periodic heartbeat to live feed
+        const load=msg.load_avg_1m!=null?`load=${msg.load_avg_1m.toFixed(2)}`:'';
+        const calls=msg.call_count!=null?`${msg.call_count} calls`:'';
+        const parts=[calls,load].filter(Boolean).join(' · ');
+        if(parts)_pushLiveFeed('blue','Heartbeat',parts);
+      }
+      if(msg.type==='search'){
+        const q=msg.query?`"${msg.query.slice(0,40)}"`:'-';
+        const lat=msg.latency_ms!=null?`${msg.latency_ms.toFixed(0)}ms`:'';
+        const hits=msg.result_count!=null?`${msg.result_count} hits`:'';
+        _pushLiveFeed('green',`Search ${q}`,[lat,hits].filter(Boolean).join(' · '));
       }
       if(msg.type==='job'){
+        const act=msg.action||'';const status=msg.status||'';
+        const dotC=status==='done'?'green':status==='error'?'red':'blue';
+        _pushLiveFeed(dotC,`Job ${act}`,status);
         // Refresh jobs tab if open
         if(document.querySelector('#page-jobs.active'))loadJobs();
+        // Refresh health if enrich_hierarchy completed
+        if(act==='enrich_hierarchy'&&status==='done'){
+          if(document.querySelector('#page-health.active'))loadKBHealth();
+          if(document.querySelector('#page-overview.active'))loadOverview();
+        }
+      }
+      if(msg.type==='index'){
+        const proj=(msg.project||'').split('/').pop();
+        _pushLiveFeed('blue',`Indexed ${proj}`,msg.files_indexed!=null?`${msg.files_indexed} files`:'');
       }
     };
     es.onerror=function(){
       $('daemon-dot').className='daemon-dot err';
+      const badge=$('live-feed-badge');
+      if(badge){badge.textContent='SSE';badge.className='badge none';}
       es.close();
       setTimeout(connect,10000);
     };
@@ -2388,19 +2861,27 @@ function deleteSavedQuery(i){
 
 /* ── Boot ────────────────────────────────────────────────────────────────────── */
 (async()=>{
+  // Set correct theme icon on boot (default is light)
+  const isLight=document.documentElement.dataset.theme==='light';
+  $('theme-btn').textContent=isLight?'🌙':'☀';
+
   try{
     await loadProjects();
     await loadOverview();
+    loadAlerts();  // populate alert badge on startup without blocking
   }catch(e){
     $('daemon-dot').className='daemon-dot err';
     $('daemon-status').textContent='error';
     $('projects-table').innerHTML=`<div style="color:var(--red);padding:10px">Failed to connect to daemon: ${escHtml(e.message)}</div>`;
   }
-  // Auto-refresh every 30s for overview and health pages
+  // Auto-refresh every 15s for overview; every 30s for health; alerts every 45s
   setInterval(()=>{
     if(document.querySelector('#page-overview.active'))loadOverview();
-    else if(document.querySelector('#page-health.active'))loadStatus();
+  },15000);
+  setInterval(()=>{
+    if(document.querySelector('#page-health.active'))loadStatus();
   },30000);
+  setInterval(loadAlerts, 45000);
 })();
 </script>
 </body>

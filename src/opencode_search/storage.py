@@ -72,12 +72,16 @@ def _require_pyarrow():
 # Arrow schema helpers
 # ---------------------------------------------------------------------------
 
-def build_schema(dims: int) -> pa.Schema:
+def build_schema(dims: int, vec_dtype: str = "float16") -> pa.Schema:
     """Build the Arrow schema for the chunks table.
 
-    Must remain byte-for-byte compatible with the Rust storage.rs schema.
+    New tables default to float16 vectors (49% smaller than float32, same
+    search quality at cosine similarity).  Existing float32 tables are opened
+    as-is for backwards compatibility — the stored dtype is detected in
+    _ensure_chunks_table and passed here only for new-table creation.
     """
     pa_mod = _require_pyarrow()
+    item_type = pa_mod.float16() if vec_dtype == "float16" else pa_mod.float32()
     return pa_mod.schema(
         [
             pa_mod.field("chunk_id", pa_mod.int64()),
@@ -89,7 +93,7 @@ def build_schema(dims: int) -> pa.Schema:
             pa_mod.field("content_hash", pa_mod.utf8()),
             pa_mod.field("start_line", pa_mod.int32()),
             pa_mod.field("end_line", pa_mod.int32()),
-            pa_mod.field("vector", pa_mod.list_(pa_mod.float32(), dims)),
+            pa_mod.field("vector", pa_mod.list_(item_type, dims)),
             pa_mod.field("created_at", pa_mod.timestamp("us")),
         ]
     )
@@ -148,6 +152,7 @@ class Storage:
         self._table: Any = None
         self._config_table: Any = None
         self._write_lock = asyncio.Lock()
+        self._vec_dtype: str = "float16"  # updated on open() to match stored schema
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -187,34 +192,46 @@ class Storage:
         return list(self._db.table_names())
 
     async def _ensure_chunks_table(self) -> None:
-        schema = build_schema(self.dims)
         existing = self._list_tables()
         if self.TABLE_CHUNKS not in existing:
-            self._table = self._db.create_table(
-                self.TABLE_CHUNKS,
-                schema=schema,
-            )
-            logger.info("Created chunks table (dims=%d)", self.dims)
+            # New table: create with float16 (default)
+            schema = build_schema(self.dims, vec_dtype="float16")
+            self._table = self._db.create_table(self.TABLE_CHUNKS, schema=schema)
+            self._vec_dtype = "float16"
+            logger.info("Created chunks table (dims=%d, dtype=float16)", self.dims)
         else:
             self._table = self._db.open_table(self.TABLE_CHUNKS)
-            # Validate that the stored schema matches expectations.
             stored_schema = self._table.schema
-            if stored_schema.field("vector").type != schema.field("vector").type:
+            stored_vec_type = stored_schema.field("vector").type
+            # Detect stored dims via list_size (FixedSizeList) or length property
+            stored_dims = getattr(stored_vec_type, "list_size", None) or getattr(stored_vec_type, "length", None)
+            if stored_dims != self.dims:
                 # Dim mismatch (e.g. old 512-dim budget tier vs new 768-dim model).
-                # Drop stale table and recreate with correct schema so re-indexing
-                # can proceed without manual intervention.
+                # Drop and recreate with float16 schema.
                 logger.warning(
-                    "Schema mismatch: stored vector type %s != expected %s; "
-                    "dropping stale table and recreating with correct dims.",
-                    stored_schema.field("vector").type,
-                    schema.field("vector").type,
+                    "Dim mismatch: stored dims %s != expected %d; recreating table.",
+                    stored_dims, self.dims,
                 )
                 self._db.drop_table(self.TABLE_CHUNKS)
-                self._table = self._db.create_table(
-                    self.TABLE_CHUNKS,
-                    schema=schema,
+                schema = build_schema(self.dims, vec_dtype="float16")
+                self._table = self._db.create_table(self.TABLE_CHUNKS, schema=schema)
+                self._vec_dtype = "float16"
+                logger.info("Recreated chunks table (dims=%d, dtype=float16)", self.dims)
+            else:
+                # Same dims: honour existing dtype for backwards compatibility.
+                # float32 tables written before Jun 2026 remain float32 until
+                # re-indexed; new float16 tables stay float16.
+                item_type = getattr(stored_vec_type, "value_type", None)
+                if item_type is not None and str(item_type) == "float":
+                    self._vec_dtype = "float32"
+                elif item_type is not None and str(item_type) == "halffloat":
+                    self._vec_dtype = "float16"
+                else:
+                    # Unknown — default to float32 for safety
+                    self._vec_dtype = "float32"
+                logger.debug(
+                    "Opened chunks table (dims=%d, dtype=%s)", self.dims, self._vec_dtype
                 )
-                logger.info("Recreated chunks table (dims=%d)", self.dims)
 
     async def _ensure_config_table(self) -> None:
         existing = self._list_tables()
@@ -238,7 +255,7 @@ class Storage:
             return
 
         pa_mod = _require_pyarrow()
-        schema = build_schema(self.dims)
+        schema = build_schema(self.dims, vec_dtype=self._vec_dtype)
 
         # Build column-oriented data for PyArrow.
         chunk_ids = pa_mod.array([c.chunk_id for c in chunks], type=pa_mod.int64())
@@ -254,15 +271,19 @@ class Storage:
         # into a contiguous matrix and build a single PyArrow flat buffer — avoids
         # creating O(N·dims) Python float objects that pa.array() with a list of
         # lists would require.
+        # Use the stored table's dtype (float16 for new tables, float32 for legacy).
+        _np_dtype = "float16" if self._vec_dtype == "float16" else "float32"
+        _pa_item = pa_mod.float16() if self._vec_dtype == "float16" else pa_mod.float32()
         try:
             import numpy as _np
-            mat = _np.stack([_np.asarray(c.vector, dtype=_np.float32) for c in chunks])
-            flat = pa_mod.array(mat.ravel(), type=pa_mod.float32())
+            _dtype = _np.float16 if _np_dtype == "float16" else _np.float32
+            mat = _np.stack([_np.asarray(c.vector, dtype=_dtype) for c in chunks])
+            flat = pa_mod.array(mat.ravel(), type=_pa_item)
             vectors = pa_mod.FixedSizeListArray.from_arrays(flat, self.dims)
         except Exception:
             vectors = pa_mod.array(
                 [c.vector for c in chunks],
-                type=pa_mod.list_(pa_mod.float32(), self.dims),
+                type=pa_mod.list_(_pa_item, self.dims),
             )
         created_ats = pa_mod.array(
             [c.created_at for c in chunks],
@@ -301,7 +322,7 @@ class Storage:
         if not chunks:
             return
         pa_mod = _require_pyarrow()
-        schema = build_schema(self.dims)
+        schema = build_schema(self.dims, vec_dtype=self._vec_dtype)
         chunk_ids = pa_mod.array([c.chunk_id for c in chunks], type=pa_mod.int64())
         paths = pa_mod.array([c.path for c in chunks], type=pa_mod.utf8())
         file_hashes = pa_mod.array([c.file_hash for c in chunks], type=pa_mod.utf8())
@@ -311,15 +332,18 @@ class Storage:
         content_hashes = pa_mod.array([c.content_hash for c in chunks], type=pa_mod.utf8())
         start_lines = pa_mod.array([c.start_line for c in chunks], type=pa_mod.int32())
         end_lines = pa_mod.array([c.end_line for c in chunks], type=pa_mod.int32())
+        _np_dtype = "float16" if self._vec_dtype == "float16" else "float32"
+        _pa_item = pa_mod.float16() if self._vec_dtype == "float16" else pa_mod.float32()
         try:
             import numpy as _np
-            mat = _np.stack([_np.asarray(c.vector, dtype=_np.float32) for c in chunks])
-            flat = pa_mod.array(mat.ravel(), type=pa_mod.float32())
+            _dtype = _np.float16 if _np_dtype == "float16" else _np.float32
+            mat = _np.stack([_np.asarray(c.vector, dtype=_dtype) for c in chunks])
+            flat = pa_mod.array(mat.ravel(), type=_pa_item)
             vectors = pa_mod.FixedSizeListArray.from_arrays(flat, self.dims)
         except Exception:
             vectors = pa_mod.array(
                 [c.vector for c in chunks],
-                type=pa_mod.list_(pa_mod.float32(), self.dims),
+                type=pa_mod.list_(_pa_item, self.dims),
             )
         created_ats = pa_mod.array([c.created_at for c in chunks], type=pa_mod.timestamp("us"))
         pa_table = pa_mod.table(
@@ -732,11 +756,14 @@ class Storage:
         )
         await self.compact()
 
-    async def vacuum(self) -> dict:
-        """Deep storage cleanup: compact + prune versions older than 7 days.
+    async def vacuum(self, retention_hours: int = 0) -> dict:
+        """Deep storage cleanup: compact fragmented files + prune old versions.
 
-        Run after a full pipeline build. Returns a dict with before/after
-        stats so callers can log the reclaimed space.
+        Uses cleanup_older_than=timedelta(hours=retention_hours). Default is 0
+        (keep only current version) for maximum space reclaim. Pass retention_hours=168
+        (7 days) if you need rollback safety for concurrent readers.
+
+        Returns a dict with before/after stats.
         """
         import os as _os
         from datetime import timedelta
@@ -758,9 +785,9 @@ class Storage:
             if callable(optimize):
                 async with self._write_lock:
                     await asyncio.to_thread(
-                        optimize, cleanup_older_than=timedelta(days=7)
+                        optimize, cleanup_older_than=timedelta(hours=retention_hours)
                     )
-            logger.info("Vacuum complete (7-day version cleanup)")
+            logger.info("Vacuum complete (retention=%dh)", retention_hours)
         except Exception as exc:
             logger.warning("Vacuum failed: %s", exc)
             return {"status": "error", "error": str(exc)}

@@ -77,12 +77,12 @@ DEFAULT_RERANK_MODEL: str = os.environ.get(
 DEFAULT_DIMS: int = 768
 
 # ---------------------------------------------------------------------------
-# LLM enrichment defaults — codex (ChatGPT gpt-5.4-mini) is the default since Jun 2026.
-# Ollama local inference was replaced to avoid GPU VRAM contention during indexing.
-# gpt-5.4-mini is the cheapest model in the Codex CLI catalog ($0.75/M input, $4.50/M output).
+# LLM enrichment defaults — claude-code (haiku-4.5) is the default since Jun 2026.
+# Uses the locally installed `claude` CLI; no separate API key needed.
+# Switch to codex by setting OPENCODE_LLM_PROVIDER=codex / OPENCODE_LLM_MODEL=gpt-5.4-mini.
 # ---------------------------------------------------------------------------
-DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "codex")
-DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "gpt-5.4-mini")
+DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "claude-code")
+DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "claude-haiku-4-5-20251001")
 DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "2048"))
 DEFAULT_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 

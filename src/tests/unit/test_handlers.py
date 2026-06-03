@@ -1341,3 +1341,78 @@ async def test_handle_graph_export_mermaid_format(tmp_path):
     assert result.get("format") == "mermaid"
     assert "mermaid" in result
     assert result["mermaid"].startswith("flowchart TD")
+
+# ---------------------------------------------------------------------------
+# _project_needs_hierarchy_enrich
+# ---------------------------------------------------------------------------
+
+
+class TestProjectNeedsHierarchyEnrich:
+    def _make_gs(self, tmp_path: Path) -> GraphStorage:
+        db = str(tmp_path / "graph.db")
+        gs = GraphStorage(db)
+        gs.open()
+        return gs
+
+    def _add_community(
+        self, gs: GraphStorage, cid: int, level: int, title: str | None = None,
+        node_count: int = 5, parent_id: int | None = None
+    ) -> CommunityData:
+        c = CommunityData(
+            id=cid, level=level, node_count=node_count,
+            title=title, parent_community_id=parent_id,
+        )
+        gs.upsert_community(c)
+        return c
+
+    def test_returns_false_when_db_does_not_exist(self, tmp_path):
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+        result = _project_needs_hierarchy_enrich(str(tmp_path / "nonexistent"))
+        assert result is False
+
+    def test_returns_false_when_max_level_is_1(self, tmp_path):
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+        gs = self._make_gs(tmp_path)
+        self._add_community(gs, 1, level=1, title="some title")
+        gs.close()
+        with patch(
+            "opencode_search.config.get_project_graph_db_path",
+            return_value=str(tmp_path / "graph.db"),
+        ):
+            result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
+        assert result is False
+
+    def test_returns_true_when_level2_communities_unenriched(self, tmp_path):
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+        gs = self._make_gs(tmp_path)
+        self._add_community(gs, 1, level=1, title="Leaf community")
+        self._add_community(gs, 2, level=2, title=None, node_count=10)  # unenriched
+        gs.close()
+        with patch(
+            "opencode_search.config.get_project_graph_db_path",
+            return_value=str(tmp_path / "graph.db"),
+        ):
+            result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
+        assert result is True
+
+    def test_returns_false_when_all_level2_enriched(self, tmp_path):
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+        gs = self._make_gs(tmp_path)
+        self._add_community(gs, 1, level=1, title="Leaf community")
+        self._add_community(gs, 2, level=2, title="Meta community", node_count=10)
+        gs.close()
+        with patch(
+            "opencode_search.config.get_project_graph_db_path",
+            return_value=str(tmp_path / "graph.db"),
+        ):
+            result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
+        assert result is False
+
+    def test_returns_false_exception_is_swallowed(self, tmp_path):
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+        with patch(
+            "opencode_search.config.get_project_graph_db_path",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
+        assert result is False

@@ -61,6 +61,8 @@ from opencode_search.handlers import (
     handle_detect_impact,
     handle_detect_patterns,
     handle_discover_federation,
+    handle_ask_feature,
+    handle_enrich_hierarchy,
     handle_enrich_project,
     handle_ensure_project_watching,
     handle_get_callees,
@@ -228,7 +230,7 @@ async def search(
 async def ask(
     query: str,
     project_path: str,
-    scope: Literal["architecture", "wiki", "all", "global"] = "all",
+    scope: Literal["architecture", "wiki", "all", "global", "feature"] = "all",
     top_k: int = 10,
     include_federation: bool = True,
 ) -> dict[str, Any]:
@@ -240,9 +242,10 @@ async def ask(
 
     scope: "all" (default) | "architecture" (communities only) | "wiki" (pages only)
            | "global" (map-reduce over ALL community summaries — GraphRAG-style holistic answer)
+           | "feature" (feature trace: entry points + call chain + algorithm + design rationale)
     """
     runtime_state.note_activity()
-    valid = {"architecture", "wiki", "all", "global"}
+    valid = {"architecture", "wiki", "all", "global", "feature"}
     if scope not in valid:
         return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
 
@@ -250,6 +253,10 @@ async def ask(
         return await handle_global_synthesis(
             query=query, project_path=project_path,
             include_federation=include_federation,
+        )
+    if scope == "feature":
+        return await handle_ask_feature(
+            query=query, project_path=project_path, top_k=top_k,
         )
     if scope == "wiki":
         return await handle_wiki_query(query=query, project_path=project_path, top_k=top_k)
@@ -515,6 +522,7 @@ async def build(
             | "ingest" | "reindex_wiki" | "describe_symbol"
             | "analyze_patterns" (LLM-powered deep code pattern analysis; requires LLM provider)
             | "hierarchy" (build recursive Leiden hierarchy — run after pipeline for GraphRAG-like levels)
+            | "enrich_hierarchy" (LLM-enrich level-2+ macro-communities — run after hierarchy)
     source_path: required for action="ingest"
     symbol: required for action="describe_symbol"
     max_communities: cap on communities to enrich/wiki (default 200)
@@ -524,6 +532,7 @@ async def build(
     valid = {
         "index", "pipeline", "enrich", "wiki", "ingest",
         "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
+        "enrich_hierarchy",
     }
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
@@ -626,6 +635,18 @@ async def build(
             project_path=project_path,
         )
         return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
+    elif action == "enrich_hierarchy":
+        job = submit_job(
+            handle_enrich_hierarchy(project_path=project_path),
+            action="enrich_hierarchy",
+            project_path=project_path,
+        )
+        return {
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Hierarchy enrichment running in background. Poll /api/jobs/{job_id} for progress.",
+        }
     else:
         if not symbol:
             return {"error": "action='describe_symbol' requires symbol parameter"}
@@ -741,13 +762,30 @@ register_dashboard_routes(mcp)
 # ---------------------------------------------------------------------------
 
 
+_healthz_start = __import__("time").monotonic()
+
+
 @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
 async def healthz(_request: Request) -> JSONResponse:
+    import os as _os
+    import time as _time
+    try:
+        load1, load5, load15 = _os.getloadavg()
+    except OSError:
+        load1 = load5 = load15 = 0.0
+    try:
+        import multiprocessing as _mp
+        cpu_count = _mp.cpu_count()
+    except Exception:
+        cpu_count = 1
     return JSONResponse(
         {
             "ok": True,
             "service": "opencode-search",
             "transport": "streamable-http",
+            "uptime_s": round(_time.monotonic() - _healthz_start, 1),
+            "load_avg": {"1m": round(load1, 2), "5m": round(load5, 2), "15m": round(load15, 2)},
+            "cpu_count": cpu_count,
             **runtime_state.snapshot(),
         }
     )

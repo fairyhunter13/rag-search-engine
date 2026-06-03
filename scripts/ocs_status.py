@@ -126,6 +126,7 @@ def _http_get(url: str, timeout: int = 5, stream_check: bool = False) -> tuple[i
 V2_KEYWORDS = [
     "GraphRAG", "impact_narrative", "semantic_trace",
     "architecture_domains", "service_mesh", "analyze_patterns",
+    "import_cycles", "suggested_questions", "remove_project",
 ]
 
 _AI_CLIENTS = {
@@ -195,7 +196,7 @@ def check_mcp_registrations() -> list[Check]:
         checks.append(Check("mcp/hermes", "mcp_registration", SKIP,
                             "~/.hermes/config.yaml not found — hermes not installed"))
 
-    # codex
+    # codex config.toml
     p = _AI_CLIENTS["codex"]
     if p.exists():
         content = p.read_text()
@@ -208,6 +209,36 @@ def check_mcp_registrations() -> list[Check]:
     else:
         checks.append(Check("mcp/codex", "mcp_registration", WARN,
                             "~/.codex/config.toml not found — codex not installed?"))
+
+    # codex AGENTS.md v2 keyword coverage
+    agents_md = Path.home() / ".codex" / "AGENTS.md"
+    if agents_md.exists():
+        content = agents_md.read_text()
+        missing = [kw for kw in V2_KEYWORDS if kw not in content]
+        if missing:
+            checks.append(Check("mcp/codex_agents_md", "mcp_registration", FAIL,
+                                f"~/.codex/AGENTS.md missing v2 keywords: {missing}"))
+        else:
+            checks.append(Check("mcp/codex_agents_md", "mcp_registration", PASS,
+                                "~/.codex/AGENTS.md has all v2 API keywords"))
+    else:
+        checks.append(Check("mcp/codex_agents_md", "mcp_registration", WARN,
+                            "~/.codex/AGENTS.md not found"))
+
+    # Claude Code model — should be haiku for cost efficiency
+    claude_cfg = _AI_CLIENTS["claude-code"]
+    if claude_cfg.exists():
+        try:
+            d = json.loads(claude_cfg.read_text())
+            model = d.get("model", "")
+            if "haiku" in model:
+                checks.append(Check("mcp/claude_model", "mcp_registration", PASS,
+                                    f"Claude Code model = {model!r} (haiku ✓)"))
+            else:
+                checks.append(Check("mcp/claude_model", "mcp_registration", WARN,
+                                    f"Claude Code model = {model!r} (expected 'haiku' for cost efficiency)"))
+        except Exception as e:
+            checks.append(Check("mcp/claude_model", "mcp_registration", WARN, str(e)))
 
     return checks
 
@@ -261,7 +292,8 @@ def check_system_prompts() -> list[Check]:
             d = yaml.safe_load(p.read_text())
             prompt = str((d or {}).get("agent", {}).get("system_prompt", ""))
             v2_keys_safe = ["scope", "impact_narrative", "semantic_trace",
-                            "architecture_domains", "service_mesh", "analyze_patterns"]
+                            "architecture_domains", "service_mesh", "analyze_patterns",
+                            "import_cycles", "suggested_questions", "remove_project"]
             missing = [kw for kw in v2_keys_safe if kw not in prompt]
             if missing:
                 checks.append(Check("prompt/hermes", "system_prompt", WARN,
@@ -273,6 +305,23 @@ def check_system_prompts() -> list[Check]:
             checks.append(Check("prompt/hermes", "system_prompt", WARN, str(e)))
     else:
         checks.append(Check("prompt/hermes", "system_prompt", SKIP, "hermes not installed"))
+
+    # codex developer_instructions v2 keywords
+    p = _AI_CLIENTS["codex"]
+    if p.exists():
+        content = p.read_text()
+        v2_keys_safe = ["impact_narrative", "semantic_trace", "architecture_domains",
+                        "service_mesh", "analyze_patterns", "import_cycles",
+                        "suggested_questions", "remove_project"]
+        missing = [kw for kw in v2_keys_safe if kw not in content]
+        if missing:
+            checks.append(Check("prompt/codex", "system_prompt", WARN,
+                                f"codex config.toml developer_instructions missing v2 keywords: {missing}"))
+        else:
+            checks.append(Check("prompt/codex", "system_prompt", PASS,
+                                "codex developer_instructions has all v2 API keywords"))
+    else:
+        checks.append(Check("prompt/codex", "system_prompt", SKIP, "codex not installed"))
 
     return checks
 
@@ -390,6 +439,28 @@ def check_kb_health(project_path: str | None) -> list[Check]:
         checks.append(Check("kb/enrichment", "kb_health", status,
                             f"Enrichment {enrich:.0f}% ({communities} communities, {wiki} wiki pages)",
                             detail=json.dumps(body)))
+        # Check hierarchy enrichment: level-2+ should be enriched if hierarchy was built
+        by_level = body.get("enrichment_by_level", {})
+        level_keys = [k for k in by_level if int(k) >= 2]
+        if level_keys:
+            unenriched_levels = [
+                f"L{k}={by_level[k]['pct']:.0f}%"
+                for k in sorted(level_keys, key=int)
+                if by_level[k].get("pct", 100) < 50
+            ]
+            if unenriched_levels:
+                checks.append(Check(
+                    "kb/hierarchy_enrichment", "kb_health", WARN,
+                    f"Hierarchy levels not enriched: {', '.join(unenriched_levels)}. "
+                    "Run build(action='enrich_hierarchy').",
+                ))
+            else:
+                checks.append(Check(
+                    "kb/hierarchy_enrichment", "kb_health", PASS,
+                    f"Hierarchy levels enriched: " + ", ".join(
+                        f"L{k}={by_level[k]['pct']:.0f}%" for k in sorted(level_keys, key=int)
+                    ),
+                ))
     else:
         checks.append(Check("kb/enrichment", "kb_health", WARN,
                             f"/api/kb_health returned {code}"))
@@ -524,7 +595,7 @@ def check_tests() -> list[Check]:
 _FEATURE_COVERAGE = {
     "search": {"unit": 30, "integration": 6, "e2e_mock": 6, "e2e_real": 5},
     "ask": {"unit": 35, "integration": 0, "e2e_mock": 15, "e2e_real": 23},
-    "graph": {"unit": 10, "integration": 140, "e2e_mock": 20, "e2e_real": 5},
+    "graph": {"unit": 10, "integration": 147, "e2e_mock": 20, "e2e_real": 5},
     "overview": {"unit": 15, "integration": 5, "e2e_mock": 3, "e2e_real": 7},
     "build/index": {"unit": 5, "integration": 55, "e2e_mock": 8, "e2e_real": 9},
     "wiki": {"unit": 5, "integration": 34, "e2e_mock": 7, "e2e_real": 1},

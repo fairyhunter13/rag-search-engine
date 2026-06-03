@@ -201,14 +201,17 @@ class TestT33EmbeddingPipeline:
         import numpy as np
         vectors_col = arrow_table.column("vector")
         first_vec = vectors_col[0].as_py()
-        arr = np.array(first_vec, dtype=np.float32)
+        # New tables use float16 (49% storage savings); legacy tables use float32.
+        arr = np.array(first_vec)
         assert arr.shape == (768,), (
             f"Expected vector shape (768,), got {arr.shape}. "
             "Embedding model may have changed; re-index with current model."
         )
-        assert arr.dtype == np.float32, f"Expected float32, got {arr.dtype}"
+        assert arr.dtype in (np.float16, np.float32), (
+            f"Expected float16 or float32 vector, got {arr.dtype}"
+        )
         assert not np.all(arr == 0), "Vector is all zeros — embedding produced null output"
-        assert np.all(np.isfinite(arr)), "Vector contains NaN or Inf values"
+        assert np.all(np.isfinite(arr.astype(np.float32))), "Vector contains NaN or Inf values"
 
     @pytest.mark.asyncio
     @pytest.mark.integration

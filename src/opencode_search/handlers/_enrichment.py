@@ -323,7 +323,13 @@ async def handle_enrich_hierarchy(
                 if c.parent_community_id is not None and c.title and c.summary:
                     children_by_parent[c.parent_community_id].append(c)
 
-            _sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+            # Hierarchy enrichment is text-only (summaries → title), no code I/O,
+            # so we can safely use higher concurrency than level-1 enrichment.
+            # Process in batches of _HIER_BATCH_SIZE so progress is saved
+            # incrementally — avoids losing all work if the process is killed.
+            _hier_concurrency = min(_LLM_CONCURRENCY * 2, 8)
+            _hier_batch_size = 50
+            _sem = asyncio.Semaphore(_hier_concurrency)
 
             async def _enrich_macro(
                 comm: CommunityData,
@@ -350,20 +356,36 @@ async def handle_enrich_hierarchy(
                         log.debug("macro community LLM failed for %d: %s", comm.id, exc)
                         return None
 
-            results = await asyncio.gather(*[_enrich_macro(c) for c in unenriched])
-            now = datetime.now(UTC).isoformat()
-            updated_batch: list[CommunityData] = []
-            for item in results:
-                if item is None:
-                    continue
-                comm, title, summary = item
-                comm.title = title
-                comm.summary = summary
-                comm.generated_at = now
-                updated_batch.append(comm)
-                total_enriched += 1
-            if updated_batch:
-                gs.upsert_communities_batch(updated_batch)
+            # Process in batches: write after each batch so partial progress
+            # is visible in the DB and survives if the process is killed.
+            for batch_start in range(0, len(unenriched), _hier_batch_size):
+                batch = unenriched[batch_start:batch_start + _hier_batch_size]
+                log.info(
+                    "enrich_hierarchy[L%d]: batch %d/%d (%d communities)",
+                    level,
+                    batch_start // _hier_batch_size + 1,
+                    (len(unenriched) + _hier_batch_size - 1) // _hier_batch_size,
+                    len(batch),
+                )
+                results = await asyncio.gather(*[_enrich_macro(c) for c in batch])
+                now = datetime.now(UTC).isoformat()
+                updated_batch: list[CommunityData] = []
+                for item in results:
+                    if item is None:
+                        continue
+                    comm, title, summary = item
+                    comm.title = title
+                    comm.summary = summary
+                    comm.generated_at = now
+                    updated_batch.append(comm)
+                    total_enriched += 1
+                if updated_batch:
+                    gs.upsert_communities_batch(updated_batch)
+                    log.info(
+                        "enrich_hierarchy[L%d]: wrote %d/%d (total=%d)",
+                        level, len(updated_batch),
+                        len(unenriched), total_enriched,
+                    )
 
         return {"status": "ok", "enriched": total_enriched, "max_level": top_level}
     finally:

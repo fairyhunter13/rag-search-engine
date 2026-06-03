@@ -39,7 +39,7 @@ python -m compileall -q src/opencode_search
 - Entry points: `src/opencode_search/mcp.py` (MCP server), `src/opencode_search/handlers/` (tool handlers), `src/opencode_search/daemon.py` (singleton daemon + installer), `src/opencode_search/cli.py` (CLI)
 - Registry: `~/.local/share/opencode-search/projects.json`
 - Tests: `src/tests/` — `unit/`, `integration/`, `e2e/` subdirs
-- LLM provider: codex with gpt-5.4-mini (set in `src/opencode_search/config.py` and `~/.bash_aliases`)
+- LLM provider: claude-code with haiku-4.5 (set in `src/opencode_search/config.py` and `~/.bash_aliases`)
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 
 [opencode-search-global-instructions:start]
@@ -80,8 +80,9 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
 
 7-tool intent API (v2 — June 2026):
 - `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: "code" (default)|"docs"|"all"
-- `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"
+- `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"|"feature"
   - scope="global": GraphRAG map-reduce synthesis across ALL community summaries
+  - scope="feature": entry points + call chain + algorithm overview + design rationale (WHY it was built this way)
 - `graph(symbol, project_path, relation)` — call graph analysis
   - relation: "callers"|"callees"|"impact"|"path" — standard
   - relation: "impact_narrative" — LLM summary of blast radius: risk level, affected domains
@@ -98,6 +99,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "pr_impact" — PR risk: changed files → communities touched + risk level
 - `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
   - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
+  - action: "enrich_hierarchy" — re-run LLM enrichment for level-2+ communities (fixes unenriched hierarchies)
 - `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
 - `manage(project_path, action)` — project lifecycle operations
   - action: "wiki_lint" | "stop_watching"
@@ -105,6 +107,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - action: "uninstall_hooks" — remove git post-commit hook
   - action: "dedup" — deduplicate graph nodes (add dry_run=True to preview)
   - action: "vacuum" — remove orphan index tier dirs; free disk space
+  - action: "remove_project" — remove project from registry (delete_index=True also removes on-disk index)
 
 QUICK DECISION GUIDE:
   'find the payment handler'           → search('payment handler')
@@ -123,6 +126,8 @@ QUICK DECISION GUIDE:
   'what packages/dependencies?'        → overview(project_path, what='patterns')
   'list all indexed projects'          → overview(what='projects')
   'index this project' [explicit ask]  → build(project_path, action='pipeline')
+  'how does checkout feature work?'    → ask('how does checkout work', project_path, scope='feature')
+  'why is auth designed this way?'     → ask('why auth uses JWT', project_path, scope='feature')
 
 Rules (no exceptions):
 - Before running ANY Bash command that searches code or text — FIRST call `search` with a natural language query.
