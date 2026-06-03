@@ -72,3 +72,59 @@ async def handle_vacuum(project_path: str, *, dry_run: bool = False) -> dict[str
         }
 
     return await asyncio.to_thread(_run)
+
+
+async def handle_remove_project(
+    project_path: str,
+    *,
+    delete_index: bool = False,
+) -> dict[str, Any]:
+    """Remove a project from the registry. Optionally delete its local index dir.
+
+    delete_index=True also removes the LanceDB/graph index on disk (frees space).
+    Does NOT stop the file watcher — call manage(action="stop_watching") first if needed.
+    """
+    import asyncio
+    import shutil
+    from pathlib import Path
+
+    from opencode_search.config import load_registry, save_registry
+
+    def _run() -> dict[str, Any]:
+        registry = load_registry()
+        canonical = str(Path(project_path).expanduser().resolve())
+
+        matched_key: str | None = None
+        for key in list(registry.keys()):
+            if key == project_path or str(Path(key).expanduser().resolve()) == canonical:
+                matched_key = key
+                break
+
+        if matched_key is None:
+            return {"status": "error", "error": f"Project not found in registry: {project_path}"}
+
+        entry = registry[matched_key]
+        db_path = (
+            getattr(entry, "db_path", None)
+            or (entry.get("db_path") if isinstance(entry, dict) else None)
+        )
+
+        del registry[matched_key]
+        save_registry(registry)
+
+        freed_mb = 0.0
+        if delete_index and db_path:
+            idx_dir = Path(db_path).parent
+            if idx_dir.exists():
+                freed_bytes = sum(f.stat().st_size for f in idx_dir.rglob("*") if f.is_file())
+                freed_mb = round(freed_bytes / 1024 / 1024, 1)
+                shutil.rmtree(idx_dir, ignore_errors=True)
+
+        return {
+            "status": "ok",
+            "removed": matched_key,
+            "index_deleted": delete_index and db_path is not None,
+            "freed_mb": freed_mb,
+        }
+
+    return await asyncio.to_thread(_run)
