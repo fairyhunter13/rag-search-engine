@@ -721,6 +721,30 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await handle_graph_diff(project_path=project, since=since)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/callflow_html", methods=["GET"], include_in_schema=False)
+    async def api_callflow_html(request: Request) -> HTMLResponse:
+        """Render a call chain as a standalone Mermaid HTML page.
+
+        Params: project, symbol, direction=callees|callers, depth=5, format=html|mermaid
+        """
+        from opencode_search.handlers._graph import handle_callflow_html as _handle
+        project = request.query_params.get("project", "")
+        symbol = request.query_params.get("symbol", "")
+        direction = request.query_params.get("direction", "callees")
+        depth = int(request.query_params.get("depth", "5"))
+        fmt = request.query_params.get("format", "html")
+        if not project or not symbol:
+            return HTMLResponse("<h1>Error: project and symbol params required</h1>", status_code=400)
+        result = await _handle(
+            symbol=symbol, project_path=project, direction=direction, depth=depth, fmt=fmt,
+        )
+        if "error" in result:
+            return HTMLResponse(f"<h1>Error: {result['error']}</h1>", status_code=404)
+        if fmt == "mermaid":
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse(result.get("mermaid", ""))
+        return HTMLResponse(result.get("html", "<html><body>No diagram</body></html>"))
+
     @mcp.custom_route("/api/dedup", methods=["GET", "POST"], include_in_schema=False)
     async def api_dedup(request: Request) -> JSONResponse:
         """Deduplicate graph nodes. GET=dry_run preview; POST with {project,dry_run,threshold}."""

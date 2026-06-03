@@ -1403,6 +1403,175 @@ def _to_graphml(nodes: list[dict], edges: list[dict], communities: list[dict]) -
     return "\n".join(lines)
 
 
+async def handle_callflow_html(
+    symbol: str,
+    project_path: str,
+    *,
+    direction: str = "callees",
+    depth: int = 5,
+    fmt: str = "html",
+) -> dict[str, Any]:
+    """Render a call chain as a Mermaid flowchart (HTML page or raw diagram text).
+
+    direction: "callees" (default) = what the symbol calls downstream
+               "callers" = who calls this symbol upstream
+    depth:     BFS depth (default 5)
+    fmt:       "html" (default standalone HTML) | "mermaid" (raw diagram text)
+    """
+    import asyncio
+
+    def _run() -> dict[str, Any]:
+        gs = _open_graph(project_path)
+        if gs is None:
+            return {"error": "project not indexed or graph not built", "project_path": project_path}
+        try:
+            root = gs.get_node(symbol)
+            if root is None:
+                return {"error": f"symbol '{symbol}' not found"}
+
+            # BFS tracking parent edges so we can draw the actual call tree
+            from collections import deque
+            visited: set[str] = {root.id}
+            edges_out: list[tuple[str, str]] = []  # (from_id, to_id)
+            nodes_out: dict[str, Any] = {root.id: root}
+            queue: deque[tuple[str, int]] = deque([(root.id, 0)])
+
+            db = gs._db()
+            while queue:
+                nid, current_depth = queue.popleft()
+                if current_depth >= depth:
+                    continue
+                if direction == "callees":
+                    sql = "SELECT to_id FROM edges WHERE from_id=? AND kind='CALLS'"
+                else:
+                    sql = "SELECT from_id AS to_id FROM edges WHERE to_id=? AND kind='CALLS'"
+                rows = db.execute(sql, (nid,)).fetchall()
+                for r in rows:
+                    child_id = r[0]
+                    if child_id not in visited:
+                        visited.add(child_id)
+                        child_node = gs.get_node_by_id(child_id)
+                        if child_node:
+                            nodes_out[child_id] = child_node
+                            queue.append((child_id, current_depth + 1))
+                    if child_id in nodes_out or child_id == root.id:
+                        if direction == "callees":
+                            edges_out.append((nid, child_id))
+                        else:
+                            edges_out.append((child_id, nid))
+
+            mermaid = _build_mermaid(root, nodes_out, edges_out, direction)
+            if fmt == "mermaid":
+                return {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "node_count": len(nodes_out),
+                    "edge_count": len(edges_out),
+                    "mermaid": mermaid,
+                }
+            html = _wrap_mermaid_html(symbol, direction, mermaid)
+            return {
+                "symbol": symbol,
+                "direction": direction,
+                "node_count": len(nodes_out),
+                "edge_count": len(edges_out),
+                "html": html,
+                "mermaid": mermaid,
+            }
+        finally:
+            gs.close()
+
+    return await asyncio.to_thread(_run)
+
+
+def _mermaid_id(node_id: str) -> str:
+    """Safe Mermaid node ID (alphanumeric only)."""
+    return "n" + node_id.replace("-", "").replace(".", "")[:16]
+
+
+def _mermaid_label(node: Any) -> str:
+    """Short display label: name (file:line)."""
+    import os
+    fname = os.path.basename(node.file) if node.file else ""
+    line = f":{node.start_line}" if node.start_line else ""
+    label = node.name or node.qualified_name
+    if fname:
+        return f"{label}\\n{fname}{line}"
+    return label
+
+
+def _build_mermaid(root: Any, nodes: dict, edges: list[tuple[str, str]], direction: str) -> str:
+    """Produce a Mermaid `flowchart TD` diagram string."""
+    arrow = "TD" if direction == "callees" else "BT"
+    lines = [f"flowchart {arrow}"]
+
+    # Root node — highlighted with double brackets
+    rid = _mermaid_id(root.id)
+    lines.append(f'    {rid}[["**{root.name}**"]]')
+    lines.append(f"    style {rid} fill:#4a90d9,color:#fff,stroke:#2c5f8a")
+
+    # Other nodes
+    for nid, node in nodes.items():
+        if nid == root.id:
+            continue
+        mid = _mermaid_id(nid)
+        label = _mermaid_label(node)
+        lines.append(f"    {mid}[{label!r}]")
+
+    # Edges
+    seen_edges: set[tuple[str, str]] = set()
+    for from_id, to_id in edges:
+        pair = (_mermaid_id(from_id), _mermaid_id(to_id))
+        if pair in seen_edges:
+            continue
+        seen_edges.add(pair)
+        lines.append(f"    {pair[0]} --> {pair[1]}")
+
+    return "\n".join(lines)
+
+
+_MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs"
+
+_HTML_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Callflow: {symbol}</title>
+<style>
+  body {{ font-family: sans-serif; background: #1a1a2e; color: #eee; margin: 0; padding: 20px; }}
+  h1 {{ font-size: 1.2rem; color: #7ec8e3; margin-bottom: 4px; }}
+  p.meta {{ font-size: 0.8rem; color: #888; margin: 0 0 20px; }}
+  .mermaid {{ background: #fff; border-radius: 8px; padding: 20px; }}
+</style>
+</head>
+<body>
+<h1>Callflow: {symbol}</h1>
+<p class="meta">{direction} · {node_count} nodes · {edge_count} edges</p>
+<div class="mermaid">
+{diagram}
+</div>
+<script type="module">
+  import mermaid from '{cdn}';
+  mermaid.initialize({{startOnLoad:true, theme:'default'}});
+</script>
+</body>
+</html>"""
+
+
+def _wrap_mermaid_html(symbol: str, direction: str, diagram: str) -> str:
+    node_count = sum(1 for ln in diagram.splitlines() if ln.strip().startswith("n") and "[" in ln)
+    edge_count = diagram.count("-->")
+    return _HTML_TEMPLATE.format(
+        symbol=symbol,
+        direction=direction,
+        node_count=node_count,
+        edge_count=edge_count,
+        diagram=diagram,
+        cdn=_MERMAID_CDN,
+    )
+
+
 async def handle_dedup_nodes(
     project_path: str,
     *,

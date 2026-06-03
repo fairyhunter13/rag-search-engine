@@ -265,6 +265,9 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <button class="nav-btn" id="nav-fed-map" onclick="showPage('fed-map')"><span class="nav-icon">🗺</span><span class="nav-label">Fed Map</span></button>
     <button class="nav-btn" id="nav-impact" onclick="showPage('impact')"><span class="nav-icon">💥</span><span class="nav-label">Impact</span></button>
     <button class="nav-btn" id="nav-trace" onclick="showPage('trace')"><span class="nav-icon">🔎</span><span class="nav-label">Trace</span></button>
+    <button class="nav-btn" id="nav-import-cycles" onclick="showPage('import-cycles')"><span class="nav-icon">🔄</span><span class="nav-label">Import Cycles</span></button>
+    <button class="nav-btn" id="nav-callflow" onclick="showPage('callflow')"><span class="nav-icon">📊</span><span class="nav-label">Callflow</span></button>
+    <button class="nav-btn" id="nav-dedup" onclick="showPage('dedup')"><span class="nav-icon">🧹</span><span class="nav-label">Dedup</span></button>
   </nav>
 </aside>
 
@@ -722,6 +725,53 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
         <button class="btn" onclick="runSemanticTrace()">Trace</button>
       </div>
       <div id="trace-result"><div style="color:var(--text-3);font-size:.82rem">Describe the start and end of a code flow to trace it.</div></div>
+    </div>
+  </div>
+
+  <!-- PAGE: IMPORT CYCLES -->
+  <div id="page-import-cycles" class="page">
+    <div class="page-title">Import Cycles</div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Circular Import Dependencies</span>
+        <button class="btn secondary" style="font-size:.81rem" onclick="loadImportCycles()">↺ Refresh</button>
+      </div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Circular import chains detected by Tarjan SCC on the file-level import graph. High-severity cycles have length ≤ 3.</p>
+      <div id="import-cycles-result"><div style="color:var(--text-3);font-size:.82rem">Click Refresh to scan for circular imports.</div></div>
+    </div>
+  </div>
+
+  <!-- PAGE: CALLFLOW -->
+  <div id="page-callflow" class="page">
+    <div class="page-title">Callflow</div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Visualize Call Chain</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Render a symbol's call chain as an interactive Mermaid diagram.</p>
+      <div class="search-row" style="margin-bottom:8px">
+        <input id="callflow-symbol" placeholder="Symbol name (e.g. ProcessOrder, handleAuth)" onkeydown="if(event.key==='Enter')runCallflow()"/>
+        <select id="callflow-direction" style="flex-shrink:0;width:120px">
+          <option value="callees">Callees (down)</option>
+          <option value="callers">Callers (up)</option>
+        </select>
+        <button class="btn" onclick="runCallflow()">Render</button>
+      </div>
+      <div id="callflow-result"><div style="color:var(--text-3);font-size:.82rem">Enter a symbol name to render its call chain.</div></div>
+    </div>
+  </div>
+
+  <!-- PAGE: DEDUP -->
+  <div id="page-dedup" class="page">
+    <div class="page-title">Graph Deduplication</div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Deduplicate Graph Nodes</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Find and merge duplicate nodes using MinHash/LSH + Jaro-Winkler similarity. Run dry-run first to preview.</p>
+      <div class="search-row" style="margin-bottom:8px">
+        <label style="font-size:.81rem;white-space:nowrap;color:var(--text-2)">Threshold:</label>
+        <input id="dedup-threshold" type="number" value="0.88" min="0.5" max="1.0" step="0.01" style="width:80px"/>
+        <button class="btn secondary" onclick="runDedup(true)">Dry Run (Preview)</button>
+        <button class="btn" style="background:var(--red)" onclick="runDedup(false)">Apply Merge</button>
+      </div>
+      <div id="dedup-result"><div style="color:var(--text-3);font-size:.82rem">Click "Dry Run" to preview what would be merged.</div></div>
     </div>
   </div>
 
@@ -1947,6 +1997,78 @@ async function runSysstat(){
     $('sysstat-run-btn').disabled=false;
     $('sysstat-spinner').style.display='none';
   }
+}
+
+/* ── Import Cycles ───────────────────────────────────────────────────────────── */
+async function loadImportCycles(){
+  if(!currentProject){toast('Select a project first','warn');return;}
+  const el=$('import-cycles-result');
+  el.innerHTML='<div style="color:var(--text-3)">Scanning…</div>';
+  try{
+    const d=await api('/import_cycles?project='+encodeURIComponent(currentProject));
+    if(d.error){el.innerHTML=`<div style="color:var(--red)">${escHtml(d.error)}</div>`;return;}
+    if(!d.cycle_count){
+      el.innerHTML='<div style="color:var(--green);font-size:.88rem">✓ No circular imports detected.</div>';
+      return;
+    }
+    const rows=d.cycles.map(c=>{
+      const sev=c.severity==='high'?'var(--red)':c.severity==='medium'?'var(--amber)':'var(--green)';
+      return `<tr><td style="color:${sev};font-weight:600">${escHtml(c.severity)}</td><td>${c.length}</td><td style="font-family:monospace;font-size:.78rem">${c.cycle.map(escHtml).join(' → ')}</td></tr>`;
+    }).join('');
+    el.innerHTML=`<p style="font-size:.81rem;color:var(--amber)">⚠ ${d.cycle_count} cycle(s) found</p>
+<table style="width:100%;border-collapse:collapse;font-size:.8rem">
+<thead><tr><th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Severity</th><th style="padding:4px 8px;border-bottom:1px solid var(--border)">Len</th><th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Cycle</th></tr></thead>
+<tbody>${rows}</tbody></table>`;
+  }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
+}
+
+/* ── Callflow ────────────────────────────────────────────────────────────────── */
+async function runCallflow(){
+  const sym=($('callflow-symbol').value||'').trim();
+  const dir=$('callflow-direction').value||'callees';
+  if(!sym){toast('Enter a symbol name','warn');return;}
+  if(!currentProject){toast('Select a project first','warn');return;}
+  const el=$('callflow-result');
+  el.innerHTML='<div style="color:var(--text-3)">Loading callflow…</div>';
+  try{
+    const url=`/api/callflow_html?project=${encodeURIComponent(currentProject)}&symbol=${encodeURIComponent(sym)}&direction=${dir}&depth=5`;
+    const r=await fetch(url);
+    if(!r.ok){el.innerHTML=`<div style="color:var(--red)">Error: ${r.status}</div>`;return;}
+    const html=await r.text();
+    const iframe=document.createElement('iframe');
+    iframe.style.cssText='width:100%;height:500px;border:1px solid var(--border);border-radius:var(--radius);background:#fff';
+    iframe.srcdoc=html;
+    el.innerHTML='';
+    el.appendChild(iframe);
+  }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
+}
+
+/* ── Dedup ───────────────────────────────────────────────────────────────────── */
+async function runDedup(dryRun){
+  if(!currentProject){toast('Select a project first','warn');return;}
+  const threshold=parseFloat($('dedup-threshold').value)||0.88;
+  const el=$('dedup-result');
+  el.innerHTML='<div style="color:var(--text-3)">'+(dryRun?'Previewing…':'Applying merge…')+'</div>';
+  try{
+    const r=await fetch('/api/dedup',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({project:currentProject,dry_run:dryRun,threshold}),
+    });
+    const d=await r.json();
+    if(d.error){el.innerHTML=`<div style="color:var(--red)">${escHtml(d.error)}</div>`;return;}
+    const badge=dryRun?'<span style="background:var(--amber);color:#000;font-size:.72rem;padding:1px 6px;border-radius:99px;margin-left:6px">DRY RUN</span>':'';
+    const stratBadge=`<span style="font-size:.72rem;color:var(--text-3)">${d.strategy||'exact'} strategy · fuzzy=${d.fuzzy_available?'yes':'no'}</span>`;
+    el.innerHTML=`<div style="margin-bottom:10px">
+      <span style="font-size:.95rem;font-weight:600">${d.merged_count} node(s) ${dryRun?'would be merged':'merged'}</span>${badge}&nbsp;&nbsp;${stratBadge}
+      <div style="font-size:.79rem;color:var(--text-3);margin-top:4px">${d.candidate_pairs_checked} pairs checked · ${d.skipped_low_entropy||0} low-entropy skipped</div>
+    </div>`+
+    (d.merged_pairs&&d.merged_pairs.length?
+      `<div style="font-size:.79rem;max-height:200px;overflow-y:auto;background:var(--surface-3);padding:8px;border-radius:var(--radius)">
+        ${d.merged_pairs.map(p=>`<div style="font-family:monospace;white-space:nowrap">${escHtml(p[0])} ← ${escHtml(p[1])}</div>`).join('')}
+      </div>`:'<div style="color:var(--green);font-size:.82rem">✓ No duplicates found.</div>');
+    if(!dryRun&&d.merged_count>0)toast(`Merged ${d.merged_count} duplicate node(s)`,'info');
+  }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
 }
 
 /* ── SSE live updates ────────────────────────────────────────────────────────── */

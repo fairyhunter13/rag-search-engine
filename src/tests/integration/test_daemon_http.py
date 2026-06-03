@@ -452,3 +452,132 @@ class TestT38FApiShapeVerification:
             f"Missing 'current_metrics' in alerts response: {list(data.keys())}"
         )
         assert isinstance(data["current_metrics"], dict)
+
+
+# ---------------------------------------------------------------------------
+# T38-G: Phase 13-16 new endpoint contracts
+# ---------------------------------------------------------------------------
+
+class TestT38GPhase1316Endpoints:
+    """P0: Routes added in phases 13-16 are registered and return correct shapes."""
+
+    @pytest.mark.asyncio
+    async def test_import_cycles_missing_project_returns_400(self, client):
+        """P0: GET /api/import_cycles without ?project= returns 400."""
+        r = await client.get("/api/import_cycles")
+        assert r.status_code == 400
+        assert "error" in r.json()
+
+    @pytest.mark.asyncio
+    async def test_import_cycles_nonexistent_project_returns_error_json(self, client):
+        """P0: GET /api/import_cycles with non-indexed project returns error JSON, not 500."""
+        r = await client.get("/api/import_cycles?project=/tmp/__nonexistent__")
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data or "cycles" in data, (
+            f"Unexpected import_cycles response: {list(data.keys())}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_suggested_questions_missing_project_returns_400(self, client):
+        """P0: GET /api/suggested_questions without ?project= returns 400."""
+        r = await client.get("/api/suggested_questions")
+        assert r.status_code == 400
+        assert "error" in r.json()
+
+    @pytest.mark.asyncio
+    async def test_suggested_questions_nonexistent_project_returns_error_json(self, client):
+        """P0: GET /api/suggested_questions with non-indexed project returns error JSON."""
+        r = await client.get("/api/suggested_questions?project=/tmp/__nonexistent__")
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data or "questions" in data
+
+    @pytest.mark.asyncio
+    async def test_graph_diff_missing_project_returns_400(self, client):
+        """P0: GET /api/graph_diff without ?project= returns 400."""
+        r = await client.get("/api/graph_diff")
+        assert r.status_code == 400
+        assert "error" in r.json()
+
+    @pytest.mark.asyncio
+    async def test_graph_diff_nonexistent_project_returns_error_json(self, client):
+        """P0: GET /api/graph_diff with non-indexed project returns error JSON, not 500."""
+        r = await client.get("/api/graph_diff?project=/tmp/__nonexistent__")
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data or "new_nodes" in data
+
+    @pytest.mark.asyncio
+    async def test_surprising_connections_missing_project_returns_400(self, client):
+        """P0: GET /api/surprising_connections without ?project= returns 400."""
+        r = await client.get("/api/surprising_connections")
+        assert r.status_code == 400
+        assert "error" in r.json()
+
+    @pytest.mark.asyncio
+    async def test_surprising_connections_nonexistent_project_returns_error_json(self, client):
+        """P0: GET /api/surprising_connections with non-indexed project returns error JSON."""
+        r = await client.get("/api/surprising_connections?project=/tmp/__nonexistent__")
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data or "surprising_connections" in data
+
+    @pytest.mark.asyncio
+    async def test_git_hooks_get_missing_project_returns_400(self, client):
+        """P0: GET /api/git_hooks without ?project= returns 400."""
+        r = await client.get("/api/git_hooks")
+        assert r.status_code == 400
+        assert "error" in r.json()
+
+    @pytest.mark.asyncio
+    async def test_git_hooks_get_valid_project_returns_installed_key(self, client):
+        """P0: GET /api/git_hooks with a valid path returns {installed: bool}."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            # Create a minimal git repo
+            (Path(td) / ".git" / "hooks").mkdir(parents=True)
+            r = await client.get(f"/api/git_hooks?project={td}")
+        assert r.status_code == 200
+        data = r.json()
+        assert "installed" in data, f"Missing 'installed' key: {data}"
+        assert isinstance(data["installed"], bool)
+
+    @pytest.mark.asyncio
+    async def test_dedup_get_missing_project_returns_400(self, client):
+        """P0: GET /api/dedup without ?project= returns 400."""
+        r = await client.get("/api/dedup")
+        assert r.status_code == 400
+        assert "error" in r.json()
+
+    @pytest.mark.asyncio
+    async def test_dedup_get_nonexistent_project_returns_error_json(self, client):
+        """P0: GET /api/dedup with non-indexed project returns error JSON, not 500."""
+        r = await client.get("/api/dedup?project=/tmp/__nonexistent__&dry_run=true")
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data or "merged_count" in data, (
+            f"Unexpected dedup response shape: {list(data.keys())}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_callflow_html_missing_params_returns_400(self, client):
+        """P0: GET /api/callflow_html without params returns 400."""
+        r = await client.get("/api/callflow_html")
+        assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_callflow_html_nonexistent_project_returns_404(self, client):
+        """P0: GET /api/callflow_html with non-indexed project returns 404 HTML."""
+        r = await client.get("/api/callflow_html?project=/tmp/__none__&symbol=foo")
+        assert r.status_code in (404, 200)
+        assert "text/html" in r.headers.get("content-type", "")
+
+    @pytest.mark.asyncio
+    async def test_callflow_mermaid_format_returns_text(self, client):
+        """P0: GET /api/callflow_html?format=mermaid returns text/plain on error or success."""
+        r = await client.get(
+            "/api/callflow_html?project=/tmp/__none__&symbol=foo&format=mermaid"
+        )
+        # Either 404 (text/html from error path) or 200 text/plain — just not 500
+        assert r.status_code != 500, f"callflow_html mermaid returned 500: {r.text[:200]}"

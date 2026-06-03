@@ -34,10 +34,18 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "architecture_domains" — top-level Leiden hierarchy
   - what: "hierarchy" — full recursive Leiden hierarchy (all levels)
   - what: "service_mesh" — detected inter-service gRPC/HTTP/MQ topology
+  - what: "import_cycles" — circular import dependencies (Tarjan SCC on file-level graph)
+  - what: "suggested_questions" — questions the graph is uniquely positioned to answer
+  - what: "graph_diff" — symbols added/removed recently
+  - what: "surprising_connections" — edges spanning architectural community boundaries
 - `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
   - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
 - `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
-- `manage(project_path, action)` — stop_watching, wiki_lint
+- `manage(project_path, action)` — project lifecycle operations
+  - action: "wiki_lint" | "stop_watching"
+  - action: "install_hooks" — install git post-commit hook for auto-reindex
+  - action: "uninstall_hooks" — remove git post-commit hook
+  - action: "dedup" — deduplicate graph nodes (add dry_run=True to preview)
 
 QUICK DECISION GUIDE:
   'find the payment handler'           → search('payment handler')
@@ -48,6 +56,10 @@ QUICK DECISION GUIDE:
   'trace login to database'            → graph('login', project_path, relation='semantic_trace', to_symbol='database write')
   'what services call each other?'     → overview(project_path, what='service_mesh')
   'top-level architecture domains?'    → overview(project_path, what='architecture_domains')
+  'are there circular imports?'        → overview(project_path, what='import_cycles')
+  'what changed in the graph?'         → overview(project_path, what='graph_diff')
+  'unusual cross-layer dependencies?'  → overview(project_path, what='surprising_connections')
+  'what should I explore first?'       → overview(project_path, what='suggested_questions')
   'tell me about this project'         → overview(project_path, what='structure')
   'what packages/dependencies?'        → overview(project_path, what='patterns')
   'list all indexed projects'          → overview(what='projects')

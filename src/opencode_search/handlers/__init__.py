@@ -28,6 +28,7 @@ from opencode_search.handlers._federation import (
 )
 from opencode_search.handlers._global_search import handle_global_synthesis
 from opencode_search.handlers._graph import (
+    handle_callflow_html,
     handle_dedup_nodes,
     handle_detect_impact,
     handle_detect_patterns,
@@ -80,6 +81,7 @@ __all__ = [
     "handle_add_federation_member",
     "handle_analyze_patterns_llm",
     "handle_auto_pipeline",
+    "handle_callflow_html",
     "handle_dedup_nodes",
     "handle_detect_impact",
     "handle_detect_patterns",
