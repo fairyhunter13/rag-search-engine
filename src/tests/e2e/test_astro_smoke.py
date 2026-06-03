@@ -15,12 +15,29 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.runtime_deps
 
 _ASTRO = "/home/user/git/github.com/fairyhunter13/redacted-name-3"
+
+
+@pytest.fixture(autouse=True)
+def real_registry(monkeypatch):
+    """Override the autouse isolate_registry fixture — live e2e tests need real DB paths.
+
+    The conftest isolate_registry redirects REGISTRY_PATH to a tmpdir, which makes
+    get_index_root() point to a non-existent temp directory. That breaks all direct
+    handler calls that need to open the graph.db / LanceDB index.
+    """
+    import opencode_search.config as cfg
+    real = Path(os.environ.get(
+        "OPENCODE_REGISTRY_PATH",
+        os.path.expanduser("~/.local/share/opencode-search/projects.json"),
+    ))
+    monkeypatch.setattr(cfg, "REGISTRY_PATH", real)
 
 
 def _run(coro):
@@ -47,7 +64,7 @@ def _require_indexed():
     import urllib.parse
     try:
         url = f"http://127.0.0.1:8765/api/kb_health?project={urllib.parse.quote(_ASTRO)}"
-        with urllib.request.urlopen(url, timeout=5) as r:
+        with urllib.request.urlopen(url, timeout=15) as r:
             data = json.loads(r.read())
             if data.get("total_communities", 0) < 10:
                 pytest.skip(f"redacted-name-3 not sufficiently indexed (communities: {data.get('total_communities')})")
@@ -75,8 +92,7 @@ class TestT40ASearch:
         from opencode_search.handlers import handle_search_code
         result = await handle_search_code(
             query="grpc server handler",
-            project_path=_ASTRO,
-            scope="code",
+            project_paths=[_ASTRO],
             top_k=5,
         )
         results = result.get("results", [])
@@ -93,8 +109,7 @@ class TestT40ASearch:
         from opencode_search.handlers import handle_search_code
         result = await handle_search_code(
             query="repository interface",
-            project_path=_ASTRO,
-            scope="code",
+            project_paths=[_ASTRO],
             top_k=5,
         )
         results = result.get("results", [])
@@ -106,8 +121,7 @@ class TestT40ASearch:
         from opencode_search.handlers import handle_search_code
         result = await handle_search_code(
             query="use case",
-            project_path=_ASTRO,
-            scope="code",
+            project_paths=[_ASTRO],
             top_k=5,
         )
         results = result.get("results", [])
@@ -143,7 +157,6 @@ class TestT40BAsk:
         result = await handle_global_search(
             query="overall architecture microservices",
             project_path=_ASTRO,
-            scope="all",
             top_k=3,
         )
         assert isinstance(result, dict), f"Expected dict, got {type(result)}"

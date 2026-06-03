@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import re
+import time
 import xml.etree.ElementTree as _ET  # noqa: N814
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,11 @@ if TYPE_CHECKING:
     from opencode_search.graph.storage import GraphStorage
 
 log = logging.getLogger(__name__)
+
+# In-process TTL cache for handle_detect_patterns (expensive file walk on large repos)
+_PATTERNS_CACHE: dict[str, tuple[float, dict]] = {}
+_PATTERNS_TTL = 300.0  # 5 minutes in-process
+_PATTERNS_FILE_TTL = 86400.0  # 24 hours for on-disk cache
 
 # ---------------------------------------------------------------------------
 # Pattern-detection helpers (called from handle_project_structure)
@@ -574,8 +580,11 @@ def _detect_architecture(frameworks: list[str], module_structure: dict[str, Any]
     return struct_type if struct_type != "unknown" else "unknown"
 
 
-async def handle_detect_patterns(project_path: str) -> dict[str, Any]:
+async def handle_detect_patterns(project_path: str, force: bool = False) -> dict[str, Any]:
     """Detect code style, architecture, dependencies, and module organization.
+
+    Results are cached in-process for 5 minutes — the full file walk is expensive
+    on large polyrepos (redacted-name-3: ~2 min scan). Pass force=True to bypass cache.
 
     Returns comprehensive pattern analysis:
     - languages: file counts by language name (accurate, gitignore-aware)
@@ -592,6 +601,26 @@ async def handle_detect_patterns(project_path: str) -> dict[str, Any]:
     root = Path(project_path).expanduser().resolve()
     if not root.is_dir():
         return {"error": f"Not a directory: {project_path}", "project_path": project_path}
+
+    cache_key = str(root)
+    if not force:
+        # 1. Check in-process cache (sub-second)
+        cached_entry = _PATTERNS_CACHE.get(cache_key)
+        if cached_entry and (time.monotonic() - cached_entry[0]) < _PATTERNS_TTL:
+            return cached_entry[1]
+        # 2. Check on-disk cache (persists across daemon restarts — 24h TTL)
+        try:
+            from opencode_search.config import get_project_index_dir
+            disk_cache = get_project_index_dir(str(root)) / "patterns_detect_cache.json"
+            if disk_cache.exists():
+                import json as _json
+                disk_data = _json.loads(disk_cache.read_text(encoding="utf-8"))
+                cached_at = disk_data.get("_cached_at", 0)
+                if time.time() - cached_at < _PATTERNS_FILE_TTL:
+                    _PATTERNS_CACHE[cache_key] = (time.monotonic(), disk_data)
+                    return disk_data
+        except Exception:
+            pass
 
     def _run() -> dict[str, Any]:
         languages = _count_languages_accurate(root, project_path)
@@ -636,16 +665,29 @@ async def handle_detect_patterns(project_path: str) -> dict[str, Any]:
     # Merge cached LLM analysis if available (non-blocking — never slows the fast path)
     try:
         from opencode_search.handlers._patterns import load_patterns_cache
-        cached = load_patterns_cache(project_path)
-        if cached:
-            result["llm_analysis"] = cached.get("llm_analysis")
-            result["llm_cached_at"] = cached.get("cached_at")
+        llm_cached = load_patterns_cache(project_path)
+        if llm_cached:
+            result["llm_analysis"] = llm_cached.get("llm_analysis")
+            result["llm_cached_at"] = llm_cached.get("cached_at")
         else:
             result["llm_analysis"] = None
             result["llm_cached_at"] = None
     except Exception:
         result["llm_analysis"] = None
         result["llm_cached_at"] = None
+
+    _PATTERNS_CACHE[cache_key] = (time.monotonic(), result)
+    # Persist to disk so next daemon restart skips the expensive file walk
+    try:
+        from opencode_search.config import get_project_index_dir
+        import json as _json
+        disk_data = dict(result)
+        disk_data["_cached_at"] = time.time()
+        disk_cache = get_project_index_dir(str(root)) / "patterns_detect_cache.json"
+        disk_cache.parent.mkdir(parents=True, exist_ok=True)
+        disk_cache.write_text(_json.dumps(disk_data), encoding="utf-8")
+    except Exception:
+        pass
 
     return result
 
@@ -1152,58 +1194,55 @@ async def handle_graph_export(
         return {"error": f"Graph not built for {project_path}. Run build(action='index') first."}
 
     try:
-        communities = await asyncio.to_thread(
-            gs.get_communities, None, min_community_size, True  # limit=None, order_by_size=True
-        )
-        # Collect nodes from largest communities until we hit max_nodes.
-        # Build nodes_out directly from already-fetched community node lists —
-        # avoids loading the entire graph (all_nodes / all_edges) into memory.
-        nodes_out: list[dict] = []
-        selected_communities = []
-        node_id_set: set[str] = set()
-        truncated = False
-        for c in communities:
-            if len(node_id_set) >= max_nodes:
-                truncated = True
-                break
-            cnodes = await asyncio.to_thread(gs.get_community_nodes, c.id)
-            for n in cnodes:
-                if len(node_id_set) >= max_nodes:
-                    truncated = True
-                    break
-                node_id_set.add(n.id)
-                nodes_out.append({
-                    "id": n.id,
-                    "name": n.name,
-                    "qualified_name": n.qualified_name,
-                    "kind": n.kind,
-                    "file": n.file,
-                    "language": n.language,
-                    "community_id": n.community_id,
-                })
-            selected_communities.append(c)
+        # Single SQL query: nodes from the largest communities, ordered by community size.
+        # Much faster than N+1 get_community_nodes() calls on large graphs.
+        def _fetch_nodes_and_comms() -> tuple[list[dict], list[dict], bool]:
+            db = gs._db()
+            rows = db.execute("""
+                SELECT n.id, n.name, n.qualified_name, n.kind, n.file, n.language,
+                       n.community_id, c.node_count, c.title, c.summary
+                FROM nodes n
+                JOIN communities c ON c.id = n.community_id
+                WHERE c.node_count >= ?
+                ORDER BY c.node_count DESC, n.community_id, n.id
+                LIMIT ?
+            """, (min_community_size, max_nodes + 1)).fetchall()
+            truncated = len(rows) > max_nodes
+            rows = rows[:max_nodes]
+            nodes_out = [
+                {
+                    "id": r[0], "name": r[1], "qualified_name": r[2],
+                    "kind": r[3], "file": r[4], "language": r[5],
+                    "community_id": r[6],
+                }
+                for r in rows
+            ]
+            seen_comms: dict = {}
+            for r in rows:
+                cid = r[6]
+                if cid not in seen_comms:
+                    seen_comms[cid] = {"id": cid, "title": r[8], "summary": r[9], "node_count": r[7]}
+            return nodes_out, list(seen_comms.values()), truncated
+
+        nodes_out, communities_out, truncated = await asyncio.to_thread(_fetch_nodes_and_comms)
+        node_id_set = {n["id"] for n in nodes_out}
+        selected_communities = communities_out
 
         # Fetch only edges whose both endpoints are in the included node set.
-        # Use targeted SQL instead of loading the entire edge table.
+        # Use SQL IN clause — avoids full table scan on large graphs.
         def _fetch_edges() -> list[dict]:
+            if not node_id_set:
+                return []
             db = gs._db()
-            out = []
-            for e in db.execute("SELECT from_id, to_id, kind FROM edges").fetchall():
-                if e[0] in node_id_set and e[1] in node_id_set:
-                    out.append({"from": e[0], "to": e[1], "kind": e[2]})
-            return out
+            ids = list(node_id_set)
+            ph = ",".join("?" * len(ids))
+            rows = db.execute(
+                f"SELECT from_id, to_id, kind FROM edges WHERE from_id IN ({ph}) AND to_id IN ({ph})",
+                ids + ids,
+            ).fetchall()
+            return [{"from": e[0], "to": e[1], "kind": e[2]} for e in rows]
 
         edges_out = await asyncio.to_thread(_fetch_edges)
-
-        communities_out = [
-            {
-                "id": c.id,
-                "title": c.title,
-                "summary": c.summary,
-                "node_count": c.node_count,
-            }
-            for c in selected_communities
-        ]
 
     finally:
         gs.close()

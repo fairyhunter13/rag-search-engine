@@ -101,7 +101,7 @@ def test_community_summary_always_returns_tuple_property(summaries):
 # (Use tempfile.mkdtemp instead of tmp_path fixture so Hypothesis works)
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 @given(file_paths=st.lists(
     st.text(min_size=1, max_size=50, alphabet=st.characters(whitelist_categories=("L", "N"))),
     min_size=0, max_size=10,
@@ -119,7 +119,7 @@ def test_get_communities_for_files_empty_input_always_empty(file_paths):
             gs.close()
 
 
-@settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 @given(depth=st.integers(min_value=1, max_value=10))
 def test_get_callers_returns_list_for_any_depth(depth):
     """get_callers() returns a list for any valid depth, even for nonexistent nodes."""

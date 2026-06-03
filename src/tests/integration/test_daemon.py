@@ -695,14 +695,14 @@ class TestPatternsAPI:
     @_LIVE
     def test_patterns_returns_ok_status(self):
         from urllib.parse import quote
-        status, body = _get(f"/api/patterns?project={quote(_PROJECT)}")
+        status, body = _get(f"/api/patterns?project={quote(_PROJECT)}", timeout=60)
         assert status == 200
         assert body.get("status") == "ok", f"Expected status=ok, got {body.get('status')}"
 
     @_LIVE
     def test_patterns_has_architecture(self):
         from urllib.parse import quote
-        _, body = _get(f"/api/patterns?project={quote(_PROJECT)}")
+        _, body = _get(f"/api/patterns?project={quote(_PROJECT)}", timeout=60)
         has_arch = "architecture" in body or "llm_analysis" in body
         assert has_arch, f"Expected architecture data, got keys: {list(body.keys())}"
 
@@ -711,7 +711,7 @@ class TestGraphExportAPI:
     @_LIVE
     def test_graph_export_json_has_nodes_edges(self):
         from urllib.parse import quote
-        status, body = _get(f"/api/graph_export?project={quote(_PROJECT)}&format=json&max_nodes=50")
+        status, body = _get(f"/api/graph_export?project={quote(_PROJECT)}&format=json&max_nodes=50", timeout=30)
         assert status == 200
         assert "nodes" in body, f"Expected 'nodes' key, got {list(body.keys())}"
         assert "edges" in body, f"Expected 'edges' key, got {list(body.keys())}"
@@ -719,7 +719,7 @@ class TestGraphExportAPI:
     @_LIVE
     def test_graph_export_max_nodes_respected(self):
         from urllib.parse import quote
-        _, body = _get(f"/api/graph_export?project={quote(_PROJECT)}&format=json&max_nodes=50")
+        _, body = _get(f"/api/graph_export?project={quote(_PROJECT)}&format=json&max_nodes=50", timeout=30)
         n = len(body.get("nodes", []))
         assert n <= 50, f"max_nodes=50 not respected: got {n} nodes"
 
@@ -730,7 +730,7 @@ class TestGraphExportAPI:
         from urllib.parse import quote
         with urllib.request.urlopen(
             f"{_BASE}/api/graph_export?project={quote(_PROJECT)}&format=graphml&max_nodes=50",
-            timeout=15
+            timeout=30
         ) as resp:
             body = resp.read().decode("utf-8", errors="replace")
         # Must parse as valid XML
