@@ -61,10 +61,16 @@ class CallResolver:
             node_id, confidence, strategy = self._resolve_one(raw)
             if node_id is not None:
                 # Graphify-compatible confidence labels:
-                # confidence=1.0 means the call was found directly in source → EXTRACTED
-                # confidence<1.0 means it was resolved via heuristics → INFERRED
-                label = "EXTRACTED" if confidence >= 1.0 else "INFERRED"
-                score = confidence if label == "INFERRED" else None
+                # confidence=1.0 → EXTRACTED (found directly in source)
+                # confidence≥0.31 → INFERRED (heuristic resolution, confident pick)
+                # confidence≤0.30 → AMBIGUOUS (multiple plausible candidates, best guess)
+                if confidence >= 1.0:
+                    label = "EXTRACTED"
+                elif confidence > 0.30:
+                    label = "INFERRED"
+                else:
+                    label = "AMBIGUOUS"
+                score = confidence if label != "EXTRACTED" else None
                 result.append(EdgeData(
                     from_id=raw.from_id,
                     to_id=node_id,
@@ -134,6 +140,9 @@ class CallResolver:
             non_file = [n for n in name_matches if n.kind != "file"]
             if len(non_file) == 1:
                 return non_file[0].id, 0.75, "unique_name"
+            # Multiple ambiguous candidates — keep best guess at low confidence
+            best = (non_file or name_matches)[0]
+            return best.id, 0.30, "ambiguous_name"
 
         # 5. Suffix match — O(1) via pre-built suffix index
         target = callee.split(".")[-1]
@@ -144,6 +153,9 @@ class CallResolver:
             for n in suffix_candidates:
                 if n.file == caller_file:
                     return n.id, 0.55, "suffix_match"
+        if len(suffix_candidates) > 1:
+            # Multiple suffix candidates — keep best guess at low confidence
+            return suffix_candidates[0].id, 0.30, "ambiguous_suffix"
 
         return None, 0.0, None
 
