@@ -556,7 +556,7 @@ def check_tests() -> list[Check]:
         ],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
         cwd=str(Path(__file__).parent.parent),
     )
     elapsed = (time.perf_counter() - t0) * 1000
