@@ -526,11 +526,11 @@ _FEATURE_COVERAGE = {
     "ask": {"unit": 35, "integration": 0, "e2e_mock": 15, "e2e_real": 23},
     "graph": {"unit": 10, "integration": 133, "e2e_mock": 20, "e2e_real": 5},
     "overview": {"unit": 15, "integration": 5, "e2e_mock": 3, "e2e_real": 7},
-    "build/index": {"unit": 5, "integration": 55, "e2e_mock": 8, "e2e_real": 0},
+    "build/index": {"unit": 5, "integration": 55, "e2e_mock": 8, "e2e_real": 9},
     "wiki": {"unit": 5, "integration": 34, "e2e_mock": 7, "e2e_real": 1},
     "enrichment": {"unit": 35, "integration": 3, "e2e_mock": 2, "e2e_real": 1},
-    "federation": {"unit": 14, "integration": 0, "e2e_mock": 0, "e2e_real": 3},
-    "manage": {"unit": 2, "integration": 20, "e2e_mock": 0, "e2e_real": 1},
+    "federation": {"unit": 14, "integration": 15, "e2e_mock": 0, "e2e_real": 9},
+    "manage": {"unit": 7, "integration": 20, "e2e_mock": 0, "e2e_real": 1},
     "mcp_tools": {"unit": 0, "integration": 60, "e2e_mock": 0, "e2e_real": 5},
 }
 
@@ -554,6 +554,7 @@ _DASHBOARD_COMPLETENESS = {
     "Mermaid graph export (/api/graph_export?format=mermaid)": True,
     "Query builder / saved queries": True,
     "Background jobs tab (/api/jobs)": True,
+    "Registry cleanup (manage remove_project)": True,
 }
 
 

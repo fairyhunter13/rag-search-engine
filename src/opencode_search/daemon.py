@@ -392,6 +392,7 @@ def _global_prompt_text() -> str:
         "    action=\"dedup\"                       — deduplicate graph nodes (dry_run=True to preview)\n"
         "    action=\"vacuum\"                      — remove orphan index tier dirs; free disk space\n"
         "    action=\"jobs\"                        — list background build jobs; job_id= for one job\n"
+        "    action=\"remove_project\"              — remove project from registry; delete_index=True also removes on-disk index\n"
         "\n"
         "QUICK DECISION GUIDE:\n"
         "  'find the payment handler'           → search('payment handler')\n"

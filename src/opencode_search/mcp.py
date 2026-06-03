@@ -674,10 +674,11 @@ async def manage(
     project_path: str,
     action: Literal[
         "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks",
-        "dedup", "vacuum", "jobs",
+        "dedup", "vacuum", "jobs", "remove_project",
     ] = "wiki_lint",
     dry_run: bool = False,
     job_id: str | None = None,
+    delete_index: bool = False,
 ) -> dict[str, Any]:
     """Project lifecycle: stop watchers, health-check wiki, manage git hooks, dedup graph, or check jobs.
 
@@ -687,11 +688,13 @@ async def manage(
             | "dedup" — deduplicate graph nodes (MinHash/LSH + Jaro-Winkler when available)
             | "vacuum" — remove orphan index_budget/index_balanced tier dirs; free disk space
             | "jobs" — list background build jobs (or check one with job_id=)
+            | "remove_project" — remove project from registry (delete_index=True also deletes index)
     dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting
     job_id: for action="jobs" — return status of a specific job instead of all jobs
+    delete_index: for action="remove_project" — also delete the on-disk index (frees space)
     """
     runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum", "jobs"}
+    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum", "jobs", "remove_project"}
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
@@ -718,6 +721,9 @@ async def manage(
             return job_to_dict(job)
         jobs = list_jobs(project_path=project_path if project_path else None)
         return {"jobs": [job_to_dict(j) for j in jobs], "total": len(jobs)}
+    if action == "remove_project":
+        from opencode_search.handlers._vacuum import handle_remove_project
+        return await handle_remove_project(project_path=project_path, delete_index=delete_index)
     return await handle_wiki_lint(project_path=project_path)
 
 
