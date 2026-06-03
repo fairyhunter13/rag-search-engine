@@ -378,6 +378,45 @@ class LLMClient:
             max_tokens=300,
         )
 
+    def feature_trace(
+        self,
+        query: str,
+        entry_points: str,
+        call_chain: str,
+        community_context: str,
+    ) -> str:
+        """Synthesize algorithm + design rationale for a feature.
+
+        Returns a JSON string with keys: algorithm, design_rationale,
+        involved_services, key_design_decisions.
+        """
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a software architecture expert. Analyze the following feature "
+                        "and explain it with algorithm steps and design rationale.\n\n"
+                        f"FEATURE: \"{query}\"\n\n"
+                        f"TOP ENTRY POINTS:\n{entry_points}\n\n"
+                        f"CALL CHAIN:\n{call_chain}\n\n"
+                        f"ARCHITECTURAL CONTEXT:\n{community_context}\n\n"
+                        "Respond with ONLY valid JSON (no markdown fences):\n"
+                        "{\n"
+                        '  "algorithm": "Step-by-step description of how this feature works. '
+                        '3-5 sentences covering the main steps, data flow, and result.",\n'
+                        '  "design_rationale": "WHY the code is designed this way. '
+                        'Why these services/patterns? What trade-offs? Like a PC builder choosing '
+                        'components: why this CPU, why this architecture. 3-4 sentences.",\n'
+                        '  "involved_services": ["ServiceA: role and why", "ServiceB: role and why"],\n'
+                        '  "key_design_decisions": ["Decision 1 and why", "Decision 2 and why"]\n'
+                        "}"
+                    ),
+                }
+            ],
+            max_tokens=800,
+        )
+
     def raw_doc_to_wiki(self, content: str, source_name: str) -> str:
         """Convert a raw document into a wiki page."""
         truncated = content[:4000]
@@ -872,15 +911,15 @@ def create_llm_client() -> LLMClient | None:
 
     Returns None when OPENCODE_LLM_PROVIDER=none.
 
-    Default provider is codex (gpt-5.4-mini) since Jun 2026.
+    Default provider is claude-code (haiku-4.5) since Jun 2026.
     Override with OPENCODE_LLM_PROVIDER env var.
 
     Supported providers:
-      codex       — locally installed OpenAI `codex` CLI (default)
+      claude-code — locally installed `claude` CLI (default, no API key needed)
+      codex       — locally installed OpenAI `codex` CLI
       ollama      — local Ollama instance
       anthropic   — Anthropic Claude API (requires ANTHROPIC_API_KEY)
       openai      — OpenAI Chat API (requires OPENAI_API_KEY)
-      claude-code — locally installed `claude` CLI (no separate API key needed)
     """
     from opencode_search.config import DEFAULT_LLM_MODEL, DEFAULT_LLM_PROVIDER
     provider = os.environ.get("OPENCODE_LLM_PROVIDER", DEFAULT_LLM_PROVIDER).strip().lower()
@@ -911,7 +950,7 @@ def create_llm_client() -> LLMClient | None:
     if provider == "openai":
         return OpenAIClient.from_env()
     if provider == "claude-code":
-        return ClaudeCodeClient.from_env()
+        return ClaudeCodeClient(model=model, timeout=timeout)
     raise ValueError(
         f"Unknown OPENCODE_LLM_PROVIDER={provider!r}. "
         "Valid values: none, codex, ollama, anthropic, openai, claude-code"

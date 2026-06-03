@@ -100,6 +100,32 @@ def _project_needs_hierarchy(project_path: str) -> bool:
         return False
 
 
+def _project_needs_hierarchy_enrich(project_path: str) -> bool:
+    """Return True if level-2+ communities exist but have unenriched (NULL) titles.
+
+    Catches the case where hierarchy was built but LLM enrichment was never
+    triggered — or was interrupted — leaving macro-communities without titles.
+    """
+    try:
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+
+        graph_db = get_project_graph_db_path(project_path)
+        if not Path(graph_db).exists():
+            return False
+        gs = GraphStorage(graph_db)
+        gs.open()
+        try:
+            if gs.get_max_community_level() <= 1:
+                return False
+            level2 = gs.get_communities(level=2)
+            return any(not c.title and (c.node_count or 0) >= 2 for c in level2)
+        finally:
+            gs.close()
+    except Exception:
+        return False
+
+
 async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[str, Any]:
     """Run the full knowledge-base pipeline automatically after indexing.
 
@@ -112,7 +138,9 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
     root = Path(project_path).expanduser().resolve()
     pp = str(root)
 
-    if not force and not _project_is_fresh(pp) and not _project_needs_hierarchy(pp):
+    needs_h = _project_needs_hierarchy(pp)
+    needs_h_enrich = _project_needs_hierarchy_enrich(pp)
+    if not force and not _project_is_fresh(pp) and not needs_h and not needs_h_enrich:
         log.info("auto_pipeline[%s]: already enriched — skipping", root.name)
         return {"status": "skipped", "reason": "already_enriched", "project_path": pp}
 
@@ -146,19 +174,26 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
         steps.append({"step": "analyze_patterns", "status": "skipped", "reason": str(exc)})
 
     # ── Step 3: Build + enrich community hierarchy ───────────────────────────
-    # Runs on fresh projects AND on already-enriched projects that lack hierarchy.
+    # Runs when: hierarchy not yet built (max_level==1) OR hierarchy exists but
+    # level-2+ communities are unenriched (title=NULL) — catches interrupted
+    # enrichment runs and hierarchy rebuilds that didn't re-enrich.
     try:
-        if _project_needs_hierarchy(pp):
-            from opencode_search.config import get_project_graph_db_path
-            from opencode_search.graph.community import CommunityDetector
-            from opencode_search.graph.storage import GraphStorage
-            db_path = get_project_graph_db_path(pp)
-            gs = GraphStorage(db_path)
-            gs.open()
-            try:
-                levels_built = await asyncio.to_thread(CommunityDetector().build_hierarchy, gs)
-            finally:
-                gs.close()
+        _needs_h = _project_needs_hierarchy(pp)
+        _needs_h_enrich = _project_needs_hierarchy_enrich(pp)
+        if _needs_h or _needs_h_enrich:
+            levels_built = 0
+            if _needs_h:
+                from opencode_search.config import get_project_graph_db_path
+                from opencode_search.graph.community import CommunityDetector
+                from opencode_search.graph.storage import GraphStorage
+                db_path = get_project_graph_db_path(pp)
+                gs = GraphStorage(db_path)
+                gs.open()
+                try:
+                    levels_built = await asyncio.to_thread(CommunityDetector().build_hierarchy, gs)
+                finally:
+                    gs.close()
+                log.info("auto_pipeline[%s]: hierarchy built (%d levels)", root.name, levels_built)
             from opencode_search.handlers._enrichment import handle_enrich_hierarchy
             h_result = await handle_enrich_hierarchy(project_path=pp)
             steps.append({
@@ -167,12 +202,15 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
                 "levels_built": levels_built,
                 "enriched": h_result.get("enriched", 0),
             })
-            log.info("auto_pipeline[%s]: hierarchy built (%d levels)", root.name, levels_built)
+            log.info(
+                "auto_pipeline[%s]: hierarchy enrich complete (enriched=%d)",
+                root.name, h_result.get("enriched", 0),
+            )
         else:
             steps.append({
                 "step": "hierarchy",
                 "status": "skipped",
-                "reason": "hierarchy already built or too few communities",
+                "reason": "hierarchy already built and enriched",
             })
     except Exception as exc:
         log.info("auto_pipeline[%s]: hierarchy skipped: %s", root.name, exc)

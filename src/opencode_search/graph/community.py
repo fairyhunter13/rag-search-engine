@@ -92,12 +92,24 @@ class CommunityDetector:
             if cid is not None:
                 entry_counts[cid].append((nid, cnt))
 
-        # Batch-write all community assignments in a single SQLite transaction
-        storage.set_community_batch(node_id_to_community)
+        # Only assign community_id for nodes in real clusters (size >= 2).
+        # Singleton nodes keep community_id=NULL — they don't benefit from
+        # clustering and storing 100k+ singleton community records wastes space.
+        real_assignments: dict[str, int] = {
+            nid: cid
+            for cid, member_ids in community_members.items()
+            if len(member_ids) >= 2
+            for nid in member_ids
+        }
+        # NULL out community_id for nodes that are now singletons (or were previously
+        # in a community that is no longer a real cluster).
+        storage.set_community_batch_with_null(node_id_to_community, real_assignments)
 
-        # Batch-write all community records in a single transaction
+        # Batch-write only real community records (node_count >= 2)
         community_records = []
         for cid, member_ids in community_members.items():
+            if len(member_ids) < 2:
+                continue  # skip singletons — saves storage, not useful for enrichment
             top = sorted(entry_counts.get(cid, []), key=lambda x: -x[1])[:5]
             ep = [id_to_node[nid].qualified_name for nid, _ in top if nid in id_to_node]
             community_records.append(CommunityData(
@@ -107,12 +119,13 @@ class CommunityDetector:
             ))
         storage.upsert_communities_batch(community_records)
 
+        n_real = len(community_records)
+        n_singletons = len(community_members) - n_real
         log.debug(
-            "community detection: %d nodes → %d communities",
-            len(nodes),
-            len(partition),
+            "community detection: %d nodes → %d communities (%d singletons skipped)",
+            len(nodes), n_real, n_singletons,
         )
-        return node_id_to_community
+        return real_assignments
 
     def build_hierarchy(
         self,

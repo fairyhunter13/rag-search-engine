@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS communities (
     parent_community_id INTEGER REFERENCES communities(id)
 );
 
+CREATE TABLE IF NOT EXISTS file_graph_hashes (
+    file TEXT PRIMARY KEY,
+    hash TEXT NOT NULL,
+    indexed_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_communities_level  ON communities(level);
 CREATE INDEX IF NOT EXISTS idx_communities_parent ON communities(parent_community_id);
 
@@ -152,6 +158,7 @@ class GraphStorage:
         assert db is not None
         comm_cols = {r[1] for r in db.execute("PRAGMA table_info(communities)").fetchall()}
         edge_cols = {r[1] for r in db.execute("PRAGMA table_info(edges)").fetchall()}
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         with db:
             if "level" not in comm_cols:
                 db.execute("ALTER TABLE communities ADD COLUMN level INTEGER NOT NULL DEFAULT 1")
@@ -167,6 +174,15 @@ class GraphStorage:
                 )
             if "confidence_score" not in edge_cols:
                 db.execute("ALTER TABLE edges ADD COLUMN confidence_score REAL")
+            # Incremental graph extraction cache (Phase 25)
+            if "file_graph_hashes" not in tables:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS file_graph_hashes (
+                        file TEXT PRIMARY KEY,
+                        hash TEXT NOT NULL,
+                        indexed_at TEXT NOT NULL DEFAULT ''
+                    )
+                """)
 
     def close(self) -> None:
         if self._conn:
@@ -254,6 +270,40 @@ class GraphStorage:
         db = self._db()
         with db:
             db.execute("DELETE FROM nodes WHERE file = ?", (file,))
+            db.execute("DELETE FROM file_graph_hashes WHERE file = ?", (file,))
+
+    def get_graph_file_hashes(self) -> dict[str, str]:
+        """Return {file_path: hash} for all files recorded in the graph extraction cache."""
+        db = self._db()
+        rows = db.execute("SELECT file, hash FROM file_graph_hashes").fetchall()
+        return {r["file"]: r["hash"] for r in rows}
+
+    def set_graph_file_hashes_batch(self, hashes: dict[str, str]) -> None:
+        """Upsert file→hash entries into the graph extraction cache."""
+        if not hashes:
+            return
+        now = _now()
+        db = self._db()
+        with db:
+            db.executemany(
+                """INSERT INTO file_graph_hashes (file, hash, indexed_at)
+                   VALUES (?,?,?)
+                   ON CONFLICT(file) DO UPDATE SET hash=excluded.hash, indexed_at=excluded.indexed_at
+                """,
+                [(f, h, now) for f, h in hashes.items()],
+            )
+
+    def purge_deleted_file_hashes(self, existing_files: set[str]) -> None:
+        """Remove hash entries for files that no longer exist on disk."""
+        db = self._db()
+        all_files = {r["file"] for r in db.execute("SELECT file FROM file_graph_hashes").fetchall()}
+        stale = all_files - existing_files
+        if stale:
+            with db:
+                db.executemany(
+                    "DELETE FROM file_graph_hashes WHERE file = ?",
+                    [(f,) for f in stale],
+                )
 
     def set_community(self, node_id: str, community_id: int) -> None:
         db = self._db()
@@ -273,6 +323,31 @@ class GraphStorage:
                 "UPDATE nodes SET community_id=? WHERE id=?",
                 [(cid, nid) for nid, cid in assignments.items()],
             )
+
+    def set_community_batch_with_null(
+        self,
+        all_assignments: dict[str, int],
+        real_assignments: dict[str, int],
+    ) -> None:
+        """Write community assignments, NULLing out singleton nodes.
+
+        Nodes in `real_assignments` get their community_id set.
+        Nodes in `all_assignments` but NOT in `real_assignments` (singletons)
+        get community_id=NULL — they're isolated and don't belong to any cluster.
+        """
+        db = self._db()
+        with db:
+            if real_assignments:
+                db.executemany(
+                    "UPDATE nodes SET community_id=? WHERE id=?",
+                    [(cid, nid) for nid, cid in real_assignments.items()],
+                )
+            singleton_ids = set(all_assignments.keys()) - set(real_assignments.keys())
+            if singleton_ids:
+                db.executemany(
+                    "UPDATE nodes SET community_id=NULL WHERE id=?",
+                    [(nid,) for nid in singleton_ids],
+                )
 
     def upsert_community(self, community: CommunityData) -> None:
         import json
@@ -559,10 +634,13 @@ class GraphStorage:
         return self._db().execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
     def vacuum(self) -> dict:
-        """Run SQLite VACUUM + WAL checkpoint to reclaim free pages.
+        """Run SQLite VACUUM + WAL checkpoint + prune singleton/orphan communities.
 
-        Call after large deletes or a full pipeline rebuild. Returns before/after
-        file size so the caller can log reclaimed bytes.
+        Singletons (node_count=1) and orphans (no nodes reference them) waste
+        space without providing enrichment value. Pruning them, then running
+        VACUUM, can reclaim 10-50 MB on large projects.
+
+        Returns before/after file size so the caller can log reclaimed bytes.
         """
         import os as _os
         db = self._db()
@@ -571,6 +649,24 @@ class GraphStorage:
         except OSError:
             before = 0
         try:
+            with db:
+                # NULL out community_id for nodes in singleton communities
+                db.execute("""
+                    UPDATE nodes SET community_id = NULL
+                    WHERE community_id IN (
+                        SELECT id FROM communities WHERE node_count = 1
+                    )
+                """)
+                # Delete singleton communities
+                db.execute("DELETE FROM communities WHERE node_count = 1")
+                # Delete orphan communities (no nodes reference them)
+                db.execute("""
+                    DELETE FROM communities
+                    WHERE id NOT IN (
+                        SELECT DISTINCT community_id FROM nodes
+                        WHERE community_id IS NOT NULL
+                    )
+                """)
             db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             db.execute("VACUUM")
             db.commit()

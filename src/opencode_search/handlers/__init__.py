@@ -18,6 +18,7 @@ from opencode_search.handlers._enrichment import (
     handle_enrich_project,
     handle_get_symbol_intent,
 )
+from opencode_search.handlers._feature import handle_ask_feature
 from opencode_search.handlers._federation import (
     _expand_with_federation,
     handle_add_federation_member,
@@ -83,6 +84,7 @@ __all__ = [
     "get_pipeline_events",
     "handle_add_federation_member",
     "handle_analyze_patterns_llm",
+    "handle_ask_feature",
     "handle_auto_pipeline",
     "handle_callflow_html",
     "handle_dedup_nodes",

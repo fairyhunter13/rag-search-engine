@@ -23,8 +23,9 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
 
 7-tool intent API (v2 — June 2026):
 - `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: "code" (default)|"docs"|"all"
-- `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"
+- `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"|"feature"
   - scope="global": GraphRAG map-reduce synthesis across ALL community summaries
+  - scope="feature": entry points + call chain + algorithm overview + design rationale (WHY it was built this way)
 - `graph(symbol, project_path, relation)` — call graph analysis
   - relation: "callers"|"callees"|"impact"|"path" — standard
   - relation: "impact_narrative" — LLM summary of blast radius: risk level, affected domains
@@ -41,6 +42,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "pr_impact" — PR risk: changed files → communities touched + risk level
 - `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
   - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
+  - action: "enrich_hierarchy" — re-run LLM enrichment for level-2+ communities (fixes unenriched hierarchies)
 - `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
 - `manage(project_path, action)` — project lifecycle operations
   - action: "wiki_lint" | "stop_watching"
@@ -48,6 +50,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - action: "uninstall_hooks" — remove git post-commit hook
   - action: "dedup" — deduplicate graph nodes (add dry_run=True to preview)
   - action: "vacuum" — remove orphan index tier dirs; free disk space
+  - action: "remove_project" — remove project from registry (delete_index=True also removes on-disk index)
 
 QUICK DECISION GUIDE:
   'find the payment handler'           → search('payment handler')
@@ -66,6 +69,8 @@ QUICK DECISION GUIDE:
   'what packages/dependencies?'        → overview(project_path, what='patterns')
   'list all indexed projects'          → overview(what='projects')
   'index this project' [explicit ask]  → build(project_path, action='pipeline')
+  'how does checkout feature work?'    → ask('how does checkout work', project_path, scope='feature')
+  'why is auth designed this way?'     → ask('why auth uses JWT', project_path, scope='feature')
 
 Rules (no exceptions):
 - Before running ANY Bash command that searches code or text — FIRST call `search` with a natural language query.
@@ -214,6 +219,24 @@ def update_hermes_yaml(path: Path, text: str) -> None:
     print(f"  ✓ {path}")
 
 
+# ─── Update ~/.codex/AGENTS.md ────────────────────────────────────────────────
+
+def update_codex_agents_md(path: Path, text: str) -> None:
+    """Rewrite ~/.codex/AGENTS.md with the full v2 API in markdown format."""
+    if not path.parent.exists():
+        print(f"  ! {path.parent} not found — skipping AGENTS.md update")
+        return
+    content = (
+        "# Code Intelligence Tools (opencode-search)\n\n"
+        "You have access to the **opencode-search** MCP server for deep code intelligence.\n"
+        "Use these tools for ALL code exploration tasks — they are faster and more accurate "
+        "than grep or file reading.\n\n"
+        f"{START_MARKER}\n{text}\n{END_MARKER}\n"
+    )
+    path.write_text(content)
+    print(f"  ✓ {path}")
+
+
 # ─── Also update the FastMCP instructions= in daemon.py ──────────────────────
 
 def update_daemon_prompt(repo: Path, text: str) -> None:
@@ -253,8 +276,11 @@ def main() -> None:
     ]:
         update_md_file(md, text)
 
-    # Codex config.toml
-    update_codex_toml(home / ".config" / "codex" / "config.toml", text)
+    # Codex config.toml — codex stores config at ~/.codex/, NOT ~/.config/codex/
+    update_codex_toml(home / ".codex" / "config.toml", text)
+
+    # Codex AGENTS.md — global markdown instructions read by codex on every session
+    update_codex_agents_md(home / ".codex" / "AGENTS.md", text)
 
     # opencode jsonc (no instruction field, just note)
     update_opencode_jsonc(home / ".config" / "opencode" / "opencode.jsonc", text)

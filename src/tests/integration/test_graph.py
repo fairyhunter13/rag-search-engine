@@ -1519,18 +1519,19 @@ def test_leiden_handles_single_node_graph(storage):
     storage.upsert_nodes([n])
     detector = CommunityDetector()
     mapping = detector.detect_communities(storage)
-    assert len(mapping) == 1
-    assert n.id in mapping
+    # Singleton nodes are NOT assigned communities (node_count < 2 → skipped)
+    assert len(mapping) == 0
+    assert n.id not in mapping
 
 
 def test_leiden_handles_disconnected_components(storage):
-    """Unconnected nodes should each be assigned a community."""
+    """Unconnected isolated nodes should be singletons — not assigned communities."""
     nodes = [_make_community_node(f"/f{i}.py", f"isolated{i}", f"m.isolated{i}") for i in range(5)]
     storage.upsert_nodes(nodes)
-    # No edges at all
+    # No edges at all → all 5 nodes are singletons → mapping is empty
     detector = CommunityDetector()
     mapping = detector.detect_communities(storage)
-    assert len(mapping) == 5
+    assert len(mapping) == 0
 
 
 def test_leiden_idempotent_on_same_graph(storage):
@@ -2682,3 +2683,87 @@ class TestCommunityUpsertPreservesTitle:
         gs.upsert_community(self._comm(1, None))  # no summary
         comms = {c.id: c for c in gs.get_communities()}
         assert comms[1].summary == "Handles login", "COALESCE must preserve enriched summary"
+
+
+class TestGraphFileHashCache:
+    """file_graph_hashes table: incremental graph extraction cache."""
+
+    @pytest.fixture
+    def gs(self, tmp_path):
+        db = GraphStorage(str(tmp_path / "graph.db"))
+        db.open()
+        yield db
+        db.close()
+
+    def test_get_graph_file_hashes_empty_on_new_db(self, gs):
+        assert gs.get_graph_file_hashes() == {}
+
+    def test_set_and_get_graph_file_hashes_batch(self, gs):
+        gs.set_graph_file_hashes_batch({"a.py": "abc123", "b.py": "def456"})
+        hashes = gs.get_graph_file_hashes()
+        assert hashes == {"a.py": "abc123", "b.py": "def456"}
+
+    def test_set_graph_file_hashes_batch_overwrites_existing(self, gs):
+        gs.set_graph_file_hashes_batch({"a.py": "old"})
+        gs.set_graph_file_hashes_batch({"a.py": "new"})
+        assert gs.get_graph_file_hashes()["a.py"] == "new"
+
+    def test_delete_file_removes_hash(self, gs):
+        node = NodeData(id="n1", name="fn", qualified_name="a.fn", kind="function", file="a.py")
+        gs.upsert_nodes([node])
+        gs.set_graph_file_hashes_batch({"a.py": "abc"})
+        gs.delete_file("a.py")
+        assert "a.py" not in gs.get_graph_file_hashes()
+
+    def test_purge_deleted_file_hashes_removes_stale(self, gs):
+        gs.set_graph_file_hashes_batch({"a.py": "h1", "b.py": "h2", "c.py": "h3"})
+        gs.purge_deleted_file_hashes({"a.py", "c.py"})  # b.py no longer exists
+        hashes = gs.get_graph_file_hashes()
+        assert "a.py" in hashes
+        assert "c.py" in hashes
+        assert "b.py" not in hashes
+
+    def test_purge_deleted_file_hashes_empty_set(self, gs):
+        gs.set_graph_file_hashes_batch({"a.py": "h1"})
+        gs.purge_deleted_file_hashes(set())  # all files deleted
+        assert gs.get_graph_file_hashes() == {}
+
+    def test_migration_creates_table_on_existing_db(self, tmp_path):
+        import sqlite3
+        db_path = str(tmp_path / "old.db")
+        # Simulate Phase-24-era schema: has level/parent_community_id/confidence_label
+        # but not file_graph_hashes (added in Phase 25)
+        conn = sqlite3.connect(db_path)
+        conn.executescript("""
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE nodes (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, qualified_name TEXT NOT NULL,
+                kind TEXT NOT NULL, file TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+                language TEXT, signature TEXT, docstring TEXT, community_id INTEGER,
+                intent TEXT, intent_at TEXT,
+                created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE edges (
+                from_id TEXT NOT NULL, to_id TEXT NOT NULL, kind TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0, resolution_strategy TEXT,
+                confidence_label TEXT NOT NULL DEFAULT 'EXTRACTED', confidence_score REAL,
+                PRIMARY KEY (from_id, to_id, kind)
+            );
+            CREATE TABLE communities (
+                id INTEGER PRIMARY KEY, title TEXT, summary TEXT,
+                node_count INTEGER NOT NULL DEFAULT 0, key_entry_points TEXT DEFAULT '[]',
+                generated_at TEXT, created_at TEXT NOT NULL DEFAULT '',
+                level INTEGER NOT NULL DEFAULT 1, parent_community_id INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_communities_level ON communities(level);
+            CREATE INDEX IF NOT EXISTS idx_communities_parent ON communities(parent_community_id);
+            CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file);
+        """)
+        conn.commit()
+        conn.close()
+
+        gs = GraphStorage(db_path)
+        gs.open()
+        tables = {r[0] for r in gs._db().execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        assert "file_graph_hashes" in tables, "migration must create file_graph_hashes table"
+        gs.close()

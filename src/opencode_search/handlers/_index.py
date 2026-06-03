@@ -307,7 +307,14 @@ def _build_graph_sync(
     graph_db_path: str,
     follow_symlinks: bool = True,
 ) -> None:
-    """Build or rebuild the full structural graph for a project (blocking)."""
+    """Build or incrementally update the structural graph for a project (blocking).
+
+    Uses a per-file SHA-256 cache: files whose content hash matches the stored
+    hash are skipped entirely, preserving their existing nodes/edges. Only
+    changed or new files are re-extracted. Deleted files are pruned from the DB.
+    On the first run (empty cache) all files are extracted as before.
+    """
+    import hashlib
     from concurrent.futures import ThreadPoolExecutor
     from os import cpu_count
 
@@ -317,66 +324,115 @@ def _build_graph_sync(
     from opencode_search.graph.resolver import CallResolver
     from opencode_search.graph.storage import GraphStorage
 
+    _GRAPH_EXTRACT_MAX_BYTES = 512 * 1024  # skip files larger than 512 KB
+
     try:
         extractor = GraphExtractor()
-        all_nodes: list = []
-        all_raw_edges: list = []
 
         storage = GraphStorage(graph_db_path)
         storage.open()
         try:
             files = list(iter_files(project_root, follow_symlinks=follow_symlinks))
-            max_workers = min(4, cpu_count() or 1)
-            batch_size = 200
+            existing_files = {str(f) for f in files}
 
-            _GRAPH_EXTRACT_MAX_BYTES = 512 * 1024  # noqa: N806  # skip files larger than 512 KB
+            # Load cached hashes: only re-extract files whose hash changed
+            cached_hashes = storage.get_graph_file_hashes()
+            storage.purge_deleted_file_hashes(existing_files)
+
+            changed_files: list[Path] = []
+            unchanged_count = 0
+            for file_path in files:
+                path_str = str(file_path)
+                try:
+                    if file_path.stat().st_size > _GRAPH_EXTRACT_MAX_BYTES:
+                        unchanged_count += 1
+                        continue
+                    content = file_path.read_bytes()
+                    current_hash = hashlib.sha256(content).hexdigest()[:16]
+                    if cached_hashes.get(path_str) == current_hash:
+                        unchanged_count += 1
+                        continue
+                    changed_files.append(file_path)
+                except Exception:
+                    unchanged_count += 1
+
+            log.info(
+                "graph extract: %d changed, %d unchanged (cache hit rate %.0f%%)",
+                len(changed_files), unchanged_count,
+                100 * unchanged_count / max(1, len(files)),
+            )
+
+            if not changed_files and unchanged_count > 0:
+                # Nothing changed — skip extraction and resolver entirely
+                log.info("graph extract: all files cached, skipping extraction")
+                return
+
+            # Delete stale nodes for changed files so re-extract starts clean
+            for file_path in changed_files:
+                storage.delete_file(str(file_path))
+
+            all_nodes: list = []
+            all_raw_edges: list = []
+            new_hashes: dict[str, str] = {}
 
             def _extract_one(file_path: Path) -> tuple:
                 try:
-                    if file_path.stat().st_size > _GRAPH_EXTRACT_MAX_BYTES:
-                        return [], []
-                    text = file_path.read_text(encoding="utf-8", errors="replace")
+                    content = file_path.read_bytes()
+                    file_hash = hashlib.sha256(content).hexdigest()[:16]
+                    text = content.decode("utf-8", errors="replace")
                     lang = language_for_file(str(file_path))
-                    return extractor.extract_file(str(file_path), text, lang)
+                    nodes, raw_edges = extractor.extract_file(str(file_path), text, lang)
+                    return nodes, raw_edges, str(file_path), file_hash
                 except Exception:
-                    return [], []
+                    return [], [], str(file_path), None
 
-            total_files = len(files)
+            max_workers = min(4, cpu_count() or 1)
+            batch_size = 200
+            total_changed = len(changed_files)
             processed = 0
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                for i in range(0, total_files, batch_size):
-                    batch = files[i: i + batch_size]
+                for i in range(0, total_changed, batch_size):
+                    batch = changed_files[i: i + batch_size]
                     results = list(pool.map(_extract_one, batch))
-                    for nodes, raw_edges in results:
+                    for nodes, raw_edges, path_str, file_hash in results:
                         all_nodes.extend(nodes)
                         all_raw_edges.extend(raw_edges)
+                        if file_hash:
+                            new_hashes[path_str] = file_hash
                     processed += len(batch)
-                    if processed % 1000 < batch_size or processed == total_files:
+                    if processed % 1000 < batch_size or processed == total_changed:
                         log.info(
-                            "graph extract: %d/%d files, %d nodes so far",
-                            processed, total_files, len(all_nodes),
+                            "graph extract: %d/%d changed files, %d nodes so far",
+                            processed, total_changed, len(all_nodes),
                         )
 
-            # Resolve calls (full graph pass when within memory cap)
-            if len(all_nodes) <= _GRAPH_RESOLVER_MAX_NODES:
+            # When running incrementally we can't do a full global resolve
+            # (only changed-file nodes are in memory). Fall back to per-file resolve.
+            is_incremental = unchanged_count > 0
+            if not is_incremental and len(all_nodes) <= _GRAPH_RESOLVER_MAX_NODES:
                 resolver = CallResolver(all_nodes)
                 resolved_edges = resolver.resolve(all_raw_edges)
             else:
-                log.warning(
-                    "graph resolver: %d nodes exceeds cap %d — per-file resolve only",
-                    len(all_nodes), _GRAPH_RESOLVER_MAX_NODES,
-                )
-                # Per-file resolve: only same_module strategy
+                if is_incremental:
+                    log.debug("graph extract: incremental run — using per-file resolve")
+                else:
+                    log.warning(
+                        "graph resolver: %d nodes exceeds cap %d — per-file resolve only",
+                        len(all_nodes), _GRAPH_RESOLVER_MAX_NODES,
+                    )
                 resolved_edges = _per_file_resolve(all_nodes, all_raw_edges)
 
-            # Write in batches
+            # Write new nodes/edges in batches
             batch_write = 500
             for i in range(0, len(all_nodes), batch_write):
                 storage.upsert_nodes(all_nodes[i: i + batch_write])
             for i in range(0, len(resolved_edges), batch_write):
                 storage.upsert_edges(resolved_edges[i: i + batch_write])
 
-            # Community detection
+            # Persist new hashes so future runs skip these files
+            storage.set_graph_file_hashes_batch(new_hashes)
+
+            # Community detection (always re-run to keep assignments fresh)
             detector = CommunityDetector()
             detector.detect_communities(storage)
 
