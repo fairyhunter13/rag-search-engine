@@ -36,7 +36,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from starlette.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -640,6 +646,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     async def api_surprising_connections(request: Request) -> JSONResponse:
         """Cross-community bridges: edges connecting nodes in different architectural clusters."""
         import contextlib
+
         from opencode_search.handlers._graph import _open_graph
         project = request.query_params.get("project", "")
         top_n = int(request.query_params.get("top_n", "20"))
@@ -811,6 +818,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     async def api_tree_html(request: Request):
         """Interactive file tree HTML. ?project=...&format=html|json&max_files=2000"""
         from starlette.responses import Response as _Resp
+
         from opencode_search.handlers._tree_html import handle_tree_html
         project = request.query_params.get("project", "")
         fmt = request.query_params.get("format", "html")
@@ -976,8 +984,8 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
 
         ?max_events=N stops after N events (used by tests to avoid infinite stream).
         """
-        from opencode_search.metrics import get_metrics
         from opencode_search.daemon_runtime import runtime_state
+        from opencode_search.metrics import get_metrics
 
         _start_time = time.time()
         try:
@@ -1118,6 +1126,36 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": str(e)}, status_code=500)
 
         return JSONResponse({"status": "unavailable"})
+
+    @mcp.custom_route("/api/jobs", methods=["GET"], include_in_schema=False)
+    async def api_jobs_list(request: Request) -> JSONResponse:
+        """List background build jobs. ?project=...&action=... to filter."""
+        from opencode_search.jobs import job_to_dict, list_jobs
+        project = request.query_params.get("project") or None
+        action = request.query_params.get("action") or None
+        jobs = list_jobs(project_path=project, action=action)
+        return JSONResponse({"jobs": [job_to_dict(j) for j in jobs], "total": len(jobs)})
+
+    @mcp.custom_route("/api/jobs/{job_id}", methods=["GET"], include_in_schema=False)
+    async def api_job_status(request: Request) -> JSONResponse:
+        """Get status of a specific background job."""
+        from opencode_search.jobs import get_job, job_to_dict
+        job_id = request.path_params.get("job_id", "")
+        job = get_job(job_id)
+        if job is None:
+            return JSONResponse({"error": f"Job {job_id!r} not found"}, status_code=404)
+        return JSONResponse(job_to_dict(job))
+
+    @mcp.custom_route("/api/jobs/{job_id}/cancel", methods=["POST"], include_in_schema=False)
+    async def api_job_cancel(request: Request) -> JSONResponse:
+        """Request cancellation of a running job."""
+        from opencode_search.jobs import cancel_job, get_job, job_to_dict
+        job_id = request.path_params.get("job_id", "")
+        if get_job(job_id) is None:
+            return JSONResponse({"error": f"Job {job_id!r} not found"}, status_code=404)
+        cancelled = cancel_job(job_id)
+        job = get_job(job_id)
+        return JSONResponse({"cancelled": cancelled, "job": job_to_dict(job) if job else None})
 
     @mcp.custom_route("/static/{path:path}", methods=["GET"], include_in_schema=False)
     async def static_files(request: Request) -> FileResponse:

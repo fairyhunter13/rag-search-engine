@@ -447,6 +447,7 @@ async def overview(
         if not project_path:
             return {"error": "project_path required for what='surprising_connections'"}
         import contextlib
+
         from opencode_search.handlers._graph import _open_graph
         def _get_bridges(path: str) -> dict:
             gs = _open_graph(path)
@@ -527,6 +528,8 @@ async def build(
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
+    from opencode_search.jobs import submit_job
+
     if action == "index":
         async def _post_index(result: dict) -> None:
             pp = str(result.get("path", ""))
@@ -539,26 +542,46 @@ async def build(
             follow_symlinks=True, on_complete=_post_index,
         )
     elif action == "pipeline":
-        return await handle_pipeline(
+        job = submit_job(
+            handle_pipeline(
+                project_path=project_path,
+                enrich_max_communities=max_communities,
+                wiki_max_communities=max_communities,
+                ingest_docs=True,
+                watch=watch,
+            ),
+            action="pipeline",
             project_path=project_path,
-            enrich_max_communities=max_communities,
-            wiki_max_communities=max_communities,
-            ingest_docs=True,
-            watch=watch,
         )
+        return {
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Pipeline running in background. Poll /api/jobs/{job_id} for progress.",
+        }
     elif action == "enrich":
-        return await handle_enrich_project(
+        job = submit_job(
+            handle_enrich_project(
+                project_path=project_path,
+                scope="communities",
+                max_communities=max_communities,
+                include_federation=include_federation,
+            ),
+            action="enrich",
             project_path=project_path,
-            scope="communities",
-            max_communities=max_communities,
-            include_federation=include_federation,
         )
+        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
     elif action == "wiki":
-        return await handle_wiki_generate(
+        job = submit_job(
+            handle_wiki_generate(
+                project_path=project_path,
+                max_communities=max_communities,
+                include_federation=include_federation,
+            ),
+            action="wiki",
             project_path=project_path,
-            max_communities=max_communities,
-            include_federation=include_federation,
         )
+        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
     elif action == "ingest":
         if not source_path:
             return {"error": "action='ingest' requires source_path parameter"}
@@ -566,29 +589,43 @@ async def build(
     elif action == "reindex_wiki":
         return await handle_wiki_reindex(project_path=project_path)
     elif action == "analyze_patterns":
-        return await handle_analyze_patterns_llm(project_path=project_path, force=force)
+        job = submit_job(
+            handle_analyze_patterns_llm(project_path=project_path, force=force),
+            action="analyze_patterns",
+            project_path=project_path,
+        )
+        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
     elif action == "hierarchy":
         import contextlib
 
         from opencode_search.graph.community import CommunityDetector
         from opencode_search.handlers._graph import _open_graph
-        def _build_hierarchy(path: str) -> dict:
-            gs = _open_graph(path)
-            if gs is None:
-                return {"error": "Project not indexed or graph DB not found"}
-            try:
-                levels = CommunityDetector().build_hierarchy(gs)
-                return {
-                    "status": "ok",
-                    "levels_built": levels,
-                    "max_level": gs.get_max_community_level(),
-                    "project_path": path,
-                }
-            finally:
-                with contextlib.suppress(Exception):
-                    gs.close()
-        import asyncio
-        return await asyncio.to_thread(_build_hierarchy, project_path)
+
+        async def _build_hierarchy_async(path: str) -> dict:
+            import asyncio as _aio
+            def _run() -> dict:
+                gs = _open_graph(path)
+                if gs is None:
+                    return {"error": "Project not indexed or graph DB not found"}
+                try:
+                    levels = CommunityDetector().build_hierarchy(gs)
+                    return {
+                        "status": "ok",
+                        "levels_built": levels,
+                        "max_level": gs.get_max_community_level(),
+                        "project_path": path,
+                    }
+                finally:
+                    with contextlib.suppress(Exception):
+                        gs.close()
+            return await _aio.to_thread(_run)
+
+        job = submit_job(
+            _build_hierarchy_async(project_path),
+            action="hierarchy",
+            project_path=project_path,
+        )
+        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
     else:
         if not symbol:
             return {"error": "action='describe_symbol' requires symbol parameter"}
