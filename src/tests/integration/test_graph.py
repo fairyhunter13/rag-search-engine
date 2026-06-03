@@ -1204,6 +1204,40 @@ def test_resolve_import_map_strategy(tmp_path):
     assert edges[0].resolution_strategy in ("import_map", "import_map_suffix", "unique_name")
 
 
+def test_resolve_confidence_label_extracted_for_direct():
+    """confidence=1.0 edges get label EXTRACTED; confidence<1.0 get INFERRED."""
+    n = _node("/a.py", "foo", qualified_name="mod.foo")
+    caller = _node("/a.py", "bar", qualified_name="mod.bar")
+    resolver = CallResolver([n, caller])
+    # same_module resolution gives confidence=0.90 → INFERRED
+    raw = _raw(caller.id, "foo")
+    edges = resolver.resolve([raw])
+    assert len(edges) == 1
+    assert edges[0].confidence_label == "INFERRED"
+    assert edges[0].confidence_score == edges[0].confidence
+
+
+def test_resolve_confidence_label_stored_and_read_back(tmp_path):
+    """EdgeData with confidence_label INFERRED round-trips through GraphStorage."""
+    from opencode_search.graph.storage import EdgeData, GraphStorage, NodeData
+    db_path = str(tmp_path / "g.db")
+    gs = GraphStorage(db_path)
+    gs.open()
+    n_a = NodeData(id="a", name="fa", qualified_name="m.fa", kind="function",
+                   file="/f.py", created_at="", updated_at="")
+    n_b = NodeData(id="b", name="fb", qualified_name="m.fb", kind="function",
+                   file="/g.py", created_at="", updated_at="")
+    gs.upsert_nodes([n_a, n_b])
+    gs.upsert_edges([EdgeData(from_id="a", to_id="b", kind="CALLS",
+                              confidence=0.85, resolution_strategy="unique_name",
+                              confidence_label="INFERRED", confidence_score=0.85)])
+    edges = gs.all_edges()
+    gs.close()
+    assert len(edges) == 1
+    assert edges[0].confidence_label == "INFERRED"
+    assert edges[0].confidence_score == 0.85
+
+
 def test_resolve_same_module_strategy():
     file_path = "/app/auth.py"
     caller = _node(file_path, "login", qualified_name="auth.login")

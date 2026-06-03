@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "last_full_run": "2026-06-02T02:09:40.660010+00:00",
+  "last_results": {
+    "code_quality": {
+      "status": "fail",
+      "passed": 2,
+      "failed": 1
+    },
+    "config": {
+      "status": "pass",
+      "passed": 5,
+      "failed": 0
+    },
+    "pipeline_wiring": {
+      "status": "pass",
+      "passed": 3,
+      "failed": 0
+    },
+    "regressions": {
+      "status": "pass",
+      "passed": 4,
+      "failed": 0
+    },
+    "tests": {
+      "status": "pass",
+      "passed": 1,
+      "failed": 0
+    }
+  },
+  "run_history": [
+    {
+      "timestamp": "2026-06-02T02:09:40.660010+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 7.5,
+      "total": 16,
+      "passed": 15,
+      "failed": 1
+    },
+    {
+      "timestamp": "2026-06-02T01:36:26.486849+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 7.7,
+      "total": 16,
+      "passed": 15,
+      "failed": 1
+    },
+    {
+      "timestamp": "2026-06-02T01:30:11.673206+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 9.0,
+      "total": 16,
+      "passed": 16,
+      "failed": 0
+    },
+    {
+      "timestamp": "2026-06-02T01:26:15.401134+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 8.2,
+      "total": 16,
+      "passed": 15,
+      "failed": 1
+    },
+    {
+      "timestamp": "2026-06-02T01:09:37.459201+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 7.9,
+      "total": 16,
+      "passed": 15,
+      "failed": 1
+    },
+    {
+      "timestamp": "2026-06-02T01:01:34.521550+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 8.5,
+      "total": 16,
+      "passed": 15,
+      "failed": 1
+    },
+    {
+      "timestamp": "2026-06-01T16:21:43.089407+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "registry",
+        "mcp_contracts",
+        "pipeline_wiring",
+        "regressions",
+        "integrations",
+        "kb_artifacts",
+        "api_schemas",
+        "tests"
+      ],
+      "duration_s": 491.2,
+      "total": 50,
+      "passed": 50,
+      "failed": 0
+    },
+    {
+      "timestamp": "2026-06-01T16:13:26.259562+00:00",
+      "categories": [
+        "api_schemas",
+        "mcp_contracts",
+        "integrations"
+      ],
+      "duration_s": 21.2,
+      "total": 18,
+      "passed": 18,
+      "failed": 0
+    },
+    {
+      "timestamp": "2026-06-01T16:11:54.845423+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "registry",
+        "mcp_contracts",
+        "pipeline_wiring",
+        "regressions",
+        "integrations",
+        "kb_artifacts",
+        "api_schemas",
+        "tests"
+      ],
+      "duration_s": 476.6,
+      "total": 35,
+      "passed": 33,
+      "failed": 2
+    },
+    {
+      "timestamp": "2026-06-01T16:03:51.305086+00:00",
+      "categories": [
+        "code_quality",
+        "config",
+        "pipeline_wiring",
+        "regressions",
+        "tests"
+      ],
+      "duration_s": 8.8,
+      "total": 16,
+      "passed": 15,
+      "failed": 1
+    }
+  ],
+  "known_failures": [
+    {
+      "name": "ruff_lint",
+      "severity": "P1",
+      "category": "code_quality",
+      "message": "Ruff: 0 style violations (pre-existing)"
+    }
+  ]
+}

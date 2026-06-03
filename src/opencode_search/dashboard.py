@@ -636,6 +636,91 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await asyncio.to_thread(_build, project)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/surprising_connections", methods=["GET"], include_in_schema=False)
+    async def api_surprising_connections(request: Request) -> JSONResponse:
+        """Cross-community bridges: edges connecting nodes in different architectural clusters."""
+        import contextlib
+        from opencode_search.handlers._graph import _open_graph
+        project = request.query_params.get("project", "")
+        top_n = int(request.query_params.get("top_n", "20"))
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        def _run(path: str) -> dict:
+            gs = _open_graph(path)
+            if gs is None:
+                return {"error": "Project not indexed"}
+            try:
+                bridges = gs.get_cross_community_bridges(top_n=top_n)
+                return {
+                    "project_path": path,
+                    "surprising_connections": bridges,
+                    "count": len(bridges),
+                }
+            finally:
+                with contextlib.suppress(Exception):
+                    gs.close()
+        import asyncio as _aio
+        return JSONResponse(await _aio.to_thread(_run, project))
+
+    @mcp.custom_route("/api/git_hooks", methods=["GET", "POST"], include_in_schema=False)
+    async def api_git_hooks(request: Request) -> JSONResponse:
+        """Install (POST action=install) or uninstall (POST action=uninstall) git post-commit hooks."""
+        from opencode_search.handlers._hooks import handle_git_hooks
+        if request.method == "GET":
+            project = request.query_params.get("project", "")
+            if not project:
+                return JSONResponse({"error": "project param required"}, status_code=400)
+            from pathlib import Path as _Path
+            git_dir = _Path(project).expanduser().resolve() / ".git"
+            hook_path = git_dir / "hooks" / "post-commit"
+            installed = hook_path.exists() and "opencode-search managed hook" in hook_path.read_text()
+            return JSONResponse({"installed": installed, "hook_path": str(hook_path), "project_path": project})
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        action = body.get("action", "install")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_git_hooks(project_path=project, install=(action == "install"))
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/import_cycles", methods=["GET"], include_in_schema=False)
+    async def api_import_cycles(request: Request) -> JSONResponse:
+        """Circular import dependencies — Tarjan SCC on file-level IMPORTS graph."""
+        from opencode_search.handlers._graph import handle_import_cycles
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        max_cycle_length = int(request.query_params.get("max_cycle_length", "8"))
+        top_n = int(request.query_params.get("top_n", "20"))
+        result = await handle_import_cycles(
+            project_path=project, max_cycle_length=max_cycle_length, top_n=top_n,
+        )
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/suggested_questions", methods=["GET"], include_in_schema=False)
+    async def api_suggested_questions(request: Request) -> JSONResponse:
+        """Questions the graph is uniquely positioned to answer."""
+        from opencode_search.handlers._graph import handle_suggest_questions
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        top_n = int(request.query_params.get("top_n", "7"))
+        result = await handle_suggest_questions(project_path=project, top_n=top_n)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/graph_diff", methods=["GET"], include_in_schema=False)
+    async def api_graph_diff(request: Request) -> JSONResponse:
+        """What changed in the graph since a given ISO timestamp."""
+        from opencode_search.handlers._graph import handle_graph_diff
+        project = request.query_params.get("project", "")
+        since = request.query_params.get("since", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_graph_diff(project_path=project, since=since)
+        return JSONResponse(result)
+
     @mcp.custom_route("/api/integrations_status", methods=["GET"], include_in_schema=False)
     async def api_integrations_status(_request: Request) -> JSONResponse:
         """Return all integration states by running configure_integrations.py --check --json."""

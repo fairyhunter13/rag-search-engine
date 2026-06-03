@@ -38,6 +38,12 @@ class EdgeData:
     kind: str                   # CALLS|IMPORTS|INHERITS|DEFINES
     confidence: float = 1.0
     resolution_strategy: str | None = None
+    # Graphify-compatible confidence labels: EXTRACTED|INFERRED|AMBIGUOUS
+    # EXTRACTED: directly stated in source (import, explicit call). confidence=1.0
+    # INFERRED:  reasoned from context (resolved call). confidence < 1.0 with rubric
+    # AMBIGUOUS: uncertain, flagged for review
+    confidence_label: str = "EXTRACTED"
+    confidence_score: float | None = None  # only set for INFERRED edges (0.55–0.95 rubric)
 
 
 @dataclass
@@ -92,6 +98,8 @@ CREATE TABLE IF NOT EXISTS edges (
     kind TEXT NOT NULL,
     confidence REAL DEFAULT 1.0,
     resolution_strategy TEXT,
+    confidence_label TEXT NOT NULL DEFAULT 'EXTRACTED',
+    confidence_score REAL,
     PRIMARY KEY (from_id, to_id, kind),
     FOREIGN KEY(from_id) REFERENCES nodes(id) ON DELETE CASCADE,
     FOREIGN KEY(to_id) REFERENCES nodes(id) ON DELETE CASCADE
@@ -142,15 +150,23 @@ class GraphStorage:
         """Apply additive schema migrations for databases created before hierarchy support."""
         db = self._conn
         assert db is not None
-        cols = {r[1] for r in db.execute("PRAGMA table_info(communities)").fetchall()}
+        comm_cols = {r[1] for r in db.execute("PRAGMA table_info(communities)").fetchall()}
+        edge_cols = {r[1] for r in db.execute("PRAGMA table_info(edges)").fetchall()}
         with db:
-            if "level" not in cols:
+            if "level" not in comm_cols:
                 db.execute("ALTER TABLE communities ADD COLUMN level INTEGER NOT NULL DEFAULT 1")
-            if "parent_community_id" not in cols:
+            if "parent_community_id" not in comm_cols:
                 db.execute("ALTER TABLE communities ADD COLUMN parent_community_id INTEGER")
             # Add indexes if they don't exist yet (CREATE INDEX IF NOT EXISTS is idempotent)
             db.execute("CREATE INDEX IF NOT EXISTS idx_communities_level  ON communities(level)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_communities_parent ON communities(parent_community_id)")
+            # Edge confidence labels (graphify-compatible: EXTRACTED/INFERRED/AMBIGUOUS)
+            if "confidence_label" not in edge_cols:
+                db.execute(
+                    "ALTER TABLE edges ADD COLUMN confidence_label TEXT NOT NULL DEFAULT 'EXTRACTED'"
+                )
+            if "confidence_score" not in edge_cols:
+                db.execute("ALTER TABLE edges ADD COLUMN confidence_score REAL")
 
     def close(self) -> None:
         if self._conn:
@@ -214,14 +230,21 @@ class GraphStorage:
         db = self._db()
         with db:
             db.executemany(
-                """INSERT INTO edges (from_id, to_id, kind, confidence, resolution_strategy)
-                   VALUES (?,?,?,?,?)
+                """INSERT INTO edges
+                   (from_id, to_id, kind, confidence, resolution_strategy,
+                    confidence_label, confidence_score)
+                   VALUES (?,?,?,?,?,?,?)
                    ON CONFLICT(from_id, to_id, kind) DO UPDATE SET
                      confidence=excluded.confidence,
-                     resolution_strategy=excluded.resolution_strategy
+                     resolution_strategy=excluded.resolution_strategy,
+                     confidence_label=excluded.confidence_label,
+                     confidence_score=excluded.confidence_score
                 """,
                 [
-                    (e.from_id, e.to_id, e.kind, e.confidence, e.resolution_strategy)
+                    (
+                        e.from_id, e.to_id, e.kind, e.confidence, e.resolution_strategy,
+                        e.confidence_label, e.confidence_score,
+                    )
                     for e in edges
                 ],
             )
@@ -444,6 +467,8 @@ class GraphStorage:
             from_id=r["from_id"], to_id=r["to_id"], kind=r["kind"],
             confidence=r["confidence"] or 1.0,
             resolution_strategy=r["resolution_strategy"],
+            confidence_label=_col(r, "confidence_label", "EXTRACTED"),
+            confidence_score=_col(r, "confidence_score", None),
         ) for r in rows]
 
     def get_communities(
@@ -595,6 +620,299 @@ class GraphStorage:
             }
             for r in rows
         ]
+
+    def find_import_cycles(
+        self,
+        max_cycle_length: int = 8,
+        top_n: int = 20,
+    ) -> list[dict]:
+        """Detect circular import dependencies at the file level.
+
+        Builds a directed file-level import graph from IMPORTS edges, then
+        finds simple cycles via iterative DFS (Tarjan-style SCC detection).
+        Returns shortest cycles first, deduplicated by rotation.
+
+        Returns list of:
+          {"cycle": ["a.go", "b.go", "c.go"], "length": 3, "severity": "high"|"medium"|"low"}
+        """
+        db = self._db()
+        rows = db.execute(
+            """
+            SELECT nf.file AS from_file, nt.file AS to_file
+            FROM edges e
+            JOIN nodes nf ON nf.id = e.from_id
+            JOIN nodes nt ON nt.id = e.to_id
+            WHERE e.kind IN ('IMPORTS', 'INHERITS')
+              AND nf.file != nt.file
+              AND nf.file != ''
+              AND nt.file != ''
+            """,
+        ).fetchall()
+
+        # Build adjacency list (file → set of files it imports)
+        graph: dict[str, set[str]] = {}
+        for r in rows:
+            ff, tf = r["from_file"], r["to_file"]
+            graph.setdefault(ff, set()).add(tf)
+            graph.setdefault(tf, set())  # ensure all nodes exist
+
+        if not graph:
+            return []
+
+        # Tarjan's SCC — finds all strongly connected components
+        index_counter = [0]
+        stack: list[str] = []
+        lowlinks: dict[str, int] = {}
+        index: dict[str, int] = {}
+        on_stack: dict[str, bool] = {}
+        sccs: list[list[str]] = []
+
+        def strongconnect(v: str) -> None:
+            index[v] = index_counter[0]
+            lowlinks[v] = index_counter[0]
+            index_counter[0] += 1
+            stack.append(v)
+            on_stack[v] = True
+
+            for w in graph.get(v, set()):
+                if w not in index:
+                    strongconnect(w)
+                    lowlinks[v] = min(lowlinks[v], lowlinks[w])
+                elif on_stack.get(w):
+                    lowlinks[v] = min(lowlinks[v], index[w])
+
+            if lowlinks[v] == index[v]:
+                scc: list[str] = []
+                while True:
+                    w = stack.pop()
+                    on_stack[w] = False
+                    scc.append(w)
+                    if w == v:
+                        break
+                if len(scc) > 1:
+                    sccs.append(scc)
+
+        import sys
+        old_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(max(old_limit, 5000))
+        try:
+            for v in list(graph.keys()):
+                if v not in index:
+                    strongconnect(v)
+        finally:
+            sys.setrecursionlimit(old_limit)
+
+        # Convert SCCs to cycle format, cap at max_cycle_length
+        results = []
+        seen: set[tuple] = set()
+        for scc in sorted(sccs, key=len):
+            if len(scc) > max_cycle_length:
+                continue
+            # Normalize: start from lexicographically smallest element
+            min_idx = scc.index(min(scc))
+            normalized = tuple(scc[min_idx:] + scc[:min_idx])
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            length = len(normalized)
+            severity = "high" if length <= 2 else ("medium" if length <= 4 else "low")
+            results.append({
+                "cycle": list(normalized),
+                "length": length,
+                "severity": severity,
+            })
+            if len(results) >= top_n:
+                break
+
+        return results
+
+    def suggest_questions(self, top_n: int = 7) -> list[dict]:
+        """Generate questions the graph is uniquely positioned to answer.
+
+        Inspired by graphify's analyze.py suggest_questions(). Uses structural
+        signals: isolated nodes, cross-community bridges, large communities,
+        god nodes with many outbound edges.
+
+        Returns list of:
+          {"type": str, "question": str, "why": str}
+        """
+        db = self._db()
+        questions: list[dict] = []
+
+        # 1. Isolated nodes (no callers, no callees — possible dead code or missing docs)
+        isolated = db.execute(
+            """
+            SELECT n.name, n.file, n.kind
+            FROM nodes n
+            WHERE n.kind NOT IN ('file', 'module')
+              AND n.community_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM edges e WHERE e.from_id = n.id OR e.to_id = n.id)
+            LIMIT 10
+            """,
+        ).fetchall()
+        if isolated:
+            names = [r["name"] for r in isolated[:3]]
+            questions.append({
+                "type": "isolated_nodes",
+                "question": f"What connects `{'`, `'.join(names)}` to the rest of the system?",
+                "why": f"{len(isolated)} nodes have no edges — possible dead code, missing docs, or extraction gaps.",
+                "count": len(isolated),
+            })
+
+        # 2. God nodes — symbols everything depends on (high in-degree)
+        gods = self.get_god_nodes(top_n=3)
+        if gods:
+            top = gods[0]
+            questions.append({
+                "type": "god_node",
+                "question": f"What would break if `{top['qualified_name']}` changed?",
+                "why": f"{top['qualified_name']} has {top['degree']} total edges — it's a critical hub. Changes propagate widely.",
+                "count": top["degree"],
+            })
+
+        # 3. Cross-community bridges — architectural boundary crossings
+        bridges = self.get_cross_community_bridges(top_n=3)
+        if bridges:
+            b = bridges[0]
+            questions.append({
+                "type": "bridge",
+                "question": f"Why does `{b['from']}` (community {b['from_community']}) depend on `{b['to']}` (community {b['to_community']})?",
+                "why": "This edge crosses architectural community boundaries — unexpected coupling worth reviewing.",
+            })
+
+        # 4. Communities with very few nodes — possibly misclustered
+        tiny = db.execute(
+            """
+            SELECT id, title, node_count FROM communities
+            WHERE node_count = 1 AND level = 1
+            LIMIT 5
+            """,
+        ).fetchall()
+        if len(tiny) >= 3:
+            questions.append({
+                "type": "singleton_communities",
+                "question": f"Why are {len(tiny)} communities isolated singletons?",
+                "why": f"{len(tiny)} communities have only 1 node — they may represent dead code, entry points, or need deeper graph extraction.",
+                "count": len(tiny),
+            })
+
+        # 5. Large communities — possibly too broad, should be split
+        large = db.execute(
+            """
+            SELECT id, title, node_count FROM communities
+            WHERE node_count > 50 AND level = 1
+            ORDER BY node_count DESC
+            LIMIT 3
+            """,
+        ).fetchall()
+        if large:
+            top_large = large[0]
+            label = top_large["title"] or f"Community {top_large['id']}"
+            questions.append({
+                "type": "large_community",
+                "question": f"Should `{label}` be split into smaller, more focused modules?",
+                "why": f"Community has {top_large['node_count']} nodes — large communities often hide multiple concerns.",
+                "node_count": top_large["node_count"],
+            })
+
+        # 6. Symbols with high out-degree but no community — possible missing enrichment
+        unenriched = db.execute(
+            """
+            SELECT n.name, COUNT(*) AS edge_count
+            FROM nodes n
+            JOIN edges e ON e.from_id = n.id
+            WHERE n.community_id IS NULL AND n.kind NOT IN ('file', 'module')
+            GROUP BY n.id
+            ORDER BY edge_count DESC
+            LIMIT 3
+            """,
+        ).fetchall()
+        if unenriched:
+            questions.append({
+                "type": "unenriched_hubs",
+                "question": f"Why is `{unenriched[0]['name']}` highly connected but not assigned to any community?",
+                "why": "High-edge nodes without community assignment reduce graph comprehension quality. Run `build(action='pipeline')` to enrich.",
+            })
+
+        if not questions:
+            return [{
+                "type": "no_signal",
+                "question": None,
+                "why": "Graph is well-structured: no isolated nodes, no oversized communities, no unenriched hubs detected.",
+            }]
+
+        return questions[:top_n]
+
+    def graph_diff(self, since_iso: str) -> dict:
+        """Return what changed in the graph since a given ISO timestamp.
+
+        Uses the updated_at column on nodes to find additions and modifications
+        since `since_iso`. Useful for "what changed in my codebase?" queries.
+
+        Args:
+            since_iso: ISO 8601 timestamp string (e.g. "2026-06-01T00:00:00")
+
+        Returns:
+            {
+              "new_nodes": [...],     # nodes with updated_at > since_iso
+              "changed_files": [...], # distinct files with changed nodes
+              "new_edges": int,       # edges from new nodes (approximate)
+              "summary": "N new symbols in M files since ...",
+              "since": since_iso,
+            }
+        """
+        db = self._db()
+        new_nodes = db.execute(
+            """
+            SELECT id, name, qualified_name, kind, file, language, community_id, updated_at
+            FROM nodes
+            WHERE updated_at > ? AND kind NOT IN ('file', 'module')
+            ORDER BY updated_at DESC
+            LIMIT 200
+            """,
+            (since_iso,),
+        ).fetchall()
+
+        changed_files = sorted({r["file"] for r in new_nodes if r["file"]})
+        node_ids = [r["id"] for r in new_nodes]
+
+        new_edge_count = 0
+        if node_ids:
+            ph = ",".join("?" * len(node_ids))
+            new_edge_count = db.execute(
+                f"SELECT COUNT(*) FROM edges WHERE from_id IN ({ph})",
+                node_ids,
+            ).fetchone()[0]
+
+        nodes_out = [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "qualified_name": r["qualified_name"],
+                "kind": r["kind"],
+                "file": r["file"],
+                "language": r["language"],
+                "community_id": r["community_id"],
+                "updated_at": r["updated_at"],
+            }
+            for r in new_nodes
+        ]
+
+        summary_parts = []
+        if nodes_out:
+            summary_parts.append(f"{len(nodes_out)} new/changed symbols")
+        if changed_files:
+            summary_parts.append(f"{len(changed_files)} files")
+        summary = (", ".join(summary_parts) + f" since {since_iso}") if summary_parts else f"no changes since {since_iso}"
+
+        return {
+            "new_nodes": nodes_out,
+            "changed_files": changed_files,
+            "new_edge_count": new_edge_count,
+            "summary": summary,
+            "since": since_iso,
+            "total_new": len(nodes_out),
+        }
 
     def get_cross_community_bridges(self, top_n: int = 10) -> list[dict]:
         """Return the top-N cross-community edges by combined node degree.

@@ -60,12 +60,19 @@ class CallResolver:
         for raw in raw_edges:
             node_id, confidence, strategy = self._resolve_one(raw)
             if node_id is not None:
+                # Graphify-compatible confidence labels:
+                # confidence=1.0 means the call was found directly in source → EXTRACTED
+                # confidence<1.0 means it was resolved via heuristics → INFERRED
+                label = "EXTRACTED" if confidence >= 1.0 else "INFERRED"
+                score = confidence if label == "INFERRED" else None
                 result.append(EdgeData(
                     from_id=raw.from_id,
                     to_id=node_id,
                     kind=raw.kind,
                     confidence=confidence,
                     resolution_strategy=strategy,
+                    confidence_label=label,
+                    confidence_score=score,
                 ))
         return result
 

@@ -1,0 +1,5 @@
+{
+  "env": {
+    "OPENCODE_ALLOW_INDEX_OUTSIDE_CWD": "1"
+  }
+}

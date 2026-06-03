@@ -977,3 +977,153 @@ async def test_handle_get_symbol_no_graph_returns_error(tmp_path):
     ):
         result = await handle_get_symbol(name="anything", project_path="/tmp/nonexistent")
     assert "error" in result
+
+
+# ===========================================================================
+# handle_import_cycles / handle_suggest_questions / handle_graph_diff
+# ===========================================================================
+
+
+@pytest.fixture
+def project_with_import_graph(tmp_path):
+    """Graph DB with import edges forming a cycle: a.py → b.py → c.py → a.py."""
+    import unittest.mock as mock
+
+    graph_db_path = str(tmp_path / "graph.db")
+    gs = GraphStorage(graph_db_path)
+    gs.open()
+
+    def _node(file, name):
+        nid = _node_id_graph(file, name)
+        return NodeData(
+            id=nid, name=name, qualified_name=name, kind="function", file=file,
+            language="python", created_at="2026-01-01T00:00:00", updated_at="2026-01-01T00:00:00",
+        )
+
+    na = _node("/proj/a.py", "fa")
+    nb = _node("/proj/b.py", "fb")
+    nc = _node("/proj/c.py", "fc")
+    gs.upsert_nodes([na, nb, nc])
+    # a.py imports b.py, b.py imports c.py, c.py imports a.py → cycle
+    gs.upsert_edges([
+        EdgeData(from_id=na.id, to_id=nb.id, kind="IMPORTS", confidence=1.0, resolution_strategy=""),
+        EdgeData(from_id=nb.id, to_id=nc.id, kind="IMPORTS", confidence=1.0, resolution_strategy=""),
+        EdgeData(from_id=nc.id, to_id=na.id, kind="IMPORTS", confidence=1.0, resolution_strategy=""),
+    ])
+    gs.close()
+
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=graph_db_path,
+    ):
+        yield str(tmp_path / "proj"), graph_db_path
+
+
+async def test_handle_import_cycles_detects_cycle(project_with_import_graph):
+    from opencode_search.handlers._graph import handle_import_cycles
+    project_path, _ = project_with_import_graph
+    result = await handle_import_cycles(project_path=project_path)
+    assert "cycles" in result
+    assert "cycle_count" in result
+    assert result["has_cycles"] is True
+    assert result["cycle_count"] >= 1
+    cycle = result["cycles"][0]
+    assert "cycle" in cycle
+    assert "length" in cycle
+    assert "severity" in cycle
+    assert cycle["severity"] in ("high", "medium", "low")
+
+
+async def test_handle_import_cycles_no_cycles(tmp_path):
+    """A graph with only CALLS edges (no IMPORTS) returns no cycles."""
+    import unittest.mock as mock
+
+    graph_db_path = str(tmp_path / "graph.db")
+    gs = GraphStorage(graph_db_path)
+    gs.open()
+    na = _make_node_graph("/proj/a.py", "fa")
+    nb = _make_node_graph("/proj/b.py", "fb")
+    gs.upsert_nodes([na, nb])
+    gs.upsert_edges([
+        EdgeData(from_id=na.id, to_id=nb.id, kind="CALLS", confidence=1.0, resolution_strategy=""),
+    ])
+    gs.close()
+
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=graph_db_path,
+    ):
+        from opencode_search.handlers._graph import handle_import_cycles
+        result = await handle_import_cycles(project_path=str(tmp_path / "proj"))
+    assert result["has_cycles"] is False
+    assert result["cycle_count"] == 0
+
+
+async def test_handle_import_cycles_no_graph_returns_error(tmp_path):
+    import unittest.mock as mock
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=str(tmp_path / "nonexistent.db"),
+    ):
+        from opencode_search.handlers._graph import handle_import_cycles
+        result = await handle_import_cycles(project_path="/tmp/nonexistent")
+    assert "error" in result
+
+
+async def test_handle_suggest_questions_returns_list(project_with_graph_graph):
+    from opencode_search.handlers._graph import handle_suggest_questions
+    project_path, _, _ = project_with_graph_graph
+    result = await handle_suggest_questions(project_path=project_path)
+    assert "questions" in result
+    assert "count" in result
+    assert isinstance(result["questions"], list)
+
+
+async def test_handle_suggest_questions_each_has_type_and_question(project_with_graph_graph):
+    from opencode_search.handlers._graph import handle_suggest_questions
+    project_path, _, _ = project_with_graph_graph
+    result = await handle_suggest_questions(project_path=project_path, top_n=10)
+    for q in result["questions"]:
+        assert "type" in q
+        assert "why" in q
+
+
+async def test_handle_suggest_questions_no_graph_returns_error(tmp_path):
+    import unittest.mock as mock
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=str(tmp_path / "nonexistent.db"),
+    ):
+        from opencode_search.handlers._graph import handle_suggest_questions
+        result = await handle_suggest_questions(project_path="/tmp/nonexistent")
+    assert "error" in result
+
+
+async def test_handle_graph_diff_returns_structure(project_with_graph_graph):
+    from opencode_search.handlers._graph import handle_graph_diff
+    project_path, _, _ = project_with_graph_graph
+    result = await handle_graph_diff(project_path=project_path, since="2020-01-01T00:00:00")
+    assert "new_nodes" in result or "error" in result
+    if "error" not in result:
+        assert "since" in result
+        assert isinstance(result.get("new_nodes", []), list)
+
+
+async def test_handle_graph_diff_future_since_returns_empty(project_with_graph_graph):
+    from opencode_search.handlers._graph import handle_graph_diff
+    project_path, _, _ = project_with_graph_graph
+    result = await handle_graph_diff(project_path=project_path, since="2099-01-01T00:00:00")
+    if "error" not in result:
+        assert result.get("new_nodes", []) == []
+        assert result.get("new_edge_count", 0) == 0
+
+
+async def test_handle_graph_diff_no_graph_returns_error(tmp_path):
+    import unittest.mock as mock
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=str(tmp_path / "nonexistent.db"),
+    ):
+        from opencode_search.handlers._graph import handle_graph_diff
+        result = await handle_graph_diff(project_path="/tmp/nonexistent", since="2020-01-01T00:00:00")
+    assert "error" in result

@@ -908,6 +908,75 @@ async def handle_detect_impact(
     return await asyncio.to_thread(_run)
 
 
+async def handle_import_cycles(
+    project_path: str,
+    max_cycle_length: int = 8,
+    top_n: int = 20,
+) -> dict[str, Any]:
+    """Detect circular import dependencies using Tarjan's SCC on the file-level graph."""
+    import asyncio
+
+    def _run() -> dict[str, Any]:
+        gs = _open_graph(project_path)
+        if gs is None:
+            return {"error": "project not indexed or graph not built", "cycles": [], "cycle_count": 0}
+        try:
+            cycles = gs.find_import_cycles(max_cycle_length=max_cycle_length, top_n=top_n)
+            return {
+                "project_path": project_path,
+                "cycles": cycles,
+                "cycle_count": len(cycles),
+                "has_cycles": len(cycles) > 0,
+            }
+        finally:
+            gs.close()
+
+    return await asyncio.to_thread(_run)
+
+
+async def handle_suggest_questions(
+    project_path: str,
+    top_n: int = 7,
+) -> dict[str, Any]:
+    """Generate questions the graph is uniquely positioned to answer."""
+    import asyncio
+
+    def _run() -> dict[str, Any]:
+        gs = _open_graph(project_path)
+        if gs is None:
+            return {"error": "project not indexed or graph not built", "questions": []}
+        try:
+            questions = gs.suggest_questions(top_n=top_n)
+            return {
+                "project_path": project_path,
+                "questions": questions,
+                "count": len(questions),
+            }
+        finally:
+            gs.close()
+
+    return await asyncio.to_thread(_run)
+
+
+async def handle_graph_diff(
+    project_path: str,
+    since: str,
+) -> dict[str, Any]:
+    """Return what changed in the graph since a given ISO timestamp."""
+    import asyncio
+
+    def _run() -> dict[str, Any]:
+        gs = _open_graph(project_path)
+        if gs is None:
+            return {"error": "project not indexed or graph not built"}
+        try:
+            return gs.graph_diff(since_iso=since)
+        finally:
+            gs.close()
+
+    return await asyncio.to_thread(_run)
+
+
 async def handle_get_communities(
     project_path: str,
     top_k: int = 100,
@@ -1236,11 +1305,21 @@ async def handle_graph_export(
             db = gs._db()
             ids = list(node_id_set)
             ph = ",".join("?" * len(ids))
+            edge_cols = {r[1] for r in db.execute("PRAGMA table_info(edges)").fetchall()}
+            has_label = "confidence_label" in edge_cols
+            select = "from_id, to_id, kind, confidence" + (", confidence_label, confidence_score" if has_label else "")
             rows = db.execute(
-                f"SELECT from_id, to_id, kind FROM edges WHERE from_id IN ({ph}) AND to_id IN ({ph})",
+                f"SELECT {select} FROM edges WHERE from_id IN ({ph}) AND to_id IN ({ph})",
                 ids + ids,
             ).fetchall()
-            return [{"from": e[0], "to": e[1], "kind": e[2]} for e in rows]
+            result = []
+            for e in rows:
+                rec = {"from": e[0], "to": e[1], "kind": e[2], "confidence": e[3]}
+                if has_label:
+                    rec["confidence_label"] = e[4]
+                    rec["confidence_score"] = e[5]
+                result.append(rec)
+            return result
 
         edges_out = await asyncio.to_thread(_fetch_edges)
 

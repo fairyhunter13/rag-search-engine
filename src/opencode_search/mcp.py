@@ -337,13 +337,17 @@ async def overview(
           | "patterns" (languages, dependencies, conventions, frameworks, architecture)
           | "architecture_domains" (top-level Leiden hierarchy = highest-level communities)
           | "hierarchy" (full community hierarchy tree, all levels)
+          | "import_cycles" (circular import dependencies using Tarjan's SCC)
+          | "suggested_questions" (questions the graph is uniquely positioned to answer)
+          | "graph_diff" (what changed in the graph recently)
     project_path: not required for what="projects" or what="metrics"
     export_format: "json" | "graphml" (only for what="graph_export")
     max_nodes: cap for graph_export (default 5000)
     """
     runtime_state.note_activity()
     valid = {"structure", "communities", "status", "projects", "metrics", "graph_export",
-             "patterns", "architecture_domains", "hierarchy", "service_mesh"}
+             "patterns", "architecture_domains", "hierarchy", "service_mesh",
+             "import_cycles", "suggested_questions", "graph_diff", "surprising_connections"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -431,6 +435,43 @@ async def overview(
                     gs.close()
         import asyncio
         return await asyncio.to_thread(_get_hierarchy, project_path)
+    elif what == "surprising_connections":
+        if not project_path:
+            return {"error": "project_path required for what='surprising_connections'"}
+        import contextlib
+        from opencode_search.handlers._graph import _open_graph
+        def _get_bridges(path: str) -> dict:
+            gs = _open_graph(path)
+            if gs is None:
+                return {"error": "Project not indexed"}
+            try:
+                bridges = gs.get_cross_community_bridges(top_n=20)
+                return {
+                    "project_path": path,
+                    "surprising_connections": bridges,
+                    "count": len(bridges),
+                }
+            finally:
+                with contextlib.suppress(Exception):
+                    gs.close()
+        import asyncio
+        return await asyncio.to_thread(_get_bridges, project_path)
+    elif what == "import_cycles":
+        if not project_path:
+            return {"error": "project_path required for what='import_cycles'"}
+        from opencode_search.handlers._graph import handle_import_cycles
+        return await handle_import_cycles(project_path=project_path)
+    elif what == "suggested_questions":
+        if not project_path:
+            return {"error": "project_path required for what='suggested_questions'"}
+        from opencode_search.handlers._graph import handle_suggest_questions
+        return await handle_suggest_questions(project_path=project_path)
+    elif what == "graph_diff":
+        if not project_path:
+            return {"error": "project_path required for what='graph_diff'"}
+        since = ""
+        from opencode_search.handlers._graph import handle_graph_diff
+        return await handle_graph_diff(project_path=project_path, since=since)
     else:
         from opencode_search.metrics import get_metrics
         return get_metrics()
@@ -581,19 +622,27 @@ async def federation(
 @mcp.tool()
 async def manage(
     project_path: str,
-    action: Literal["stop_watching", "wiki_lint"] = "wiki_lint",
+    action: Literal["stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks"] = "wiki_lint",
 ) -> dict[str, Any]:
-    """Project lifecycle: stop file watchers or health-check the wiki.
+    """Project lifecycle: stop watchers, health-check wiki, or manage git hooks.
 
     action: "wiki_lint" (default) | "stop_watching"
+            | "install_hooks" — install git post-commit hook for auto-reindex
+            | "uninstall_hooks" — remove git post-commit hook
     """
     runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint"}
+    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks"}
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
     if action == "stop_watching":
         return await handle_stop_watching(path=project_path)
+    if action in ("install_hooks", "uninstall_hooks"):
+        from opencode_search.handlers._hooks import handle_git_hooks
+        return await handle_git_hooks(
+            project_path=project_path,
+            install=(action == "install_hooks"),
+        )
     return await handle_wiki_lint(project_path=project_path)
 
 
