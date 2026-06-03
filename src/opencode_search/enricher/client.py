@@ -39,8 +39,8 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Ollama module-level defaults (inline to avoid circular imports with config.py)
 # ---------------------------------------------------------------------------
-_OLLAMA_DEFAULT_MODEL = os.environ.get("OPENCODE_LLM_MODEL", "phi4-mini:3.8b")
-_OLLAMA_DEFAULT_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "2048"))
+_OLLAMA_DEFAULT_MODEL = os.environ.get("OPENCODE_LLM_MODEL", "qwen3-enrich:1.7b")
+_OLLAMA_DEFAULT_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 _OLLAMA_DEFAULT_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 
 
@@ -488,6 +488,7 @@ class OllamaClient(LLMClient):
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "think": False,  # disable CoT/thinking mode for qwen3+ (no-op on other models)
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,

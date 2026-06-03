@@ -81,9 +81,9 @@ DEFAULT_DIMS: int = 768
 # Uses the locally installed `claude` CLI; no separate API key needed.
 # Switch to codex by setting OPENCODE_LLM_PROVIDER=codex / OPENCODE_LLM_MODEL=gpt-5.4-mini.
 # ---------------------------------------------------------------------------
-DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "claude-code")
-DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "claude-haiku-4-5-20251001")
-DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "2048"))
+DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama")
+DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "qwen3-enrich:1.7b")
+DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 DEFAULT_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 
 # Legacy tier suffix → dims mapping used only during migration
