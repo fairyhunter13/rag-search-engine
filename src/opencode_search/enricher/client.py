@@ -710,12 +710,16 @@ class ClaudeCodeClient(LLMClient):
                 "claude CLI not found. Install Claude Code: https://claude.ai/code"
             )
         prompt = _format_messages_as_prompt(messages)
-        cmd = ["claude", "-p", prompt, "--model", self.model]
+        # Use stdin (--print flag) instead of -p argument — avoids ARG_MAX limits
+        # on long prompts (code samples can reach 10-15KB).
+        # Note: the claude CLI has no --max-tokens flag; max_tokens/temperature
+        # are accepted for API compatibility but not forwarded to the CLI.
+        cmd = ["claude", "--print", "--model", self.model]
         try:
             result = subprocess.run(
                 cmd,
+                input=prompt,
                 capture_output=True,
-                stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=self.timeout,
             )

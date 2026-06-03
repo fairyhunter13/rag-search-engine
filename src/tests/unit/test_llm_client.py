@@ -597,7 +597,7 @@ def test_claude_code_chat_calls_subprocess(monkeypatch):
     assert result == "This function authenticates a user."
     assert len(captured_cmd) == 1
     assert captured_cmd[0][0] == "claude"
-    assert "-p" in captured_cmd[0]
+    assert "--print" in captured_cmd[0]
     assert "--model" in captured_cmd[0]
     assert "claude-haiku-4-5-20251001" in captured_cmd[0]
 

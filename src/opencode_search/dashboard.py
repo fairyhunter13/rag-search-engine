@@ -994,7 +994,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             max_events = 0
 
         async def _generate():
+            from opencode_search.jobs import list_jobs
             count = 0
+            _last_job_states: dict[str, str] = {}
             try:
                 interval = 5
                 while True:
@@ -1017,6 +1019,20 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                         "uptime_s": int(time.time() - _start_time),
                     })
                     yield f"data: {payload}\n\n"
+                    # Emit job status change events (no polling needed on client side)
+                    for job in list_jobs():
+                        prev = _last_job_states.get(job.id)
+                        if prev != job.status:
+                            _last_job_states[job.id] = job.status
+                            job_event = json.dumps({
+                                "type": "job",
+                                "job_id": job.id,
+                                "action": job.action,
+                                "project": job.project_path,
+                                "status": job.status,
+                                "error": job.error,
+                            })
+                            yield f"data: {job_event}\n\n"
                     count += 1
                     if max_events and count >= max_events:
                         return

@@ -673,21 +673,25 @@ async def federation(
 async def manage(
     project_path: str,
     action: Literal[
-        "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum"
+        "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks",
+        "dedup", "vacuum", "jobs",
     ] = "wiki_lint",
     dry_run: bool = False,
+    job_id: str | None = None,
 ) -> dict[str, Any]:
-    """Project lifecycle: stop watchers, health-check wiki, manage git hooks, or dedup graph.
+    """Project lifecycle: stop watchers, health-check wiki, manage git hooks, dedup graph, or check jobs.
 
     action: "wiki_lint" (default) | "stop_watching"
             | "install_hooks" — install git post-commit hook for auto-reindex
             | "uninstall_hooks" — remove git post-commit hook
             | "dedup" — deduplicate graph nodes (MinHash/LSH + Jaro-Winkler when available)
             | "vacuum" — remove orphan index_budget/index_balanced tier dirs; free disk space
+            | "jobs" — list background build jobs (or check one with job_id=)
     dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting
+    job_id: for action="jobs" — return status of a specific job instead of all jobs
     """
     runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum"}
+    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum", "jobs"}
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
@@ -705,6 +709,15 @@ async def manage(
     if action == "vacuum":
         from opencode_search.handlers._vacuum import handle_vacuum
         return await handle_vacuum(project_path=project_path, dry_run=dry_run)
+    if action == "jobs":
+        from opencode_search.jobs import get_job, job_to_dict, list_jobs
+        if job_id:
+            job = get_job(job_id)
+            if job is None:
+                return {"error": f"Job {job_id!r} not found"}
+            return job_to_dict(job)
+        jobs = list_jobs(project_path=project_path if project_path else None)
+        return {"jobs": [job_to_dict(j) for j in jobs], "total": len(jobs)}
     return await handle_wiki_lint(project_path=project_path)
 
 
