@@ -2620,3 +2620,65 @@ class TestGroovyExtraction:
         callee_names = {e.raw_callee for e in edges if e.kind == "CALLS"}
         assert callee_names, \
             "Expected at least one raw_callee in Groovy call edges. Got none"
+
+
+# ============================================================
+# GraphStorage: Community upsert COALESCE behavior
+# ============================================================
+
+class TestCommunityUpsertPreservesTitle:
+    """upsert_community / upsert_communities_batch must preserve enriched titles."""
+
+    @pytest.fixture
+    def gs(self, tmp_path):
+        db = GraphStorage(str(tmp_path / "graph.db"))
+        db.open()
+        yield db
+        db.close()
+
+    def _comm(self, id: int, title: str | None = None, node_count: int = 5) -> CommunityData:
+        return CommunityData(id=id, node_count=node_count, title=title, level=1)
+
+    def test_upsert_community_sets_title_on_insert(self, gs):
+        gs.upsert_community(self._comm(1, "Auth Layer"))
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].title == "Auth Layer"
+
+    def test_upsert_community_preserves_title_on_null_update(self, gs):
+        gs.upsert_community(self._comm(1, "Auth Layer"))
+        gs.upsert_community(self._comm(1, None))  # re-detection with no title
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].title == "Auth Layer", "COALESCE must preserve enriched title"
+
+    def test_upsert_community_overwrites_title_when_new_title_given(self, gs):
+        gs.upsert_community(self._comm(1, "Old Title"))
+        gs.upsert_community(self._comm(1, "New Title"))
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].title == "New Title"
+
+    def test_upsert_communities_batch_preserves_title_on_null(self, gs):
+        gs.upsert_communities_batch([self._comm(1, "Billing"), self._comm(2, "Auth")])
+        # Simulate re-detection: same IDs, no titles
+        gs.upsert_communities_batch([self._comm(1, None), self._comm(2, None)])
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].title == "Billing", "batch upsert must preserve existing title"
+        assert comms[2].title == "Auth", "batch upsert must preserve existing title"
+
+    def test_upsert_communities_batch_updates_node_count(self, gs):
+        gs.upsert_communities_batch([self._comm(1, "Billing", node_count=5)])
+        gs.upsert_communities_batch([self._comm(1, None, node_count=50)])
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].node_count == 50, "node_count must be updated even when title preserved"
+
+    def test_upsert_communities_batch_overwrites_title_with_new_value(self, gs):
+        gs.upsert_communities_batch([self._comm(1, "OldTitle")])
+        gs.upsert_communities_batch([self._comm(1, "NewTitle")])
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].title == "NewTitle"
+
+    def test_upsert_community_preserves_summary_on_null_update(self, gs):
+        c = CommunityData(id=1, node_count=5, title="Auth", summary="Handles login", level=1)
+        gs.upsert_community(c)
+        gs.upsert_community(self._comm(1, None))  # no summary
+        comms = {c.id: c for c in gs.get_communities()}
+        assert comms[1].summary == "Handles login", "COALESCE must preserve enriched summary"

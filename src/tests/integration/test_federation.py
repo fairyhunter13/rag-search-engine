@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.integration]
 
 
 # ---------------------------------------------------------------------------

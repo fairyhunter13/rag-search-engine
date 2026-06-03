@@ -285,8 +285,8 @@ class GraphStorage:
                     level, parent_community_id)
                    VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
-                     title=excluded.title,
-                     summary=excluded.summary,
+                     title=COALESCE(excluded.title, communities.title),
+                     summary=COALESCE(excluded.summary, communities.summary),
                      node_count=excluded.node_count,
                      key_entry_points=excluded.key_entry_points,
                      generated_at=excluded.generated_at,
@@ -318,8 +318,8 @@ class GraphStorage:
                     level, parent_community_id)
                    VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
-                     title=excluded.title,
-                     summary=excluded.summary,
+                     title=COALESCE(excluded.title, communities.title),
+                     summary=COALESCE(excluded.summary, communities.summary),
                      node_count=excluded.node_count,
                      key_entry_points=excluded.key_entry_points,
                      generated_at=excluded.generated_at,

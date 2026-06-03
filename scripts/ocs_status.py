@@ -524,7 +524,7 @@ def check_tests() -> list[Check]:
 _FEATURE_COVERAGE = {
     "search": {"unit": 30, "integration": 6, "e2e_mock": 6, "e2e_real": 5},
     "ask": {"unit": 35, "integration": 0, "e2e_mock": 15, "e2e_real": 23},
-    "graph": {"unit": 10, "integration": 133, "e2e_mock": 20, "e2e_real": 5},
+    "graph": {"unit": 10, "integration": 140, "e2e_mock": 20, "e2e_real": 5},
     "overview": {"unit": 15, "integration": 5, "e2e_mock": 3, "e2e_real": 7},
     "build/index": {"unit": 5, "integration": 55, "e2e_mock": 8, "e2e_real": 9},
     "wiki": {"unit": 5, "integration": 34, "e2e_mock": 7, "e2e_real": 1},

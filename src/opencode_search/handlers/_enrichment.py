@@ -251,36 +251,33 @@ async def _enrich_communities(
         return 0
 
     # Run LLM calls concurrently (semaphore limits parallelism).
+    # Write each result to DB immediately after completion so partial progress
+    # is preserved if the process is killed before all calls finish.
     sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+    count = 0
 
     async def _call_llm(
         community: Any,
         summaries: list[str],
         code_samples: list[tuple[str, str]],
-    ) -> tuple[Any, str, str] | None:
+    ) -> None:
+        nonlocal count
         async with sem:
             try:
                 title, summary = await asyncio.to_thread(
                     llm.community_summary, summaries, code_samples,
                 )
-                return community, title, summary
             except Exception as exc:
                 log.debug("community LLM call failed for %d: %s", community.id, exc)
-                return None
+                return
+            now = datetime.now(UTC).isoformat()
+            community.title = title
+            community.summary = summary
+            community.generated_at = now
+            gs.upsert_community(community)
+            count += 1
 
-    results = await asyncio.gather(*[_call_llm(c, s, cs) for c, s, cs in community_data])
-
-    count = 0
-    now = datetime.now(UTC).isoformat()
-    for item in results:
-        if item is None:
-            continue
-        community, title, summary = item
-        community.title = title
-        community.summary = summary
-        community.generated_at = now
-        gs.upsert_community(community)
-        count += 1
+    await asyncio.gather(*[_call_llm(c, s, cs) for c, s, cs in community_data])
     return count
 
 
