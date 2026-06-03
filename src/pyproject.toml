@@ -69,6 +69,11 @@ prerelease = [
     # TOML writer for codex config.toml patching
     "tomli-w>=1.0",
 ]
+graph-extras = [
+    # Entity deduplication: MinHash/LSH blocking + Jaro-Winkler verification
+    "datasketch>=1.6.0",
+    "rapidfuzz>=3.0.0",
+]
 
 [dependency-groups]
 dev = [

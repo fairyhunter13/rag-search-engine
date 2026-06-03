@@ -1401,3 +1401,41 @@ def _to_graphml(nodes: list[dict], edges: list[dict], communities: list[dict]) -
 
     lines += ["  </graph>", "</graphml>"]
     return "\n".join(lines)
+
+
+async def handle_dedup_nodes(
+    project_path: str,
+    *,
+    threshold: float = 0.88,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Deduplicate graph nodes using MinHash/LSH + Jaro-Winkler (or exact-norm fallback).
+
+    Finds nodes with nearly-identical qualified names in the same (file, kind) group
+    and merges them, redirecting edges to the canonical node.
+    """
+    import asyncio
+
+    def _run() -> dict[str, Any]:
+        from opencode_search.graph.dedup import DedupResult, _FUZZY_AVAILABLE, dedup_nodes
+
+        gs = _open_graph(project_path)
+        if gs is None:
+            return {"error": "project not indexed or graph not built", "project_path": project_path}
+        try:
+            result: DedupResult = dedup_nodes(gs, threshold=threshold, dry_run=dry_run)
+            return {
+                "project_path": project_path,
+                "strategy": result.strategy,
+                "merged_count": result.merged_count,
+                "candidate_pairs_checked": result.candidate_pairs_checked,
+                "skipped_low_entropy": result.skipped_low_entropy,
+                "dry_run": dry_run,
+                "fuzzy_available": _FUZZY_AVAILABLE,
+                "merged_pairs": result.merged_pairs[:50],  # cap output size
+                "errors": result.errors,
+            }
+        finally:
+            gs.close()
+
+    return await asyncio.to_thread(_run)

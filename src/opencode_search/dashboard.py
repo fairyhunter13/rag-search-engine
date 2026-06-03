@@ -721,6 +721,26 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await handle_graph_diff(project_path=project, since=since)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/dedup", methods=["GET", "POST"], include_in_schema=False)
+    async def api_dedup(request: Request) -> JSONResponse:
+        """Deduplicate graph nodes. GET=dry_run preview; POST with {project,dry_run,threshold}."""
+        from opencode_search.handlers._graph import handle_dedup_nodes
+        if request.method == "POST":
+            body: dict = {}
+            with contextlib.suppress(Exception):
+                body = await request.json()
+            project = body.get("project") or request.query_params.get("project", "")
+            dry_run = bool(body.get("dry_run", False))
+            threshold = float(body.get("threshold", 0.88))
+        else:
+            project = request.query_params.get("project", "")
+            dry_run = request.query_params.get("dry_run", "true").lower() != "false"
+            threshold = float(request.query_params.get("threshold", "0.88"))
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_dedup_nodes(project_path=project, threshold=threshold, dry_run=dry_run)
+        return JSONResponse(result)
+
     @mcp.custom_route("/api/integrations_status", methods=["GET"], include_in_schema=False)
     async def api_integrations_status(_request: Request) -> JSONResponse:
         """Return all integration states by running configure_integrations.py --check --json."""

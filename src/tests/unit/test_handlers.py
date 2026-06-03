@@ -1127,3 +1127,144 @@ async def test_handle_graph_diff_no_graph_returns_error(tmp_path):
         from opencode_search.handlers._graph import handle_graph_diff
         result = await handle_graph_diff(project_path="/tmp/nonexistent", since="2020-01-01T00:00:00")
     assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# handle_dedup_nodes tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def project_with_duplicate_nodes(tmp_path):
+    """Graph DB with two near-duplicate nodes in the same file."""
+    import unittest.mock as mock
+
+    graph_db_path = str(tmp_path / "graph.db")
+    gs = GraphStorage(graph_db_path)
+    gs.open()
+
+    # Two nodes in the same file with nearly-identical qualified names
+    n1 = NodeData(
+        id="aaa111000000001",
+        name="process_order",
+        qualified_name="orders.process_order",
+        kind="function",
+        file="/proj/orders.py",
+        language="python",
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+    )
+    # Slightly different ID but same logical symbol (duplicate indexing scenario)
+    n2 = NodeData(
+        id="aaa111000000002",
+        name="process_order",
+        qualified_name="orders.process_order",  # exact same qualified_name → exact dedup catches it
+        kind="function",
+        file="/proj/orders.py",
+        language="python",
+        created_at="2026-01-01T00:00:01",
+        updated_at="2026-01-01T00:00:01",
+    )
+    # A third unrelated node
+    n3 = NodeData(
+        id="bbb222000000001",
+        name="cancel_order",
+        qualified_name="orders.cancel_order",
+        kind="function",
+        file="/proj/orders.py",
+        language="python",
+        created_at="2026-01-01T00:00:00",
+        updated_at="2026-01-01T00:00:00",
+    )
+    gs.upsert_nodes([n1, n2, n3])
+    gs.upsert_edges([
+        EdgeData(from_id=n3.id, to_id=n1.id, kind="CALLS", confidence=1.0),
+        EdgeData(from_id=n3.id, to_id=n2.id, kind="CALLS", confidence=1.0),
+    ])
+    gs.close()
+
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=graph_db_path,
+    ):
+        yield str(tmp_path / "proj"), graph_db_path
+
+
+async def test_handle_dedup_nodes_dry_run_finds_duplicates(project_with_duplicate_nodes):
+    """dry_run=True reports duplicates without modifying the DB."""
+    from opencode_search.handlers._graph import handle_dedup_nodes
+
+    project_path, graph_db_path = project_with_duplicate_nodes
+    result = await handle_dedup_nodes(project_path=project_path, dry_run=True)
+
+    assert "project_path" in result
+    assert result["dry_run"] is True
+    assert "strategy" in result
+    assert result["strategy"] in ("exact", "fuzzy")
+    assert "merged_count" in result
+    assert "candidate_pairs_checked" in result
+    assert "fuzzy_available" in result
+    assert "errors" in result
+    # Exact-mode dedup should detect the two identical qualified-name nodes
+    assert result["merged_count"] >= 1, f"Expected ≥1 duplicate, got: {result}"
+
+
+async def test_handle_dedup_nodes_applies_merge(project_with_duplicate_nodes):
+    """dry_run=False actually removes the duplicate node."""
+    from opencode_search.handlers._graph import handle_dedup_nodes
+    from opencode_search.graph.storage import GraphStorage
+
+    project_path, graph_db_path = project_with_duplicate_nodes
+    result = await handle_dedup_nodes(project_path=project_path, dry_run=False)
+
+    assert result["merged_count"] >= 1, f"Expected merge to happen, got: {result}"
+    assert not result["errors"], f"Unexpected errors: {result['errors']}"
+
+    # Verify the DB was actually modified — duplicate should be gone
+    gs = GraphStorage(graph_db_path)
+    gs.open()
+    try:
+        nodes = gs.all_nodes()
+        all_qnames = [n.qualified_name for n in nodes]
+        # After dedup, only one node with "orders.process_order" should remain
+        process_order_nodes = [n for n in nodes if n.qualified_name == "orders.process_order"]
+        assert len(process_order_nodes) == 1, (
+            f"Expected 1 node after dedup, got {len(process_order_nodes)}"
+        )
+    finally:
+        gs.close()
+
+
+async def test_handle_dedup_nodes_no_graph_returns_error(tmp_path):
+    """Returns error dict when the project has no graph DB."""
+    import unittest.mock as mock
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=str(tmp_path / "nonexistent.db"),
+    ):
+        from opencode_search.handlers._graph import handle_dedup_nodes
+        result = await handle_dedup_nodes(project_path="/tmp/nonexistent")
+    assert "error" in result
+
+
+async def test_handle_dedup_nodes_no_duplicates_is_noop(tmp_path):
+    """A graph with no duplicates results in merged_count=0."""
+    import unittest.mock as mock
+    from opencode_search.graph.storage import GraphStorage, NodeData
+
+    graph_db_path = str(tmp_path / "graph.db")
+    gs = GraphStorage(graph_db_path)
+    gs.open()
+    na = _make_node_graph("/proj/a.py", "func_alpha", "mod.func_alpha")
+    nb = _make_node_graph("/proj/b.py", "func_beta", "mod.func_beta")
+    gs.upsert_nodes([na, nb])
+    gs.close()
+
+    with mock.patch(
+        "opencode_search.handlers._graph.get_project_graph_db_path",
+        return_value=graph_db_path,
+    ):
+        from opencode_search.handlers._graph import handle_dedup_nodes
+        result = await handle_dedup_nodes(project_path=str(tmp_path / "proj"), dry_run=False)
+
+    assert result["merged_count"] == 0
+    assert not result["errors"]

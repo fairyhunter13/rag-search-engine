@@ -622,16 +622,21 @@ async def federation(
 @mcp.tool()
 async def manage(
     project_path: str,
-    action: Literal["stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks"] = "wiki_lint",
+    action: Literal[
+        "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup"
+    ] = "wiki_lint",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Project lifecycle: stop watchers, health-check wiki, or manage git hooks.
+    """Project lifecycle: stop watchers, health-check wiki, manage git hooks, or dedup graph.
 
     action: "wiki_lint" (default) | "stop_watching"
             | "install_hooks" — install git post-commit hook for auto-reindex
             | "uninstall_hooks" — remove git post-commit hook
+            | "dedup" — deduplicate graph nodes (MinHash/LSH + Jaro-Winkler when available)
+    dry_run: for action="dedup" — report pairs without modifying the graph
     """
     runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks"}
+    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup"}
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
@@ -643,6 +648,9 @@ async def manage(
             project_path=project_path,
             install=(action == "install_hooks"),
         )
+    if action == "dedup":
+        from opencode_search.handlers._graph import handle_dedup_nodes
+        return await handle_dedup_nodes(project_path=project_path, dry_run=dry_run)
     return await handle_wiki_lint(project_path=project_path)
 
 
