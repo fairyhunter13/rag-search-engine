@@ -680,3 +680,72 @@ class TestT38KPhase20Routes:
         """P0: GET /api/graph_export?format=mermaid with non-indexed project returns JSON."""
         r = await client.get("/api/graph_export?project=/tmp/__none__&format=mermaid")
         assert r.status_code != 500, f"graph_export mermaid returned 500: {r.text[:200]}"
+
+
+# ---------------------------------------------------------------------------
+# T38-L: Background Jobs API (Phase 22)
+# ---------------------------------------------------------------------------
+
+class TestT38LJobsApi:
+    """P0: /api/jobs endpoints return correct shapes."""
+
+    @pytest.mark.asyncio
+    async def test_jobs_list_returns_200_with_jobs_key(self, client):
+        """P0: GET /api/jobs returns 200 with 'jobs' and 'total' keys."""
+        r = await client.get("/api/jobs")
+        assert r.status_code == 200, f"GET /api/jobs returned {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        assert "jobs" in data, f"Missing 'jobs' key in /api/jobs response: {data}"
+        assert "total" in data, f"Missing 'total' key in /api/jobs response: {data}"
+        assert isinstance(data["jobs"], list)
+        assert isinstance(data["total"], int)
+
+    @pytest.mark.asyncio
+    async def test_jobs_list_accepts_project_filter(self, client):
+        """P0: GET /api/jobs?project=... filters by project and returns 200."""
+        r = await client.get("/api/jobs?project=/tmp/__none__")
+        assert r.status_code == 200, f"jobs list with project filter returned {r.status_code}"
+        data = r.json()
+        assert "jobs" in data
+
+    @pytest.mark.asyncio
+    async def test_jobs_list_accepts_action_filter(self, client):
+        """P0: GET /api/jobs?action=pipeline returns filtered list."""
+        r = await client.get("/api/jobs?action=pipeline")
+        assert r.status_code == 200
+        data = r.json()
+        assert "jobs" in data
+
+    @pytest.mark.asyncio
+    async def test_job_status_not_found_returns_404(self, client):
+        """P0: GET /api/jobs/{bad_id} returns 404 JSON."""
+        r = await client.get("/api/jobs/nonexistent-id")
+        assert r.status_code == 404
+        data = r.json()
+        assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_job_cancel_not_found_returns_404(self, client):
+        """P0: POST /api/jobs/{bad_id}/cancel returns 404 JSON."""
+        r = await client.post("/api/jobs/nonexistent-id/cancel")
+        assert r.status_code == 404
+        data = r.json()
+        assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_dashboard_html_has_jobs_page(self, client):
+        """P0: /dashboard HTML contains page-jobs div for the Jobs tab."""
+        r = await client.get("/dashboard")
+        assert r.status_code == 200
+        assert "page-jobs" in r.text, "/dashboard HTML missing 'page-jobs' div"
+        assert "loadJobs" in r.text, "/dashboard HTML missing loadJobs JS function"
+        assert "cancelJob" in r.text, "/dashboard HTML missing cancelJob JS function"
+
+    @pytest.mark.asyncio
+    async def test_dashboard_html_has_saved_queries_page(self, client):
+        """P0: /dashboard HTML contains page-saved-queries div for Saved Queries tab."""
+        r = await client.get("/dashboard")
+        assert r.status_code == 200
+        assert "page-saved-queries" in r.text, "/dashboard HTML missing 'page-saved-queries' div"
+        assert "saveQuery" in r.text, "/dashboard HTML missing saveQuery JS function"
+        assert "loadSavedQueries" in r.text, "/dashboard HTML missing loadSavedQueries JS function"

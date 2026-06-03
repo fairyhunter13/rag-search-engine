@@ -294,6 +294,7 @@ _OPTIONAL_ROUTES = [
     "/api/system_status",
     "/api/vacuum?project=/tmp/__none__",
     "/api/tree_html?project=/tmp/__none__",
+    "/api/jobs",
 ]
 
 
@@ -551,7 +552,8 @@ _DASHBOARD_COMPLETENESS = {
     "File Tree viewer (/api/tree_html)": True,
     "Vacuum / storage cleanup (/api/vacuum)": True,
     "Mermaid graph export (/api/graph_export?format=mermaid)": True,
-    "Query builder / saved queries": False,
+    "Query builder / saved queries": True,
+    "Background jobs tab (/api/jobs)": True,
 }
 
 

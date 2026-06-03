@@ -243,6 +243,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <button class="nav-btn active" id="nav-overview" onclick="showPage('overview')"><span class="nav-icon">⬡</span><span class="nav-label">Overview</span></button>
     <div class="nav-group">Explore</div>
     <button class="nav-btn" id="nav-search" onclick="showPage('search')"><span class="nav-icon">⚡</span><span class="nav-label">Search</span></button>
+    <button class="nav-btn" id="nav-saved-queries" onclick="showPage('saved-queries')"><span class="nav-icon">🔖</span><span class="nav-label">Saved Queries</span></button>
     <button class="nav-btn" id="nav-ask" onclick="showPage('ask')"><span class="nav-icon">💬</span><span class="nav-label">Ask</span></button>
     <button class="nav-btn" id="nav-graph" onclick="showPage('graph')"><span class="nav-icon">🕸</span><span class="nav-label">Graph</span></button>
     <div class="nav-group">Knowledge</div>
@@ -259,6 +260,7 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <div class="nav-group">Admin</div>
     <button class="nav-btn" id="nav-projects" onclick="showPage('projects')"><span class="nav-icon">📋</span><span class="nav-label">Projects</span></button>
     <button class="nav-btn" id="nav-integrations" onclick="showPage('integrations')"><span class="nav-icon">🔌</span><span class="nav-label">Integrations</span></button>
+    <button class="nav-btn" id="nav-jobs" onclick="showPage('jobs')"><span class="nav-icon">⚙</span><span class="nav-label">Jobs</span></button>
     <div class="nav-group">Intelligence</div>
     <button class="nav-btn" id="nav-arch-map" onclick="showPage('arch-map')"><span class="nav-icon">🏛</span><span class="nav-label">Arch Map</span></button>
     <button class="nav-btn" id="nav-service-mesh" onclick="showPage('service-mesh')"><span class="nav-icon">🕷</span><span class="nav-label">Service Mesh</span></button>
@@ -814,6 +816,63 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     </div>
   </div>
 
+  <!-- PAGE: JOBS -->
+  <div id="page-jobs" class="page">
+    <div class="page-title">Background Jobs</div>
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:.81rem;color:var(--text-3)">Filter:</span>
+        <select id="jobs-filter-status" onchange="loadJobs()" style="font-size:.79rem;padding:4px 8px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);border-radius:var(--radius)">
+          <option value="">All statuses</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="ok">Completed</option>
+          <option value="error">Error</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <button class="btn secondary" onclick="loadJobs()" style="font-size:.78rem;padding:4px 10px">↺ Refresh</button>
+        <span id="jobs-count" style="font-size:.79rem;color:var(--text-3)"></span>
+      </div>
+    </div>
+    <div id="jobs-table" class="card">
+      <div class="loader">Loading jobs…</div>
+    </div>
+  </div>
+
+  <!-- PAGE: SAVED QUERIES -->
+  <div id="page-saved-queries" class="page">
+    <div class="page-title">Saved Queries</div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title" style="margin-bottom:10px">Save a Query</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <label style="font-size:.75rem;color:var(--text-3);display:block;margin-bottom:3px">Query *</label>
+          <input id="sq-query" type="text" placeholder="e.g. payment handler gRPC" style="width:100%;font-size:.81rem;padding:6px 10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);border-radius:var(--radius)" onkeydown="if(event.key==='Enter')saveQuery()"/>
+        </div>
+        <div>
+          <label style="font-size:.75rem;color:var(--text-3);display:block;margin-bottom:3px">Name (optional)</label>
+          <input id="sq-name" type="text" placeholder="e.g. Payment gRPC handler" style="width:100%;font-size:.81rem;padding:6px 10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);border-radius:var(--radius)"/>
+        </div>
+        <div>
+          <label style="font-size:.75rem;color:var(--text-3);display:block;margin-bottom:3px">Scope</label>
+          <select id="sq-scope" style="width:100%;font-size:.81rem;padding:6px 10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);border-radius:var(--radius)">
+            <option value="code">Code</option>
+            <option value="docs">Docs</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:.75rem;color:var(--text-3);display:block;margin-bottom:3px">Note (optional)</label>
+          <input id="sq-note" type="text" placeholder="e.g. for auth debugging" style="width:100%;font-size:.81rem;padding:6px 10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);border-radius:var(--radius)"/>
+        </div>
+      </div>
+      <button class="btn" onclick="saveQuery()">Save Query</button>
+    </div>
+    <div id="sq-list">
+      <div class="loader">No saved queries yet.</div>
+    </div>
+  </div>
+
   </main>
 </div><!-- end .main-wrap -->
 </div><!-- end .app -->
@@ -869,9 +928,11 @@ function toggleTheme(){
 /* ── Navigation ──────────────────────────────────────────────────────────────── */
 const _PAGE_LOAD={
   overview:loadOverview, search:()=>{}, ask:loadAskSuggestions, graph:()=>{},
+  'saved-queries':loadSavedQueries,
   structure:loadStructure, patterns:loadPatterns, wiki:loadWikiList,
   communities:loadCommunities, health:()=>{loadStatus();loadMetricsCharts();loadAlerts();}, verify:loadVerify,
   release:loadRelease, qa:loadQaGate, projects:()=>{}, integrations:loadIntegrations,
+  jobs:loadJobs,
   'arch-map':loadArchMap, 'service-mesh':()=>{}, 'fed-map':loadFedMap, impact:()=>{}, trace:()=>{},
   sysstat:loadSysstat,
   'file-tree':()=>{}, 'pr-impact':()=>{}, vacuum:()=>{},
@@ -2176,6 +2237,128 @@ async function runVacuum(dryRun){
   }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
 }
 
+/* ── Jobs ────────────────────────────────────────────────────────────────────── */
+async function loadJobs(){
+  const statusFilter=$('jobs-filter-status').value;
+  const el=$('jobs-table');
+  try{
+    let url='/jobs';
+    if(currentProject)url+='?project='+encodeURIComponent(currentProject);
+    const d=await api(url);
+    let jobs=d.jobs||[];
+    if(statusFilter)jobs=jobs.filter(j=>j.status===statusFilter);
+    $('jobs-count').textContent=jobs.length+' job(s)';
+    if(!jobs.length){el.innerHTML='<div style="color:var(--text-3);font-size:.81rem;padding:10px">No jobs found.</div>';return;}
+    const statusCls={queued:'warn',running:'',ok:'ok',error:'err',cancelled:''};
+    const statusIcon={queued:'⏳',running:'⚙',ok:'✓',error:'✗',cancelled:'⦸'};
+    function dur(j){
+      if(!j.started_at)return'—';
+      const end=j.completed_at?new Date(j.completed_at):new Date();
+      return((end-new Date(j.started_at))/1000).toFixed(1)+'s';
+    }
+    el.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;font-size:.79rem;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--border-2)">
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">ID</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">Action</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">Project</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">Status</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">Queued</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">Duration</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600">Error</th>
+        <th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:600"></th>
+      </tr></thead>
+      <tbody>${jobs.map(j=>{
+        const cls=statusCls[j.status]||'';
+        const icon=statusIcon[j.status]||'';
+        const proj=j.project_path?(j.project_path.split('/').slice(-2).join('/')):'—';
+        const qAt=j.queued_at?new Date(j.queued_at).toLocaleTimeString():'—';
+        const errTxt=j.error?`<code style="color:var(--red);word-break:break-all">${escHtml(j.error.slice(0,80))}</code>`:'—';
+        const canCancel=j.status==='queued'||j.status==='running';
+        return`<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:5px 8px;font-family:monospace;color:var(--text-3)">${escHtml(j.id)}</td>
+          <td style="padding:5px 8px;color:var(--accent)">${escHtml(j.action)}</td>
+          <td style="padding:5px 8px;color:var(--text-2)" title="${escAttr(j.project_path||'')}">${escHtml(proj)}</td>
+          <td style="padding:5px 8px"><span class="badge ${cls}">${icon} ${escHtml(j.status)}</span></td>
+          <td style="padding:5px 8px;color:var(--text-3)">${qAt}</td>
+          <td style="padding:5px 8px;color:var(--text-2)">${dur(j)}</td>
+          <td style="padding:5px 8px">${errTxt}</td>
+          <td style="padding:5px 8px">${canCancel?`<button class="btn secondary" style="font-size:.72rem;padding:2px 8px" onclick="cancelJob('${escAttr(j.id)}')">Cancel</button>`:''}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+  }catch(e){el.innerHTML=`<div style="color:var(--red);padding:10px">Error: ${escHtml(e.message)}</div>`;}
+}
+
+async function cancelJob(jobId){
+  try{
+    const r=await fetch('/api/jobs/'+jobId+'/cancel',{method:'POST'});
+    const d=await r.json();
+    if(d.cancelled)toast('Job '+jobId+' cancellation requested','info');
+    else toast('Could not cancel job '+jobId,'warn');
+    await loadJobs();
+  }catch(e){toast('Cancel error: '+e.message,'warn');}
+}
+
+/* ── Saved Queries ───────────────────────────────────────────────────────────── */
+const _SQ_KEY='opencode_saved_queries';
+
+function _sqLoad(){try{return JSON.parse(localStorage.getItem(_SQ_KEY)||'[]');}catch(e){return[];}}
+function _sqSave(qs){try{localStorage.setItem(_SQ_KEY,JSON.stringify(qs));}catch(e){}}
+
+function loadSavedQueries(){
+  const qs=_sqLoad();
+  const el=$('sq-list');
+  if(!qs.length){el.innerHTML='<div style="color:var(--text-3);font-size:.81rem;padding:10px">No saved queries yet. Save one above.</div>';return;}
+  el.innerHTML=qs.map((q,i)=>`<div class="card" style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:600;font-size:.88rem;margin-bottom:3px">${escHtml(q.name||q.query)}</div>
+        <code style="font-size:.77rem;color:var(--cyan)">${escHtml(q.query)}</code>
+        <span style="margin-left:8px;font-size:.72rem;background:var(--surface-3);color:var(--text-3);padding:1px 6px;border-radius:99px">${escHtml(q.scope||'code')}</span>
+        ${q.note?`<div style="font-size:.75rem;color:var(--text-3);margin-top:3px">${escHtml(q.note)}</div>`:''}
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn" style="font-size:.75rem;padding:3px 10px" onclick="runSavedQuery(${i})">▶ Run</button>
+        <button class="btn secondary" style="font-size:.75rem;padding:3px 10px;color:var(--red)" onclick="deleteSavedQuery(${i})">Delete</button>
+      </div>
+    </div>
+  </div>`).join('');
+}
+
+function saveQuery(){
+  const query=$('sq-query').value.trim();
+  if(!query){toast('Query text is required','warn');return;}
+  const qs=_sqLoad();
+  qs.unshift({
+    id:Date.now().toString(36),
+    name:$('sq-name').value.trim()||query.slice(0,40),
+    query,
+    scope:$('sq-scope').value||'code',
+    note:$('sq-note').value.trim(),
+    saved_at:new Date().toISOString(),
+  });
+  _sqSave(qs);
+  $('sq-query').value='';$('sq-name').value='';$('sq-note').value='';
+  toast('Query saved','info');
+  loadSavedQueries();
+}
+
+function runSavedQuery(i){
+  const qs=_sqLoad();
+  const q=qs[i];if(!q)return;
+  $('search-q').value=q.query;
+  if($('search-scope'))$('search-scope').value=q.scope||'code';
+  showPage('search');
+  runSearch();
+}
+
+function deleteSavedQuery(i){
+  const qs=_sqLoad();
+  qs.splice(i,1);
+  _sqSave(qs);
+  loadSavedQueries();
+}
+
 /* ── SSE live updates ────────────────────────────────────────────────────────── */
 (function initSSE(){
   let es;
@@ -2188,6 +2371,10 @@ async function runVacuum(dryRun){
         $('daemon-status').textContent='connected';
         if($('metrics-snapshot'))$('metrics-snapshot').textContent=
           `${msg.call_count??0} searches · p50=${msg.latency_p50_ms??'—'}ms · p95=${msg.latency_p95_ms??'—'}ms · 0-result=${msg.zero_result_pct!=null?msg.zero_result_pct.toFixed(1):'—'}%`;
+      }
+      if(msg.type==='job'){
+        // Refresh jobs tab if open
+        if(document.querySelector('#page-jobs.active'))loadJobs();
       }
     };
     es.onerror=function(){
