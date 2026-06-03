@@ -159,6 +159,7 @@ class TestT33EmbeddingPipeline:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.gpu
     async def test_t33_indexed_chunks_have_vectors(self, tmp_path, monkeypatch):
         """P0: After indexing, LanceDB chunks table has non-empty vector column."""
         import opencode_search.config as cfg
@@ -211,6 +212,7 @@ class TestT33EmbeddingPipeline:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.gpu
     async def test_t33_vectors_are_normalized(self, tmp_path, monkeypatch):
         """P0: Embedding vectors are L2-normalized (norm ≈ 1.0) as expected from FastEmbed."""
         import opencode_search.config as cfg

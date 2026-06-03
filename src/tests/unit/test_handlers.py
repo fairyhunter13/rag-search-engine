@@ -1274,7 +1274,7 @@ async def test_handle_dedup_nodes_no_duplicates_is_noop(tmp_path):
 # _graph_to_mermaid unit tests (no graph storage needed)
 # ============================================================
 
-def test_graph_to_mermaid_basic_structure():
+async def test_graph_to_mermaid_basic_structure():
     """_graph_to_mermaid returns a flowchart TD string with nodes and edges."""
     from opencode_search.handlers._graph import _graph_to_mermaid
     nodes = [
@@ -1295,14 +1295,14 @@ def test_graph_to_mermaid_basic_structure():
     assert "-->" in diagram
 
 
-def test_graph_to_mermaid_empty_graph():
+async def test_graph_to_mermaid_empty_graph():
     """Empty graph produces a minimal flowchart header."""
     from opencode_search.handlers._graph import _graph_to_mermaid
     diagram = _graph_to_mermaid([], [], [])
     assert diagram.startswith("flowchart TD")
 
 
-def test_graph_to_mermaid_no_cross_boundary_edges():
+async def test_graph_to_mermaid_no_cross_boundary_edges():
     """Edges referencing nodes not in the export set are omitted."""
     from opencode_search.handlers._graph import _graph_to_mermaid
     nodes = [{"id": "n1", "name": "only_node", "community_id": None}]
