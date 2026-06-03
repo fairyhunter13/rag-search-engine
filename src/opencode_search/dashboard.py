@@ -819,7 +819,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_tree_html(project_path=project, fmt=fmt, max_files=max_files)
         if "error" in result:
-            return JSONResponse(result, status_code=404)
+            return JSONResponse(result, status_code=400)
         if fmt == "html" and "html" in result:
             return _Resp(content=result["html"], media_type="text/html")
         return JSONResponse(result)

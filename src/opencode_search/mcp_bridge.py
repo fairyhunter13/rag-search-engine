@@ -46,23 +46,37 @@ def _allow_outside_workspace() -> bool:
 
 
 def _ensure_within_workspace(path: str, *, what: str) -> dict[str, Any] | None:
-    """Return an error dict if `path` escapes the workspace, else None."""
+    """Return an error dict if `path` escapes the workspace, else None.
+
+    Checks the unresolved absolute path first so that symlinks *inside* the
+    workspace directory (e.g. repositories-ubuntu/acme-campaign-be → external
+    real path) are still allowed — the symlink itself is within the workspace.
+    """
     if _allow_outside_workspace():
         return None
     root = _get_workspace_root()
-    candidate = Path(path).expanduser().resolve()
+    # Unresolved check: symlink under workspace dir → OK even if target is outside
+    candidate_abs = Path(path).expanduser().absolute()
+    try:
+        candidate_abs.relative_to(root)
+        return None
+    except ValueError:
+        pass
+    # Resolved check: real path also under workspace root → OK
+    candidate = candidate_abs.resolve()
     try:
         candidate.relative_to(root)
-    except Exception:
-        return {
-            "status": "error",
-            "error": (
-                f"{what} is restricted to the currently opened workspace. "
-                f"workspace_root={root!s} does not contain requested path={candidate!s}. "
-                "Set OPENCODE_ALLOW_INDEX_OUTSIDE_CWD=1 to override."
-            ),
-        }
-    return None
+        return None
+    except ValueError:
+        pass
+    return {
+        "status": "error",
+        "error": (
+            f"{what} is restricted to the currently opened workspace. "
+            f"workspace_root={root!s} does not contain requested path={candidate_abs!s}. "
+            "Set OPENCODE_ALLOW_INDEX_OUTSIDE_CWD=1 to override."
+        ),
+    }
 
 
 def _post_json(url: str, payload: dict[str, Any]) -> None:

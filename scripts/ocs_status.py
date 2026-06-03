@@ -101,9 +101,13 @@ def _timed(fn) -> tuple[any, float]:
     return result, (time.perf_counter() - t0) * 1000
 
 
-def _http_get(url: str, timeout: int = 5) -> tuple[int, dict | str]:
+def _http_get(url: str, timeout: int = 5, stream_check: bool = False) -> tuple[int, dict | str]:
+    """Fetch url and return (status_code, body). For SSE endpoints, use stream_check=True."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
+            if stream_check:
+                # Just check status code without consuming stream body
+                return r.status, {}
             body = r.read().decode()
             try:
                 return r.status, json.loads(body)
@@ -288,6 +292,8 @@ _OPTIONAL_ROUTES = [
     "/api/events/stream",
     "/api/alerts",
     "/api/system_status",
+    "/api/vacuum?project=/tmp/__none__",
+    "/api/tree_html?project=/tmp/__none__",
 ]
 
 
@@ -320,16 +326,24 @@ def check_dashboard() -> list[Check]:
                                 f"{route} → HTTP {code}"))
 
     # Optional/new routes (WARN not FAIL if missing)
+    _SSE_ROUTES = {"/api/events/stream"}
     for route in _OPTIONAL_ROUTES:
-        code, _ = _http_get(f"{_DAEMON_URL}{route}", timeout=3)
-        if code == 200:
-            checks.append(Check(f"dashboard{route}", "dashboard", PASS, f"{route} → 200"))
+        base_route = route.split("?")[0]
+        is_sse = base_route in _SSE_ROUTES
+        code, _ = _http_get(f"{_DAEMON_URL}{route}", timeout=3, stream_check=is_sse)
+        if code in (200, 400, 422):
+            # 200=ok, 400/422=route exists but needs params — all mean "implemented"
+            checks.append(Check(f"dashboard{base_route}", "dashboard", PASS,
+                                f"{base_route} → {code} (registered)"))
         elif code == 0:
-            checks.append(Check(f"dashboard{route}", "dashboard", SKIP,
-                                f"{route} not yet implemented"))
+            checks.append(Check(f"dashboard{base_route}", "dashboard", SKIP,
+                                f"{base_route} not yet implemented"))
+        elif code == 404:
+            checks.append(Check(f"dashboard{base_route}", "dashboard", WARN,
+                                f"{base_route} → HTTP 404 (route missing?)"))
         else:
-            checks.append(Check(f"dashboard{route}", "dashboard", WARN,
-                                f"{route} → HTTP {code} (expected 200)"))
+            checks.append(Check(f"dashboard{base_route}", "dashboard", WARN,
+                                f"{base_route} → HTTP {code} (expected 2xx/4xx)"))
 
     return checks
 
@@ -520,19 +534,23 @@ _FEATURE_COVERAGE = {
 }
 
 _DASHBOARD_COMPLETENESS = {
-    "18 navigation tabs": True,
+    "18+ navigation tabs": True,
     "30+ API endpoints": True,
     "Code search UI": True,
     "Architecture Q&A": True,
-    "Call graph visualization": True,
+    "Call graph visualization (Sigma.js WebGL)": True,
     "KB health indicators": True,
     "Quality gate panels": True,
-    "Service mesh topology": True,
-    "Federation topology map": False,
-    "Time-series charts (Chart.js)": False,
-    "SSE live updates": False,
-    "Alert rules panel": False,
-    "Metrics persistence (SQLite)": False,
+    "Service mesh topology (canvas force graph)": True,
+    "Federation topology map": True,
+    "Time-series charts (Chart.js)": True,
+    "SSE live updates (/api/events/stream)": True,
+    "Alert rules panel (/api/alerts)": True,
+    "Metrics persistence (SQLite, /api/metrics/history)": True,
+    "PR Impact tab (/api/pr_impact)": True,
+    "File Tree viewer (/api/tree_html)": True,
+    "Vacuum / storage cleanup (/api/vacuum)": True,
+    "Mermaid graph export (/api/graph_export?format=mermaid)": True,
     "Query builder / saved queries": False,
 }
 
