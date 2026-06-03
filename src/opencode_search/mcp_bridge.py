@@ -361,7 +361,8 @@ async def manage(
 
     action: "wiki_lint" (default) | "stop_watching" | "install_hooks" | "uninstall_hooks"
             | "dedup" (entity deduplication via MinHash/LSH; use dry_run=True to preview)
-    dry_run: when True (for action="dedup"), preview merges without applying them.
+            | "vacuum" (remove orphan index_budget/index_balanced dirs; use dry_run=True to preview)
+    dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting.
     """
     resolved = _resolve_path_like(project_path)
     err = _ensure_within_workspace(resolved, what="manage")

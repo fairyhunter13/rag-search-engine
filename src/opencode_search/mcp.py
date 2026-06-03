@@ -321,7 +321,12 @@ async def graph(
 @mcp.tool()
 async def overview(
     project_path: str | None = None,
-    what: Literal["structure", "communities", "status", "projects", "metrics", "graph_export", "patterns", "architecture_domains", "hierarchy", "service_mesh"] = "structure",
+    what: Literal[
+        "structure", "communities", "status", "projects", "metrics", "graph_export",
+        "patterns", "architecture_domains", "hierarchy", "service_mesh",
+        "import_cycles", "suggested_questions", "graph_diff", "surprising_connections",
+        "pr_impact",
+    ] = "structure",
     max_depth: int = 4,
     top_k: int = 100,
     export_format: Literal["json", "graphml"] = "json",
@@ -340,6 +345,8 @@ async def overview(
           | "import_cycles" (circular import dependencies using Tarjan's SCC)
           | "suggested_questions" (questions the graph is uniquely positioned to answer)
           | "graph_diff" (what changed in the graph recently)
+          | "surprising_connections" (edges spanning architectural community boundaries)
+          | "pr_impact" (changed files → communities touched + risk level; auto-detects git diff)
     project_path: not required for what="projects" or what="metrics"
     export_format: "json" | "graphml" (only for what="graph_export")
     max_nodes: cap for graph_export (default 5000)
@@ -347,7 +354,8 @@ async def overview(
     runtime_state.note_activity()
     valid = {"structure", "communities", "status", "projects", "metrics", "graph_export",
              "patterns", "architecture_domains", "hierarchy", "service_mesh",
-             "import_cycles", "suggested_questions", "graph_diff", "surprising_connections"}
+             "import_cycles", "suggested_questions", "graph_diff", "surprising_connections",
+             "pr_impact"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -472,6 +480,11 @@ async def overview(
         since = ""
         from opencode_search.handlers._graph import handle_graph_diff
         return await handle_graph_diff(project_path=project_path, since=since)
+    elif what == "pr_impact":
+        if not project_path:
+            return {"error": "project_path required for what='pr_impact'"}
+        from opencode_search.handlers._pr_impact import handle_pr_impact
+        return await handle_pr_impact(project_path=project_path)
     else:
         from opencode_search.metrics import get_metrics
         return get_metrics()
@@ -623,7 +636,7 @@ async def federation(
 async def manage(
     project_path: str,
     action: Literal[
-        "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup"
+        "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum"
     ] = "wiki_lint",
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -633,10 +646,11 @@ async def manage(
             | "install_hooks" — install git post-commit hook for auto-reindex
             | "uninstall_hooks" — remove git post-commit hook
             | "dedup" — deduplicate graph nodes (MinHash/LSH + Jaro-Winkler when available)
-    dry_run: for action="dedup" — report pairs without modifying the graph
+            | "vacuum" — remove orphan index_budget/index_balanced tier dirs; free disk space
+    dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting
     """
     runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup"}
+    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum"}
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
@@ -651,6 +665,9 @@ async def manage(
     if action == "dedup":
         from opencode_search.handlers._graph import handle_dedup_nodes
         return await handle_dedup_nodes(project_path=project_path, dry_run=dry_run)
+    if action == "vacuum":
+        from opencode_search.handlers._vacuum import handle_vacuum
+        return await handle_vacuum(project_path=project_path, dry_run=dry_run)
     return await handle_wiki_lint(project_path=project_path)
 
 

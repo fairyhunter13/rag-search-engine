@@ -581,3 +581,104 @@ class TestT38GPhase1316Endpoints:
         )
         # Either 404 (text/html from error path) or 200 text/plain — just not 500
         assert r.status_code != 500, f"callflow_html mermaid returned 500: {r.text[:200]}"
+
+
+# ---------------------------------------------------------------------------
+# T38-K: Phase 20 new routes — vacuum, pr_impact, tree_html, graph_export mermaid
+# ---------------------------------------------------------------------------
+
+class TestT38KPhase20Routes:
+    """P0: New Phase 20 API routes return expected shapes."""
+
+    @pytest.mark.asyncio
+    async def test_vacuum_missing_project_returns_400(self, client):
+        """P0: GET /api/vacuum without project param returns 400."""
+        r = await client.get("/api/vacuum")
+        assert r.status_code == 400
+        data = r.json()
+        assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_vacuum_dry_run_nonexistent_project_returns_json(self, client):
+        """P0: GET /api/vacuum with non-indexed project returns JSON (not 500)."""
+        r = await client.get("/api/vacuum?project=/tmp/__nonexistent_proj__&dry_run=true")
+        assert r.status_code != 500, f"vacuum returned 500: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), f"Expected dict, got: {type(data)}"
+
+    @pytest.mark.asyncio
+    async def test_vacuum_dry_run_returns_known_keys(self, client):
+        """P0: vacuum response has expected result keys."""
+        r = await client.get("/api/vacuum?project=/tmp/__nonexistent_proj__&dry_run=true")
+        data = r.json()
+        # Either error key or vacuum result keys
+        valid_keys = {"orphan_dirs_found", "orphan_dirs_removed", "freed_bytes", "freed_mb", "error"}
+        assert any(k in data for k in valid_keys), \
+            f"Unexpected vacuum response shape: {list(data.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_vacuum_post_missing_project_returns_400(self, client):
+        """P0: POST /api/vacuum without project in body returns 400."""
+        r = await client.post("/api/vacuum", json={})
+        assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_pr_impact_missing_project_returns_400(self, client):
+        """P0: GET /api/pr_impact without project param returns 400."""
+        r = await client.get("/api/pr_impact")
+        assert r.status_code == 400
+        data = r.json()
+        assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_pr_impact_nonexistent_project_returns_json(self, client):
+        """P0: GET /api/pr_impact with non-indexed project returns JSON (not 500)."""
+        r = await client.get("/api/pr_impact?project=/tmp/__none__&base_branch=main")
+        assert r.status_code != 500, f"pr_impact returned 500: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+
+    @pytest.mark.asyncio
+    async def test_pr_impact_post_with_files_returns_json(self, client):
+        """P0: POST /api/pr_impact with explicit files list returns JSON."""
+        r = await client.post("/api/pr_impact", json={
+            "project": "/tmp/__none__",
+            "files": ["src/foo.py", "src/bar.py"],
+            "base_branch": "main",
+        })
+        assert r.status_code != 500, f"pr_impact POST returned 500: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+
+    @pytest.mark.asyncio
+    async def test_tree_html_missing_project_returns_400(self, client):
+        """P0: GET /api/tree_html without project param returns 400."""
+        r = await client.get("/api/tree_html")
+        assert r.status_code == 400
+        data = r.json()
+        assert "error" in data
+
+    @pytest.mark.asyncio
+    async def test_tree_html_nonexistent_project_returns_404(self, client):
+        """P0: GET /api/tree_html with non-indexed project returns 404 JSON."""
+        r = await client.get("/api/tree_html?project=/tmp/__none__")
+        assert r.status_code in (404, 400), f"Unexpected status: {r.status_code}"
+
+    @pytest.mark.asyncio
+    async def test_tree_html_json_format_returns_json(self, client):
+        """P0: GET /api/tree_html?format=json returns JSON (not HTML)."""
+        r = await client.get("/api/tree_html?project=/tmp/__none__&format=json")
+        assert r.status_code != 500, f"tree_html json format returned 500: {r.text[:200]}"
+        assert "application/json" in r.headers.get("content-type", "") or r.status_code in (400, 404)
+
+    @pytest.mark.asyncio
+    async def test_graph_export_mermaid_missing_project_returns_400(self, client):
+        """P0: GET /api/graph_export?format=mermaid without project returns 400."""
+        r = await client.get("/api/graph_export?format=mermaid")
+        assert r.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_graph_export_mermaid_nonexistent_project_returns_json(self, client):
+        """P0: GET /api/graph_export?format=mermaid with non-indexed project returns JSON."""
+        r = await client.get("/api/graph_export?project=/tmp/__none__&format=mermaid")
+        assert r.status_code != 500, f"graph_export mermaid returned 500: {r.text[:200]}"

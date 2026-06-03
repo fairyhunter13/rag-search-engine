@@ -207,6 +207,10 @@ class GraphExtractor:
             return _extract_swift(file_path, src, root, file_node, now)
         elif language == "c_sharp":
             return _extract_c_sharp(file_path, src, root, file_node, now)
+        elif language == "scala":
+            return _extract_scala(file_path, src, root, file_node, now)
+        elif language == "groovy":
+            return _extract_groovy(file_path, src, root, file_node, now)
         else:
             return _extract_generic(file_path, src, root, file_node, now, language=language)
 
@@ -1484,6 +1488,204 @@ def _collect_c_sharp_calls(src: bytes, node: Any, from_id: str, raw_edges: list[
 # Generic Tier-2 extractor (Scala, Ruby, PHP, Swift, C#, Dart, Lua,
 # Elixir, Bash, R, Zig, Haskell, SQL, Groovy, Perl, OCaml, …)
 # ------------------------------------------------------------------
+
+def _extract_scala(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/object/trait/def nodes and call edges from Scala source."""
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path)
+
+    def _walk(node: Any, ctx: str | None = None) -> None:
+        kind = node.kind()
+
+        if kind in ("class_definition", "object_definition", "trait_definition"):
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{ctx}.{name}" if ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                obj_kind = "class" if "class" in kind else ("object" if "object" in kind else "trait")
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified, kind=obj_kind,
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="scala", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body") or node
+                for i in range(body.named_child_count()):
+                    _walk(body.named_child(i), qualified)
+                return
+
+        elif kind == "function_definition":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = _text(src, name_node).strip()
+                qualified = f"{ctx}.{name}" if ctx else f"{mod_name}.{name}"
+                nid = _node_id(file_path, qualified)
+                nodes.append(NodeData(
+                    id=nid, name=name, qualified_name=qualified,
+                    kind="method" if ctx else "function",
+                    file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                    language="scala", created_at=now, updated_at=now,
+                ))
+                body = node.child_by_field_name("body")
+                if body:
+                    _collect_generic_calls(src, body, nid, raw_edges)
+                return
+
+        for i in range(node.named_child_count()):
+            _walk(node.named_child(i), ctx)
+
+    _walk(root)
+    return nodes, raw_edges
+
+
+def _extract_groovy(
+    file_path: str,
+    src: bytes,
+    root: Any,
+    file_node: Any,
+    now: str,
+) -> tuple[list[Any], list[_RawEdge]]:
+    """Extract class/method nodes and call edges from Groovy source.
+
+    tree-sitter-language-pack's Groovy grammar uses command/unit/block/func nodes
+    rather than class_declaration/method_declaration. This extractor maps that structure.
+    """
+    from .storage import NodeData
+
+    nodes: list[NodeData] = [file_node]
+    raw_edges: list[_RawEdge] = []
+    mod_name = _basename(file_path)
+
+    def _first_ident(node: Any) -> str | None:
+        """Return text of the first identifier child."""
+        for i in range(node.child_count()):
+            child = node.child(i)
+            if child.kind() == "identifier":
+                return _text(src, child).strip()
+        return None
+
+    def _first_unit_ident(command_node: Any) -> str | None:
+        """Return first identifier inside first unit child of a command node."""
+        for i in range(command_node.child_count()):
+            child = command_node.child(i)
+            if child.kind() == "unit":
+                return _first_ident(child)
+        return None
+
+    def _class_name_from_block(block_node: Any) -> str | None:
+        """Get class name = first identifier in the first unit of a class block."""
+        for i in range(block_node.child_count()):
+            child = block_node.child(i)
+            if child.kind() == "unit":
+                return _first_ident(child)
+        return None
+
+    def _method_name_from_block(block_node: Any) -> str | None:
+        """Get method name = identifier inside first func node in block's first unit."""
+        for i in range(block_node.child_count()):
+            child = block_node.child(i)
+            if child.kind() == "unit":
+                for j in range(child.child_count()):
+                    func_node = child.child(j)
+                    if func_node.kind() == "func":
+                        return _first_ident(func_node)
+        return None
+
+    def _collect_groovy_calls(block_node: Any, from_id: str) -> None:
+        """Collect call edges: command > unit > func > identifier in method body."""
+        for i in range(block_node.child_count()):
+            child = block_node.child(i)
+            if child.kind() == "command":
+                for j in range(child.child_count()):
+                    unit = child.child(j)
+                    if unit.kind() == "unit":
+                        for k in range(unit.child_count()):
+                            func_node = unit.child(k)
+                            if func_node.kind() == "func":
+                                callee = _first_ident(func_node)
+                                if callee:
+                                    raw_edges.append(
+                                        _RawEdge(from_id=from_id, raw_callee=callee, kind="CALLS")
+                                    )
+                                break
+                        break
+            elif child.kind() == "block":
+                _collect_groovy_calls(child, from_id)
+
+    def _walk(node: Any, class_ctx: str | None = None) -> None:
+        if node.kind() != "command":
+            for i in range(node.child_count()):
+                _walk(node.child(i), class_ctx)
+            return
+
+        first_kw = _first_unit_ident(node)
+        if first_kw == "class":
+            for i in range(node.child_count()):
+                child = node.child(i)
+                if child.kind() == "block":
+                    class_name = _class_name_from_block(child)
+                    if class_name:
+                        qualified = f"{mod_name}.{class_name}"
+                        nid = _node_id(file_path, qualified)
+                        nodes.append(NodeData(
+                            id=nid, name=class_name, qualified_name=qualified, kind="class",
+                            file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                            language="groovy", created_at=now, updated_at=now,
+                        ))
+                        for j in range(child.child_count()):
+                            _walk(child.child(j), qualified)
+                    break
+        elif first_kw == "def":
+            for i in range(node.child_count()):
+                child = node.child(i)
+                if child.kind() == "block":
+                    method_name = _method_name_from_block(child)
+                    if method_name:
+                        qualified = f"{class_ctx}.{method_name}" if class_ctx else f"{mod_name}.{method_name}"
+                        nid = _node_id(file_path, qualified)
+                        nodes.append(NodeData(
+                            id=nid, name=method_name, qualified_name=qualified,
+                            kind="method" if class_ctx else "function",
+                            file=file_path, start_line=_lineno(node), end_line=_endlineno(node),
+                            language="groovy", created_at=now, updated_at=now,
+                        ))
+                        _collect_groovy_calls(child, nid)
+                    break
+        else:
+            for i in range(node.child_count()):
+                _walk(node.child(i), class_ctx)
+
+    _walk(root)
+    return nodes, raw_edges
+
+
+def _collect_generic_calls(
+    src: bytes, node: Any, from_id: str, raw_edges: list[_RawEdge]
+) -> None:
+    """Walk a tree-sitter body node collecting method_invocation / call_expression call edges."""
+    kind = node.kind()
+    if kind in ("method_invocation", "call_expression", "invocation_expression"):
+        name_node = (
+            node.child_by_field_name("name")
+            or node.child_by_field_name("function")
+            or node.child_by_field_name("method")
+        )
+        if name_node:
+            raw_callee = _text(src, name_node).strip()
+            if raw_callee:
+                raw_edges.append(_RawEdge(from_id=from_id, raw_callee=raw_callee, kind="CALLS"))
+    for i in range(node.named_child_count()):
+        _collect_generic_calls(src, node.named_child(i), from_id, raw_edges)
+
 
 def _extract_generic(
     file_path: str,

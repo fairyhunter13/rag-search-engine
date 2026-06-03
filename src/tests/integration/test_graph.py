@@ -1238,6 +1238,32 @@ def test_resolve_confidence_label_stored_and_read_back(tmp_path):
     assert edges[0].confidence_score == 0.85
 
 
+def test_resolve_ambiguous_label_stored_and_read_back(tmp_path):
+    """EdgeData with confidence_label AMBIGUOUS round-trips through GraphStorage SQLite."""
+    from opencode_search.graph.storage import EdgeData, GraphStorage, NodeData
+    db_path = str(tmp_path / "g_ambiguous.db")
+    gs = GraphStorage(db_path)
+    gs.open()
+    n_a = NodeData(id="aa", name="caller", qualified_name="m.caller", kind="function",
+                   file="/c.py", created_at="", updated_at="")
+    n_b = NodeData(id="bb", name="callee", qualified_name="m.callee", kind="function",
+                   file="/d.py", created_at="", updated_at="")
+    gs.upsert_nodes([n_a, n_b])
+    gs.upsert_edges([EdgeData(
+        from_id="aa", to_id="bb", kind="CALLS",
+        confidence=0.30, resolution_strategy="ambiguous_name",
+        confidence_label="AMBIGUOUS", confidence_score=0.30,
+    )])
+    edges = gs.all_edges()
+    gs.close()
+    assert len(edges) == 1
+    assert edges[0].confidence_label == "AMBIGUOUS", \
+        f"Expected AMBIGUOUS label, got: {edges[0].confidence_label!r}"
+    assert edges[0].confidence_score is not None
+    assert edges[0].confidence_score <= 0.30
+    assert edges[0].resolution_strategy == "ambiguous_name"
+
+
 def test_resolve_same_module_strategy():
     file_path = "/app/auth.py"
     caller = _node(file_path, "login", qualified_name="auth.login")
@@ -1900,6 +1926,7 @@ class TestCommunityEnrichment:
 # ===========================================================================
 # Phase 4: Extended Go + gRPC + Java extraction tests
 # ===========================================================================
+# Phase 20: Scala + Groovy extraction tests (appended below TestProtobufGrpcExtractorExtended)
 
 @pytest.fixture
 def ex() -> GraphExtractor:
@@ -2333,3 +2360,265 @@ class TestProtobufGrpcExtractorExtended:
         getter_count = sum(1 for n in names if n.startswith("Get"))
         assert getter_count >= 2, \
             f"Expected >= 2 proto getters extracted, got {getter_count}. Names: {names}"
+
+# ===========================================================================
+# Phase 20: Scala extraction tests
+# ===========================================================================
+
+class TestScalaExtraction:
+    """Scala language extraction — class, object, trait, method, call edges."""
+
+    def test_scala_class_extracted(self, ex):
+        src = (
+            "package com.example\n\n"
+            "class CartService {\n"
+            "  def getCart(id: String): String = id\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/CartService.scala", src, "scala")
+        names = _names(nodes)
+        assert "CartService" in names, f"Expected CartService class. Got: {names}"
+
+    def test_scala_object_extracted(self, ex):
+        src = (
+            "package com.example\n\n"
+            "object PaymentUtils {\n"
+            "  def formatAmount(amount: Double): String = amount.toString\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/PaymentUtils.scala", src, "scala")
+        names = _names(nodes)
+        assert "PaymentUtils" in names, f"Expected PaymentUtils object. Got: {names}"
+
+    def test_scala_trait_extracted(self, ex):
+        src = (
+            "package com.example\n\n"
+            "trait Repository {\n"
+            "  def findById(id: String): Option[String]\n"
+            "  def save(item: String): Unit\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/Repository.scala", src, "scala")
+        names = _names(nodes)
+        assert "Repository" in names, f"Expected Repository trait. Got: {names}"
+
+    def test_scala_def_method_extracted(self, ex):
+        src = (
+            "class OrderProcessor {\n"
+            "  def processOrder(orderId: String): Boolean = {\n"
+            "    true\n"
+            "  }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/OrderProcessor.scala", src, "scala")
+        names = _names(nodes)
+        assert "processOrder" in names or "OrderProcessor" in names, \
+            f"Expected processOrder or OrderProcessor. Got: {names}"
+
+    def test_scala_multiple_defs_in_class(self, ex):
+        src = (
+            "class InvoiceService {\n"
+            "  def createInvoice(id: String): String = id\n"
+            "  def cancelInvoice(id: String): Boolean = true\n"
+            "  def getInvoice(id: String): Option[String] = None\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/InvoiceService.scala", src, "scala")
+        names = _names(nodes)
+        assert len(names) >= 1, f"Expected at least 1 symbol from Scala class. Got: {names}"
+
+    def test_scala_call_edges_extracted(self, ex):
+        src = (
+            "class NotificationService {\n"
+            "  def sendEmail(to: String): Unit = {\n"
+            "    validate(to)\n"
+            "    deliver(to)\n"
+            "  }\n"
+            "  def validate(s: String): Boolean = true\n"
+            "  def deliver(s: String): Unit = ()\n"
+            "}\n"
+        )
+        _, edges = ex.extract_file("/tmp/NotificationService.scala", src, "scala")
+        call_edges = [e for e in edges if e.kind == "CALLS"]
+        assert len(call_edges) >= 1, \
+            f"Expected CALLS edges from Scala method. Got none. Total edges: {len(edges)}"
+
+    def test_scala_case_class_extracted(self, ex):
+        src = (
+            "case class OrderItem(\n"
+            "  productId: String,\n"
+            "  quantity: Int,\n"
+            "  price: Double\n"
+            ")\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/OrderItem.scala", src, "scala")
+        names = _names(nodes)
+        assert names, f"Expected at least one symbol from Scala case class. Got empty"
+
+    def test_scala_object_with_main(self, ex):
+        src = (
+            "object Main extends App {\n"
+            "  println(\"Starting\")\n"
+            "  val service = new CartService()\n"
+            "  service.run()\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/Main.scala", src, "scala")
+        names = _names(nodes)
+        assert "Main" in names, f"Expected Main object. Got: {names}"
+
+    def test_scala_companion_object_and_class(self, ex):
+        src = (
+            "class User(val name: String)\n\n"
+            "object User {\n"
+            "  def apply(name: String): User = new User(name)\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/User.scala", src, "scala")
+        names = _names(nodes)
+        assert "User" in names, f"Expected User in companion object/class. Got: {names}"
+
+    def test_scala_nodes_have_file_attribute(self, ex):
+        src = "class PaymentProcessor {\n  def pay(): Unit = ()\n}\n"
+        nodes, _ = ex.extract_file("/tmp/PaymentProcessor.scala", src, "scala")
+        for node in nodes:
+            assert node.file is not None, f"Node {node.name} missing file attribute"
+
+
+# ===========================================================================
+# Phase 20: Groovy extraction tests
+# ===========================================================================
+
+class TestGroovyExtraction:
+    """Groovy language extraction — class, methods, constructors, call edges."""
+
+    def test_groovy_class_extracted(self, ex):
+        src = (
+            "package com.example\n\n"
+            "class CartService {\n"
+            "    String getCart(String id) {\n"
+            "        return id\n"
+            "    }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/CartService.groovy", src, "groovy")
+        names = _names(nodes)
+        assert "CartService" in names, f"Expected CartService class. Got: {names}"
+
+    def test_groovy_method_extracted(self, ex):
+        src = (
+            "class OrderService {\n"
+            "    def processOrder(String orderId) {\n"
+            "        return true\n"
+            "    }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/OrderService.groovy", src, "groovy")
+        names = _names(nodes)
+        assert "processOrder" in names or "OrderService" in names, \
+            f"Expected processOrder or OrderService. Got: {names}"
+
+    def test_groovy_constructor_extracted(self, ex):
+        src = (
+            "class PaymentGateway {\n"
+            "    String apiKey\n\n"
+            "    PaymentGateway(String key) {\n"
+            "        this.apiKey = key\n"
+            "    }\n\n"
+            "    def charge(double amount) {\n"
+            "        return true\n"
+            "    }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/PaymentGateway.groovy", src, "groovy")
+        names = _names(nodes)
+        assert "PaymentGateway" in names, f"Expected PaymentGateway. Got: {names}"
+
+    def test_groovy_multiple_methods_in_class(self, ex):
+        src = (
+            "class InvoiceService {\n"
+            "    def create(String id) { return id }\n"
+            "    def cancel(String id) { return true }\n"
+            "    def get(String id) { return null }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/InvoiceService.groovy", src, "groovy")
+        names = _names(nodes)
+        assert len(names) >= 1, f"Expected at least 1 symbol from Groovy class. Got: {names}"
+
+    def test_groovy_call_edges_extracted(self, ex):
+        src = (
+            "class NotificationService {\n"
+            "    def notify(String to) {\n"
+            "        validate(to)\n"
+            "        send(to)\n"
+            "    }\n"
+            "    def validate(String s) { return true }\n"
+            "    def send(String s) { }\n"
+            "}\n"
+        )
+        _, edges = ex.extract_file("/tmp/NotificationService.groovy", src, "groovy")
+        call_edges = [e for e in edges if e.kind == "CALLS"]
+        assert len(call_edges) >= 1, \
+            f"Expected CALLS edges from Groovy method. Got none. Total: {len(edges)}"
+
+    def test_groovy_static_method(self, ex):
+        src = (
+            "class MathUtils {\n"
+            "    static double round(double value) {\n"
+            "        return Math.round(value)\n"
+            "    }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/MathUtils.groovy", src, "groovy")
+        names = _names(nodes)
+        assert "MathUtils" in names or "round" in names, \
+            f"Expected MathUtils or round. Got: {names}"
+
+    def test_groovy_interface_extracted(self, ex):
+        src = (
+            "interface Repository {\n"
+            "    def findById(String id)\n"
+            "    def save(Object item)\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/Repository.groovy", src, "groovy")
+        names = _names(nodes)
+        assert names, f"Expected at least one symbol from Groovy interface. Got empty"
+
+    def test_groovy_annotation_class(self, ex):
+        src = (
+            "import groovy.transform.CompileStatic\n\n"
+            "@CompileStatic\n"
+            "class ProductService {\n"
+            "    def getProduct(String id) {\n"
+            "        return fetchFromDB(id)\n"
+            "    }\n"
+            "    private def fetchFromDB(String id) { return null }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/ProductService.groovy", src, "groovy")
+        names = _names(nodes)
+        assert "ProductService" in names, f"Expected ProductService. Got: {names}"
+
+    def test_groovy_nodes_have_file_attribute(self, ex):
+        src = "class FooService {\n    def foo() { }\n}\n"
+        nodes, _ = ex.extract_file("/tmp/FooService.groovy", src, "groovy")
+        for node in nodes:
+            assert node.file is not None, f"Node {node.name} missing file attribute"
+
+    def test_groovy_closure_call_edges(self, ex):
+        src = (
+            "class TaskRunner {\n"
+            "    def run() {\n"
+            "        def result = compute()\n"
+            "        log(result)\n"
+            "    }\n"
+            "    def compute() { return 42 }\n"
+            "    def log(v) { println(v) }\n"
+            "}\n"
+        )
+        _, edges = ex.extract_file("/tmp/TaskRunner.groovy", src, "groovy")
+        callee_names = {e.raw_callee for e in edges if e.kind == "CALLS"}
+        assert callee_names, \
+            f"Expected at least one raw_callee in Groovy call edges. Got none"

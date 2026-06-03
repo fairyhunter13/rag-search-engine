@@ -268,6 +268,9 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     <button class="nav-btn" id="nav-import-cycles" onclick="showPage('import-cycles')"><span class="nav-icon">🔄</span><span class="nav-label">Import Cycles</span></button>
     <button class="nav-btn" id="nav-callflow" onclick="showPage('callflow')"><span class="nav-icon">📊</span><span class="nav-label">Callflow</span></button>
     <button class="nav-btn" id="nav-dedup" onclick="showPage('dedup')"><span class="nav-icon">🧹</span><span class="nav-label">Dedup</span></button>
+    <button class="nav-btn" id="nav-file-tree" onclick="showPage('file-tree')"><span class="nav-icon">🌲</span><span class="nav-label">File Tree</span></button>
+    <button class="nav-btn" id="nav-pr-impact" onclick="showPage('pr-impact')"><span class="nav-icon">🎯</span><span class="nav-label">PR Impact</span></button>
+    <button class="nav-btn" id="nav-vacuum" onclick="showPage('vacuum')"><span class="nav-icon">💾</span><span class="nav-label">Vacuum</span></button>
   </nav>
 </aside>
 
@@ -775,6 +778,42 @@ canvas{width:100%;height:100%;cursor:grab;display:block}
     </div>
   </div>
 
+  <div id="page-file-tree" class="page">
+    <div class="page-title">File Tree</div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Interactive File Tree</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Collapsible file tree generated from the graph's indexed file nodes.</p>
+      <button class="btn secondary" onclick="loadFileTree()">Load Tree</button>
+      <div id="file-tree-wrap" style="margin-top:12px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;min-height:60px"></div>
+    </div>
+  </div>
+
+  <div id="page-pr-impact" class="page">
+    <div class="page-title">PR Impact Analysis</div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Changed Files → Graph Impact</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Paste changed files (one per line) or leave empty to auto-detect from <code>git diff main...HEAD</code>.</p>
+      <div style="margin-bottom:8px">
+        <label style="font-size:.81rem;color:var(--text-2)">Base branch:</label>
+        <input id="pr-base-branch" type="text" value="main" style="width:100px;margin-left:6px"/>
+      </div>
+      <textarea id="pr-files-input" placeholder="Paste changed file paths here (optional)" rows="5" style="width:100%;box-sizing:border-box;background:var(--surface-2);color:var(--text-1);border:1px solid var(--border);border-radius:var(--radius);padding:8px;font-family:monospace;font-size:.82rem;resize:vertical"></textarea>
+      <button class="btn" style="margin-top:8px" onclick="runPrImpact()">Analyze Impact</button>
+      <div id="pr-impact-result" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <div id="page-vacuum" class="page">
+    <div class="page-title">Storage Vacuum</div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Orphan Index Cleanup</div>
+      <p style="font-size:.79rem;color:var(--text-3);margin-bottom:12px">Remove orphan <code>index_budget/</code>, <code>index_balanced/</code> directories left from embedding tier upgrades. These can waste tens of GB.</p>
+      <button class="btn secondary" onclick="runVacuum(true)">Dry Run (Preview)</button>
+      <button class="btn" style="background:var(--red);margin-left:8px" onclick="runVacuum(false)">Apply Vacuum</button>
+      <div id="vacuum-result" style="margin-top:12px"></div>
+    </div>
+  </div>
+
   </main>
 </div><!-- end .main-wrap -->
 </div><!-- end .app -->
@@ -835,6 +874,8 @@ const _PAGE_LOAD={
   release:loadRelease, qa:loadQaGate, projects:()=>{}, integrations:loadIntegrations,
   'arch-map':loadArchMap, 'service-mesh':()=>{}, 'fed-map':loadFedMap, impact:()=>{}, trace:()=>{},
   sysstat:loadSysstat,
+  'file-tree':()=>{}, 'pr-impact':()=>{}, vacuum:()=>{},
+  'import-cycles':()=>{}, callflow:()=>{}, dedup:()=>{},
 };
 
 function showPage(name){
@@ -2068,6 +2109,70 @@ async function runDedup(dryRun){
         ${d.merged_pairs.map(p=>`<div style="font-family:monospace;white-space:nowrap">${escHtml(p[0])} ← ${escHtml(p[1])}</div>`).join('')}
       </div>`:'<div style="color:var(--green);font-size:.82rem">✓ No duplicates found.</div>');
     if(!dryRun&&d.merged_count>0)toast(`Merged ${d.merged_count} duplicate node(s)`,'info');
+  }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
+}
+
+async function loadFileTree(){
+  if(!currentProject){toast('Select a project first','warn');return;}
+  const wrap=$('file-tree-wrap');
+  wrap.innerHTML='<div style="padding:12px;color:var(--text-3)">Loading…</div>';
+  try{
+    const r=await fetch('/api/tree_html?project='+encodeURIComponent(currentProject)+'&format=html');
+    if(!r.ok){const d=await r.json();wrap.innerHTML=`<div style="padding:12px;color:var(--red)">${escHtml(d.error||'Error')}</div>`;return;}
+    const html=await r.text();
+    const iframe=document.createElement('iframe');
+    iframe.style.cssText='width:100%;height:500px;border:none;background:#1e1e2e';
+    wrap.innerHTML='';
+    wrap.appendChild(iframe);
+    iframe.srcdoc=html;
+  }catch(e){wrap.innerHTML=`<div style="padding:12px;color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
+}
+
+async function runPrImpact(){
+  if(!currentProject){toast('Select a project first','warn');return;}
+  const el=$('pr-impact-result');
+  el.innerHTML='<div style="color:var(--text-3)">Analyzing…</div>';
+  const raw=$('pr-files-input').value.trim();
+  const files=raw?raw.split('\n').map(s=>s.trim()).filter(Boolean):null;
+  const base=$('pr-base-branch').value.trim()||'main';
+  try{
+    const r=await fetch('/api/pr_impact',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({project:currentProject,files,base_branch:base}),
+    });
+    const d=await r.json();
+    if(d.error){el.innerHTML=`<div style="color:var(--red)">${escHtml(d.error)}</div>`;return;}
+    const riskColor={none:'var(--text-3)',low:'var(--green)',medium:'var(--amber)',high:'var(--red)'}[d.risk_level]||'var(--text-1)';
+    const comms=(d.communities_touched||[]).map(c=>`<span style="background:var(--surface-3);padding:1px 6px;border-radius:4px;font-size:.79rem;margin:2px 2px">${escHtml(c.title||'C'+c.community_id)}</span>`).join('');
+    el.innerHTML=`<div style="margin-bottom:12px">
+      <span style="font-size:1rem;font-weight:700;color:${riskColor}">Risk: ${d.risk_level.toUpperCase()}</span>
+      <span style="margin-left:12px;font-size:.82rem;color:var(--text-2)">${d.nodes_affected} nodes · ${d.community_count} communities</span>
+    </div>
+    ${comms?`<div style="margin-bottom:10px">${comms}</div>`:''}
+    ${(d.top_affected_nodes||[]).length?`<div style="font-size:.79rem;color:var(--text-2);margin-top:8px">Top affected: ${d.top_affected_nodes.slice(0,8).map(n=>`<code>${escHtml(n.name)}</code>`).join(', ')}</div>`:''}`;
+  }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
+}
+
+async function runVacuum(dryRun){
+  if(!currentProject){toast('Select a project first','warn');return;}
+  const el=$('vacuum-result');
+  el.innerHTML='<div style="color:var(--text-3)">'+(dryRun?'Scanning…':'Running vacuum…')+'</div>';
+  try{
+    const r=await fetch('/api/vacuum',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({project:currentProject,dry_run:dryRun}),
+    });
+    const d=await r.json();
+    if(d.error){el.innerHTML=`<div style="color:var(--red)">${escHtml(d.error)}</div>`;return;}
+    const dirs=d.orphan_dirs_found||d.orphan_dirs_removed||[];
+    const badge=dryRun?'<span style="background:var(--amber);color:#000;font-size:.72rem;padding:1px 6px;border-radius:99px">DRY RUN</span>':'';
+    el.innerHTML=`<div style="margin-bottom:8px">
+      <span style="font-weight:600">${dirs.length} orphan dir(s) ${dryRun?'found':'removed'}</span> ${badge}
+      <span style="margin-left:8px;color:var(--text-3);font-size:.82rem">${d.freed_mb} MB freed</span>
+    </div>`+
+    (dirs.length?`<div style="font-family:monospace;font-size:.78rem;background:var(--surface-3);padding:8px;border-radius:var(--radius);max-height:160px;overflow-y:auto">${dirs.map(p=>`<div>${escHtml(p)}</div>`).join('')}</div>`:'<div style="color:var(--green);font-size:.82rem">✓ No orphan dirs found.</div>')+
+    (d.empty_projects&&d.empty_projects.length?`<div style="margin-top:10px;font-size:.79rem;color:var(--amber)">${d.empty_project_count} empty project(s) in registry: ${d.empty_projects.slice(0,5).map(p=>`<code>${escHtml(p.split('/').pop())}</code>`).join(', ')}</div>`:'');
+    if(!dryRun&&dirs.length)toast(`Vacuum freed ${d.freed_mb} MB`,'info');
   }catch(e){el.innerHTML=`<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;}
 }
 

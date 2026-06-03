@@ -55,7 +55,10 @@ from opencode_search.handlers._query import (
     handle_project_status,
     handle_search_code,
 )
+from opencode_search.handlers._pr_impact import handle_pr_impact
 from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+from opencode_search.handlers._tree_html import handle_tree_html
+from opencode_search.handlers._vacuum import handle_vacuum
 from opencode_search.handlers._watch import (
     handle_ensure_project_watching,
     handle_release_project_watch,
@@ -112,6 +115,9 @@ __all__ = [
     "handle_search_code",
     "handle_stop_watching",
     "handle_suggest_questions",
+    "handle_pr_impact",
+    "handle_tree_html",
+    "handle_vacuum",
     "handle_trace_path",
     "handle_wiki_generate",
     "handle_wiki_ingest",

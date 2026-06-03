@@ -1,6 +1,7 @@
 """Tests for opencode_search.metrics."""
 from __future__ import annotations
 
+import time
 import pytest
 
 from opencode_search.metrics import get_metrics, record_search, reset_metrics
@@ -116,3 +117,79 @@ def test_thread_safety():
 
     m = get_metrics()
     assert m["call_count"] == 1000
+
+
+# ---------------------------------------------------------------------------
+# SQLite persistence round-trip tests (record_search_event → /api/metrics/history)
+# ---------------------------------------------------------------------------
+
+def test_record_search_event_writes_to_sqlite(tmp_path, monkeypatch):
+    """record_search_event() inserts a row into the SQLite metrics DB."""
+    import opencode_search.dashboard as dash
+
+    # Redirect SQLite DB to a tmp dir so we don't pollute real DB
+    monkeypatch.setattr(dash, "_METRICS_DB", tmp_path / "metrics_test.db")
+    monkeypatch.setattr(dash, "_DATA_DIR", tmp_path)
+
+    dash.record_search_event(
+        query="test query",
+        scope="code",
+        result_count=5,
+        top_score=0.95,
+        latency_ms=42.0,
+        project="/tmp/test_project",
+    )
+
+    conn = dash._get_metrics_db()
+    rows = conn.execute("SELECT * FROM search_events").fetchall()
+    conn.close()
+
+    assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+    row = rows[0]
+    assert row["query"] == "test query"
+    assert row["result_count"] == 5
+    assert abs(row["latency_ms"] - 42.0) < 0.01
+    assert abs(row["top_score"] - 0.95) < 0.01
+
+
+def test_record_multiple_search_events_accumulate(tmp_path, monkeypatch):
+    """Multiple record_search_event calls accumulate rows in SQLite."""
+    import opencode_search.dashboard as dash
+
+    monkeypatch.setattr(dash, "_METRICS_DB", tmp_path / "metrics_multi.db")
+    monkeypatch.setattr(dash, "_DATA_DIR", tmp_path)
+
+    for i in range(5):
+        dash.record_search_event(
+            query=f"query_{i}",
+            scope="all",
+            result_count=i,
+            top_score=0.5,
+            latency_ms=10.0 * (i + 1),
+            project="/tmp/proj",
+        )
+
+    conn = dash._get_metrics_db()
+    count = conn.execute("SELECT COUNT(*) FROM search_events").fetchone()[0]
+    conn.close()
+
+    assert count == 5, f"Expected 5 rows, got {count}"
+
+
+def test_record_search_event_ts_is_recent(tmp_path, monkeypatch):
+    """Recorded event has a timestamp within the last 5 seconds."""
+    import opencode_search.dashboard as dash
+
+    monkeypatch.setattr(dash, "_METRICS_DB", tmp_path / "metrics_ts.db")
+    monkeypatch.setattr(dash, "_DATA_DIR", tmp_path)
+
+    before = time.time()
+    dash.record_search_event("q", "code", 1, 0.8, 30.0, "/p")
+    after = time.time()
+
+    conn = dash._get_metrics_db()
+    row = conn.execute("SELECT ts FROM search_events").fetchone()
+    conn.close()
+
+    assert before <= row["ts"] <= after + 0.1, \
+        f"Timestamp {row['ts']} not in expected range [{before}, {after}]"

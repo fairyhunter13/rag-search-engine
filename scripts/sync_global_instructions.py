@@ -38,6 +38,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "suggested_questions" — questions the graph is uniquely positioned to answer
   - what: "graph_diff" — symbols added/removed recently
   - what: "surprising_connections" — edges spanning architectural community boundaries
+  - what: "pr_impact" — PR risk: changed files → communities touched + risk level
 - `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
   - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
 - `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
@@ -46,6 +47,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - action: "install_hooks" — install git post-commit hook for auto-reindex
   - action: "uninstall_hooks" — remove git post-commit hook
   - action: "dedup" — deduplicate graph nodes (add dry_run=True to preview)
+  - action: "vacuum" — remove orphan index tier dirs; free disk space
 
 QUICK DECISION GUIDE:
   'find the payment handler'           → search('payment handler')

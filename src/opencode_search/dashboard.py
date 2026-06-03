@@ -765,6 +765,65 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await handle_dedup_nodes(project_path=project, threshold=threshold, dry_run=dry_run)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/vacuum", methods=["GET", "POST"], include_in_schema=False)
+    async def api_vacuum(request: Request) -> JSONResponse:
+        """Storage cleanup: remove orphan index tier dirs. GET=dry_run; POST with {project,dry_run}."""
+        from opencode_search.handlers._vacuum import handle_vacuum
+        if request.method == "POST":
+            body: dict = {}
+            with contextlib.suppress(Exception):
+                body = await request.json()
+            project = body.get("project") or request.query_params.get("project", "")
+            dry_run = bool(body.get("dry_run", False))
+        else:
+            project = request.query_params.get("project", "")
+            dry_run = request.query_params.get("dry_run", "true").lower() != "false"
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_vacuum(project_path=project, dry_run=dry_run)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/pr_impact", methods=["GET", "POST"], include_in_schema=False)
+    async def api_pr_impact(request: Request) -> JSONResponse:
+        """PR impact: changed files → communities touched + risk level.
+
+        GET  ?project=...&base_branch=main
+        POST {project, files: [...], base_branch: "main"}
+        """
+        from opencode_search.handlers._pr_impact import handle_pr_impact
+        if request.method == "POST":
+            body: dict = {}
+            with contextlib.suppress(Exception):
+                body = await request.json()
+            project = body.get("project") or request.query_params.get("project", "")
+            files = body.get("files") or None
+            base_branch = body.get("base_branch", "main")
+        else:
+            project = request.query_params.get("project", "")
+            files = None
+            base_branch = request.query_params.get("base_branch", "main")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_pr_impact(project_path=project, files=files, base_branch=base_branch)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/tree_html", methods=["GET"], include_in_schema=False)
+    async def api_tree_html(request: Request):
+        """Interactive file tree HTML. ?project=...&format=html|json&max_files=2000"""
+        from starlette.responses import Response as _Resp
+        from opencode_search.handlers._tree_html import handle_tree_html
+        project = request.query_params.get("project", "")
+        fmt = request.query_params.get("format", "html")
+        max_files = int(request.query_params.get("max_files", "2000"))
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_tree_html(project_path=project, fmt=fmt, max_files=max_files)
+        if "error" in result:
+            return JSONResponse(result, status_code=404)
+        if fmt == "html" and "html" in result:
+            return _Resp(content=result["html"], media_type="text/html")
+        return JSONResponse(result)
+
     @mcp.custom_route("/api/integrations_status", methods=["GET"], include_in_schema=False)
     async def api_integrations_status(_request: Request) -> JSONResponse:
         """Return all integration states by running configure_integrations.py --check --json."""
