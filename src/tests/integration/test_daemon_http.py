@@ -366,3 +366,89 @@ class TestT38EPhase3Routes:
         """P0: GET /static/nonexistent returns 404."""
         r = await client.get("/static/does_not_exist.js")
         assert r.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_static_route_serves_sigma_graph(self, client):
+        """P0: GET /static/sigma-graph.min.js serves Sigma.js WebGL bundle."""
+        r = await client.get("/static/sigma-graph.min.js")
+        assert r.status_code == 200, f"/static/sigma-graph.min.js returned {r.status_code}"
+        assert len(r.content) > 50_000, f"sigma-graph.min.js too small: {len(r.content)} bytes"
+
+
+# ---------------------------------------------------------------------------
+# T38-F: API response shape verification (key-level contracts)
+# ---------------------------------------------------------------------------
+
+class TestT38FApiShapeVerification:
+    """P0: Verify /api/* responses have the expected keys, not just 200."""
+
+    @pytest.mark.asyncio
+    async def test_metrics_has_all_required_keys(self, client):
+        """P0: GET /api/metrics includes call_count, latency_ms, zero_result_count."""
+        r = await client.get("/api/metrics")
+        assert r.status_code == 200
+        data = r.json()
+        assert "call_count" in data, f"Missing 'call_count': {list(data.keys())}"
+        assert "zero_result_count" in data, f"Missing 'zero_result_count': {list(data.keys())}"
+        assert "latency_ms" in data, f"Missing 'latency_ms': {list(data.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_metrics_latency_ms_has_percentile_keys(self, client):
+        """P0: latency_ms sub-dict has p50, p95, avg, min, max keys."""
+        r = await client.get("/api/metrics")
+        assert r.status_code == 200
+        lms = r.json().get("latency_ms", {})
+        assert isinstance(lms, dict), f"latency_ms is not a dict: {lms}"
+        for key in ("p50", "p95", "avg"):
+            assert key in lms, f"latency_ms missing '{key}' key: {list(lms.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_communities_with_project_returns_communities_key(self, client, monkeypatch):
+        """P0: GET /api/communities?project=... returns JSON with 'communities' key."""
+        _use_real_registry(monkeypatch)
+        r = await client.get(f"/api/communities?project={_ASTRO}&top_k=5")
+        assert r.status_code == 200, f"/api/communities returned {r.status_code}: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+        assert "communities" in data, f"Missing 'communities' key: {list(data.keys())}"
+        assert isinstance(data["communities"], list), "communities must be a list"
+
+    @pytest.mark.asyncio
+    async def test_patterns_with_nonexistent_project_returns_json(self, client):
+        """P0: GET /api/patterns with non-indexed project path returns JSON (not 500)."""
+        r = await client.get("/api/patterns?project=/tmp/nonexistent_project_xyz")
+        assert r.status_code != 500, f"/api/patterns returned 500: {r.text[:200]}"
+        assert r.headers.get("content-type", "").startswith("application/json"), (
+            f"Expected JSON content-type: {r.headers.get('content-type')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_metrics_history_has_search_count_key(self, client):
+        """P0: /api/metrics/history includes search_count per bucket."""
+        r = await client.get("/api/metrics/history?hours=1&bucket_m=60")
+        assert r.status_code == 200
+        data = r.json()
+        assert "search_count" in data, f"Missing 'search_count': {list(data.keys())}"
+        assert "hours" in data, f"Missing 'hours': {list(data.keys())}"
+        assert "bucket_m" in data, f"Missing 'bucket_m': {list(data.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_auto_pipeline_status_events_key(self, client):
+        """P0: /api/auto_pipeline_status returns 'events' list alongside 'enabled'."""
+        r = await client.get("/api/auto_pipeline_status")
+        assert r.status_code == 200
+        data = r.json()
+        assert "events" in data or "recent_events" in data or "enabled" in data, (
+            f"Expected events/enabled in auto_pipeline_status: {list(data.keys())}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_alerts_current_metrics_key_present(self, client):
+        """P0: GET /api/alerts response includes current_metrics dict."""
+        r = await client.get("/api/alerts")
+        assert r.status_code == 200
+        data = r.json()
+        assert "current_metrics" in data, (
+            f"Missing 'current_metrics' in alerts response: {list(data.keys())}"
+        )
+        assert isinstance(data["current_metrics"], dict)

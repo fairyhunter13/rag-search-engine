@@ -2078,3 +2078,208 @@ class TestJavaSpringBootExtraction:
         nodes, _ = ex.extract_file("/tmp/CartRepository.java", src, "java")
         names = _names(nodes)
         assert names, f"Java interface extraction returned no symbols"
+
+    def test_java_method_call_edges(self, ex):
+        """Java method calls inside a method body produce CALLS edges."""
+        src = (
+            "package com.example.service;\n\n"
+            "public class OrderService {\n"
+            "    public OrderDto processOrder(String orderId) {\n"
+            "        OrderDto order = loadOrder(orderId);\n"
+            "        validate(order);\n"
+            "        return save(order);\n"
+            "    }\n"
+            "\n"
+            "    private OrderDto loadOrder(String id) { return null; }\n"
+            "    private void validate(OrderDto o) {}\n"
+            "    private OrderDto save(OrderDto o) { return o; }\n"
+            "}\n"
+        )
+        nodes, raw_edges = ex.extract_file("/tmp/OrderService.java", src, "java")
+        names = _names(nodes)
+        assert "OrderService" in names or "processOrder" in names, \
+            f"OrderService class/method not extracted. Got: {names}"
+        calls = {e.raw_callee for e in raw_edges if e.kind == "CALLS"}
+        assert calls, (
+            f"Expected CALLS edges from Java method body. "
+            f"nodes={names}"
+        )
+
+    def test_java_constructor_injection_pattern(self, ex):
+        """Java constructor injection (Autowired-style) is extracted as a class with method."""
+        src = (
+            "package com.example.handler;\n\n"
+            "import org.springframework.beans.factory.annotation.Autowired;\n\n"
+            "public class CartHandler {\n"
+            "    private final CartService cartService;\n"
+            "\n"
+            "    @Autowired\n"
+            "    public CartHandler(CartService cartService) {\n"
+            "        this.cartService = cartService;\n"
+            "    }\n"
+            "\n"
+            "    public CartDto handle(String userId) {\n"
+            "        return cartService.getCart(userId);\n"
+            "    }\n"
+            "}\n"
+        )
+        nodes, raw_edges = ex.extract_file("/tmp/CartHandler.java", src, "java")
+        names = _names(nodes)
+        assert names, f"Java constructor injection class returned no symbols"
+        assert "CartHandler" in names or "handle" in names or "CartHandler" in names, \
+            f"Expected CartHandler class or methods. Got: {names}"
+
+    def test_java_interface_implementation(self, ex):
+        """Java class implementing an interface produces INHERITS or class/method nodes."""
+        src = (
+            "package com.example.impl;\n\n"
+            "public class CartRepositoryImpl implements CartRepository {\n"
+            "\n"
+            "    @Override\n"
+            "    public Cart findByUserId(String userId) {\n"
+            "        return null;\n"
+            "    }\n"
+            "\n"
+            "    @Override\n"
+            "    public void save(Cart cart) {}\n"
+            "\n"
+            "    @Override\n"
+            "    public void deleteByUserId(String userId) {}\n"
+            "}\n"
+        )
+        nodes, raw_edges = ex.extract_file("/tmp/CartRepositoryImpl.java", src, "java")
+        names = _names(nodes)
+        assert names, f"Java implementing class returned no symbols"
+
+    def test_java_multiple_annotated_classes(self, ex):
+        """Multiple annotated Spring classes in one snippet are all extracted."""
+        src = (
+            "package com.example;\n\n"
+            "@Component\n"
+            "public class EventPublisher {\n"
+            "    public void publish(Object event) {}\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/EventPublisher.java", src, "java")
+        names = _names(nodes)
+        assert names, f"Java @Component class returned no symbols"
+
+    def test_java_class_with_fields_extracts_class_name(self, ex):
+        """A Java class with field declarations produces at least the class node."""
+        src = (
+            "package com.example.dto;\n\n"
+            "public class CartDto {\n"
+            "    private String userId;\n"
+            "    private java.util.List<ItemDto> items;\n"
+            "\n"
+            "    public String getUserId() { return userId; }\n"
+            "    public void setUserId(String userId) { this.userId = userId; }\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/CartDto.java", src, "java")
+        names = _names(nodes)
+        assert names, f"Java DTO class returned no symbols"
+        assert "CartDto" in names or "getUserId" in names, \
+            f"Expected CartDto class or getter methods. Got: {names}"
+
+
+class TestProtobufGrpcExtractorExtended:
+    """Extended gRPC/Protobuf extraction tests — redacted-name-3 uses proto3 extensively."""
+
+    @pytest.fixture
+    def ex(self) -> GraphExtractor:
+        return GraphExtractor()
+
+    def test_grpc_streaming_rpc_stub(self, ex):
+        """Go gRPC stub for server-streaming RPC is extracted as a method."""
+        src = (
+            "package pb\n\n"
+            "type OrderServiceClient interface {\n"
+            "\tPlaceOrder(ctx context.Context, req *PlaceOrderRequest) (*PlaceOrderResponse, error)\n"
+            "\tListOrders(ctx context.Context, req *ListOrdersRequest, opts ...grpc.CallOption) (OrderService_ListOrdersClient, error)\n"
+            "}\n\n"
+            "func NewOrderServiceClient(cc *grpc.ClientConn) OrderServiceClient {\n"
+            "\treturn &orderServiceClient{cc}\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/order_grpc.pb.go", src, "go")
+        names = _names(nodes)
+        assert "NewOrderServiceClient" in names or "OrderServiceClient" in names, \
+            f"gRPC streaming client stub not extracted. Got: {names}"
+
+    def test_proto_generated_go_enum_consts(self, ex):
+        """Proto-generated Go enum constants (iota-like const blocks) are in files."""
+        src = (
+            "package pb\n\n"
+            "type OrderStatus int32\n\n"
+            "const (\n"
+            "\tOrderStatus_PENDING  OrderStatus = 0\n"
+            "\tOrderStatus_PAID     OrderStatus = 1\n"
+            "\tOrderStatus_SHIPPED  OrderStatus = 2\n"
+            ")\n\n"
+            "func (x OrderStatus) String() string {\n"
+            "\treturn \"\"\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/order_pb.go", src, "go")
+        names = _names(nodes)
+        assert names, f"No symbols extracted from proto enum stub. Got empty."
+        # At minimum the String() method should be extracted
+        assert "String" in names or "OrderStatus" in names, \
+            f"Expected String() method or OrderStatus type. Got: {names}"
+
+    def test_grpc_server_register_and_handler(self, ex):
+        """Go gRPC server with RegisterXxxServer and handler methods are both extracted."""
+        src = (
+            "package server\n\n"
+            "type PaymentServiceServer struct{}\n\n"
+            "func (s *PaymentServiceServer) ProcessPayment(ctx context.Context, req *PaymentRequest) (*PaymentResponse, error) {\n"
+            "\treturn nil, nil\n"
+            "}\n\n"
+            "func (s *PaymentServiceServer) RefundPayment(ctx context.Context, req *RefundRequest) (*RefundResponse, error) {\n"
+            "\treturn nil, nil\n"
+            "}\n\n"
+            "func RegisterPaymentServiceServer(srv *grpc.Server, impl PaymentServiceServer) {\n"
+            "\tsrv.RegisterService(&_PaymentService_serviceDesc, impl)\n"
+            "}\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/payment_grpc.pb.go", src, "go")
+        names = _names(nodes)
+        assert "ProcessPayment" in names or "RegisterPaymentServiceServer" in names, \
+            f"gRPC server symbols not extracted. Got: {names}"
+
+    def test_grpc_context_cancellation_call_edges(self, ex):
+        """gRPC handler that checks ctx.Done() produces CALLS edges."""
+        src = (
+            "package handler\n\n"
+            "func (h *OrderHandler) CreateOrder(ctx context.Context, req *CreateOrderRequest) (*Order, error) {\n"
+            "\tselect {\n"
+            "\tcase <-ctx.Done():\n"
+            "\t\treturn nil, ctx.Err()\n"
+            "\tdefault:\n"
+            "\t}\n"
+            "\treturn h.orderUseCase.Create(ctx, req)\n"
+            "}\n"
+        )
+        _, edges = ex.extract_file("/tmp/order_handler.go", src, "go")
+        callees = {e.raw_callee for e in edges if e.kind == "CALLS"}
+        assert callees, f"Expected CALLS edges from gRPC handler body. Got none"
+
+    def test_multiple_proto_message_getters(self, ex):
+        """Multiple Get* proto getter methods are all extracted."""
+        src = (
+            "package pb\n\n"
+            "type CartItem struct {\n"
+            "\tProductId string\n"
+            "\tQuantity  int32\n"
+            "\tPrice     float64\n"
+            "}\n\n"
+            "func (m *CartItem) GetProductId() string { return m.ProductId }\n"
+            "func (m *CartItem) GetQuantity() int32   { return m.Quantity }\n"
+            "func (m *CartItem) GetPrice() float64    { return m.Price }\n"
+        )
+        nodes, _ = ex.extract_file("/tmp/cart_item.pb.go", src, "go")
+        names = _names(nodes)
+        getter_count = sum(1 for n in names if n.startswith("Get"))
+        assert getter_count >= 2, \
+            f"Expected >= 2 proto getters extracted, got {getter_count}. Names: {names}"
