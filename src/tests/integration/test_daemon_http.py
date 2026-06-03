@@ -12,11 +12,9 @@ Coverage:
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -251,7 +249,7 @@ class TestT38DPostRoutes:
         """P0: POST /api/analyze_patterns is registered (not 404)."""
         r = await client.post("/api/analyze_patterns")
         assert r.status_code != 404, (
-            f"POST /api/analyze_patterns returned 404 — route not registered"
+            "POST /api/analyze_patterns returned 404 — route not registered"
         )
 
     @pytest.mark.asyncio
@@ -259,7 +257,7 @@ class TestT38DPostRoutes:
         """P1: POST /api/run_prerelease is registered (not 404)."""
         r = await client.post("/api/run_prerelease")
         assert r.status_code != 404, (
-            f"POST /api/run_prerelease returned 404 — route not registered"
+            "POST /api/run_prerelease returned 404 — route not registered"
         )
 
     @pytest.mark.asyncio
@@ -267,7 +265,7 @@ class TestT38DPostRoutes:
         """P1: POST /api/run_qa is registered (not 404)."""
         r = await client.post("/api/run_qa")
         assert r.status_code != 404, (
-            f"POST /api/run_qa returned 404 — route not registered"
+            "POST /api/run_qa returned 404 — route not registered"
         )
 
     @pytest.mark.asyncio
@@ -275,7 +273,7 @@ class TestT38DPostRoutes:
         """P1: POST /api/build_hierarchy is registered (not 404)."""
         r = await client.post("/api/build_hierarchy")
         assert r.status_code != 404, (
-            f"POST /api/build_hierarchy returned 404 — route not registered"
+            "POST /api/build_hierarchy returned 404 — route not registered"
         )
 
     @pytest.mark.asyncio
@@ -283,7 +281,7 @@ class TestT38DPostRoutes:
         """P1: POST /api/auto_fix_trigger is registered (not 404)."""
         r = await client.post("/api/auto_fix_trigger")
         assert r.status_code != 404, (
-            f"POST /api/auto_fix_trigger returned 404 — route not registered"
+            "POST /api/auto_fix_trigger returned 404 — route not registered"
         )
 
 
@@ -303,8 +301,8 @@ class TestT38EPhase3Routes:
         assert isinstance(data, dict), f"Expected dict, got {type(data)}"
         assert "timestamps" in data, f"Missing 'timestamps' key: {list(data.keys())}"
         assert "latency_p50" in data, f"Missing 'latency_p50' key: {list(data.keys())}"
-        assert "latency_p95" in data, f"Missing 'latency_p95' key"
-        assert "zero_result_pct" in data, f"Missing 'zero_result_pct' key"
+        assert "latency_p95" in data, "Missing 'latency_p95' key"
+        assert "zero_result_pct" in data, "Missing 'zero_result_pct' key"
         assert isinstance(data["timestamps"], list), "timestamps must be a list"
 
     @pytest.mark.asyncio
@@ -350,7 +348,7 @@ class TestT38EPhase3Routes:
     async def test_system_status_registered(self, client):
         """P0: GET /api/system_status is registered (not 404)."""
         r = await client.get("/api/system_status")
-        assert r.status_code != 404, f"/api/system_status returned 404 — route not registered"
+        assert r.status_code != 404, "/api/system_status returned 404 — route not registered"
         # Returns either a status dict or a 503/500 if ocs_status.py is unavailable
         assert r.status_code in (200, 500, 503), f"Unexpected status: {r.status_code}"
 

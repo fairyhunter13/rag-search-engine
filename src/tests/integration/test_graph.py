@@ -1,15 +1,17 @@
 """Tests for the graph pipeline: AST extraction, storage, resolution, community detection, and E2E."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import os
 import sqlite3
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-import pytest_asyncio
 
 from opencode_search.graph.community import CommunityDetector
 from opencode_search.graph.extractor import GraphExtractor, _RawEdge, language_for_file
@@ -1632,8 +1634,6 @@ def test_leiden_large_graph_500_nodes_under_30s(storage):
 
 @pytest.mark.asyncio
 async def test_handle_get_communities_returns_all(tmp_path):
-    from unittest.mock import patch
-
     from opencode_search.graph.storage import CommunityData
     from opencode_search.handlers._graph import handle_get_communities
 
@@ -1660,8 +1660,6 @@ async def test_handle_get_communities_returns_all(tmp_path):
 
 @pytest.mark.asyncio
 async def test_handle_get_communities_before_detection_returns_empty(tmp_path):
-    from unittest.mock import patch
-
     from opencode_search.handlers._graph import handle_get_communities
 
     graph_db_path = str(tmp_path / "graph.db")
@@ -1968,7 +1966,7 @@ class TestGoExtractionComprehensive:
         # are extracted); the extractor returns interface method names or the interface itself.
         # Accept any symbol from this source — at minimum the interface methods are captured
         # as plain function nodes OR the interface type itself as a "class"-kind node.
-        assert names, f"No symbols extracted from Go interface source. Got empty set."
+        assert names, "No symbols extracted from Go interface source. Got empty set."
 
     def test_qualified_name_with_receiver_type(self, ex):
         src = "package usecase\n\ntype OrderUseCase struct{}\n\nfunc (o *OrderUseCase) CreateOrder() error {\n\treturn nil\n}\n"
@@ -2061,7 +2059,7 @@ class TestProtobufGrpcExtraction:
         )
         _, edges = ex.extract_file("/tmp/handler.go", src, "go")
         callees = {e.raw_callee for e in edges if e.kind == "CALLS"}
-        assert callees, f"Expected CALLS from gRPC client call. Got none"
+        assert callees, "Expected CALLS from gRPC client call. Got none"
 
     def test_proto_message_struct_in_generated_go(self, ex):
         """Proto-generated Go has message structs with field methods."""
@@ -2122,7 +2120,7 @@ class TestJavaSpringBootExtraction:
         nodes, _ = ex.extract_file("/tmp/CartController.java", src, "java")
         names = _names(nodes)
         # At minimum the class or methods should be extracted
-        assert names, f"Java Spring Boot extraction returned no symbols"
+        assert names, "Java Spring Boot extraction returned no symbols"
         assert "CartController" in names or "getCart" in names or "addItem" in names, \
             f"Expected CartController class or methods. Got: {names}"
 
@@ -2141,7 +2139,7 @@ class TestJavaSpringBootExtraction:
         )
         nodes, _ = ex.extract_file("/tmp/CartService.java", src, "java")
         names = _names(nodes)
-        assert names, f"Java @Service class extraction returned no symbols"
+        assert names, "Java @Service class extraction returned no symbols"
 
     def test_repository_interface_extraction(self, ex):
         src = (
@@ -2154,7 +2152,7 @@ class TestJavaSpringBootExtraction:
         )
         nodes, _ = ex.extract_file("/tmp/CartRepository.java", src, "java")
         names = _names(nodes)
-        assert names, f"Java interface extraction returned no symbols"
+        assert names, "Java interface extraction returned no symbols"
 
     def test_java_method_call_edges(self, ex):
         """Java method calls inside a method body produce CALLS edges."""
@@ -2202,7 +2200,7 @@ class TestJavaSpringBootExtraction:
         )
         nodes, raw_edges = ex.extract_file("/tmp/CartHandler.java", src, "java")
         names = _names(nodes)
-        assert names, f"Java constructor injection class returned no symbols"
+        assert names, "Java constructor injection class returned no symbols"
         assert "CartHandler" in names or "handle" in names or "CartHandler" in names, \
             f"Expected CartHandler class or methods. Got: {names}"
 
@@ -2226,7 +2224,7 @@ class TestJavaSpringBootExtraction:
         )
         nodes, raw_edges = ex.extract_file("/tmp/CartRepositoryImpl.java", src, "java")
         names = _names(nodes)
-        assert names, f"Java implementing class returned no symbols"
+        assert names, "Java implementing class returned no symbols"
 
     def test_java_multiple_annotated_classes(self, ex):
         """Multiple annotated Spring classes in one snippet are all extracted."""
@@ -2239,7 +2237,7 @@ class TestJavaSpringBootExtraction:
         )
         nodes, _ = ex.extract_file("/tmp/EventPublisher.java", src, "java")
         names = _names(nodes)
-        assert names, f"Java @Component class returned no symbols"
+        assert names, "Java @Component class returned no symbols"
 
     def test_java_class_with_fields_extracts_class_name(self, ex):
         """A Java class with field declarations produces at least the class node."""
@@ -2255,7 +2253,7 @@ class TestJavaSpringBootExtraction:
         )
         nodes, _ = ex.extract_file("/tmp/CartDto.java", src, "java")
         names = _names(nodes)
-        assert names, f"Java DTO class returned no symbols"
+        assert names, "Java DTO class returned no symbols"
         assert "CartDto" in names or "getUserId" in names, \
             f"Expected CartDto class or getter methods. Got: {names}"
 
@@ -2300,7 +2298,7 @@ class TestProtobufGrpcExtractorExtended:
         )
         nodes, _ = ex.extract_file("/tmp/order_pb.go", src, "go")
         names = _names(nodes)
-        assert names, f"No symbols extracted from proto enum stub. Got empty."
+        assert names, "No symbols extracted from proto enum stub. Got empty."
         # At minimum the String() method should be extracted
         assert "String" in names or "OrderStatus" in names, \
             f"Expected String() method or OrderStatus type. Got: {names}"
@@ -2340,7 +2338,7 @@ class TestProtobufGrpcExtractorExtended:
         )
         _, edges = ex.extract_file("/tmp/order_handler.go", src, "go")
         callees = {e.raw_callee for e in edges if e.kind == "CALLS"}
-        assert callees, f"Expected CALLS edges from gRPC handler body. Got none"
+        assert callees, "Expected CALLS edges from gRPC handler body. Got none"
 
     def test_multiple_proto_message_getters(self, ex):
         """Multiple Get* proto getter methods are all extracted."""
@@ -2453,7 +2451,7 @@ class TestScalaExtraction:
         )
         nodes, _ = ex.extract_file("/tmp/OrderItem.scala", src, "scala")
         names = _names(nodes)
-        assert names, f"Expected at least one symbol from Scala case class. Got empty"
+        assert names, "Expected at least one symbol from Scala case class. Got empty"
 
     def test_scala_object_with_main(self, ex):
         src = (
@@ -2584,7 +2582,7 @@ class TestGroovyExtraction:
         )
         nodes, _ = ex.extract_file("/tmp/Repository.groovy", src, "groovy")
         names = _names(nodes)
-        assert names, f"Expected at least one symbol from Groovy interface. Got empty"
+        assert names, "Expected at least one symbol from Groovy interface. Got empty"
 
     def test_groovy_annotation_class(self, ex):
         src = (
@@ -2621,4 +2619,4 @@ class TestGroovyExtraction:
         _, edges = ex.extract_file("/tmp/TaskRunner.groovy", src, "groovy")
         callee_names = {e.raw_callee for e in edges if e.kind == "CALLS"}
         assert callee_names, \
-            f"Expected at least one raw_callee in Groovy call edges. Got none"
+            "Expected at least one raw_callee in Groovy call edges. Got none"
