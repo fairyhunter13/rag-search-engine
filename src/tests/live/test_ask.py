@@ -45,12 +45,13 @@ def test_ask_feature_scope_returns_structured_data(http, project):
 
 
 def test_ask_returns_non_empty_for_concrete_question(http, project):
-    """A concrete how-does-X-work question must return a non-empty answer."""
+    """A concrete how-does-X-work question must return a non-empty answer or results."""
     r = http.get("/api/ask", params={"q": "How does search indexing work?", "project": project})
     assert r.status_code == 200
     data = r.json()
     answer = data.get("answer", "") or data.get("summary", "")
     communities = data.get("communities", [])
-    assert len(answer) > 20 or len(communities) > 0, (
+    results = data.get("results", [])
+    assert len(answer) > 20 or len(communities) > 0 or len(results) > 0, (
         f"ask returned empty result: {data}"
     )

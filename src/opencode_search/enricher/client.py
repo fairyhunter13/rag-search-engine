@@ -942,8 +942,10 @@ class CodexClient(LLMClient):
                 "codex CLI not found. Install from: https://github.com/openai/codex"
             )
         prompt = _format_messages_as_prompt(messages)
-        # codex exec <task> runs in full-auto non-interactive mode
-        cmd = ["codex", "exec", prompt]
+        # codex exec <task> runs in full-auto non-interactive mode.
+        # --skip-git-repo-check avoids "Not inside a trusted directory" when the
+        # daemon's working directory is not a git repo (e.g., /home/user/).
+        cmd = ["codex", "exec", prompt, "--skip-git-repo-check"]
         if self.pass_model_flag:
             cmd += ["--model", self.model]
         try:

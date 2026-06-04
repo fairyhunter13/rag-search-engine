@@ -124,19 +124,35 @@ async def handle_project_status(path: str) -> dict[str, Any]:
     }
 
 
+def _count_communities(project_path: str) -> int:
+    """Return community count from graph.db, 0 if unavailable."""
+    import sqlite3
+    from opencode_search.config import get_project_graph_db_path
+    db_path = get_project_graph_db_path(project_path)
+    with contextlib.suppress(Exception):
+        conn = sqlite3.connect(db_path, timeout=2.0)
+        try:
+            (count,) = conn.execute("SELECT COUNT(*) FROM communities").fetchone()
+            return int(count)
+        finally:
+            conn.close()
+    return 0
+
+
 async def handle_list_indexed_projects() -> dict[str, Any]:
     """Return all projects currently registered in the index registry."""
+    import asyncio
     registry = load_registry()
     active = set(watcher_manager.list_active())
-    return {
-        "projects": [
-            {
-                "path": p.path,
-                "db_path": str(p.db_path),
-                "watching": p.path in active or p.watch,
-                "indexed_at": p.indexed_at,
-                "file_count": p.file_count,
-            }
-            for p in registry.values()
-        ]
-    }
+    rows = []
+    for p in registry.values():
+        community_count = await asyncio.to_thread(_count_communities, p.path)
+        rows.append({
+            "path": p.path,
+            "db_path": str(p.db_path),
+            "watching": p.path in active or p.watch,
+            "indexed_at": p.indexed_at,
+            "file_count": p.file_count,
+            "communities": community_count,
+        })
+    return {"projects": rows}

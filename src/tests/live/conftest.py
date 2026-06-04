@@ -45,13 +45,19 @@ def gpu():
 
 @pytest.fixture(scope="session")
 def project(http):
-    """Return the path of an indexed project that has communities."""
+    """Return the path of an indexed project that has communities.
+
+    Prefers larger projects (communities > 100) to ensure richer patterns data.
+    Falls back to any project with communities if no large ones are found.
+    """
     r = http.get("/api/projects")
     projects = r.json().get("projects", [])
-    indexed = [p["path"] for p in projects if p.get("communities", 0) > 0]
-    if not indexed:
+    all_indexed = [p for p in projects if p.get("communities", 0) > 0]
+    if not all_indexed:
         pytest.skip("No indexed project with communities — run build(action='pipeline') first")
-    return indexed[0]
+    # Prefer a project with > 100 communities for richer test coverage
+    large = [p["path"] for p in all_indexed if p.get("communities", 0) > 100]
+    return large[0] if large else all_indexed[0]["path"]
 
 
 def parse_sse(response: httpx.Response) -> list[dict]:

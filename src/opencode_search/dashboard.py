@@ -321,6 +321,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             result = await handle_get_callees(symbol=symbol, project_path=project, depth=depth)
         elif relation == "impact":
             result = await handle_detect_impact(symbol=symbol, project_path=project)
+        elif relation == "impact_narrative":
+            from opencode_search.handlers._impact import handle_impact_narrative
+            result = await handle_impact_narrative(symbol=symbol, project_path=project)
         elif relation == "path" and to_sym:
             result = await handle_trace_path(from_symbol=symbol, to_symbol=to_sym, project_path=project)
         else:

@@ -18,8 +18,8 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-_MAP_BATCH_SIZE = 8     # communities per MAP call
-_MAX_COMMUNITIES = 200  # cap to avoid very long runs
+_MAP_BATCH_SIZE = 12    # communities per MAP call
+_MAX_COMMUNITIES = 60   # cap: 5 MAP batches × ~30s codex each = ~90s at semaphore(4)
 
 
 def _score_community(title: str | None, summary: str | None, query_lower: str) -> float:
@@ -130,7 +130,7 @@ async def handle_global_synthesis(
 
     # Limit concurrent Ollama calls to prevent CPU saturation (GPU handles tokens
     # but attention/tokenisation still saturates CPU cores with too many parallel requests)
-    _llm_sem = asyncio.Semaphore(2)
+    _llm_sem = asyncio.Semaphore(4)
 
     async def _map_batch(summaries: list[str]) -> str:
         async with _llm_sem:
