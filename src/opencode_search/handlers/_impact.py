@@ -40,7 +40,6 @@ async def handle_impact_narrative(
     impact_data = await handle_detect_impact(
         symbol=symbol,
         project_path=project_path,
-        include_federation=include_federation,
     )
 
     callers = impact_data.get("callers", [])

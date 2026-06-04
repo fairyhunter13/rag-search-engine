@@ -56,11 +56,14 @@ def test_vector_search_returns_results(http, project):
 
 def test_graph_has_nodes(http, project):
     """The graph must have nodes after indexing (tree-sitter extraction worked)."""
-    r = http.get("/api/overview", params={"project": project, "what": "status"})
+    r = http.get("/api/overview", params={"project": project, "what": "structure"})
     assert r.status_code == 200
     data = r.json()
-    node_count = data.get("node_count", 0) or data.get("graph_nodes", 0) or data.get("nodes", 0)
-    if node_count == 0:
-        r2 = http.get("/api/overview", params={"project": project, "what": "structure"})
-        node_count = r2.json().get("graph", {}).get("nodes", 0)
-    assert node_count > 0, f"Graph has zero nodes — tree-sitter extraction may have failed: {data}"
+    graph_stats = data.get("graph_stats", {})
+    node_count = (
+        graph_stats.get("nodes", 0)
+        or graph_stats.get("total_communities", 0)
+        or data.get("node_count", 0)
+        or data.get("graph", {}).get("nodes", 0)
+    )
+    assert node_count > 0, f"Graph has zero nodes — tree-sitter extraction may have failed: {graph_stats}"
