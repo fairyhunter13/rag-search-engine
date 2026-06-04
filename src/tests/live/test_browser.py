@@ -36,13 +36,14 @@ def require_daemon():
 
 @pytest.fixture(scope="module")
 def live_project():
-    """Return an indexed project path or skip the module."""
+    """Return an indexed project path with communities > 100 for richer test coverage."""
     r = httpx.get(f"{DAEMON_URL}/api/projects", timeout=10)
     projects = r.json().get("projects", [])
-    indexed = [p["path"] for p in projects if p.get("communities", 0) > 0]
-    if not indexed:
+    all_indexed = [p for p in projects if p.get("communities", 0) > 0]
+    if not all_indexed:
         pytest.skip("No indexed project with communities")
-    return indexed[0]
+    large = [p["path"] for p in all_indexed if p.get("communities", 0) > 100]
+    return large[0] if large else all_indexed[0]["path"]
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +113,7 @@ class TestPulseView:
         page.goto(DASHBOARD_URL)
         page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
         pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse'), [data-tab='pulse']").first
-        if pulse.count() == 0:
-            pytest.skip("No Pulse tab — may be named differently")
+        assert pulse.count() > 0, "No Pulse tab found — dashboard nav must have a Pulse tab"
         pulse.click()
         page.wait_for_timeout(500)
         content = page.content()
@@ -289,8 +289,7 @@ class TestAdminView:
     def test_admin_projects_table_visible(self, page):
         self._open_admin(page)
         projects_content = page.locator("table, .projects-list, .project-row, [data-project]").first
-        if projects_content.count() == 0:
-            pytest.skip("No projects table in admin view")
+        assert projects_content.count() > 0, "No projects table in admin view — Admin tab must show indexed projects"
         assert projects_content.is_visible(), "Projects table not visible in admin"
 
     def test_admin_jobs_section_present(self, page):
