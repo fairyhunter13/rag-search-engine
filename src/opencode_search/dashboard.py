@@ -198,10 +198,18 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/overview", methods=["GET"], include_in_schema=False)
     async def api_overview(request: Request) -> JSONResponse:
         from opencode_search.handlers import handle_project_structure
+        from opencode_search.mcp import overview as mcp_overview
         project = request.query_params.get("project", "")
+        what = request.query_params.get("what", "structure")
+        if what == "projects":
+            result = await mcp_overview(what="projects")
+            return JSONResponse(result)
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_project_structure(project_path=project, max_depth=4)
+        if what == "structure":
+            result = await handle_project_structure(project_path=project, max_depth=4)
+        else:
+            result = await mcp_overview(project_path=project, what=what)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/communities", methods=["GET"], include_in_schema=False)

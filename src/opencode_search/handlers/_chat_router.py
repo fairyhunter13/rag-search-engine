@@ -103,16 +103,14 @@ async def classify_intent_llm(query: str) -> str:
             intent = m.group(1)
             if intent in _VALID_INTENTS:
                 return intent
-        # Scan response text for a known intent name (ordered: specific → generic)
-        text_lower = text.lower()
-        for intent in ["debug_trace", "graph_callers", "graph_callees", "graph_impact",
-                        "architecture", "debug", "global", "search", "feature"]:
-            if intent in text_lower:
+        # Try to find a valid intent anywhere in the LLM response (structured output variant)
+        for intent in _VALID_INTENTS:
+            if f'"{intent}"' in text or f"'{intent}'" in text:
                 return intent
     except Exception as e:
         log.debug("LLM intent classification failed: %s", e)
 
-    return "feature"
+    return "search"
 
 
 _EXTRACT_SYMBOL_SYSTEM = (
@@ -698,7 +696,7 @@ async def handle_chat_auto(
             answer = _prose_graph(result, query, "callees")
             sources = list({n.get("file_path", "") for n in result.get("callees", []) if n.get("file_path")})
         else:
-            from opencode_search.handlers._impact import handle_detect_impact
+            from opencode_search.handlers._graph import handle_detect_impact
             result = await handle_detect_impact(symbol=symbol, project_path=project_path)
             answer = _prose_impact(result, query)
             sources = result.get("affected_files", [])

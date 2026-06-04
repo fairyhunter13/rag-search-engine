@@ -15,6 +15,7 @@ LRU result cache (TTLCache) avoids redundant GPU inference for repeated queries.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import logging
 import os
@@ -207,8 +208,17 @@ def _cache_key(
 
 
 # ---------------------------------------------------------------------------
-# GPU embedding and reranking (sync wrappers dispatched via to_thread)
+# GPU embedding and reranking (sync wrappers dispatched via dedicated executor)
 # ---------------------------------------------------------------------------
+
+# Single-thread executor: ONNX/CUDA cuBLAS handles are per-thread. Using the
+# default asyncio.to_thread() pool creates new threads under load — each new
+# thread must allocate a fresh cuBLAS handle, which fails when VRAM is nearly
+# full. A single persistent thread creates its cuBLAS handle once at first use
+# and reuses it for all subsequent calls.
+_GPU_INFER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="gpu-infer"
+)
 
 
 def _embed_query_sync(query: str, model: str, dims: int) -> list[float]:
@@ -360,8 +370,9 @@ async def _rerank_rows(
         # so that authority weighting can promote high-authority chunks that would
         # otherwise be pruned by the cross-encoder's raw top_k cut.
         rerank_k = len(docs)
-        ranked: list[tuple[int, float]] = await asyncio.to_thread(
-            _rerank_sync, query, docs, model, rerank_k
+        loop = asyncio.get_event_loop()
+        ranked: list[tuple[int, float]] = await loop.run_in_executor(
+            _GPU_INFER_EXECUTOR, _rerank_sync, query, docs, model, rerank_k
         )
 
     out: list[dict] = []
@@ -416,9 +427,11 @@ async def search(
 
     t0 = time.perf_counter()
 
-    # Embed the query on GPU
-    query_vec: list[float] = await asyncio.to_thread(
-        _embed_query_sync, query, embed_model, dims
+    # Embed the query on GPU — always dispatched to the dedicated single-thread
+    # executor so the ONNX cuBLAS handle is created once and reused.
+    loop = asyncio.get_event_loop()
+    query_vec: list[float] = await loop.run_in_executor(
+        _GPU_INFER_EXECUTOR, _embed_query_sync, query, embed_model, dims
     )
     if not query_vec:
         log.error("embed_query returned empty vector for query=%.40r", query)

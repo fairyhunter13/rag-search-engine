@@ -1086,8 +1086,18 @@ def create_query_llm_client() -> LLMClient | None:
     timeout = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", str(DEFAULT_QUERY_LLM_TIMEOUT)))
     num_ctx = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "8192"))
 
-    if provider == "ollama":
-        client: LLMClient = OllamaClient(
+    if provider == "codex":
+        primary: LLMClient = CodexClient(model=model, timeout=timeout)
+        if not os.environ.get("OPENCODE_LLM_NO_FALLBACK") and shutil.which("claude"):
+            fallback: LLMClient = ClaudeCodeClient(model=_CLAUDE_CODE_DEFAULT_MODEL, timeout=timeout)
+            client: LLMClient = FallbackLLMClient(primary=primary, fallback=fallback)
+        else:
+            client = primary
+        if not primary.is_available():
+            return create_llm_client()
+        return client
+    elif provider == "ollama":
+        client = OllamaClient(
             base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
             model=model,
             timeout=timeout,
@@ -1099,8 +1109,6 @@ def create_query_llm_client() -> LLMClient | None:
         client = OpenAIClient.from_env()
     elif provider == "claude-code":
         client = ClaudeCodeClient(model=model, timeout=timeout)
-    elif provider == "codex":
-        client = CodexClient(model=model, timeout=timeout)
     else:
         return create_llm_client()
 
