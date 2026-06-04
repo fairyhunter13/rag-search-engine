@@ -604,3 +604,75 @@ class TestFullConversationFlow:
         # Should mention a file path or code concept
         assert any(kw in a3.lower() for kw in ["graph", "storage", ".py", "file", "module"]), \
             f"Turn 3 answer doesn't reference code: {a3[:200]}"
+
+    # ── Phase 35: Architecture + enhanced debug ─────────────────────────────
+
+    def test_architecture_question_routes_to_architecture_intent(self, http):
+        """End-to-end architecture question should be classified as 'architecture' intent."""
+        r = http.post("/api/chat", json={"project": _PROJECT, "query": "how is the architecture end to end of this codebase?"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body.get("intent") == "architecture", \
+            f"Expected architecture intent, got: {body.get('intent')}"
+
+    def test_architecture_answer_names_multiple_layers(self, http):
+        """Architecture answer should describe multiple layers of the system."""
+        r = http.post("/api/chat", json={"project": _PROJECT, "query": "walk me through the whole system from entry to storage"})
+        assert r.status_code == 200
+        answer = r.json().get("answer", "").lower()
+        layer_keywords = ["handler", "storage", "router", "api", "layer", "entry",
+                          "data", "business", "infra", "service", "mcp"]
+        matched = sum(1 for kw in layer_keywords if kw in answer)
+        assert matched >= 3, \
+            f"Architecture answer should name multiple layers (got {matched}): {answer[:400]}"
+        assert len(answer) > 300, f"Architecture answer too short: {len(answer)} chars"
+
+    def test_debug_question_identifies_business_process(self, http):
+        """Debug question should identify the business process containing the bug."""
+        r = http.post("/api/chat", json={
+            "project": _PROJECT,
+            "query": "can we find the exact line of code, at which business process, at which algorithm, that caused the bug where chat messages disappear after sending?",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        answer = body.get("answer", "")
+        assert body.get("intent") == "debug", f"Expected debug intent, got: {body.get('intent')}"
+        assert len(answer) > 200, f"Debug answer too short: {len(answer)} chars"
+        has_process = any(kw in answer.lower() for kw in [
+            "process", "handler", "community", "workflow", "layer", "business",
+        ])
+        assert has_process, f"Debug answer should name a business process: {answer[:500]}"
+
+    def test_debug_question_names_file_or_line(self, http):
+        """Debug answer should reference specific files or functions."""
+        r = http.post("/api/chat", json={
+            "project": _PROJECT,
+            "query": "why does the streaming chat response sometimes stop or not show tokens?",
+        })
+        assert r.status_code == 200
+        answer = r.json().get("answer", "")
+        has_file_ref = ".py" in answer or "line" in answer.lower() or "function" in answer.lower()
+        assert has_file_ref, f"Debug answer should reference specific code: {answer[:500]}"
+        assert len(answer) > 300
+
+    def test_architecture_streams_native_tokens(self, http):
+        """Architecture intent should stream tokens (not heartbeat-only)."""
+        tokens = []
+        with httpx.stream("POST", f"{_DAEMON}/api/chat_stream",
+                          json={"project": _PROJECT, "query": "how is the architecture end to end?"},
+                          timeout=120) as resp:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if evt.get("type") == "token":
+                    tokens.append(evt["text"])
+                if evt.get("type") == "done":
+                    assert evt.get("intent") == "architecture", \
+                        f"Expected architecture in done event, got: {evt.get('intent')}"
+                    break
+        assert len(tokens) >= 5, \
+            f"Architecture streaming should deliver tokens, got {len(tokens)}"

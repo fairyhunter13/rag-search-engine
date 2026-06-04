@@ -362,39 +362,52 @@ class TestDebugTraceEndpoint:
 
 # ── 5. Chat Router Intent Classification ─────────────────────────────────────
 
+@pytest.mark.runtime_deps
 class TestChatRouterIntentClassification:
-    """Prove the intent classifier routes queries correctly."""
+    """Prove the LLM intent classifier routes queries correctly (requires running Ollama)."""
 
-    def _classify(self, query):
-        from opencode_search.handlers._chat_router import classify_intent
-        return classify_intent(query)
+    async def _classify(self, query):
+        from opencode_search.handlers._chat_router import classify_intent_llm
+        return await classify_intent_llm(query)
 
-    def test_stack_trace_detected_as_debug_trace(self):
-        intent = self._classify(PYTHON_TRACEBACK)
+    @pytest.mark.asyncio
+    async def test_stack_trace_detected_as_debug_trace(self):
+        intent = await self._classify(PYTHON_TRACEBACK)
         assert intent == "debug_trace"
 
-    def test_bug_question_detected_as_debug(self):
-        assert self._classify("why does the campaign clashing fail?") == "debug"
-        assert self._classify("there's an error in the payment handler") == "debug"
+    @pytest.mark.asyncio
+    async def test_bug_question_detected_as_debug(self):
+        assert await self._classify("why does the campaign clashing fail?") == "debug"
+        assert await self._classify("there's an error in the payment handler") == "debug"
 
-    def test_find_query_detected_as_search(self):
-        assert self._classify("find the authentication middleware") == "search"
-        assert self._classify("where is the payment handler defined?") == "search"
+    @pytest.mark.asyncio
+    async def test_find_query_detected_as_search(self):
+        assert await self._classify("find the authentication middleware") == "search"
+        assert await self._classify("where is the payment handler defined?") == "search"
 
-    def test_callers_query_detected_as_graph(self):
-        assert self._classify("what calls process_order?") == "graph_callers"
-        assert self._classify("callers of handle_index") == "graph_callers"
+    @pytest.mark.asyncio
+    async def test_callers_query_detected_as_graph(self):
+        assert await self._classify("what calls process_order?") == "graph_callers"
+        assert await self._classify("callers of handle_index") == "graph_callers"
 
-    def test_impact_query_detected_as_graph(self):
-        assert self._classify("what breaks if I change the storage layer?") == "graph_impact"
+    @pytest.mark.asyncio
+    async def test_impact_query_detected_as_graph(self):
+        assert await self._classify("what breaks if I change the storage layer?") == "graph_impact"
 
-    def test_list_all_detected_as_global(self):
-        assert self._classify("list all features in the codebase") == "global"
-        assert self._classify("give me all business processes") == "global"
+    @pytest.mark.asyncio
+    async def test_list_all_detected_as_global(self):
+        assert await self._classify("list all features in the codebase") == "global"
+        assert await self._classify("give me all business processes") == "global"
 
-    def test_how_does_defaults_to_feature(self):
-        assert self._classify("how does the indexing pipeline work?") == "feature"
-        assert self._classify("explain the graph extraction algorithm") == "feature"
+    @pytest.mark.asyncio
+    async def test_how_does_defaults_to_feature(self):
+        assert await self._classify("how does the indexing pipeline work?") == "feature"
+        assert await self._classify("explain the graph extraction algorithm") == "feature"
+
+    @pytest.mark.asyncio
+    async def test_architecture_question_classified_correctly(self):
+        assert await self._classify("walk me through the whole system flow") == "architecture"
+        assert await self._classify("how is the architecture end to end?") == "architecture"
 
 
 # ── 6. System Prompt E2E ─────────────────────────────────────────────────────

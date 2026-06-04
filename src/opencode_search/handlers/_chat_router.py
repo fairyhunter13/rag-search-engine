@@ -1,18 +1,19 @@
-"""Unified chat router — auto-detects intent, calls right handler, returns humanized prose.
+"""Unified chat router — LLM-classified intent, calls right handler, returns humanized prose.
 
 Every response is a flowing narrative written by the query-tier LLM, not a raw JSON
 dump of structured data. The caller always gets a conversational answer with code
 references embedded naturally in the text.
 
-Intent hierarchy (first match wins):
-  debug_trace  — query contains a recognisable stack trace
-  debug        — mentions bug/fail/error/inconsistency/why fails
-  search       — explicit "find / where is / search for" without explanation keywords
-  graph_callers — "what calls X / callers of X"
-  graph_callees — "what does X call / callees / downstream"
-  graph_impact  — "what breaks if / impact / blast radius"
-  global        — "list all / all features / exhaustive / business processes"
-  feature       — default (how does X work, why is X designed, explain X)
+Intent classification uses the LLM (no keyword heuristics) so any phrasing is handled:
+  debug_trace   — query IS a stack trace / error log
+  debug         — question about a bug, failure, or "why does X not work"
+  search        — find/locate/show specific code or files
+  graph_callers — "what calls X", "callers of X"
+  graph_callees — "what does X call", "downstream of X"
+  graph_impact  — blast radius, "what breaks if I change X"
+  architecture  — end-to-end system design, layers, "walk me through the whole system"
+  global        — exhaustive list of ALL features / business processes
+  feature       — default: how does X work, explain X, why is X designed this way
 """
 from __future__ import annotations
 
@@ -55,83 +56,63 @@ async def _bridge_stream(llm: Any, messages: list[dict[str, Any]], max_tokens: i
             raise item
         yield item
 
-# ── Intent patterns ───────────────────────────────────────────────────────────
+# ── LLM-based intent classification ──────────────────────────────────────────
+# No keyword heuristics — the LLM classifies any phrasing correctly.
 
-_DEBUG_KEYWORDS = frozenset([
-    "bug", "fail", "failure", "error", "wrong", "inconsistency", "inconsistent",
-    "why does", "why is it", "not working", "broken", "crash", "exception",
-    "issue", "problem", "panic", "traceback", "segfault", "unexpected", "corrupt",
-    "race condition", "deadlock", "null pointer", "nil pointer", "undefined",
+_VALID_INTENTS = frozenset([
+    "debug_trace", "debug", "search",
+    "graph_callers", "graph_callees", "graph_impact",
+    "architecture", "global", "feature",
 ])
 
-_SEARCH_KEYWORDS = frozenset([
-    "find", "where is", "where are", "which file", "which files",
-    "locate", "search for", "show me the code for", "show the implementation",
-])
+_CLASSIFY_SYSTEM = """\
+Classify this code-intelligence query into exactly one intent.
 
-_EXPLANATION_OVERRIDE = frozenset([
-    "how", "why", "what", "explain", "describe", "understand", "tell me",
-])
+Intents:
+  debug_trace   — the query IS a stack trace / traceback / error log with file paths and line numbers
+  debug         — question about a bug, error, failure, crash, "why fails", "not working" (NO stack trace)
+  search        — explicit request to find, locate, or show specific code, files, or function implementations
+  graph_callers — "what calls X", "callers of X", "who calls X"
+  graph_callees — "what does X call", "callees of X", "downstream of X"
+  graph_impact  — blast radius, "what breaks if I change X", "what depends on X"
+  architecture  — overall system design, end-to-end flow, layers, "how the whole system works", "walk me through the system"
+  global        — exhaustive list of ALL features, ALL business processes, complete inventory of everything
+  feature       — default: how does X work, explain X, why is X designed this way, describe feature X
 
-_GLOBAL_KEYWORDS = frozenset([
-    "list all", "all features", "every feature", "everything", "complete list",
-    "exhaustive", "business processes", "all functionalities", "what are the",
-    "give me all",
-])
-
-_STACK_TRACE_PATTERNS = re.compile(
-    r'File "[^"]+", line \d+'  # Python
-    r'|at .+\(.+\.(java|kt|scala):\d+\)'  # Java/Kotlin
-    r'|goroutine \d+ \['  # Go
-    r'|\.go:\d+ \+'  # Go alt
-    r'|at \S+ \(/.+\.(js|ts):\d+'  # JS
-    r'|\.rs:\d+\b'  # Rust
-)
-
-_CALLER_PATTERNS = re.compile(
-    r'\b(what calls|who calls|callers of|called by|callers)\b', re.IGNORECASE
-)
-_CALLEE_PATTERNS = re.compile(
-    r'\b(what does .+ call|callees of|downstream of|calls from|what .+ calls)\b', re.IGNORECASE
-)
-_IMPACT_PATTERNS = re.compile(
-    r'\b(what breaks|blast radius|impact of|if i change|what depends)\b', re.IGNORECASE
-)
+Respond with ONLY valid JSON: {"intent": "<name>"}"""
 
 
-def classify_intent(query: str) -> str:
-    """Classify query intent. Returns one of the intent strings listed in module docstring."""
-    q_lower = query.lower()
+async def classify_intent_llm(query: str) -> str:
+    """Classify query intent via LLM — handles any phrasing, no keyword brittle matching."""
+    import asyncio
+    import re as _re
 
-    # Stack trace → debug_trace
-    if _STACK_TRACE_PATTERNS.search(query):
-        return "debug_trace"
+    from opencode_search.enricher import create_query_llm_client
 
-    # Explicit debug keywords
-    if any(kw in q_lower for kw in _DEBUG_KEYWORDS):
-        return "debug"
+    try:
+        llm = await asyncio.to_thread(create_query_llm_client)
+        if llm is None:
+            return "feature"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _CLASSIFY_SYSTEM},
+            {"role": "user", "content": query[:500]},
+        ]
+        raw = await asyncio.to_thread(llm.chat, messages, max_tokens=32)
+        text = raw if isinstance(raw, str) else (raw.get("content", "") if isinstance(raw, dict) else str(raw))
+        m = _re.search(r'"intent"\s*:\s*"(\w+)"', text)
+        if m:
+            intent = m.group(1)
+            if intent in _VALID_INTENTS:
+                return intent
+        # Scan response text for a known intent name (ordered: specific → generic)
+        text_lower = text.lower()
+        for intent in ["debug_trace", "graph_callers", "graph_callees", "graph_impact",
+                        "architecture", "debug", "global", "search", "feature"]:
+            if intent in text_lower:
+                return intent
+    except Exception as e:
+        log.debug("LLM intent classification failed: %s", e)
 
-    # Graph callers
-    if _CALLER_PATTERNS.search(query):
-        return "graph_callers"
-
-    # Graph callees
-    if _CALLEE_PATTERNS.search(query):
-        return "graph_callees"
-
-    # Graph impact
-    if _IMPACT_PATTERNS.search(query):
-        return "graph_impact"
-
-    # Global/exhaustive synthesis
-    if any(kw in q_lower for kw in _GLOBAL_KEYWORDS):
-        return "global"
-
-    # Search (only if no explanation words present)
-    if any(kw in q_lower for kw in _SEARCH_KEYWORDS) and not any(kw in q_lower for kw in _EXPLANATION_OVERRIDE):
-        return "search"
-
-    # Default: feature/architecture explanation
     return "feature"
 
 
@@ -318,37 +299,88 @@ def _prose_debug(result: dict) -> str:
 async def _handle_nl_debug(query: str, project_path: str) -> dict[str, Any]:
     """Debug investigation from natural language — no stack trace required.
 
-    Strategy:
-    1. Feature-trace the problematic code/feature
-    2. Use KB chat with a "code review / bug hunt" system prompt
-    3. Return structured debug result
+    Identifies: business process (community), algorithm step, file:line range, root cause.
+    Based on Agentless fault localization: file-level → function-level → line-level narrowing.
     """
+    import asyncio
+
     from opencode_search.enricher import create_query_llm_client
     from opencode_search.handlers._feature import handle_ask_feature
+    from opencode_search.handlers._kb_chat import _fetch_community_context
     from opencode_search.handlers._query import handle_search_code
 
     t0 = time.perf_counter()
 
-    # Get feature context
-    feature_result = await handle_ask_feature(query=query, project_path=project_path, top_k=12)
-    code_result = await handle_search_code(query=query, project_paths=[project_path], top_k=8)
+    # Parallel: feature trace + code search + community context
+    feature_task = handle_ask_feature(query=query, project_path=project_path, top_k=12)
+    code_task = handle_search_code(query=query, project_paths=[project_path], top_k=8)
+    community_task = _fetch_community_context(query, project_path, top_k=8, include_federation=False)
 
-    # Build investigation context
-    algo = feature_result.get("algorithm", "")
-    eps = feature_result.get("entry_points", [])
-    rationale = feature_result.get("design_rationale", "")
-    code_results = code_result.get("results", [])
+    feature_result, code_result, (_, comm_list, _) = await asyncio.gather(
+        feature_task, code_task, community_task, return_exceptions=False
+    )
 
-    ctx_lines: list[str] = ["[FEATURE UNDERSTANDING]"]
+    # Core feature data
+    algo = feature_result.get("algorithm", "") if isinstance(feature_result, dict) else ""
+    eps = feature_result.get("entry_points", []) if isinstance(feature_result, dict) else []
+    rationale = feature_result.get("design_rationale", "") if isinstance(feature_result, dict) else ""
+    call_chain = feature_result.get("call_chain", []) if isinstance(feature_result, dict) else []
+    code_results = code_result.get("results", []) if isinstance(code_result, dict) else []
+
+    # Look up line ranges for entry points (Agentless-style function-level localization)
+    async def _lookup_lines(symbol: str) -> tuple[int, int]:
+        try:
+            from opencode_search.handlers._graph import handle_get_symbol
+            r = await handle_get_symbol(symbol=symbol, project_path=project_path)
+            return r.get("start_line", 0), r.get("end_line", 0)
+        except Exception:
+            return 0, 0
+
+    ep_lines_tasks = [_lookup_lines(ep.get("symbol", "")) for ep in eps[:4]]
+    ep_lines_results = await asyncio.gather(*ep_lines_tasks, return_exceptions=True)
+
+    # Build rich context: business process + algorithm + lines
+    ctx_lines: list[str] = []
+
+    # Business process context (community semantic_type labels)
+    if comm_list:
+        ctx_lines.append("[BUSINESS PROCESS CONTEXT]")
+        for c in comm_list[:5]:
+            st = c.get("semantic_type", "utility")
+            ctx_lines.append(f'  Community: "{c["title"]}" (semantic_type: {st})')
+            ctx_lines.append(f'  Summary: {c["summary"][:200]}')
+
+    # Algorithm steps
     if algo:
-        ctx_lines.append(f"Algorithm: {algo[:600]}")
-    if rationale:
-        ctx_lines.append(f"Design rationale: {rationale[:400]}")
-    if eps:
-        ctx_lines.append("\nEntry points:")
-        for ep in eps[:4]:
-            ctx_lines.append(f"  {ep.get('file', '')}:{ep.get('symbol', '')}")
+        ctx_lines.append("\n[ALGORITHM STEPS]")
+        ctx_lines.append(algo[:600])
 
+    if rationale:
+        ctx_lines.append("\n[DESIGN RATIONALE]")
+        ctx_lines.append(rationale[:400])
+
+    # Entry points with line ranges
+    if eps:
+        ctx_lines.append("\n[ENTRY POINTS WITH LINE RANGES]")
+        for i, ep in enumerate(eps[:4]):
+            sym = ep.get("symbol", "unknown")
+            f = ep.get("file", "")
+            lines_res = ep_lines_results[i] if i < len(ep_lines_results) else (0, 0)
+            if isinstance(lines_res, tuple) and lines_res[0]:
+                ctx_lines.append(f"  {sym}() → {f} lines {lines_res[0]}–{lines_res[1]}")
+            else:
+                ctx_lines.append(f"  {sym}() → {f}")
+
+    # Call chain
+    if call_chain:
+        ctx_lines.append("\n[CALL CHAIN]")
+        for step in call_chain[:6]:
+            name = step.get("name") or step.get("qualified_name", "")
+            f = step.get("file", "")
+            d = step.get("depth", "")
+            ctx_lines.append(f"  depth={d}: {name} ({f})")
+
+    # Code samples
     ctx_lines.append("\n[CODE SAMPLES]")
     for r in code_results[:5]:
         snippet = (r.get("content") or "")[:300].replace("\n", " ")
@@ -356,40 +388,223 @@ async def _handle_nl_debug(query: str, project_path: str) -> dict[str, Any]:
 
     context = "\n".join(ctx_lines)
 
-    # LLM investigation
+    # LLM with explicit 4-part structure request
     system = (
-        "You are a senior software engineer doing a security and bug audit. "
-        "Based on the provided code context, identify: "
-        "1) Potential bugs, race conditions, or logic errors "
-        "2) Inconsistencies between the algorithm description and expected behaviour "
-        "3) Edge cases that are not handled "
-        "4) Any design smell that could cause production issues. "
-        "Be specific: name exact files, functions, and lines. "
-        "Format: Root Cause (if any), Inconsistencies Found, Risk Assessment, Recommendations."
+        "You are a senior software engineer performing root cause analysis. "
+        "Using the provided context, identify and state FOUR things with these exact headings:\n\n"
+        "**BUSINESS PROCESS:** Name the community/domain where the bug originates "
+        "(use the community names provided)\n"
+        "**ALGORITHM STEP:** Which step of the algorithm/workflow where the bug manifests "
+        "(number it, e.g. 'Step 3: message appending')\n"
+        "**FILE & LINE RANGE:** Exact function name and file:line range "
+        "(use the provided line data)\n"
+        "**ROOT CAUSE:** Why this specific location causes the observed symptom — "
+        "include race conditions, edge cases, or logic errors\n\n"
+        "Be specific. Reference exact files and functions. "
+        "If line data is not provided, estimate based on the call chain."
     )
 
     root_cause = "(Analysis unavailable)"
     hotspot_files = [ep.get("file", "") for ep in eps[:4] if ep.get("file")]
+    business_process = comm_list[0]["title"] if comm_list else ""
+    algorithm_step = ""
+    line_range = ""
+
+    # Build line_range from best entry point
+    if eps and ep_lines_results:
+        best_ep = eps[0]
+        best_lines = ep_lines_results[0] if ep_lines_results else (0, 0)
+        if isinstance(best_lines, tuple) and best_lines[0]:
+            line_range = f"{best_ep.get('file', '')}:{best_lines[0]}–{best_lines[1]}"
+        else:
+            line_range = best_ep.get("file", "")
 
     try:
-        llm = create_query_llm_client()
-        resp = await llm.chat(
-            messages=[{"role": "user", "content": f"Analyse this for bugs and inconsistencies:\n\n{context}\n\nOriginal question: {query}"}],
-            system=system,
-        )
-        root_cause = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+        llm = await asyncio.to_thread(create_query_llm_client)
+        if llm:
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"Analyse for root cause:\n\n{context}\n\nQuestion: {query}"},
+            ]
+            root_cause = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
     except Exception as e:
         log.warning("NL debug LLM failed: %s", e)
-        root_cause = f"Based on the feature trace, the code works as follows: {algo}"
+        if algo:
+            root_cause = (
+                f"**BUSINESS PROCESS:** {business_process or 'Unknown'}\n"
+                f"**ALGORITHM STEP:** Review the algorithm for edge cases\n"
+                f"**FILE & LINE RANGE:** {line_range or 'See entry points above'}\n"
+                f"**ROOT CAUSE:** Based on feature trace: {algo[:300]}"
+            )
+
+    # Extract algorithm_step from algo if LLM didn't provide it
+    if algo and not algorithm_step:
+        first_line = algo.split("\n")[0] if "\n" in algo else algo[:100]
+        algorithm_step = first_line
 
     return {
         "frames": [],
         "root_cause": root_cause,
         "fix_recommendation": None,
         "hotspot_files": hotspot_files,
-        "communities_involved": [ep.get("file", "")[:30] for ep in eps[:3]],
+        "communities_involved": [c["title"] for c in comm_list[:4]],
+        "business_process": business_process,
+        "algorithm_step": algorithm_step,
+        "line_range": line_range,
         "confidence": "medium" if eps else "low",
         "elapsed_ms": round((time.perf_counter() - t0) * 1000),
+    }
+
+
+# ── Architecture handler (PathRAG-inspired layered synthesis) ─────────────────
+
+_ARCH_LAYER_MAP = {
+    "entry_point": "API & Entry Layer",
+    "handler": "API & Entry Layer",
+    "router": "API & Entry Layer",
+    "api": "API & Entry Layer",
+    "business_process": "Business Logic Layer",
+    "workflow": "Business Logic Layer",
+    "service": "Business Logic Layer",
+    "processor": "Business Logic Layer",
+    "storage": "Data Layer",
+    "repository": "Data Layer",
+    "data_access": "Data Layer",
+    "database": "Data Layer",
+    "utility": "Infrastructure Layer",
+    "infrastructure": "Infrastructure Layer",
+    "config": "Infrastructure Layer",
+    "client": "Infrastructure Layer",
+}
+
+_ARCH_LAYER_ORDER = [
+    "API & Entry Layer",
+    "Business Logic Layer",
+    "Data Layer",
+    "Infrastructure Layer",
+]
+
+_ARCH_SYSTEM_PROMPT = (
+    "You are a senior software architect. "
+    "Write a comprehensive end-to-end architecture narrative structured as FOUR sections:\n"
+    "1. **API & Entry Layer** — how requests/events enter the system "
+    "(HTTP routes, CLI commands, MCP tools, background jobs)\n"
+    "2. **Business Logic Layer** — the core business workflows and services "
+    "that process incoming requests\n"
+    "3. **Data Layer** — how data is read and written "
+    "(graph DB, vector DB, file system, caches)\n"
+    "4. **Infrastructure Layer** — LLM/AI integration, external services, "
+    "configuration, monitoring\n\n"
+    "For each layer name the key files and functions. "
+    "Close with a concrete example: one request traced through all four layers. "
+    "Use ONLY the provided context — never fabricate files or functions not present."
+)
+
+
+async def _handle_architecture(
+    query: str,
+    project_path: str,
+    conversation_history: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Architecture end-to-end narrative — four-layer synthesis (PathRAG-inspired)."""
+    import asyncio
+
+    from opencode_search.enricher import create_query_llm_client
+    from opencode_search.handlers._kb_chat import _fetch_community_context
+
+    t0 = time.perf_counter()
+
+    from opencode_search.handlers._kb_chat import _fetch_code_context
+
+    async def _get_patterns() -> dict:
+        try:
+            from opencode_search.handlers._graph import handle_detect_patterns
+            return await handle_detect_patterns(project_path=project_path)
+        except Exception:
+            return {}
+
+    (_, comm_list, comm_count), (code_ctx, _code_sources, _), patterns = await asyncio.gather(
+        _fetch_community_context(query, project_path, top_k=25, include_federation=False),
+        _fetch_code_context(query, project_path, top_k=12),
+        _get_patterns(),
+    )
+
+    # Group communities by semantic_type into architectural layers
+    layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
+    for comm in comm_list:
+        st = (comm.get("semantic_type") or "utility").lower()
+        layer = _ARCH_LAYER_MAP.get(st, "Business Logic Layer")
+        layers[layer].append(comm)
+
+    # Build layered context string
+    ctx_sections: list[str] = []
+    for layer_name in _ARCH_LAYER_ORDER:
+        comms = layers[layer_name]
+        if comms:
+            comm_lines = "\n".join(
+                f"  [{c['semantic_type']}] {c['title']}: {c['summary'][:200]}"
+                for c in comms[:6]
+            )
+            ctx_sections.append(f"**{layer_name}:**\n{comm_lines}")
+
+    # Append code locations — anchors LLM to real file paths
+    if code_ctx:
+        ctx_sections.append(f"**Actual code locations (use these exact paths):**\n{code_ctx}")
+
+    # Append detected patterns
+    arch_type = patterns.get("architecture", "")
+    frameworks = [
+        (f.get("name") or str(f)) if isinstance(f, dict) else str(f)
+        for f in (patterns.get("key_frameworks") or [])
+    ]
+    if arch_type or frameworks:
+        p_parts = []
+        if arch_type:
+            p_parts.append(f"Architecture type: {arch_type}")
+        if frameworks:
+            p_parts.append(f"Key frameworks: {', '.join(frameworks[:6])}")
+        ctx_sections.append("**Detected patterns:**\n" + "\n".join(p_parts))
+
+    arch_context = "\n\n".join(ctx_sections) if ctx_sections else "(No architecture data — run build(action='pipeline') first)"
+
+    # LLM synthesis
+    llm = await asyncio.to_thread(create_query_llm_client)
+    model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
+    answer = "(Architecture analysis unavailable)"
+
+    if llm:
+        try:
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": f"{_ARCH_SYSTEM_PROMPT}\n\nArchitecture context:\n{arch_context}"},
+            ]
+            for turn in (conversation_history or [])[-4:]:
+                role = turn.get("role", "")
+                content = turn.get("content", "")
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+            messages.append({"role": "user", "content": query})
+            answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1536)
+        except Exception as e:
+            log.warning("Architecture LLM failed: %s", e)
+            lines = [f"**Architecture Overview — {comm_count} communities indexed:**"]
+            for layer_name in _ARCH_LAYER_ORDER:
+                comms = layers[layer_name]
+                if comms:
+                    lines.append(f"\n**{layer_name}:**")
+                    for c in comms[:4]:
+                        lines.append(f"- {c['title']}: {c['summary'][:100]}")
+            answer = "\n".join(lines)
+
+    sources = list(dict.fromkeys(
+        c["title"] for ln in _ARCH_LAYER_ORDER for c in layers[ln]
+    ))[:8]
+
+    return {
+        "answer": answer,
+        "intent": "architecture",
+        "sources": sources,
+        "elapsed_ms": round((time.perf_counter() - t0) * 1000),
+        "model": model_name,
     }
 
 
@@ -419,7 +634,7 @@ async def handle_chat_auto(
         }
     """
     t0 = time.perf_counter()
-    intent = mode if mode not in ("auto", "quick", "comprehensive") else classify_intent(query)
+    intent = mode if mode not in ("auto", "quick", "comprehensive") else await classify_intent_llm(query)
 
     sources: list[str] = []
     answer = ""
@@ -458,6 +673,13 @@ async def handle_chat_auto(
             result = await handle_detect_impact(symbol=symbol, project_path=project_path)
             answer = _prose_impact(result, query)
             sources = result.get("affected_files", [])
+
+    # ── architecture: end-to-end layered narrative ───────────────────────────
+    elif intent == "architecture":
+        result = await _handle_architecture(query, project_path, conversation_history)
+        answer = result.get("answer", "")
+        sources = result.get("sources", [])
+        model_name = result.get("model", "")
 
     # ── search: explicit code lookup ──────────────────────────────────────────
     elif intent == "search":
@@ -552,7 +774,7 @@ async def handle_chat_auto_stream(
     import time as _time
 
     t0 = _time.perf_counter()
-    intent = mode if mode not in ("auto", "quick", "comprehensive") else classify_intent(query)
+    intent = mode if mode not in ("auto", "quick", "comprehensive") else await classify_intent_llm(query)
 
     # ── search: no LLM — yield prose immediately ──────────────────────────────
     if intent == "search":
@@ -578,6 +800,15 @@ async def handle_chat_auto_stream(
             yield event
         return
 
+    # ── architecture: layered synthesis → native LLM streaming ───────────────
+    if intent == "architecture":
+        async for event in _stream_architecture(
+            query=query, project_path=project_path,
+            conversation_history=conversation_history, t0=t0,
+        ):
+            yield event
+        return
+
     # ── global / MAP-REDUCE / debug / graph: heartbeat approach ───────────────
     task = asyncio.ensure_future(handle_chat_auto(
         query=query, project_path=project_path,
@@ -587,7 +818,7 @@ async def handle_chat_auto_stream(
     while not task.done():
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             yield {"type": "thinking"}
 
     result = await task
@@ -727,3 +958,107 @@ async def _run_feature_trace(query: str, project_path: str) -> dict[str, Any]:
         return await handle_ask_feature(query=query, project_path=project_path, top_k=12)
     except Exception:
         return {}
+
+
+async def _stream_architecture(
+    query: str,
+    project_path: str,
+    conversation_history: list[dict] | None,
+    t0: float,
+    chunk_size: int = 40,
+):
+    """Stream the architecture-intent response with native Ollama token streaming."""
+    import asyncio
+    import time as _time
+
+    from opencode_search.enricher import create_query_llm_client
+    from opencode_search.handlers._kb_chat import _fetch_code_context, _fetch_community_context
+
+    async def _get_patterns() -> dict:
+        try:
+            from opencode_search.handlers._graph import handle_detect_patterns
+            return await handle_detect_patterns(project_path=project_path)
+        except Exception:
+            return {}
+
+    # Parallel context assembly
+    (_, comm_list, _comm_count), (code_ctx, _, _), patterns = await asyncio.gather(
+        _fetch_community_context(query, project_path, top_k=25, include_federation=False),
+        _fetch_code_context(query, project_path, top_k=12),
+        _get_patterns(),
+    )
+
+    # Group and build layered context (same as _handle_architecture)
+    layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
+    for comm in comm_list:
+        st = (comm.get("semantic_type") or "utility").lower()
+        layers[_ARCH_LAYER_MAP.get(st, "Business Logic Layer")].append(comm)
+
+    ctx_sections: list[str] = []
+    for layer_name in _ARCH_LAYER_ORDER:
+        comms = layers[layer_name]
+        if comms:
+            ctx_sections.append(
+                f"**{layer_name}:**\n"
+                + "\n".join(
+                    f"  [{c['semantic_type']}] {c['title']}: {c['summary'][:200]}"
+                    for c in comms[:6]
+                )
+            )
+
+    if code_ctx:
+        ctx_sections.append(f"**Actual code locations (use these exact paths):**\n{code_ctx}")
+
+    arch_type = patterns.get("architecture", "")
+    frameworks = [
+        (f.get("name") or str(f)) if isinstance(f, dict) else str(f)
+        for f in (patterns.get("key_frameworks") or [])
+    ]
+    if arch_type or frameworks:
+        p_parts = []
+        if arch_type:
+            p_parts.append(f"Architecture type: {arch_type}")
+        if frameworks:
+            p_parts.append(f"Key frameworks: {', '.join(frameworks[:6])}")
+        ctx_sections.append("**Detected patterns:**\n" + "\n".join(p_parts))
+
+    arch_context = "\n\n".join(ctx_sections) if ctx_sections else "(No architecture data indexed)"
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": f"{_ARCH_SYSTEM_PROMPT}\n\nArchitecture context:\n{arch_context}"},
+    ]
+    for turn in (conversation_history or [])[-4:]:
+        role = turn.get("role", "")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": query})
+
+    llm = await asyncio.to_thread(create_query_llm_client)
+    model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
+
+    if llm is None:
+        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER."
+        for i in range(0, len(err), chunk_size):
+            yield {"type": "token", "text": err[i:i + chunk_size]}
+    elif hasattr(llm, "stream_chat"):
+        async for token in _bridge_stream(llm, messages, max_tokens=1536):
+            yield {"type": "token", "text": token}
+    else:
+        answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1536)
+        for i in range(0, max(len(answer), 1), chunk_size):
+            chunk = answer[i:i + chunk_size]
+            if chunk:
+                yield {"type": "token", "text": chunk}
+            await asyncio.sleep(0)
+
+    sources = list(dict.fromkeys(
+        c["title"] for ln in _ARCH_LAYER_ORDER for c in layers[ln]
+    ))[:8]
+    yield {
+        "type": "done",
+        "intent": "architecture",
+        "sources": sources,
+        "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
+        "model": model_name,
+    }
