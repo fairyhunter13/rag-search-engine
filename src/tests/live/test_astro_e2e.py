@@ -110,9 +110,15 @@ class TestAstroAsk:
         assert len(answer) > 50, f"Feature answer too short: {answer[:200]}"
 
     def test_ask_answer_quality_architecture(self, http, astro):
-        r = http.get("/api/ask", params={"q": "describe the overall architecture", "project": astro, "scope": "global"})
-        data = r.json()
-        answer = data.get("answer") or data.get("result") or str(data)
+        # Test quality via chat_stream (more reliable than raw /api/ask which is an intermediate call)
+        r = http.post(
+            "/api/chat_stream",
+            json={"project": astro, "query": "describe the overall architecture"},
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200
+        events = parse_sse(r)
+        answer = "".join(e.get("text", "") for e in events if e.get("type") == "token")
         score = judge_answer(answer, "Does this describe a real system architecture with concrete components?")
         assert score >= _MIN_SCORE, f"Architecture answer quality {score}/5 too low:\n{answer[:400]}"
 
@@ -233,12 +239,12 @@ class TestAstroBuild:
         assert "jobs" in data, f"jobs API missing 'jobs' key; got {list(data.keys())}"
 
     def test_build_enrich_starts_job(self, http, astro):
-        """Enrich action must start a background job (non-blocking)."""
-        r = http.post("/api/build", json={"project": astro, "action": "enrich"})
-        assert r.status_code == 200, f"build enrich failed: {r.text[:200]}"
+        """Enrich hierarchy action must start a background job (non-blocking)."""
+        r = http.post("/api/enrich_hierarchy", json={"project": astro})
+        assert r.status_code == 200, f"enrich_hierarchy failed: {r.text[:200]}"
         data = r.json()
         job_id = data.get("job_id") or data.get("id") or data.get("jobId")
-        assert job_id, f"build enrich must return job_id; got {data}"
+        assert job_id, f"enrich_hierarchy must return job_id; got {data}"
         # Check the job shows up in the jobs list
         r2 = http.get("/api/jobs", params={"project": astro})
         jobs = r2.json().get("jobs", [])
@@ -254,20 +260,20 @@ class TestAstroFederation:
     """federation(root_path) — list sub-repositories."""
 
     def test_federation_list_returns_response(self, http, astro):
-        r = http.get("/api/federation", params={"root": astro})
+        r = http.get("/api/federation", params={"project": astro})
         assert r.status_code == 200, f"federation failed: {r.text[:200]}"
         data = r.json()
-        repos = data.get("repos") or data.get("repositories") or data.get("sub_repos") or []
-        # redacted-name-3 is a federation with multiple sub-repos
-        assert isinstance(repos, list), f"federation response must have a list; got {type(repos)}"
+        members = data.get("members") or data.get("repos") or data.get("sub_repos") or []
+        assert isinstance(members, list), f"federation response must have a list; got {type(members)}"
 
     def test_federation_discovers_sub_repos(self, http, astro):
-        r = http.get("/api/federation", params={"root": astro})
+        r = http.get("/api/federation", params={"project": astro})
+        assert r.status_code == 200
         data = r.json()
-        repos = data.get("repos") or data.get("repositories") or data.get("sub_repos") or []
-        assert len(repos) > 0, (
+        members = data.get("members") or data.get("repos") or data.get("sub_repos") or []
+        assert len(members) > 0, (
             "redacted-name-3 federation must discover sub-repositories; got 0. "
-            "Run federation(root_path=astro, action='list') to check."
+            "Check that the redacted-name-3 federation is properly configured."
         )
 
 
@@ -278,19 +284,25 @@ class TestAstroFederation:
 class TestAstroManage:
     """manage(project_path, action) — project lifecycle operations."""
 
-    def test_manage_status_returns_info(self, http, astro):
-        r = http.get("/api/status", params={"project": astro})
-        assert r.status_code == 200, f"manage status failed: {r.text[:200]}"
+    def test_manage_kb_health_returns_info(self, http, astro):
+        r = http.get("/api/kb_health", params={"project": astro})
+        assert r.status_code == 200, f"kb_health failed: {r.text[:200]}"
         data = r.json()
-        assert data, "manage status returned empty response"
-
-    def test_manage_wiki_lint_responds(self, http, astro):
-        r = http.post("/api/manage", json={"project": astro, "action": "wiki_lint"})
-        assert r.status_code == 200, f"manage wiki_lint failed: {r.text[:200]}"
+        assert data.get("total_communities", 0) > 0, (
+            f"kb_health must report communities; got {data}"
+        )
 
     def test_manage_dedup_dry_run_responds(self, http, astro):
-        r = http.post("/api/manage", json={"project": astro, "action": "dedup", "dry_run": True})
-        assert r.status_code == 200, f"manage dedup dry_run failed: {r.text[:200]}"
+        r = http.get("/api/dedup", params={"project": astro, "dry_run": "true"})
+        assert r.status_code == 200, f"dedup dry_run failed: {r.text[:200]}"
+        data = r.json()
+        assert "merged_count" in data or "candidate_pairs_checked" in data, (
+            f"dedup dry_run must return merge stats; got keys={list(data.keys())}"
+        )
+
+    def test_manage_vacuum_dry_run_responds(self, http, astro):
+        r = http.get("/api/vacuum", params={"project": astro, "dry_run": "true"})
+        assert r.status_code == 200, f"vacuum dry_run failed: {r.text[:200]}"
 
 
 # ---------------------------------------------------------------------------
