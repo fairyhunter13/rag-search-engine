@@ -74,9 +74,9 @@ Intents:
   graph_callers — "what calls X", "callers of X", "who calls X"
   graph_callees — "what does X call", "callees of X", "downstream of X"
   graph_impact  — blast radius, "what breaks if I change X", "what depends on X"
-  architecture  — overall system design, end-to-end flow, layers, "how the whole system works", "walk me through the system"
-  global        — exhaustive list of ALL features, ALL business processes, complete inventory of everything
-  feature       — default: how does X work, explain X, why is X designed this way, describe feature X
+  architecture  — high-level design patterns, service topology, "what is the architecture", "how is X architected", "describe the design of"
+  global        — comprehensive/holistic overview of the ENTIRE system, "global overview", "overview of the whole system", "tell me about this project", "what does this system do", "comprehensive overview of everything"
+  feature       — how does X work, trace X end-to-end, "how does search work", "walk me through X flow", explain X feature, follow request path through X
 
 Respond with ONLY valid JSON: {"intent": "<name>"}"""
 
