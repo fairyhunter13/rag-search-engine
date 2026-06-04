@@ -80,7 +80,7 @@ def judge_answer(answer: str, question: str) -> int:
         client = create_query_llm_client()
         prompt = (
             f"Score the following answer 1-5 for: {question}\n"
-            f"Answer: {answer[:500]}\n"
+            f"Answer: {answer[:2000]}\n"
             "Respond with a single digit 1-5. Nothing else."
         )
         raw = client.chat([{"role": "user", "content": prompt}], max_tokens=8)
