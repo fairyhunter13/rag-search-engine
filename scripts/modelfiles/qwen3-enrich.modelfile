@@ -1,0 +1,6 @@
+FROM qwen3:1.7b
+PARAMETER num_ctx 4096
+PARAMETER num_predict 512
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+SYSTEM "You are a concise technical summarizer. Reply directly without using <think> tags. Never include reasoning steps. Output only the requested JSON."
