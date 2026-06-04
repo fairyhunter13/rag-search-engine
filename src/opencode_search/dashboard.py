@@ -1331,16 +1331,24 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": "ocs_status.py not found"}, status_code=503)
 
         try:
-            import subprocess as _sp
-            result = _sp.run(
-                [sys.executable, str(ocs_script), "--json", "--no-tests",
-                 "--cache", str(alt_cache)],
-                capture_output=True, text=True, timeout=30,
+            import asyncio as _asyncio
+            proc = await _asyncio.create_subprocess_exec(
+                sys.executable, str(ocs_script), "--json", "--no-tests",
+                "--cache", str(alt_cache),
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
                 cwd=str(scripts_dir.parent),
             )
-            if result.returncode in (0, 1) and result.stdout.strip():
+            try:
+                stdout_b, _ = await _asyncio.wait_for(proc.communicate(), timeout=30)
+            except _asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                return JSONResponse({"error": "ocs_status.py timed out"}, status_code=500)
+            stdout = stdout_b.decode() if stdout_b else ""
+            if proc.returncode in (0, 1) and stdout.strip():
                 try:
-                    return JSONResponse(json.loads(result.stdout))
+                    return JSONResponse(json.loads(stdout))
                 except Exception:
                     pass
             # Serve the cache if it was just written
