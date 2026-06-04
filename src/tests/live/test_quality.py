@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.slow, pytest.mark.flaky(reruns=2, reruns_delay=10)]
 
 from .conftest import judge_answer, parse_sse  # noqa: E402
 

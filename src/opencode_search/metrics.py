@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict
 
 _MAX_SAMPLES = 1000
 
@@ -87,3 +87,57 @@ def get_metrics() -> dict[str, Any]:
 def reset_metrics() -> None:
     """Reset all counters. Intended for tests."""
     _metrics.reset()
+
+
+# ── Chat stream metrics ────────────────────────────────────────────────────────
+
+
+@dataclass
+class _ChatStreamMetrics:
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    stream_error_count: int = 0
+    stream_success_count: int = 0
+    _error_by_intent: Dict[str, int] = field(default_factory=dict, repr=False)
+
+    def record_error(self, intent: str) -> None:
+        with self._lock:
+            self.stream_error_count += 1
+            self._error_by_intent[intent] = self._error_by_intent.get(intent, 0) + 1
+
+    def record_success(self) -> None:
+        with self._lock:
+            self.stream_success_count += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            total = self.stream_error_count + self.stream_success_count
+            return {
+                "stream_error_count": self.stream_error_count,
+                "stream_success_count": self.stream_success_count,
+                "error_rate": round(self.stream_error_count / total, 4) if total else 0.0,
+                "error_by_intent": dict(self._error_by_intent),
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self.stream_error_count = 0
+            self.stream_success_count = 0
+            self._error_by_intent.clear()
+
+
+_chat_metrics = _ChatStreamMetrics()
+
+
+def record_stream_error(intent: str) -> None:
+    """Record a streaming LLM failure for the given intent. Safe to call from any thread."""
+    _chat_metrics.record_error(intent)
+
+
+def record_stream_success() -> None:
+    """Record a successful streaming LLM completion. Safe to call from any thread."""
+    _chat_metrics.record_success()
+
+
+def get_stream_metrics() -> dict[str, Any]:
+    """Return a point-in-time snapshot of chat stream error metrics."""
+    return _chat_metrics.snapshot()

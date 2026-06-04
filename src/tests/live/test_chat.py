@@ -106,3 +106,33 @@ def test_chat_sources_are_real_paths(http, project):
     if sources:
         fabricated = [s for s in sources if any(k in s for k in ("/fake/", "/example/", "/placeholder/"))]
         assert not fabricated, f"Fabricated paths in sources: {fabricated}"
+
+
+@pytest.mark.slow
+def test_chat_debug_intent(http, project):
+    """A 'why is X slow/broken' question must route to debug intent."""
+    _answer, intent, _sources, _elapsed = _chat(
+        http, project,
+        "why is the indexer slow and how can I debug it?",
+    )
+    assert intent == "debug", f"Expected intent=debug for debug question; got: {intent!r}"
+
+
+@pytest.mark.slow
+def test_global_intent_routes_correctly(http, project):
+    """Global query must route to 'global' intent and return a substantive answer."""
+    r = http.post(
+        "/api/chat_stream",
+        json={"project": project,
+              "query": "give me a global overview of the entire system and all its components"},
+        headers={"Accept": "text/event-stream"},
+    )
+    assert r.status_code == 200
+    events = parse_sse(r)
+    tokens = [e for e in events if e.get("type") == "token"]
+    done = next((e for e in events if e.get("type") == "done"), {})
+    assert done.get("intent") == "global", (
+        f"Expected global intent, got {done.get('intent')!r}"
+    )
+    answer = "".join(e.get("text", "") for e in tokens)
+    assert len(answer) > 100, f"Global answer too short: {len(answer)} chars"

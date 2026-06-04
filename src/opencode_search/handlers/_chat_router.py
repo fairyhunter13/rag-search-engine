@@ -22,6 +22,8 @@ import threading
 import time
 from typing import Any
 
+from opencode_search.metrics import record_stream_error, record_stream_success
+
 log = logging.getLogger(__name__)
 
 
@@ -984,15 +986,19 @@ async def _stream_feature(
         try:
             async for token in _bridge_stream(llm, messages, max_tokens=1024):
                 yield {"type": "token", "text": token}
+            record_stream_success()
         except Exception as _se:
             log.warning("_stream_feature: stream_chat failed: %s", _se)
+            record_stream_error("feature")
             yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
     else:
         # Fallback: blocking call + chunk
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
+            record_stream_success()
         except Exception as _ce:
             log.warning("_stream_feature: chat failed: %s", _ce)
+            record_stream_error("feature")
             answer = f"Feature analysis unavailable: {type(_ce).__name__}"
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
@@ -1150,14 +1156,18 @@ async def _stream_global(
         try:
             async for token in _bridge_stream(llm, messages, max_tokens=2048):
                 yield {"type": "token", "text": token}
+            record_stream_success()
         except Exception as _se:
             log.warning("_stream_global: stream_chat failed: %s", _se)
+            record_stream_error("global")
             yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
     else:
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=2048)
+            record_stream_success()
         except Exception as _ce:
             log.warning("_stream_global: chat failed: %s", _ce)
+            record_stream_error("global")
             answer = f"Global analysis unavailable: {type(_ce).__name__}"
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
@@ -1312,14 +1322,18 @@ async def _stream_debug(
         try:
             async for token in _bridge_stream(llm, messages, max_tokens=1024):
                 yield {"type": "token", "text": token}
+            record_stream_success()
         except Exception as _se:
             log.warning("_stream_debug: stream_chat failed: %s", _se)
+            record_stream_error("debug")
             yield {"type": "token", "text": f" [debug analysis incomplete: {type(_se).__name__}]"}
     else:
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
+            record_stream_success()
         except Exception as _ce:
             log.warning("_stream_debug: chat failed: %s", _ce)
+            record_stream_error("debug")
             answer = f"Debug analysis unavailable: {type(_ce).__name__}"
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
@@ -1451,14 +1465,18 @@ async def _stream_architecture(
         try:
             async for token in _bridge_stream(llm, messages, max_tokens=1536):
                 yield {"type": "token", "text": token}
+            record_stream_success()
         except Exception as _se:
             log.warning("_stream_architecture: stream_chat failed: %s", _se)
+            record_stream_error("architecture")
             yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
     else:
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1536)
+            record_stream_success()
         except Exception as _ce:
             log.warning("_stream_architecture: chat failed: %s", _ce)
+            record_stream_error("architecture")
             answer = f"Architecture analysis unavailable: {type(_ce).__name__}"
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]

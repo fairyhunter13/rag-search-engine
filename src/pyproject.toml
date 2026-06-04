@@ -80,6 +80,7 @@ graph-extras = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-rerunfailures>=14.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
 ]
@@ -150,4 +151,5 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["src/tests"]
 markers = [
     "live: requires daemon at :8765, Ollama at :11434, CUDA GPU — skipped if any absent",
+    "slow: LLM-heavy tests (>30s each) — skip for fast smoke checks with -m 'live and not slow'",
 ]

@@ -326,6 +326,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             result = await handle_impact_narrative(symbol=symbol, project_path=project)
         elif relation == "path" and to_sym:
             result = await handle_trace_path(from_symbol=symbol, to_symbol=to_sym, project_path=project)
+        elif relation == "semantic_trace" and to_sym:
+            from opencode_search.handlers._trace import handle_semantic_trace
+            result = await handle_semantic_trace(from_query=symbol, to_query=to_sym, project_path=project)
         else:
             return JSONResponse({"error": "Invalid relation or missing to param"}, status_code=400)
         return JSONResponse(result)
@@ -346,8 +349,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
 
         from opencode_search.daemon import _META_PATH
         from opencode_search.daemon_runtime import runtime_state
-        from opencode_search.metrics import get_metrics
+        from opencode_search.metrics import get_metrics, get_stream_metrics
         data = get_metrics()
+        data["chat_stream"] = get_stream_metrics()
         snap = runtime_state.snapshot()
         data["connected_clients"] = snap.get("active_clients", 0)
         data["client_ids"] = snap.get("client_ids", [])
@@ -1341,7 +1345,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             )
             try:
                 stdout_b, _ = await _asyncio.wait_for(proc.communicate(), timeout=30)
-            except _asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.communicate()
                 return JSONResponse({"error": "ocs_status.py timed out"}, status_code=500)

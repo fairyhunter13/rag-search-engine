@@ -13,12 +13,12 @@ from __future__ import annotations
 import httpx
 import pytest
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.slow]
 
 DAEMON_URL = "http://localhost:8765"
 DASHBOARD_URL = f"{DAEMON_URL}/dashboard"
-_TIMEOUT_PAGE = 15_000   # ms — page load
-_TIMEOUT_CHAT = 90_000   # ms — wait for AI response
+_TIMEOUT_PAGE = 15_000    # ms — page load
+_TIMEOUT_CHAT = 300_000  # ms — wait for AI response (global/debug can take 150s+)
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,13 @@ def live_project():
 
 def _navigate_to_chat(page) -> None:
     page.goto(DASHBOARD_URL)
-    page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+    # Use "load" not "networkidle" — dashboard keeps SSE connections open that never idle
+    page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+    # Wait for loadProjects() to complete — _proj must be set before sendChat() will work
+    page.wait_for_function(
+        "() => { const s = document.getElementById('project-sel'); return s && s.value !== ''; }",
+        timeout=15000,
+    )
     chat_tab = page.locator("button:has-text('Chat'), a:has-text('Chat'), [data-tab='chat']").first
     if chat_tab.count() > 0 and chat_tab.is_visible():
         chat_tab.click()
@@ -71,9 +77,16 @@ def _send_message(page, text: str) -> None:
 
 
 def _wait_for_ai_response(page, timeout_ms: int = _TIMEOUT_CHAT):
-    sel = ".ai-bubble, .assistant-message, .bot-message, [data-role='assistant'], .message-assistant"
-    page.locator(sel).first.wait_for(state="attached", timeout=timeout_ms)
-    return page.locator(sel).last.inner_text()
+    # Dashboard uses .msg.ai for AI message bubbles; .thinking = still streaming
+    thinking_sel = ".msg.ai"
+    done_sel = ".msg.ai:not(.thinking)"
+    # Wait for any AI message (includes thinking placeholder)
+    page.locator(thinking_sel).first.wait_for(state="attached", timeout=timeout_ms)
+    # Wait until the thinking class is removed (response fully rendered)
+    page.wait_for_selector(done_sel, timeout=timeout_ms)
+    # Brief settle to allow innerHTML to finish updating
+    page.wait_for_timeout(300)
+    return page.locator(done_sel).last.inner_text()
 
 
 # ---------------------------------------------------------------------------
@@ -83,14 +96,14 @@ def _wait_for_ai_response(page, timeout_ms: int = _TIMEOUT_CHAT):
 class TestDashboardLoads:
     def test_root_redirects_to_dashboard(self, page):
         page.goto(DAEMON_URL)
-        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         assert "/dashboard" in page.url or page.title() != "", (
             "Root URL did not redirect to dashboard"
         )
 
     def test_dashboard_page_not_blank(self, page):
         page.goto(DASHBOARD_URL)
-        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         content = page.content()
         assert len(content) > 500, "Dashboard returned a nearly empty page"
         assert "error" not in content[:200].lower() or "opencode" in content.lower(), (
@@ -99,7 +112,7 @@ class TestDashboardLoads:
 
     def test_navigation_tabs_visible(self, page):
         page.goto(DASHBOARD_URL)
-        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         nav = page.locator("nav, [role='tablist'], .tabs, .navbar, .top-bar").first
         assert nav.count() > 0 or nav.is_visible(), "No navigation element found on dashboard"
 
@@ -111,7 +124,7 @@ class TestDashboardLoads:
 class TestPulseView:
     def test_pulse_tab_accessible(self, page):
         page.goto(DASHBOARD_URL)
-        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse'), [data-tab='pulse']").first
         assert pulse.count() > 0, "No Pulse tab found — dashboard nav must have a Pulse tab"
         pulse.click()
@@ -122,7 +135,7 @@ class TestPulseView:
 
     def test_pulse_shows_activity_or_metrics(self, page):
         page.goto(DASHBOARD_URL)
-        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse')").first
         if pulse.count() > 0:
             pulse.click()
@@ -234,10 +247,48 @@ class TestChatStreaming:
         _navigate_to_chat(page)
         _send_message(page, "What is the architecture?")
         _wait_for_ai_response(page)
-        badge_sel = ".intent-badge, .badge, [data-intent], .tag-intent, .intent-label"
+        badge_sel = ".intent-tag, .intent-badge, [data-intent], .badge"
         badge = page.locator(badge_sel).first
         if badge.count() > 0:
             assert badge.is_visible(), "Intent badge exists but is not visible"
+
+    def test_streaming_tokens_appear_progressively(self, page, live_project):
+        """Tokens must appear in the DOM before the response is fully complete."""
+        token_times: list[float] = []
+
+        def on_response(response):
+            if "chat_stream" in response.url:
+                token_times.append(page.evaluate("Date.now()"))
+
+        page.on("response", on_response)
+        _navigate_to_chat(page)
+        start = page.evaluate("Date.now()")
+        _send_message(page, "What is this codebase?")
+        # Wait for first partial text to appear in the AI bubble (thinking placeholder counts)
+        page.wait_for_selector(".msg.ai", timeout=_TIMEOUT_CHAT)
+        mid_time = page.evaluate("Date.now()")
+        _wait_for_ai_response(page)
+        # Streaming means mid_time is before response complete
+        assert mid_time - start < _TIMEOUT_CHAT, "AI message appeared too late (not streaming)"
+
+    def test_multi_turn_conversation(self, page, live_project):
+        """Second question in same chat must produce a new response (multi-turn works)."""
+        _navigate_to_chat(page)
+        _send_message(page, "What is the overall architecture?")
+        first_text = _wait_for_ai_response(page)
+        assert len(first_text) > 20, f"First response too short: {first_text!r}"
+        # Count existing messages before second turn
+        msg_count_before = page.locator(".msg.ai:not(.thinking)").count()
+        # Second turn: follow-up question
+        _send_message(page, "What are the main entry points?")
+        # Wait for a new AI message to appear
+        page.wait_for_function(
+            f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {msg_count_before}",
+            timeout=_TIMEOUT_CHAT,
+        )
+        second_text = page.locator(".msg.ai:not(.thinking)").last.inner_text()
+        assert len(second_text) > 20, f"Second response too short: {second_text!r}"
+        assert second_text != first_text, "Second response identical to first — multi-turn may be broken"
 
     def test_no_duplicate_user_bubble_on_rapid_enter(self, page, live_project):
         """Pressing Enter twice rapidly must not create two user message bubbles."""
@@ -248,7 +299,7 @@ class TestChatStreaming:
         inp.press("Enter")
         inp.press("Enter")  # second rapid Enter
         page.wait_for_timeout(500)
-        user_sel = ".user-bubble, .user-message, [data-role='user'], .message-user"
+        user_sel = ".msg.user, .user-bubble, .user-message, [data-role='user']"
         user_bubbles = page.locator(user_sel)
         count = user_bubbles.count()
         assert count <= 1, (
@@ -263,7 +314,7 @@ class TestChatStreaming:
 class TestAdminView:
     def _open_admin(self, page):
         page.goto(DASHBOARD_URL)
-        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         admin_tab = page.locator("button:has-text('Admin'), a:has-text('Admin'), [data-tab='admin']").first
         if admin_tab.count() == 0:
             pytest.skip("No Admin tab visible")

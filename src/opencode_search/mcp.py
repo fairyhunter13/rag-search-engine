@@ -519,8 +519,8 @@ async def overview(
         from opencode_search.handlers._business import handle_process_flows
         return await handle_process_flows(project_path=project_path)
     else:
-        from opencode_search.metrics import get_metrics
-        return get_metrics()
+        from opencode_search.metrics import get_metrics, get_stream_metrics
+        return {"search": get_metrics(), "chat_stream": get_stream_metrics()}
 
 
 @mcp.tool()
@@ -720,7 +720,7 @@ async def manage(
     project_path: str,
     action: Literal[
         "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks",
-        "dedup", "vacuum", "jobs", "remove_project",
+        "dedup", "vacuum", "jobs", "remove_project", "reload",
     ] = "wiki_lint",
     dry_run: bool = False,
     job_id: str | None = None,
@@ -735,15 +735,27 @@ async def manage(
             | "vacuum" — remove orphan index_budget/index_balanced tier dirs; free disk space
             | "jobs" — list background build jobs (or check one with job_id=)
             | "remove_project" — remove project from registry (delete_index=True also deletes index)
+            | "reload" — gracefully restart the daemon (systemd auto-restarts it within ~1s)
     dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting
     job_id: for action="jobs" — return status of a specific job instead of all jobs
     delete_index: for action="remove_project" — also delete the on-disk index (frees space)
     """
     runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum", "jobs", "remove_project"}
+    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum", "jobs", "remove_project", "reload"}
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
+    if action == "reload":
+        import os
+        import signal
+        import threading
+        import time as _time
+        pid = os.getpid()
+        threading.Thread(
+            target=lambda: (_time.sleep(0.5), os.kill(pid, signal.SIGTERM)),
+            daemon=True,
+        ).start()
+        return {"status": "reloading", "pid": pid, "note": "daemon will restart via systemd in ~1s"}
     if action == "stop_watching":
         return await handle_stop_watching(path=project_path)
     if action in ("install_hooks", "uninstall_hooks"):

@@ -18,22 +18,27 @@ opencode-search is the tool under test. Every call to `overview` and `search` va
 ## Running tests and quality checks
 
 ```bash
-# All fast tests (no GPU, no live services)
-.venv/bin/pytest src/tests/ -m "not (gpu or runtime_deps or large or embedder or indexer or slow or playwright)" -q
+# Fast smoke check — skips LLM quality tests + browser tests (~5 min)
+.venv/bin/pytest src/tests/live/ -m "live and not slow" -q
 
-# Full test suite (all non-GPU)
-.venv/bin/pytest src/tests/ -m "not (gpu or embedder or indexer or playwright)" -q
+# Full live suite — all intents, quality scoring, watcher (~40 min, no browser)
+.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q
 
-# Playwright browser E2E tests (must run separately — conflicts with pytest-asyncio mode=auto)
-.venv/bin/pytest src/tests/e2e/test_dashboard_playwright.py -v --browser chromium
-
-# MCP contracts + invariants only
-.venv/bin/pytest src/tests/integration/test_mcp.py src/tests/integration/test_invariants.py -v
+# Browser / Playwright tests (run separately — conflicts with pytest-asyncio mode=auto)
+.venv/bin/pytest src/tests/live/test_browser.py -v --browser chromium
 
 # Code quality
 ruff check src/opencode_search src/tests
 python -m compileall -q src/opencode_search
 ```
+
+**Test markers**:
+- `live` — requires daemon at :8765, Ollama, GPU
+- `slow` — LLM-heavy tests (>30s each); skip with `-m "live and not slow"` for fast feedback
+
+**Daemon reload** (after code changes): `manage(action="reload")` or MCP bridge call — daemon restarts via systemd in ~1s.
+
+**Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 

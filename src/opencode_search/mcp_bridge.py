@@ -379,6 +379,7 @@ async def manage(
     action: "wiki_lint" (default) | "stop_watching" | "install_hooks" | "uninstall_hooks"
             | "dedup" (entity deduplication via MinHash/LSH; use dry_run=True to preview)
             | "vacuum" (remove orphan index_budget/index_balanced dirs; use dry_run=True to preview)
+            | "reload" (gracefully restart the daemon; systemd auto-restarts it within ~1s)
     dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting.
     """
     resolved = _resolve_path_like(project_path)

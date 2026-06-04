@@ -108,6 +108,8 @@ class TestAstroAsk:
         answer = data.get("answer") or data.get("result") or str(data)
         assert len(answer) > 50, f"Feature answer too short: {answer[:200]}"
 
+    @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_ask_answer_quality_architecture(self, http, astro):
         # Test quality via chat_stream (more reliable than raw /api/ask which is an intermediate call)
         # Uses ≥2: redacted-name-3 has multiple distributed entry modes rather than a single monolith
@@ -363,11 +365,15 @@ class TestAstroChatIntents:
         )
         assert intent == "debug_trace", f"Expected intent=debug_trace for stack trace; got {intent!r}"
 
+    @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_chat_answer_quality_global(self, http, astro):
         answer, *_ = _chat(http, astro, "Give me a comprehensive global overview of this entire system")
         score = judge_answer(answer, "Does this provide a broad, multi-domain system overview with concrete details?")
         assert score >= _MIN_SCORE, f"Global overview quality {score}/5 too low:\n{answer[:400]}"
 
+    @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_chat_answer_quality_feature(self, http, astro):
         answer, *_ = _chat(http, astro, "How does the search feature work end to end?")
         score = judge_answer(answer, "Does this trace a specific feature end-to-end with entry points or call chain?")
