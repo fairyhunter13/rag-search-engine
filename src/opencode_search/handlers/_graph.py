@@ -928,6 +928,7 @@ async def handle_get_communities(
                     "generated_at": c.generated_at,
                     "level": c.level,
                     "parent_community_id": c.parent_community_id,
+                    "semantic_type": c.semantic_type,
                 })
             god_nodes = gs.get_god_nodes(top_n=10)
             bridges = gs.get_cross_community_bridges(top_n=10)

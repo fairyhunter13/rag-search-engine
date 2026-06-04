@@ -30,10 +30,10 @@ def gpu():
     result = subprocess.run(
         [
             sys.executable, "-c",
-            "from opencode_search.embeddings import get_embed_model; "
-            "m = get_embed_model(); "
-            "v = m.embed(['test query']); "
-            "assert len(v) == 1 and v[0].shape[0] > 0, 'bad shape'",
+            "from opencode_search.embeddings import embed_query; "
+            "from opencode_search.config import DEFAULT_EMBED_MODEL, DEFAULT_DIMS; "
+            "v = embed_query('test query', model=DEFAULT_EMBED_MODEL, dimensions=DEFAULT_DIMS); "
+            "assert len(v) > 0, f'empty vector: {v}'",
         ],
         capture_output=True,
         text=True,

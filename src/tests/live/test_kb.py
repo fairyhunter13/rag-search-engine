@@ -46,17 +46,17 @@ class TestEnrichment:
         r = http.get("/api/communities", params={"project": project, "top_k": 20})
         assert r.status_code == 200
         communities = r.json().get("communities", [])
-        if not communities:
-            pytest.skip("No communities found")
+        assert communities, "No communities returned"
+        first = communities[0]
+        assert "semantic_type" in first, (
+            f"semantic_type field missing from community response; keys={list(first.keys())} — "
+            "handle_get_communities must include semantic_type"
+        )
         with_type = [c for c in communities if c.get("semantic_type")]
         pct = len(with_type) / len(communities) * 100
-        if pct == 0:
-            pytest.xfail(
-                "No semantic_type assigned — run build(action='enrich') to classify"
-            )
         assert pct >= 50, (
             f"Only {pct:.0f}% of top-20 communities have semantic_type — "
-            "run build(action='enrich') to classify"
+            "run build(action='enrich') to backfill"
         )
 
     def test_enrichment_uses_local_llm(self):
@@ -146,9 +146,14 @@ class TestWiki:
         r = http.get("/api/kb_health", params={"project": project})
         assert r.status_code == 200
         data = r.json()
-        wiki_count = data.get("wiki_count", data.get("wiki_pages", -1))
-        if wiki_count == -1:
-            pytest.skip("wiki_count not in kb_health response")
+        wiki_count = (
+            data.get("wiki_page_count")
+            or data.get("wiki_count")
+            or data.get("wiki_pages")
+        )
+        assert wiki_count is not None, (
+            f"wiki_page_count not in kb_health response; keys={list(data.keys())}"
+        )
         assert wiki_count >= 0, f"Unexpected wiki_count: {wiki_count}"
 
 

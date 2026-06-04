@@ -198,6 +198,35 @@ async def _enrich_symbols(gs: Any, llm: Any) -> int:
 
 _LLM_CONCURRENCY: int = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", "2"))
 
+_SEMANTIC_TYPE_RULES: list[tuple[list[str], str]] = [
+    (["handler", "router", "controller", "endpoint", "rest", "grpc", "http", "api", "middleware", "interceptor", "gateway"], "api_boundary"),
+    (["model", "schema", "entity", "table", "record", "struct", "dto", "domain", "aggregate"], "data_model"),
+    (["workflow", "pipeline", "process", "flow", "job", "scheduler", "task", "queue", "batch"], "business_process"),
+    (["rule", "policy", "constraint", "validation", "guard", "check", "compliance"], "business_rule"),
+    (["auth", "payment", "checkout", "order", "cart", "loyalty", "promo", "campaign", "feature"], "feature"),
+    (["deploy", "docker", "k8s", "config", "env", "cache", "redis", "kafka", "infra", "monitoring", "observability"], "infrastructure"),
+]
+
+
+def _classify_semantic_type_fast(title: str, summary: str = "") -> str:
+    """Rule-based semantic type from title/summary — O(1), no LLM needed."""
+    text = f"{title} {summary[:200]}".lower()
+    for keywords, stype in _SEMANTIC_TYPE_RULES:
+        if any(kw in text for kw in keywords):
+            return stype
+    return "utility"
+
+
+def _backfill_semantic_types(gs: Any, all_communities: list[Any]) -> int:
+    """Assign semantic_type to enriched communities that have none, without LLM."""
+    missing = [c for c in all_communities if c.title and not c.semantic_type]
+    if not missing:
+        return 0
+    for c in missing:
+        c.semantic_type = _classify_semantic_type_fast(c.title or "", c.summary or "")
+        gs.upsert_community(c)
+    return len(missing)
+
 
 async def _enrich_communities(
     gs: Any,
@@ -222,11 +251,16 @@ async def _enrich_communities(
         id_set = set(community_ids)
         communities = [c for c in all_communities if c.id in id_set][:max_communities]
     else:
-        # Default: only unenriched communities, largest-first.
+        # LLM enrichment for communities without title/summary.
         communities = [c for c in all_communities if not c.title][:max_communities]
 
     if not communities:
-        return 0
+        # Fast rule-based backfill: assign semantic_type for titled communities
+        # that never got it (enriched before semantic_type was introduced).
+        backfill_count = _backfill_semantic_types(gs, all_communities)
+        if backfill_count:
+            log.info("backfilled semantic_type for %d communities", backfill_count)
+        return backfill_count
 
     log.info(
         "enriching %d communities (max=%d, selective=%s)",
