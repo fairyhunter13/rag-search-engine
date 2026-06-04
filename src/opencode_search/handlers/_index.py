@@ -80,6 +80,17 @@ def _build_incremental_on_change(
                 except Exception as _ie:
                     log.debug("incremental enrichment scheduling failed: %s", _ie)
             clear_search_cache()
+            # Update indexed_at so /api/projects reflects the incremental reindex.
+            try:
+                _reg = load_registry()
+                _entry = _reg.get(str(project_root))
+                if _entry is not None:
+                    _entry.indexed_at = _now_iso()
+                    _entry.last_active = _now_iso()
+                    _reg[str(project_root)] = _entry
+                    save_registry(_reg)
+            except Exception as _re:
+                log.debug("registry indexed_at update failed: %s", _re)
         finally:
             await st.close()
 
