@@ -523,11 +523,13 @@ async def _handle_architecture(
     import asyncio
 
     from opencode_search.enricher import create_query_llm_client
-    from opencode_search.handlers._kb_chat import _fetch_community_context
+    from opencode_search.handlers._kb_chat import (
+        _fetch_code_context,
+        _fetch_community_context,
+        _fetch_wiki_context,
+    )
 
     t0 = time.perf_counter()
-
-    from opencode_search.handlers._kb_chat import _fetch_code_context
 
     async def _get_patterns() -> dict:
         try:
@@ -536,11 +538,13 @@ async def _handle_architecture(
         except Exception:
             return {}
 
-    (_, comm_list, comm_count), (code_ctx, _code_sources, _), patterns = await asyncio.gather(
-        _fetch_community_context(query, project_path, top_k=25, include_federation=False),
-        _fetch_code_context(query, project_path, top_k=12),
-        _get_patterns(),
-    )
+    (_, comm_list, comm_count), (code_ctx, _code_sources, _), patterns, (wiki_ctx, _) = \
+        await asyncio.gather(
+            _fetch_community_context(query, project_path, top_k=25, include_federation=False),
+            _fetch_code_context(query, project_path, top_k=12),
+            _get_patterns(),
+            _fetch_wiki_context(query, project_path, top_k=5),
+        )
 
     # Check semantic_type coverage — may be NULL if project was enriched before
     # the semantic_type field was introduced (common in older indexes).
@@ -591,6 +595,9 @@ async def _handle_architecture(
         if frameworks:
             p_parts.append(f"Key frameworks: {', '.join(frameworks[:6])}")
         ctx_sections.append("**Detected patterns:**\n" + "\n".join(p_parts))
+
+    if wiki_ctx:
+        ctx_sections.append(f"**Wiki knowledge:**\n{wiki_ctx}")
 
     arch_context = "\n\n".join(ctx_sections) if ctx_sections else "(No architecture data — run build(action='pipeline') first)"
 
@@ -850,7 +857,25 @@ async def handle_chat_auto_stream(
             yield event
         return
 
-    # ── global / MAP-REDUCE / debug / graph: heartbeat approach ───────────────
+    # ── global: MAP heartbeats → stream REDUCE synthesis ─────────────────────
+    if intent == "global":
+        async for event in _stream_global(
+            query=query, project_path=project_path,
+            conversation_history=conversation_history, t0=t0,
+        ):
+            yield event
+        return
+
+    # ── debug / debug_trace: streaming root-cause analysis ───────────────────
+    if intent in ("debug", "debug_trace"):
+        async for event in _stream_debug(
+            query=query, project_path=project_path,
+            is_trace=(intent == "debug_trace"), t0=t0,
+        ):
+            yield event
+        return
+
+    # ── graph: heartbeat approach (fast lookups, streaming not needed) ────────
     task = asyncio.ensure_future(handle_chat_auto(
         query=query, project_path=project_path,
         conversation_history=conversation_history, mode=mode,
@@ -956,11 +981,19 @@ async def _stream_feature(
             yield {"type": "token", "text": err[i:i + chunk_size]}
     elif hasattr(llm, "stream_chat"):
         # Native streaming — tokens arrive in real time
-        async for token in _bridge_stream(llm, messages, max_tokens=1024):
-            yield {"type": "token", "text": token}
+        try:
+            async for token in _bridge_stream(llm, messages, max_tokens=1024):
+                yield {"type": "token", "text": token}
+        except Exception as _se:
+            log.warning("_stream_feature: stream_chat failed: %s", _se)
+            yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
     else:
         # Fallback: blocking call + chunk
-        answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
+        try:
+            answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
+        except Exception as _ce:
+            log.warning("_stream_feature: chat failed: %s", _ce)
+            answer = f"Feature analysis unavailable: {type(_ce).__name__}"
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
             if chunk:
@@ -992,6 +1025,318 @@ async def _stream_feature(
     }
 
 
+async def _stream_global(
+    query: str,
+    project_path: str,
+    conversation_history: list[dict] | None,
+    t0: float,
+    chunk_size: int = 40,
+):
+    """Stream global/comprehensive intent: MAP heartbeats then stream REDUCE synthesis."""
+    import asyncio
+    import time as _time
+
+    from opencode_search.config import load_registry as _load_registry
+    from opencode_search.enricher import create_query_llm_client
+    from opencode_search.handlers._kb_chat import (
+        _MAP_BATCH_SIZE,
+        _fetch_code_context,
+        _fetch_community_context,
+        _fetch_hierarchy_communities,
+        _fetch_wiki_context,
+    )
+
+    # Detect federation root — use cross-repo synthesis when sub-repos are indexed
+    _reg = await asyncio.to_thread(_load_registry)
+    _entry = _reg.get(project_path)
+    _is_fed = bool(_entry and _entry.federation)
+
+    # For federation roots, expand code search across all indexed members
+    _fed_members = [m for m in (_entry.federation if _entry else [])
+                    if _reg.get(m) and _reg[m].indexed_at is not None]
+
+    # Parallel context assembly: vector similarity + structural hierarchy + wiki
+    (_, code_sources, _), (_, comm_list, _), (wiki_ctx, _), hier_comms = \
+        await asyncio.gather(
+            _fetch_code_context(query, project_path, top_k=15, extra_paths=_fed_members or None),
+            _fetch_community_context(query, project_path, top_k=60, include_federation=_is_fed),
+            _fetch_wiki_context(query, project_path, top_k=5),
+            _fetch_hierarchy_communities(project_path, max_count=30),
+        )
+
+    # Merge hierarchy communities (structural breadth) with vector-similarity communities
+    # Deduplicate by title to avoid repeating the same community in MAP batches
+    seen_titles: set[str] = {c["title"] for c in comm_list}
+    for hc in hier_comms:
+        if hc["title"] and hc["title"] not in seen_titles:
+            comm_list.append(hc)
+            seen_titles.add(hc["title"])
+
+    llm = await asyncio.to_thread(create_query_llm_client)
+    model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
+
+    if llm is None:
+        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER."
+        for i in range(0, len(err), chunk_size):
+            yield {"type": "token", "text": err[i:i + chunk_size]}
+        yield {"type": "done", "intent": "global", "sources": [], "elapsed_ms": 0, "model": "none"}
+        return
+
+    # MAP phase — run all batches in parallel (semaphore=2), emit heartbeats
+    batches: list[list[str]] = []
+    for i in range(0, len(comm_list), _MAP_BATCH_SIZE):
+        batch = comm_list[i:i + _MAP_BATCH_SIZE]
+        batches.append([
+            f"[{c['semantic_type']}] {c['title']}: {c['summary']}"
+            for c in batch
+        ])
+
+    sem = asyncio.Semaphore(2)
+
+    async def _map_one(summaries: list[str]) -> str:
+        async with sem:
+            return await asyncio.to_thread(llm.map_query, query, summaries)
+
+    map_tasks = [asyncio.ensure_future(_map_one(b)) for b in batches]
+    partial: list[str] = []
+    pending = set(map_tasks)
+    while pending:
+        done, pending = await asyncio.wait(pending, timeout=10.0)
+        for t in done:
+            try:
+                result = t.result()
+                if isinstance(result, str) and result.strip():
+                    partial.append(result)
+            except Exception:
+                pass
+        if pending:
+            yield {"type": "thinking"}
+
+    if not partial:
+        fallback = "No community data found. Run build(action='pipeline') to index the project."
+        for i in range(0, len(fallback), chunk_size):
+            yield {"type": "token", "text": fallback[i:i + chunk_size]}
+        yield {
+            "type": "done", "intent": "global",
+            "sources": code_sources[:10],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
+            "model": model_name,
+        }
+        return
+
+    # REDUCE phase — stream synthesis tokens if supported
+    from opencode_search.handlers._kb_chat import _SYSTEM_PROMPT
+
+    reduce_system = (
+        f"{_SYSTEM_PROMPT}\n\n"
+        "You are synthesizing partial findings from a large codebase into a comprehensive answer. "
+        "Be specific, reference component names, list features exhaustively, avoid repetition."
+    )
+    reduce_context = "\n\n".join(f"Finding {i+1}:\n{p}" for i, p in enumerate(partial[:20]))
+    if wiki_ctx:
+        reduce_context += f"\n\n[WIKI KNOWLEDGE]\n{wiki_ctx}"
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": f"{reduce_system}\n\nPartial findings:\n{reduce_context}"},
+    ]
+    for turn in (conversation_history or [])[-4:]:
+        role = turn.get("role", "")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": query})
+
+    if hasattr(llm, "stream_chat"):
+        try:
+            async for token in _bridge_stream(llm, messages, max_tokens=2048):
+                yield {"type": "token", "text": token}
+        except Exception as _se:
+            log.warning("_stream_global: stream_chat failed: %s", _se)
+            yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
+    else:
+        try:
+            answer = await asyncio.to_thread(llm.chat, messages, max_tokens=2048)
+        except Exception as _ce:
+            log.warning("_stream_global: chat failed: %s", _ce)
+            answer = f"Global analysis unavailable: {type(_ce).__name__}"
+        for i in range(0, max(len(answer), 1), chunk_size):
+            chunk = answer[i:i + chunk_size]
+            if chunk:
+                yield {"type": "token", "text": chunk}
+            await asyncio.sleep(0)
+
+    yield {
+        "type": "done",
+        "intent": "global",
+        "sources": code_sources[:10],
+        "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
+        "model": model_name,
+    }
+
+
+async def _stream_debug(
+    query: str,
+    project_path: str,
+    is_trace: bool,
+    t0: float,
+    chunk_size: int = 40,
+):
+    """Stream debug and debug_trace intent responses.
+
+    debug_trace: run handle_debug_trace in background, heartbeat while waiting,
+                 then stream the formatted prose result.
+    debug: assemble context in parallel (heartbeat if slow), then stream LLM synthesis.
+    """
+    import asyncio
+    import time as _time
+
+    from opencode_search.enricher import create_query_llm_client
+
+    if is_trace:
+        # ── debug_trace: parse stack trace + localize ──────────────────────────
+        from opencode_search.handlers._debug_trace import handle_debug_trace
+        task = asyncio.ensure_future(
+            handle_debug_trace(traceback=query, project_path=project_path, include_fix=True)
+        )
+        while not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+            except TimeoutError:
+                yield {"type": "thinking"}
+        try:
+            result = await task
+        except Exception as exc:
+            result = {"root_cause": f"Debug trace failed: {exc}", "hotspot_files": []}
+        answer = _prose_debug(result)
+        for i in range(0, max(len(answer), 1), chunk_size):
+            chunk = answer[i:i + chunk_size]
+            if chunk:
+                yield {"type": "token", "text": chunk}
+            await asyncio.sleep(0)
+        yield {
+            "type": "done",
+            "intent": "debug_trace",
+            "sources": result.get("hotspot_files", [])[:10],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
+            "model": "",
+        }
+        return
+
+    # ── debug: NL root-cause investigation with LLM streaming ─────────────────
+    from opencode_search.handlers._kb_chat import _fetch_community_context
+    from opencode_search.handlers._query import handle_search_code
+
+    async def _bounded_feature_trace() -> dict:
+        try:
+            return await asyncio.wait_for(_run_feature_trace(query, project_path), timeout=40.0)
+        except (TimeoutError, asyncio.TimeoutError):
+            return {}
+
+    # Parallel context assembly — feature trace bounded at 40s to keep total latency reasonable
+    feature_task = asyncio.ensure_future(_bounded_feature_trace())
+    code_task = asyncio.ensure_future(
+        handle_search_code(query=query, project_paths=[project_path], top_k=8)
+    )
+    community_task = asyncio.ensure_future(
+        _fetch_community_context(query, project_path, top_k=8, include_federation=False)
+    )
+    pending = {feature_task, code_task, community_task}
+    while pending:
+        _, pending = await asyncio.wait(pending, timeout=10.0)
+        if pending:
+            yield {"type": "thinking"}
+
+    feature_result = feature_task.result() if not feature_task.exception() else {}
+    code_result = code_task.result() if not code_task.exception() else {}
+    _, comm_list, _ = community_task.result() if not community_task.exception() else ("", [], 0)
+
+    algo = feature_result.get("algorithm", "") if isinstance(feature_result, dict) else ""
+    eps = feature_result.get("entry_points", []) if isinstance(feature_result, dict) else []
+    rationale = feature_result.get("design_rationale", "") if isinstance(feature_result, dict) else ""
+    call_chain = feature_result.get("call_chain", []) if isinstance(feature_result, dict) else []
+    code_results = code_result.get("results", []) if isinstance(code_result, dict) else []
+
+    ctx_lines: list[str] = []
+    if comm_list:
+        ctx_lines.append("[BUSINESS PROCESS CONTEXT]")
+        for c in comm_list[:5]:
+            st = c.get("semantic_type", "utility")
+            ctx_lines.append(f'  Community: "{c["title"]}" (semantic_type: {st})')
+            ctx_lines.append(f'  Summary: {c["summary"][:200]}')
+    if algo:
+        ctx_lines.append("\n[ALGORITHM STEPS]")
+        ctx_lines.append(algo[:600])
+    if rationale:
+        ctx_lines.append("\n[DESIGN RATIONALE]")
+        ctx_lines.append(rationale[:400])
+    if eps:
+        ctx_lines.append("\n[ENTRY POINTS]")
+        for ep in eps[:4]:
+            ctx_lines.append(f"  {ep.get('symbol', '')} → {ep.get('file', '')}")
+    if call_chain:
+        ctx_lines.append("\n[CALL CHAIN]")
+        for step in call_chain[:6]:
+            name = step.get("name") or step.get("qualified_name", "")
+            f = step.get("file", "")
+            d = step.get("depth", "")
+            ctx_lines.append(f"  depth={d}: {name} ({f})")
+    ctx_lines.append("\n[CODE SAMPLES]")
+    for r in code_results[:5]:
+        snippet = (r.get("content") or "")[:300].replace("\n", " ")
+        ctx_lines.append(f"  {r.get('path', '')}: {snippet}")
+
+    context = "\n".join(ctx_lines)
+    debug_system = (
+        "You are a senior software engineer performing root cause analysis. "
+        "Using the provided context, identify and state FOUR things with these exact headings:\n\n"
+        "**BUSINESS PROCESS:** Name the community/domain where the bug originates\n"
+        "**ALGORITHM STEP:** Which step of the algorithm/workflow where the bug manifests\n"
+        "**FILE & LINE RANGE:** Exact function name and file location\n"
+        "**ROOT CAUSE:** Why this specific location causes the observed symptom — "
+        "include race conditions, edge cases, or logic errors\n\n"
+        "Be specific. Reference exact files and functions."
+    )
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": debug_system},
+        {"role": "user", "content": f"Analyse for root cause:\n\n{context}\n\nQuestion: {query}"},
+    ]
+
+    llm = await asyncio.to_thread(create_query_llm_client)
+    model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
+
+    if llm is None:
+        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER."
+        for i in range(0, len(err), chunk_size):
+            yield {"type": "token", "text": err[i:i + chunk_size]}
+    elif hasattr(llm, "stream_chat"):
+        try:
+            async for token in _bridge_stream(llm, messages, max_tokens=1024):
+                yield {"type": "token", "text": token}
+        except Exception as _se:
+            log.warning("_stream_debug: stream_chat failed: %s", _se)
+            yield {"type": "token", "text": f" [debug analysis incomplete: {type(_se).__name__}]"}
+    else:
+        try:
+            answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
+        except Exception as _ce:
+            log.warning("_stream_debug: chat failed: %s", _ce)
+            answer = f"Debug analysis unavailable: {type(_ce).__name__}"
+        for i in range(0, max(len(answer), 1), chunk_size):
+            chunk = answer[i:i + chunk_size]
+            if chunk:
+                yield {"type": "token", "text": chunk}
+            await asyncio.sleep(0)
+
+    hotspot_files = [ep.get("file", "") for ep in eps[:4] if ep.get("file")]
+    yield {
+        "type": "done",
+        "intent": "debug",
+        "sources": hotspot_files[:10],
+        "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
+        "model": model_name,
+    }
+
+
 async def _run_feature_trace(query: str, project_path: str) -> dict[str, Any]:
     """Run handle_ask_feature safely, returning {} on any error."""
     try:
@@ -1013,7 +1358,11 @@ async def _stream_architecture(
     import time as _time
 
     from opencode_search.enricher import create_query_llm_client
-    from opencode_search.handlers._kb_chat import _fetch_code_context, _fetch_community_context
+    from opencode_search.handlers._kb_chat import (
+        _fetch_code_context,
+        _fetch_community_context,
+        _fetch_wiki_context,
+    )
 
     async def _get_patterns() -> dict:
         try:
@@ -1023,10 +1372,11 @@ async def _stream_architecture(
             return {}
 
     # Parallel context assembly
-    (_, comm_list, _comm_count), (code_ctx, _, _), patterns = await asyncio.gather(
+    (_, comm_list, _comm_count), (code_ctx, _, _), patterns, (wiki_ctx, _) = await asyncio.gather(
         _fetch_community_context(query, project_path, top_k=25, include_federation=False),
         _fetch_code_context(query, project_path, top_k=12),
         _get_patterns(),
+        _fetch_wiki_context(query, project_path, top_k=5),
     )
 
     # Group and build layered context — gracefully handles NULL semantic_type
@@ -1075,6 +1425,9 @@ async def _stream_architecture(
             p_parts.append(f"Key frameworks: {', '.join(frameworks[:6])}")
         ctx_sections.append("**Detected patterns:**\n" + "\n".join(p_parts))
 
+    if wiki_ctx:
+        ctx_sections.append(f"**Wiki knowledge:**\n{wiki_ctx}")
+
     arch_context = "\n\n".join(ctx_sections) if ctx_sections else "(No architecture data indexed)"
 
     messages: list[dict[str, Any]] = [
@@ -1095,10 +1448,18 @@ async def _stream_architecture(
         for i in range(0, len(err), chunk_size):
             yield {"type": "token", "text": err[i:i + chunk_size]}
     elif hasattr(llm, "stream_chat"):
-        async for token in _bridge_stream(llm, messages, max_tokens=1536):
-            yield {"type": "token", "text": token}
+        try:
+            async for token in _bridge_stream(llm, messages, max_tokens=1536):
+                yield {"type": "token", "text": token}
+        except Exception as _se:
+            log.warning("_stream_architecture: stream_chat failed: %s", _se)
+            yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
     else:
-        answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1536)
+        try:
+            answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1536)
+        except Exception as _ce:
+            log.warning("_stream_architecture: chat failed: %s", _ce)
+            answer = f"Architecture analysis unavailable: {type(_ce).__name__}"
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
             if chunk:
