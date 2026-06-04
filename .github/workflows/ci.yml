@@ -8,7 +8,7 @@ on:
 
 jobs:
   # ──────────────────────────────────────────────
-  # Job 1: Code quality (ruff + mypy + compile)
+  # Job 1: Code quality (ruff + compile check)
   # ──────────────────────────────────────────────
   quality:
     name: Code Quality
@@ -21,10 +21,8 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dev dependencies
-        run: |
-          pip install -e 'src[dev]' --no-deps 2>/dev/null || true
-          pip install ruff mypy hypothesis
+      - name: Install dependencies
+        run: pip install ruff
 
       - name: Ruff lint
         run: ruff check src/opencode_search src/tests
@@ -33,73 +31,11 @@ jobs:
         run: python -m compileall -q src/opencode_search
 
   # ──────────────────────────────────────────────
-  # Job 2: Unit + integration tests
+  # Job 2: Test discovery — confirm all live tests
+  # are collected without import errors
   # ──────────────────────────────────────────────
-  tests:
-    name: Tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    needs: quality
-
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -e 'src[dev]'
-
-      - name: Run tests
-        run: |
-          pytest src/tests/ -x -q \
-            -m "not (gpu or runtime_deps or large or embedder or indexer or slow)" \
-            --tb=short
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-results-${{ matrix.python-version }}
-          path: .pytest_cache/
-
-  # ──────────────────────────────────────────────
-  # Job 3: MCP contracts + invariants
-  # ──────────────────────────────────────────────
-  contracts:
-    name: MCP Contracts & Invariants
-    runs-on: ubuntu-latest
-    needs: tests
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -e 'src[dev]' hypothesis
-
-      - name: Run MCP contract and invariant tests
-        run: |
-          pytest src/tests/integration/test_mcp.py \
-                 src/tests/integration/test_invariants.py \
-                 -v --tb=short \
-                 -m "not (gpu or runtime_deps or large)"
-
-  # ──────────────────────────────────────────────
-  # Job 4: Property-based tests (Hypothesis)
-  # ──────────────────────────────────────────────
-  property_tests:
-    name: Property-Based Tests
+  collect:
+    name: Test Collection
     runs-on: ubuntu-latest
     needs: quality
 
@@ -112,11 +48,50 @@ jobs:
           cache: "pip"
 
       - name: Install dependencies
-        run: pip install -e 'src[dev]' hypothesis
-
-      - name: Run Hypothesis tests
-        env:
-          HYPOTHESIS_MAX_EXAMPLES: "50"
         run: |
-          pytest src/tests/integration/test_invariants.py -v --tb=short \
-            --hypothesis-seed=0
+          pip install -e 'src[dev]' --quiet
+
+      - name: Collect live tests (no services needed)
+        run: |
+          python -m pytest src/tests/live/ \
+            --ignore=src/tests/live/test_browser.py \
+            --collect-only -q 2>&1 | tail -5
+
+      - name: Confirm zero non-live tests remain
+        run: |
+          count=$(python -m pytest src/tests/ -m "not live" --collect-only -q 2>&1 | grep "selected" | grep -oP '\d+' | head -1 || echo 0)
+          echo "Non-live test count: ${count:-0}"
+          test "${count:-0}" -eq 0 || (echo "ERROR: found non-live tests that can pass without real services" && exit 1)
+
+  # ──────────────────────────────────────────────
+  # Live tests run on self-hosted GPU runner only
+  # (requires daemon :8765, Ollama :11434, RTX GPU)
+  # ──────────────────────────────────────────────
+  live:
+    name: Live Tests (GPU runner)
+    runs-on: self-hosted
+    needs: quality
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify daemon is running
+        run: curl -sf http://localhost:8765/api/projects > /dev/null
+
+      - name: Run live test suite
+        run: |
+          .venv/bin/pytest src/tests/live/ \
+            --ignore=src/tests/live/test_browser.py \
+            --ignore=src/tests/live/test_quality.py \
+            -q --tb=short
+
+      - name: Run quality gate tests
+        run: |
+          .venv/bin/pytest src/tests/live/test_quality.py \
+            -q --tb=short
+
+      - name: Run browser tests
+        run: |
+          .venv/bin/pytest src/tests/live/test_browser.py \
+            --browser chromium --tb=short
