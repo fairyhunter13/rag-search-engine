@@ -1034,20 +1034,18 @@ def create_llm_client() -> LLMClient | None:
     provider = os.environ.get("OPENCODE_LLM_PROVIDER", DEFAULT_LLM_PROVIDER).strip().lower()
     if provider == "none" or not provider:
         return None
+    # Hard enforcement: codex and claude-code are forbidden for KB build operations.
+    # They may only be used for dashboard chat queries via create_query_llm_client().
+    if provider in ("codex", "claude-code"):
+        raise RuntimeError(
+            f"OPENCODE_LLM_PROVIDER={provider!r} is FORBIDDEN for KB build operations. "
+            "Indexing, enrichment, wiki generation, and pattern analysis must use "
+            "OPENCODE_LLM_PROVIDER=ollama (local GPU). "
+            "To use codex/claude-code for dashboard chat, set OPENCODE_QUERY_LLM_PROVIDER instead."
+        )
     # Read shared params once — each branch uses these rather than re-reading env.
     model = os.environ.get("OPENCODE_LLM_MODEL", DEFAULT_LLM_MODEL)
     timeout = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
-    if provider == "codex":
-        primary = CodexClient(
-            model=model,
-            timeout=timeout,
-            pass_model_flag=bool(os.environ.get("OPENCODE_CODEX_PASS_MODEL", "")),
-        )
-        # Auto-fallback to claude-haiku-4.5 on rate-limit unless disabled.
-        if not os.environ.get("OPENCODE_LLM_NO_FALLBACK") and shutil.which("claude"):
-            fallback = ClaudeCodeClient(model=_CLAUDE_CODE_DEFAULT_MODEL, timeout=timeout)
-            return FallbackLLMClient(primary=primary, fallback=fallback)
-        return primary
     if provider == "ollama":
         return OllamaClient(
             base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
@@ -1058,11 +1056,10 @@ def create_llm_client() -> LLMClient | None:
         return AnthropicClient.from_env()
     if provider == "openai":
         return OpenAIClient.from_env()
-    if provider == "claude-code":
-        return ClaudeCodeClient(model=model, timeout=timeout)
     raise ValueError(
         f"Unknown OPENCODE_LLM_PROVIDER={provider!r}. "
-        "Valid values: none, codex, ollama, anthropic, openai, claude-code"
+        "Valid values: none, ollama, anthropic, openai. "
+        "(codex and claude-code are forbidden for KB build — use OPENCODE_QUERY_LLM_PROVIDER for chat)"
     )
 
 
