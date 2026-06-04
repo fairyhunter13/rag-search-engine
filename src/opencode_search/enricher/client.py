@@ -498,6 +498,37 @@ class OllamaClient(LLMClient):
         except Exception:
             return False
 
+    def _assert_gpu_only(self) -> None:
+        """Crash with a fatal error if this model has any CPU-offloaded layers.
+
+        CPU inference is forbidden and prohibited — all LLM layers must run on GPU.
+        Triggered before the first inference call to enforce the GPU-only policy.
+        """
+        try:
+            req = urllib.request.Request(f"{self.base_url}/api/ps")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                ps = json.loads(resp.read().decode("utf-8"))
+            for entry in ps.get("models", []):
+                # Match by exact name or by model family prefix (strip tag)
+                entry_name = entry.get("name", "")
+                if entry_name != self.model and entry_name.split(":")[0] != self.model.split(":")[0]:
+                    continue
+                size_total = entry.get("size", 0)
+                size_vram = entry.get("size_vram", 0)
+                cpu_bytes = size_total - size_vram
+                if cpu_bytes > 10_000_000:  # > 10 MB on CPU is a violation
+                    cpu_gb = cpu_bytes / 1e9
+                    raise RuntimeError(
+                        f"FATAL: CPU inference violation — model '{self.model}' has "
+                        f"{cpu_gb:.2f} GB offloaded to CPU. "
+                        "All LLM inference MUST run on GPU. "
+                        "Free up VRAM (kill stale processes) or use a smaller model."
+                    )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # Can't check GPU state — allow inference to proceed
+
     def chat(
         self,
         messages: list[dict[str, str]],
@@ -505,6 +536,7 @@ class OllamaClient(LLMClient):
         temperature: float = 0.1,
         max_tokens: int = 1024,
     ) -> str:
+        self._assert_gpu_only()
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -546,6 +578,7 @@ class OllamaClient(LLMClient):
         """
         from typing import Iterator  # noqa: F401 (only for annotation)
 
+        self._assert_gpu_only()
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,

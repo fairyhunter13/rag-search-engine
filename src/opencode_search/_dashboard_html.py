@@ -11,6 +11,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>opencode-search</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <style>
 /* ── Design tokens (Datadog DRUIDS) ──────────────────────────────────────── */
 :root{
@@ -107,10 +109,23 @@ a{color:inherit;text-decoration:none}
 .msg{max-width:760px;display:flex;flex-direction:column;gap:6px}
 .msg.user{align-self:flex-end;align-items:flex-end}
 .msg.ai{align-self:flex-start}
-.msg-bubble{padding:10px 14px;border-radius:var(--radius);font-size:.83rem;line-height:1.55;white-space:pre-wrap;word-break:break-word}
-.msg.user .msg-bubble{background:rgba(123,97,255,.18);border:1px solid rgba(123,97,255,.3);color:var(--text)}
+.msg-bubble{padding:10px 14px;border-radius:var(--radius);font-size:.83rem;line-height:1.55;word-break:break-word;overflow-x:auto}
+.msg.user .msg-bubble{background:rgba(123,97,255,.18);border:1px solid rgba(123,97,255,.3);color:var(--text);white-space:pre-wrap}
 .msg.ai .msg-bubble{background:var(--surface);border:1px solid var(--border);color:var(--text)}
 .msg.ai.thinking .msg-bubble{color:var(--text-3);font-style:italic}
+/* Markdown rendered content inside AI bubbles */
+.msg.ai .msg-bubble h1,.msg.ai .msg-bubble h2,.msg.ai .msg-bubble h3{color:var(--text);font-weight:600;margin:.7em 0 .3em;line-height:1.3}
+.msg.ai .msg-bubble h1{font-size:1rem}.msg.ai .msg-bubble h2{font-size:.95rem}.msg.ai .msg-bubble h3{font-size:.88rem}
+.msg.ai .msg-bubble p{margin:.35em 0}
+.msg.ai .msg-bubble ul,.msg.ai .msg-bubble ol{padding-left:1.3em;margin:.35em 0}
+.msg.ai .msg-bubble li{margin:.15em 0}
+.msg.ai .msg-bubble code{font-family:'JetBrains Mono','Fira Code',monospace;font-size:.8rem;background:var(--surface-3);border:1px solid var(--border);border-radius:3px;padding:0 4px}
+.msg.ai .msg-bubble pre{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;overflow-x:auto;margin:.4em 0}
+.msg.ai .msg-bubble pre code{background:none;border:none;padding:0;font-size:.78rem;line-height:1.5}
+.msg.ai .msg-bubble strong{color:var(--text);font-weight:600}
+.msg.ai .msg-bubble em{color:var(--text-2)}
+.msg.ai .msg-bubble blockquote{border-left:3px solid var(--purple);padding-left:10px;color:var(--text-2);margin:.4em 0}
+.msg.ai .msg-bubble a{color:var(--cyan);text-decoration:underline}
 .msg-meta{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .intent-tag{font-size:.62rem;padding:2px 7px;border-radius:10px;background:rgba(123,97,255,.15);color:var(--purple);font-weight:600}
 .src-chip{font-size:.62rem;padding:2px 7px;border-radius:10px;background:var(--surface-2);color:var(--text-2);cursor:default;border:1px solid var(--border)}
@@ -328,6 +343,13 @@ let _msgSeq=0;
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// mdSafe: render markdown to safe HTML for AI messages
+const mdSafe=s=>{
+  try{
+    if(typeof marked==='undefined'||typeof DOMPurify==='undefined')return esc(s);
+    return DOMPurify.sanitize(marked.parse(String(s||'')),{USE_PROFILES:{html:true}});
+  }catch{return esc(s);}
+};
 
 function toast(msg,type='info'){
   const t=document.createElement('div');
@@ -711,14 +733,14 @@ function appendStreamMsg(text){
   const id='msg-'+(++_msgSeq);
   const hist=$('chat-history');
   hist.insertAdjacentHTML('beforeend',
-    `<div class="msg ai" id="${id}"><div class="msg-bubble" id="${id}-bubble">${esc(text)}</div></div>`);
+    `<div class="msg ai" id="${id}"><div class="msg-bubble" id="${id}-bubble">${mdSafe(text)}</div></div>`);
   hist.scrollTop=hist.scrollHeight;
   return id;
 }
 
 function updateStreamMsg(id,text){
   const bubble=$(id+'-bubble');
-  if(bubble){bubble.textContent=text;$('chat-history').scrollTop=$('chat-history').scrollHeight;}
+  if(bubble){bubble.innerHTML=mdSafe(text);$('chat-history').scrollTop=$('chat-history').scrollHeight;}
 }
 
 function finalizeStreamMsg(id,meta){
@@ -753,7 +775,8 @@ function appendMsg(role,text,extraClass='',meta=null){
     });
     if(tags.length)metaHtml=`<div class="msg-meta">${tags.join('')}</div>`;
   }
-  hist.insertAdjacentHTML('beforeend', `<div class="msg ${cls}" id="${id}"><div class="msg-bubble">${esc(text)}</div>${metaHtml}</div>`);
+  const bubbleContent=cls==='user'?esc(text):mdSafe(text);
+  hist.insertAdjacentHTML('beforeend', `<div class="msg ${cls}" id="${id}"><div class="msg-bubble">${bubbleContent}</div>${metaHtml}</div>`);
   hist.scrollTop=hist.scrollHeight;
   return id;
 }

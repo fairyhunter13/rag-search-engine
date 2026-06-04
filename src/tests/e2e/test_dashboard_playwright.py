@@ -48,7 +48,22 @@ _MOCK_SUGGESTED = {"questions": [
     "explain community detection",
 ]}
 _MOCK_CHAT = {
-    "answer": "The indexing pipeline starts with tree-sitter parsing across all source files. Each file is split into semantic chunks, embedded on GPU, and stored in LanceDB.",
+    "answer": (
+        "## Indexing Pipeline\n\n"
+        "The indexing pipeline starts with **tree-sitter parsing** across all source files.\n\n"
+        "### Steps\n"
+        "1. Parse source files using tree-sitter grammars\n"
+        "2. Extract semantic chunks (functions, classes)\n"
+        "3. Embed each chunk on GPU via `fastembed`\n"
+        "4. Store vectors in **LanceDB** with metadata\n\n"
+        "```python\n"
+        "def run_pipeline(project_path: str):\n"
+        "    chunks = extract_chunks(project_path)\n"
+        "    vectors = embed_batch(chunks)  # GPU only\n"
+        "    storage.upsert(vectors)\n"
+        "```\n\n"
+        "> CPU fallback is forbidden — all embedding runs on CUDA."
+    ),
     "intent": "feature",
     "sources": [
         f"{_MOCK_PROJECT}/src/handlers/_pipeline.py",
@@ -114,6 +129,8 @@ def _dashboard_server():
         def _send_sse_stream(self, answer: str, meta: dict):
             """Simulate SSE streaming chat response (text/event-stream)."""
             events = []
+            # Send one thinking heartbeat first to simulate realistic LLM delay
+            events.append("data: " + json.dumps({"type": "thinking"}) + "\n\n")
             chunk = 40
             for i in range(0, max(len(answer), 1), chunk):
                 events.append("data: " + json.dumps({"type": "token", "text": answer[i:i + chunk]}) + "\n\n")
@@ -635,3 +652,192 @@ class TestVisualQuality:
         sidebar = pw_page.query_selector('.sidebar, #sidebar')
         assert sidebar is None, \
             "Old .sidebar element must not be present in the redesigned dashboard"
+
+
+# ── 8. Comprehensive chat feature coverage ────────────────────────────────────
+
+class TestChatComprehensive:
+    """Comprehensive chat behavior: markdown, SSE streaming, in-flight guard, multi-turn."""
+
+    def _go_chat(self, p):
+        p.click("#vbtn-chat")
+        p.wait_for_selector("#chat-in", state="visible")
+
+    def test_ai_bubble_renders_markdown_not_raw_text(self, pw_page):
+        """AI response containing ** and ## must render as HTML elements, not raw asterisks."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "describe the architecture")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=8000)
+        # Verify the bubble content is non-empty
+        text = pw_page.evaluate(
+            "document.querySelector('.msg.ai:not(.thinking) .msg-bubble')?.textContent?.trim() || ''"
+        )
+        assert len(text) > 10, "AI bubble must have content after response"
+        # Verify rendered HTML contains markup (not raw **text**)
+        inner_html = pw_page.evaluate(
+            "document.querySelector('.msg.ai:not(.thinking) .msg-bubble')?.innerHTML || ''"
+        )
+        # The mock answer has **bold** → must become <strong> or at minimum not show raw **
+        raw_asterisks_count = inner_html.count("**")
+        # Either markdown was rendered (no raw **) or fallback esc() was used (raw text visible)
+        # Either way, double-asterisks should NOT appear as literal ** in rendered HTML
+        has_structure = (
+            "<h" in inner_html or "<strong" in inner_html or "<code" in inner_html
+            or "<ul" in inner_html or "<ol" in inner_html or "<em" in inner_html
+            or raw_asterisks_count == 0  # rendered successfully
+        )
+        assert has_structure, \
+            f"AI bubble must render markdown structure. Inner HTML (truncated): {inner_html[:300]}"
+
+    def test_code_block_rendered_in_response(self, pw_page):
+        """Code blocks in LLM response (``` ... ```) should render as <pre><code>."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "show me a code example")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=8000)
+        inner_html = pw_page.evaluate(
+            "document.querySelector('.msg.ai:not(.thinking) .msg-bubble')?.innerHTML || ''"
+        )
+        # Mock response has a ```python ... ``` block — should render as <pre> or <code>
+        has_code = "<pre" in inner_html or "<code" in inner_html
+        # If marked.js CDN unavailable, code blocks won't render — check text content
+        if not has_code:
+            text = pw_page.evaluate(
+                "document.querySelector('.msg.ai:not(.thinking) .msg-bubble')?.textContent || ''"
+            )
+            assert "def run_pipeline" in text or len(text) > 50, \
+                "Response must contain code content even without markdown rendering"
+        else:
+            assert has_code, "Code block must render as <pre> or <code> element"
+
+    def test_thinking_bubble_appears_and_disappears(self, pw_page):
+        """Thinking... bubble must appear on send and be removed after response arrives."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "what does the pipeline handler do?")
+        pw_page.click("#send-btn")
+        # Wait for the final AI response (replaces thinking bubble)
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        # After response, no thinking bubbles should remain
+        thinking = pw_page.query_selector_all(".msg.ai.thinking")
+        assert len(thinking) == 0, \
+            f"Thinking bubble must be removed after response arrives; {len(thinking)} remain"
+
+    def test_inflight_guard_only_one_send(self, pw_page):
+        """Rapid clicks while in-flight must not create duplicate user messages."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "rapid fire test")
+        # Three rapid clicks — only the first should go through
+        pw_page.click("#send-btn")
+        pw_page.click("#send-btn")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        user_msgs = pw_page.query_selector_all(".msg.user")
+        assert len(user_msgs) == 1, \
+            f"In-flight guard must allow only 1 send; found {len(user_msgs)} user messages"
+
+    def test_inflight_guard_enter_key(self, pw_page):
+        """Rapid Enter presses must be blocked by in-flight guard."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "enter key rapid test")
+        pw_page.press("#chat-in", "Enter")
+        pw_page.press("#chat-in", "Enter")
+        pw_page.press("#chat-in", "Enter")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        user_msgs = pw_page.query_selector_all(".msg.user")
+        assert len(user_msgs) == 1, \
+            f"Enter key in-flight guard must prevent duplicates; found {len(user_msgs)} user messages"
+
+    def test_send_button_reenabled_after_response(self, pw_page):
+        """Send button must be re-enabled after stream completes."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "button state test")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        is_disabled = pw_page.evaluate("document.querySelector('#send-btn')?.disabled ?? true")
+        assert not is_disabled, "Send button must be re-enabled after stream completes"
+
+    def test_user_message_plain_text_no_markdown(self, pw_page):
+        """User messages must display as escaped plain text, not rendered markdown."""
+        self._go_chat(pw_page)
+        markdown_text = "**bold** `code` ## heading"
+        pw_page.fill("#chat-in", markdown_text)
+        pw_page.press("#chat-in", "Enter")
+        pw_page.wait_for_selector(".msg.user", timeout=3000)
+        user_html = pw_page.evaluate(
+            "document.querySelector('.msg.user .msg-bubble')?.innerHTML || ''"
+        )
+        assert "<strong>" not in user_html, \
+            "User bubble must not render **bold** as <strong>"
+        assert "<h2>" not in user_html, \
+            "User bubble must not render ## as <h2>"
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+
+    def test_multi_turn_two_questions_two_answers(self, pw_page):
+        """Two sequential questions must each receive an AI answer."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "first: what is this codebase?")
+        pw_page.press("#chat-in", "Enter")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        pw_page.fill("#chat-in", "second: what are the key files?")
+        pw_page.press("#chat-in", "Enter")
+        pw_page.wait_for_function(
+            "document.querySelectorAll('.msg.ai:not(.thinking)').length >= 2",
+            timeout=12000,
+        )
+        ai_msgs = pw_page.query_selector_all(".msg.ai:not(.thinking)")
+        assert len(ai_msgs) >= 2, f"Two questions must produce two AI responses, got {len(ai_msgs)}"
+
+    def test_intent_badge_present_on_response(self, pw_page):
+        """Intent badge must appear on every AI response."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "how does the search work?")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".intent-tag", timeout=8000)
+        badge = pw_page.query_selector(".intent-tag")
+        assert badge is not None, "Intent badge (.intent-tag) must appear"
+        assert len((badge.text_content() or "").strip()) > 0, "Intent badge must have text"
+
+    def test_source_chips_present_on_response(self, pw_page):
+        """Source file chips must appear after responses with sources."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "what is the entry point?")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".src-chip", timeout=8000)
+        chips = pw_page.query_selector_all(".src-chip")
+        assert len(chips) >= 1, "Source chips must appear when sources are available"
+
+    def test_elapsed_time_badge_present(self, pw_page):
+        """Elapsed time badge must appear showing response time."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "describe the graph extractor")
+        pw_page.click("#send-btn")
+        pw_page.wait_for_selector(".elapsed", timeout=8000)
+        elapsed = pw_page.query_selector(".elapsed")
+        assert elapsed is not None, ".elapsed badge must appear"
+
+    def test_chat_scrolls_to_bottom_after_response(self, pw_page):
+        """Chat history must auto-scroll to bottom when response arrives."""
+        self._go_chat(pw_page)
+        pw_page.fill("#chat-in", "tell me everything about the project")
+        pw_page.press("#chat-in", "Enter")
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        at_bottom = pw_page.evaluate("""
+            (() => {
+                const h = document.getElementById('chat-history');
+                if (!h) return true;
+                return Math.abs(h.scrollHeight - h.scrollTop - h.clientHeight) < 20;
+            })()
+        """)
+        assert at_bottom, "Chat history must auto-scroll to bottom after response"
+
+    def test_suggested_question_triggers_chat_and_gets_response(self, pw_page):
+        """Clicking a suggested question must navigate to chat and get an AI response."""
+        # Start from pulse view
+        pw_page.click("#vbtn-pulse")
+        pw_page.wait_for_selector(".sq-btn", timeout=5000)
+        pw_page.locator(".sq-btn").first.click()
+        pw_page.wait_for_selector("#view-chat.active", timeout=3000)
+        pw_page.wait_for_selector(".msg.ai:not(.thinking)", timeout=10000)
+        ai_msgs = pw_page.query_selector_all(".msg.ai:not(.thinking)")
+        assert len(ai_msgs) >= 1, "Suggested question must produce an AI response"

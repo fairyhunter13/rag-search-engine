@@ -18,7 +18,6 @@ Intent classification uses the LLM (no keyword heuristics) so any phrasing is ha
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 from typing import Any
@@ -116,25 +115,41 @@ async def classify_intent_llm(query: str) -> str:
     return "feature"
 
 
-def _extract_symbol(query: str) -> str:
-    """Best-effort extraction of a symbol name from a graph query."""
-    # "what calls handle_pipeline" → "handle_pipeline"
-    patterns = [
-        re.compile(r"(?:callers? of|what calls?|who calls?|callees? of|what does (\S+) call|downstream of|impact of|if i change)\s+['\"]?(\w+)['\"]?", re.IGNORECASE),
-        re.compile(r"['\"](\w+)['\"]"),
-        re.compile(r"\b([A-Za-z_]\w*(?:\.\w+)*)\b"),
-    ]
-    for pat in patterns:
-        m = pat.search(query)
-        if m:
-            # Return last non-empty group
-            groups = [g for g in m.groups() if g]
-            if groups:
-                return groups[-1]
-    # Fallback: longest word
-    words = re.findall(r"\b[A-Za-z_]\w{2,}\b", query)
-    if words:
-        return max(words, key=len)
+_EXTRACT_SYMBOL_SYSTEM = (
+    "Extract the code symbol (function name, class name, variable, or method) "
+    "that the user wants to look up in the call graph. "
+    "Return ONLY the symbol name as a single word/identifier, nothing else. "
+    "Examples:\n"
+    "  'what calls handle_pipeline?' → handle_pipeline\n"
+    "  'who calls ProcessOrder' → ProcessOrder\n"
+    "  'impact of changing UserService' → UserService\n"
+    "  'callees of db.connect' → db.connect\n"
+    "If no clear symbol, return the most likely identifier from the query."
+)
+
+
+async def _extract_symbol_llm(query: str) -> str:
+    """Extract the target symbol from a graph query using the LLM."""
+    import asyncio
+
+    from opencode_search.enricher import create_query_llm_client
+
+    try:
+        llm = await asyncio.to_thread(create_query_llm_client)
+        if llm is None:
+            return query.split()[-1] if query.split() else query
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _EXTRACT_SYMBOL_SYSTEM},
+            {"role": "user", "content": query[:300]},
+        ]
+        raw = await asyncio.to_thread(llm.chat, messages, max_tokens=24)
+        text = raw if isinstance(raw, str) else (raw.get("content", "") if isinstance(raw, dict) else str(raw))
+        # Clean up: strip whitespace, punctuation, quotes
+        symbol = text.strip().strip("'\"` \t\n").split()[0] if text.strip() else ""
+        if symbol:
+            return symbol
+    except Exception as e:
+        log.debug("LLM symbol extraction failed: %s", e)
     return query.split()[-1] if query.split() else query
 
 
@@ -529,23 +544,37 @@ async def _handle_architecture(
         _get_patterns(),
     )
 
-    # Group communities by semantic_type into architectural layers
-    layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
-    for comm in comm_list:
-        st = (comm.get("semantic_type") or "utility").lower()
-        layer = _ARCH_LAYER_MAP.get(st, "Business Logic Layer")
-        layers[layer].append(comm)
+    # Check semantic_type coverage — may be NULL if project was enriched before
+    # the semantic_type field was introduced (common in older indexes).
+    typed_count = sum(1 for c in comm_list if c.get("semantic_type"))
+    use_flat = typed_count < len(comm_list) * 0.2  # < 20% typed → flat-list mode
 
-    # Build layered context string
     ctx_sections: list[str] = []
-    for layer_name in _ARCH_LAYER_ORDER:
-        comms = layers[layer_name]
-        if comms:
-            comm_lines = "\n".join(
-                f"  [{c['semantic_type']}] {c['title']}: {c['summary'][:200]}"
-                for c in comms[:6]
-            )
-            ctx_sections.append(f"**{layer_name}:**\n{comm_lines}")
+
+    if use_flat:
+        # Flat-list: pass all communities as plain list; LLM does its own grouping
+        comm_lines = "\n".join(
+            f"  {c['title']}: {(c.get('summary') or '')[:200]}"
+            for c in comm_list[:30]
+        )
+        ctx_sections.append(f"**Communities ({len(comm_list)} total, sample):**\n{comm_lines}")
+        layers = {name: [] for name in _ARCH_LAYER_ORDER}
+    else:
+        # Group communities by semantic_type into architectural layers
+        layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
+        for comm in comm_list:
+            st = (comm.get("semantic_type") or "utility").lower()
+            layer = _ARCH_LAYER_MAP.get(st, "Business Logic Layer")
+            layers[layer].append(comm)
+
+        for layer_name in _ARCH_LAYER_ORDER:
+            comms = layers[layer_name]
+            if comms:
+                comm_lines = "\n".join(
+                    f"  [{c['semantic_type']}] {c['title']}: {(c.get('summary') or '')[:200]}"
+                    for c in comms[:6]
+                )
+                ctx_sections.append(f"**{layer_name}:**\n{comm_lines}")
 
     # Append code locations — anchors LLM to real file paths
     if code_ctx:
@@ -657,7 +686,7 @@ async def handle_chat_auto(
 
     # ── graph_callers / graph_callees / graph_impact ──────────────────────────
     elif intent in ("graph_callers", "graph_callees", "graph_impact"):
-        symbol = _extract_symbol(query)
+        symbol = await _extract_symbol_llm(query)
         if intent == "graph_callers":
             from opencode_search.handlers._graph import handle_get_callers
             result = await handle_get_callers(symbol=symbol, project_path=project_path, depth=3)
@@ -774,12 +803,26 @@ async def handle_chat_auto_stream(
     import time as _time
 
     t0 = _time.perf_counter()
-    intent = mode if mode not in ("auto", "quick", "comprehensive") else await classify_intent_llm(query)
+
+    # Parallelize: classify intent AND prefetch code search simultaneously.
+    # Code prefetch completes in ~0.3s (vector lookup) while LLM classification
+    # takes ~1-2s — both finish before the first token is ready regardless.
+    if mode not in ("auto", "quick", "comprehensive"):
+        intent = mode
+        code_prefetch = None
+    else:
+        from opencode_search.handlers._query import handle_search_code as _sc
+        intent_task = asyncio.ensure_future(classify_intent_llm(query))
+        code_prefetch_task = asyncio.ensure_future(
+            _sc(query=query, project_paths=[project_path], top_k=10)
+        )
+        intent = await intent_task
+        code_prefetch = await code_prefetch_task
 
     # ── search: no LLM — yield prose immediately ──────────────────────────────
     if intent == "search":
         from opencode_search.handlers._query import handle_search_code
-        result = await handle_search_code(query=query, project_paths=[project_path], top_k=10)
+        result = code_prefetch if code_prefetch is not None else await handle_search_code(query=query, project_paths=[project_path], top_k=10)
         answer = _prose_search(result, query)
         sources = [r.get("path", "") for r in result.get("results", []) if r.get("path")]
         for i in range(0, max(len(answer), 1), chunk_size):
@@ -988,23 +1031,35 @@ async def _stream_architecture(
         _get_patterns(),
     )
 
-    # Group and build layered context (same as _handle_architecture)
-    layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
-    for comm in comm_list:
-        st = (comm.get("semantic_type") or "utility").lower()
-        layers[_ARCH_LAYER_MAP.get(st, "Business Logic Layer")].append(comm)
+    # Group and build layered context — gracefully handles NULL semantic_type
+    typed_count = sum(1 for c in comm_list if c.get("semantic_type"))
+    use_flat = typed_count < len(comm_list) * 0.2
 
     ctx_sections: list[str] = []
-    for layer_name in _ARCH_LAYER_ORDER:
-        comms = layers[layer_name]
-        if comms:
-            ctx_sections.append(
-                f"**{layer_name}:**\n"
-                + "\n".join(
-                    f"  [{c['semantic_type']}] {c['title']}: {c['summary'][:200]}"
-                    for c in comms[:6]
+
+    if use_flat:
+        comm_lines = "\n".join(
+            f"  {c['title']}: {(c.get('summary') or '')[:200]}"
+            for c in comm_list[:30]
+        )
+        ctx_sections.append(f"**Communities ({len(comm_list)} total, sample):**\n{comm_lines}")
+        layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
+    else:
+        layers = {name: [] for name in _ARCH_LAYER_ORDER}
+        for comm in comm_list:
+            st = (comm.get("semantic_type") or "utility").lower()
+            layers[_ARCH_LAYER_MAP.get(st, "Business Logic Layer")].append(comm)
+
+        for layer_name in _ARCH_LAYER_ORDER:
+            comms = layers[layer_name]
+            if comms:
+                ctx_sections.append(
+                    f"**{layer_name}:**\n"
+                    + "\n".join(
+                        f"  [{c['semantic_type']}] {c['title']}: {(c.get('summary') or '')[:200]}"
+                        for c in comms[:6]
+                    )
                 )
-            )
 
     if code_ctx:
         ctx_sections.append(f"**Actual code locations (use these exact paths):**\n{code_ctx}")
