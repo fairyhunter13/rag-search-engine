@@ -77,14 +77,24 @@ DEFAULT_RERANK_MODEL: str = os.environ.get(
 DEFAULT_DIMS: int = 768
 
 # ---------------------------------------------------------------------------
-# LLM enrichment defaults — claude-code (haiku-4.5) is the default since Jun 2026.
-# Uses the locally installed `claude` CLI; no separate API key needed.
-# Switch to codex by setting OPENCODE_LLM_PROVIDER=codex / OPENCODE_LLM_MODEL=gpt-5.4-mini.
+# LLM enrichment defaults — ollama + qwen3-enrich:1.7b (GPU-local, RTX 5080).
+# Lightweight, fast (~270 t/s), JSON output only. Used for KB building.
 # ---------------------------------------------------------------------------
 DEFAULT_LLM_PROVIDER: str = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama")
 DEFAULT_LLM_MODEL: str = os.environ.get("OPENCODE_LLM_MODEL", "qwen3-enrich:1.7b")
 DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 DEFAULT_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
+
+# ---------------------------------------------------------------------------
+# Query-tier LLM — higher quality model used only for dashboard chat / ask.
+# Does not affect KB-build speed or VRAM during indexing.
+# Default: qwen3-query:8b (~5.5 GB VRAM) alongside enrich model = ~8.4 GB total.
+# Falls back to enrich model if the query model is not available.
+# ---------------------------------------------------------------------------
+DEFAULT_QUERY_LLM_PROVIDER: str = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "ollama")
+DEFAULT_QUERY_LLM_MODEL: str = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "qwen3-query:8b")
+DEFAULT_QUERY_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
+DEFAULT_QUERY_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))
 
 # Legacy tier suffix → dims mapping used only during migration
 _LEGACY_TIER_DIMS: dict[str, int] = {

@@ -707,6 +707,125 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             "message": "Hierarchy enrichment running in background.",
         })
 
+    @mcp.custom_route("/api/feature_map", methods=["GET"], include_in_schema=False)
+    async def api_feature_map(request: Request) -> JSONResponse:
+        """Business knowledge map: all communities grouped by semantic_type."""
+        from opencode_search.handlers._business import handle_feature_map
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_feature_map(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/business_rules", methods=["GET"], include_in_schema=False)
+    async def api_business_rules(request: Request) -> JSONResponse:
+        """Return communities classified as business_rule."""
+        from opencode_search.handlers._business import handle_business_rules
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_business_rules(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/process_flows", methods=["GET"], include_in_schema=False)
+    async def api_process_flows(request: Request) -> JSONResponse:
+        """Return communities classified as business_process."""
+        from opencode_search.handlers._business import handle_process_flows
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_process_flows(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/ask_business", methods=["GET"], include_in_schema=False)
+    async def api_ask_business(request: Request) -> JSONResponse:
+        """Answer business-domain questions using semantic-type–classified communities."""
+        from opencode_search.handlers._business import handle_ask_business
+        project = request.query_params.get("project", "")
+        q = request.query_params.get("q", "")
+        if not project or not q:
+            return JSONResponse({"error": "project and q params required"}, status_code=400)
+        result = await handle_ask_business(query=q, project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/chat", methods=["POST"], include_in_schema=False)
+    async def api_kb_chat(request: Request) -> JSONResponse:
+        """Unified chat: auto-detects intent, returns humanized prose.
+
+        Body JSON: {"project": str, "query": str, "history": list[dict] | null}
+        """
+        import contextlib
+
+        from opencode_search.handlers._chat_router import handle_chat_auto
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        query = body.get("query", "")
+        history = body.get("history") or []
+        if not project or not query:
+            return JSONResponse({"error": "project and query required"}, status_code=400)
+        result = await handle_chat_auto(
+            query=query,
+            project_path=project,
+            conversation_history=history,
+        )
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/chat_stream", methods=["POST"], include_in_schema=False)
+    async def api_kb_chat_stream(request: Request) -> StreamingResponse | JSONResponse:
+        """Streaming chat: yields NDJSON tokens as they are generated.
+
+        Body JSON: {"project": str, "query": str, "history": list[dict] | null}
+        Each line: {"type":"token","text":"..."} or {"type":"done","intent":"...",...}
+        """
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        query = body.get("query", "")
+        history = body.get("history") or []
+        if not project or not query:
+            return JSONResponse({"error": "project and query required"}, status_code=400)
+
+        from opencode_search.handlers._chat_router import handle_chat_auto_stream
+
+        async def _gen():
+            async for chunk in handle_chat_auto_stream(
+                query=query,
+                project_path=project,
+                conversation_history=history,
+            ):
+                yield json.dumps(chunk) + "\n"
+
+        return StreamingResponse(_gen(), media_type="application/x-ndjson")
+
+    @mcp.custom_route("/api/debug", methods=["POST"], include_in_schema=False)
+    async def api_debug_trace(request: Request) -> JSONResponse:
+        """Root-cause trace from a stack trace.
+
+        Body JSON: {"project": str, "traceback": str, "error_message": str, "include_fix": bool}
+        """
+        import contextlib
+
+        from opencode_search.handlers._debug_trace import handle_debug_trace
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        traceback_text = body.get("traceback", "")
+        error_message = body.get("error_message", "")
+        include_fix = bool(body.get("include_fix", True))
+        if not project or not traceback_text:
+            return JSONResponse({"error": "project and traceback required"}, status_code=400)
+        result = await handle_debug_trace(
+            traceback=traceback_text,
+            project_path=project,
+            error_message=error_message,
+            include_fix=include_fix,
+        )
+        return JSONResponse(result)
+
     @mcp.custom_route("/api/surprising_connections", methods=["GET"], include_in_schema=False)
     async def api_surprising_connections(request: Request) -> JSONResponse:
         """Cross-community bridges: edges connecting nodes in different architectural clusters."""
