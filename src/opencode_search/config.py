@@ -86,13 +86,13 @@ DEFAULT_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 DEFAULT_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 
 # ---------------------------------------------------------------------------
-# Query-tier LLM — higher quality model used only for dashboard chat / ask.
-# Does not affect KB-build speed or VRAM during indexing.
-# Default: qwen3-query:8b (~5.5 GB VRAM) alongside enrich model = ~8.4 GB total.
-# Falls back to enrich model if the query model is not available.
+# Query-tier LLM — used only for dashboard chat / ask.
+# Default: codex (gpt-5.4-mini) with automatic fallback to claude-code (haiku-4.5).
+# Zero VRAM usage: runs via CLI subprocess, not on the local GPU.
+# Override with OPENCODE_QUERY_LLM_PROVIDER=ollama to revert to local qwen3-query:8b.
 # ---------------------------------------------------------------------------
-DEFAULT_QUERY_LLM_PROVIDER: str = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "ollama")
-DEFAULT_QUERY_LLM_MODEL: str = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "qwen3-query:8b")
+DEFAULT_QUERY_LLM_PROVIDER: str = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "codex")
+DEFAULT_QUERY_LLM_MODEL: str = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "gpt-5.4-mini")
 DEFAULT_QUERY_LLM_NUM_CTX: int = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
 DEFAULT_QUERY_LLM_TIMEOUT: int = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))
 

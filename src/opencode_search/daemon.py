@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+# Configure CUDA library paths before any CUDA-linked imports. Must run early
+# so dlopen finds libcurand/libcublas/libcudnn when ONNX loads its CUDA plugin.
+from opencode_search.cuda_setup import configure_cuda_paths as _configure_cuda_paths
+_configure_cuda_paths()
+
 import json
 import os
 import re

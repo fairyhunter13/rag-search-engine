@@ -58,10 +58,10 @@ from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
     handle_add_federation_member,
     handle_analyze_patterns_llm,
+    handle_ask_feature,
     handle_detect_impact,
     handle_detect_patterns,
     handle_discover_federation,
-    handle_ask_feature,
     handle_enrich_hierarchy,
     handle_enrich_project,
     handle_ensure_project_watching,

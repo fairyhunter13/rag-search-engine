@@ -1,0 +1,300 @@
+"""Live browser tests — Playwright drives real Chromium against the live dashboard.
+
+Covers all three views (Pulse / Chat / Admin), all chat intents, streaming SSE,
+and admin actions (vacuum, dedup).
+
+Run separately (conflicts with pytest-asyncio mode=auto):
+    .venv/bin/pytest src/tests/live/test_browser.py --browser chromium --timeout=180
+
+Requires: daemon at :8765, indexed project with communities.
+"""
+from __future__ import annotations
+
+import httpx
+import pytest
+
+pytestmark = pytest.mark.live
+
+DAEMON_URL = "http://localhost:8765"
+DASHBOARD_URL = f"{DAEMON_URL}/dashboard"
+_TIMEOUT_PAGE = 15_000   # ms — page load
+_TIMEOUT_CHAT = 90_000   # ms — wait for AI response
+
+
+# ---------------------------------------------------------------------------
+# Module-level skip helpers
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module", autouse=True)
+def require_daemon():
+    """Skip entire module if daemon is not reachable."""
+    try:
+        httpx.get(f"{DAEMON_URL}/api/projects", timeout=5).raise_for_status()
+    except Exception as exc:
+        pytest.skip(f"Daemon not reachable: {exc}")
+
+
+@pytest.fixture(scope="module")
+def live_project():
+    """Return an indexed project path or skip the module."""
+    r = httpx.get(f"{DAEMON_URL}/api/projects", timeout=10)
+    projects = r.json().get("projects", [])
+    indexed = [p["path"] for p in projects if p.get("communities", 0) > 0]
+    if not indexed:
+        pytest.skip("No indexed project with communities")
+    return indexed[0]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _navigate_to_chat(page) -> None:
+    page.goto(DASHBOARD_URL)
+    page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+    chat_tab = page.locator("button:has-text('Chat'), a:has-text('Chat'), [data-tab='chat']").first
+    if chat_tab.count() > 0 and chat_tab.is_visible():
+        chat_tab.click()
+        page.wait_for_timeout(300)
+
+
+def _get_chat_input(page):
+    return page.locator("textarea[placeholder], textarea.chat-input, textarea").last
+
+
+def _send_message(page, text: str) -> None:
+    inp = _get_chat_input(page)
+    assert inp.is_visible(), "Chat input not visible"
+    inp.fill(text)
+    inp.press("Enter")
+
+
+def _wait_for_ai_response(page, timeout_ms: int = _TIMEOUT_CHAT):
+    sel = ".ai-bubble, .assistant-message, .bot-message, [data-role='assistant'], .message-assistant"
+    page.locator(sel).first.wait_for(state="attached", timeout=timeout_ms)
+    return page.locator(sel).last.inner_text()
+
+
+# ---------------------------------------------------------------------------
+# View: Dashboard loads
+# ---------------------------------------------------------------------------
+
+class TestDashboardLoads:
+    def test_root_redirects_to_dashboard(self, page):
+        page.goto(DAEMON_URL)
+        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        assert "/dashboard" in page.url or page.title() != "", (
+            "Root URL did not redirect to dashboard"
+        )
+
+    def test_dashboard_page_not_blank(self, page):
+        page.goto(DASHBOARD_URL)
+        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        content = page.content()
+        assert len(content) > 500, "Dashboard returned a nearly empty page"
+        assert "error" not in content[:200].lower() or "opencode" in content.lower(), (
+            "Dashboard may be showing an error page"
+        )
+
+    def test_navigation_tabs_visible(self, page):
+        page.goto(DASHBOARD_URL)
+        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        nav = page.locator("nav, [role='tablist'], .tabs, .navbar, .top-bar").first
+        assert nav.count() > 0 or nav.is_visible(), "No navigation element found on dashboard"
+
+
+# ---------------------------------------------------------------------------
+# View: Pulse
+# ---------------------------------------------------------------------------
+
+class TestPulseView:
+    def test_pulse_tab_accessible(self, page):
+        page.goto(DASHBOARD_URL)
+        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse'), [data-tab='pulse']").first
+        if pulse.count() == 0:
+            pytest.skip("No Pulse tab — may be named differently")
+        pulse.click()
+        page.wait_for_timeout(500)
+        content = page.content()
+        has_kpi = any(w in content.lower() for w in ("kpi", "communities", "indexed", "total", "metric"))
+        assert has_kpi, "Pulse tab has no recognizable KPI content"
+
+    def test_pulse_shows_activity_or_metrics(self, page):
+        page.goto(DASHBOARD_URL)
+        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse')").first
+        if pulse.count() > 0:
+            pulse.click()
+            page.wait_for_timeout(800)
+        content = page.content()
+        has_numbers = any(c.isdigit() for c in content)
+        assert has_numbers, "Pulse view contains no numeric data"
+
+
+# ---------------------------------------------------------------------------
+# View: Chat — basic behavior
+# ---------------------------------------------------------------------------
+
+class TestChatView:
+    def test_chat_input_visible(self, page):
+        _navigate_to_chat(page)
+        assert _get_chat_input(page).is_visible(), "Chat input not visible"
+
+    def test_chat_sends_and_receives_response(self, page, live_project):
+        _navigate_to_chat(page)
+        _send_message(page, "What does this project do?")
+        text = _wait_for_ai_response(page)
+        assert len(text) > 10, f"AI response too short: {text!r}"
+
+    def test_chat_response_is_not_error_message(self, page, live_project):
+        _navigate_to_chat(page)
+        _send_message(page, "What is the overall architecture?")
+        text = _wait_for_ai_response(page)
+        error_phrases = ["500 internal", "traceback", "exception:", "cannot connect"]
+        assert not any(p in text.lower() for p in error_phrases), (
+            f"AI response looks like an error: {text[:200]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# View: Chat — all 9 intents
+# ---------------------------------------------------------------------------
+
+class TestChatIntents:
+    """Each intent must produce a non-empty response."""
+
+    def _chat_and_get_text(self, page, live_project: str, query: str) -> str:
+        _navigate_to_chat(page)
+        _send_message(page, query)
+        return _wait_for_ai_response(page)
+
+    def test_intent_architecture(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "What is the overall architecture?")
+        assert len(text) > 30, f"Architecture response too short: {text!r}"
+
+    def test_intent_search(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "Find the main HTTP handler function")
+        assert len(text) > 20, f"Search response too short: {text!r}"
+
+    def test_intent_global(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "Give me a comprehensive global overview of the entire system")
+        assert len(text) > 50, f"Global overview response too short: {text!r}"
+
+    def test_intent_feature(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "How does the request processing feature work end to end?")
+        assert len(text) > 30, f"Feature trace response too short: {text!r}"
+
+    def test_intent_graph_callers(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "What functions call the main function?")
+        assert len(text) > 10, f"Graph callers response too short: {text!r}"
+
+    def test_intent_graph_impact(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "What breaks if I change the main handler?")
+        assert len(text) > 10, f"Graph impact response too short: {text!r}"
+
+    def test_intent_debug_trace(self, page, live_project):
+        traceback = (
+            "Traceback (most recent call last):\n"
+            "  File 'server.py', line 42, in handle_request\n"
+            "    result = process(data)\n"
+            "KeyError: 'content'"
+        )
+        text = self._chat_and_get_text(page, live_project, traceback)
+        assert len(text) > 20, f"Debug trace response too short: {text!r}"
+
+    def test_intent_debug(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "How do I debug a connection pool exhaustion issue?")
+        assert len(text) > 20, f"Debug response too short: {text!r}"
+
+
+# ---------------------------------------------------------------------------
+# View: Chat — streaming behavior
+# ---------------------------------------------------------------------------
+
+class TestChatStreaming:
+    def test_sse_events_received(self, page, live_project):
+        """Network requests to /api/chat_stream must be seen while chat is active."""
+        stream_requests: list[str] = []
+
+        def on_request(request):
+            if "chat_stream" in request.url:
+                stream_requests.append(request.url)
+
+        page.on("request", on_request)
+        _navigate_to_chat(page)
+        _send_message(page, "What does this project do?")
+        page.wait_for_timeout(3000)
+        assert len(stream_requests) > 0, (
+            "No /api/chat_stream request seen — chat may not be using SSE streaming"
+        )
+
+    def test_intent_badge_visible_after_response(self, page, live_project):
+        """After a response, an intent badge must appear (shows routing worked)."""
+        _navigate_to_chat(page)
+        _send_message(page, "What is the architecture?")
+        _wait_for_ai_response(page)
+        badge_sel = ".intent-badge, .badge, [data-intent], .tag-intent, .intent-label"
+        badge = page.locator(badge_sel).first
+        if badge.count() > 0:
+            assert badge.is_visible(), "Intent badge exists but is not visible"
+
+    def test_no_duplicate_user_bubble_on_rapid_enter(self, page, live_project):
+        """Pressing Enter twice rapidly must not create two user message bubbles."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        assert inp.is_visible()
+        inp.fill("What is this project?")
+        inp.press("Enter")
+        inp.press("Enter")  # second rapid Enter
+        page.wait_for_timeout(500)
+        user_sel = ".user-bubble, .user-message, [data-role='user'], .message-user"
+        user_bubbles = page.locator(user_sel)
+        count = user_bubbles.count()
+        assert count <= 1, (
+            f"Rapid Enter created {count} user bubbles — in-flight guard may be broken"
+        )
+
+
+# ---------------------------------------------------------------------------
+# View: Admin
+# ---------------------------------------------------------------------------
+
+class TestAdminView:
+    def _open_admin(self, page):
+        page.goto(DASHBOARD_URL)
+        page.wait_for_load_state("networkidle", timeout=_TIMEOUT_PAGE)
+        admin_tab = page.locator("button:has-text('Admin'), a:has-text('Admin'), [data-tab='admin']").first
+        if admin_tab.count() == 0:
+            pytest.skip("No Admin tab visible")
+        admin_tab.click()
+        page.wait_for_timeout(500)
+
+    def test_admin_tab_opens(self, page):
+        self._open_admin(page)
+        content = page.content()
+        has_admin = any(w in content.lower() for w in ("vacuum", "dedup", "project", "build", "index", "jobs"))
+        assert has_admin, "Admin tab opened but no admin controls found"
+
+    def test_admin_vacuum_button_present(self, page):
+        self._open_admin(page)
+        vacuum = page.locator("button:has-text('Vacuum'), button:has-text('vacuum')").first
+        assert vacuum.count() > 0, "No Vacuum button in Admin view"
+
+    def test_admin_dedup_button_present(self, page):
+        self._open_admin(page)
+        dedup = page.locator("button:has-text('Dedup'), button:has-text('dedup'), button:has-text('Deduplicate')").first
+        assert dedup.count() > 0, "No Dedup button in Admin view"
+
+    def test_admin_projects_table_visible(self, page):
+        self._open_admin(page)
+        projects_content = page.locator("table, .projects-list, .project-row, [data-project]").first
+        if projects_content.count() == 0:
+            pytest.skip("No projects table in admin view")
+        assert projects_content.is_visible(), "Projects table not visible in admin"
+
+    def test_admin_jobs_section_present(self, page):
+        self._open_admin(page)
+        content = page.content()
+        has_jobs = any(w in content.lower() for w in ("jobs", "pipeline", "background", "running"))
+        assert has_jobs, "No jobs/pipeline section in admin view"

@@ -164,7 +164,7 @@ class _GpuBatcher:
         self.errors = 0
         # Per-session content_hash → vector cache: skip re-embedding identical
         # boilerplate chunks (proto-generated code, shared middleware, etc.)
-        self._content_vec_cache: dict[str, "np.ndarray"] = {}
+        self._content_vec_cache: dict[str, np.ndarray] = {}
         self.total_cache_hits = 0
 
     async def add(self, fr: _FileReady) -> None:

@@ -11,8 +11,6 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>opencode-search</title>
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <style>
 /* ── Design tokens (Datadog DRUIDS) ──────────────────────────────────────── */
 :root{
@@ -343,13 +341,40 @@ let _msgSeq=0;
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-// mdSafe: render markdown to safe HTML for AI messages
-const mdSafe=s=>{
-  try{
-    if(typeof marked==='undefined'||typeof DOMPurify==='undefined')return esc(s);
-    return DOMPurify.sanitize(marked.parse(String(s||'')),{USE_PROFILES:{html:true}});
-  }catch{return esc(s);}
-};
+// mdSafe: render markdown to safe HTML for AI messages (no external deps)
+function mdSafe(s){
+  if(!s)return '';
+  // 1. Escape HTML first (XSS safety)
+  let h=esc(String(s));
+  // 2. Fenced code blocks  ```lang\ncode\n```
+  h=h.replace(/```(?:[^\n]*)?\n([\s\S]*?)```/g,(_,c)=>'<pre><code>'+c+'</code></pre>');
+  // 3. Inline code
+  h=h.replace(/`([^`\n]+)`/g,(_,c)=>'<code>'+c+'</code>');
+  // 4. Headings (process before bold/italic)
+  h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');
+  // 5. Bold + italic combinations
+  h=h.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
+  h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/__(.+?)__/g,'<strong>$1</strong>');
+  h=h.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+  // 6. Blockquote (already escaped, so &gt;)
+  h=h.replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>');
+  // 7. Unordered lists
+  h=h.replace(/((?:^[*\-] .+$\n?)+)/gm,m=>'<ul>'+m.replace(/^[*\-] (.+)$/gm,'<li>$1</li>')+'</ul>');
+  // 8. Horizontal rule
+  h=h.replace(/^---+$/gm,'<hr>');
+  // 9. Paragraphs: split on blank lines
+  const parts=h.split(/\n{2,}/);
+  h=parts.map(p=>{
+    p=p.trim();
+    if(!p)return '';
+    if(/^<(h[1-3]|pre|ul|blockquote|hr)/.test(p))return p;
+    return '<p>'+p.replace(/\n/g,'<br>')+'</p>';
+  }).join('\n');
+  return h;
+}
 
 function toast(msg,type='info'){
   const t=document.createElement('div');
@@ -499,7 +524,7 @@ async function loadPulse(){
     const sugD=sug.status==='fulfilled'?sug.value:{};
     const qs=(sugD.questions||[]).slice(0,6);
     $('suggested-list').innerHTML=qs.length
-      ?qs.map(q=>`<button class="sq-btn" data-q="${esc(q)}" onclick="askQuestion(this.dataset.q)">${esc(q)}</button>`).join('')
+      ?qs.map(q=>`<button class="sq-btn" data-q="${esc(q.question||q)}" onclick="askQuestion(this.dataset.q)">${esc(q.question||q)}</button>`).join('')
       :'<div style="color:var(--text-3);font-size:.75rem">Run the full pipeline to generate questions</div>';
 
   }catch(e){

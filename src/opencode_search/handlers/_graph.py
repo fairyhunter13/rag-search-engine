@@ -27,40 +27,35 @@ _PATTERNS_FILE_TTL = 86400.0  # 24 hours for on-disk cache
 # Pattern-detection helpers (called from handle_project_structure)
 # ---------------------------------------------------------------------------
 
-_FRAMEWORK_MAP: dict[str, str] = {
-    "github.com/gin-gonic/gin": "gin",
-    "github.com/labstack/echo": "echo",
-    "github.com/gorilla/mux": "gorilla/mux",
-    "github.com/go-chi/chi": "chi",
-    "google.golang.org/grpc": "gRPC",
-    "gorm.io/gorm": "gorm",
-    "github.com/jmoiron/sqlx": "sqlx",
-    "github.com/go-redis/redis": "redis",
-    "github.com/redis/go-redis": "redis",
-    "github.com/confluentinc/confluent-kafka-go": "kafka",
-    "github.com/segmentio/kafka-go": "kafka",
-    "github.com/elastic/go-elasticsearch": "elasticsearch",
-    "github.com/prometheus/client_golang": "prometheus",
-    "go.uber.org/zap": "zap",
-    "github.com/sirupsen/logrus": "logrus",
-    "go.opentelemetry.io": "OpenTelemetry",
-    "github.com/spf13/cobra": "cobra",
-    "github.com/spf13/viper": "viper",
-    "react": "React",
-    "next": "Next.js",
-    "vue": "Vue",
-    "angular": "Angular",
-    "svelte": "Svelte",
-    "django": "Django",
-    "flask": "Flask",
-    "fastapi": "FastAPI",
-    "spring": "Spring",
-    "javax.persistence": "JPA",
-    "hibernate": "Hibernate",
-    "lombok": "Lombok",
-    "sqlalchemy": "SQLAlchemy",
-    "pydantic": "Pydantic",
-}
+def _extract_json(text: str) -> Any:
+    """Extract the first JSON object or array from an LLM response (handles think tags, fences)."""
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
+    if m:
+        with contextlib.suppress(Exception):
+            return json.loads(m.group(1))
+    for pat in (r'(\{[\s\S]+\})', r'(\[[\s\S]+\])'):
+        m = re.search(pat, text)
+        if m:
+            with contextlib.suppress(Exception):
+                return json.loads(m.group(1))
+    with contextlib.suppress(Exception):
+        return json.loads(text)
+    return None
+
+
+def _llm_classify(prompt: str, fallback: Any) -> Any:
+    """Call local enrichment LLM for classification. Returns fallback on any error."""
+    try:
+        from opencode_search.enricher.client import create_llm_client
+        client = create_llm_client()
+        raw = client.chat([{"role": "user", "content": prompt}], max_tokens=512, temperature=0.1)
+        result = _extract_json(raw)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    return fallback
 
 
 def _detect_dependencies(root: Path) -> dict[str, Any]:
@@ -355,16 +350,10 @@ def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, A
 
 
 def _detect_conventions(root: Path, primary_language: str | None = None) -> dict[str, Any]:
-    """Detect code style conventions by sampling source files.
-
-    primary_language: hint from _count_languages_accurate so the sampler
-    biases toward files of the dominant language (avoids misdetection in
-    federation/monorepo projects where many languages are present).
-    """
+    """Detect code style conventions by sampling source files and classifying via LLM."""
     try:
-        from opencode_search.discover import SOURCE_EXTENSIONS, detect_language, iter_files
+        from opencode_search.discover import SOURCE_EXTENSIONS, iter_files
 
-        # Extension sets per language — ordered most-preferred first
         _LANG_EXTS: dict[str, tuple[str, ...]] = {  # noqa: N806
             "go":         (".go",),
             "python":     (".py",),
@@ -376,12 +365,10 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
         }
         _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}  # noqa: N806
 
-        # Bias toward files matching primary_language hint
         primary_exts: set[str] = set()
         if primary_language and primary_language in _LANG_EXTS:
             primary_exts = set(_LANG_EXTS[primary_language])
 
-        # Two-pass: first fill with primary-language files, then any preferred
         primary_files: list[Path] = []
         other_files: list[Path] = []
         for path in iter_files(root, follow_symlinks=True):
@@ -395,188 +382,117 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
             if len(primary_files) >= 40 and len(other_files) >= 20:
                 break
 
-        # Prefer primary-language files; fall back to mixed if too few
         sample_files = primary_files if len(primary_files) >= 5 else primary_files + other_files
         if not sample_files:
             return {}
 
-        # Detect primary language from sample (confirms or corrects the hint)
-        lang_counter: collections.Counter = collections.Counter()
-        for p in sample_files:
-            lang_counter[detect_language(p)] += 1
-        primary_lang = primary_language or (
-            lang_counter.most_common(1)[0][0] if lang_counter else "unknown"
-        )
-
-        # Read samples for heuristics (800 chars captures package + imports + first functions)
         combined = ""
-        for p in sample_files[:20]:
+        for p in sample_files[:10]:
             with contextlib.suppress(Exception):
-                combined += p.read_text(errors="replace")[:800]
+                combined += p.read_text(errors="replace")[:600]
 
-        # Error handling
-        err_handling = "unknown"
-        if primary_lang == "go":
-            if "if err != nil" in combined:
-                err_handling = "if_err_nil"
-            elif re.search(r"errors\.As|errors\.Is", combined):
-                err_handling = "errors_as_is"
-            elif "Result[" in combined or "errors.Wrap(" in combined:
-                err_handling = "wrapped_errors"
-        elif primary_lang == "python":
-            err_handling = "try_except" if "try:" in combined else "unknown"
-        elif primary_lang in ("java", "kotlin"):
-            err_handling = "try_catch" if "try {" in combined else "unknown"
-        elif primary_lang == "rust":
-            err_handling = "result_type" if "Result<" in combined else "unknown"
+        if not combined.strip():
+            return {}
 
-        # Test style
-        test_style = "unknown"
-        if primary_lang == "go":
-            if "t.Run(" in combined:
-                test_style = "table_driven"
-            elif "testify" in combined or "assert.Equal(" in combined or "require.Equal(" in combined:
-                test_style = "testify"
-            elif "func Test" in combined:
-                test_style = "stdlib_testing"
-        elif primary_lang == "python":
-            test_style = "pytest" if "def test_" in combined else "unknown"
-        elif primary_lang == "java":
-            test_style = "junit" if "@Test" in combined else "unknown"
-
-        # Logging library
-        logging_lib = "unknown"
-        if "go.uber.org/zap" in combined or '"zap"' in combined or "zap.L()." in combined:
-            logging_lib = "zap"
-        elif "logrus" in combined:
-            logging_lib = "logrus"
-        elif "slog." in combined:
-            logging_lib = "slog"
-        elif "log.Printf(" in combined or "log.Println(" in combined or "log.Fatal(" in combined:
-            logging_lib = "stdlib_log"
-        elif "logging." in combined:
-            logging_lib = "python_logging"
-        elif "zerolog" in combined:
-            logging_lib = "zerolog"
-
-        # Naming convention (sample identifier names)
-        naming = "unknown"
-        if primary_lang == "go":
-            naming = "camelCase"  # Go always uses camelCase/PascalCase
-        elif primary_lang == "python":
-            naming = "snake_case"  # Python convention
-        elif primary_lang in ("java", "kotlin"):
-            naming = "camelCase"
-
-        # Struct/annotation tags
-        common_tags: list[str] = []
-        if 'json:"' in combined:
-            common_tags.append("json")
-        if 'db:"' in combined or 'column:"' in combined:
-            common_tags.append("db")
-        if 'validate:"' in combined:
-            common_tags.append("validate")
-        if 'yaml:"' in combined:
-            common_tags.append("yaml")
-        if '@JsonProperty' in combined or '@Column' in combined:
-            common_tags.append("java_annotations")
-
-        return {
-            "language": primary_lang,
-            "error_handling": err_handling,
-            "test_style": test_style,
-            "logging_lib": logging_lib,
-            "naming": naming,
-            "common_struct_tags": common_tags,
-        }
+        prompt = (
+            "Analyze this sample source code and identify the coding conventions used.\n"
+            f"Hint: primary language is {primary_language or 'unknown'}.\n"
+            f"Code sample:\n{combined[:3000]}\n\n"
+            'Respond ONLY with a JSON object:\n'
+            '{"language":"<name>","error_handling":"<pattern>","test_style":"<style>",'
+            '"logging_lib":"<library>","naming":"<convention>","common_struct_tags":["<tag>"]}\n'
+            "language: primary language name (go, python, java, kotlin, typescript, javascript, rust, etc.)\n"
+            "error_handling: if_err_nil | try_except | try_catch | result_type | unknown\n"
+            "test_style: table_driven | testify | stdlib_testing | pytest | junit | unknown\n"
+            "logging_lib: zap | logrus | slog | zerolog | stdlib_log | python_logging | unknown | <detected lib name>\n"
+            "naming: camelCase | snake_case | PascalCase | unknown\n"
+            "common_struct_tags: field/annotation tags seen in code, e.g. [\"json\",\"db\",\"validate\"]"
+        )
+        result = _llm_classify(prompt, {})
+        if isinstance(result, dict) and "language" in result:
+            return result
+        return {}
     except Exception:
         return {}
 
 
 def _detect_frameworks_from_dependencies(deps: dict[str, Any]) -> list[str]:
-    """Identify key frameworks from dependency manifest packages."""
+    """Identify key frameworks from dependency manifest packages using LLM."""
     packages = deps.get("packages", [])
     if not packages:
         return []
-    frameworks: list[str] = []
-    seen: set[str] = set()
-    for pkg in packages:
-        name = pkg.get("name", "")
-        for prefix, framework in _FRAMEWORK_MAP.items():
-            if prefix in name and framework not in seen:
-                seen.add(framework)
-                frameworks.append(framework)
-    return frameworks[:10]
+    names = [p.get("name", "") for p in packages if p.get("name")][:80]
+    if not names:
+        return []
+    prompt = (
+        "Given these software package names, identify the key frameworks and major libraries used.\n"
+        f"Packages: {json.dumps(names)}\n"
+        "Respond ONLY with a JSON array of framework names, e.g.: [\"React\",\"FastAPI\",\"gRPC\"]\n"
+        "Include only significant frameworks (web, ORM, message queue, observability, CLI). Max 10. "
+        "If none recognized, return []."
+    )
+    result = _llm_classify(prompt, [])
+    if isinstance(result, list):
+        return [str(f) for f in result if f][:10]
+    return []
 
 
 def _detect_module_structure(root: Path) -> dict[str, Any]:
-    """Detect the module/package organization pattern from directory layout."""
+    """Detect the module/package organization pattern from directory layout using LLM."""
+    _SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build"}  # noqa: N806
     try:
         top_dirs = sorted(
-            [d.name for d in root.iterdir() if d.is_dir() and not d.name.startswith(".") and d.name not in {
-                ".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build",
-            }]
+            d.name for d in root.iterdir()
+            if d.is_dir() and not d.name.startswith(".") and d.name not in _SKIP
         )
-
-        # Detect known patterns
-        dir_set = set(top_dirs)
-        pattern = "unknown"
-        if {"cmd", "internal"}.issubset(dir_set) or {"cmd", "pkg"}.issubset(dir_set):
-            pattern = "go_standard"
-        elif {"domain", "usecase", "infrastructure"}.issubset(dir_set) or {"domain", "usecase", "interface"}.issubset(dir_set):
-            pattern = "clean_architecture"
-        elif {"controller", "service", "repository"}.issubset(dir_set) or {"controllers", "services", "models"}.issubset(dir_set):
-            pattern = "layered_mvc"
-        elif "features" in dir_set or "modules" in dir_set:
-            pattern = "feature_sliced"
-        elif len(top_dirs) > 8 and all((root / d).is_dir() for d in top_dirs):
-            pattern = "monorepo"
-        elif {"src", "lib", "test"}.issubset(dir_set) or "src" in dir_set:
-            pattern = "src_layout"
-
-        # Top packages: second-level directories of important top-level dirs
-        top_packages: list[str] = []
-        priority_dirs = [d for d in ("internal", "src", "lib", "pkg", "app") if d in dir_set]
-        for pdir in priority_dirs[:3]:
-            sub = root / pdir
-            try:
-                for sd in sorted(sub.iterdir()):
-                    if sd.is_dir() and not sd.name.startswith("."):
-                        top_packages.append(f"{pdir}/{sd.name}")
-            except Exception:
-                pass
-        if not top_packages:
-            top_packages = list(top_dirs[:8])
-
-        return {
-            "type": pattern,
-            "top_packages": top_packages[:10],
-            "detected_dirs": top_dirs[:20],
-        }
     except Exception:
         return {"type": "unknown", "top_packages": [], "detected_dirs": []}
 
+    if not top_dirs:
+        return {"type": "unknown", "top_packages": [], "detected_dirs": []}
+
+    second_level: dict[str, list[str]] = {}
+    for d in top_dirs[:12]:
+        with contextlib.suppress(Exception):
+            subdirs = sorted(sd.name for sd in (root / d).iterdir() if sd.is_dir() and not sd.name.startswith("."))
+            if subdirs:
+                second_level[d] = subdirs[:8]
+
+    prompt = (
+        "Analyze this software project directory structure and identify the module organization pattern.\n"
+        f"Top-level dirs: {json.dumps(top_dirs[:20])}\n"
+        f"Second-level dirs: {json.dumps(second_level)}\n"
+        'Respond ONLY with JSON: {"type":"<pattern>","top_packages":["<pkg>"],"detected_dirs":["<dir>"]}\n'
+        "type: go_standard | clean_architecture | layered_mvc | feature_sliced | monorepo | src_layout | <descriptive name>\n"
+        "top_packages: 5-10 most important package/module paths\n"
+        "detected_dirs: all top-level dirs"
+    )
+    fallback = {"type": "unknown", "top_packages": top_dirs[:8], "detected_dirs": top_dirs[:20]}
+    result = _llm_classify(prompt, fallback)
+    if isinstance(result, dict) and "type" in result:
+        return {
+            "type": result.get("type", "unknown"),
+            "top_packages": result.get("top_packages", top_dirs[:8]),
+            "detected_dirs": result.get("detected_dirs", top_dirs[:20]),
+        }
+    return fallback
+
 
 def _detect_architecture(frameworks: list[str], module_structure: dict[str, Any]) -> str:
-    """Synthesize a high-level architecture label from detected frameworks and structure."""
+    """Synthesize a high-level architecture label from frameworks and structure using LLM."""
     struct_type = module_structure.get("type", "unknown")
-    fw_lower = {f.lower() for f in frameworks}
-
-    has_grpc = "grpc" in fw_lower
-    has_spring = any("spring" in f for f in fw_lower)
-    has_proto = "protobuf" in fw_lower
-    has_react = "react" in fw_lower or "next.js" in fw_lower
-
-    if struct_type == "monorepo":
-        return "microservices_federation" if (has_grpc or has_proto) else "monorepo"
-    if struct_type == "clean_architecture":
-        return "clean_architecture_grpc_microservice" if has_grpc else "clean_architecture_ddd"
-    if struct_type == "go_standard":
-        return "go_grpc_service" if has_grpc else "go_standard"
-    if struct_type == "layered_mvc":
-        return "spring_boot_mvc" if has_spring else "layered_mvc"
-    if has_react:
-        return "frontend_spa"
+    top_packages = module_structure.get("top_packages", [])
+    prompt = (
+        "Synthesize a high-level software architecture label from these facts.\n"
+        f"Key frameworks: {json.dumps(frameworks)}\n"
+        f"Module pattern: {struct_type}\n"
+        f"Key packages: {json.dumps(top_packages[:10])}\n"
+        'Respond ONLY with a JSON string, e.g.: "microservices_grpc" or "spring_boot_mvc" or "clean_architecture_ddd"\n'
+        "Use concise snake_case. No explanation."
+    )
+    result = _llm_classify(prompt, struct_type)
+    if isinstance(result, str) and result.strip():
+        return result.strip()
     return struct_type if struct_type != "unknown" else "unknown"
 
 
