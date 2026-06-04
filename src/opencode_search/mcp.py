@@ -230,7 +230,7 @@ async def search(
 async def ask(
     query: str,
     project_path: str,
-    scope: Literal["architecture", "wiki", "all", "global", "feature"] = "all",
+    scope: Literal["architecture", "wiki", "all", "global", "feature", "business"] = "all",
     top_k: int = 10,
     include_federation: bool = True,
 ) -> dict[str, Any]:
@@ -243,9 +243,10 @@ async def ask(
     scope: "all" (default) | "architecture" (communities only) | "wiki" (pages only)
            | "global" (map-reduce over ALL community summaries — GraphRAG-style holistic answer)
            | "feature" (feature trace: entry points + call chain + algorithm + design rationale)
+           | "business" (answer from business-classified communities: features, processes, rules)
     """
     runtime_state.note_activity()
-    valid = {"architecture", "wiki", "all", "global", "feature"}
+    valid = {"architecture", "wiki", "all", "global", "feature", "business"}
     if scope not in valid:
         return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
 
@@ -257,6 +258,12 @@ async def ask(
     if scope == "feature":
         return await handle_ask_feature(
             query=query, project_path=project_path, top_k=top_k,
+        )
+    if scope == "business":
+        from opencode_search.handlers._business import handle_ask_business
+        return await handle_ask_business(
+            query=query, project_path=project_path, top_k=top_k,
+            include_federation=include_federation,
         )
     if scope == "wiki":
         return await handle_wiki_query(query=query, project_path=project_path, top_k=top_k)
@@ -332,7 +339,7 @@ async def overview(
         "structure", "communities", "status", "projects", "metrics", "graph_export",
         "patterns", "architecture_domains", "hierarchy", "service_mesh",
         "import_cycles", "suggested_questions", "graph_diff", "surprising_connections",
-        "pr_impact",
+        "pr_impact", "feature_map", "business_rules", "process_flows",
     ] = "structure",
     max_depth: int = 4,
     top_k: int = 100,
@@ -354,6 +361,9 @@ async def overview(
           | "graph_diff" (what changed in the graph recently)
           | "surprising_connections" (edges spanning architectural community boundaries)
           | "pr_impact" (changed files → communities touched + risk level; auto-detects git diff)
+          | "feature_map" (all communities grouped by business semantic type: feature|process|rule|...)
+          | "business_rules" (communities classified as constraints/policies/validations)
+          | "process_flows" (communities classified as workflows/business processes)
     project_path: not required for what="projects" or what="metrics"
     export_format: "json" | "graphml" (only for what="graph_export")
     max_nodes: cap for graph_export (default 5000)
@@ -362,7 +372,7 @@ async def overview(
     valid = {"structure", "communities", "status", "projects", "metrics", "graph_export",
              "patterns", "architecture_domains", "hierarchy", "service_mesh",
              "import_cycles", "suggested_questions", "graph_diff", "surprising_connections",
-             "pr_impact"}
+             "pr_impact", "feature_map", "business_rules", "process_flows"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -493,6 +503,21 @@ async def overview(
             return {"error": "project_path required for what='pr_impact'"}
         from opencode_search.handlers._pr_impact import handle_pr_impact
         return await handle_pr_impact(project_path=project_path)
+    elif what == "feature_map":
+        if not project_path:
+            return {"error": "project_path required for what='feature_map'"}
+        from opencode_search.handlers._business import handle_feature_map
+        return await handle_feature_map(project_path=project_path)
+    elif what == "business_rules":
+        if not project_path:
+            return {"error": "project_path required for what='business_rules'"}
+        from opencode_search.handlers._business import handle_business_rules
+        return await handle_business_rules(project_path=project_path)
+    elif what == "process_flows":
+        if not project_path:
+            return {"error": "project_path required for what='process_flows'"}
+        from opencode_search.handlers._business import handle_process_flows
+        return await handle_process_flows(project_path=project_path)
     else:
         from opencode_search.metrics import get_metrics
         return get_metrics()

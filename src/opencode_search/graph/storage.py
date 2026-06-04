@@ -46,6 +46,12 @@ class EdgeData:
     confidence_score: float | None = None  # only set for INFERRED edges (0.55–0.95 rubric)
 
 
+_SEMANTIC_TYPES = frozenset({
+    "feature", "business_process", "business_rule",
+    "data_model", "api_boundary", "infrastructure", "utility",
+})
+
+
 @dataclass
 class CommunityData:
     id: int
@@ -57,6 +63,7 @@ class CommunityData:
     created_at: str = ""
     level: int = 1                        # 1=micro (default), 2+=macro hierarchy levels
     parent_community_id: int | None = None  # ID of the level+1 community this belongs to
+    semantic_type: str | None = None      # Business classification: feature|business_process|business_rule|data_model|api_boundary|infrastructure|utility
 
 
 @dataclass
@@ -114,7 +121,8 @@ CREATE TABLE IF NOT EXISTS communities (
     generated_at TEXT,
     created_at TEXT NOT NULL DEFAULT '',
     level INTEGER NOT NULL DEFAULT 1,
-    parent_community_id INTEGER REFERENCES communities(id)
+    parent_community_id INTEGER REFERENCES communities(id),
+    semantic_type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS file_graph_hashes (
@@ -183,6 +191,10 @@ class GraphStorage:
                         indexed_at TEXT NOT NULL DEFAULT ''
                     )
                 """)
+            # Business semantic classification (Phase 29)
+            if "semantic_type" not in comm_cols:
+                db.execute("ALTER TABLE communities ADD COLUMN semantic_type TEXT")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_communities_semantic_type ON communities(semantic_type)")
 
     def close(self) -> None:
         if self._conn:
@@ -357,8 +369,8 @@ class GraphStorage:
             db.execute(
                 """INSERT INTO communities
                    (id, title, summary, node_count, key_entry_points, generated_at, created_at,
-                    level, parent_community_id)
-                   VALUES (?,?,?,?,?,?,?,?,?)
+                    level, parent_community_id, semantic_type)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      title=COALESCE(excluded.title, communities.title),
                      summary=COALESCE(excluded.summary, communities.summary),
@@ -366,7 +378,8 @@ class GraphStorage:
                      key_entry_points=excluded.key_entry_points,
                      generated_at=excluded.generated_at,
                      level=excluded.level,
-                     parent_community_id=excluded.parent_community_id
+                     parent_community_id=excluded.parent_community_id,
+                     semantic_type=COALESCE(excluded.semantic_type, communities.semantic_type)
                 """,
                 (
                     community.id, community.title, community.summary,
@@ -376,6 +389,7 @@ class GraphStorage:
                     community.created_at or now,
                     community.level,
                     community.parent_community_id,
+                    community.semantic_type,
                 ),
             )
 
@@ -390,8 +404,8 @@ class GraphStorage:
             db.executemany(
                 """INSERT INTO communities
                    (id, title, summary, node_count, key_entry_points, generated_at, created_at,
-                    level, parent_community_id)
-                   VALUES (?,?,?,?,?,?,?,?,?)
+                    level, parent_community_id, semantic_type)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                      title=COALESCE(excluded.title, communities.title),
                      summary=COALESCE(excluded.summary, communities.summary),
@@ -399,7 +413,8 @@ class GraphStorage:
                      key_entry_points=excluded.key_entry_points,
                      generated_at=excluded.generated_at,
                      level=excluded.level,
-                     parent_community_id=excluded.parent_community_id
+                     parent_community_id=excluded.parent_community_id,
+                     semantic_type=COALESCE(excluded.semantic_type, communities.semantic_type)
                 """,
                 [
                     (
@@ -407,6 +422,7 @@ class GraphStorage:
                         json.dumps(c.key_entry_points),
                         c.generated_at, c.created_at or now,
                         c.level, c.parent_community_id,
+                        c.semantic_type,
                     )
                     for c in communities
                 ],
@@ -594,8 +610,40 @@ class GraphStorage:
                 created_at=r["created_at"] or "",
                 level=_col(r, "level", 1),
                 parent_community_id=_col(r, "parent_community_id", None),
+                semantic_type=_col(r, "semantic_type", None),
             ))
         return result
+
+    def get_communities_by_semantic_type(self, semantic_type: str) -> list[CommunityData]:
+        """Return all enriched communities matching a given semantic_type, largest first."""
+        import json
+        db = self._db()
+        rows = db.execute(
+            "SELECT * FROM communities WHERE semantic_type=? AND node_count>=2 ORDER BY node_count DESC",
+            (semantic_type,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            ep = r["key_entry_points"]
+            result.append(CommunityData(
+                id=r["id"], title=r["title"], summary=r["summary"],
+                node_count=r["node_count"],
+                key_entry_points=json.loads(ep) if ep else [],
+                generated_at=r["generated_at"],
+                created_at=r["created_at"] or "",
+                level=_col(r, "level", 1),
+                parent_community_id=_col(r, "parent_community_id", None),
+                semantic_type=r["semantic_type"],
+            ))
+        return result
+
+    def get_semantic_type_counts(self) -> dict[str, int]:
+        """Return count of enriched communities per semantic_type."""
+        db = self._db()
+        rows = db.execute(
+            "SELECT semantic_type, COUNT(*) as cnt FROM communities WHERE semantic_type IS NOT NULL AND node_count>=2 GROUP BY semantic_type ORDER BY cnt DESC"
+        ).fetchall()
+        return {r["semantic_type"]: r["cnt"] for r in rows}
 
     def get_max_community_level(self) -> int:
         """Return the highest hierarchy level present in this graph (1 if no hierarchy built)."""
