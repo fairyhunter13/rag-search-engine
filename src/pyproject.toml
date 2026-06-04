@@ -66,6 +66,7 @@ gpu = [
 prerelease = [
     # Headless browser for human-simulation UI tests
     "playwright>=1.44",
+    "pytest-playwright>=0.5.0",
     # TOML writer for codex config.toml patching
     "tomli-w>=1.0",
 ]
@@ -110,6 +111,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "opencode_search/embeddings.py" = ["E402", "F401", "I001"]  # ONNX monkey-patching: unusual import order intentional
 "opencode_search/storage.py" = ["E402", "F401", "I001"]     # lancedb dynamic API: unusual import order intentional
+"tests/e2e/test_dashboard_playwright.py" = ["E701"]         # compact one-liner elif routing table is intentional
 
 [tool.mypy]
 python_version = "3.11"
@@ -158,4 +160,5 @@ markers = [
     "indexer: tests that require the Rust indexer service",
     "slow: tests that run for more than 30 seconds",
     "timeout: mark a test with a custom timeout in seconds",
+    "playwright: Playwright browser E2E tests — run separately (conflicts with pytest-asyncio mode=auto)",
 ]

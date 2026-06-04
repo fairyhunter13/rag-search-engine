@@ -733,19 +733,20 @@ class TestT38LJobsApi:
         assert "error" in data
 
     @pytest.mark.asyncio
-    async def test_dashboard_html_has_jobs_page(self, client):
-        """P0: /dashboard HTML contains page-jobs div for the Jobs tab."""
+    async def test_dashboard_html_has_pulse_view(self, client):
+        """P0: /dashboard HTML contains the Pulse (KPI) view — 3-view Datadog design."""
         r = await client.get("/dashboard")
         assert r.status_code == 200
-        assert "page-jobs" in r.text, "/dashboard HTML missing 'page-jobs' div"
-        assert "loadJobs" in r.text, "/dashboard HTML missing loadJobs JS function"
-        assert "cancelJob" in r.text, "/dashboard HTML missing cancelJob JS function"
+        assert "view-pulse" in r.text, "/dashboard HTML missing 'view-pulse' div"
+        assert "loadPulse" in r.text, "/dashboard HTML missing loadPulse JS function"
+        assert "bento" in r.text, "/dashboard HTML missing bento KPI grid"
 
     @pytest.mark.asyncio
-    async def test_dashboard_html_has_saved_queries_page(self, client):
-        """P0: /dashboard HTML contains page-saved-queries div for Saved Queries tab."""
+    async def test_dashboard_html_has_chat_and_admin_views(self, client):
+        """P0: /dashboard HTML contains Chat and Admin views — 3-view Datadog design."""
         r = await client.get("/dashboard")
         assert r.status_code == 200
-        assert "page-saved-queries" in r.text, "/dashboard HTML missing 'page-saved-queries' div"
-        assert "saveQuery" in r.text, "/dashboard HTML missing saveQuery JS function"
-        assert "loadSavedQueries" in r.text, "/dashboard HTML missing loadSavedQueries JS function"
+        assert "view-chat" in r.text, "/dashboard HTML missing 'view-chat' div"
+        assert "sendChat" in r.text, "/dashboard HTML missing sendChat JS function"
+        assert "view-admin" in r.text, "/dashboard HTML missing 'view-admin' div"
+        assert "loadAdmin" in r.text, "/dashboard HTML missing loadAdmin JS function"

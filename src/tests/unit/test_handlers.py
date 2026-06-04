@@ -1365,12 +1365,12 @@ class TestProjectNeedsHierarchyEnrich:
         gs.upsert_community(c)
         return c
 
-    def test_returns_false_when_db_does_not_exist(self, tmp_path):
+    async def test_returns_false_when_db_does_not_exist(self, tmp_path):
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
         result = _project_needs_hierarchy_enrich(str(tmp_path / "nonexistent"))
         assert result is False
 
-    def test_returns_false_when_max_level_is_1(self, tmp_path):
+    async def test_returns_false_when_max_level_is_1(self, tmp_path):
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
         gs = self._make_gs(tmp_path)
         self._add_community(gs, 1, level=1, title="some title")
@@ -1382,7 +1382,7 @@ class TestProjectNeedsHierarchyEnrich:
             result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
         assert result is False
 
-    def test_returns_true_when_level2_communities_unenriched(self, tmp_path):
+    async def test_returns_true_when_level2_communities_unenriched(self, tmp_path):
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
         gs = self._make_gs(tmp_path)
         self._add_community(gs, 1, level=1, title="Leaf community")
@@ -1395,7 +1395,7 @@ class TestProjectNeedsHierarchyEnrich:
             result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
         assert result is True
 
-    def test_returns_false_when_all_level2_enriched(self, tmp_path):
+    async def test_returns_false_when_all_level2_enriched(self, tmp_path):
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
         gs = self._make_gs(tmp_path)
         self._add_community(gs, 1, level=1, title="Leaf community")
@@ -1408,7 +1408,7 @@ class TestProjectNeedsHierarchyEnrich:
             result = _project_needs_hierarchy_enrich(str(tmp_path / "proj"))
         assert result is False
 
-    def test_returns_false_exception_is_swallowed(self, tmp_path):
+    async def test_returns_false_exception_is_swallowed(self, tmp_path):
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
         with patch(
             "opencode_search.config.get_project_graph_db_path",

@@ -319,9 +319,10 @@ def test_ollama_symbol_intent_returns_string(mock_ollama_server):
 
 def test_ollama_community_summary_returns_title_and_summary(mock_ollama_server):
     client = OllamaClient(base_url=mock_ollama_server)
-    title, summary = client.community_summary(["auth.login (function)", "auth.verify (function)"])
+    title, summary, stype = client.community_summary(["auth.login (function)", "auth.verify (function)"])
     assert isinstance(title, str)
     assert isinstance(summary, str)
+    assert isinstance(stype, str)
     assert len(title) > 0
 
 
@@ -471,9 +472,10 @@ def test_openai_symbol_intent_returns_string(mock_openai_server):
 
 def test_openai_community_summary_returns_title_and_summary(mock_openai_server):
     client = OpenAIClient(api_key="sk-test", base_url=mock_openai_server)
-    title, summary = client.community_summary(["db.connect (function)", "db.query (function)"])
+    title, summary, stype = client.community_summary(["db.connect (function)", "db.query (function)"])
     assert isinstance(title, str)
     assert isinstance(summary, str)
+    assert isinstance(stype, str)
 
 
 # ---------------------------------------------------------------------------
@@ -777,9 +779,9 @@ def test_community_summary_with_code_samples_includes_samples_in_prompt(mock_oll
 
     def capture_chat(messages, **kw):
         captured_messages.extend(messages)
-        return "TITLE: Auth Layer\nSUMMARY: Handles authentication."
+        return "TITLE: Auth Layer\nSUMMARY: Handles authentication.\nTYPE: feature"
     with patch.object(client, "chat", side_effect=capture_chat):
-        title, _summary = client.community_summary(
+        title, _summary, _stype = client.community_summary(
             ["auth.login (function)"],
             code_samples=[("/src/auth.go", "func login(u, p string) bool { return check(u, p) }")],
         )
@@ -793,12 +795,67 @@ def test_community_summary_with_code_samples_includes_samples_in_prompt(mock_oll
     )
 
 
+# ---------------------------------------------------------------------------
+# community_summary parser — plain-text, JSON, TYPE extraction (Phase 29)
+# ---------------------------------------------------------------------------
+
+def test_community_summary_parses_plaintext_with_type(mock_ollama_server):
+    from unittest.mock import patch
+    client = OllamaClient(base_url=mock_ollama_server)
+    with patch.object(client, "chat", return_value="TITLE: Payment Gateway\nSUMMARY: Handles payments.\nTYPE: feature"):
+        title, summary, stype = client.community_summary(["pay.process (function)"])
+    assert title == "Payment Gateway"
+    assert "payments" in summary
+    assert stype == "feature"
+
+
+def test_community_summary_parses_json_with_type(mock_ollama_server):
+    from unittest.mock import patch
+    import json as _json
+    client = OllamaClient(base_url=mock_ollama_server)
+    resp = _json.dumps({"TITLE": "Checkout Flow", "SUMMARY": "Orchestrates checkout.", "TYPE": "business_process"})
+    with patch.object(client, "chat", return_value=resp):
+        title, summary, stype = client.community_summary(["checkout.run (function)"])
+    assert title == "Checkout Flow"
+    assert "checkout" in summary.lower()
+    assert stype == "business_process"
+
+
+def test_community_summary_defaults_unknown_type_to_utility(mock_ollama_server):
+    from unittest.mock import patch
+    client = OllamaClient(base_url=mock_ollama_server)
+    with patch.object(client, "chat", return_value="TITLE: Utils\nSUMMARY: Helpers.\nTYPE: unknown_garbage"):
+        _title, _summary, stype = client.community_summary(["util.helper (function)"])
+    assert stype == "utility"
+
+
+def test_community_summary_json_missing_type_defaults_to_utility(mock_ollama_server):
+    from unittest.mock import patch
+    import json as _json
+    client = OllamaClient(base_url=mock_ollama_server)
+    resp = _json.dumps({"TITLE": "DB Models", "SUMMARY": "ORM entities."})
+    with patch.object(client, "chat", return_value=resp):
+        title, summary, stype = client.community_summary(["model.User (class)"])
+    assert title == "DB Models"
+    assert stype == "utility"
+
+
+def test_community_summary_returns_three_values(mock_ollama_server):
+    """Ensure community_summary always returns a 3-tuple."""
+    from unittest.mock import patch
+    client = OllamaClient(base_url=mock_ollama_server)
+    with patch.object(client, "chat", return_value="TITLE: X\nSUMMARY: Y.\nTYPE: infrastructure"):
+        result = client.community_summary(["x (function)"])
+    assert len(result) == 3
+
+
 def test_community_summary_without_code_samples_still_works(mock_ollama_server):
     """community_summary(code_samples=None) is backward compatible."""
     client = OllamaClient(base_url=mock_ollama_server)
-    title, summary = client.community_summary(["db.Query (function)"], code_samples=None)
+    title, summary, stype = client.community_summary(["db.Query (function)"], code_samples=None)
     assert isinstance(title, str)
     assert isinstance(summary, str)
+    assert isinstance(stype, str)
 
 
 def test_project_overview_returns_json_parseable_string(mock_ollama_server):
@@ -997,9 +1054,10 @@ def test_ollama_symbol_intent_with_docstring(mock_ollama_server):
 
 def test_ollama_community_summary_returns_title_and_summary(mock_ollama_server):
     client = OllamaClient(base_url=mock_ollama_server)
-    title, summary = client.community_summary(["auth.login (function)", "auth.verify (function)"])
+    title, summary, stype = client.community_summary(["auth.login (function)", "auth.verify (function)"])
     assert isinstance(title, str)
     assert isinstance(summary, str)
+    assert isinstance(stype, str)
     assert len(title) > 0
 
 

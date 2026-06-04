@@ -79,20 +79,21 @@ def test_build_action_validation_property(action):
 @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
 @given(summaries=st.lists(st.text(min_size=1, max_size=100), min_size=0, max_size=30))
 def test_community_summary_always_returns_tuple_property(summaries):
-    """community_summary() always returns (str, str) regardless of input length."""
+    """community_summary() always returns (str, str, str) regardless of input length."""
     from opencode_search.enricher.client import LLMClient
 
     mock_client = MagicMock(spec=LLMClient)
-    mock_client.chat.return_value = "TITLE: Test Cluster\nSUMMARY: A test cluster."
+    mock_client.chat.return_value = "TITLE: Test Cluster\nSUMMARY: A test cluster.\nTYPE: utility"
 
     real_method = LLMClient.community_summary
     result = real_method(mock_client, summaries)
 
     assert isinstance(result, tuple), f"community_summary returned {type(result)}"
-    assert len(result) == 2, f"community_summary returned {len(result)}-tuple"
-    title, summary = result
+    assert len(result) == 3, f"community_summary returned {len(result)}-tuple, expected 3"
+    title, summary, stype = result
     assert isinstance(title, str), f"title is {type(title)}"
     assert isinstance(summary, str), f"summary is {type(summary)}"
+    assert isinstance(stype, str), f"semantic_type is {type(stype)}"
     assert len(title) > 0, "title must be non-empty"
 
 
