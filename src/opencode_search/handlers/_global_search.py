@@ -54,7 +54,7 @@ async def handle_global_synthesis(
         level: Community hierarchy level to query (1=micro, 2+=macro).
     """
     from opencode_search.config import load_registry
-    from opencode_search.enricher import create_llm_client
+    from opencode_search.enricher import create_query_llm_client as create_llm_client
     from opencode_search.handlers._graph import _open_graph
 
     t0 = time.perf_counter()
@@ -128,8 +128,13 @@ async def handle_global_synthesis(
         ]
         batches.append(summaries)
 
+    # Limit concurrent Ollama calls to prevent CPU saturation (GPU handles tokens
+    # but attention/tokenisation still saturates CPU cores with too many parallel requests)
+    _llm_sem = asyncio.Semaphore(2)
+
     async def _map_batch(summaries: list[str]) -> str:
-        return await asyncio.to_thread(llm.map_query, query, summaries)
+        async with _llm_sem:
+            return await asyncio.to_thread(llm.map_query, query, summaries)
 
     map_tasks = [_map_batch(b) for b in batches]
     partial_answers = await asyncio.gather(*map_tasks, return_exceptions=True)

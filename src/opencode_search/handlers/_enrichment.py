@@ -264,7 +264,7 @@ async def _enrich_communities(
         nonlocal count
         async with sem:
             try:
-                title, summary = await asyncio.to_thread(
+                title, summary, semantic_type = await asyncio.to_thread(
                     llm.community_summary, summaries, code_samples,
                 )
             except Exception as exc:
@@ -273,6 +273,7 @@ async def _enrich_communities(
             now = datetime.now(UTC).isoformat()
             community.title = title
             community.summary = summary
+            community.semantic_type = semantic_type
             community.generated_at = now
             gs.upsert_community(community)
             count += 1

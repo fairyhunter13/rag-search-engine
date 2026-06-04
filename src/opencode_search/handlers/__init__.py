@@ -1,4 +1,13 @@
 """Handler package — re-exports all public names for backward compatibility."""
+from opencode_search.handlers._chat_router import handle_chat_auto, handle_chat_auto_stream
+from opencode_search.handlers._debug_trace import handle_debug_trace, parse_traceback
+from opencode_search.handlers._kb_chat import handle_kb_chat
+from opencode_search.handlers._business import (
+    handle_ask_business,
+    handle_business_rules,
+    handle_feature_map,
+    handle_process_flows,
+)
 from opencode_search.handlers._autopipeline import (
     auto_pipeline_enabled,
     get_pipeline_events,
@@ -99,6 +108,8 @@ __all__ = [
     "handle_get_callers",
     "handle_get_communities",
     "handle_get_symbol",
+    "handle_chat_auto",
+    "handle_chat_auto_stream",
     "handle_get_symbol_intent",
     "handle_global_search",
     "handle_global_synthesis",
