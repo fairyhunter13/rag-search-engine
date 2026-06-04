@@ -532,6 +532,58 @@ class OllamaClient(LLMClient):
         except urllib.error.URLError as exc:
             raise ConnectionError(f"Ollama connection error: {exc.reason}") from exc
 
+    def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1024,
+    ) -> "Iterator[str]":
+        """Yield content tokens as they stream from Ollama. Blocking generator.
+
+        Uses Ollama's NDJSON streaming API (stream=true). Each yielded string
+        is a raw token fragment exactly as Ollama emits it.
+        """
+        from typing import Iterator  # noqa: F401 (only for annotation)
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "think": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "num_ctx": self.num_ctx,
+            },
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/chat",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                for raw_line in resp:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        evt = json.loads(line.decode("utf-8"))
+                    except json.JSONDecodeError:
+                        continue
+                    content = evt.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+                    if evt.get("done"):
+                        break
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"Ollama HTTP {exc.code}: {exc.read().decode()}") from exc
+        except urllib.error.URLError as exc:
+            raise ConnectionError(f"Ollama connection error: {exc.reason}") from exc
+
 
 # ---------------------------------------------------------------------------
 # Anthropic provider

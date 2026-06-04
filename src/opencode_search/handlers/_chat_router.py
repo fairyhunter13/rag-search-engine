@@ -18,10 +18,42 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+
+async def _bridge_stream(llm: Any, messages: list[dict[str, Any]], max_tokens: int = 1024):
+    """Bridge blocking llm.stream_chat() to an async generator via asyncio.Queue.
+
+    Runs the blocking generator in a daemon thread and forwards tokens through a
+    thread-safe queue. The caller gets a clean async generator of token strings.
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _run() -> None:
+        try:
+            for token in llm.stream_chat(messages, max_tokens=max_tokens):
+                loop.call_soon_threadsafe(queue.put_nowait, token)
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
 
 # ── Intent patterns ───────────────────────────────────────────────────────────
 
@@ -505,26 +537,51 @@ async def handle_chat_auto_stream(
     mode: str = "auto",
     chunk_size: int = 40,
 ):
-    """Async generator wrapping handle_chat_auto() — yields NDJSON events.
+    """Async generator — yields NDJSON events with real-time token streaming.
 
-    Each yielded dict is one of:
-      {"type": "thinking"}              — keepalive while LLM is processing (every ~10s)
-      {"type": "token", "text": "<chunk>"}
-      {"type": "done", "intent": "...", "sources": [...], "elapsed_ms": 0, "model": "..."}
+    Event types:
+      {"type": "thinking"}              — keepalive while context is loading / LLM is busy
+      {"type": "token", "text": "<t>"}  — one raw token from the LLM (or chunk fallback)
+      {"type": "done", "intent": "...", "sources": [...], "elapsed_ms": N, "model": "..."}
 
-    If the LLM client supports streaming, real tokens are yielded.
-    Otherwise the full response is split into chunk_size-char pieces for
-    immediate progressive display.
+    For feature/search intents (the common case) this uses Ollama's native streaming API so
+    the user sees the first token within ~3-5s (context assembly) rather than waiting 30-60s
+    for the full response.  For global/MAP-REDUCE intents it falls back to heartbeat + chunk.
     """
     import asyncio
+    import time as _time
 
-    # Run LLM call as a concurrent task; yield keepalives every 10s so the
-    # HTTP connection doesn't time out during long MAP-REDUCE operations.
+    t0 = _time.perf_counter()
+    intent = mode if mode not in ("auto", "quick", "comprehensive") else classify_intent(query)
+
+    # ── search: no LLM — yield prose immediately ──────────────────────────────
+    if intent == "search":
+        from opencode_search.handlers._query import handle_search_code
+        result = await handle_search_code(query=query, project_paths=[project_path], top_k=10)
+        answer = _prose_search(result, query)
+        sources = [r.get("path", "") for r in result.get("results", []) if r.get("path")]
+        for i in range(0, max(len(answer), 1), chunk_size):
+            chunk = answer[i:i + chunk_size]
+            if chunk:
+                yield {"type": "token", "text": chunk}
+            await asyncio.sleep(0)
+        yield {"type": "done", "intent": "search", "sources": sources[:10],
+               "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": ""}
+        return
+
+    # ── feature: context assembly → native LLM streaming ─────────────────────
+    if intent == "feature":
+        async for event in _stream_feature(
+            query=query, project_path=project_path,
+            conversation_history=conversation_history, t0=t0,
+        ):
+            yield event
+        return
+
+    # ── global / MAP-REDUCE / debug / graph: heartbeat approach ───────────────
     task = asyncio.ensure_future(handle_chat_auto(
-        query=query,
-        project_path=project_path,
-        conversation_history=conversation_history,
-        mode=mode,
+        query=query, project_path=project_path,
+        conversation_history=conversation_history, mode=mode,
     ))
 
     while not task.done():
@@ -534,14 +591,12 @@ async def handle_chat_auto_stream(
             yield {"type": "thinking"}
 
     result = await task
-    answer: str = result.get("answer", "")
-
+    answer = result.get("answer", "")
     for i in range(0, max(len(answer), 1), chunk_size):
         chunk = answer[i:i + chunk_size]
         if chunk:
             yield {"type": "token", "text": chunk}
         await asyncio.sleep(0)
-
     yield {
         "type": "done",
         "intent": result.get("intent", ""),
@@ -549,3 +604,126 @@ async def handle_chat_auto_stream(
         "elapsed_ms": result.get("elapsed_ms", 0),
         "model": result.get("model", ""),
     }
+
+
+async def _stream_feature(
+    query: str,
+    project_path: str,
+    conversation_history: list[dict] | None,
+    t0: float,
+    chunk_size: int = 40,
+):
+    """Stream the feature-intent chat response with native Ollama token streaming.
+
+    Runs context assembly (code + community + wiki) and the feature trace concurrently.
+    Streams KB answer tokens as they arrive, then appends feature trace on completion.
+    """
+    import asyncio
+    import time as _time
+
+    from opencode_search.enricher import create_query_llm_client
+    from opencode_search.handlers._kb_chat import (
+        _SYSTEM_PROMPT,
+        _fetch_code_context,
+        _fetch_community_context,
+        _fetch_wiki_context,
+    )
+
+    # Step 1: kick off feature trace + context assembly in parallel
+    feature_task = asyncio.ensure_future(
+        _run_feature_trace(query, project_path)
+    )
+    code_task = asyncio.ensure_future(_fetch_code_context(query, project_path, top_k=15))
+    community_task = asyncio.ensure_future(
+        _fetch_community_context(query, project_path, top_k=20, include_federation=False)
+    )
+    wiki_task = asyncio.ensure_future(_fetch_wiki_context(query, project_path, top_k=5))
+
+    # Step 2: context assembly (usually 2-5s)
+    (code_ctx, code_sources, _), (comm_ctx, _, _), (wiki_ctx, _) = await asyncio.gather(
+        code_task, community_task, wiki_task
+    )
+
+    # Step 3: build messages
+    sections: list[str] = []
+    if code_ctx:
+        sections.append(f"[CODE LOCATIONS]\n{code_ctx}")
+    if comm_ctx:
+        sections.append(f"[ARCHITECTURE COMMUNITIES]\n{comm_ctx}")
+    if wiki_ctx:
+        sections.append(f"[WIKI KNOWLEDGE]\n{wiki_ctx}")
+
+    if not sections:
+        answer_fallback = (
+            "No indexed content found. "
+            "Run build(action='pipeline') to index the project first."
+        )
+        for i in range(0, len(answer_fallback), chunk_size):
+            yield {"type": "token", "text": answer_fallback[i:i + chunk_size]}
+        yield {"type": "done", "intent": "feature", "sources": [], "elapsed_ms": 0, "model": ""}
+        feature_task.cancel()
+        return
+
+    context = "\n\n".join(sections)
+    system_content = f"{_SYSTEM_PROMPT}\n\nContext from the knowledge base:\n{context}"
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
+    for turn in (conversation_history or [])[-6:]:
+        role = turn.get("role", "")
+        content = turn.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": query})
+
+    # Step 4: get LLM and stream tokens
+    llm = await asyncio.to_thread(create_query_llm_client)
+    model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
+
+    if llm is None:
+        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER."
+        for i in range(0, len(err), chunk_size):
+            yield {"type": "token", "text": err[i:i + chunk_size]}
+    elif hasattr(llm, "stream_chat"):
+        # Native streaming — tokens arrive in real time
+        async for token in _bridge_stream(llm, messages, max_tokens=1024):
+            yield {"type": "token", "text": token}
+    else:
+        # Fallback: blocking call + chunk
+        answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
+        for i in range(0, max(len(answer), 1), chunk_size):
+            chunk = answer[i:i + chunk_size]
+            if chunk:
+                yield {"type": "token", "text": chunk}
+            await asyncio.sleep(0)
+
+    # Step 5: append feature trace as supplement (if ready and meaningful)
+    feature_result = await feature_task
+    if isinstance(feature_result, dict) and feature_result.get("status") == "ok":
+        feature_prose = _prose_feature(feature_result, query)
+        if feature_prose and len(feature_prose) > 100:
+            supplement = f"\n\n---\n\n**Detailed trace:**\n\n{feature_prose}"
+            for i in range(0, len(supplement), chunk_size):
+                chunk = supplement[i:i + chunk_size]
+                if chunk:
+                    yield {"type": "token", "text": chunk}
+                await asyncio.sleep(0)
+        feat_sources = [ep.get("file", "") for ep in feature_result.get("entry_points", [])]
+    else:
+        feat_sources = []
+
+    all_sources = list(dict.fromkeys([s for s in (code_sources + feat_sources) if s]))[:10]
+    yield {
+        "type": "done",
+        "intent": "feature",
+        "sources": all_sources,
+        "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
+        "model": model_name,
+    }
+
+
+async def _run_feature_trace(query: str, project_path: str) -> dict[str, Any]:
+    """Run handle_ask_feature safely, returning {} on any error."""
+    try:
+        from opencode_search.handlers._feature import handle_ask_feature
+        return await handle_ask_feature(query=query, project_path=project_path, top_k=12)
+    except Exception:
+        return {}
