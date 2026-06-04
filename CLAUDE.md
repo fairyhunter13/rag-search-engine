@@ -19,10 +19,13 @@ opencode-search is the tool under test. Every call to `overview` and `search` va
 
 ```bash
 # All fast tests (no GPU, no live services)
-.venv/bin/pytest src/tests/ -m "not (gpu or runtime_deps or large or embedder or indexer or slow)" -q
+.venv/bin/pytest src/tests/ -m "not (gpu or runtime_deps or large or embedder or indexer or slow or playwright)" -q
 
 # Full test suite (all non-GPU)
-.venv/bin/pytest src/tests/ -m "not (gpu or embedder or indexer)" -q
+.venv/bin/pytest src/tests/ -m "not (gpu or embedder or indexer or playwright)" -q
+
+# Playwright browser E2E tests (must run separately — conflicts with pytest-asyncio mode=auto)
+.venv/bin/pytest src/tests/e2e/test_dashboard_playwright.py -v --browser chromium
 
 # MCP contracts + invariants only
 .venv/bin/pytest src/tests/integration/test_mcp.py src/tests/integration/test_invariants.py -v
@@ -34,12 +37,23 @@ python -m compileall -q src/opencode_search
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
+## GPU-only enforcement (CPU fallback is forbidden and prohibited)
+
+All inference — embeddings, LLM enrichment, query LLM — runs exclusively on GPU (RTX 5080).
+**CPU fallback is forbidden and prohibited.** Any attempt to use CPU for inference must raise a fatal error, not fall back silently. This applies to:
+
+- Embeddings (`OPENCODE_EMBED_DEVICE=cuda` — never `cpu`)
+- LLM enrichment (qwen3-enrich:1.7b via Ollama GPU service)
+- Query LLM (qwen3-query:8b via Ollama GPU service)
+
+If `OLLAMA_NUM_GPU_LAYERS` is 0 or the model falls back to CPU, the process must crash with a clear error.
+
 ## Project quick reference
 
 - Entry points: `src/opencode_search/mcp.py` (MCP server), `src/opencode_search/handlers/` (tool handlers), `src/opencode_search/daemon.py` (singleton daemon + installer), `src/opencode_search/cli.py` (CLI)
 - Registry: `~/.local/share/opencode-search/projects.json`
 - Tests: `src/tests/` — `unit/`, `integration/`, `e2e/` subdirs
-- LLM provider: claude-code with haiku-4.5 (set in `src/opencode_search/config.py` and `~/.bash_aliases`)
+- LLM provider: ollama + qwen3-enrich:1.7b (GPU-local, RTX 5080; systemd service; see `scripts/modelfiles/qwen3-enrich.modelfile`)
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 
 [opencode-search-global-instructions:start]
