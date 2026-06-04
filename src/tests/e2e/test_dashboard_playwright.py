@@ -111,22 +111,23 @@ def _dashboard_server():
             elif p.startswith("/api/system_status"):   self._send_json({"status": "ok"})
             else:                                      self._send_json(_MOCK_EMPTY)
 
-        def _send_ndjson_stream(self, answer: str, meta: dict):
-            """Simulate NDJSON streaming chat response."""
-            lines = []
+        def _send_sse_stream(self, answer: str, meta: dict):
+            """Simulate SSE streaming chat response (text/event-stream)."""
+            events = []
             chunk = 40
             for i in range(0, max(len(answer), 1), chunk):
-                lines.append(json.dumps({"type": "token", "text": answer[i:i + chunk]}) + "\n")
-            lines.append(json.dumps({
+                events.append("data: " + json.dumps({"type": "token", "text": answer[i:i + chunk]}) + "\n\n")
+            events.append("data: " + json.dumps({
                 "type": "done",
                 "intent": meta.get("intent", "feature"),
                 "sources": meta.get("sources", []),
                 "elapsed_ms": meta.get("elapsed_ms", 312),
                 "model": meta.get("model", "qwen3-query:8b"),
-            }) + "\n")
-            body = "".join(lines).encode()
+            }) + "\n\n")
+            body = "".join(events).encode()
             self.send_response(200)
-            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -135,7 +136,7 @@ def _dashboard_server():
             p = self.path.split("?")[0]
             if p == "/api/chat":                       self._send_json(_MOCK_CHAT)
             elif p == "/api/chat_stream":
-                self._send_ndjson_stream(
+                self._send_sse_stream(
                     _MOCK_CHAT["answer"],
                     {"intent": _MOCK_CHAT["intent"], "sources": _MOCK_CHAT["sources"],
                      "elapsed_ms": _MOCK_CHAT["elapsed_ms"], "model": _MOCK_CHAT["model"]},
