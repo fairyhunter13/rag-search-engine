@@ -108,12 +108,11 @@ class LLMClient:
         self,
         node_summaries: list[str],
         code_samples: list[tuple[str, str]] | None = None,
-    ) -> tuple[str, str]:
-        """Generate title + 2-3 sentence summary for a community cluster.
+    ) -> tuple[str, str, str]:
+        """Generate title + summary + semantic_type for a community cluster.
 
-        LLM-first approach: when code_samples are provided the LLM sees actual
-        source code in addition to symbol names, producing richer and more
-        accurate descriptions.
+        Returns (title, summary, semantic_type). semantic_type is one of:
+        feature|business_process|business_rule|data_model|api_boundary|infrastructure|utility
         """
         nodes_text = "\n".join(f"- {s}" for s in node_summaries[:30])
         code_text = ""
@@ -131,20 +130,42 @@ class LLMClient:
                         "You are a software architect. Given this code cluster, respond with:\n"
                         "TITLE: <short descriptive title>\n"
                         "SUMMARY: <2-3 sentence summary of what this cluster does>\n"
+                        "TYPE: <one of: feature|business_process|business_rule|data_model|api_boundary|infrastructure|utility>\n"
                         "No other text.\n\n"
+                        "TYPE guide: feature=user-facing capability, business_process=workflow/flow, "
+                        "business_rule=constraint/policy/validation, data_model=schema/entity/ORM, "
+                        "api_boundary=HTTP/RPC interface, infrastructure=config/deploy/logging, "
+                        "utility=helper/test/build\n\n"
                         f"Cluster symbols:\n{nodes_text}{code_text}"
                     ),
                 }
             ],
-            max_tokens=300,
+            max_tokens=350,
         )
-        title = summary = ""
-        for line in text.splitlines():
-            if line.startswith("TITLE:"):
-                title = line[6:].strip()
-            elif line.startswith("SUMMARY:"):
-                summary = line[8:].strip()
-        return title or "Untitled cluster", summary or text
+        title = summary = semantic_type = ""
+        _valid_types = {"feature", "business_process", "business_rule", "data_model", "api_boundary", "infrastructure", "utility"}
+        # Try JSON first (some models return {"TITLE":...,"SUMMARY":...,"TYPE":...})
+        stripped = text.strip()
+        if stripped.startswith("{"):
+            try:
+                parsed = json.loads(stripped)
+                title = parsed.get("TITLE") or parsed.get("title") or ""
+                summary = parsed.get("SUMMARY") or parsed.get("summary") or ""
+                semantic_type = parsed.get("TYPE") or parsed.get("type") or ""
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        if not title:
+            for line in text.splitlines():
+                if line.startswith("TITLE:"):
+                    title = line[6:].strip()
+                elif line.startswith("SUMMARY:"):
+                    summary = line[8:].strip()
+                elif line.startswith("TYPE:"):
+                    semantic_type = line[5:].strip().lower()
+        semantic_type = semantic_type.lower() if semantic_type else ""
+        if semantic_type not in _valid_types:
+            semantic_type = "utility"
+        return title or "Untitled cluster", summary or text, semantic_type
 
     def module_wiki_page(
         self,
@@ -956,3 +977,48 @@ def create_llm_client() -> LLMClient | None:
         f"Unknown OPENCODE_LLM_PROVIDER={provider!r}. "
         "Valid values: none, codex, ollama, anthropic, openai, claude-code"
     )
+
+
+def create_query_llm_client() -> LLMClient | None:
+    """Create the LLM client for dashboard queries (higher quality than enrich tier).
+
+    Reads OPENCODE_QUERY_LLM_* env vars. If the configured query model is not
+    available (Ollama returns connection error or model not found), silently falls
+    back to create_llm_client() so dashboards still work without qwen3-query:8b.
+
+    Default: ollama + qwen3-query:8b (8192 ctx, ~50-80 t/s, ~5.5 GB VRAM).
+    """
+    from opencode_search.config import (
+        DEFAULT_QUERY_LLM_MODEL,
+        DEFAULT_QUERY_LLM_PROVIDER,
+        DEFAULT_QUERY_LLM_TIMEOUT,
+    )
+    provider = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", DEFAULT_QUERY_LLM_PROVIDER).strip().lower()
+    if provider == "none" or not provider:
+        return create_llm_client()
+
+    model = os.environ.get("OPENCODE_QUERY_LLM_MODEL", DEFAULT_QUERY_LLM_MODEL)
+    timeout = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", str(DEFAULT_QUERY_LLM_TIMEOUT)))
+    num_ctx = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "8192"))
+
+    if provider == "ollama":
+        client: LLMClient = OllamaClient(
+            base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
+            model=model,
+            timeout=timeout,
+            num_ctx=num_ctx,
+        )
+    elif provider == "anthropic":
+        client = AnthropicClient.from_env()
+    elif provider == "openai":
+        client = OpenAIClient.from_env()
+    elif provider == "claude-code":
+        client = ClaudeCodeClient(model=model, timeout=timeout)
+    elif provider == "codex":
+        client = CodexClient(model=model, timeout=timeout)
+    else:
+        return create_llm_client()
+
+    if not client.is_available():
+        return create_llm_client()
+    return client

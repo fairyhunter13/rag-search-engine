@@ -1087,10 +1087,14 @@ async def handle_global_search(
         finally:
             gs.close()
 
-    def _search_all_communities() -> list[dict[str, Any]]:
+    async def _search_all_communities() -> list[dict[str, Any]]:
+        # Parallel scatter-gather across all projects (federation-aware)
+        per_project = await asyncio.gather(
+            *[asyncio.to_thread(_search_communities_for, path) for path in effective_paths]
+        )
         all_matches: list[dict[str, Any]] = []
-        for path in effective_paths:
-            all_matches.extend(_search_communities_for(path))
+        for hits in per_project:
+            all_matches.extend(hits)
         all_matches.sort(key=lambda x: x["score"] or 0.0, reverse=True)
         return all_matches[:top_k]
 
@@ -1111,7 +1115,7 @@ async def handle_global_search(
 
     wiki_tasks = [_wiki_for_path(p) for p in effective_paths]
     community_hits_list, *wiki_hits_per_path = await asyncio.gather(
-        asyncio.to_thread(_search_all_communities),
+        _search_all_communities(),
         *wiki_tasks,
     )
     community_hits = community_hits_list

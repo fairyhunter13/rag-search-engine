@@ -9,6 +9,7 @@ from .client import (
     OllamaClient,
     OpenAIClient,
     create_llm_client,
+    create_query_llm_client,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "OllamaClient",
     "OpenAIClient",
     "create_llm_client",
+    "create_query_llm_client",
 ]

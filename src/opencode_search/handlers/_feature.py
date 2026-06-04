@@ -46,7 +46,7 @@ async def handle_ask_feature(
     was designed that way.
     """
     from opencode_search.config import get_project_graph_db_path
-    from opencode_search.enricher import create_llm_client
+    from opencode_search.enricher import create_query_llm_client as create_llm_client
     from opencode_search.graph.storage import GraphStorage
     from opencode_search.handlers._query import handle_search_code
 
@@ -78,6 +78,7 @@ async def handle_ask_feature(
             entry_candidates.append({
                 "symbol": sym,
                 "file": r.get("path", ""),
+                "kind": r.get("kind", ""),
                 "language": r.get("language", ""),
                 "score": round(r.get("score", 0.0), 3),
                 "snippet": (r.get("content") or "")[:200],
