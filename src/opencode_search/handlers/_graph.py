@@ -679,8 +679,9 @@ async def handle_detect_patterns(project_path: str, force: bool = False) -> dict
     _PATTERNS_CACHE[cache_key] = (time.monotonic(), result)
     # Persist to disk so next daemon restart skips the expensive file walk
     try:
-        from opencode_search.config import get_project_index_dir
         import json as _json
+
+        from opencode_search.config import get_project_index_dir
         disk_data = dict(result)
         disk_data["_cached_at"] = time.time()
         disk_cache = get_project_index_dir(str(root)) / "patterns_detect_cache.json"
@@ -1644,7 +1645,7 @@ async def handle_dedup_nodes(
     import asyncio
 
     def _run() -> dict[str, Any]:
-        from opencode_search.graph.dedup import DedupResult, _FUZZY_AVAILABLE, dedup_nodes
+        from opencode_search.graph.dedup import _FUZZY_AVAILABLE, DedupResult, dedup_nodes
 
         gs = _open_graph(project_path)
         if gs is None:

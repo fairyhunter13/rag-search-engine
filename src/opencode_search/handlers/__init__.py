@@ -1,13 +1,4 @@
 """Handler package — re-exports all public names for backward compatibility."""
-from opencode_search.handlers._chat_router import handle_chat_auto, handle_chat_auto_stream
-from opencode_search.handlers._debug_trace import handle_debug_trace, parse_traceback
-from opencode_search.handlers._kb_chat import handle_kb_chat
-from opencode_search.handlers._business import (
-    handle_ask_business,
-    handle_business_rules,
-    handle_feature_map,
-    handle_process_flows,
-)
 from opencode_search.handlers._autopipeline import (
     auto_pipeline_enabled,
     get_pipeline_events,
@@ -15,6 +6,13 @@ from opencode_search.handlers._autopipeline import (
     schedule_auto_pipeline,
     schedule_incremental_enrichment,
 )
+from opencode_search.handlers._business import (
+    handle_ask_business,
+    handle_business_rules,
+    handle_feature_map,
+    handle_process_flows,
+)
+from opencode_search.handlers._chat_router import handle_chat_auto, handle_chat_auto_stream
 from opencode_search.handlers._common import (
     _indexing_lock,
     _indexing_status,
@@ -22,6 +20,7 @@ from opencode_search.handlers._common import (
     _touch_projects_last_active,
     resolve_indexed_project_path,
 )
+from opencode_search.handlers._debug_trace import handle_debug_trace, parse_traceback
 from opencode_search.handlers._enrichment import (
     handle_enrich_hierarchy,
     handle_enrich_project,
@@ -58,14 +57,15 @@ from opencode_search.handlers._index import (
     _build_incremental_on_change,
     handle_index_project,
 )
+from opencode_search.handlers._kb_chat import handle_kb_chat
 from opencode_search.handlers._patterns import handle_analyze_patterns_llm
 from opencode_search.handlers._pipeline import handle_pipeline
+from opencode_search.handlers._pr_impact import handle_pr_impact
 from opencode_search.handlers._query import (
     handle_list_indexed_projects,
     handle_project_status,
     handle_search_code,
 )
-from opencode_search.handlers._pr_impact import handle_pr_impact
 from opencode_search.handlers._service_mesh import handle_detect_service_mesh
 from opencode_search.handlers._tree_html import handle_tree_html
 from opencode_search.handlers._vacuum import handle_vacuum
@@ -96,6 +96,8 @@ __all__ = [
     "handle_ask_feature",
     "handle_auto_pipeline",
     "handle_callflow_html",
+    "handle_chat_auto",
+    "handle_chat_auto_stream",
     "handle_dedup_nodes",
     "handle_detect_impact",
     "handle_detect_patterns",
@@ -108,8 +110,6 @@ __all__ = [
     "handle_get_callers",
     "handle_get_communities",
     "handle_get_symbol",
-    "handle_chat_auto",
-    "handle_chat_auto_stream",
     "handle_get_symbol_intent",
     "handle_global_search",
     "handle_global_synthesis",
@@ -121,6 +121,7 @@ __all__ = [
     "handle_list_federation",
     "handle_list_indexed_projects",
     "handle_pipeline",
+    "handle_pr_impact",
     "handle_project_status",
     "handle_project_structure",
     "handle_release_project_watch",
@@ -128,10 +129,9 @@ __all__ = [
     "handle_search_code",
     "handle_stop_watching",
     "handle_suggest_questions",
-    "handle_pr_impact",
+    "handle_trace_path",
     "handle_tree_html",
     "handle_vacuum",
-    "handle_trace_path",
     "handle_wiki_generate",
     "handle_wiki_ingest",
     "handle_wiki_lint",

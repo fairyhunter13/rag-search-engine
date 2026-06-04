@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -570,13 +571,12 @@ class OllamaClient(LLMClient):
         *,
         temperature: float = 0.1,
         max_tokens: int = 1024,
-    ) -> "Iterator[str]":
+    ) -> Iterator[str]:
         """Yield content tokens as they stream from Ollama. Blocking generator.
 
         Uses Ollama's NDJSON streaming API (stream=true). Each yielded string
         is a raw token fragment exactly as Ollama emits it.
         """
-        from typing import Iterator  # noqa: F401 (only for annotation)
 
         self._assert_gpu_only()
         payload: dict[str, Any] = {

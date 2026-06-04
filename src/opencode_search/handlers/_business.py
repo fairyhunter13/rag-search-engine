@@ -18,9 +18,10 @@ _BUSINESS_TYPES = {"feature", "business_process", "business_rule"}
 
 
 def _open_graph(project_path: str) -> Any:
+    from pathlib import Path
+
     from opencode_search.config import get_project_graph_db_path
     from opencode_search.graph.storage import GraphStorage
-    from pathlib import Path
     db_path = get_project_graph_db_path(project_path)
     if not Path(db_path).exists():
         return None
