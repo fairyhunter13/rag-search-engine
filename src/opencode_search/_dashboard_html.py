@@ -320,6 +320,7 @@ a{color:inherit;text-decoration:none}
 /* ── State ───────────────────────────────────────────────────────────────── */
 let _proj='';
 let _chatHistory=[];
+let _chatInFlight=false;
 let _cmdIdx=0;
 let _sparkHistory={};
 let _msgSeq=0;
@@ -623,16 +624,18 @@ function askQuestion(q){
 }
 
 async function sendChat(){
+  if(_chatInFlight)return;
   if(!_proj){toast('Select a project first','err');return;}
   const inp=$('chat-in');
   const query=inp.value.trim();
   if(!query)return;
+  _chatInFlight=true;
   inp.value='';
   inp.style.height='auto';
+  $('send-btn').disabled=true;
 
   appendMsg('user',query);
   const thinkId=appendMsg('ai','Thinking…','thinking');
-  $('send-btn').disabled=true;
   const thinkStart=Date.now();
 
   try{
@@ -642,7 +645,6 @@ async function sendChat(){
       body:JSON.stringify({project:_proj,query,history:_chatHistory.slice(-8)}),
     });
     if(!r.ok||!r.body){
-      // Fallback: non-streaming error response
       const d=await r.json().catch(()=>({}));
       removeMsg(thinkId);
       appendMsg('ai','Error: '+(d.error||r.statusText),'ai-err');
@@ -655,45 +657,54 @@ async function sendChat(){
     let streamMsgId=null;
     let accumulated='';
 
+    // Parse SSE format: events are delimited by \n\n; each line is "data: <json>"
+    const processEvent=(raw)=>{
+      const dataLine=raw.split('\n').find(l=>l.startsWith('data:'));
+      if(!dataLine)return;
+      let evt;
+      try{evt=JSON.parse(dataLine.slice(5).trim());}catch{return;}
+      if(evt.type==='thinking'){
+        const el=$(thinkId);
+        if(el){const s=Math.round((Date.now()-thinkStart)/1000);el.querySelector('.msg-bubble').textContent='Thinking… ('+s+'s)';}
+      }else if(evt.type==='token'){
+        accumulated+=String(evt.text||'');
+        if(!streamMsgId){
+          removeMsg(thinkId);
+          streamMsgId=appendStreamMsg(accumulated);
+        }else{
+          updateStreamMsg(streamMsgId,accumulated);
+        }
+      }else if(evt.type==='done'){
+        const meta={intent:evt.intent,sources:evt.sources,elapsed:evt.elapsed_ms,model:evt.model};
+        if(streamMsgId){finalizeStreamMsg(streamMsgId,meta);}
+        else{removeMsg(thinkId);appendMsg('ai',accumulated||'(no response)','',meta);}
+        _chatHistory.push({role:'user',content:query});
+        _chatHistory.push({role:'assistant',content:String(accumulated)});
+      }
+    };
+
     const loop=async()=>{
       while(true){
         const {done,value}=await reader.read();
         if(done)break;
         buf+=decoder.decode(value,{stream:true});
-        const lines=buf.split('\n');
-        buf=lines.pop()||'';
-        for(const line of lines){
-          if(!line.trim())continue;
-          let evt;
-          try{evt=JSON.parse(line);}catch{continue;}
-          if(evt.type==='thinking'){
-            // Keepalive heartbeat — update elapsed time in thinking bubble
-            const el=$(thinkId);
-            if(el){const s=Math.round((Date.now()-thinkStart)/1000);el.querySelector('.msg-bubble').textContent='Thinking… ('+s+'s)';}
-          }else if(evt.type==='token'){
-            accumulated+=evt.text;
-            if(!streamMsgId){
-              removeMsg(thinkId);
-              streamMsgId=appendStreamMsg(accumulated);
-            }else{
-              updateStreamMsg(streamMsgId,accumulated);
-            }
-          }else if(evt.type==='done'){
-            const meta={intent:evt.intent,sources:evt.sources,elapsed:evt.elapsed_ms,model:evt.model};
-            if(streamMsgId){finalizeStreamMsg(streamMsgId,meta);}
-            else{removeMsg(thinkId);appendMsg('ai',accumulated||'(no response)','',meta);}
-            _chatHistory.push({role:'user',content:query});
-            _chatHistory.push({role:'assistant',content:accumulated});
-          }
-        }
+        // Split on double-newline (SSE event boundary)
+        const events=buf.split('\n\n');
+        buf=events.pop()||'';
+        for(const ev of events){if(ev.trim())processEvent(ev);}
       }
+      // Flush any remaining buffer
+      if(buf.trim())processEvent(buf);
     };
     await loop();
     if(!streamMsgId){removeMsg(thinkId);appendMsg('ai',accumulated||'(no response)');}
   }catch(e){
     removeMsg(thinkId);
     appendMsg('ai','Network error: '+e.message,'ai-err');
-  }finally{$('send-btn').disabled=false;}
+  }finally{
+    $('send-btn').disabled=false;
+    _chatInFlight=false;
+  }
 }
 
 function appendStreamMsg(text){

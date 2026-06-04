@@ -420,8 +420,32 @@ class TestConversationHistoryBehavior:
 # T7: Streaming chat delivers progressive NDJSON tokens
 # ---------------------------------------------------------------------------
 
+def _parse_sse_events(response):
+    """Parse SSE stream (text/event-stream) into a list of parsed JSON dicts.
+
+    SSE events are delimited by blank lines; each event line starts with 'data: '.
+    Skips blank lines and non-data lines.  Returns list of parsed dicts.
+    """
+    events = []
+    buf = ""
+    for chunk in response.iter_bytes():
+        buf += chunk.decode("utf-8", errors="replace")
+    # Split on double-newline (SSE event boundary)
+    for raw_event in buf.split("\n\n"):
+        for line in raw_event.splitlines():
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                if not payload:
+                    continue
+                try:
+                    events.append(json.loads(payload))
+                except json.JSONDecodeError:
+                    pass
+    return events
+
+
 class TestStreamingChatBehavior:
-    """The /api/chat_stream endpoint must deliver real-time NDJSON token stream."""
+    """The /api/chat_stream endpoint must deliver real-time SSE token stream."""
 
     def test_stream_delivers_token_events(self, http):
         tokens = []
@@ -433,22 +457,15 @@ class TestStreamingChatBehavior:
         }) as r:
             assert r.status_code == 200, f"stream returned {r.status_code}"
             ct = r.headers.get("content-type", "")
-            assert "ndjson" in ct or "json" in ct, f"Expected ndjson content-type, got: {ct}"
+            assert "event-stream" in ct or "json" in ct, f"Expected SSE content-type, got: {ct}"
+            events = _parse_sse_events(r)
 
-            for line in r.iter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                evt_type = evt.get("type")
-                if evt_type == "token":
-                    tokens.append(evt.get("text", ""))
-                elif evt_type == "done":
-                    done_event = evt
-                    break
-                # "thinking" keepalive events are ignored — they just prevent HTTP timeout
+        for evt in events:
+            evt_type = evt.get("type")
+            if evt_type == "token":
+                tokens.append(evt.get("text", ""))
+            elif evt_type == "done":
+                done_event = evt
 
         assert len(tokens) >= 1, f"Expected at least 1 token event, got {len(tokens)}"
         assert done_event is not None, "Expected 'done' event at end of stream"
@@ -464,17 +481,12 @@ class TestStreamingChatBehavior:
         }) as r:
             if r.status_code != 200:
                 pytest.skip(f"stream not available: {r.status_code}")
-            for line in r.iter_lines():
-                if not line.strip():
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if evt.get("type") == "done":
-                    done_event = evt
-                    break
-                # skip "thinking" keepalive events
+            events = _parse_sse_events(r)
+
+        for evt in events:
+            if evt.get("type") == "done":
+                done_event = evt
+                break
 
         assert done_event is not None, "No done event received"
         assert "model" in done_event or "intent" in done_event, \
@@ -656,23 +668,22 @@ class TestFullConversationFlow:
         assert len(answer) > 300
 
     def test_architecture_streams_native_tokens(self, http):
-        """Architecture intent should stream tokens (not heartbeat-only)."""
+        """Architecture intent should stream tokens via SSE (not heartbeat-only)."""
         tokens = []
+        done_event = None
         with httpx.stream("POST", f"{_DAEMON}/api/chat_stream",
                           json={"project": _PROJECT, "query": "how is the architecture end to end?"},
                           timeout=120) as resp:
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                try:
-                    evt = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if evt.get("type") == "token":
-                    tokens.append(evt["text"])
-                if evt.get("type") == "done":
-                    assert evt.get("intent") == "architecture", \
-                        f"Expected architecture in done event, got: {evt.get('intent')}"
-                    break
+            ct = resp.headers.get("content-type", "")
+            assert "event-stream" in ct or "json" in ct, f"Expected SSE content-type, got: {ct}"
+            events = _parse_sse_events(resp)
+        for evt in events:
+            if evt.get("type") == "token":
+                tokens.append(evt["text"])
+            if evt.get("type") == "done":
+                done_event = evt
+        if done_event:
+            assert done_event.get("intent") == "architecture", \
+                f"Expected architecture in done event, got: {done_event.get('intent')}"
         assert len(tokens) >= 5, \
             f"Architecture streaming should deliver tokens, got {len(tokens)}"

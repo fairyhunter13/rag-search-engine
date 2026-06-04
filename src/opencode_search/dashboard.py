@@ -796,9 +796,16 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                 project_path=project,
                 conversation_history=history,
             ):
-                yield json.dumps(chunk) + "\n"
+                yield f"data: {json.dumps(chunk)}\n\n"
 
-        return StreamingResponse(_gen(), media_type="application/x-ndjson")
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @mcp.custom_route("/api/debug", methods=["POST"], include_in_schema=False)
     async def api_debug_trace(request: Request) -> JSONResponse:
