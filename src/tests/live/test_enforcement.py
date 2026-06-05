@@ -290,3 +290,58 @@ class TestOpencodeBridgeConfig:
             "opencode MCP bridge must set OPENCODE_QUERY_LLM_PROVIDER=ollama; "
             f"got env={env}"
         )
+
+
+# ---------------------------------------------------------------------------
+# configure_integrations.py self-repair
+# ---------------------------------------------------------------------------
+
+_REPO = Path("/home/user/git/github.com/fairyhunter13/opencode-search-engine")
+
+
+class TestConfigureIntegrationsScript:
+    """configure_integrations.py must detect missing env vars and write them."""
+
+    def test_check_all_configured(self):
+        """--check --json must report all integrations as already_ok or skipped."""
+        result = subprocess.run(
+            [str(_VENV_PYTHON), "scripts/configure_integrations.py", "--check", "--json"],
+            capture_output=True, text=True, cwd=str(_REPO),
+        )
+        assert result.returncode == 0, (
+            f"configure_integrations.py --check failed:\n{result.stdout[:500]}\n{result.stderr[:300]}"
+        )
+        data = json.loads(result.stdout)
+        bad = [r for r in data if r["status"] not in ("already_ok", "skipped")]
+        assert not bad, f"Integrations not fully configured: {bad}"
+
+    def test_repair_opencode_missing_env(self, tmp_path):
+        """Script must inject ollama env vars into opencode.jsonc when they're absent."""
+        fake_home = tmp_path / "home"
+        config_dir = fake_home / ".config" / "opencode"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "opencode.jsonc"
+        config_file.write_text(json.dumps({
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": {
+                "opencode-search": {
+                    "type": "local",
+                    "command": [str(_VENV_PYTHON), "-m", "opencode_search", "daemon", "bridge-stdio"],
+                    "timeout": 30000,
+                }
+            }
+        }))
+        subprocess.run(
+            [str(_VENV_PYTHON), "scripts/configure_integrations.py", "--json"],
+            capture_output=True, text=True,
+            env={**os.environ, "HOME": str(fake_home)},
+            cwd=str(_REPO),
+        )
+        updated = json.loads(config_file.read_text())
+        env = updated.get("mcp", {}).get("opencode-search", {}).get("env", {})
+        assert env.get("OPENCODE_LLM_PROVIDER") == "ollama", (
+            f"Script must add OPENCODE_LLM_PROVIDER=ollama when missing; got env={env}"
+        )
+        assert env.get("OPENCODE_QUERY_LLM_PROVIDER") == "ollama", (
+            f"Script must add OPENCODE_QUERY_LLM_PROVIDER=ollama when missing; got env={env}"
+        )
