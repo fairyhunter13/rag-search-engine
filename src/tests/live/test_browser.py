@@ -175,6 +175,39 @@ class TestPulseView:
         kpi = page.locator("#kpi-stream")
         assert kpi.count() > 0, "Stream Health KPI value (#kpi-stream) not found"
 
+    def test_pulse_kpi_enrichment_tile_renders(self, page):
+        """#kpi-enrichment tile must exist and show any value (% or '—')."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        tile = page.locator("#kpi-enrichment")
+        assert tile.count() > 0, "#kpi-enrichment tile not found in Pulse view"
+        val = (tile.text_content(timeout=5_000) or "").strip()
+        assert val != "", "#kpi-enrichment has no text content"
+
+    def test_pulse_kpi_wiki_tile_renders(self, page):
+        """#kpi-wiki tile must exist and show any value."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        tile = page.locator("#kpi-wiki")
+        assert tile.count() > 0, "#kpi-wiki tile not found in Pulse view"
+        val = (tile.text_content(timeout=5_000) or "").strip()
+        assert val != "", "#kpi-wiki has no text content"
+
+    def test_pulse_kpi_uptime_populated(self, page):
+        """#kpi-uptime must show a non-dash value — daemon has been running."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.wait_for_function(
+            "document.querySelector('#kpi-uptime')?.textContent?.trim() !== '—'",
+            timeout=20_000,
+        )
+        val = (page.locator("#kpi-uptime").text_content(timeout=5_000) or "").strip()
+        assert val and val != "—", f"#kpi-uptime still showing '—': {val!r}"
+
     def test_pulse_kpi_tiles_populated(self, page):
         """KPI tiles must show non-dash values after the metrics poll runs."""
         _goto_with_retry(page, DASHBOARD_URL)
@@ -453,6 +486,49 @@ class TestAdminView:
         log_text = (page.locator("#op-log").text_content() or "").strip()
         assert log_text, "op-log empty after clicking Vacuum"
 
+    def _click_admin_op(self, page, btn_text: str) -> str:
+        """Open admin, click an operation button, return op-log text."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        btn = page.locator(f"button:has-text('{btn_text}')").first
+        if not btn.count():
+            pytest.skip(f"Button '{btn_text}' not found in Admin view")
+        btn.click()
+        page.wait_for_function(
+            "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
+            timeout=20_000,
+        )
+        return (page.locator("#op-log").text_content() or "").strip()
+
+    def test_admin_dedup_executes_and_logs(self, page):
+        """Clicking Dedup must write output to #op-log."""
+        log_text = self._click_admin_op(page, "Dedup")
+        assert log_text, "op-log empty after clicking Dedup"
+
+    def test_admin_reindex_submits_job(self, page):
+        """Clicking Re-index must submit a background job and log it."""
+        log_text = self._click_admin_op(page, "Re-index")
+        assert log_text, "op-log empty after clicking Re-index"
+
+    def test_admin_enrich_submits_job(self, page):
+        """Clicking Enrich must submit a background job and log it."""
+        log_text = self._click_admin_op(page, "Enrich")
+        assert log_text, "op-log empty after clicking Enrich"
+
+    def test_admin_wiki_submits_job(self, page):
+        """Clicking Wiki must submit a background job and log it."""
+        log_text = self._click_admin_op(page, "Wiki")
+        assert log_text, "op-log empty after clicking Wiki"
+
 
 # ---------------------------------------------------------------------------
 # Global UI elements
@@ -497,4 +573,65 @@ class TestGlobalUI:
         )
         assert "hidden" in (overlay.get_attribute("class") or ""), (
             "Command palette did not close after Escape"
+        )
+
+    def test_theme_toggle_changes_button_text(self, page):
+        """Clicking #theme-btn must toggle text between ☀ and 🌙."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        btn = page.locator("#theme-btn")
+        assert btn.count() > 0, "#theme-btn not found"
+        initial_text = (btn.text_content() or "").strip()
+        btn.click()
+        page.wait_for_timeout(300)
+        toggled_text = (btn.text_content() or "").strip()
+        assert toggled_text != initial_text, (
+            f"#theme-btn text did not change after click: was {initial_text!r}, still {toggled_text!r}"
+        )
+        # Toggle back
+        btn.click()
+        page.wait_for_timeout(300)
+        restored_text = (btn.text_content() or "").strip()
+        assert restored_text == initial_text, (
+            f"Theme did not restore: expected {initial_text!r}, got {restored_text!r}"
+        )
+
+    def test_command_palette_filters_on_type(self, page):
+        """Typing in #cmd-input must narrow the result list to matching items."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        page.locator("#cmd-input").type("vacuum")
+        page.wait_for_timeout(200)
+        items = page.locator("#cmd-results li")
+        assert items.count() >= 1, "Filter returned no results for 'vacuum'"
+        labels = [(items.nth(i).text_content() or "") for i in range(items.count())]
+        assert any("vacuum" in lbl.lower() for lbl in labels), (
+            f"Filter did not show vacuum-related items: {labels}"
+        )
+        page.keyboard.press("Escape")
+
+    def test_command_palette_executes_via_enter(self, page):
+        """Pressing Enter on a highlighted palette item must execute it."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        page.locator("#cmd-input").type("Pulse")
+        page.wait_for_timeout(200)
+        page.keyboard.press("Enter")
+        page.wait_for_function(
+            "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=3_000,
+        )
+        page.wait_for_function(
+            "document.getElementById('view-pulse')?.classList?.contains('active')",
+            timeout=3_000,
         )

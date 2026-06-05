@@ -10,7 +10,7 @@ with 100% accuracy against the indexed codebase by:
   5. LLM synthesis: root cause hypothesis + fix recommendation
 
 Algorithm:
-  - Parse: regex-based traceback parser for Python/Go/Java/JS/Rust formats
+  - Parse: LLM-first (qwen3-query:8b) with regex fallback for Python/Go/Java/JS/Rust formats
   - Map: normalise paths against project root, find nodes in GraphStorage
   - Context: community summaries for each matched node + algorithm context
   - Synthesis: query-tier LLM with chain-of-thought prompt
@@ -18,6 +18,7 @@ Algorithm:
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import re
 import time
@@ -119,6 +120,33 @@ def _parse_rust(text: str) -> list[dict]:
             frames.append({"file": filem.group(1), "line": int(filem.group(2)), "function": pending_func, "lang": "rust"})
             pending_func = None
     return frames
+
+
+async def _parse_with_llm(text: str) -> list[dict]:
+    """Use query LLM to extract stack frames from any language traceback."""
+    try:
+        llm = create_query_llm_client()
+        prompt = (
+            "Extract stack frames from this error traceback.\n"
+            "Return ONLY a JSON array of objects with keys: "
+            "file (string path), line (integer), function (string), lang (string: python/go/java/javascript/rust/unknown).\n"
+            "Include only frames that reference actual source files. Return [] if none found.\n"
+            "No explanation — only the JSON array.\n\n"
+            f"Traceback:\n{text}"
+        )
+        response = await llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            system="You are a stack trace parser. Extract structured frame data from error tracebacks. Return only valid JSON.",
+        )
+        raw = response.get("content", "") if isinstance(response, dict) else str(response)
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```\w*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw.strip())
+        frames = json.loads(raw.strip())
+        return [f for f in frames if isinstance(f, dict) and f.get("file") and f.get("line")]
+    except Exception:
+        return []
 
 
 def parse_traceback(text: str) -> list[dict]:
@@ -312,7 +340,9 @@ async def handle_debug_trace(
     t0 = time.perf_counter()
 
     # ── 1. Parse traceback ────────────────────────────────────────────────────
-    frames = parse_traceback(traceback)
+    frames = await _parse_with_llm(traceback)
+    if not frames:
+        frames = parse_traceback(traceback)  # regex fallback
     if not frames:
         return {
             "frames": [],

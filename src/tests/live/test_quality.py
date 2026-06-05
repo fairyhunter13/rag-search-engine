@@ -80,3 +80,33 @@ def test_quality_frameworks_answer(http, project):
     assert len(answer) > 30, f"Frameworks answer too short: {answer!r}"
     score = judge_answer(answer, "Does this name specific frameworks or libraries with reasonable accuracy?")
     assert score >= 2, f"Frameworks answer quality {score}/5 too low:\n{answer[:400]}"
+
+
+def test_quality_feature_trace(http, project):
+    """Feature trace must score ≥ 3/5 for explaining end-to-end behaviour."""
+    answer = _ask_chat(http, project, "Explain step by step how the indexing feature works")
+    assert len(answer) > 50, f"Feature answer too short: {answer!r}"
+    score = judge_answer(answer, "Does this explain a feature end-to-end with implementation steps?")
+    assert score >= _MIN_SCORE, f"Feature trace quality {score}/5 too low:\n{answer[:400]}"
+
+
+def test_quality_debug_trace(http, project):
+    """Debug trace must score ≥ 3/5 for diagnosing a real error."""
+    tb = (
+        "Traceback (most recent call last):\n"
+        "  File 'server.py', line 42, in handle_request\n"
+        "    result = process(data)\n"
+        "KeyError: 'content'"
+    )
+    answer = _ask_chat(http, project, tb)
+    assert len(answer) > 30, f"Debug trace answer too short: {answer!r}"
+    score = judge_answer(answer, "Does this explain the root cause of a KeyError with concrete fix advice?")
+    assert score >= _MIN_SCORE, f"Debug trace quality {score}/5 too low:\n{answer[:400]}"
+
+
+def test_quality_graph_impact(http, project):
+    """Graph impact must score ≥ 2/5 for naming what breaks if a symbol changes."""
+    answer = _ask_chat(http, project, "What breaks if I change the embedding model?")
+    assert len(answer) > 30, f"Graph impact answer too short: {answer!r}"
+    score = judge_answer(answer, "Does this identify specific components or modules that depend on the embedding model?")
+    assert score >= 2, f"Graph impact quality {score}/5 too low:\n{answer[:400]}"
