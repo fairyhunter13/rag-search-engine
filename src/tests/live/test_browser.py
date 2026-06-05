@@ -50,8 +50,23 @@ def live_project():
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _goto_with_retry(page, url: str, retries: int = 3, wait_s: int = 10) -> None:
+    """Navigate with retry loop — handles transient daemon downtime (e.g. from reload test)."""
+    import time as _t
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            page.goto(url, timeout=20_000)
+            return
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries - 1:
+                _t.sleep(wait_s)
+    raise last_err  # type: ignore[misc]
+
+
 def _navigate_to_chat(page) -> None:
-    page.goto(DASHBOARD_URL)
+    _goto_with_retry(page, DASHBOARD_URL)
     # Use "load" not "networkidle" — dashboard keeps SSE connections open that never idle
     page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
     # Wait for the project selector element to exist in DOM
@@ -98,14 +113,14 @@ def _wait_for_ai_response(page, timeout_ms: int = _TIMEOUT_CHAT):
 
 class TestDashboardLoads:
     def test_root_redirects_to_dashboard(self, page):
-        page.goto(DAEMON_URL)
+        _goto_with_retry(page, DAEMON_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         assert "/dashboard" in page.url or page.title() != "", (
             "Root URL did not redirect to dashboard"
         )
 
     def test_dashboard_page_not_blank(self, page):
-        page.goto(DASHBOARD_URL)
+        _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         content = page.content()
         assert len(content) > 500, "Dashboard returned a nearly empty page"
@@ -114,7 +129,7 @@ class TestDashboardLoads:
         )
 
     def test_navigation_tabs_visible(self, page):
-        page.goto(DASHBOARD_URL)
+        _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         nav = page.locator("nav, [role='tablist'], .tabs, .navbar, .top-bar").first
         assert nav.count() > 0 or nav.is_visible(), "No navigation element found on dashboard"
@@ -126,7 +141,7 @@ class TestDashboardLoads:
 
 class TestPulseView:
     def test_pulse_tab_accessible(self, page):
-        page.goto(DASHBOARD_URL)
+        _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse'), [data-tab='pulse']").first
         assert pulse.count() > 0, "No Pulse tab found — dashboard nav must have a Pulse tab"
@@ -137,7 +152,7 @@ class TestPulseView:
         assert has_kpi, "Pulse tab has no recognizable KPI content"
 
     def test_pulse_shows_activity_or_metrics(self, page):
-        page.goto(DASHBOARD_URL)
+        _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse')").first
         if pulse.count() > 0:
@@ -149,7 +164,7 @@ class TestPulseView:
 
     def test_pulse_stream_health_tile_present(self, page):
         """Stream Health KPI tile must be rendered in the Pulse view."""
-        page.goto(DASHBOARD_URL)
+        _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse'), [data-tab='pulse']").first
         if pulse.count() > 0:
@@ -330,7 +345,7 @@ class TestChatStreaming:
 
 class TestAdminView:
     def _open_admin(self, page):
-        page.goto(DASHBOARD_URL)
+        _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         admin_tab = page.locator("button:has-text('Admin'), a:has-text('Admin'), [data-tab='admin']").first
         if admin_tab.count() == 0:
