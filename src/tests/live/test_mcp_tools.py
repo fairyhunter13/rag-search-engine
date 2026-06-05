@@ -641,7 +641,11 @@ class TestMCPExtended:
         assert r.status_code == 200, f"/api/feature failed: {r.text[:300]}"
         data = r.json()
         assert isinstance(data, dict), f"/api/feature must return a dict; got {type(data)}"
-        has_content = any(k in data for k in ("answer", "trace", "result", "summary", "text", "error"))
+        # /api/feature returns structured trace: entry_points, call_chain, algorithm, etc.
+        has_content = any(k in data for k in (
+            "entry_points", "call_chain", "algorithm", "design_rationale",
+            "summary", "answer", "trace", "result", "text", "error"
+        ))
         assert has_content, f"/api/feature missing content keys: {list(data.keys())}"
 
     def test_alerts_post_saves_rules(self, http):
