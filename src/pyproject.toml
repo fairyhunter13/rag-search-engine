@@ -153,6 +153,9 @@ ignore_errors = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["src/tests"]
+# reruns=1: handles transient keepalive disconnect after long test sessions
+# reruns-delay=3: brief pause lets the daemon recover between retry attempts
+addopts = "--reruns=1 --reruns-delay=3"
 markers = [
     "live: requires daemon at :8765, Ollama at :11434, CUDA GPU — skipped if any absent",
     "slow: LLM-heavy tests (>30s each) — skip for fast smoke checks with -m 'live and not slow'",
