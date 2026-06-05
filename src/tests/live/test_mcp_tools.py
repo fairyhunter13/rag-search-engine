@@ -333,36 +333,6 @@ class TestMCPManage:
         assert r.status_code == 200
         assert "jobs" in r.json()
 
-    @pytest.mark.slow
-    def test_manage_reload(self, http):
-        """Reload returns reloading status and daemon recovers within 15s.
-
-        Marked slow because it restarts the daemon (disrupts session HTTP pool)
-        and should not run alongside the fast suite to avoid connection errors.
-        """
-        import time
-
-        import httpx as _httpx
-        r = http.post("/api/reload")
-        assert r.status_code == 200, f"reload failed: {r.status_code} {r.text[:200]}"
-        data = r.json()
-        assert data.get("status") == "reloading", f"unexpected reload response: {data}"
-        assert "pid" in data, "reload response must include pid"
-        deadline = time.time() + 15
-        # Use a fresh client to poll — avoids reusing the dead session connection
-        with _httpx.Client(base_url="http://localhost:8765", timeout=5.0) as poll:
-            while time.time() < deadline:
-                time.sleep(1)
-                try:
-                    r2 = poll.get("/api/projects")
-                    if r2.status_code == 200:
-                        break
-                except Exception:
-                    pass
-            else:
-                pytest.fail("Daemon did not come back up within 15s after reload")
-        time.sleep(2)  # extra buffer so session pool settles
-
 
 class TestMCPMetrics:
     """Verify stream error/success counters in /api/metrics."""
@@ -749,3 +719,38 @@ class TestMCPExtended:
         assert r.status_code in (200, 404), f"job cancel unexpected status: {r.status_code}"
         data = r.json()
         assert isinstance(data, dict), "job cancel must return a dict"
+
+
+# ---------------------------------------------------------------------------
+# Reload (last — restarts daemon, must run after all other tests)
+# ---------------------------------------------------------------------------
+
+class TestMCPReload:
+    """manage(action='reload') — runs LAST to avoid disrupting other tests."""
+
+    @pytest.mark.slow
+    def test_manage_reload(self, http):
+        """Reload returns reloading status and daemon recovers within 15s."""
+        import time
+
+        import httpx as _httpx
+
+        r = http.post("/api/reload")
+        assert r.status_code == 200, f"reload failed: {r.status_code} {r.text[:200]}"
+        data = r.json()
+        assert data.get("status") == "reloading", f"unexpected reload response: {data}"
+        assert "pid" in data, "reload response must include pid"
+
+        deadline = time.time() + 15
+        with _httpx.Client(base_url="http://localhost:8765", timeout=5.0) as poll:
+            while time.time() < deadline:
+                time.sleep(1)
+                try:
+                    r2 = poll.get("/api/projects")
+                    if r2.status_code == 200:
+                        break
+                except Exception:
+                    pass
+            else:
+                pytest.fail("Daemon did not come back up within 15s after reload")
+        time.sleep(2)  # extra buffer so session pool settles
