@@ -931,6 +931,16 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await handle_git_hooks(project_path=project, install=(action == "install"))
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/wiki_lint", methods=["GET"], include_in_schema=False)
+    async def api_wiki_lint(request: Request) -> JSONResponse:
+        """Health-check the wiki: page count, stale pages, missing entries."""
+        from opencode_search.handlers._wiki import handle_wiki_lint
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_wiki_lint(project_path=project)
+        return JSONResponse(result)
+
     @mcp.custom_route("/api/import_cycles", methods=["GET"], include_in_schema=False)
     async def api_import_cycles(request: Request) -> JSONResponse:
         """Circular import dependencies — Tarjan SCC on file-level IMPORTS graph."""

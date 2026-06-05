@@ -368,6 +368,14 @@ class TestMCPManage:
             f"wiki_page_count not in kb_health; keys={list(data.keys())}"
         )
 
+    def test_manage_wiki_lint_endpoint(self, http, project):
+        """GET /api/wiki_lint must return wiki health info (page count, issues)."""
+        r = http.get("/api/wiki_lint", params={"project": project})
+        assert r.status_code == 200, f"wiki_lint failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "wiki_lint must return a dict"
+        assert "error" not in data, f"wiki_lint returned error: {data}"
+
 
 class TestMCPMetrics:
     """Verify stream error/success counters in /api/metrics."""
