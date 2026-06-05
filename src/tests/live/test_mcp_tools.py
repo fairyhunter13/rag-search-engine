@@ -351,3 +351,92 @@ class TestMCPMetrics:
         assert after > before, (
             f"stream_success_count did not increment: before={before}, after={after}"
         )
+
+
+# ---------------------------------------------------------------------------
+# business intelligence
+# ---------------------------------------------------------------------------
+
+class TestMCPBusiness:
+    """Business intelligence endpoints: feature_map, business_rules, process_flows, ask_business."""
+
+    def test_business_rules_returns_list(self, http, project):
+        r = http.get("/api/business_rules", params={"project": project})
+        assert r.status_code == 200, f"business_rules failed: {r.text[:200]}"
+        data = r.json()
+        assert "business_rules" in data or "error" in data, (
+            f"business_rules returned unexpected shape: {list(data.keys())}"
+        )
+        if "business_rules" in data:
+            assert isinstance(data["business_rules"], list), "business_rules must be a list"
+
+    def test_process_flows_returns_list(self, http, project):
+        r = http.get("/api/process_flows", params={"project": project})
+        assert r.status_code == 200, f"process_flows failed: {r.text[:200]}"
+        data = r.json()
+        assert "process_flows" in data or "error" in data, (
+            f"process_flows returned unexpected shape: {list(data.keys())}"
+        )
+        if "process_flows" in data:
+            assert isinstance(data["process_flows"], list), "process_flows must be a list"
+
+    @pytest.mark.slow
+    def test_ask_business_returns_answer(self, http, project):
+        r = http.get("/api/ask_business", params={
+            "project": project,
+            "q": "What are the main business processes in this project?",
+        })
+        assert r.status_code == 200, f"ask_business failed: {r.text[:200]}"
+        data = r.json()
+        has_answer = (
+            data.get("answer") or data.get("summary") or data.get("communities")
+            or data.get("error")
+        )
+        assert has_answer, f"ask_business returned empty response: {data}"
+
+
+# ---------------------------------------------------------------------------
+# admin / status endpoints
+# ---------------------------------------------------------------------------
+
+class TestMCPAdmin:
+    """Lightweight admin and status endpoints."""
+
+    def test_auto_pipeline_status_accessible(self, http):
+        r = http.get("/api/auto_pipeline_status")
+        assert r.status_code == 200, f"auto_pipeline_status failed: {r.text[:200]}"
+        data = r.json()
+        assert "enabled" in data, f"auto_pipeline_status missing 'enabled': {data}"
+        assert isinstance(data.get("events", []), list), "events must be a list"
+
+    def test_callflow_html_returns_html(self, http, project):
+        r = http.get("/api/callflow_html", params={
+            "project": project,
+            "symbol": "main",
+            "direction": "callees",
+            "depth": "3",
+            "format": "html",
+        })
+        assert r.status_code in (200, 404), f"callflow_html unexpected status: {r.status_code}"
+        if r.status_code == 200:
+            assert "<" in r.text, "callflow_html must return HTML content"
+
+    def test_callflow_mermaid_returns_text(self, http, project):
+        r = http.get("/api/callflow_html", params={
+            "project": project,
+            "symbol": "main",
+            "format": "mermaid",
+        })
+        assert r.status_code in (200, 404), f"callflow mermaid unexpected status: {r.status_code}"
+
+    def test_git_hooks_status_accessible(self, http, project):
+        r = http.get("/api/git_hooks", params={"project": project})
+        assert r.status_code == 200, f"git_hooks GET failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "git_hooks must return a dict"
+
+    def test_integrations_status_accessible(self, http):
+        r = http.get("/api/integrations_status")
+        assert r.status_code == 200, f"integrations_status failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, (dict, list)), "integrations_status must return a dict or list"
