@@ -16,7 +16,9 @@ DAEMON_URL = "http://localhost:8765"
 @pytest.fixture(scope="session")
 def http():
     """HTTP client connected to the live daemon. Skips if daemon is not running."""
-    with httpx.Client(base_url=DAEMON_URL, timeout=300.0) as client:
+    # retries=2: handles stale keepalive connections (server closes after N requests)
+    transport = httpx.HTTPTransport(retries=2)
+    with httpx.Client(base_url=DAEMON_URL, timeout=300.0, transport=transport) as client:
         try:
             client.get("/api/projects").raise_for_status()
         except Exception as exc:
