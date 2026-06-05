@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.slow]
 
 from .conftest import parse_sse  # noqa: E402
 

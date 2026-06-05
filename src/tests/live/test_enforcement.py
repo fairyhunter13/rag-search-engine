@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -226,6 +225,8 @@ class TestDaemonQueryProviderConfig:
 class TestChatModelReported:
     """Chat stream must report which model answered — proves routing is live."""
 
+    pytestmark = pytest.mark.slow
+
     def test_chat_done_reports_model(self, http, project):
         from .conftest import parse_sse
         r = http.post(
@@ -258,3 +259,34 @@ class TestChatModelReported:
             f"Expected intent=search; got {done.get('intent')!r}"
         )
         assert len(answer) > 20, f"Search answer too short: {answer!r}"
+
+
+# ---------------------------------------------------------------------------
+# opencode bridge — ~/.config/opencode/opencode.jsonc must force ollama
+# ---------------------------------------------------------------------------
+
+class TestOpencodeBridgeConfig:
+    """opencode.jsonc MCP bridge must isolate KB + query providers to ollama."""
+
+    _CONFIG = _HOME / ".config" / "opencode" / "opencode.jsonc"
+
+    def test_opencode_jsonc_exists(self):
+        assert self._CONFIG.exists(), (
+            f"~/.config/opencode/opencode.jsonc not found at {self._CONFIG}"
+        )
+
+    def test_opencode_kb_provider_is_ollama(self):
+        data = json.loads(self._CONFIG.read_text())
+        env = data.get("mcp", {}).get("opencode-search", {}).get("env", {})
+        assert env.get("OPENCODE_LLM_PROVIDER") == "ollama", (
+            "opencode MCP bridge must set OPENCODE_LLM_PROVIDER=ollama to prevent "
+            f"circular API calls; got env={env}"
+        )
+
+    def test_opencode_query_provider_is_ollama(self):
+        data = json.loads(self._CONFIG.read_text())
+        env = data.get("mcp", {}).get("opencode-search", {}).get("env", {})
+        assert env.get("OPENCODE_QUERY_LLM_PROVIDER") == "ollama", (
+            "opencode MCP bridge must set OPENCODE_QUERY_LLM_PROVIDER=ollama; "
+            f"got env={env}"
+        )
