@@ -215,6 +215,31 @@ def _prose_impact(result: dict, query: str) -> str:
     narrative = result.get("narrative") or result.get("summary", "")
     if narrative:
         return narrative
+
+    # handle_detect_impact returns {callers_by_depth, total_affected, symbol}
+    if result.get("error"):
+        return f"No impact data found for the query: **{query}**."
+
+    callers_by_depth: dict = result.get("callers_by_depth", {})
+    total = result.get("total_affected", 0)
+    symbol = result.get("symbol", query)
+
+    if callers_by_depth and total > 0:
+        lines = [f"**Impact analysis for `{symbol}`:** {total} caller(s) affected.\n"]
+        for depth_key in sorted(callers_by_depth.keys(), key=int):
+            callers = callers_by_depth[depth_key]
+            depth = int(depth_key)
+            label = "Direct callers" if depth == 1 else f"Depth-{depth} callers"
+            lines.append(f"{label} ({len(callers)}):")
+            for c in callers[:6]:
+                name = c.get("qualified_name") or c.get("name", "unknown")
+                file = c.get("file", "")
+                lines.append(f"- `{name}`" + (f" in `{file}`" if file else ""))
+            if len(callers) > 6:
+                lines.append(f"  … and {len(callers) - 6} more")
+        return "\n".join(lines)
+
+    # Legacy format: changed_symbols / affected_communities
     changed = result.get("changed_symbols", [])
     affected = result.get("affected_communities", [])
     if not changed and not affected:
