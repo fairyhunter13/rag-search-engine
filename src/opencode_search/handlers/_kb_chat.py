@@ -95,14 +95,18 @@ async def handle_kb_chat(
 # ── Context fetchers ──────────────────────────────────────────────────────────
 
 async def _fetch_code_context(
-    query: str, project_path: str, top_k: int
+    query: str,
+    project_path: str,
+    top_k: int,
+    extra_paths: list[str] | None = None,
 ) -> tuple[str, list[str], int]:
-    """Return (context_text, source_paths, count)."""
+    """Return (context_text, source_paths, count). extra_paths adds federation members."""
     try:
         from opencode_search.handlers._query import handle_search_code
+        all_paths = [project_path] + (extra_paths or [])
         result = await handle_search_code(
             query=query,
-            project_paths=[project_path],
+            project_paths=all_paths,
             top_k=top_k,
             use_rerank=False,
         )
@@ -204,6 +208,46 @@ async def _fetch_wiki_context(
     except Exception as exc:
         log.debug("kb_chat: wiki context fetch failed: %s", exc)
         return "", 0
+
+
+async def _fetch_hierarchy_communities(
+    project_path: str, max_count: int = 30
+) -> list[dict[str, Any]]:
+    """Return top-level (level=max) hierarchy communities for structural breadth coverage.
+
+    Vector similarity search finds semantically similar communities; this finds the
+    high-level cluster summaries that represent the whole codebase structurally.
+    Returns [] if no hierarchy has been built (max_level == 1).
+    """
+    def _load() -> list[dict[str, Any]]:
+        from opencode_search.config import load_registry
+        from opencode_search.graph.storage import GraphStorage
+        registry = load_registry()
+        entry = registry.get(project_path)
+        if not entry:
+            return []
+        gs = GraphStorage(entry.db_path)
+        max_lvl = gs.get_max_community_level()
+        if max_lvl <= 1:
+            return []
+        comms = gs.get_communities(level=max_lvl, order_by_size=True, limit=max_count)
+        return [
+            {
+                "id": c.id,
+                "title": c.title or "",
+                "summary": c.summary or "",
+                "semantic_type": c.semantic_type or "utility",
+                "node_count": c.node_count,
+            }
+            for c in comms
+            if c.title and c.summary
+        ]
+
+    try:
+        return await asyncio.to_thread(_load)
+    except Exception as exc:
+        log.debug("kb_chat: hierarchy communities fetch failed: %s", exc)
+        return []
 
 
 # ── LLM call strategies ────────────────────────────────────────────────────────

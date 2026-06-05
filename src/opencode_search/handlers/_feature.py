@@ -210,18 +210,32 @@ async def handle_ask_feature(
         log.debug("feature_trace LLM synthesis failed: %s", exc)
         synthesis = {"error": str(exc)}
 
-    # Infer involved services from file paths
-    services_from_files: list[str] = []
-    service_dirs: set[str] = set()
-    for c in call_chain_raw:
-        parts = Path(c["file"]).parts if c.get("file") else []
-        # Look for service-like directory names
-        for part in parts:
-            _svc_kw = ["service", "handler", "controller", "api", "repo"]
-            if any(keyword in part.lower() for keyword in _svc_kw):
-                service_dirs.add(part)
-    if service_dirs:
-        services_from_files = sorted(service_dirs)
+    # Derive involved services: prefer LLM synthesis result; if missing, ask LLM
+    # to infer from the call chain rather than using keyword-based path matching.
+    involved_services: list[str] = synthesis.get("involved_services") or []
+    if not involved_services and call_chain_raw:
+        try:
+            chain_files = list(dict.fromkeys(
+                c["file"] for c in call_chain_raw if c.get("file")
+            ))[:12]
+            svc_prompt = (
+                "From the following file paths in a call chain, list the distinct "
+                "service or subsystem names (usually top-level directory names). "
+                "Return a JSON array of strings, e.g. [\"auth\", \"payment\"]. "
+                "Return [] if the paths are all in one service.\n\n"
+                "Files:\n" + "\n".join(chain_files)
+            )
+            svc_raw = await asyncio.to_thread(
+                llm.chat,
+                [{"role": "user", "content": svc_prompt}],
+                max_tokens=64,
+            )
+            import re as _re
+            m = _re.search(r"\[.*?\]", (svc_raw or ""), _re.DOTALL)
+            if m:
+                involved_services = json.loads(m.group(0))
+        except Exception:
+            pass
 
     return {
         "status": "ok",
@@ -230,7 +244,7 @@ async def handle_ask_feature(
         "call_chain": call_chain_raw,
         "algorithm": synthesis.get("algorithm"),
         "design_rationale": synthesis.get("design_rationale"),
-        "involved_services": synthesis.get("involved_services", services_from_files),
+        "involved_services": involved_services,
         "key_design_decisions": synthesis.get("key_design_decisions", []),
         "communities": community_contexts,
     }

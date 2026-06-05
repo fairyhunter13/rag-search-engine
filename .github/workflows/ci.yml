@@ -5,6 +5,8 @@ on:
     branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
+  schedule:
+    - cron: "0 2 * * *"  # nightly at 02:00 UTC
 
 jobs:
   # ──────────────────────────────────────────────
@@ -64,11 +66,12 @@ jobs:
           test "${count:-0}" -eq 0 || (echo "ERROR: found non-live tests that can pass without real services" && exit 1)
 
   # ──────────────────────────────────────────────
-  # Live tests run on self-hosted GPU runner only
-  # (requires daemon :8765, Ollama :11434, RTX GPU)
+  # Fast live tests: enforcement, config, search,
+  # KB health — run on every push to main.
+  # Completes in <5 minutes on GPU runner.
   # ──────────────────────────────────────────────
-  live:
-    name: Live Tests (GPU runner)
+  live-fast:
+    name: Live Tests Fast (GPU runner)
     runs-on: self-hosted
     needs: quality
     if: github.ref == 'refs/heads/main'
@@ -79,19 +82,47 @@ jobs:
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
-      - name: Run live test suite
+      - name: Run fast live tests
         run: |
-          .venv/bin/pytest src/tests/live/ \
-            --ignore=src/tests/live/test_browser.py \
-            --ignore=src/tests/live/test_quality.py \
-            -q --tb=short
+          .venv/bin/pytest \
+            src/tests/live/test_enforcement.py \
+            src/tests/live/test_embedding.py \
+            src/tests/live/test_search.py \
+            src/tests/live/test_watcher.py \
+            -q --tb=short --timeout=120
+
+  # ──────────────────────────────────────────────
+  # Slow live tests: full E2E, chat quality, browser
+  # Run on schedule (nightly) — these take 15-30 min.
+  # ──────────────────────────────────────────────
+  live-slow:
+    name: Live Tests Slow (GPU runner, scheduled)
+    runs-on: self-hosted
+    needs: quality
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]'))
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify daemon is running
+        run: curl -sf http://localhost:8765/api/projects > /dev/null
+
+      - name: Run full E2E + chat tests
+        run: |
+          .venv/bin/pytest \
+            src/tests/live/test_astro_e2e.py \
+            src/tests/live/test_indexing.py \
+            src/tests/live/test_ask.py \
+            src/tests/live/test_chat.py \
+            src/tests/live/test_patterns.py \
+            -q --tb=short --timeout=600
 
       - name: Run quality gate tests
         run: |
           .venv/bin/pytest src/tests/live/test_quality.py \
-            -q --tb=short
+            -q --tb=short --timeout=300
 
       - name: Run browser tests
         run: |
           .venv/bin/pytest src/tests/live/test_browser.py \
-            --browser chromium --tb=short
+            --browser chromium --tb=short --timeout=120

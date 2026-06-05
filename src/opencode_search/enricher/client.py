@@ -705,6 +705,59 @@ class AnthropicClient(LLMClient):
         except urllib.error.URLError as exc:
             raise ConnectionError(f"Anthropic connection error: {exc.reason}") from exc
 
+    def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1024,
+    ) -> Iterator[str]:
+        """Yield content tokens from Anthropic SSE streaming API."""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/v1/messages",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": _ANTHROPIC_API_VERSION,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").rstrip("\n\r")
+                    if not line.startswith("data:"):
+                        continue
+                    payload_str = line[5:].strip()
+                    if not payload_str or payload_str == "[DONE]":
+                        continue
+                    try:
+                        evt = json.loads(payload_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if evt.get("type") == "content_block_delta":
+                        text = evt.get("delta", {}).get("text", "")
+                        if text:
+                            yield text
+                    elif evt.get("type") == "message_stop":
+                        break
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode()
+            if exc.code == 429 or _is_rate_limit(body):
+                raise RateLimitError(f"Anthropic rate-limited (HTTP {exc.code}): {body[:200]}") from exc
+            raise RuntimeError(f"Anthropic HTTP {exc.code}: {body}") from exc
+        except urllib.error.URLError as exc:
+            raise ConnectionError(f"Anthropic connection error: {exc.reason}") from exc
+
 
 # ---------------------------------------------------------------------------
 # OpenAI provider (also compatible with any OpenAI-compatible endpoint)
@@ -782,6 +835,57 @@ class OpenAIClient(LLMClient):
                 if not choices:
                     raise RuntimeError(f"OpenAI returned no choices: {body}")
                 return choices[0]["message"]["content"]
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode()
+            if exc.code == 429 or _is_rate_limit(body):
+                raise RateLimitError(f"OpenAI rate-limited (HTTP {exc.code}): {body[:200]}") from exc
+            raise RuntimeError(f"OpenAI HTTP {exc.code}: {body}") from exc
+        except urllib.error.URLError as exc:
+            raise ConnectionError(f"OpenAI connection error: {exc.reason}") from exc
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1024,
+    ) -> Iterator[str]:
+        """Yield content tokens from OpenAI SSE streaming API."""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/v1/chat/completions",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").rstrip("\n\r")
+                    if not line.startswith("data:"):
+                        continue
+                    payload_str = line[5:].strip()
+                    if not payload_str or payload_str == "[DONE]":
+                        continue
+                    try:
+                        evt = json.loads(payload_str)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = evt.get("choices", [])
+                    if choices:
+                        text = choices[0].get("delta", {}).get("content", "")
+                        if text:
+                            yield text
         except urllib.error.HTTPError as exc:
             body = exc.read().decode()
             if exc.code == 429 or _is_rate_limit(body):
@@ -1008,6 +1112,41 @@ class FallbackLLMClient(LLMClient):
                 type(self.primary).__name__, type(self.fallback).__name__,
             )
             return self.fallback.chat(messages, temperature=temperature, max_tokens=max_tokens)
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1024,
+    ) -> Iterator[str]:
+        """Stream from primary if it supports streaming; otherwise yield full response as one chunk.
+
+        On RateLimitError during the stream, falls back to fallback.chat() and yields as one chunk.
+        """
+        import logging
+        _log = logging.getLogger(__name__)
+        if hasattr(self.primary, "stream_chat"):
+            try:
+                yield from self.primary.stream_chat(messages, temperature=temperature, max_tokens=max_tokens)
+                return
+            except RateLimitError:
+                _log.warning(
+                    "Primary LLM (%s) rate-limited during streaming — falling back to %s",
+                    type(self.primary).__name__, type(self.fallback).__name__,
+                )
+        else:
+            # Primary has no stream_chat — call it as a blocking call, yield result as one chunk
+            try:
+                yield self.primary.chat(messages, temperature=temperature, max_tokens=max_tokens)
+                return
+            except RateLimitError:
+                _log.warning(
+                    "Primary LLM (%s) rate-limited — falling back to %s",
+                    type(self.primary).__name__, type(self.fallback).__name__,
+                )
+        result = self.fallback.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        yield result
 
 
 # ---------------------------------------------------------------------------

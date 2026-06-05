@@ -80,7 +80,6 @@ async def handle_semantic_trace(
         from_symbol=from_symbol,
         to_symbol=to_symbol,
         project_path=project_path,
-        include_federation=include_federation,
     )
 
     path_nodes = path_data.get("path", [])

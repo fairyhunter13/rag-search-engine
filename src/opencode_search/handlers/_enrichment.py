@@ -198,33 +198,58 @@ async def _enrich_symbols(gs: Any, llm: Any) -> int:
 
 _LLM_CONCURRENCY: int = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", "2"))
 
-_SEMANTIC_TYPE_RULES: list[tuple[list[str], str]] = [
-    (["handler", "router", "controller", "endpoint", "rest", "grpc", "http", "api", "middleware", "interceptor", "gateway"], "api_boundary"),
-    (["model", "schema", "entity", "table", "record", "struct", "dto", "domain", "aggregate"], "data_model"),
-    (["workflow", "pipeline", "process", "flow", "job", "scheduler", "task", "queue", "batch"], "business_process"),
-    (["rule", "policy", "constraint", "validation", "guard", "check", "compliance"], "business_rule"),
-    (["auth", "payment", "checkout", "order", "cart", "loyalty", "promo", "campaign", "feature"], "feature"),
-    (["deploy", "docker", "k8s", "config", "env", "cache", "redis", "kafka", "infra", "monitoring", "observability"], "infrastructure"),
-]
+_VALID_SEMANTIC_TYPES = frozenset([
+    "api_boundary", "data_model", "business_process", "business_rule",
+    "feature", "infrastructure", "utility",
+])
+
+_SEMANTIC_TYPE_SYSTEM = (
+    "Classify the following code community into exactly ONE semantic type.\n\n"
+    "Types:\n"
+    "  api_boundary    — HTTP/gRPC handlers, routers, middleware, API endpoints, interceptors\n"
+    "  data_model      — entities, schemas, DTOs, database models, domain objects\n"
+    "  business_process — workflows, pipelines, jobs, queues, event flows, schedulers\n"
+    "  business_rule   — validation logic, policies, constraints, guards, compliance checks\n"
+    "  feature         — product features, user-facing functionality, domain capabilities\n"
+    "  infrastructure  — deployment, config, caching, monitoring, messaging, external adapters\n"
+    "  utility         — helpers, common utilities, shared/generic code\n\n"
+    "Respond with ONLY the type name, nothing else."
+)
 
 
-def _classify_semantic_type_fast(title: str, summary: str = "") -> str:
-    """Rule-based semantic type from title/summary — O(1), no LLM needed."""
-    text = f"{title} {summary[:200]}".lower()
-    for keywords, stype in _SEMANTIC_TYPE_RULES:
-        if any(kw in text for kw in keywords):
-            return stype
+async def _classify_semantic_type_llm(title: str, summary: str, llm: Any) -> str:
+    """LLM-based semantic type classification — accurate, no keyword heuristics."""
+    import asyncio
+    try:
+        messages = [
+            {"role": "system", "content": _SEMANTIC_TYPE_SYSTEM},
+            {"role": "user", "content": f"Title: {title}\nSummary: {summary[:400]}"},
+        ]
+        raw = await asyncio.to_thread(llm.chat, messages, max_tokens=16)
+        text = (raw or "").strip().lower().split()[0] if raw else ""
+        if text in _VALID_SEMANTIC_TYPES:
+            return text
+    except Exception:
+        pass
     return "utility"
 
 
-def _backfill_semantic_types(gs: Any, all_communities: list[Any]) -> int:
-    """Assign semantic_type to enriched communities that have none, without LLM."""
+async def _backfill_semantic_types(gs: Any, all_communities: list[Any], llm: Any) -> int:
+    """LLM-classify semantic_type for enriched communities that have none."""
+    import asyncio
     missing = [c for c in all_communities if c.title and not c.semantic_type]
     if not missing:
         return 0
-    for c in missing:
-        c.semantic_type = _classify_semantic_type_fast(c.title or "", c.summary or "")
-        gs.upsert_community(c)
+    sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+
+    async def _classify_one(c: Any) -> None:
+        async with sem:
+            c.semantic_type = await _classify_semantic_type_llm(
+                c.title or "", c.summary or "", llm
+            )
+            gs.upsert_community(c)
+
+    await asyncio.gather(*[_classify_one(c) for c in missing])
     return len(missing)
 
 
@@ -255,11 +280,11 @@ async def _enrich_communities(
         communities = [c for c in all_communities if not c.title][:max_communities]
 
     if not communities:
-        # Fast rule-based backfill: assign semantic_type for titled communities
-        # that never got it (enriched before semantic_type was introduced).
-        backfill_count = _backfill_semantic_types(gs, all_communities)
+        # LLM backfill: assign semantic_type for enriched communities that never got it
+        # (enriched before semantic_type field was introduced).
+        backfill_count = await _backfill_semantic_types(gs, all_communities, llm)
         if backfill_count:
-            log.info("backfilled semantic_type for %d communities", backfill_count)
+            log.info("backfilled semantic_type for %d communities via LLM", backfill_count)
         return backfill_count
 
     log.info(
