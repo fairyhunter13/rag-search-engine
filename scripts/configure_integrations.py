@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -99,14 +98,38 @@ def configure_codex(check_only: bool = False) -> ConfigResult:
                 path=str(config_path),
             )
 
-    # Check if already configured
+    _ENV_VARS = {
+        "OPENCODE_LLM_PROVIDER": "ollama",
+        "OPENCODE_QUERY_LLM_PROVIDER": "ollama",
+    }
+    _ENV_SNIPPET = (
+        '\n[mcp_servers.opencode-search.env]\n'
+        'OPENCODE_LLM_PROVIDER = "ollama"\n'
+        'OPENCODE_QUERY_LLM_PROVIDER = "ollama"\n'
+    )
+
+    # Check if already fully configured (entry + env vars)
     mcp_servers = existing.get("mcp_servers", {})
-    if "opencode-search" in mcp_servers:
-        existing_cmd = mcp_servers["opencode-search"].get("command", "")
-        if str(_VENV_PYTHON) in str(existing_cmd) or "opencode_search" in str(existing_cmd):
+    entry = mcp_servers.get("opencode-search", {})
+    if entry:
+        existing_cmd = entry.get("command", "")
+        has_cmd = str(_VENV_PYTHON) in str(existing_cmd) or "opencode_search" in str(existing_cmd)
+        has_env = entry.get("env", {}) == _ENV_VARS or (
+            'OPENCODE_LLM_PROVIDER = "ollama"' in config_path.read_text()
+        )
+        if has_cmd and has_env:
             return ConfigResult(
                 tool="codex", status="already_ok",
                 message="opencode-search already configured in codex config.toml",
+                path=str(config_path),
+            )
+        if has_cmd and not has_env and not check_only:
+            # Entry exists but env vars missing — append env section
+            existing_text = config_path.read_text()
+            config_path.write_text(existing_text + _ENV_SNIPPET)
+            return ConfigResult(
+                tool="codex", status="configured",
+                message=f"Added ollama env vars to existing opencode-search entry in {config_path}",
                 path=str(config_path),
             )
 
@@ -124,6 +147,7 @@ def configure_codex(check_only: bool = False) -> ConfigResult:
         existing["mcp_servers"]["opencode-search"] = {
             "command": _MCP_COMMAND,
             "args": _MCP_ARGS,
+            "env": _ENV_VARS,
         }
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_bytes(tomli_w.dumps(existing).encode())
@@ -139,6 +163,7 @@ def configure_codex(check_only: bool = False) -> ConfigResult:
             '\n[mcp_servers.opencode-search]\n'
             f'command = "{_MCP_COMMAND}"\n'
             f'args = {json.dumps(_MCP_ARGS)}\n'
+            + _ENV_SNIPPET
         )
         existing_text = config_path.read_text() if config_path.exists() else ""
         if "opencode-search" not in existing_text:
@@ -200,7 +225,7 @@ def verify_claude_code(check_only: bool = False) -> ConfigResult:
     if not settings_path.exists():
         return ConfigResult(
             tool="claude-code(settings)", status="missing",
-            message=f"~/.claude/settings.json not found",
+            message="~/.claude/settings.json not found",
             path=str(settings_path),
         )
 
@@ -211,13 +236,13 @@ def verify_claude_code(check_only: bool = False) -> ConfigResult:
         if has_ocs:
             return ConfigResult(
                 tool="claude-code(settings)", status="already_ok",
-                message=f"opencode-search MCP configured in ~/.claude/settings.json",
+                message="opencode-search MCP configured in ~/.claude/settings.json",
                 path=str(settings_path),
             )
         else:
             return ConfigResult(
                 tool="claude-code(settings)", status="missing",
-                message=f"opencode-search NOT in ~/.claude/settings.json mcpServers",
+                message="opencode-search NOT in ~/.claude/settings.json mcpServers",
                 path=str(settings_path),
             )
     except Exception as exc:
@@ -234,52 +259,67 @@ def verify_claude_md() -> ConfigResult:
     if claude_md.exists() and "opencode-search" in claude_md.read_text():
         return ConfigResult(
             tool="claude-code(CLAUDE.md)", status="already_ok",
-            message=f"opencode-search instructions in ~/.claude/CLAUDE.md",
+            message="opencode-search instructions in ~/.claude/CLAUDE.md",
             path=str(claude_md),
         )
     return ConfigResult(
         tool="claude-code(CLAUDE.md)", status="missing",
-        message=f"opencode-search instructions missing from ~/.claude/CLAUDE.md",
+        message="opencode-search instructions missing from ~/.claude/CLAUDE.md",
         path=str(claude_md),
     )
 
 
-def verify_opencode() -> ConfigResult:
-    """Verify ~/.config/opencode/opencode.jsonc has MCP entry."""
+def verify_opencode(check_only: bool = False) -> ConfigResult:
+    """Verify (and optionally fix) ~/.config/opencode/opencode.jsonc has MCP entry + ollama env."""
     config_path = Path.home() / ".config" / "opencode" / "opencode.jsonc"
     if not config_path.exists():
         return ConfigResult(
             tool="opencode(config)", status="missing",
-            message=f"~/.config/opencode/opencode.jsonc not found",
+            message="~/.config/opencode/opencode.jsonc not found",
             path=str(config_path),
         )
     try:
         import json
-        data = json.loads(config_path.read_text())
-        env = data.get("mcp", {}).get("opencode-search", {}).get("env", {})
+        text = config_path.read_text()
+        data = json.loads(text)
+        entry = data.get("mcp", {}).get("opencode-search", {})
+        if not entry:
+            return ConfigResult(
+                tool="opencode(config)", status="missing",
+                message="opencode-search NOT in opencode.jsonc",
+                path=str(config_path),
+            )
+        env = entry.get("env", {})
         has_env = (
             env.get("OPENCODE_LLM_PROVIDER") == "ollama"
             and env.get("OPENCODE_QUERY_LLM_PROVIDER") == "ollama"
         )
-        if "opencode-search" in data.get("mcp", {}):
-            if has_env:
-                return ConfigResult(
-                    tool="opencode(config)", status="already_ok",
-                    message="opencode-search MCP configured with ollama env vars in opencode.jsonc",
-                    path=str(config_path),
-                )
+        if has_env:
             return ConfigResult(
-                tool="opencode(config)", status="warning",
-                message="opencode-search MCP found but missing OPENCODE_LLM_PROVIDER/OPENCODE_QUERY_LLM_PROVIDER=ollama env vars",
+                tool="opencode(config)", status="already_ok",
+                message="opencode-search MCP configured with ollama env vars in opencode.jsonc",
                 path=str(config_path),
             )
-    except Exception:
-        pass
-    return ConfigResult(
-        tool="opencode(config)", status="missing",
-        message="opencode-search NOT in opencode.jsonc",
-        path=str(config_path),
-    )
+        if check_only:
+            return ConfigResult(
+                tool="opencode(config)", status="warning",
+                message="opencode-search MCP found but missing ollama env vars",
+                path=str(config_path),
+            )
+        # Fix: inject env vars into the entry
+        entry["env"] = {"OPENCODE_LLM_PROVIDER": "ollama", "OPENCODE_QUERY_LLM_PROVIDER": "ollama"}
+        config_path.write_text(json.dumps(data, indent=2) + "\n")
+        return ConfigResult(
+            tool="opencode(config)", status="configured",
+            message=f"Added ollama env vars to opencode-search in {config_path}",
+            path=str(config_path),
+        )
+    except Exception as exc:
+        return ConfigResult(
+            tool="opencode(config)", status="error",
+            message=f"Failed to update {config_path}: {exc}",
+            path=str(config_path),
+        )
 
 
 def verify_bash_aliases() -> ConfigResult:
@@ -288,18 +328,18 @@ def verify_bash_aliases() -> ConfigResult:
     if aliases_path.exists() and ("ocs=" in aliases_path.read_text() or "opencode_search" in aliases_path.read_text()):
         return ConfigResult(
             tool="bash_aliases", status="already_ok",
-            message=f"opencode-search aliases defined in ~/.bash_aliases",
+            message="opencode-search aliases defined in ~/.bash_aliases",
             path=str(aliases_path),
         )
     return ConfigResult(
         tool="bash_aliases", status="missing",
-        message=f"opencode-search aliases missing from ~/.bash_aliases",
+        message="opencode-search aliases missing from ~/.bash_aliases",
         path=str(aliases_path),
     )
 
 
-def verify_hermes() -> ConfigResult:
-    """Verify ~/.hermes/config.yaml has opencode-search MCP entry with ollama env vars."""
+def verify_hermes(check_only: bool = False) -> ConfigResult:
+    """Verify (and optionally fix) ~/.hermes/config.yaml has opencode-search MCP + ollama env."""
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
         return ConfigResult(tool="hermes", status="skipped", message="~/.hermes/config.yaml not found (hermes not installed)", path=str(config_path))
@@ -309,12 +349,23 @@ def verify_hermes() -> ConfigResult:
     has_env = "OPENCODE_LLM_PROVIDER: ollama" in content and "OPENCODE_QUERY_LLM_PROVIDER: ollama" in content
     if has_env:
         return ConfigResult(tool="hermes", status="already_ok", message="opencode-search MCP with ollama env vars in ~/.hermes/config.yaml", path=str(config_path))
-    return ConfigResult(tool="hermes", status="warning", message="opencode-search MCP found but missing OPENCODE_LLM_PROVIDER/OPENCODE_QUERY_LLM_PROVIDER=ollama in env section", path=str(config_path))
+    if check_only:
+        return ConfigResult(tool="hermes", status="warning", message="opencode-search MCP found but missing OPENCODE_LLM_PROVIDER/OPENCODE_QUERY_LLM_PROVIDER=ollama in env section", path=str(config_path))
+    # Fix: insert env vars after "enabled: true" or after the last arg line
+    import re
+    env_block = "    env:\n      OPENCODE_LLM_PROVIDER: ollama\n      OPENCODE_QUERY_LLM_PROVIDER: ollama\n"
+    if "enabled: true" in content:
+        fixed = content.replace("    enabled: true\n", "    enabled: true\n" + env_block, 1)
+    elif "bridge-stdio" in content:
+        fixed = re.sub(r"(    - bridge-stdio\n)", r"\1" + env_block, content, count=1)
+    else:
+        return ConfigResult(tool="hermes", status="warning", message="Could not locate insertion point for env vars in hermes config", path=str(config_path))
+    config_path.write_text(fixed, encoding="utf-8")
+    return ConfigResult(tool="hermes", status="configured", message=f"Added ollama env vars to opencode-search in {config_path}", path=str(config_path))
 
 
 def verify_git_hook(check_only: bool = False) -> ConfigResult:
     """Install a git pre-push hook that runs prerelease.py --fast before push to main."""
-    import subprocess
     try:
         result = subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True, text=True, cwd=str(Path(__file__).parent.parent))
         if result.returncode != 0:
@@ -362,9 +413,9 @@ def run_all(check_only: bool = False) -> list[ConfigResult]:
     results.append(configure_codex_agents_md(check_only=check_only))
     results.append(verify_claude_code(check_only=check_only))
     results.append(verify_claude_md())
-    results.append(verify_opencode())
+    results.append(verify_opencode(check_only=check_only))
     results.append(verify_bash_aliases())
-    results.append(verify_hermes())
+    results.append(verify_hermes(check_only=check_only))
     results.append(verify_git_hook(check_only=check_only))
     return results
 
@@ -382,7 +433,7 @@ def main() -> int:
         print(json.dumps([dataclasses.asdict(r) for r in results], indent=2))
     else:
         print(f"\n{'='*60}")
-        print(f"  Integration Configuration")
+        print("  Integration Configuration")
         print(f"{'='*60}")
         icons = {"configured": "✅", "already_ok": "✅", "missing": "🔴", "skipped": "⏭️", "error": "❌"}
         for r in results:
