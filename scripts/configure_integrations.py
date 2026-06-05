@@ -253,16 +253,31 @@ def verify_opencode() -> ConfigResult:
             message=f"~/.config/opencode/opencode.jsonc not found",
             path=str(config_path),
         )
-    content = config_path.read_text()
-    if "opencode-search" in content:
-        return ConfigResult(
-            tool="opencode(config)", status="already_ok",
-            message=f"opencode-search MCP configured in opencode.jsonc",
-            path=str(config_path),
+    try:
+        import json
+        data = json.loads(config_path.read_text())
+        env = data.get("mcp", {}).get("opencode-search", {}).get("env", {})
+        has_env = (
+            env.get("OPENCODE_LLM_PROVIDER") == "ollama"
+            and env.get("OPENCODE_QUERY_LLM_PROVIDER") == "ollama"
         )
+        if "opencode-search" in data.get("mcp", {}):
+            if has_env:
+                return ConfigResult(
+                    tool="opencode(config)", status="already_ok",
+                    message="opencode-search MCP configured with ollama env vars in opencode.jsonc",
+                    path=str(config_path),
+                )
+            return ConfigResult(
+                tool="opencode(config)", status="warning",
+                message="opencode-search MCP found but missing OPENCODE_LLM_PROVIDER/OPENCODE_QUERY_LLM_PROVIDER=ollama env vars",
+                path=str(config_path),
+            )
+    except Exception:
+        pass
     return ConfigResult(
         tool="opencode(config)", status="missing",
-        message=f"opencode-search NOT in opencode.jsonc",
+        message="opencode-search NOT in opencode.jsonc",
         path=str(config_path),
     )
 
@@ -284,14 +299,17 @@ def verify_bash_aliases() -> ConfigResult:
 
 
 def verify_hermes() -> ConfigResult:
-    """Verify ~/.hermes/config.yaml has opencode-search MCP entry."""
+    """Verify ~/.hermes/config.yaml has opencode-search MCP entry with ollama env vars."""
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
         return ConfigResult(tool="hermes", status="skipped", message="~/.hermes/config.yaml not found (hermes not installed)", path=str(config_path))
     content = config_path.read_text(encoding="utf-8", errors="replace")
-    if "opencode-search" in content:
-        return ConfigResult(tool="hermes", status="already_ok", message="opencode-search MCP in ~/.hermes/config.yaml", path=str(config_path))
-    return ConfigResult(tool="hermes", status="missing", message="opencode-search MCP not found in ~/.hermes/config.yaml", path=str(config_path))
+    if "opencode-search" not in content:
+        return ConfigResult(tool="hermes", status="missing", message="opencode-search MCP not found in ~/.hermes/config.yaml", path=str(config_path))
+    has_env = "OPENCODE_LLM_PROVIDER: ollama" in content and "OPENCODE_QUERY_LLM_PROVIDER: ollama" in content
+    if has_env:
+        return ConfigResult(tool="hermes", status="already_ok", message="opencode-search MCP with ollama env vars in ~/.hermes/config.yaml", path=str(config_path))
+    return ConfigResult(tool="hermes", status="warning", message="opencode-search MCP found but missing OPENCODE_LLM_PROVIDER/OPENCODE_QUERY_LLM_PROVIDER=ollama in env section", path=str(config_path))
 
 
 def verify_git_hook(check_only: bool = False) -> ConfigResult:
