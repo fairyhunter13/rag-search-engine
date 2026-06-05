@@ -144,6 +144,19 @@ class TestPulseView:
         has_numbers = any(c.isdigit() for c in content)
         assert has_numbers, "Pulse view contains no numeric data"
 
+    def test_pulse_stream_health_tile_present(self, page):
+        """Stream Health KPI tile must be rendered in the Pulse view."""
+        page.goto(DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        pulse = page.locator("button:has-text('Pulse'), a:has-text('Pulse'), [data-tab='pulse']").first
+        if pulse.count() > 0:
+            pulse.click()
+        page.wait_for_timeout(1500)
+        tile = page.locator("#tile-stream")
+        assert tile.count() > 0, "Stream Health tile (#tile-stream) not found in Pulse view"
+        kpi = page.locator("#kpi-stream")
+        assert kpi.count() > 0, "Stream Health KPI value (#kpi-stream) not found"
+
 
 # ---------------------------------------------------------------------------
 # View: Chat — basic behavior
