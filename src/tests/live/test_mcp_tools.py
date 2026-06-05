@@ -319,6 +319,7 @@ class TestMCPManage:
         and should not run alongside the fast suite to avoid connection errors.
         """
         import time
+
         import httpx as _httpx
         r = http.post("/api/reload")
         assert r.status_code == 200, f"reload failed: {r.status_code} {r.text[:200]}"
@@ -486,3 +487,239 @@ class TestMCPAdmin:
         assert has_analysis, (
             f"/api/debug must return analysis/answer/summary/root_cause/files; got keys: {list(data.keys())}"
         )
+
+
+# ---------------------------------------------------------------------------
+# extended coverage — dedicated routes not covered via overview/graph params
+# ---------------------------------------------------------------------------
+
+class TestMCPExtended:
+    """Dedicated route coverage for endpoints not exercised via overview/graph params."""
+
+    def test_graph_export_json_returns_graph_data(self, http, project):
+        """GET /api/graph_export?format=json must return nodes/edges dict."""
+        r = http.get("/api/graph_export", params={"project": project, "format": "json", "max_nodes": "200"})
+        assert r.status_code == 200, f"graph_export failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "graph_export must return a dict"
+        has_graph = "nodes" in data or "edges" in data or "graph" in data or "error" in data
+        assert has_graph, f"graph_export missing nodes/edges/graph: {list(data.keys())}"
+
+    def test_metrics_history_returns_time_series(self, http):
+        """GET /api/metrics/history must return bucketed time series arrays."""
+        r = http.get("/api/metrics/history", params={"hours": "1", "bucket_m": "5"})
+        assert r.status_code == 200, f"metrics/history failed: {r.text[:200]}"
+        data = r.json()
+        assert "timestamps" in data, f"metrics/history missing timestamps: {list(data.keys())}"
+        assert "latency_p50" in data, f"metrics/history missing latency_p50: {list(data.keys())}"
+        assert isinstance(data["timestamps"], list), "timestamps must be a list"
+
+    def test_alerts_get_returns_rules_and_violations(self, http):
+        """GET /api/alerts must return alert rules and current violation status."""
+        r = http.get("/api/alerts")
+        assert r.status_code == 200, f"alerts GET failed: {r.text[:200]}"
+        data = r.json()
+        assert "rules" in data, f"alerts missing rules: {list(data.keys())}"
+        assert "violations" in data, f"alerts missing violations: {list(data.keys())}"
+        assert isinstance(data["rules"], list), "rules must be a list"
+
+    def test_verify_status_returns_dict(self, http):
+        """GET /api/verify_status must return a dict (even if no runs yet)."""
+        r = http.get("/api/verify_status")
+        assert r.status_code == 200, f"verify_status failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "verify_status must return a dict"
+
+    def test_prerelease_status_returns_data_or_404(self, http):
+        """GET /api/prerelease_status returns report JSON or 404 if no report exists."""
+        r = http.get("/api/prerelease_status")
+        assert r.status_code in (200, 404), f"prerelease_status unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "prerelease_status must return a dict"
+
+    def test_qa_status_returns_data_or_404(self, http):
+        """GET /api/qa_status returns QA report JSON or 404 if no report exists."""
+        r = http.get("/api/qa_status")
+        assert r.status_code in (200, 404), f"qa_status unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "qa_status must return a dict"
+
+    def test_tree_html_returns_html(self, http, project):
+        """GET /api/tree_html?format=html must return an HTML string."""
+        r = http.get("/api/tree_html", params={"project": project, "format": "html", "max_files": "500"})
+        assert r.status_code == 200, f"tree_html failed: {r.text[:200]}"
+        assert "text/html" in r.headers.get("content-type", "") or "<" in r.text, (
+            "tree_html must return HTML"
+        )
+
+    def test_tree_html_json_returns_dict(self, http, project):
+        """GET /api/tree_html?format=json must return a tree dict."""
+        r = http.get("/api/tree_html", params={"project": project, "format": "json", "max_files": "500"})
+        assert r.status_code == 200, f"tree_html JSON failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "tree_html JSON must return a dict"
+        has_tree = "tree" in data or "files" in data or "root" in data or "error" in data
+        assert has_tree, f"tree_html JSON missing tree/files/root: {list(data.keys())}"
+
+    def test_service_mesh_dedicated_route(self, http, project):
+        """GET /api/service_mesh (dedicated route, not overview?what=service_mesh)."""
+        r = http.get("/api/service_mesh", params={"project": project})
+        assert r.status_code == 200, f"service_mesh failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "service_mesh must return a dict"
+
+    def test_surprising_connections_dedicated_route(self, http, project):
+        """GET /api/surprising_connections (dedicated route, not overview?what=surprising_connections)."""
+        r = http.get("/api/surprising_connections", params={"project": project})
+        assert r.status_code == 200, f"surprising_connections failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "surprising_connections must return a dict"
+
+    def test_feature_map_dedicated_route(self, http, project):
+        """GET /api/feature_map (dedicated route, not overview?what=feature_map)."""
+        r = http.get("/api/feature_map", params={"project": project})
+        assert r.status_code == 200, f"feature_map failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "feature_map must return a dict"
+
+    def test_pr_impact_returns_impact(self, http, project):
+        """GET /api/pr_impact must return impact analysis for recent changes."""
+        r = http.get("/api/pr_impact", params={"project": project})
+        assert r.status_code == 200, f"pr_impact failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "pr_impact must return a dict"
+
+    def test_graph_diff_dedicated_route(self, http, project):
+        """GET /api/graph_diff (dedicated route) must return added/removed symbols."""
+        r = http.get("/api/graph_diff", params={"project": project})
+        assert r.status_code == 200, f"graph_diff failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "graph_diff must return a dict"
+
+    def test_import_cycles_dedicated_route(self, http, project):
+        """GET /api/import_cycles (dedicated route) must return cycle info."""
+        r = http.get("/api/import_cycles", params={"project": project})
+        assert r.status_code == 200, f"import_cycles failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "import_cycles must return a dict"
+
+    def test_suggested_questions_dedicated_route(self, http, project):
+        """GET /api/suggested_questions (dedicated route) must return questions."""
+        r = http.get("/api/suggested_questions", params={"project": project})
+        assert r.status_code == 200, f"suggested_questions failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "suggested_questions must return a dict"
+
+    def test_analyze_patterns_triggers_job(self, http, project):
+        """POST /api/analyze_patterns must return a job_id for async tracking."""
+        r = http.post("/api/analyze_patterns", params={"project": project})
+        assert r.status_code == 200, f"analyze_patterns failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "analyze_patterns must return a dict"
+        has_job = "job_id" in data or "error" in data or "status" in data
+        assert has_job, f"analyze_patterns missing job_id/error/status: {list(data.keys())}"
+
+    def test_jobs_by_id_accessible(self, http):
+        """GET /api/jobs returns list; GET /api/jobs/{id} returns details for first job."""
+        r = http.get("/api/jobs")
+        assert r.status_code == 200, f"jobs list failed: {r.text[:200]}"
+        data = r.json()
+        jobs = data.get("jobs", [])
+        if jobs:
+            job_id = jobs[0].get("id") or jobs[0].get("job_id")
+            if job_id:
+                r2 = http.get(f"/api/jobs/{job_id}")
+                assert r2.status_code in (200, 404), f"jobs/{job_id} unexpected status: {r2.status_code}"
+
+    @pytest.mark.slow
+    def test_feature_ask_returns_trace(self, http, project):
+        """GET /api/feature?q=...&project=... must return feature trace (calls LLM)."""
+        r = http.get("/api/feature", params={
+            "project": project,
+            "q": "How does the indexer work?",
+        })
+        assert r.status_code == 200, f"/api/feature failed: {r.text[:300]}"
+        data = r.json()
+        assert isinstance(data, dict), f"/api/feature must return a dict; got {type(data)}"
+        has_content = any(k in data for k in ("answer", "trace", "result", "summary", "text", "error"))
+        assert has_content, f"/api/feature missing content keys: {list(data.keys())}"
+
+    def test_alerts_post_saves_rules(self, http):
+        """POST /api/alerts with a rule list must save and return saved count."""
+        rules = [
+            {"id": "test_rule", "name": "Test alert", "metric": "latency_p95_ms", "op": ">", "threshold": 9999, "enabled": False}
+        ]
+        r = http.post("/api/alerts", json={"rules": rules})
+        assert r.status_code == 200, f"alerts POST failed: {r.text[:200]}"
+        data = r.json()
+        assert "saved" in data or "error" in data, f"alerts POST missing saved/error: {list(data.keys())}"
+
+    def test_build_hierarchy_triggers_job(self, http, project):
+        """POST /api/build_hierarchy must start a background job or return sync result."""
+        r = http.post("/api/build_hierarchy", json={"project": project})
+        assert r.status_code == 200, f"build_hierarchy failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "build_hierarchy must return a dict"
+        has_result = any(k in data for k in ("job_id", "status", "error", "levels", "communities"))
+        assert has_result, f"build_hierarchy missing expected keys: {list(data.keys())}"
+
+    def test_impact_narrative_dedicated_route(self, http, project):
+        """GET /api/impact_narrative (dedicated route) must return narrative for a symbol."""
+        r = http.get("/api/impact_narrative", params={"project": project, "symbol": "main"})
+        assert r.status_code in (200, 404), f"impact_narrative unexpected status: {r.status_code}"
+        if r.status_code == 200:
+            data = r.json()
+            assert isinstance(data, dict), "impact_narrative must return a dict"
+
+    def test_semantic_trace_dedicated_route(self, http, project):
+        """GET /api/semantic_trace (dedicated route) must return trace or error."""
+        r = http.get("/api/semantic_trace", params={
+            "project": project,
+            "from": "index",
+            "to": "storage",
+        })
+        assert r.status_code == 200, f"semantic_trace dedicated route failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "semantic_trace must return a dict"
+
+    def test_events_stream_returns_sse(self, http):
+        """GET /api/events/stream?max_events=1 must return an SSE event."""
+        r = http.get("/api/events/stream", params={"max_events": "1"}, timeout=15.0)
+        assert r.status_code == 200, f"events/stream failed: {r.status_code}"
+        content_type = r.headers.get("content-type", "")
+        has_sse = "text/event-stream" in content_type or "data:" in r.text
+        assert has_sse, f"events/stream must be SSE; content-type={content_type}, body={r.text[:100]}"
+
+    def test_run_prerelease_starts_task(self, http):
+        """POST /api/run_prerelease must return a task_id (or 503 if script not found)."""
+        r = http.post("/api/run_prerelease", json={})
+        assert r.status_code in (200, 503), f"run_prerelease unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "run_prerelease must return a dict"
+        if r.status_code == 200:
+            assert "task_id" in data or "status" in data, f"run_prerelease missing task_id/status: {list(data.keys())}"
+
+    def test_run_qa_starts_task(self, http):
+        """POST /api/run_qa must return a task_id (or 503 if script not found)."""
+        r = http.post("/api/run_qa", json={})
+        assert r.status_code in (200, 503), f"run_qa unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "run_qa must return a dict"
+        if r.status_code == 200:
+            assert "task_id" in data or "status" in data, f"run_qa missing task_id/status: {list(data.keys())}"
+
+    def test_auto_fix_trigger_returns_task_or_503(self, http):
+        """POST /api/auto_fix_trigger must return a task_id or 503 if selfheal.py is absent."""
+        r = http.post("/api/auto_fix_trigger", json={})
+        assert r.status_code in (200, 503), f"auto_fix_trigger unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "auto_fix_trigger must return a dict"
+        if r.status_code == 200:
+            assert "task_id" in data or "status" in data, f"auto_fix_trigger missing task_id/status: {list(data.keys())}"
+
+    def test_job_cancel_returns_result(self, http):
+        """POST /api/jobs/{job_id}/cancel must return a 200 or 404 (not 5xx)."""
+        r = http.post("/api/jobs/nonexistent-job/cancel")
+        assert r.status_code in (200, 404), f"job cancel unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "job cancel must return a dict"

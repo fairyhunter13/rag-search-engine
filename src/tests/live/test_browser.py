@@ -290,13 +290,14 @@ class TestChatStreaming:
     def test_multi_turn_conversation(self, page, live_project):
         """Second question in same chat must produce a new response (multi-turn works)."""
         _navigate_to_chat(page)
-        _send_message(page, "What is the overall architecture?")
+        # Use a fast search-intent query (no global synthesis)
+        _send_message(page, "what files are in this project?")
         first_text = _wait_for_ai_response(page)
         assert len(first_text) > 20, f"First response too short: {first_text!r}"
         # Count existing messages before second turn
         msg_count_before = page.locator(".msg.ai:not(.thinking)").count()
-        # Second turn: follow-up question
-        _send_message(page, "What are the main entry points?")
+        # Second turn: simple follow-up
+        _send_message(page, "list the main directories")
         # Wait for a new AI message to appear
         page.wait_for_function(
             f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {msg_count_before}",

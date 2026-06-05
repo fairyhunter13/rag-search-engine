@@ -387,15 +387,34 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     async def api_reload(_request: Request) -> JSONResponse:
         import os
         import signal
+        import subprocess
+        import sys
         import threading
         import time as _t
         pid = os.getpid()
-        threading.Thread(
-            target=lambda: (_t.sleep(0.5), os.kill(pid, signal.SIGTERM)),
-            daemon=True,
-        ).start()
+
+        def _restart() -> None:
+            _t.sleep(1.0)
+            # Spawn a watcher subprocess that waits for port to free then restarts daemon
+            subprocess.Popen(
+                [
+                    sys.executable, "-c",
+                    (
+                        "import time, subprocess, sys\n"
+                        "time.sleep(2)\n"
+                        "subprocess.Popen([sys.executable, '-m', 'opencode_search', 'daemon', 'ensure'],"
+                        " start_new_session=True)\n"
+                    ),
+                ],
+                close_fds=True,
+                start_new_session=True,
+            )
+            _t.sleep(0.2)
+            os.kill(pid, signal.SIGTERM)
+
+        threading.Thread(target=_restart, daemon=False).start()
         return JSONResponse({"status": "reloading", "pid": pid,
-                             "note": "daemon will restart via systemd in ~1s"})
+                             "note": "daemon restarting in ~3s"})
 
     @mcp.custom_route("/api/analyze_patterns", methods=["POST"], include_in_schema=False)
     async def api_analyze_patterns(request: Request) -> JSONResponse:
