@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
 
 _MAX_SAMPLES = 1000
 
@@ -97,7 +97,7 @@ class _ChatStreamMetrics:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     stream_error_count: int = 0
     stream_success_count: int = 0
-    _error_by_intent: Dict[str, int] = field(default_factory=dict, repr=False)
+    _error_by_intent: dict[str, int] = field(default_factory=dict, repr=False)
 
     def record_error(self, intent: str) -> None:
         with self._lock:

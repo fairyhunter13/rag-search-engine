@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.slow]
 
 _COMPONENT_WORDS = {"component", "service", "layer", "module", "architecture", "domain",
                     "handler", "api", "grpc", "http", "microservice", "package"}
