@@ -175,6 +175,44 @@ class TestPulseView:
         kpi = page.locator("#kpi-stream")
         assert kpi.count() > 0, "Stream Health KPI value (#kpi-stream) not found"
 
+    def test_pulse_kpi_tiles_populated(self, page):
+        """KPI tiles must show non-dash values after the metrics poll runs."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Wait for project to be auto-selected (loadPulse requires _proj)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        # Wait for the files KPI tile to show a real value (not "—")
+        page.wait_for_function(
+            "document.querySelector('#kpi-files')?.textContent?.trim() !== '—'",
+            timeout=20_000,
+        )
+        for tile_id in ("#kpi-files", "#kpi-communities", "#kpi-requests"):
+            val = (page.locator(tile_id).text_content(timeout=5_000) or "").strip()
+            assert val and val != "—", f"{tile_id} still showing '—' after metrics poll"
+
+    def test_pulse_suggested_questions_clickable(self, page):
+        """Clicking a suggested question must switch to chat view and submit it."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Wait for project selection and loadPulse to populate suggested questions
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.wait_for_selector(".sq-btn", timeout=20_000)
+        first_btn = page.locator(".sq-btn").first
+        first_btn.click()
+        # askQuestion() calls switchView('chat') synchronously — verify view switched
+        page.wait_for_function(
+            "document.getElementById('view-chat')?.classList?.contains('active')",
+            timeout=5_000,
+        )
+        # A user message bubble must appear (sendChat was called)
+        page.wait_for_selector(".msg.user", timeout=10_000)
+
 
 # ---------------------------------------------------------------------------
 # View: Chat — basic behavior
@@ -380,3 +418,76 @@ class TestAdminView:
         content = page.content()
         has_jobs = any(w in content.lower() for w in ("jobs", "pipeline", "background", "running"))
         assert has_jobs, "No jobs/pipeline section in admin view"
+
+    def test_admin_vacuum_executes_and_logs(self, page):
+        """Clicking Vacuum must trigger the operation and write output to #op-log."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Wait for a project to be auto-selected (runVacuum requires _proj)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        # Navigate to Admin
+        admin_tab = page.locator("button:has-text('Admin'), a:has-text('Admin'), [data-tab='admin']").first
+        if admin_tab.count() == 0:
+            pytest.skip("No Admin tab visible")
+        admin_tab.click()
+        page.wait_for_selector("#op-log", timeout=5_000)
+        # Click Vacuum button
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        assert vacuum_btn.count() > 0, "Vacuum button not found in Admin view"
+        vacuum_btn.click()
+        # Wait for op-log to receive at least one entry (dry-run is fast)
+        page.wait_for_function(
+            "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
+            timeout=15_000,
+        )
+        log_text = (page.locator("#op-log").text_content() or "").strip()
+        assert log_text, "op-log empty after clicking Vacuum"
+
+
+# ---------------------------------------------------------------------------
+# Global UI elements
+# ---------------------------------------------------------------------------
+
+class TestGlobalUI:
+    """Status indicators, command palette — global UI elements present in all views."""
+
+    def test_daemon_dot_ok_when_daemon_up(self, page):
+        """#daemon-dot must have class 'ok' when daemon is reachable and responding."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # loadPulse() calls setDot('ok') when API calls succeed; wait up to 15s
+        page.wait_for_function(
+            "document.getElementById('daemon-dot')?.classList?.contains('ok')",
+            timeout=15_000,
+        )
+        classes = page.locator("#daemon-dot").get_attribute("class") or ""
+        assert "ok" in classes, f"#daemon-dot class '{classes}' — expected 'ok' when daemon is up"
+
+    def test_command_palette_opens_with_ctrl_k(self, page):
+        """Ctrl+K must open the command palette; Escape must close it."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Command palette starts hidden
+        overlay = page.locator("#cmd-overlay")
+        assert overlay.count() > 0, "#cmd-overlay not found — command palette HTML missing"
+        # Open with Ctrl+K
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        assert "hidden" not in (overlay.get_attribute("class") or ""), (
+            "Command palette did not open after Ctrl+K"
+        )
+        # Close with Escape
+        page.keyboard.press("Escape")
+        page.wait_for_function(
+            "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        assert "hidden" in (overlay.get_attribute("class") or ""), (
+            "Command palette did not close after Escape"
+        )
