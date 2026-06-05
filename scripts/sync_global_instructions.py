@@ -50,6 +50,7 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - action: "uninstall_hooks" — remove git post-commit hook
   - action: "dedup" — deduplicate graph nodes (add dry_run=True to preview)
   - action: "vacuum" — remove orphan index tier dirs; free disk space
+  - action: "reload" — gracefully restart the daemon; systemd auto-restarts it within ~1s
   - action: "remove_project" — remove project from registry (delete_index=True also removes on-disk index)
 
 QUICK DECISION GUIDE:
