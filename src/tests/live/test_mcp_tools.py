@@ -333,6 +333,41 @@ class TestMCPManage:
         assert r.status_code == 200
         assert "jobs" in r.json()
 
+    def test_manage_git_hooks_status(self, http, project):
+        """GET /api/git_hooks must report whether the post-commit hook is installed."""
+        r = http.get("/api/git_hooks", params={"project": project})
+        assert r.status_code == 200, f"git_hooks GET failed: {r.text[:200]}"
+        data = r.json()
+        assert "installed" in data, f"git_hooks response missing 'installed': {list(data.keys())}"
+        assert "hook_path" in data, f"git_hooks response missing 'hook_path': {list(data.keys())}"
+
+    def test_manage_git_hooks_install_uninstall(self, http, project):
+        """POST /api/git_hooks install then uninstall must be idempotent and return status."""
+        # Install
+        r = http.post("/api/git_hooks", json={"project": project, "action": "install"})
+        assert r.status_code == 200, f"git_hooks install failed: {r.text[:200]}"
+        data = r.json()
+        assert "error" not in data or data.get("installed") is not None, (
+            f"git_hooks install response unexpected: {data}"
+        )
+        # Uninstall (clean up)
+        r2 = http.post("/api/git_hooks", json={"project": project, "action": "uninstall"})
+        assert r2.status_code == 200, f"git_hooks uninstall failed: {r2.text[:200]}"
+
+    def test_manage_wiki_health_in_kb_health(self, http, project):
+        """KB health must include wiki page count — validates wiki_lint coverage."""
+        r = http.get("/api/kb_health", params={"project": project})
+        assert r.status_code == 200, f"kb_health failed: {r.text[:200]}"
+        data = r.json()
+        wiki_count = (
+            data.get("wiki_page_count")
+            or data.get("wiki_count")
+            or data.get("wiki_pages")
+        )
+        assert wiki_count is not None, (
+            f"wiki_page_count not in kb_health; keys={list(data.keys())}"
+        )
+
 
 class TestMCPMetrics:
     """Verify stream error/success counters in /api/metrics."""
