@@ -129,8 +129,8 @@ async def _parse_with_llm(text: str) -> list[dict]:
         prompt = (
             "Extract stack frames from this error traceback.\n"
             "Return ONLY a JSON array of objects with keys: "
-            "file (string path), line (integer), function (string), lang (string: python/go/java/javascript/rust/unknown).\n"
-            "Include only frames that reference actual source files. Return [] if none found.\n"
+            "file (string, may be relative or absolute path), line (integer), function (string), lang (string: python/go/java/javascript/rust/unknown).\n"
+            "Include every frame that has a file name and line number. Return [] only if no frames exist.\n"
             "No explanation — only the JSON array.\n\n"
             f"Traceback:\n{text}"
         )
