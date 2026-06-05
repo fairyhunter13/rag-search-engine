@@ -50,6 +50,7 @@ class TestMCPSearch:
 class TestMCPAsk:
     """ask(query, project_path, scope) — architecture, design, how-does-X-work."""
 
+    @pytest.mark.slow
     def test_ask_default_scope_returns_answer(self, http, project):
         r = http.get("/api/ask", params={"q": "How does this system work?", "project": project})
         assert r.status_code == 200, f"ask failed: {r.text[:200]}"
@@ -59,6 +60,7 @@ class TestMCPAsk:
         results = data.get("results", [])
         assert len(answer) > 20 or len(communities) > 0 or len(results) > 0, f"ask returned nothing: {data}"
 
+    @pytest.mark.slow
     def test_ask_global_scope_returns_synthesis(self, http, project):
         r = http.get("/api/ask", params={"q": "Describe the overall architecture", "project": project, "scope": "global"})
         assert r.status_code == 200, f"ask global failed: {r.text[:200]}"
@@ -66,6 +68,7 @@ class TestMCPAsk:
         answer = data.get("answer", "") or data.get("summary", "")
         assert len(answer) > 50, f"global synthesis too short ({len(answer)} chars): {answer[:200]}"
 
+    @pytest.mark.slow
     def test_ask_feature_scope_returns_structured_trace(self, http, project):
         r = http.get("/api/ask", params={"q": "How does request processing work?", "project": project, "scope": "feature"})
         assert r.status_code == 200, f"ask feature failed: {r.text[:200]}"
@@ -85,7 +88,6 @@ class TestMCPGraph:
         r = http.get("/api/graph", params={"project": project, "symbol": "main", "relation": "callers"})
         assert r.status_code == 200, f"graph callers failed: {r.text[:200]}"
         data = r.json()
-        # Either callers found or a clear message that symbol wasn't found
         assert "callers" in data or "error" in data or "matches" in data or "message" in data, (
             f"Unexpected graph response shape: {list(data.keys())}"
         )
@@ -105,6 +107,18 @@ class TestMCPGraph:
             or data.get("error")
         )
         assert has_narrative, f"impact_narrative returned no narrative: {data}"
+
+    def test_graph_semantic_trace_returns_result(self, http, project):
+        r = http.get("/api/graph", params={
+            "project": project,
+            "symbol": "main",
+            "relation": "semantic_trace",
+            "to": "database",
+        })
+        assert r.status_code == 200, f"graph semantic_trace failed: {r.text[:200]}"
+        data = r.json()
+        has_trace = any(k in data for k in ("trace", "path", "narrative", "error", "message", "steps"))
+        assert has_trace, f"semantic_trace returned unexpected shape: {list(data.keys())}"
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +173,50 @@ class TestMCPOverview:
         data = r.json()
         questions = data.get("questions", data.get("suggested_questions", []))
         assert isinstance(questions, list), f"Unexpected questions shape: {type(questions)}"
+
+    def test_overview_architecture_domains(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "architecture_domains"})
+        assert r.status_code == 200, f"architecture_domains failed: {r.text[:200]}"
+        data = r.json()
+        assert "error" not in data or data.get("domains") is not None or "communities" in data, (
+            f"architecture_domains returned unexpected shape: {list(data.keys())}"
+        )
+
+    def test_overview_import_cycles(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "import_cycles"})
+        assert r.status_code == 200, f"import_cycles failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "import_cycles must return a dict"
+
+    def test_overview_graph_diff(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "graph_diff"})
+        assert r.status_code == 200, f"graph_diff failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "graph_diff must return a dict"
+
+    def test_overview_surprising_connections(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "surprising_connections"})
+        assert r.status_code == 200, f"surprising_connections failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "surprising_connections must return a dict"
+
+    def test_overview_pr_impact(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "pr_impact"})
+        assert r.status_code == 200, f"pr_impact failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "pr_impact must return a dict"
+
+    def test_overview_feature_map(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "feature_map"})
+        assert r.status_code == 200, f"feature_map failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "feature_map must return a dict"
+
+    def test_overview_service_mesh(self, http, project):
+        r = http.get("/api/overview", params={"project": project, "what": "service_mesh"})
+        assert r.status_code == 200, f"service_mesh failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "service_mesh must return a dict"
 
 
 # ---------------------------------------------------------------------------
@@ -250,3 +308,46 @@ class TestMCPManage:
         r = http.get("/api/jobs", params={"project": project})
         assert r.status_code == 200
         assert "jobs" in r.json()
+
+    def test_manage_reload(self, http):
+        """Reload returns reloading status and daemon recovers within 15s."""
+        import time
+        r = http.post("/api/reload")
+        assert r.status_code == 200, f"reload failed: {r.status_code} {r.text[:200]}"
+        data = r.json()
+        assert data.get("status") == "reloading", f"unexpected reload response: {data}"
+        assert "pid" in data, "reload response must include pid"
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            time.sleep(1)
+            try:
+                r2 = http.get("/api/projects")
+                if r2.status_code == 200:
+                    break
+            except Exception:
+                pass
+        else:
+            pytest.fail("Daemon did not come back up within 15s after reload")
+
+
+class TestMCPMetrics:
+    """Verify stream error/success counters in /api/metrics."""
+
+    @pytest.mark.slow
+    def test_stream_success_count_increments(self, http, project):
+        """A successful chat call must increment chat_stream.stream_success_count."""
+        from .conftest import parse_sse
+        m0 = http.get("/api/metrics").json()
+        before = m0.get("chat_stream", {}).get("stream_success_count", 0)
+        r = http.post(
+            "/api/chat_stream",
+            json={"project": project, "query": "what does the indexer do?"},
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200, f"chat_stream failed: {r.status_code}"
+        parse_sse(r)
+        m1 = http.get("/api/metrics").json()
+        after = m1.get("chat_stream", {}).get("stream_success_count", 0)
+        assert after > before, (
+            f"stream_success_count did not increment: before={before}, after={after}"
+        )

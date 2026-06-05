@@ -383,6 +383,20 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             "events": get_pipeline_events()[-20:],  # last 20 events
         })
 
+    @mcp.custom_route("/api/reload", methods=["POST"], include_in_schema=False)
+    async def api_reload(_request: Request) -> JSONResponse:
+        import os
+        import signal
+        import threading
+        import time as _t
+        pid = os.getpid()
+        threading.Thread(
+            target=lambda: (_t.sleep(0.5), os.kill(pid, signal.SIGTERM)),
+            daemon=True,
+        ).start()
+        return JSONResponse({"status": "reloading", "pid": pid,
+                             "note": "daemon will restart via systemd in ~1s"})
+
     @mcp.custom_route("/api/analyze_patterns", methods=["POST"], include_in_schema=False)
     async def api_analyze_patterns(request: Request) -> JSONResponse:
         from opencode_search.handlers import handle_analyze_patterns_llm

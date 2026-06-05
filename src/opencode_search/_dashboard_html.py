@@ -258,6 +258,15 @@ a{color:inherit;text-decoration:none}
         <div class="tile-sub" id="ks-uptime">active watchers: —</div>
         <div class="tile-spark"><svg id="sp-uptime"></svg></div>
       </div>
+      <div class="tile" id="tile-stream">
+        <div class="tile-top">
+          <span class="tile-lbl">Stream Health</span>
+          <span class="tile-badge" id="tb-stream"></span>
+        </div>
+        <div class="tile-num" id="kpi-stream">—</div>
+        <div class="tile-sub" id="ks-stream">LLM stream calls</div>
+        <div class="tile-spark"><svg id="sp-stream"></svg></div>
+      </div>
     </div>
 
     <!-- Activity feed + suggested questions -->
@@ -499,6 +508,18 @@ async function loadPulse(){
     $('ks-uptime').textContent=`active watchers: ${watchers}`;
     $('tile-uptime').className='tile ok';
 
+    const cs=metD.chat_stream||{};
+    const csErr=cs.stream_error_count||0;
+    const csSucc=cs.stream_success_count||0;
+    const csTotal=csErr+csSucc;
+    const csRate=csTotal>0?(csErr/csTotal):0;
+    const csBadge=csErr===0?'ok':(csRate<0.05?'warn':'err');
+    setTile('stream',csTotal,
+      csErr===0?'✓':`${csErr} err`,
+      csBadge,
+      csTotal>0?`${csSucc} ok · ${csErr} err`:'no calls yet'
+    );
+
     setDot('ok');
 
     // Sparklines (push current value into rolling history)
@@ -507,6 +528,7 @@ async function loadPulse(){
     pushSpark('enrichment',ep);
     pushSpark('wiki',wikiCt);
     pushSpark('requests',reqs);
+    pushSpark('stream',csTotal);
     renderSparks();
 
     // Activity feed from pipeline events
