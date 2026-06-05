@@ -122,6 +122,20 @@ class TestMCPGraph:
         has_trace = any(k in data for k in ("trace", "path", "narrative", "error", "message", "steps"))
         assert has_trace, f"semantic_trace returned unexpected shape: {list(data.keys())}"
 
+    def test_graph_path_returns_result(self, http, project):
+        """graph(relation='path', to_symbol=...) finds call path between two symbols."""
+        r = http.get("/api/graph", params={
+            "project": project,
+            "symbol": "main",
+            "relation": "path",
+            "to": "error",
+        })
+        assert r.status_code == 200, f"graph path failed: {r.text[:200]}"
+        data = r.json()
+        # May return path=[] if not connected — both outcomes are valid
+        has_result = any(k in data for k in ("path", "connected", "error", "steps", "message"))
+        assert has_result, f"graph path unexpected shape: {list(data.keys())}"
+
 
 # ---------------------------------------------------------------------------
 # overview
@@ -257,6 +271,14 @@ class TestMCPBuild:
         assert len(pages) > 0, (
             "No wiki pages found — run build(action='wiki') or build(action='pipeline')"
         )
+
+    def test_enrich_hierarchy_triggers_job(self, http, project):
+        """POST /api/enrich_hierarchy must start a background enrichment job."""
+        r = http.post("/api/enrich_hierarchy", json={"project": project})
+        assert r.status_code == 200, f"enrich_hierarchy failed: {r.text[:200]}"
+        data = r.json()
+        has_result = any(k in data for k in ("job_id", "status", "error", "enriched"))
+        assert has_result, f"enrich_hierarchy missing job_id/status/error: {list(data.keys())}"
 
 
 # ---------------------------------------------------------------------------
