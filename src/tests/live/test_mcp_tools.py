@@ -96,6 +96,7 @@ class TestMCPGraph:
         r = http.get("/api/graph", params={"project": project, "symbol": "main", "relation": "callees"})
         assert r.status_code == 200, f"graph callees failed: {r.text[:200]}"
 
+    @pytest.mark.slow
     def test_graph_impact_returns_narrative(self, http, project):
         r = http.get("/api/graph", params={"project": project, "symbol": "main", "relation": "impact_narrative"})
         assert r.status_code == 200, f"graph impact_narrative failed: {r.text[:200]}"
@@ -108,6 +109,7 @@ class TestMCPGraph:
         )
         assert has_narrative, f"impact_narrative returned no narrative: {data}"
 
+    @pytest.mark.slow
     def test_graph_semantic_trace_returns_result(self, http, project):
         r = http.get("/api/graph", params={
             "project": project,

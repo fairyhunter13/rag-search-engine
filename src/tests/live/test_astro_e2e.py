@@ -87,6 +87,7 @@ class TestAstroSearch:
 class TestAstroAsk:
     """ask(query, project_path, scope) — KB-powered synthesis."""
 
+    @pytest.mark.slow
     def test_ask_architecture_returns_answer(self, http, astro):
         r = http.get("/api/ask", params={"q": "what is the overall system architecture?", "project": astro})
         assert r.status_code == 200, f"ask failed: {r.text[:200]}"
@@ -94,6 +95,7 @@ class TestAstroAsk:
         answer = data.get("answer") or data.get("result") or str(data)
         assert len(answer) > 100, f"Architecture answer too short: {answer[:200]}"
 
+    @pytest.mark.slow
     def test_ask_global_scope_synthesizes_all_communities(self, http, astro):
         r = http.get("/api/ask", params={"q": "give me a comprehensive overview", "project": astro, "scope": "global"})
         assert r.status_code == 200, f"ask global failed: {r.text[:200]}"
@@ -101,6 +103,7 @@ class TestAstroAsk:
         answer = data.get("answer") or data.get("result") or str(data)
         assert len(answer) > 200, f"Global answer too short: {answer[:200]}"
 
+    @pytest.mark.slow
     def test_ask_feature_scope_returns_entry_points(self, http, astro):
         r = http.get("/api/ask", params={"q": "how does search work end to end?", "project": astro, "scope": "feature"})
         assert r.status_code == 200, f"ask feature failed: {r.text[:200]}"
@@ -156,6 +159,7 @@ class TestAstroGraph:
         r = http.get("/api/graph", params={"symbol": symbol, "project": astro, "relation": "callees"})
         assert r.status_code == 200, f"graph callees failed: {r.text[:200]}"
 
+    @pytest.mark.slow
     def test_graph_impact_narrative_returns_text(self, http, astro):
         symbol = self._find_a_symbol(http, astro)
         r = http.get("/api/graph", params={"symbol": symbol, "project": astro, "relation": "impact_narrative"})
@@ -328,6 +332,8 @@ def _chat(http, project: str, query: str) -> tuple[str, str, list[str], int, str
 
 class TestAstroChatIntents:
     """Chat router correctly routes all intents and returns LLM-quality answers."""
+
+    pytestmark = pytest.mark.slow
 
     def test_chat_search_intent(self, http, astro):
         answer, intent, *_ = _chat(http, astro, "find the gRPC service definition files")
