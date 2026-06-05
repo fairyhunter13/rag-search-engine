@@ -1,6 +1,6 @@
-"""LLM-powered pattern analysis handler.
+"""LLM-powered deep pattern analysis handler.
 
-Complements the fast heuristic detector in _graph.py with deep LLM analysis:
+Complements handle_detect_patterns in _graph.py with file-level LLM analysis:
 - Reads representative source files
 - Sends them to the project's configured local LLM
 - Returns/caches a structured analysis covering architecture, idioms,
