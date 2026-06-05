@@ -276,6 +276,10 @@ class TestChatIntents:
         text = self._chat_and_get_text(page, live_project, "What breaks if I change the main handler?")
         assert len(text) > 10, f"Graph impact response too short: {text!r}"
 
+    def test_intent_graph_callees(self, page, live_project):
+        text = self._chat_and_get_text(page, live_project, "What does the search handler call internally?")
+        assert len(text) > 10, f"Graph callees response too short: {text!r}"
+
     def test_intent_debug_trace(self, page, live_project):
         traceback = (
             "Traceback (most recent call last):\n"

@@ -136,3 +136,63 @@ def test_global_intent_routes_correctly(http, project):
     )
     answer = "".join(e.get("text", "") for e in tokens)
     assert len(answer) > 100, f"Global answer too short: {len(answer)} chars"
+
+
+@pytest.mark.slow
+def test_chat_search_intent(http, project):
+    """An explicit 'find/show me the source code' query must route to search intent."""
+    _answer, intent, _sources, _elapsed = _chat(
+        http, project,
+        "show me the source code of the main HTTP route handler",
+    )
+    assert intent in ("search", "architecture", "feature"), (
+        f"Search query routed to unexpected intent: {intent!r}"
+    )
+
+
+@pytest.mark.slow
+def test_chat_feature_intent(http, project):
+    """An 'end-to-end how does X work' query must route to feature intent."""
+    _answer, intent, _sources, _elapsed = _chat(
+        http, project,
+        "explain step by step how the indexing feature works from file discovery to storage",
+    )
+    assert intent in ("feature", "architecture", "global"), (
+        f"Feature query routed to unexpected intent: {intent!r}"
+    )
+
+
+@pytest.mark.slow
+def test_chat_graph_callers_intent(http, project):
+    """A 'what calls X' query must route to graph_callers intent."""
+    _answer, intent, _sources, _elapsed = _chat(
+        http, project,
+        "what functions call the embedder",
+    )
+    assert intent in ("graph_callers", "search"), (
+        f"Callers query routed to unexpected intent: {intent!r}"
+    )
+
+
+@pytest.mark.slow
+def test_chat_graph_callees_intent(http, project):
+    """A 'what does X call' query must route to graph_callees intent."""
+    _answer, intent, _sources, _elapsed = _chat(
+        http, project,
+        "what does the main search handler call internally",
+    )
+    assert intent in ("graph_callees", "search", "feature"), (
+        f"Callees query routed to unexpected intent: {intent!r}"
+    )
+
+
+@pytest.mark.slow
+def test_chat_graph_impact_intent(http, project):
+    """A 'what breaks if I change X' query must route to graph_impact intent."""
+    _answer, intent, _sources, _elapsed = _chat(
+        http, project,
+        "what breaks if I change the embedding model",
+    )
+    assert intent in ("graph_impact", "architecture", "feature"), (
+        f"Impact query routed to unexpected intent: {intent!r}"
+    )
