@@ -57,10 +57,10 @@ def _sample_source_files(root: Path) -> list[tuple[str, str]]:
     """
     import os
 
-    _SKIP_DIRS = {"vendor", "node_modules", ".git", ".venv", "venv",  # noqa: N806
+    _SKIP_DIRS = {"vendor", "node_modules", ".git", ".venv", "venv",
                   "target", "dist", "build", "__pycache__"}
-    _SKIP_NAME_PARTS = {"generated", "pb", "mock", "mocks"}  # noqa: N806
-    _PRIMARY_EXTS = {".go", ".py", ".java", ".kt", ".ts", ".tsx", ".rs", ".rb",  # noqa: N806
+    _SKIP_NAME_PARTS = {"generated", "pb", "mock", "mocks"}
+    _PRIMARY_EXTS = {".go", ".py", ".java", ".kt", ".ts", ".tsx", ".rs", ".rb",
                      ".cs", ".swift", ".cpp", ".c", ".scala"}
 
     def _is_ok(path: Path) -> bool:

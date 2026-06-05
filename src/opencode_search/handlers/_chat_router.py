@@ -1239,7 +1239,7 @@ async def _stream_debug(
     async def _bounded_feature_trace() -> dict:
         try:
             return await asyncio.wait_for(_run_feature_trace(query, project_path), timeout=40.0)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             return {}
 
     # Parallel context assembly — feature trace bounded at 40s to keep total latency reasonable

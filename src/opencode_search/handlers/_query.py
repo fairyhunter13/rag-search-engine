@@ -127,6 +127,7 @@ async def handle_project_status(path: str) -> dict[str, Any]:
 def _count_communities(project_path: str) -> int:
     """Return community count from graph.db, 0 if unavailable."""
     import sqlite3
+
     from opencode_search.config import get_project_graph_db_path
     db_path = get_project_graph_db_path(project_path)
     with contextlib.suppress(Exception):

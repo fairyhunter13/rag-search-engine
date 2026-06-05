@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-import xml.etree.ElementTree as _ET  # noqa: N814
+import xml.etree.ElementTree as _ET
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -268,7 +268,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
     # Build search dirs: root + 1st-level dirs + symlinked repos inside container dirs.
     # Symlinked entries (federation members) are added first so they aren't squeezed
     # out by non-repo subdirs when the cap is reached.
-    _SKIP_SCAN = {".git", ".venv", "venv", "node_modules", "__pycache__", "target", "dist", "build"}  # noqa: N806
+    _SKIP_SCAN = {".git", ".venv", "venv", "node_modules", "__pycache__", "target", "dist", "build"}
     search_dirs: list[Path] = [root]
     first_level: list[Path] = []
     try:
@@ -354,7 +354,7 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
     try:
         from opencode_search.discover import SOURCE_EXTENSIONS, iter_files
 
-        _LANG_EXTS: dict[str, tuple[str, ...]] = {  # noqa: N806
+        _LANG_EXTS: dict[str, tuple[str, ...]] = {
             "go":         (".go",),
             "python":     (".py",),
             "java":       (".java",),
@@ -363,7 +363,7 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
             "javascript": (".js", ".jsx", ".mjs"),
             "rust":       (".rs",),
         }
-        _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}  # noqa: N806
+        _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}
 
         primary_exts: set[str] = set()
         if primary_language and primary_language in _LANG_EXTS:
@@ -439,7 +439,7 @@ def _detect_frameworks_from_dependencies(deps: dict[str, Any]) -> list[str]:
 
 def _detect_module_structure(root: Path) -> dict[str, Any]:
     """Detect the module/package organization pattern from directory layout using LLM."""
-    _SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build"}  # noqa: N806
+    _SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build"}
     try:
         top_dirs = sorted(
             d.name for d in root.iterdir()
@@ -1076,7 +1076,7 @@ async def handle_project_structure(
     if not root.is_dir():
         return {"error": f"Not a directory: {project_path}"}
 
-    _SKIP_DIRS = {  # noqa: N806
+    _SKIP_DIRS = {
         ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
         ".pytest_cache", "dist", "build", "target", ".idea", ".vscode",
         "vendor", ".tox", "coverage", ".coverage", "htmlcoverage",

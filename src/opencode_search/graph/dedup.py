@@ -17,6 +17,7 @@ Fallback: when datasketch or rapidfuzz are unavailable, uses exact-norm-only ded
 from __future__ import annotations
 
 import contextlib
+import importlib.util as _iutil
 import logging
 import re
 import sqlite3
@@ -33,11 +34,7 @@ log = logging.getLogger(__name__)
 # Feature detection — graceful fallback if extras not installed
 # ---------------------------------------------------------------------------
 
-try:
-    import datasketch as _datasketch  # noqa: F401
-    _HAVE_DATASKETCH = True
-except ImportError:
-    _HAVE_DATASKETCH = False
+_HAVE_DATASKETCH = _iutil.find_spec("datasketch") is not None
 
 try:
     from rapidfuzz.distance import JaroWinkler as _JaroWinkler

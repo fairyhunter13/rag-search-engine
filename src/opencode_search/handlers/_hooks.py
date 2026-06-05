@@ -44,10 +44,7 @@ async def handle_git_hooks(project_path: str, install: bool) -> dict[str, Any]:
                 }
             if existing and not existing.endswith("\n"):
                 existing += "\n"
-            if existing:
-                new_content = existing.rstrip("\n") + "\n\n" + _HOOK_BODY
-            else:
-                new_content = _HOOK_BODY
+            new_content = existing.rstrip("\n") + "\n\n" + _HOOK_BODY if existing else _HOOK_BODY
             hook_path.write_text(new_content)
             hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             return {

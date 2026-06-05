@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -772,10 +773,8 @@ class Storage:
             total = 0
             for root, _, files in _os.walk(path):
                 for f in files:
-                    try:
+                    with contextlib.suppress(OSError):
                         total += _os.path.getsize(_os.path.join(root, f))
-                    except OSError:
-                        pass
             return total
 
         before = _du(self.db_path)

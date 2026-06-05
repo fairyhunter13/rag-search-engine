@@ -481,7 +481,7 @@ def _update_graph_incremental(
                 new_raw_edges: list = []
                 for path in modified_paths:
                     try:
-                        from pathlib import Path as _P  # noqa: N814
+                        from pathlib import Path as _P
                         text = _P(path).read_text(encoding="utf-8", errors="replace")
                         lang = language_for_file(path)
                         nodes, raw_edges = extractor.extract_file(path, text, lang)

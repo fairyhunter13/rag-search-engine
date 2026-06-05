@@ -54,10 +54,13 @@ def _navigate_to_chat(page) -> None:
     page.goto(DASHBOARD_URL)
     # Use "load" not "networkidle" — dashboard keeps SSE connections open that never idle
     page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+    # Wait for the project selector element to exist in DOM
+    page.wait_for_selector("#project-sel", timeout=_TIMEOUT_PAGE)
     # Wait for loadProjects() to complete — _proj must be set before sendChat() will work
+    # Use 45s: daemon may be under LLM load from previous tests in the same session
     page.wait_for_function(
-        "() => { const s = document.getElementById('project-sel'); return s && s.value !== ''; }",
-        timeout=15000,
+        "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+        timeout=45000,
     )
     chat_tab = page.locator("button:has-text('Chat'), a:has-text('Chat'), [data-tab='chat']").first
     if chat_tab.count() > 0 and chat_tab.is_visible():

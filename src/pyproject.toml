@@ -107,11 +107,15 @@ ignore = [
     "RUF002", # × (MULTIPLICATION SIGN) in docstrings is intentional math notation
     "RUF001", # en-dash/em-dash in JS strings embedded in Python raw strings
     "RUF003", # ambiguous characters in comments (mathematical notation)
+    "N806",   # _UPPER_CASE local constants in functions are intentional convention
+    "N814",   # CamelCase imported as _lower alias (e.g., ElementTree as _ET)
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "opencode_search/embeddings.py" = ["E402", "F401", "I001"]  # ONNX monkey-patching: unusual import order intentional
 "opencode_search/storage.py" = ["E402", "F401", "I001"]     # lancedb dynamic API: unusual import order intentional
+"opencode_search/daemon.py" = ["E402", "I001"]              # CUDA path setup must run before any CUDA imports
+"opencode_search/handlers/__init__.py" = ["F401"]            # re-export module: all imports are intentionally public
 
 [tool.mypy]
 python_version = "3.11"

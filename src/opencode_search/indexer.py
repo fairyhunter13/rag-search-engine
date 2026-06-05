@@ -8,6 +8,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL
 from opencode_search.discover import detect_language, iter_files
@@ -164,7 +165,7 @@ class _GpuBatcher:
         self.errors = 0
         # Per-session content_hash → vector cache: skip re-embedding identical
         # boilerplate chunks (proto-generated code, shared middleware, etc.)
-        self._content_vec_cache: dict[str, np.ndarray] = {}
+        self._content_vec_cache: dict[str, Any] = {}
         self.total_cache_hits = 0
 
     async def add(self, fr: _FileReady) -> None:
@@ -188,7 +189,7 @@ class _GpuBatcher:
         ]
         miss_indices: list[int] = []
         miss_texts: list[str] = []
-        for idx, (text, ch) in enumerate(zip(texts, all_content_hashes)):
+        for idx, (text, ch) in enumerate(zip(texts, all_content_hashes, strict=True)):
             if ch not in self._content_vec_cache:
                 miss_indices.append(idx)
                 miss_texts.append(text)
@@ -204,7 +205,7 @@ class _GpuBatcher:
                     embed_passages, miss_texts, model=self._embed_model, dimensions=self._dims,
                     _return_numpy=True,
                 )
-                for mi, mv in zip(miss_indices, miss_vectors):
+                for mi, mv in zip(miss_indices, miss_vectors, strict=True):
                     self._content_vec_cache[all_content_hashes[mi]] = mv
                 await _thermal_yield()
             # Build full vectors array (cache hits reuse cached numpy array)
