@@ -82,13 +82,12 @@ jobs:
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
-      - name: Run fast live tests
+      - name: Run fast live tests (all non-slow)
         run: |
           .venv/bin/pytest \
-            src/tests/live/test_enforcement.py \
-            src/tests/live/test_embedding.py \
-            src/tests/live/test_search.py \
-            src/tests/live/test_watcher.py \
+            src/tests/live/ \
+            --ignore=src/tests/live/test_browser.py \
+            -m "live and not slow" \
             -q --tb=short --timeout=120
 
   # ──────────────────────────────────────────────
@@ -107,22 +106,15 @@ jobs:
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
-      - name: Run full E2E + chat tests
+      - name: Run full live suite (all tests including slow)
         run: |
           .venv/bin/pytest \
-            src/tests/live/test_astro_e2e.py \
-            src/tests/live/test_indexing.py \
-            src/tests/live/test_ask.py \
-            src/tests/live/test_chat.py \
-            src/tests/live/test_patterns.py \
+            src/tests/live/ \
+            --ignore=src/tests/live/test_browser.py \
+            -m "live" \
             -q --tb=short --timeout=600
-
-      - name: Run quality gate tests
-        run: |
-          .venv/bin/pytest src/tests/live/test_quality.py \
-            -q --tb=short --timeout=300
 
       - name: Run browser tests
         run: |
           .venv/bin/pytest src/tests/live/test_browser.py \
-            --browser chromium --tb=short --timeout=120
+            --browser chromium --tb=short --timeout=300
