@@ -216,7 +216,10 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     async def api_communities(request: Request) -> JSONResponse:
         from opencode_search.handlers import handle_get_communities
         project = request.query_params.get("project", "")
-        top_k = int(request.query_params.get("top_k", "50"))
+        try:
+            top_k = int(request.query_params.get("top_k", "50"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "top_k must be an integer"}, status_code=400)
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_get_communities(project_path=project, top_k=top_k)
@@ -312,7 +315,10 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         symbol = request.query_params.get("symbol", "")
         relation = request.query_params.get("relation", "definition")
         to_sym = request.query_params.get("to", "")
-        depth = int(request.query_params.get("depth", "5"))
+        try:
+            depth = int(request.query_params.get("depth", "5"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "depth must be an integer"}, status_code=400)
         if not project or not symbol:
             return JSONResponse({"error": "project and symbol params required"}, status_code=400)
         if relation == "definition":
@@ -459,7 +465,10 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         from opencode_search.handlers import handle_graph_export
         project = request.query_params.get("project", "")
         fmt = request.query_params.get("format", "json")
-        max_nodes = int(request.query_params.get("max_nodes", "5000"))
+        try:
+            max_nodes = int(request.query_params.get("max_nodes", "5000"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "max_nodes must be an integer"}, status_code=400)
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_graph_export(project_path=project, format=fmt, max_nodes=max_nodes)
@@ -914,7 +923,10 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
 
         from opencode_search.handlers._graph import _open_graph
         project = request.query_params.get("project", "")
-        top_n = int(request.query_params.get("top_n", "20"))
+        try:
+            top_n = int(request.query_params.get("top_n", "20"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "top_n must be an integer"}, status_code=400)
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         def _run(path: str) -> dict:
@@ -974,8 +986,11 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         project = request.query_params.get("project", "")
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
-        max_cycle_length = int(request.query_params.get("max_cycle_length", "8"))
-        top_n = int(request.query_params.get("top_n", "20"))
+        try:
+            max_cycle_length = int(request.query_params.get("max_cycle_length", "8"))
+            top_n = int(request.query_params.get("top_n", "20"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "max_cycle_length and top_n must be integers"}, status_code=400)
         result = await handle_import_cycles(
             project_path=project, max_cycle_length=max_cycle_length, top_n=top_n,
         )
@@ -988,7 +1003,10 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         project = request.query_params.get("project", "")
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
-        top_n = int(request.query_params.get("top_n", "7"))
+        try:
+            top_n = int(request.query_params.get("top_n", "7"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "top_n must be an integer"}, status_code=400)
         result = await handle_suggest_questions(project_path=project, top_n=top_n)
         return JSONResponse(result)
 
@@ -1037,11 +1055,17 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                 body = await request.json()
             project = body.get("project") or request.query_params.get("project", "")
             dry_run = bool(body.get("dry_run", False))
-            threshold = float(body.get("threshold", 0.88))
+            try:
+                threshold = float(body.get("threshold", 0.88))
+            except (ValueError, TypeError):
+                return JSONResponse({"error": "threshold must be a float"}, status_code=400)
         else:
             project = request.query_params.get("project", "")
             dry_run = request.query_params.get("dry_run", "true").lower() != "false"
-            threshold = float(request.query_params.get("threshold", "0.88"))
+            try:
+                threshold = float(request.query_params.get("threshold", "0.88"))
+            except (ValueError, TypeError):
+                return JSONResponse({"error": "threshold must be a float"}, status_code=400)
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_dedup_nodes(project_path=project, threshold=threshold, dry_run=dry_run)
@@ -1137,7 +1161,10 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         from opencode_search.handlers._tree_html import handle_tree_html
         project = request.query_params.get("project", "")
         fmt = request.query_params.get("format", "html")
-        max_files = int(request.query_params.get("max_files", "2000"))
+        try:
+            max_files = int(request.query_params.get("max_files", "2000"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "max_files must be an integer"}, status_code=400)
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_tree_html(project_path=project, fmt=fmt, max_files=max_files)
