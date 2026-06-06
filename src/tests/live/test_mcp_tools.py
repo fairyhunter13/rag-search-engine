@@ -325,6 +325,7 @@ class TestMCPBuild:
             "No wiki pages found — run build(action='wiki') or build(action='pipeline')"
         )
 
+    @pytest.mark.slow
     def test_enrich_hierarchy_triggers_and_completes(self, http, quality_project):
         """POST /api/enrich_hierarchy must complete with status=ok and max_level >= 1."""
         r = http.post("/api/enrich_hierarchy", json={"project": quality_project})
@@ -422,27 +423,27 @@ class TestMCPFederation:
 class TestMCPManage:
     """manage(project_path, action) — project lifecycle: vacuum, dedup, jobs."""
 
-    def test_manage_vacuum_dry_run(self, http, project):
-        """Vacuum GET (dry-run) must return freed/reclaimable size."""
-        r = http.get("/api/vacuum", params={"project": project})
-        assert r.status_code == 200, f"vacuum failed: {r.text[:200]}"
+    @pytest.mark.slow
+    def test_manage_vacuum_real(self, http, project):
+        """Vacuum real (GET ?dry_run=false) must free orphan dirs and return freed_bytes."""
+        r = http.get("/api/vacuum", params={"project": project, "dry_run": "false"})
+        assert r.status_code == 200, f"vacuum real failed: {r.text[:200]}"
         data = r.json()
-        assert "error" not in data or data.get("freed_bytes") is not None or "status" in data, (
-            f"Vacuum returned unexpected shape: {data}"
+        assert "freed_bytes" in data or "freed_mb" in data or "orphan_dirs_removed" in data, (
+            f"Vacuum real response missing freed stats: {data}"
         )
+        assert "error" not in data, f"vacuum returned error: {data}"
 
-    def test_manage_dedup_dry_run(self, http, project):
-        """Dedup GET (dry-run preview) must return some dedup-related data."""
-        r = http.get("/api/dedup", params={"project": project, "dry_run": "true"})
-        assert r.status_code == 200, f"dedup failed: {r.text[:200]}"
+    @pytest.mark.slow
+    def test_manage_dedup_real(self, http, project):
+        """Dedup real (GET ?dry_run=false) must return merged_count and candidate_pairs_checked."""
+        r = http.get("/api/dedup", params={"project": project, "dry_run": "false"})
+        assert r.status_code == 200, f"dedup real failed: {r.text[:200]}"
         data = r.json()
-        assert (
-            "candidates" in data
-            or "duplicates" in data
-            or "status" in data
-            or "candidate_pairs_checked" in data
-            or "dry_run" in data
-        ), f"Dedup returned unexpected shape: {data}"
+        assert "merged_count" in data or "candidate_pairs_checked" in data, (
+            f"Real dedup response missing merge stats: {data}"
+        )
+        assert data.get("dry_run") is not True, f"dedup still in dry_run mode: {data}"
 
     def test_manage_jobs_list(self, http, project):
         """Jobs list must be accessible (action='jobs')."""
