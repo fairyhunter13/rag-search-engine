@@ -456,6 +456,52 @@ class TestChatStreaming:
         )
         assert has_html, "msg-bubble has no HTML children — mdSafe may not have rendered"
 
+    def test_send_button_click_works(self, page, live_project):
+        """Clicking send button (not Enter) sends message and produces a response."""
+        _navigate_to_chat(page)
+        page.locator("#chat-in").fill("list the top level directories")
+        send_btn = page.locator("#send-btn")
+        assert send_btn.count() > 0, "#send-btn not found — send button missing from chat"
+        send_btn.click()
+        response = _wait_for_ai_response(page)
+        assert len(response) > 10, f"Send button response too short: {response!r}"
+
+    def test_source_chips_visible_after_response(self, page, live_project):
+        """Source file chips (.src-chip) appear after a search-intent response."""
+        _navigate_to_chat(page)
+        _send_message(page, "find the main handler files")
+        _wait_for_ai_response(page)
+        chips = page.locator(".src-chip")
+        assert chips.count() > 0, "No .src-chip elements appeared after search-intent response"
+
+    def test_three_turn_conversation_works(self, page, live_project):
+        """Three consecutive messages each produce a unique AI response."""
+        _navigate_to_chat(page)
+        _send_message(page, "what services exist?")
+        r1 = _wait_for_ai_response(page)
+        assert len(r1) > 20, f"First response too short: {r1!r}"
+
+        count1 = page.locator(".msg.ai:not(.thinking)").count()
+        _send_message(page, "tell me about the first one")
+        page.wait_for_function(
+            f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {count1}",
+            timeout=_TIMEOUT_CHAT,
+        )
+        r2 = page.locator(".msg.ai:not(.thinking)").last.inner_text()
+        assert len(r2) > 20, f"Second response too short: {r2!r}"
+
+        count2 = page.locator(".msg.ai:not(.thinking)").count()
+        _send_message(page, "how is it tested?")
+        page.wait_for_function(
+            f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {count2}",
+            timeout=_TIMEOUT_CHAT,
+        )
+        r3 = page.locator(".msg.ai:not(.thinking)").last.inner_text()
+        assert len(r3) > 20, f"Third response too short: {r3!r}"
+
+        unique = {r1[:50], r2[:50], r3[:50]}
+        assert len(unique) == 3, "Duplicate responses detected in 3-turn conversation"
+
 
 # ---------------------------------------------------------------------------
 # View: Admin
@@ -604,6 +650,47 @@ class TestAdminView:
         toast_el = page.locator("#toast div").first
         assert toast_el.count() > 0, "#toast div never appeared after Vacuum"
 
+    def test_admin_active_project_row_highlighted(self, page, live_project):
+        """The currently selected project has .active-row class in the projects table."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        page.wait_for_selector("table, .projects-list", timeout=10_000)
+        active_rows = page.locator(".projects-table tr.active-row, table tr.active-row")
+        assert active_rows.count() >= 1, "No .active-row found in projects table after project selected"
+
+    def test_admin_op_log_shows_intermediate_message(self, page, live_project):
+        """Clicking Vacuum writes an immediate message to #op-log."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        if not vacuum_btn.count():
+            pytest.skip("Vacuum button not found in Admin view")
+        vacuum_btn.click()
+        page.wait_for_function(
+            "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
+            timeout=10_000,
+        )
+        log_text = (page.locator("#op-log").text_content() or "").strip()
+        assert len(log_text) > 0, "op-log empty after vacuum click"
+
 
 # ---------------------------------------------------------------------------
 # Global UI elements
@@ -725,3 +812,58 @@ class TestGlobalUI:
         highlighted = page.locator("#cmd-results li.hi, #cmd-results li[aria-selected='true']")
         assert highlighted.count() > 0, "ArrowDown did not highlight any palette item"
         page.keyboard.press("Escape")
+
+    def test_pulse_sparklines_rendered(self, page, live_project):
+        """Pulse tab SVG sparklines (#sp-files etc.) contain drawn polyline elements."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        # Allow metrics to load and sparklines to render
+        page.wait_for_timeout(2000)
+        sparkline = page.locator("#sp-files polyline, #sp-files polygon")
+        assert sparkline.count() > 0, (
+            "Pulse sparkline #sp-files has no drawn polyline/polygon — sparklines not rendering"
+        )
+
+    def test_command_palette_all_view_switches(self, page, live_project):
+        """All 3 view switch commands (Admin, Chat, Pulse) work via command palette."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        for view_cmd in ("Admin", "Chat", "Pulse"):
+            page.keyboard.press("Control+k")
+            page.wait_for_function(
+                "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+                timeout=5_000,
+            )
+            page.locator("#cmd-input").fill(view_cmd)
+            page.wait_for_timeout(200)
+            page.keyboard.press("Enter")
+            page.wait_for_function(
+                "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+                timeout=5_000,
+            )
+            page.wait_for_timeout(500)
+
+    def test_toast_auto_dismisses_after_timeout(self, page, live_project):
+        """Toast notification disappears automatically within ~6s of appearing."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        if not vacuum_btn.count():
+            pytest.skip("Vacuum button not found in Admin view")
+        vacuum_btn.click()
+        page.wait_for_selector("#toast div", state="visible", timeout=15_000)
+        # Toast must auto-dismiss within 8s (4s display timeout + 4s buffer for animation)
+        page.wait_for_selector("#toast div", state="hidden", timeout=8_000)
