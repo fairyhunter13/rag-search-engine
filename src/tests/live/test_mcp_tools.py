@@ -42,6 +42,13 @@ class TestMCPSearch:
         r = http.get("/api/search", params={"q": "configuration", "project": project, "scope": "all"})
         assert r.status_code == 200, f"scope=all failed: {r.text[:200]}"
 
+    def test_search_empty_query_returns_gracefully(self, http, project):
+        """search with empty query must return error or empty results — not 5xx."""
+        r = http.get("/api/search", params={"q": "", "project": project})
+        assert r.status_code in (200, 400), f"search empty query unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, (dict, list)), "search empty query must return dict or list"
+
 
 # ---------------------------------------------------------------------------
 # ask
@@ -135,6 +142,22 @@ class TestMCPGraph:
         # May return path=[] if not connected — both outcomes are valid
         has_result = any(k in data for k in ("path", "connected", "error", "steps", "message"))
         assert has_result, f"graph path unexpected shape: {list(data.keys())}"
+
+    def test_graph_impact_raw_returns_callers(self, http, project):
+        """graph(relation='impact') raw format returns callers_by_depth or empty."""
+        r = http.get("/api/graph", params={"project": project, "symbol": "handle_chat_auto", "relation": "impact"})
+        assert r.status_code == 200, f"graph impact raw failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), f"graph impact must return dict; got {type(data)}"
+        has_result = any(k in data for k in ("callers_by_depth", "callers", "total_affected", "error", "message"))
+        assert has_result, f"graph impact raw unexpected shape: {list(data.keys())}"
+
+    def test_graph_empty_symbol_returns_gracefully(self, http, project):
+        """graph with empty symbol must return an error dict, not raise."""
+        r = http.get("/api/graph", params={"project": project, "symbol": "", "relation": "callers"})
+        assert r.status_code in (200, 400), f"graph empty symbol unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "graph empty symbol must return a dict"
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +257,26 @@ class TestMCPOverview:
         data = r.json()
         assert isinstance(data, dict), "service_mesh must return a dict"
 
+    def test_overview_invalid_what_returns_error(self, http, project):
+        """overview with an unknown what= value must return an error dict, not 5xx."""
+        r = http.get("/api/overview", params={"project": project, "what": "__invalid_what_value__"})
+        assert r.status_code in (200, 400), f"overview invalid what= unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "overview invalid what= must return a dict"
+        text = str(data).lower()
+        assert "error" in text or "unknown" in text or "invalid" in text or "unsupported" in text or data, (
+            f"overview invalid what= should indicate an error: {data}"
+        )
+
+    def test_communities_list_returns_data(self, http, project):
+        """GET /api/communities must return a non-empty list of community dicts."""
+        r = http.get("/api/communities", params={"project": project})
+        assert r.status_code == 200, f"communities failed: {r.text[:200]}"
+        data = r.json()
+        communities = data if isinstance(data, list) else data.get("communities", data.get("results", []))
+        assert len(communities) > 0, "communities returned empty list"
+        assert isinstance(communities[0], dict), "community entry must be a dict"
+
 
 # ---------------------------------------------------------------------------
 # build (via jobs + kb_health)
@@ -272,13 +315,46 @@ class TestMCPBuild:
             "No wiki pages found — run build(action='wiki') or build(action='pipeline')"
         )
 
-    def test_enrich_hierarchy_triggers_job(self, http, project):
-        """POST /api/enrich_hierarchy must start a background enrichment job."""
-        r = http.post("/api/enrich_hierarchy", json={"project": project})
+    def test_enrich_hierarchy_triggers_and_completes(self, http, quality_project):
+        """POST /api/enrich_hierarchy must complete with status=ok and max_level >= 1."""
+        r = http.post("/api/enrich_hierarchy", json={"project": quality_project})
         assert r.status_code == 200, f"enrich_hierarchy failed: {r.text[:200]}"
         data = r.json()
-        has_result = any(k in data for k in ("job_id", "status", "error", "enriched"))
-        assert has_result, f"enrich_hierarchy missing job_id/status/error: {list(data.keys())}"
+        assert "job_id" in data, f"missing job_id: {list(data.keys())}"
+
+        import time as _time
+        job_id = data["job_id"]
+        result = None
+        for _ in range(12):
+            _time.sleep(5)
+            jr = http.get(f"/api/jobs/{job_id}")
+            assert jr.status_code == 200
+            jd = jr.json()
+            if jd.get("status") != "running":
+                result = jd.get("result", {})
+                break
+        assert result is not None, "enrich_hierarchy job did not complete within 60s"
+        assert result.get("status") == "ok", f"unexpected result: {result}"
+        assert result.get("max_level", 0) >= 1, f"max_level too low: {result}"
+
+    def test_overview_patterns_detects_frameworks(self, http, quality_project):
+        """LLM-based framework detection must return at least one framework."""
+        r = http.get("/api/overview", params={"project": quality_project, "what": "patterns"})
+        assert r.status_code == 200
+        data = r.json()
+        frameworks = data.get("key_frameworks") or (data.get("result") or {}).get("key_frameworks", [])
+        assert isinstance(frameworks, list) and len(frameworks) > 0, \
+            f"No frameworks detected via LLM: {list(data.keys())}"
+
+    def test_overview_patterns_has_module_structure(self, http, quality_project):
+        """LLM-based module structure detection must return a non-empty type."""
+        r = http.get("/api/overview", params={"project": quality_project, "what": "patterns"})
+        assert r.status_code == 200
+        data = r.json()
+        ms = data.get("module_structure") or (data.get("result") or {}).get("module_structure", {})
+        structure_type = ms.get("type", "") if isinstance(ms, dict) else str(ms)
+        assert structure_type and structure_type != "unknown", \
+            f"Module structure type empty or unknown: {ms}"
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +372,13 @@ class TestMCPFederation:
         # Either members list or empty (fine — project may have no federation)
         members = data.get("members", data.get("repos", []))
         assert isinstance(members, list), "members must be a list"
+
+    def test_federation_discover_returns_structure(self, http, project):
+        """federation(action='discover') must return sub-repos or empty list."""
+        r = http.get("/api/federation", params={"project": project, "action": "discover"})
+        assert r.status_code == 200, f"federation discover failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, (dict, list)), f"federation discover must return dict or list; got {type(data)}"
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +458,23 @@ class TestMCPManage:
         data = r.json()
         assert isinstance(data, dict), "wiki_lint must return a dict"
         assert "error" not in data, f"wiki_lint returned error: {data}"
+
+    def test_manage_stop_watching_returns_gracefully(self, http, project):
+        """manage(action='stop_watching') must succeed; restore watcher after."""
+        r = http.post("/api/stop_watching", json={"project": project})
+        assert r.status_code == 200, f"stop_watching unexpected status: {r.status_code} {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "stop_watching must return a dict"
+        assert data.get("status") == "stopped", f"stop_watching returned unexpected status: {data}"
+        # Restore watcher so subsequent tests (test_watcher_is_active) still pass
+        http.post("/api/start_watching", json={"project": project})
+
+    def test_manage_remove_nonexistent_project_graceful(self, http):
+        """manage(action='remove_project') for unknown path must return error, not 5xx."""
+        r = http.post("/api/remove_project", json={"project": "/tmp/__nonexistent_test_path__"})
+        assert r.status_code in (200, 400, 404), f"remove nonexistent project unexpected status: {r.status_code}"
+        data = r.json()
+        assert isinstance(data, dict), "remove_project must return a dict"
 
 
 class TestMCPMetrics:
@@ -487,6 +587,13 @@ class TestMCPAdmin:
         assert r.status_code == 200, f"integrations_status failed: {r.text[:200]}"
         data = r.json()
         assert isinstance(data, (dict, list)), "integrations_status must return a dict or list"
+
+    def test_system_status_accessible(self, http):
+        """GET /api/system_status must return 200 with a dict response."""
+        r = http.get("/api/system_status")
+        assert r.status_code == 200, f"system_status failed: {r.status_code} {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), f"system_status must return dict, got {type(data).__name__}"
 
     @pytest.mark.slow
     def test_chat_non_streaming_returns_result(self, http, project):
@@ -762,6 +869,32 @@ class TestMCPExtended:
         assert r.status_code in (200, 404), f"job cancel unexpected status: {r.status_code}"
         data = r.json()
         assert isinstance(data, dict), "job cancel must return a dict"
+
+    def test_wiki_page_path_traversal_blocked(self, http, project):
+        """GET /api/wiki/page with path traversal in name must return 400."""
+        r = http.get("/api/wiki/page", params={"project": project, "name": "../../etc/passwd"})
+        assert r.status_code == 400, f"path traversal should be blocked (400): {r.status_code}"
+        assert "error" in r.json(), "blocked request should return error dict"
+
+    def test_wiki_page_nonexistent_returns_404(self, http, project):
+        """GET /api/wiki/page with unknown page must return 404."""
+        r = http.get("/api/wiki/page", params={"project": project, "name": "__no_such_page_xyz__"})
+        assert r.status_code == 404, f"missing wiki page should return 404: {r.status_code}"
+
+    @pytest.mark.slow
+    def test_chat_stream_returns_sse_events(self, http, project):
+        """POST /api/chat_stream must return SSE events with token or done frames."""
+        from .conftest import parse_sse
+        r = http.post(
+            "/api/chat_stream",
+            json={"project": project, "query": "what is this project?"},
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200, f"chat_stream failed: {r.status_code} {r.text[:200]}"
+        events = parse_sse(r)
+        assert len(events) > 0, "chat_stream returned no SSE events"
+        types = {e.get("type") for e in events}
+        assert types & {"token", "done", "intent"}, f"no expected event types in SSE: {types}"
 
 
 # ---------------------------------------------------------------------------

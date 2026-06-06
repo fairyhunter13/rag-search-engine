@@ -403,18 +403,10 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
                             break
             sample_files = primary_files
         if not sample_files:
-            # Return deterministic fallback based on primary_language
             if primary_language:
-                lang = primary_language
-                _EH = {"go": "if_err_nil", "java": "try_catch", "kotlin": "try_catch",
-                       "python": "try_except", "typescript": "try_catch", "javascript": "try_catch", "rust": "result_type"}
-                _NM = {"go": "camelCase", "java": "camelCase", "kotlin": "camelCase",
-                       "python": "snake_case", "typescript": "camelCase", "javascript": "camelCase", "rust": "snake_case"}
-                _TS = {"go": "table_driven", "java": "junit", "kotlin": "junit",
-                       "python": "pytest", "typescript": "jest", "javascript": "jest", "rust": "stdlib_testing"}
-                return {"language": lang, "error_handling": _EH.get(lang, "unknown"),
-                        "test_style": _TS.get(lang, "unknown"), "logging_lib": "unknown",
-                        "naming": _NM.get(lang, "unknown"), "common_struct_tags": []}
+                return {"language": primary_language, "error_handling": "unknown",
+                        "test_style": "unknown", "logging_lib": "unknown",
+                        "naming": "unknown", "common_struct_tags": []}
             return {}
 
         combined = ""
@@ -425,28 +417,13 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
         if not combined.strip():
             return {}
 
-        # Build deterministic fallback from what we already know
         lang = primary_language or "unknown"
-        _LANG_ERROR_HANDLING = {
-            "go": "if_err_nil", "java": "try_catch", "kotlin": "try_catch",
-            "python": "try_except", "typescript": "try_catch", "javascript": "try_catch",
-            "rust": "result_type",
-        }
-        _LANG_NAMING = {
-            "go": "camelCase", "java": "camelCase", "kotlin": "camelCase",
-            "python": "snake_case", "typescript": "camelCase", "javascript": "camelCase",
-            "rust": "snake_case",
-        }
-        _LANG_TEST = {
-            "go": "table_driven", "java": "junit", "kotlin": "junit",
-            "python": "pytest", "typescript": "jest", "javascript": "jest", "rust": "stdlib_testing",
-        }
         safe_fallback = {
             "language": lang,
-            "error_handling": _LANG_ERROR_HANDLING.get(lang, "unknown"),
-            "test_style": _LANG_TEST.get(lang, "unknown"),
+            "error_handling": "unknown",
+            "test_style": "unknown",
             "logging_lib": "unknown",
-            "naming": _LANG_NAMING.get(lang, "unknown"),
+            "naming": "unknown",
             "common_struct_tags": [],
         }
 
@@ -472,135 +449,51 @@ def _detect_conventions(root: Path, primary_language: str | None = None) -> dict
         return {}
 
 
-_FRAMEWORK_KEYWORDS: list[tuple[list[str], str]] = [
-    (["springframework", "spring-boot", "spring.boot"], "Spring Boot"),
-    (["spring-security", "spring.security"], "Spring Security"),
-    (["spring-data", "spring.data"], "Spring Data"),
-    (["grpc", "grpc-stub", "grpc-protobuf", "grpc-netty"], "gRPC"),
-    (["protobuf", "protoc-gen"], "Protocol Buffers"),
-    (["react", "react-dom", "react-router"], "React"),
-    (["nextjs", "next.js", "@next/"], "Next.js"),
-    (["vue", "vuex", "vue-router", "@vue/"], "Vue.js"),
-    (["angular", "@angular/"], "Angular"),
-    (["express", "express-"], "Express"),
-    (["fastapi", "uvicorn"], "FastAPI"),
-    (["django", "djangorestframework"], "Django"),
-    (["flask", "flask-"], "Flask"),
-    (["fasthttp", "gin-gonic", "echo", "fiber", "mux"], "Go Web"),
-    (["kafka", "sarama", "confluent-kafka", "@kafka/"], "Kafka"),
-    (["rabbitmq", "amqp", "pika"], "RabbitMQ"),
-    (["redis", "redisson", "jedis", "lettuce"], "Redis"),
-    (["mongo", "mongodb", "mongoose"], "MongoDB"),
-    (["postgres", "postgresql", "pgx", "pg"], "PostgreSQL"),
-    (["mysql", "mariadb", "mysqlclient"], "MySQL"),
-    (["hibernate", "jpa"], "Hibernate/JPA"),
-    (["gorm", "sqlx", "ent", "bun"], "Go ORM"),
-    (["firebase", "firestore"], "Firebase"),
-    (["opentelemetry", "otelgrpc", "opentracing"], "OpenTelemetry"),
-    (["datadog", "dogstatsd", "dd-trace"], "Datadog"),
-    (["prometheus", "grafana"], "Prometheus"),
-    (["kubernetes", "k8s", "helm"], "Kubernetes"),
-    (["docker", "containerd"], "Docker"),
-    (["jwt", "jjwt", "jsonwebtoken"], "JWT"),
-    (["graphql", "apollo", "gqlgen"], "GraphQL"),
-    (["swagger", "springdoc", "openapi"], "OpenAPI/Swagger"),
-    (["pytorch", "tensorflow", "keras"], "ML Framework"),
-    (["pandas", "numpy", "scipy"], "Data Science"),
-    (["celery", "dramatiq", "rq"], "Task Queue"),
-    (["sqlalchemy", "alembic"], "SQLAlchemy"),
-    (["pydantic"], "Pydantic"),
-    (["lombok"], "Lombok"),
-    (["junit", "mockito", "testcontainers"], "Testing (Java)"),
-    (["pytest", "unittest"], "Pytest"),
-    (["playwright", "selenium", "cypress"], "E2E Testing"),
-    (["tailwind", "tailwindcss"], "Tailwind CSS"),
-    (["typescript"], "TypeScript"),
-]
-
-
 def _detect_frameworks_from_dependencies(deps: dict[str, Any]) -> list[str]:
-    """Identify key frameworks from dependency manifest packages.
-
-    Uses keyword matching against well-known framework signatures as the primary
-    mechanism (deterministic, fast), then augments with LLM for any remaining
-    unrecognised packages.
-    """
+    """Identify key frameworks from dependency manifest packages using LLM."""
     packages = deps.get("packages", [])
     if not packages:
         return []
     names = [p.get("name", "").lower() for p in packages if p.get("name")][:80]
     if not names:
         return []
-
-    # Primary: keyword-based detection (deterministic)
-    found: dict[str, bool] = {}
-    for keywords, label in _FRAMEWORK_KEYWORDS:
-        for kw in keywords:
-            if any(kw in n for n in names):
-                found[label] = True
-                break
-    detected = list(found)[:10]
-
-    # If we already found 3+ well-known frameworks, return without LLM
-    if len(detected) >= 3:
-        return detected
-
-    # Supplement: LLM for any remaining unrecognised packages
-    unrecognised = [n for n in names[:40] if not any(kw in n for kws, _ in _FRAMEWORK_KEYWORDS for kw in kws)]
-    if unrecognised:
-        prompt = (
-            "Given these software package names, identify any key frameworks or major libraries.\n"
-            f"Packages: {json.dumps(unrecognised[:30])}\n"
-            "Respond ONLY with a JSON array of framework names. Max 5. "
-            "If none recognized, return []."
-        )
-        result = _llm_classify(prompt, [])
-        if isinstance(result, list):
-            for f in result[:5]:
-                if f and str(f) not in detected:
-                    detected.append(str(f))
-
-    return detected[:10]
+    prompt = (
+        "Given these software package names from a project's dependency manifest, "
+        "identify the key frameworks and major libraries in use.\n"
+        f"Packages: {json.dumps(names[:60])}\n"
+        "Respond ONLY with a JSON array of framework/library names (strings). "
+        "Max 10. If none recognized, return []."
+    )
+    result = _llm_classify(prompt, [])
+    if isinstance(result, list):
+        return [str(f) for f in result if f][:10]
+    return []
 
 
 def _infer_module_structure_from_dirs(
     top_dirs: list[str], second_level: dict[str, list[str]], root: Path | None = None
 ) -> str:
-    """Keyword-based module structure detection from directory names."""
-    # Go workspace: go.work present → workspace monorepo
+    """LLM-based module structure detection from directory names."""
     if root and (root / "go.work").exists():
         return "go_workspace"
-    dirs_lower = {d.lower() for d in top_dirs}
-    # Go standard: has go.mod / go.work or typical go dirs
-    if "cmd" in dirs_lower and ("internal" in dirs_lower or "pkg" in dirs_lower):
-        return "go_standard"
-    # Java/Kotlin Spring: src/main/java layout
-    if "src" in dirs_lower:
-        src_sub = {s.lower() for s in second_level.get("src", [])}
-        if "main" in src_sub or "test" in src_sub:
-            return "layered_mvc"
-    # Python src layout
-    if "src" in dirs_lower and ("tests" in dirs_lower or "test" in dirs_lower):
-        return "src_layout"
-    # Clean architecture signals
-    if {"domain", "application", "infrastructure", "presentation"} & dirs_lower:
-        return "clean_architecture"
-    if {"domain", "usecase", "repository"} & dirs_lower:
-        return "clean_architecture"
-    # Feature-sliced design
-    if {"features", "entities", "shared", "widgets"} & dirs_lower:
-        return "feature_sliced"
-    # Monorepo signals
-    if {"packages", "apps", "services", "libs", "modules"} & dirs_lower:
-        return "monorepo"
-    # Layered MVC signals
-    if {"controllers", "services", "models", "repositories"} & dirs_lower:
-        return "layered_mvc"
-    if {"handler", "service", "repository", "model"} & dirs_lower:
-        return "layered_mvc"
-    # Routes-based (Next.js / Nuxt)
-    if "pages" in dirs_lower or "routes" in dirs_lower:
-        return "routes_based"
+    if not top_dirs:
+        return "unknown"
+    prompt = (
+        "Given these top-level directory names of a software project, "
+        "respond with a single snake_case pattern name.\n"
+        f"Top-level dirs: {json.dumps(top_dirs[:30])}\n"
+        "Examples: go_standard, layered_mvc, clean_architecture, feature_sliced, "
+        "monorepo, src_layout, routes_based. No explanation."
+    )
+    try:
+        from opencode_search.enricher.client import create_llm_client
+        client = create_llm_client()
+        raw = client.chat([{"role": "user", "content": prompt}], max_tokens=30, temperature=0.1)
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip().strip('"\'').strip()
+        if raw and "<" not in raw and len(raw) < 60:
+            return raw
+    except Exception:
+        pass
     return "unknown"
 
 
@@ -625,94 +518,30 @@ def _detect_module_structure(root: Path) -> dict[str, Any]:
             if subdirs:
                 second_level[d] = subdirs[:8]
 
-    # Primary: keyword-based detection (deterministic, fast)
-    kw_type = _infer_module_structure_from_dirs(top_dirs, second_level, root=root)
-    if kw_type != "unknown":
-        return {"type": kw_type, "top_packages": top_dirs[:8], "detected_dirs": top_dirs[:20]}
-
-    # Fallback: LLM for unusual layouts
-    prompt = (
-        "Analyze this software project directory structure and classify its module organization.\n"
-        f"Top-level dirs: {json.dumps(top_dirs[:20])}\n"
-        f"Second-level dirs: {json.dumps(second_level)}\n"
-        "Respond with a JSON object. Use a concrete pattern name for 'type' — do not use placeholders.\n"
-        '{"type":"go_standard","top_packages":["cmd","internal"],"detected_dirs":["cmd","internal","pkg"]}\n'
-        "type options: go_standard | clean_architecture | layered_mvc | feature_sliced | monorepo | src_layout"
-    )
-    fallback = {"type": "unknown", "top_packages": top_dirs[:8], "detected_dirs": top_dirs[:20]}
-    result = _llm_classify(prompt, fallback)
-    if isinstance(result, dict) and "type" in result:
-        inferred_type = result.get("type", "unknown")
-        # Reject LLM placeholder echoes
-        if inferred_type and "<" not in inferred_type and inferred_type != "unknown":
-            return {
-                "type": inferred_type,
-                "top_packages": result.get("top_packages", top_dirs[:8]),
-                "detected_dirs": result.get("detected_dirs", top_dirs[:20]),
-            }
-    return fallback
-
-
-def _synthesize_architecture_label(frameworks: list[str], struct_type: str) -> str:
-    """Keyword-based architecture label synthesis from frameworks and module pattern."""
-    fw_lower = {f.lower() for f in frameworks}
-    # gRPC microservices
-    if "grpc" in fw_lower and struct_type in ("go_standard", "layered_mvc"):
-        return "microservices_grpc"
-    # Spring Boot
-    if "spring boot" in fw_lower:
-        if "grpc" in fw_lower:
-            return "spring_boot_grpc"
-        return "spring_boot_mvc"
-    # Go standard REST
-    if "go web" in fw_lower and struct_type == "go_standard":
-        return "go_rest_api"
-    # Django/FastAPI/Flask Python
-    if "django" in fw_lower:
-        return "django_mvc"
-    if "fastapi" in fw_lower:
-        return "fastapi_rest"
-    if "flask" in fw_lower:
-        return "flask_rest"
-    # React/Next.js frontend
-    if "next.js" in fw_lower:
-        return "nextjs_fullstack"
-    if "react" in fw_lower:
-        return "react_spa"
-    # Monorepo/federation
-    if struct_type in ("monorepo", "go_workspace"):
-        return "monorepo_federation"
-    # Clean architecture
-    if struct_type == "clean_architecture":
-        return "clean_architecture"
-    # Fall through to struct_type if it's meaningful
-    if struct_type and struct_type != "unknown":
-        return struct_type
-    return "unknown"
+    struct_type = _infer_module_structure_from_dirs(top_dirs, second_level, root=root)
+    return {"type": struct_type, "top_packages": top_dirs[:8], "detected_dirs": top_dirs[:20]}
 
 
 def _detect_architecture(frameworks: list[str], module_structure: dict[str, Any]) -> str:
-    """Synthesize a high-level architecture label from frameworks and structure."""
+    """Synthesize a high-level architecture label from frameworks and structure using LLM."""
     struct_type = module_structure.get("type", "unknown")
     top_packages = module_structure.get("top_packages", [])
-
-    # Primary: keyword-based synthesis (deterministic)
-    kw_label = _synthesize_architecture_label(frameworks, struct_type)
-    if kw_label != "unknown":
-        return kw_label
-
-    # Fallback: LLM synthesis for unusual combinations
     prompt = (
-        "Synthesize one concise snake_case software architecture label from these facts.\n"
+        "Synthesize one concise snake_case architecture label for this project.\n"
         f"Key frameworks: {json.dumps(frameworks)}\n"
         f"Module pattern: {struct_type}\n"
         f"Key packages: {json.dumps(top_packages[:10])}\n"
-        "Respond ONLY with a JSON string value. Example output: \"microservices_grpc\"\n"
-        "Use snake_case. Do not include quotation marks or explanation."
+        "Respond with a single snake_case label only. No explanation."
     )
-    result = _llm_classify(prompt, struct_type)
-    if isinstance(result, str) and result.strip() and "<" not in result:
-        return result.strip()
+    try:
+        from opencode_search.enricher.client import create_llm_client
+        client = create_llm_client()
+        raw = client.chat([{"role": "user", "content": prompt}], max_tokens=30, temperature=0.1)
+        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip().strip('"\'').strip()
+        if raw and "<" not in raw and len(raw) < 60:
+            return raw
+    except Exception:
+        pass
     return struct_type if struct_type != "unknown" else "unknown"
 
 

@@ -123,7 +123,7 @@ async def _fetch_code_context(
         ctx = "\n".join(lines) if lines else ""
         return ctx, paths, len(results)
     except Exception as exc:
-        log.debug("kb_chat: code context fetch failed: %s", exc)
+        log.warning("kb_chat: code context fetch failed: %s", exc)
         return "", [], 0
 
 
@@ -187,7 +187,7 @@ async def _fetch_community_context(
         ctx = "\n".join(lines) if lines else ""
         return ctx, selected, len(selected)
     except Exception as exc:
-        log.debug("kb_chat: community context fetch failed: %s", exc)
+        log.warning("kb_chat: community context fetch failed: %s", exc)
         return "", [], 0
 
 
@@ -206,7 +206,7 @@ async def _fetch_wiki_context(
         ctx = "\n\n".join(lines) if lines else ""
         return ctx, len(pages)
     except Exception as exc:
-        log.debug("kb_chat: wiki context fetch failed: %s", exc)
+        log.warning("kb_chat: wiki context fetch failed: %s", exc)
         return "", 0
 
 
@@ -246,7 +246,7 @@ async def _fetch_hierarchy_communities(
     try:
         return await asyncio.to_thread(_load)
     except Exception as exc:
-        log.debug("kb_chat: hierarchy communities fetch failed: %s", exc)
+        log.warning("kb_chat: hierarchy communities fetch failed: %s", exc)
         return []
 
 
