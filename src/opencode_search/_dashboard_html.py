@@ -423,7 +423,7 @@ async function loadProjects(){
     if(_proj)sel.value=_proj;
     return projs;
   }catch(e){
-    showToast('Failed to load projects: '+e.message,'error');
+    toast('Failed to load projects: '+e.message,'err');
     return [];
   }
 }

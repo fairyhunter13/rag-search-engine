@@ -337,11 +337,35 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
 
     @mcp.custom_route("/api/federation", methods=["GET"], include_in_schema=False)
     async def api_federation(request: Request) -> JSONResponse:
-        from opencode_search.handlers import handle_list_federation
+        from opencode_search.handlers._federation import (
+            handle_add_federation_member,
+            handle_discover_federation,
+            handle_index_federation,
+            handle_list_federation,
+            handle_remove_federation_member,
+        )
         project = request.query_params.get("project", "")
+        action = request.query_params.get("action", "list")
+        member = request.query_params.get("member", "")
+
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_list_federation(project_path=project)
+
+        if action == "discover":
+            result = await handle_discover_federation(project_path=project)
+        elif action == "add":
+            if not member:
+                return JSONResponse({"error": "member param required for action=add"}, status_code=400)
+            result = await handle_add_federation_member(root_path=project, member_path=member)
+        elif action == "remove":
+            if not member:
+                return JSONResponse({"error": "member param required for action=remove"}, status_code=400)
+            result = await handle_remove_federation_member(root_path=project, member_path=member)
+        elif action == "index":
+            result = await handle_index_federation(root_path=project)
+        else:
+            result = await handle_list_federation(project_path=project)
+
         return JSONResponse(result)
 
     @mcp.custom_route("/api/metrics", methods=["GET"], include_in_schema=False)

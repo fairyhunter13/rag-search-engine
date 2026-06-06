@@ -83,6 +83,16 @@ class TestMCPAsk:
         has_trace = any(k in data for k in ("entry_points", "call_chain", "algorithm", "design_rationale", "answer"))
         assert has_trace, f"feature scope returned no trace data; keys={list(data.keys())}"
 
+    @pytest.mark.slow
+    def test_ask_wiki_scope_returns_answer(self, http, project):
+        """ask with scope=wiki must call handle_wiki_query and return a result dict."""
+        r = http.get("/api/ask", params={"project": project, "q": "how does this project work?", "scope": "wiki"})
+        assert r.status_code == 200, f"ask wiki scope failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), "ask wiki scope must return dict"
+        has_result = "answer" in data or "results" in data or "pages" in data or "error" in data
+        assert has_result, f"ask wiki scope returned unexpected shape: {list(data.keys())}"
+
 
 # ---------------------------------------------------------------------------
 # graph
@@ -380,6 +390,30 @@ class TestMCPFederation:
         data = r.json()
         assert isinstance(data, (dict, list)), f"federation discover must return dict or list; got {type(data)}"
 
+    def test_federation_add_member_same_path_error(self, http, project):
+        """action=add with root==member must return graceful error dict."""
+        r = http.get("/api/federation", params={"project": project, "action": "add", "member": project})
+        assert r.status_code == 200, f"federation add failed: {r.text[:200]}"
+        data = r.json()
+        assert "error" in data, f"expected error for same-path add, got: {data}"
+
+    def test_federation_remove_member_not_registered_error(self, http, project):
+        """action=remove with non-member path must return graceful error dict."""
+        r = http.get("/api/federation", params={
+            "project": project, "action": "remove", "member": "/tmp/nonexistent-federation-xyz",
+        })
+        assert r.status_code == 200, f"federation remove failed: {r.text[:200]}"
+        data = r.json()
+        assert "error" in data, f"expected error for non-member remove, got: {data}"
+
+    def test_federation_index_returns_structure(self, http, project):
+        """action=index must return a dict with indexed/failed keys (ok even with 0 members)."""
+        r = http.get("/api/federation", params={"project": project, "action": "index"})
+        assert r.status_code == 200, f"federation index failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict), f"federation index must return dict, got {type(data)}"
+        assert "indexed" in data or "error" in data, f"unexpected response shape: {data}"
+
 
 # ---------------------------------------------------------------------------
 # manage
@@ -594,6 +628,15 @@ class TestMCPAdmin:
         assert r.status_code == 200, f"system_status failed: {r.status_code} {r.text[:200]}"
         data = r.json()
         assert isinstance(data, dict), f"system_status must return dict, got {type(data).__name__}"
+
+    def test_healthz_returns_ok(self, http):
+        """GET /healthz must return ok=true with service name and uptime."""
+        r = http.get("/healthz")
+        assert r.status_code == 200, f"/healthz failed: {r.status_code} {r.text[:200]}"
+        data = r.json()
+        assert data.get("ok") is True, f"healthz must have ok=true: {data}"
+        assert data.get("service") == "opencode-search", f"wrong service name: {data}"
+        assert isinstance(data.get("uptime_s"), (int, float)), f"uptime_s missing: {data}"
 
     @pytest.mark.slow
     def test_chat_non_streaming_returns_result(self, http, project):

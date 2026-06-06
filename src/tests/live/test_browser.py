@@ -444,6 +444,18 @@ class TestChatStreaming:
         if meta.count() > 0:
             assert meta.is_visible(), ".elapsed/.msg-meta found but not visible"
 
+    def test_chat_response_has_rendered_html(self, page, live_project):
+        """AI response bubble must contain rendered HTML elements (mdSafe ran)."""
+        _navigate_to_chat(page)
+        _send_message(page, "Show me a code example from this project")
+        _wait_for_ai_response(page)
+        bubble = page.locator(".msg.ai:not(.thinking) .msg-bubble").first
+        assert bubble.count() > 0, "No AI bubble found after response"
+        has_html = page.evaluate(
+            "document.querySelector('.msg.ai:not(.thinking) .msg-bubble')?.children?.length > 0"
+        )
+        assert has_html, "msg-bubble has no HTML children — mdSafe may not have rendered"
+
 
 # ---------------------------------------------------------------------------
 # View: Admin
@@ -567,6 +579,30 @@ class TestAdminView:
         refresh_btn.click()
         page.wait_for_timeout(500)
         assert page.url.startswith(DASHBOARD_URL), "Page navigated away after Refresh click"
+
+    def test_admin_operation_shows_toast(self, page):
+        """Clicking an Admin operation button must produce a toast notification."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        if not vacuum_btn.count():
+            pytest.skip("Vacuum button not found in Admin view")
+        vacuum_btn.click()
+        page.wait_for_function(
+            "document.querySelector('#toast div') !== null",
+            timeout=8_000,
+        )
+        toast_el = page.locator("#toast div").first
+        assert toast_el.count() > 0, "#toast div never appeared after Vacuum"
 
 
 # ---------------------------------------------------------------------------
