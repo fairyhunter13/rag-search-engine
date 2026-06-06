@@ -240,7 +240,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         if not project or not name:
             return JSONResponse({"error": "project and name params required"}, status_code=400)
         wiki_dir = get_project_wiki_dir(project)
-        page_path = wiki_dir / f"{name}.md"
+        page_path = (wiki_dir / f"{name}.md").resolve()
+        if not str(page_path).startswith(str(wiki_dir.resolve())):
+            return JSONResponse({"error": "Invalid page name"}, status_code=400)
         if not page_path.exists():
             return JSONResponse({"error": f"Page not found: {name}"}, status_code=404)
         return JSONResponse({"name": name, "content": page_path.read_text(errors="replace")})
@@ -1037,6 +1039,46 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
         result = await handle_vacuum(project_path=project, dry_run=dry_run)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/stop_watching", methods=["POST"], include_in_schema=False)
+    async def api_stop_watching(request: Request) -> JSONResponse:
+        """Stop the file watcher for a project. POST {project}."""
+        from opencode_search.handlers._watch import handle_stop_watching
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_stop_watching(path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/start_watching", methods=["POST"], include_in_schema=False)
+    async def api_start_watching(request: Request) -> JSONResponse:
+        """Start (or resume) the file watcher for a project. POST {project}."""
+        from opencode_search.handlers._watch import handle_ensure_project_watching
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_ensure_project_watching(path=project, persist=True)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/remove_project", methods=["POST"], include_in_schema=False)
+    async def api_remove_project(request: Request) -> JSONResponse:
+        """Remove a project from the registry. POST {project, delete_index?}."""
+        from opencode_search.handlers._vacuum import handle_remove_project
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        delete_index = bool(body.get("delete_index", False))
+        result = await handle_remove_project(project_path=project, delete_index=delete_index)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/pr_impact", methods=["GET", "POST"], include_in_schema=False)

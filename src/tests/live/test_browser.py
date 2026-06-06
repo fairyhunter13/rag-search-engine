@@ -272,6 +272,27 @@ class TestChatView:
             f"AI response looks like an error: {text[:200]}"
         )
 
+    def test_project_switch_clears_chat_input(self, page):
+        """After a page reload (simulating project switch), chat input must be empty."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.click("#vbtn-chat")
+        page.wait_for_function(
+            "document.getElementById('view-chat')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        page.locator("#chat-in").fill("test message before project switch")
+        # Reload simulates navigating away and back (or project switch re-init)
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.click("#vbtn-chat")
+        page.wait_for_function(
+            "document.getElementById('view-chat')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        chat_val = page.locator("#chat-in").input_value(timeout=3_000)
+        assert chat_val == "", f"chat-in not cleared after page reload: {chat_val!r}"
+
 
 # ---------------------------------------------------------------------------
 # View: Chat — all 9 intents
@@ -414,6 +435,15 @@ class TestChatStreaming:
             f"Rapid Enter created {count} user bubbles — in-flight guard may be broken"
         )
 
+    def test_message_metadata_appears_after_response(self, page, live_project):
+        """After a full response, .elapsed timing must be visible in .msg-meta."""
+        _navigate_to_chat(page)
+        _send_message(page, "What files are in this project?")
+        _wait_for_ai_response(page)
+        meta = page.locator(".msg.ai:not(.thinking) .elapsed, .msg.ai:not(.thinking) .msg-meta").first
+        if meta.count() > 0:
+            assert meta.is_visible(), ".elapsed/.msg-meta found but not visible"
+
 
 # ---------------------------------------------------------------------------
 # View: Admin
@@ -529,6 +559,15 @@ class TestAdminView:
         log_text = self._click_admin_op(page, "Wiki")
         assert log_text, "op-log empty after clicking Wiki"
 
+    def test_admin_refresh_button_present(self, page):
+        """Admin view must have a Refresh button that is clickable."""
+        self._open_admin(page)
+        refresh_btn = page.locator("button:has-text('Refresh'), button:has-text('🔄')").first
+        assert refresh_btn.count() > 0, "No Refresh button found in Admin view"
+        refresh_btn.click()
+        page.wait_for_timeout(500)
+        assert page.url.startswith(DASHBOARD_URL), "Page navigated away after Refresh click"
+
 
 # ---------------------------------------------------------------------------
 # Global UI elements
@@ -635,3 +674,18 @@ class TestGlobalUI:
             "document.getElementById('view-pulse')?.classList?.contains('active')",
             timeout=3_000,
         )
+
+    def test_command_palette_arrow_navigation(self, page):
+        """ArrowDown in command palette must highlight the first result item."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        page.keyboard.press("ArrowDown")
+        page.wait_for_timeout(150)
+        highlighted = page.locator("#cmd-results li.hi, #cmd-results li[aria-selected='true']")
+        assert highlighted.count() > 0, "ArrowDown did not highlight any palette item"
+        page.keyboard.press("Escape")

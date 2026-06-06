@@ -125,6 +125,7 @@ def _parse_rust(text: str) -> list[dict]:
 async def _parse_with_llm(text: str) -> list[dict]:
     """Use query LLM to extract stack frames from any language traceback."""
     try:
+        text = text[:8000]
         llm = create_query_llm_client()
         prompt = (
             "Extract stack frames from this error traceback.\n"

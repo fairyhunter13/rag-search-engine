@@ -327,7 +327,7 @@ async def _enrich_communities(
                     llm.community_summary, summaries, code_samples,
                 )
             except Exception as exc:
-                log.debug("community LLM call failed for %d: %s", community.id, exc)
+                log.warning("community LLM call failed for community %d: %s", community.id, exc)
                 return
             now = datetime.now(UTC).isoformat()
             community.title = title
@@ -370,7 +370,7 @@ async def handle_enrich_hierarchy(
 
         for level in range(2, effective_max + 1):
             level_comms = gs.get_communities(level=level, order_by_size=True)
-            unenriched = [c for c in level_comms if not c.title]
+            unenriched = [c for c in level_comms if not c.title or c.title == f"Community {c.id}"]
             if not unenriched:
                 continue
 
@@ -395,7 +395,7 @@ async def handle_enrich_hierarchy(
                 comm: CommunityData,
                 _map: dict = children_by_parent,
                 _s: asyncio.Semaphore = _sem,
-            ) -> tuple[CommunityData, str, str] | None:
+            ) -> tuple[CommunityData, str, str, str] | None:
                 children = _map.get(comm.id, [])
                 if not children:
                     return None
@@ -406,14 +406,14 @@ async def handle_enrich_hierarchy(
                     return None
                 async with _s:
                     try:
-                        title, summary = await asyncio.to_thread(
+                        title, summary, semantic_type = await asyncio.to_thread(
                             llm.community_summary,
                             child_summaries,
                             None,
                         )
-                        return comm, title, summary
+                        return comm, title, summary, semantic_type
                     except Exception as exc:
-                        log.debug("macro community LLM failed for %d: %s", comm.id, exc)
+                        log.warning("macro community LLM failed for %d: %s", comm.id, exc)
                         return None
 
             # Process in batches: write after each batch so partial progress
@@ -433,9 +433,11 @@ async def handle_enrich_hierarchy(
                 for item in results:
                     if item is None:
                         continue
-                    comm, title, summary = item
+                    comm, title, summary, semantic_type = item
                     comm.title = title
                     comm.summary = summary
+                    if semantic_type:
+                        comm.semantic_type = semantic_type
                     comm.generated_at = now
                     updated_batch.append(comm)
                     total_enriched += 1

@@ -57,9 +57,37 @@ def project(http):
     all_indexed = [p for p in projects if p.get("communities", 0) > 0]
     if not all_indexed:
         pytest.skip("No indexed project with communities — run build(action='pipeline') first")
-    # Prefer a project with > 100 communities for richer test coverage
-    large = [p["path"] for p in all_indexed if p.get("communities", 0) > 100]
-    return large[0] if large else all_indexed[0]["path"]
+    # Prefer the largest well-enriched project (>50% enrichment, accessible graph)
+    large = sorted(
+        [p for p in all_indexed if p.get("communities", 0) > 100],
+        key=lambda p: p.get("communities", 0),
+        reverse=True,
+    )
+    for candidate in large[:8]:
+        try:
+            h = http.get("/api/kb_health", params={"project": candidate["path"]})
+            if h.status_code == 200 and h.json().get("enrichment_pct", 0) > 50:
+                return candidate["path"]
+        except Exception:
+            continue
+    if large:
+        return large[0]["path"]
+    return all_indexed[0]["path"]
+
+
+@pytest.fixture(scope="session")
+def quality_project(http):
+    """Return opencode-search-engine path for engine-specific quality tests.
+
+    Tests that reference engine-internal symbols (handle_chat_auto,
+    handle_debug_trace) must use this fixture instead of the generic `project`.
+    """
+    r = http.get("/api/projects")
+    projects = r.json().get("projects", [])
+    matches = [p["path"] for p in projects if p.get("path", "").endswith("opencode-search-engine")]
+    if not matches:
+        pytest.skip("opencode-search-engine not in registry — run build(action='pipeline') first")
+    return matches[0]
 
 
 def parse_sse(response: httpx.Response) -> list[dict]:

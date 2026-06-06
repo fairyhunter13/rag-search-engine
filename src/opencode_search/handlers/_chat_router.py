@@ -498,45 +498,12 @@ async def _handle_nl_debug(query: str, project_path: str) -> dict[str, Any]:
 
 # ── Architecture handler (PathRAG-inspired layered synthesis) ─────────────────
 
-_ARCH_LAYER_MAP = {
-    "entry_point": "API & Entry Layer",
-    "handler": "API & Entry Layer",
-    "router": "API & Entry Layer",
-    "api": "API & Entry Layer",
-    "business_process": "Business Logic Layer",
-    "workflow": "Business Logic Layer",
-    "service": "Business Logic Layer",
-    "processor": "Business Logic Layer",
-    "storage": "Data Layer",
-    "repository": "Data Layer",
-    "data_access": "Data Layer",
-    "database": "Data Layer",
-    "utility": "Infrastructure Layer",
-    "infrastructure": "Infrastructure Layer",
-    "config": "Infrastructure Layer",
-    "client": "Infrastructure Layer",
-}
-
-_ARCH_LAYER_ORDER = [
-    "API & Entry Layer",
-    "Business Logic Layer",
-    "Data Layer",
-    "Infrastructure Layer",
-]
-
 _ARCH_SYSTEM_PROMPT = (
     "You are a senior software architect. "
-    "Write a comprehensive end-to-end architecture narrative structured as FOUR sections:\n"
-    "1. **API & Entry Layer** — how requests/events enter the system "
-    "(HTTP routes, CLI commands, MCP tools, background jobs)\n"
-    "2. **Business Logic Layer** — the core business workflows and services "
-    "that process incoming requests\n"
-    "3. **Data Layer** — how data is read and written "
-    "(graph DB, vector DB, file system, caches)\n"
-    "4. **Infrastructure Layer** — LLM/AI integration, external services, "
-    "configuration, monitoring\n\n"
-    "For each layer name the key files and functions. "
-    "Close with a concrete example: one request traced through all four layers. "
+    "Write a comprehensive end-to-end architecture narrative. "
+    "Organise the code communities into meaningful architectural layers or domains based on "
+    "their semantic type and purpose. For each layer or domain, name the key files and functions. "
+    "Close with a concrete example: one request traced through all layers. "
     "Use ONLY the provided context — never fabricate files or functions not present."
 )
 
@@ -573,37 +540,14 @@ async def _handle_architecture(
             _fetch_wiki_context(query, project_path, top_k=5),
         )
 
-    # Check semantic_type coverage — may be NULL if project was enriched before
-    # the semantic_type field was introduced (common in older indexes).
-    typed_count = sum(1 for c in comm_list if c.get("semantic_type"))
-    use_flat = typed_count < len(comm_list) * 0.2  # < 20% typed → flat-list mode
-
     ctx_sections: list[str] = []
 
-    if use_flat:
-        # Flat-list: pass all communities as plain list; LLM does its own grouping
+    if comm_list:
         comm_lines = "\n".join(
-            f"  {c['title']}: {(c.get('summary') or '')[:200]}"
+            f"  [{c.get('semantic_type', 'utility')}] {c['title']}: {(c.get('summary') or '')[:200]}"
             for c in comm_list[:30]
         )
-        ctx_sections.append(f"**Communities ({len(comm_list)} total, sample):**\n{comm_lines}")
-        layers = {name: [] for name in _ARCH_LAYER_ORDER}
-    else:
-        # Group communities by semantic_type into architectural layers
-        layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
-        for comm in comm_list:
-            st = (comm.get("semantic_type") or "utility").lower()
-            layer = _ARCH_LAYER_MAP.get(st, "Business Logic Layer")
-            layers[layer].append(comm)
-
-        for layer_name in _ARCH_LAYER_ORDER:
-            comms = layers[layer_name]
-            if comms:
-                comm_lines = "\n".join(
-                    f"  [{c['semantic_type']}] {c['title']}: {(c.get('summary') or '')[:200]}"
-                    for c in comms[:6]
-                )
-                ctx_sections.append(f"**{layer_name}:**\n{comm_lines}")
+        ctx_sections.append(f"**Code communities ({len(comm_list)} indexed):**\n{comm_lines}")
 
     # Append code locations — anchors LLM to real file paths
     if code_ctx:
@@ -648,17 +592,13 @@ async def _handle_architecture(
         except Exception as e:
             log.warning("Architecture LLM failed: %s", e)
             lines = [f"**Architecture Overview — {comm_count} communities indexed:**"]
-            for layer_name in _ARCH_LAYER_ORDER:
-                comms = layers[layer_name]
-                if comms:
-                    lines.append(f"\n**{layer_name}:**")
-                    for c in comms[:4]:
-                        lines.append(f"- {c['title']}: {c['summary'][:100]}")
+            for c in comm_list[:12]:
+                st = c.get("semantic_type", "")
+                prefix = f"[{st}] " if st else ""
+                lines.append(f"- {prefix}{c['title']}: {(c.get('summary') or '')[:100]}")
             answer = "\n".join(lines)
 
-    sources = list(dict.fromkeys(
-        c["title"] for ln in _ARCH_LAYER_ORDER for c in layers[ln]
-    ))[:8]
+    sources = list(dict.fromkeys(c["title"] for c in comm_list))[:8]
 
     return {
         "answer": answer,
@@ -1418,35 +1358,14 @@ async def _stream_architecture(
         _fetch_wiki_context(query, project_path, top_k=5),
     )
 
-    # Group and build layered context — gracefully handles NULL semantic_type
-    typed_count = sum(1 for c in comm_list if c.get("semantic_type"))
-    use_flat = typed_count < len(comm_list) * 0.2
-
     ctx_sections: list[str] = []
 
-    if use_flat:
+    if comm_list:
         comm_lines = "\n".join(
-            f"  {c['title']}: {(c.get('summary') or '')[:200]}"
+            f"  [{c.get('semantic_type', 'utility')}] {c['title']}: {(c.get('summary') or '')[:200]}"
             for c in comm_list[:30]
         )
-        ctx_sections.append(f"**Communities ({len(comm_list)} total, sample):**\n{comm_lines}")
-        layers: dict[str, list[dict]] = {name: [] for name in _ARCH_LAYER_ORDER}
-    else:
-        layers = {name: [] for name in _ARCH_LAYER_ORDER}
-        for comm in comm_list:
-            st = (comm.get("semantic_type") or "utility").lower()
-            layers[_ARCH_LAYER_MAP.get(st, "Business Logic Layer")].append(comm)
-
-        for layer_name in _ARCH_LAYER_ORDER:
-            comms = layers[layer_name]
-            if comms:
-                ctx_sections.append(
-                    f"**{layer_name}:**\n"
-                    + "\n".join(
-                        f"  [{c['semantic_type']}] {c['title']}: {(c.get('summary') or '')[:200]}"
-                        for c in comms[:6]
-                    )
-                )
+        ctx_sections.append(f"**Code communities ({len(comm_list)} indexed):**\n{comm_lines}")
 
     if code_ctx:
         ctx_sections.append(f"**Actual code locations (use these exact paths):**\n{code_ctx}")
@@ -1509,9 +1428,7 @@ async def _stream_architecture(
                 yield {"type": "token", "text": chunk}
             await asyncio.sleep(0)
 
-    sources = list(dict.fromkeys(
-        c["title"] for ln in _ARCH_LAYER_ORDER for c in layers[ln]
-    ))[:8]
+    sources = list(dict.fromkeys(c["title"] for c in comm_list))[:8]
     yield {
         "type": "done",
         "intent": "architecture",

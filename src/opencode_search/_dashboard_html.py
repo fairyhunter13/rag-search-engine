@@ -410,21 +410,29 @@ function switchView(name){
 
 /* ── Project selector ────────────────────────────────────────────────────── */
 async function loadProjects(){
-  const r=await fetch('/api/projects');
-  const d=await r.json();
-  const sel=$('project-sel');
-  const projs=d.projects||[];
-  sel.innerHTML=projs.length
-    ?projs.map(p=>`<option value="${esc(p.path)}">${esc(p.path.split('/').slice(-2).join('/'))}</option>`).join('')
-    :'<option value="">No projects indexed</option>';
-  if(!_proj&&projs.length)_proj=projs[0].path;
-  if(_proj)sel.value=_proj;
-  return projs;
+  try{
+    const r=await fetch('/api/projects');
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d=await r.json();
+    const sel=$('project-sel');
+    const projs=d.projects||[];
+    sel.innerHTML=projs.length
+      ?projs.map(p=>`<option value="${esc(p.path)}">${esc(p.path.split('/').slice(-2).join('/'))}</option>`).join('')
+      :'<option value="">No projects indexed</option>';
+    if(!_proj&&projs.length)_proj=projs[0].path;
+    if(_proj)sel.value=_proj;
+    return projs;
+  }catch(e){
+    showToast('Failed to load projects: '+e.message,'error');
+    return [];
+  }
 }
 
 function switchProject(path){
   _proj=path;
   _sparkHistory={};
+  _chatHistory=[];
+  _chatInFlight=false;
   const active=document.querySelector('.view.active');
   if(active&&active.id==='view-pulse')loadPulse();
   else if(active&&active.id==='view-admin')loadAdmin();
