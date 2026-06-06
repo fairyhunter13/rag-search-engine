@@ -105,10 +105,10 @@ async def classify_intent_llm(query: str) -> str:
             intent = m.group(1)
             if intent in _VALID_INTENTS:
                 return intent
-        # Try to find a valid intent anywhere in the LLM response (structured output variant)
-        for intent in _VALID_INTENTS:
-            if f'"{intent}"' in text or f"'{intent}'" in text:
-                return intent
+        # Strict-only: if JSON parse didn't yield a valid intent, raise so caller emits error
+        raise ValueError(f"LLM returned unparseable intent: {text[:120]!r}")
+    except ValueError:
+        raise
     except Exception as e:
         log.debug("LLM intent classification failed: %s", e)
 
@@ -918,13 +918,16 @@ async def _stream_feature(
         sections.append(f"[WIKI KNOWLEDGE]\n{wiki_ctx}")
 
     if not sections:
-        answer_fallback = (
-            "No indexed content found. "
-            "Run build(action='pipeline') to index the project first."
-        )
-        for i in range(0, len(answer_fallback), chunk_size):
-            yield {"type": "token", "text": answer_fallback[i:i + chunk_size]}
-        yield {"type": "done", "intent": "feature", "sources": [], "elapsed_ms": 0, "model": ""}
+        yield {
+            "type": "error",
+            "code": "no_content",
+            "message": "No indexed content found. Run build(action='pipeline') to index the project first.",
+            "intent": "feature",
+        }
+        yield {
+            "type": "done", "intent": "feature", "sources": [],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "",
+        }
         feature_task.cancel()
         return
 
@@ -955,7 +958,7 @@ async def _stream_feature(
         except Exception as _se:
             log.warning("_stream_feature: stream_chat failed: %s", _se)
             record_stream_error("feature")
-            yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
+            yield {"type": "error", "code": "stream_failed", "message": str(_se), "intent": "feature"}
     else:
         # Fallback: blocking call + chunk
         try:
@@ -1047,10 +1050,16 @@ async def _stream_global(
     model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
 
     if llm is None:
-        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER."
-        for i in range(0, len(err), chunk_size):
-            yield {"type": "token", "text": err[i:i + chunk_size]}
-        yield {"type": "done", "intent": "global", "sources": [], "elapsed_ms": 0, "model": "none"}
+        yield {
+            "type": "error",
+            "code": "llm_unavailable",
+            "message": "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER.",
+            "intent": "global",
+        }
+        yield {
+            "type": "done", "intent": "global", "sources": [],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "none",
+        }
         return
 
     # MAP phase — run all batches in parallel (semaphore=2), emit heartbeats
@@ -1125,7 +1134,7 @@ async def _stream_global(
         except Exception as _se:
             log.warning("_stream_global: stream_chat failed: %s", _se)
             record_stream_error("global")
-            yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
+            yield {"type": "error", "code": "stream_failed", "message": str(_se), "intent": "global"}
     else:
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=2048)
@@ -1193,7 +1202,7 @@ async def _stream_debug(
             "intent": "debug_trace",
             "sources": result.get("hotspot_files", [])[:10],
             "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
-            "model": "",
+            "model": "debug_trace",
         }
         return
 
@@ -1291,7 +1300,7 @@ async def _stream_debug(
         except Exception as _se:
             log.warning("_stream_debug: stream_chat failed: %s", _se)
             record_stream_error("debug")
-            yield {"type": "token", "text": f" [debug analysis incomplete: {type(_se).__name__}]"}
+            yield {"type": "error", "code": "stream_failed", "message": str(_se), "intent": "debug"}
     else:
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)

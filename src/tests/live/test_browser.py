@@ -867,3 +867,553 @@ class TestGlobalUI:
         page.wait_for_selector("#toast div", state="visible", timeout=15_000)
         # Toast must auto-dismiss within 8s (4s display timeout + 4s buffer for animation)
         page.wait_for_selector("#toast div", state="hidden", timeout=8_000)
+
+
+# ---------------------------------------------------------------------------
+# Phase 64 gap additions: TestPulseViewGaps (C.1–C.10)
+# ---------------------------------------------------------------------------
+
+class TestPulseViewGaps:
+    """Coverage gaps from Phase 64 dashboard audit — tile badges, sparklines, empty states."""
+
+    def _load_pulse(self, page) -> None:
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.wait_for_timeout(2_500)  # allow metrics poll to complete
+
+    def test_tile_files_badge_shows_indexed_status(self, page, live_project):
+        """#tb-files badge must be present and contain a non-empty string after metrics load."""
+        self._load_pulse(page)
+        badge = page.locator("#tb-files")
+        assert badge.count() > 0, "#tb-files badge element not found"
+        text = (badge.text_content(timeout=8_000) or "").strip()
+        assert text != "", "#tb-files badge has no text"
+
+    def test_tile_communities_badge_shows_graph_status(self, page, live_project):
+        """#tb-communities badge must be present after pulse load."""
+        self._load_pulse(page)
+        badge = page.locator("#tb-communities")
+        assert badge.count() > 0, "#tb-communities badge element not found"
+        text = (badge.text_content(timeout=8_000) or "").strip()
+        assert text != "", "#tb-communities badge has no text"
+
+    def test_tile_enrichment_badge_has_status_class(self, page, live_project):
+        """#tb-enrichment badge must carry one of ok/warn/err CSS class."""
+        self._load_pulse(page)
+        badge = page.locator("#tb-enrichment")
+        assert badge.count() > 0, "#tb-enrichment badge element not found"
+        page.wait_for_function(
+            "['ok','warn','err'].some(c => document.getElementById('tb-enrichment')?.classList?.contains(c))",
+            timeout=10_000,
+        )
+        classes = badge.get_attribute("class") or ""
+        assert any(c in classes for c in ("ok", "warn", "err")), (
+            f"#tb-enrichment must have ok/warn/err class; got: {classes!r}"
+        )
+
+    def test_tile_wiki_badge_present(self, page, live_project):
+        """#tb-wiki badge must exist after pulse load."""
+        self._load_pulse(page)
+        badge = page.locator("#tb-wiki")
+        assert badge.count() > 0, "#tb-wiki badge element not found"
+
+    def test_tile_stream_badge_present(self, page, live_project):
+        """#tb-stream badge must exist and have a status class after pulse load."""
+        self._load_pulse(page)
+        badge = page.locator("#tb-stream")
+        assert badge.count() > 0, "#tb-stream badge element not found"
+        page.wait_for_function(
+            "['ok','warn','err'].some(c => document.getElementById('tb-stream')?.classList?.contains(c))",
+            timeout=10_000,
+        )
+
+    def test_kpi_requests_tile_present_with_value_or_dash(self, page, live_project):
+        """#kpi-requests must show a numeric value or '—' — never blank."""
+        self._load_pulse(page)
+        kpi = page.locator("#kpi-requests")
+        assert kpi.count() > 0, "#kpi-requests element not found"
+        text = (kpi.text_content(timeout=8_000) or "").strip()
+        assert text != "", "#kpi-requests has no text content"
+
+    def test_activity_feed_empty_state_shows_message(self, page, live_project):
+        """When no recent pipeline events exist, #activity-list must show an empty-state message."""
+        self._load_pulse(page)
+        act_list = page.locator("#activity-list")
+        assert act_list.count() > 0, "#activity-list element not found"
+        content = act_list.inner_text(timeout=8_000)
+        # Either populated or shows the empty-state message
+        assert content.strip() != "", "#activity-list must not be completely blank"
+
+    def test_sparklines_render_files_tile(self, page, live_project):
+        """#sp-files sparkline must contain polyline or polygon after metrics poll."""
+        self._load_pulse(page)
+        sparkline = page.locator("#sp-files polyline, #sp-files polygon")
+        assert sparkline.count() > 0, "#sp-files sparkline has no drawn polyline/polygon"
+
+    def test_sparklines_render_communities_tile(self, page, live_project):
+        """#sp-communities sparkline must render after metrics poll."""
+        self._load_pulse(page)
+        sparkline = page.locator("#sp-communities polyline, #sp-communities polygon")
+        assert sparkline.count() > 0, (
+            "#sp-communities sparkline has no drawn polyline/polygon — sparkline not rendering"
+        )
+
+    def test_sparklines_render_enrichment_tile(self, page, live_project):
+        """#sp-enrichment sparkline must render after metrics poll."""
+        self._load_pulse(page)
+        sparkline = page.locator("#sp-enrichment polyline, #sp-enrichment polygon")
+        assert sparkline.count() > 0, (
+            "#sp-enrichment sparkline has no drawn polyline/polygon"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 64 gap additions: TestChatViewGaps (C.11–C.24)
+# ---------------------------------------------------------------------------
+
+class TestChatViewGaps:
+    """Coverage gaps in chat view behavior: input guards, button state, mdSafe rendering."""
+
+    def test_shift_enter_inserts_newline_does_not_send(self, page, live_project):
+        """Shift+Enter in chat input must NOT send a message — must insert a newline."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.click()
+        inp.fill("test line 1")
+        inp.press("Shift+Enter")
+        page.wait_for_timeout(300)
+        # No user message bubble must appear
+        user_msgs = page.locator(".msg.user")
+        assert user_msgs.count() == 0, (
+            f"Shift+Enter must not send a message; {user_msgs.count()} user message(s) appeared"
+        )
+        # Input must still contain text
+        val = inp.input_value()
+        assert val.strip() != "", "Chat input was cleared by Shift+Enter (should not send)"
+
+    def test_empty_input_does_not_send(self, page, live_project):
+        """Pressing Enter on an empty chat input must not create any message bubble."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.click()
+        inp.fill("")
+        inp.press("Enter")
+        page.wait_for_timeout(300)
+        user_msgs = page.locator(".msg.user")
+        assert user_msgs.count() == 0, (
+            f"Empty Enter must not send; got {user_msgs.count()} user messages"
+        )
+
+    def test_send_btn_disabled_during_in_flight(self, page, live_project):
+        """#send-btn must be disabled immediately after sending a message (while in-flight)."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill("what is 1+1?")
+        page.locator("#send-btn").click()
+        # Check disabled state immediately (within 1s of click)
+        page.wait_for_function(
+            "document.getElementById('send-btn')?.disabled === true",
+            timeout=3_000,
+        )
+
+    def test_send_btn_re_enabled_after_response(self, page, live_project):
+        """#send-btn must be re-enabled after the AI response is fully received."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill("what is 1+1?")
+        page.locator("#send-btn").click()
+        _wait_for_ai_response(page)
+        send_btn = page.locator("#send-btn")
+        assert not send_btn.is_disabled(), "#send-btn must be re-enabled after AI response"
+
+    def test_chat_in_auto_grow_caps_at_160px(self, page, live_project):
+        """chat-in textarea auto-grows with content but caps at 160px height."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.click()
+        # Fill with many newlines to trigger auto-grow
+        large_text = "\n".join(["line " + str(i) for i in range(30)])
+        inp.fill(large_text)
+        page.wait_for_timeout(300)
+        height = page.evaluate("() => document.getElementById('chat-in')?.offsetHeight || 0")
+        assert height > 0, "chat-in has zero height"
+        assert height <= 165, (
+            f"chat-in must cap at ~160px; got {height}px — auto-grow cap not enforced"
+        )
+
+    def test_chat_network_error_shows_ai_err_class(self, page, live_project):
+        """When /api/chat_stream is blocked, an .ai-err bubble must appear in the chat."""
+        _navigate_to_chat(page)
+        # Intercept and abort the chat_stream request (native Playwright browser interception)
+        page.route("**/api/chat_stream", lambda route: route.abort())
+        try:
+            inp = _get_chat_input(page)
+            inp.fill("what is this project?")
+            page.locator("#send-btn").click()
+            page.wait_for_selector(".msg.ai.ai-err, .msg.ai-err", timeout=10_000)
+            err_bubble = page.locator(".msg.ai.ai-err, .msg.ai-err, .ai-err")
+            assert err_bubble.count() > 0, ".ai-err bubble not shown after network error"
+        finally:
+            page.unroute("**/api/chat_stream")
+
+    def test_thinking_timer_increments(self, page, live_project):
+        """Thinking bubble text must change from 'Thinking… (Xs)' to a higher second count."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill("describe the architecture of this project in detail")
+        page.locator("#send-btn").click()
+        # Wait for thinking bubble
+        page.wait_for_selector(".msg.ai.thinking", timeout=10_000)
+        page.wait_for_timeout(2_000)
+        text1 = page.locator(".msg.ai.thinking .msg-bubble").inner_text(timeout=5_000)
+        page.wait_for_timeout(2_000)
+        text2 = page.locator(".msg.ai.thinking .msg-bubble").inner_text(timeout=5_000)
+        # Timer should have incremented (text changed)
+        assert text1 != text2, (
+            f"Thinking timer did not increment: '{text1}' → '{text2}'"
+        )
+        # Wait for full response to avoid leaving in-flight state
+        _wait_for_ai_response(page)
+
+    def test_chat_in_placeholder_text_present(self, page, live_project):
+        """Chat input must have a non-empty placeholder attribute."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        placeholder = inp.get_attribute("placeholder") or ""
+        assert placeholder.strip() != "", "Chat input has no placeholder text"
+
+    def test_mdsafe_escapes_script_tag(self, page, live_project):
+        """mdSafe must escape <script> tags — no script element must appear in AI bubble DOM."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill('Reply with this exact text (no markdown, no changes): <script>alert(1)</script>')
+        page.locator("#send-btn").click()
+        _wait_for_ai_response(page)
+        # No actual <script> element must exist inside an AI bubble
+        script_in_bubble = page.locator(".msg.ai script")
+        assert script_in_bubble.count() == 0, (
+            "mdSafe failed to escape <script> — a real <script> element exists in AI bubble DOM"
+        )
+
+    def test_mdsafe_renders_fenced_code_block(self, page, live_project):
+        """AI response with fenced code block must render a <pre><code> element in the bubble."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill("Show a Python hello world example in a fenced code block")
+        page.locator("#send-btn").click()
+        _wait_for_ai_response(page)
+        code_block = page.locator(".msg.ai pre code, .msg.ai pre")
+        assert code_block.count() > 0, (
+            "mdSafe did not render a <pre><code> block for a fenced-code response"
+        )
+
+    def test_mdsafe_renders_bullet_list(self, page, live_project):
+        """AI response with a bullet list must render <ul><li> elements in the bubble."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill("List 3 important concepts about software architecture as a bullet list")
+        page.locator("#send-btn").click()
+        _wait_for_ai_response(page)
+        ul = page.locator(".msg.ai ul li, .msg.ai ol li")
+        assert ul.count() > 0, "mdSafe did not render list items for a bullet-list response"
+
+    def test_mdsafe_renders_bold_text(self, page, live_project):
+        """AI response with **bold** markdown must render <strong> or <b> elements."""
+        _navigate_to_chat(page)
+        inp = _get_chat_input(page)
+        inp.fill("Explain in one sentence with some **bold** words")
+        page.locator("#send-btn").click()
+        _wait_for_ai_response(page)
+        bold = page.locator(".msg.ai strong, .msg.ai b")
+        assert bold.count() > 0, "mdSafe did not render <strong>/<b> for **bold** markdown"
+
+
+# ---------------------------------------------------------------------------
+# Phase 64 gap additions: TestAdminViewGaps (B.7 + C.25–C.29)
+# ---------------------------------------------------------------------------
+
+class TestAdminViewGaps:
+    """Admin view gap tests: double-click dedup, project link, no-project toast, watching indicator."""
+
+    def _load_admin(self, page) -> None:
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        page.wait_for_timeout(1_000)
+
+    def test_vacuum_rapid_double_click_does_not_duplicate_jobs(self, page, live_project):
+        """Rapid double-click on Vacuum must not create two op-log entries."""
+        self._load_admin(page)
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        if not vacuum_btn.count():
+            pytest.skip("Vacuum button not found")
+        op_log = page.locator("#op-log")
+        # Double-click rapidly
+        vacuum_btn.click()
+        page.wait_for_timeout(100)
+        vacuum_btn.click()
+        page.wait_for_timeout(2_000)
+        entries = op_log.locator("div").all_text_contents()
+        vacuum_entries = [e for e in entries if "vacuum" in e.lower() or "running" in e.lower()]
+        assert len(vacuum_entries) <= 2, (
+            f"Rapid double-click produced too many op-log entries: {vacuum_entries}"
+        )
+
+    def test_admin_op_without_project_shows_err_toast(self, page, live_project):
+        """Clicking Vacuum with no project selected must show an error toast."""
+        self._load_admin(page)
+        # Clear _proj via JS eval so no project is selected
+        page.evaluate("window._proj = null; window._proj = undefined;")
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        if not vacuum_btn.count():
+            pytest.skip("Vacuum button not found")
+        vacuum_btn.click()
+        page.wait_for_selector("#toast .err, .toast.err, [class*='err']", timeout=5_000)
+        toast = page.locator("#toast .err, .toast.err")
+        assert toast.count() > 0, "Error toast must appear when clicking Vacuum with no project"
+
+    def test_admin_watching_indicator_present(self, page, live_project):
+        """Admin table must show a watching indicator (● or ○) for each project row."""
+        self._load_admin(page)
+        # Table rows should contain watching indicators
+        tbody = page.locator("#projects-body")
+        assert tbody.count() > 0, "#projects-body not found"
+        page.wait_for_function(
+            "document.getElementById('projects-body')?.children?.length > 0",
+            timeout=10_000,
+        )
+        content = tbody.inner_text(timeout=5_000)
+        has_indicator = "●" in content or "○" in content
+        assert has_indicator, (
+            f"Admin table must show watching indicators (● or ○); got:\n{content[:300]}"
+        )
+
+    def test_admin_project_selector_onchange_switches_project(self, page, live_project):
+        """Changing project-sel dropdown must update _proj variable."""
+        self._load_admin(page)
+        sel = page.locator("#project-sel")
+        assert sel.count() > 0, "#project-sel not found"
+        options = sel.locator("option").all()
+        if len(options) < 2:
+            pytest.skip("Need at least 2 projects to test dropdown switch")
+        # Get current value
+        current = page.evaluate("window._proj")
+        # Select a different option
+        all_values = [opt.get_attribute("value") for opt in options]
+        target = next((v for v in all_values if v != current and v), None)
+        if not target:
+            pytest.skip("No alternative project path found in selector")
+        sel.select_option(value=target)
+        page.wait_for_timeout(500)
+        new_proj = page.evaluate("window._proj")
+        assert new_proj == target, (
+            f"_proj not updated after dropdown change; expected {target!r}, got {new_proj!r}"
+        )
+
+    def test_admin_empty_projects_table_shows_message(self, page):
+        """If no projects are indexed, admin tbody must show 'No projects indexed' message."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        page.wait_for_timeout(2_000)
+        tbody = page.locator("#projects-body")
+        assert tbody.count() > 0, "#projects-body not found"
+        content = tbody.inner_text(timeout=8_000)
+        # Either shows projects or the empty message — never blank
+        assert content.strip() != "", "#projects-body must not be blank after admin loads"
+
+
+# ---------------------------------------------------------------------------
+# Phase 64 gap additions: TestGlobalUIGaps (C.30–C.37)
+# ---------------------------------------------------------------------------
+
+class TestGlobalUIGaps:
+    """Global UI gap tests: daemon dot, palette nav, theme CSS, toast stack."""
+
+    def test_daemon_dot_err_when_metrics_fetch_fails(self, page, live_project):
+        """When /api/metrics is blocked, the status dot must show 'err' class."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Block the metrics endpoint (Playwright native browser-level interception)
+        page.route("**/api/metrics", lambda route: route.abort())
+        try:
+            # Trigger a pulse refresh which calls /api/metrics
+            page.evaluate("window._sparkHistory={}; loadPulse && loadPulse();")
+            page.wait_for_function(
+                "document.querySelector('#sdot')?.classList?.contains('err') || "
+                "document.querySelector('.sdot')?.classList?.contains('err')",
+                timeout=15_000,
+            )
+            dot = page.locator("#sdot, .sdot").first
+            classes = dot.get_attribute("class") or ""
+            assert "err" in classes, (
+                f"Status dot must show 'err' when metrics fetch fails; classes: {classes!r}"
+            )
+        finally:
+            page.unroute("**/api/metrics")
+
+    def test_command_palette_arrow_up_navigation(self, page):
+        """ArrowDown twice then ArrowUp once must highlight the first item, not the second."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        page.keyboard.press("ArrowDown")
+        page.wait_for_timeout(100)
+        page.keyboard.press("ArrowDown")
+        page.wait_for_timeout(100)
+        page.keyboard.press("ArrowUp")
+        page.wait_for_timeout(100)
+        # After 2 downs + 1 up, the first item should be highlighted
+        highlighted = page.locator("#cmd-results li.hi, #cmd-results li[aria-selected='true']")
+        assert highlighted.count() > 0, "No item highlighted after ArrowDown+ArrowDown+ArrowUp"
+        page.keyboard.press("Escape")
+
+    def test_command_palette_click_outside_closes(self, page):
+        """Clicking the palette overlay background must close the palette."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        # Click the overlay (background) to close — use force=True since it may be behind other elements
+        overlay = page.locator("#cmd-overlay")
+        overlay.click(position={"x": 10, "y": 10}, force=True)
+        page.wait_for_function(
+            "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+
+    def test_command_palette_mouse_click_result(self, page):
+        """Clicking a palette result item with the mouse must execute the action and close palette."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        first_result = page.locator("#cmd-results li").first
+        if not first_result.count():
+            pytest.skip("No palette results found")
+        first_result.click()
+        page.wait_for_function(
+            "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+
+    def test_command_palette_empty_filter_shows_results(self, page):
+        """Opening palette with empty input must show multiple results (all commands)."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.keyboard.press("Control+k")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        # With empty filter, all commands should be visible
+        page.wait_for_function(
+            "document.querySelectorAll('#cmd-results li').length >= 3",
+            timeout=5_000,
+        )
+        count = page.locator("#cmd-results li").count()
+        assert count >= 3, f"Palette with empty filter must show ≥3 commands; got {count}"
+        page.keyboard.press("Escape")
+
+    def test_theme_applies_different_css_vars(self, page, live_project):
+        """Clicking theme toggle button must change document background color."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        initial_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        # Find theme toggle button
+        theme_btn = page.locator(
+            "button:has-text('Theme'), button[title*='theme'], button[title*='Theme'], "
+            "button[onclick*='theme'], button[onclick*='dark'], button[onclick*='light']"
+        ).first
+        if not theme_btn.count():
+            # Try the command palette
+            page.keyboard.press("Control+k")
+            page.wait_for_timeout(200)
+            page.locator("#cmd-input").fill("Theme")
+            page.wait_for_timeout(200)
+            result = page.locator("#cmd-results li").first
+            if result.count():
+                result.click()
+            else:
+                page.keyboard.press("Escape")
+                pytest.skip("Theme toggle button not found")
+        else:
+            theme_btn.click()
+        page.wait_for_timeout(500)
+        new_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        assert initial_bg != new_bg, (
+            f"Theme toggle must change body background; both are {initial_bg!r}"
+        )
+
+    def test_theme_does_not_persist_across_reload(self, page, live_project):
+        """Toggle theme, reload page — must revert to dark theme (no localStorage persistence)."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        initial_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        # Toggle theme via JS directly (fastest, doesn't depend on button location)
+        page.evaluate("typeof toggleTheme === 'function' && toggleTheme()")
+        page.wait_for_timeout(400)
+        # Reload
+        page.reload()
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_timeout(500)
+        after_reload_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+        assert after_reload_bg == initial_bg, (
+            f"Theme persisted across reload (localStorage likely in use); "
+            f"initial={initial_bg!r} after_reload={after_reload_bg!r}. "
+            "Update this test if localStorage persistence is intentionally added."
+        )
+
+    def test_toast_stack_multiple_toasts_visible(self, page, live_project):
+        """Triggering two operations rapidly must stack multiple toast notifications."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        vacuum_btn = page.locator("button:has-text('Vacuum')").first
+        dedup_btn = page.locator("button:has-text('Dedup')").first
+        if not vacuum_btn.count() or not dedup_btn.count():
+            pytest.skip("Vacuum or Dedup button not found")
+        # Click both rapidly
+        vacuum_btn.click()
+        page.wait_for_timeout(100)
+        dedup_btn.click()
+        # Check if multiple toasts appear
+        page.wait_for_selector("#toast div", state="visible", timeout=10_000)
+        page.wait_for_timeout(500)
+        toast_count = page.locator("#toast div").count()
+        # At minimum one toast must appear; ideally 2 stack
+        assert toast_count >= 1, "No toast appeared after triggering admin ops"

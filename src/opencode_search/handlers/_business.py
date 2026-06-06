@@ -222,8 +222,8 @@ async def handle_ask_business(
         for c in top
     )
     try:
-        from opencode_search.enricher import create_query_llm_client
-        llm = create_query_llm_client()
+        from opencode_search.enricher import create_llm_client
+        llm = create_llm_client()
         prompt = (
             f"You are a business analyst. Based on these classified code communities, "
             f"answer this question:\n\n{query}\n\n"

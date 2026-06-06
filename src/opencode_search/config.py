@@ -248,18 +248,29 @@ def load_registry() -> dict[str, ProjectEntry]:
 
 
 def save_registry(entries: dict[str, ProjectEntry]) -> None:
-    """Atomically write the project registry to disk (write .tmp then rename)."""
+    """Atomically write the project registry to disk (write .tmp then rename).
+
+    Uses an advisory fcntl file lock so concurrent daemon processes can't
+    interleave read-modify-write cycles and lose each other's entries.
+    """
+    import fcntl
+
     path = REGISTRY_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = {k: v.to_dict() for k, v in entries.items()}
-    # Write to a sibling temp file first, then rename for atomicity.
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=".registry-", suffix=".tmp")
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-        os.replace(tmp_path, path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
+    lock_path = path.with_suffix(".lock")
+    with open(lock_path, "w") as lock_fh:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
+        try:
+            data = {k: v.to_dict() for k, v in entries.items()}
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=".registry-", suffix=".tmp")
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, indent=2)
+                os.replace(tmp_path, path)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+                raise
+        finally:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)

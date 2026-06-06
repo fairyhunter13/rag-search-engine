@@ -60,16 +60,47 @@ def _evict_old_jobs() -> None:
 _terminal = _TERMINAL  # module-level alias used inside functions
 
 
+def find_active_job(*, project_path: str, action: str) -> Job | None:
+    """Return the in-flight (queued/running) job for this (project, action) pair.
+
+    Used by `submit_job(dedup=True)` to avoid spawning concurrent duplicate
+    builds that would race on the same LanceDB tables and graph DB.
+    """
+    for j in _jobs.values():
+        if j.status in _TERMINAL:
+            continue
+        if j.project_path == project_path and j.action == action:
+            return j
+    return None
+
+
 def submit_job(
     coro: Coroutine[Any, Any, dict[str, Any]],
     *,
     action: str,
     project_path: str,
+    dedup: bool = False,
 ) -> Job:
     """Schedule *coro* as a background asyncio task and return the Job immediately.
 
     The coroutine must return a dict; its ``status`` key drives the job outcome.
+
+    When *dedup* is True, an existing in-flight Job for (project_path, action)
+    is returned instead of spawning a new one — the passed-in coroutine is
+    closed to silence the "coroutine was never awaited" warning.
     """
+    if dedup:
+        existing = find_active_job(project_path=project_path, action=action)
+        if existing is not None:
+            try:
+                coro.close()
+            except Exception:
+                pass
+            log.info(
+                "submit_job: dedup hit — returning existing job[%s] for %s(%s)",
+                existing.id, action, project_path,
+            )
+            return existing
     job_id = str(uuid.uuid4())[:8]
     job = Job(
         id=job_id,

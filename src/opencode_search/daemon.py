@@ -1157,7 +1157,14 @@ def _start_shutdown_monitor() -> None:
 
 
 def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_DAEMON_PORT) -> None:
+    from opencode_search.embeddings import assert_gpu_available
     from opencode_search.mcp import run_mcp_http_server
+
+    # GPU-only enforcement (see CLAUDE.md). Fail fast before binding the HTTP
+    # socket so the daemon never silently runs inference on CPU. Skippable only
+    # by tests via OPENCODE_SKIP_GPU_ASSERT=1, never in production.
+    if os.environ.get("OPENCODE_SKIP_GPU_ASSERT") != "1":
+        assert_gpu_available()
 
     if _tcp_port_open(host, port):
         raise RuntimeError(f"Cannot start daemon on {host}:{port}; port already in use")

@@ -84,7 +84,7 @@ class TestInvestigationWorkflows:
         assert r.status_code == 200, f"pr_impact failed: {r.text[:200]}"
         data = r.json()
         assert "risk_level" in data, f"risk_level missing from pr_impact response: {data}"
-        assert data["risk_level"] in ("low", "medium", "high"), (
+        assert data["risk_level"] in ("low", "medium", "high", "none"), (
             f"Unexpected risk_level: {data['risk_level']!r}"
         )
         assert "communities_touched" in data

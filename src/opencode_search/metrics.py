@@ -97,6 +97,7 @@ class _ChatStreamMetrics:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     stream_error_count: int = 0
     stream_success_count: int = 0
+    stream_cancelled_count: int = 0
     _error_by_intent: dict[str, int] = field(default_factory=dict, repr=False)
 
     def record_error(self, intent: str) -> None:
@@ -108,12 +109,17 @@ class _ChatStreamMetrics:
         with self._lock:
             self.stream_success_count += 1
 
+    def record_cancelled(self) -> None:
+        with self._lock:
+            self.stream_cancelled_count += 1
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             total = self.stream_error_count + self.stream_success_count
             return {
                 "stream_error_count": self.stream_error_count,
                 "stream_success_count": self.stream_success_count,
+                "stream_cancelled_count": self.stream_cancelled_count,
                 "error_rate": round(self.stream_error_count / total, 4) if total else 0.0,
                 "error_by_intent": dict(self._error_by_intent),
             }
@@ -122,6 +128,7 @@ class _ChatStreamMetrics:
         with self._lock:
             self.stream_error_count = 0
             self.stream_success_count = 0
+            self.stream_cancelled_count = 0
             self._error_by_intent.clear()
 
 
@@ -138,6 +145,31 @@ def record_stream_success() -> None:
     _chat_metrics.record_success()
 
 
+def record_stream_cancelled() -> None:
+    """Record a stream cancelled due to client disconnect. Safe to call from any thread."""
+    _chat_metrics.record_cancelled()
+
+
 def get_stream_metrics() -> dict[str, Any]:
     """Return a point-in-time snapshot of chat stream error metrics."""
     return _chat_metrics.snapshot()
+
+
+# ---------------------------------------------------------------------------
+# Storage corruption metrics
+# ---------------------------------------------------------------------------
+
+_storage_corruption_fallback_count: int = 0
+_storage_lock = threading.Lock()
+
+
+def record_storage_corruption_fallback() -> None:
+    """Increment the count of times a corrupted IVF index forced a flat-search fallback."""
+    global _storage_corruption_fallback_count
+    with _storage_lock:
+        _storage_corruption_fallback_count += 1
+
+
+def get_storage_corruption_count() -> int:
+    with _storage_lock:
+        return _storage_corruption_fallback_count

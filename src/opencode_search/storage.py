@@ -30,6 +30,14 @@ from opencode_search.config import (
 logger = logging.getLogger(__name__)
 
 
+class DimensionMismatchError(RuntimeError):
+    """Raised when the stored embedding dimension doesn't match the expected dim.
+
+    Resolution: set OPENCODE_ALLOW_DIM_MIGRATION=1 to allow silent drop-and-
+    recreate (destroys the existing index), or re-index with the original model.
+    """
+
+
 def _missing_dependency_error(package: str) -> ModuleNotFoundError:
     return ModuleNotFoundError(
         f"{package} is required for the LanceDB storage backend. "
@@ -207,17 +215,25 @@ class Storage:
             # Detect stored dims via list_size (FixedSizeList) or length property
             stored_dims = getattr(stored_vec_type, "list_size", None) or getattr(stored_vec_type, "length", None)
             if stored_dims != self.dims:
-                # Dim mismatch (e.g. old 512-dim budget tier vs new 768-dim model).
-                # Drop and recreate with float16 schema.
-                logger.warning(
-                    "Dim mismatch: stored dims %s != expected %d; recreating table.",
-                    stored_dims, self.dims,
-                )
-                self._db.drop_table(self.TABLE_CHUNKS)
-                schema = build_schema(self.dims, vec_dtype="float16")
-                self._table = self._db.create_table(self.TABLE_CHUNKS, schema=schema)
-                self._vec_dtype = "float16"
-                logger.info("Recreated chunks table (dims=%d, dtype=float16)", self.dims)
+                import os as _os
+                if _os.environ.get("OPENCODE_ALLOW_DIM_MIGRATION") == "1":
+                    logger.warning(
+                        "Dim mismatch: stored dims %s != expected %d; "
+                        "OPENCODE_ALLOW_DIM_MIGRATION=1 — dropping and recreating table.",
+                        stored_dims, self.dims,
+                    )
+                    self._db.drop_table(self.TABLE_CHUNKS)
+                    schema = build_schema(self.dims, vec_dtype="float16")
+                    self._table = self._db.create_table(self.TABLE_CHUNKS, schema=schema)
+                    self._vec_dtype = "float16"
+                    logger.info("Recreated chunks table (dims=%d, dtype=float16)", self.dims)
+                else:
+                    raise DimensionMismatchError(
+                        f"Embedding dimension mismatch: stored={stored_dims}, "
+                        f"expected={self.dims}. "
+                        "Set OPENCODE_ALLOW_DIM_MIGRATION=1 to drop-and-recreate "
+                        "(DESTROYS existing index data), or re-index with the original model."
+                    )
             else:
                 # Same dims: honour existing dtype for backwards compatibility.
                 # float32 tables written before Jun 2026 remain float32 until
@@ -459,8 +475,15 @@ class Storage:
                 .refine_factor(refine_factor)
                 .to_arrow()
             )
-        except Exception:
-            # Fall back without IVF params (flat search before index exists).
+        except Exception as _ivf_err:
+            # IVF index not yet built or corrupted — fall back to flat O(n) search.
+            logger.warning(
+                "IVF search failed (%s: %s); falling back to flat scan — "
+                "run build(action='pipeline') to rebuild the index.",
+                type(_ivf_err).__name__, _ivf_err,
+            )
+            from opencode_search.metrics import record_storage_corruption_fallback
+            record_storage_corruption_fallback()
             results = (
                 self._table
                 .search(query_arr)

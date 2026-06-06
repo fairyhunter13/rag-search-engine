@@ -397,6 +397,20 @@ function setDot(state){
   d.className='sdot '+(state==='ok'?'ok':state==='warn'?'warn':'err');
 }
 
+/* ── fetch with AbortController timeout ─────────────────────────────────── */
+async function fetchWithTimeout(url,opts={},ms=30000){
+  const ac=new AbortController();
+  const tid=setTimeout(()=>ac.abort(),ms);
+  try{
+    const r=await fetch(url,{...opts,signal:ac.signal});
+    clearTimeout(tid);
+    return r;
+  }catch(e){
+    clearTimeout(tid);
+    throw e;
+  }
+}
+
 /* ── View switching ──────────────────────────────────────────────────────── */
 function switchView(name){
   ['pulse','chat','admin'].forEach(v=>{
@@ -411,7 +425,7 @@ function switchView(name){
 /* ── Project selector ────────────────────────────────────────────────────── */
 async function loadProjects(){
   try{
-    const r=await fetch('/api/projects');
+    const r=await fetchWithTimeout('/api/projects');
     if(!r.ok) throw new Error(`HTTP ${r.status}`);
     const d=await r.json();
     const sel=$('project-sel');
@@ -467,10 +481,10 @@ async function loadPulse(){
   if(!_proj)return;
   try{
     const [ovr,kb,met,sug]=await Promise.allSettled([
-      fetch(`/api/overview?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
-      fetch(`/api/kb_health?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
-      fetch('/api/metrics').then(r=>r.json()),
-      fetch(`/api/suggested_questions?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
+      fetchWithTimeout(`/api/overview?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
+      fetchWithTimeout(`/api/kb_health?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
+      fetchWithTimeout('/api/metrics').then(r=>r.json()),
+      fetchWithTimeout(`/api/suggested_questions?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
     ]);
 
     // Files tile
@@ -642,7 +656,7 @@ async function runVacuum(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Running vacuum…');
   try{
-    const r=await fetch(`/api/vacuum?project=${encodeURIComponent(_proj)}`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/vacuum?project=${encodeURIComponent(_proj)}`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||JSON.stringify(d),'ok');
     toast('Vacuum complete','info');
@@ -653,7 +667,7 @@ async function runDedup(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Running dedup…');
   try{
-    const r=await fetch(`/api/dedup?project=${encodeURIComponent(_proj)}`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/dedup?project=${encodeURIComponent(_proj)}`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||JSON.stringify(d),'ok');
     toast('Dedup complete','info');
@@ -664,7 +678,7 @@ async function runReindex(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Re-indexing (this may take a while)…');
   try{
-    const r=await fetch(`/api/build_hierarchy?project=${encodeURIComponent(_proj)}`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/build_hierarchy?project=${encodeURIComponent(_proj)}`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||'Job submitted','ok');
     toast('Re-index job started','info');
@@ -675,7 +689,7 @@ async function runEnrich(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Enriching hierarchy…');
   try{
-    const r=await fetch(`/api/enrich_hierarchy?project=${encodeURIComponent(_proj)}`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/enrich_hierarchy?project=${encodeURIComponent(_proj)}`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||'Job submitted','ok');
     toast('Enrich job started','info');
@@ -686,7 +700,7 @@ async function runWiki(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Generating wiki…');
   try{
-    const r=await fetch(`/api/build_hierarchy?project=${encodeURIComponent(_proj)}&action=wiki`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/build_hierarchy?project=${encodeURIComponent(_proj)}&action=wiki`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||'Job submitted','ok');
     toast('Wiki generation started','info');
@@ -751,6 +765,12 @@ async function sendChat(){
         }else{
           updateStreamMsg(streamMsgId,accumulated);
         }
+      }else if(evt.type==='error'){
+        removeMsg(thinkId);
+        const errMsg=evt.message||'An error occurred';
+        if(streamMsgId){finalizeStreamMsg(streamMsgId,{intent:evt.intent,sources:[],elapsed:0,model:''});}
+        appendMsg('ai','Error: '+errMsg,'ai-err');
+        toast(errMsg,'err');
       }else if(evt.type==='done'){
         const meta={intent:evt.intent,sources:evt.sources,elapsed:evt.elapsed_ms,model:evt.model};
         if(streamMsgId){finalizeStreamMsg(streamMsgId,meta);}
