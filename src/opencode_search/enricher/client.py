@@ -1122,7 +1122,9 @@ class FallbackLLMClient(LLMClient):
     ) -> Iterator[str]:
         """Stream from primary if it supports streaming; otherwise yield full response as one chunk.
 
-        On RateLimitError during the stream, falls back to fallback.chat() and yields as one chunk.
+        On RateLimitError OR any transient failure during the stream, switches to the
+        fallback's stream_chat (or chat if stream not supported). If the fallback also
+        fails, the exception propagates to the caller which emits an SSE error event.
         """
         import logging
         _log = logging.getLogger(__name__)
@@ -1130,23 +1132,29 @@ class FallbackLLMClient(LLMClient):
             try:
                 yield from self.primary.stream_chat(messages, temperature=temperature, max_tokens=max_tokens)
                 return
-            except RateLimitError:
+            except Exception as _primary_err:
                 _log.warning(
-                    "Primary LLM (%s) rate-limited during streaming — falling back to %s",
-                    type(self.primary).__name__, type(self.fallback).__name__,
+                    "Primary LLM (%s) failed during streaming (%s: %s) — falling back to %s",
+                    type(self.primary).__name__, type(_primary_err).__name__, _primary_err,
+                    type(self.fallback).__name__,
                 )
         else:
             # Primary has no stream_chat — call it as a blocking call, yield result as one chunk
             try:
                 yield self.primary.chat(messages, temperature=temperature, max_tokens=max_tokens)
                 return
-            except RateLimitError:
+            except Exception as _primary_err:
                 _log.warning(
-                    "Primary LLM (%s) rate-limited — falling back to %s",
-                    type(self.primary).__name__, type(self.fallback).__name__,
+                    "Primary LLM (%s) failed (%s: %s) — falling back to %s",
+                    type(self.primary).__name__, type(_primary_err).__name__, _primary_err,
+                    type(self.fallback).__name__,
                 )
-        result = self.fallback.chat(messages, temperature=temperature, max_tokens=max_tokens)
-        yield result
+        # Fallback path — prefer streaming if available, otherwise chunk
+        if hasattr(self.fallback, "stream_chat"):
+            yield from self.fallback.stream_chat(messages, temperature=temperature, max_tokens=max_tokens)
+        else:
+            result = self.fallback.chat(messages, temperature=temperature, max_tokens=max_tokens)
+            yield result
 
 
 # ---------------------------------------------------------------------------

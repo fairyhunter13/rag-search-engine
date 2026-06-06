@@ -54,7 +54,7 @@ async def handle_global_synthesis(
         level: Community hierarchy level to query (1=micro, 2+=macro).
     """
     from opencode_search.config import load_registry
-    from opencode_search.enricher import create_query_llm_client as create_llm_client
+    from opencode_search.enricher import create_llm_client
     from opencode_search.handlers._graph import _open_graph
 
     t0 = time.perf_counter()

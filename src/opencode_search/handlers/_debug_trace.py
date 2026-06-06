@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from opencode_search.enricher import create_query_llm_client
+from opencode_search.enricher import create_llm_client
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ async def _parse_with_llm(text: str) -> list[dict]:
     """Use query LLM to extract stack frames from any language traceback."""
     try:
         text = text[:8000]
-        llm = create_query_llm_client()
+        llm = create_llm_client()
         prompt = (
             "Extract stack frames from this error traceback.\n"
             "Return ONLY a JSON array of objects with keys: "
@@ -405,7 +405,7 @@ async def handle_debug_trace(
     confidence = "low" if not graph_ctx else ("high" if len(graph_ctx) >= 3 else "medium")
 
     try:
-        llm = create_query_llm_client()
+        llm = create_llm_client()
         user_msg = (
             f"Debug this error:\n\n{prompt_ctx}\n\n"
             "Identify the root cause and explain why it happens based on the architecture context."

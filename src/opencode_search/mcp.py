@@ -586,6 +586,7 @@ async def build(
             ),
             action="pipeline",
             project_path=project_path,
+            dedup=True,
         )
         return {
             "status": "started",
@@ -603,6 +604,7 @@ async def build(
             ),
             action="enrich",
             project_path=project_path,
+            dedup=True,
         )
         return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
     elif action == "wiki":
@@ -614,6 +616,7 @@ async def build(
             ),
             action="wiki",
             project_path=project_path,
+            dedup=True,
         )
         return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
     elif action == "ingest":

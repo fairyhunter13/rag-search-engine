@@ -46,8 +46,9 @@ async def handle_ask_feature(
     was designed that way.
     """
     from opencode_search.config import get_project_graph_db_path
-    from opencode_search.enricher import create_query_llm_client as create_llm_client
+    from opencode_search.enricher import create_llm_client
     from opencode_search.graph.storage import GraphStorage
+    from opencode_search.handlers._kb_chat import _fetch_community_context
     from opencode_search.handlers._query import handle_search_code
 
     root = str(Path(project_path).expanduser().resolve())
@@ -60,12 +61,10 @@ async def handle_ask_feature(
         use_rerank=True,
     )
     raw_results = search_result.get("results", [])
-    if not raw_results:
-        return {
-            "status": "no_results",
-            "query": query,
-            "message": "No code found for this feature. Make sure the project is indexed.",
-        }
+    # When code search misses (relative paths, sparse index, etc.) we do NOT
+    # early-return — the community graph + wiki often still carry the signal
+    # to answer the question. The final dict guarantees an `answer` key so the
+    # caller (/api/ask?scope=feature, tests) never sees the empty-key shape.
 
     # ── Step 2: Extract symbol names from search results ─────────────────────
     # Search results have qualified_name / symbol fields from the code chunks.
@@ -158,17 +157,42 @@ async def handle_ask_feature(
 
     community_contexts = await asyncio.to_thread(_get_communities, root, community_ids_seen)
 
+    # ── Step 4b: Query-based community fallback when call-chain context empty ──
+    # If code search missed (no entry candidates) OR the call chain didn't
+    # surface enriched communities, query the community graph directly with
+    # the user's question text so we still have signal for the LLM to chew on.
+    if not community_contexts:
+        _, fallback_comms, _ = await _fetch_community_context(
+            query, root, top_k=_MAX_COMMUNITY_CONTEXT, include_federation=False,
+        )
+        community_contexts = [
+            {
+                "id": idx,
+                "title": c.get("title", ""),
+                "summary": (c.get("summary") or "")[:300],
+                "level": 0,
+            }
+            for idx, c in enumerate(fallback_comms[:_MAX_COMMUNITY_CONTEXT])
+        ]
+
     # ── Step 5: LLM synthesis ─────────────────────────────────────────────────
     llm = await asyncio.to_thread(create_llm_client)
     if llm is None or not llm.is_available():
+        msg = (
+            "Feature trace unavailable: local KB LLM client could not be "
+            "initialized. Ensure Ollama is running on GPU and qwen3-enrich "
+            "is installed. Raw call chain (if any) is included below."
+        )
         return {
             "status": "ok",
             "query": query,
+            "answer": msg,
             "entry_points": entry_candidates[:_MAX_ENTRY_POINTS],
             "call_chain": call_chain_raw,
             "algorithm": None,
             "design_rationale": None,
             "involved_services": [],
+            "key_design_decisions": [],
             "communities": community_contexts,
             "note": "LLM not available — raw call chain only",
         }
@@ -237,13 +261,42 @@ async def handle_ask_feature(
         except Exception:
             pass
 
+    algorithm = synthesis.get("algorithm")
+    design_rationale = synthesis.get("design_rationale")
+    # Always surface a human-readable `answer` field. Callers (UI + tests) read
+    # this first; keeping it populated even on partial/empty synthesis means
+    # /api/ask?scope=feature never returns a body without an answer.
+    answer_parts: list[str] = []
+    if algorithm:
+        answer_parts.append(str(algorithm).strip())
+    if design_rationale:
+        answer_parts.append("Why: " + str(design_rationale).strip())
+    if not answer_parts:
+        if entry_candidates or community_contexts:
+            answer = (
+                f"Feature trace for {query!r}: code search returned "
+                f"{len(entry_candidates)} entry point candidate(s) and "
+                f"{len(community_contexts)} relevant community summaries, "
+                "but the local LLM did not produce a synthesis. See "
+                "entry_points/communities for the raw context."
+            )
+        else:
+            answer = (
+                f"No code or community context found for {query!r} in this "
+                "project. Make sure it is indexed (build action='pipeline') "
+                "and enriched. Try rephrasing the query with a more specific "
+                "function or feature name."
+            )
+        answer_parts = [answer]
+
     return {
         "status": "ok",
         "query": query,
+        "answer": "\n\n".join(answer_parts),
         "entry_points": entry_candidates[:_MAX_ENTRY_POINTS],
         "call_chain": call_chain_raw,
-        "algorithm": synthesis.get("algorithm"),
-        "design_rationale": synthesis.get("design_rationale"),
+        "algorithm": algorithm,
+        "design_rationale": design_rationale,
         "involved_services": involved_services,
         "key_design_decisions": synthesis.get("key_design_decisions", []),
         "communities": community_contexts,

@@ -499,26 +499,30 @@ def _normalize_embeddings_gpu(mat: np.ndarray) -> np.ndarray:
     """GPU-accelerated L2 normalization using CuPy.
 
     Keeps data on GPU for normalization, avoiding CPU-GPU transfers.
-    Falls back to CPU if GPU fails or CuPy unavailable.
+    CPU fallback is forbidden — raises GPUNotAvailableError on any GPU failure
+    so the caller can decide explicitly (e.g., via `_normalize_embeddings`'s
+    configured mode router) whether CPU is acceptable.
     """
     cp_mod = _get_cupy()
     if cp_mod is None:
-        return _normalize_embeddings_cpu(mat)
+        raise GPUNotAvailableError(
+            "[GPU-REQUIRED] _normalize_embeddings_gpu called but CuPy is not "
+            "importable. CPU fallback is forbidden for the GPU path. Either "
+            "install cupy or call _normalize_embeddings() which honors the "
+            "OPENCODE_GPU_NORMALIZE configuration."
+        )
 
+    # Transfer to GPU, normalize, transfer back. Any failure is fatal — no
+    # silent CPU fallback. Callers wanting graceful degradation must route via
+    # `_normalize_embeddings()` with OPENCODE_GPU_NORMALIZE=auto|cpu.
+    mat_gpu = cp_mod.asarray(mat, dtype=cp_mod.float32)
     try:
-        # Transfer to GPU, normalize, transfer back
-        mat_gpu = cp_mod.asarray(mat, dtype=cp_mod.float32)
         norms = cp_mod.linalg.norm(mat_gpu, axis=1, keepdims=True)
         cp_mod.divide(mat_gpu, norms, out=mat_gpu, where=norms > 0)
         result = cp_mod.asnumpy(mat_gpu)
-
-        # Clean up GPU memory
-        del mat_gpu, norms
-        return result
-    except Exception as e:
-        # Fallback to CPU if GPU fails (OOM, driver issues, etc.)
-        log.debug(f"GPU normalization failed, falling back to CPU: {e}")
-        return _normalize_embeddings_cpu(mat)
+    finally:
+        del mat_gpu
+    return result
 
 
 def _normalize_embeddings_cpu(mat: np.ndarray) -> np.ndarray:
@@ -1244,7 +1248,8 @@ def assert_gpu_available() -> None:
     Call once at process startup so the server fails fast with a clear message
     rather than silently running on CPU. GPU is always required.
 
-    Raises GPUNotAvailableError if no working GPU provider is found.
+    Raises GPUNotAvailableError if no working GPU provider is found OR if CuPy
+    (used for GPU-side embedding normalization) is not importable.
     """
     log.info("[GPU-REQUIRED] Startup GPU check")
 
@@ -1260,6 +1265,25 @@ def assert_gpu_available() -> None:
 
     active = next((p for p in (providers or []) if p in _GPU_PROVIDERS), "none")
     log.info("[GPU-REQUIRED] Startup GPU check PASSED — active provider: %s", active)
+
+    # CuPy is required when OPENCODE_GPU_NORMALIZE != "cpu" since the GPU
+    # normalization path raises if CuPy is missing. Probe it eagerly so the
+    # daemon refuses to start rather than crashing on the first large batch.
+    if _GPU_NORMALIZE_MODE != "cpu":
+        try:
+            import cupy  # noqa: F401
+        except Exception as exc:  # pragma: no cover - exercised via subprocess test
+            msg = (
+                "[GPU-REQUIRED] FATAL: CuPy is not importable but "
+                f"OPENCODE_GPU_NORMALIZE={_GPU_NORMALIZE_MODE!r} requires it. "
+                "Install cupy-cuda12x (or set OPENCODE_GPU_NORMALIZE=cpu to "
+                "intentionally use CPU normalization — note this is a configured "
+                "choice, not a fallback). Underlying import error: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            log.critical(msg)
+            raise GPUNotAvailableError(msg) from exc
+        log.info("[GPU-REQUIRED] CuPy check PASSED")
 
 
 def _onnx_available_providers() -> list[str]:

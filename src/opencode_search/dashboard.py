@@ -872,6 +872,7 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": "project and query required"}, status_code=400)
 
         from opencode_search.handlers._chat_router import handle_chat_auto_stream
+        from opencode_search.metrics import record_stream_cancelled
 
         async def _gen():
             async for chunk in handle_chat_auto_stream(
@@ -879,6 +880,9 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                 project_path=project,
                 conversation_history=history,
             ):
+                if await request.is_disconnected():
+                    record_stream_cancelled()
+                    return
                 yield f"data: {json.dumps(chunk)}\n\n"
 
         return StreamingResponse(
