@@ -286,6 +286,34 @@ def _repair_codex_toml(config_path: Path, dry_run: bool = False) -> ConfigResult
 # MCP entry repair: hermes config.yaml
 # ---------------------------------------------------------------------------
 
+def _build_hermes_config_text() -> str:
+    """Build the complete canonical hermes config.yaml (MCP entry + agent system prompt)."""
+    from integrations.canonical import CANONICAL_BODY
+    env_lines = "\n".join(f"      {k}: {v}" for k, v in CANONICAL_MCP_ENV.items())
+    args_lines = "\n".join(f"      - {a}" for a in CANONICAL_MCP_ARGS)
+    # YAML literal block scalars must not contain backticks/arrows/em-dashes
+    safe_body = (CANONICAL_BODY
+                 .replace("`", "'")
+                 .replace("→", "->")
+                 .replace("—", "--"))
+    wrapped = f"{SENTINEL_AGENTS_START}\n{safe_body}\n{SENTINEL_AGENTS_END}"
+    # Indent every line by 4 spaces for YAML block scalar under `system_prompt: |`
+    indented = "\n".join("    " + ln for ln in wrapped.splitlines())
+    return (
+        "mcp_servers:\n"
+        "  opencode-search:\n"
+        "    enabled: true\n"
+        f"    command: {CANONICAL_MCP_COMMAND}\n"
+        "    args:\n"
+        + args_lines + "\n"
+        "    env:\n"
+        + env_lines + "\n"
+        "agent:\n"
+        "  system_prompt: |\n"
+        + indented + "\n"
+    )
+
+
 def _verify_hermes_yaml(config_path: Path) -> ConfigResult:
     label = "hermes/config.yaml"
     if not config_path.exists():
@@ -295,7 +323,7 @@ def _verify_hermes_yaml(config_path: Path) -> ConfigResult:
     if "opencode-search" not in text:
         return ConfigResult(tool=label, status="missing",
                             message="opencode-search MCP not in hermes config.yaml", path=str(config_path))
-    for key, val in CANONICAL_MCP_ENV.items():
+    for key in CANONICAL_MCP_ENV:
         if key not in text:
             return ConfigResult(tool=label, status="missing",
                                 message=f"hermes config.yaml missing env var {key}", path=str(config_path))
@@ -304,43 +332,14 @@ def _verify_hermes_yaml(config_path: Path) -> ConfigResult:
 
 
 def _repair_hermes_yaml(config_path: Path, dry_run: bool = False) -> ConfigResult:
+    """Rewrite the entire hermes config.yaml with the canonical MCP entry + agent system prompt."""
     label = "hermes/config.yaml"
     if not config_path.exists():
         return ConfigResult(tool=label, status="skipped",
                             message="hermes not installed", path=str(config_path))
     old_text = config_path.read_text(encoding="utf-8")
-
-    # Build env lines for yaml
-    env_lines = "".join(f"      {k}: {v}\n" for k, v in CANONICAL_MCP_ENV.items())
-    new_block = (
-        "  opencode-search:\n"
-        "    enabled: true\n"
-        f"    command: {CANONICAL_MCP_COMMAND}\n"
-        "    args:\n"
-        + "".join(f"      - {a}\n" for a in CANONICAL_MCP_ARGS)
-        + "    env:\n"
-        + env_lines
-    )
-
-    import re
-    if "opencode-search:" in old_text:
-        # Replace the opencode-search block under mcp_servers
-        new_text = re.sub(
-            r"  opencode-search:.*?(?=\n  [a-zA-Z]|\Z)",
-            new_block.rstrip(),
-            old_text,
-            flags=re.DOTALL,
-        )
-    elif "mcp_servers:" in old_text:
-        new_text = old_text.replace(
-            "mcp_servers:",
-            "mcp_servers:\n" + new_block.rstrip(),
-            1,
-        )
-    else:
-        new_text = old_text.rstrip() + "\nmcp_servers:\n" + new_block
-
-    if old_text == new_text:
+    new_text = _build_hermes_config_text()
+    if old_text.strip() == new_text.strip():
         return ConfigResult(tool=label, status="already_ok",
                             message="hermes config.yaml already in sync", path=str(config_path))
     diff = _diff(old_text, new_text, str(config_path))
@@ -349,49 +348,49 @@ def _repair_hermes_yaml(config_path: Path, dry_run: bool = False) -> ConfigResul
                             message=f"[DRY-RUN] Would update {config_path}", path=str(config_path), diff=diff)
     config_path.write_text(new_text, encoding="utf-8")
     return ConfigResult(tool=label, status="configured",
-                        message=f"Updated hermes MCP entry: {config_path}", path=str(config_path), diff=diff)
+                        message=f"Updated hermes config.yaml: {config_path}", path=str(config_path), diff=diff)
 
 
 # ---------------------------------------------------------------------------
-# hermes SYSTEM_PROMPT.md (new file)
+# hermes agent.system_prompt in config.yaml (replaces SYSTEM_PROMPT.md)
 # ---------------------------------------------------------------------------
 
-def _verify_hermes_system_prompt(md_path: Path) -> ConfigResult:
-    label = "hermes/SYSTEM_PROMPT.md"
-    if not md_path.parent.parent.exists():  # ~/.hermes/ not present
+def _verify_hermes_agent_prompt(config_path: Path) -> ConfigResult:
+    """Verify that agent.system_prompt in hermes config.yaml contains the canonical body."""
+    label = "hermes/agent_system_prompt"
+    if not config_path.parent.exists():
         return ConfigResult(tool=label, status="skipped",
-                            message="hermes not installed", path=str(md_path))
-    if not md_path.exists():
+                            message="hermes not installed", path=str(config_path))
+    if not config_path.exists():
         return ConfigResult(tool=label, status="missing",
-                            message=f"hermes SYSTEM_PROMPT.md not found: {md_path}", path=str(md_path))
-    text = md_path.read_text()
-    from integrations.canonical import CANONICAL_BODY
-    if _verify_sentinel_block(text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY):
+                            message=f"hermes config.yaml not found: {config_path}", path=str(config_path))
+    text = config_path.read_text()
+    # In the YAML literal block scalar, sentinel lines are indented 4 spaces
+    indented_start = "    " + SENTINEL_AGENTS_START
+    indented_end = "    " + SENTINEL_AGENTS_END
+    if "agent:" not in text or indented_start not in text or indented_end not in text:
+        return ConfigResult(tool=label, status="missing",
+                            message="hermes agent.system_prompt missing or no sentinel block", path=str(config_path))
+    # Compare file content against the canonical full config text
+    canonical = _build_hermes_config_text()
+    if text.strip() == canonical.strip():
         return ConfigResult(tool=label, status="already_ok",
-                            message=f"hermes system prompt in sync: {md_path}", path=str(md_path))
+                            message="hermes agent system prompt in sync", path=str(config_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"hermes system prompt drifted: {md_path}", path=str(md_path))
+                        message="hermes agent system prompt drifted", path=str(config_path))
 
 
-def _repair_hermes_system_prompt(md_path: Path, dry_run: bool = False) -> ConfigResult:
-    label = "hermes/SYSTEM_PROMPT.md"
-    if not md_path.parent.parent.exists():
+def _repair_hermes_agent_prompt(config_path: Path, dry_run: bool = False) -> ConfigResult:
+    """Repair hermes agent.system_prompt — rewrites the full config.yaml canonically."""
+    label = "hermes/agent_system_prompt"
+    if not config_path.parent.exists():
         return ConfigResult(tool=label, status="skipped",
-                            message="hermes not installed", path=str(md_path))
-    old_text = md_path.read_text() if md_path.exists() else ""
-    from integrations.canonical import CANONICAL_BODY
-    new_text = _replace_sentinel_block(old_text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
-    if old_text == new_text:
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {md_path}", path=str(md_path))
-    diff = _diff(old_text, new_text, str(md_path))
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would create/update {md_path}", path=str(md_path), diff=diff)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(new_text)
-    return ConfigResult(tool=label, status="configured",
-                        message=f"Written hermes SYSTEM_PROMPT.md: {md_path}", path=str(md_path), diff=diff)
+                            message="hermes not installed", path=str(config_path))
+    # Delegate to full hermes config rewrite (idempotent — same target file)
+    result = _repair_hermes_yaml(config_path, dry_run=dry_run)
+    return ConfigResult(tool=label, status=result.status,
+                        message=result.message.replace("hermes config.yaml", "hermes agent_system_prompt"),
+                        path=result.path, diff=result.diff)
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +631,7 @@ _SYSTEM_PROMPT_TARGETS: list[tuple[str, Path, str]] = [
     ("agents", _H / ".codex" / "AGENTS.md", "codex/AGENTS.md"),
     ("agents", _H / ".config" / "opencode" / "AGENTS.md", "opencode-default/AGENTS.md"),
     ("agents", _H / ".config" / "opencode-personal" / "opencode" / "AGENTS.md", "opencode-personal/AGENTS.md"),
-    ("hermes_md", _H / ".hermes" / "SYSTEM_PROMPT.md", "hermes/SYSTEM_PROMPT.md"),
+    ("hermes_agent", _H / ".hermes" / "config.yaml", "hermes/agent_system_prompt"),
 ]
 
 _MCP_TARGETS: list[tuple[str, Path, str]] = [
@@ -654,8 +653,8 @@ def verify_all() -> list[ConfigResult]:
             results.append(_verify_claude_md(path))
         elif kind == "agents":
             results.append(_verify_agents_md(path, label))
-        elif kind == "hermes_md":
-            results.append(_verify_hermes_system_prompt(path))
+        elif kind == "hermes_agent":
+            results.append(_verify_hermes_agent_prompt(path))
     for kind, path, label in _MCP_TARGETS:
         if kind == "settings":
             results.append(_verify_settings_json(path))
@@ -677,8 +676,8 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
             results.append(_repair_claude_md(path, dry_run=dry_run))
         elif kind == "agents":
             results.append(_repair_agents_md(path, label, dry_run=dry_run))
-        elif kind == "hermes_md":
-            results.append(_repair_hermes_system_prompt(path, dry_run=dry_run))
+        elif kind == "hermes_agent":
+            results.append(_repair_hermes_agent_prompt(path, dry_run=dry_run))
     for kind, path, label in _MCP_TARGETS:
         if kind == "settings":
             results.append(_repair_settings_json(path, dry_run=dry_run))

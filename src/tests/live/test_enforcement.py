@@ -332,7 +332,7 @@ class TestConfigureIntegrationsScript:
             }
         }))
         subprocess.run(
-            [str(_VENV_PYTHON), "scripts/configure_integrations.py", "--json"],
+            [str(_VENV_PYTHON), "scripts/configure_integrations.py", "--apply-all", "--json"],
             capture_output=True, text=True,
             env={**os.environ, "HOME": str(fake_home)},
             cwd=str(_REPO),
