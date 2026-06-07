@@ -103,6 +103,51 @@ def parse_sse(response: httpx.Response) -> list[dict]:
     return events
 
 
+@pytest.fixture(scope="session")
+def browser_context_args(browser_context_args):
+    """Minimal browser context: fixed viewport, ignore self-signed certs."""
+    return {**browser_context_args, "viewport": {"width": 1280, "height": 720},
+            "ignore_https_errors": True}
+
+
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args):
+    """Single Chromium launch per session; no sandbox/GPU/extensions → low CPU/RAM."""
+    return {**browser_type_launch_args,
+            "headless": True,
+            "args": ["--no-sandbox", "--disable-dev-shm-usage",
+                     "--disable-gpu", "--disable-extensions",
+                     "--disable-background-networking",
+                     "--disable-renderer-backgrounding",
+                     "--mute-audio", "--no-first-run"]}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pin_ollama_model_resident():
+    """Keep qwen3-query:8b loaded for the whole test session (no per-test warm-up).
+    Reverts to 10m keep-alive at teardown to match the production systemd setting."""
+    with contextlib.suppress(Exception):
+        httpx.post("http://localhost:11434/api/generate",
+                   json={"model": "qwen3-query:8b", "prompt": "", "keep_alive": -1},
+                   timeout=5.0)
+    yield
+    with contextlib.suppress(Exception):
+        httpx.post("http://localhost:11434/api/generate",
+                   json={"model": "qwen3-query:8b", "prompt": "", "keep_alive": "10m"},
+                   timeout=5.0)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cap_cpu_threads():
+    """Cap CPU math thread pools to 1 — embeddings run on CUDA, not CPU."""
+    import os
+    for k in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
+              "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+              "ONNXRUNTIME_NUM_THREADS"):
+        os.environ.setdefault(k, "1")
+    yield
+
+
 def judge_answer(answer: str, question: str) -> int:
     """Score an LLM answer 1-5 using the local query LLM. Returns 1 on failure."""
     try:

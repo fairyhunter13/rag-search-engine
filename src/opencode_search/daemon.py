@@ -156,6 +156,17 @@ def _tcp_port_open(host: str, port: int, timeout: float = 0.3) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def _wait_for_port_free(host: str, port: int, *, timeout_s: float = 5.0, poll_s: float = 0.1) -> bool:
+    """Poll until host:port stops accepting connections (predecessor released it) or timeout."""
+    import time
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not _tcp_port_open(host, port, timeout=0.1):
+            return True
+        time.sleep(poll_s)
+    return False
+
+
 def _find_pid_by_port(host: str, port: int) -> int | None:
     try:
         connections = psutil.net_connections(kind="tcp")
@@ -1169,7 +1180,9 @@ def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_
         assert_gpu_available()
 
     if _tcp_port_open(host, port):
-        raise RuntimeError(f"Cannot start daemon on {host}:{port}; port already in use")
+        grace = float(os.environ.get("OPENCODE_DAEMON_BIND_WAIT_S", "5"))
+        if not _wait_for_port_free(host, port, timeout_s=grace):
+            raise RuntimeError(f"Cannot start daemon on {host}:{port}; still in use after {grace}s wait")
     _write_pidfile(host=host, port=port)
     try:
         _start_shutdown_monitor()
