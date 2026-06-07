@@ -701,23 +701,131 @@ def _apply_fastembed_patch() -> None:
 
 _ONNX_LOG_SEVERITY_LEVEL = int(os.environ.get("OPENCODE_ONNX_LOG_SEVERITY", "3"))
 
-# Circuit breaker: block ONNX session creation for _CUBLAS_COOLDOWN_S seconds
-# after a CUBLAS resource-allocation failure.  Without this, the daemon retries
-# on every incoming request, consuming CPU + RAM in a tight loop that can push
-# system load to 70+ and RAM to 50 GB within minutes.
+# ---------------------------------------------------------------------------
+# CUBLAS circuit breaker: adaptive retry + Ollama probe + hard cooldown
+#
+# When Ollama loads qwen3-query:8b it briefly contends for VRAM, causing
+# CUBLAS_STATUS_ALLOC_FAILED during ONNX session creation. The old behaviour
+# (30s hard block, no retry) meant a single transient OOM locked the daemon
+# for a full 30s and lost the request.
+#
+# New behaviour:
+#   1. Attempt fn() up to _CUBLAS_MAX_RETRIES times.
+#   2. On each CUBLAS error: probe Ollama /api/ps to wait for model loading
+#      to settle, then sleep with exponential backoff before retry.
+#   3. Only after all retries are exhausted: enter hard cooldown and re-raise.
+# ---------------------------------------------------------------------------
 _cublas_fail_time: float = 0.0
 _cublas_fail_lock = threading.Lock()
 _CUBLAS_COOLDOWN_S: float = float(os.environ.get("OPENCODE_CUBLAS_COOLDOWN_S", "30"))
+_CUBLAS_MAX_RETRIES: int = int(os.environ.get("OPENCODE_CUBLAS_MAX_RETRIES", "4"))
+_CUBLAS_BACKOFF_BASE_S: float = float(os.environ.get("OPENCODE_CUBLAS_BACKOFF_BASE_S", "1.0"))
+_CUBLAS_OLLAMA_PROBE_TIMEOUT_S: float = float(
+    os.environ.get("OPENCODE_CUBLAS_OLLAMA_PROBE_TIMEOUT_S", "15")
+)
+_OLLAMA_PS_URL: str = os.environ.get(
+    "OPENCODE_OLLAMA_PS_URL", "http://localhost:11434/api/ps"
+)
+
+# Diagnostic counters — read via get_cublas_metrics(); writes are thread-safe
+# via _cublas_fail_lock (counters are incremented only in locked sections or
+# from a single worker thread, so correctness is maintained).
+_cublas_retry_attempts: int = 0
+_cublas_retry_recoveries: int = 0
+_cublas_hard_cooldowns_entered: int = 0
+_cublas_ollama_waits: int = 0
+
+
+def _is_cublas_error(exc: BaseException) -> bool:
+    msg = str(exc)
+    return "CUBLAS" in msg or "cublasCreate" in msg or "resource allocation" in msg.lower()
+
+
+def _probe_ollama_loading(timeout_s: float) -> bool:
+    """Poll Ollama /api/ps until no model is actively loading, up to timeout_s.
+
+    Returns True if we waited (i.e. a model was in a loading-like state),
+    False if the endpoint was idle or unreachable (no wait needed).
+    """
+    global _cublas_ollama_waits
+    import time as _t
+    import urllib.request
+    _LOADING_TAGS = ("qwen3", "qwen2", "llama", "mistral", "gemma")
+    deadline = _t.monotonic() + timeout_s
+    waited = False
+    while _t.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(_OLLAMA_PS_URL, timeout=2) as resp:
+                import json as _json
+                data = _json.loads(resp.read())
+            models = data.get("models") or []
+            loading = [
+                m for m in models
+                if m.get("size_vram", 0) > 0
+                and any(tag in m.get("name", "").lower() for tag in _LOADING_TAGS)
+            ]
+            if not loading:
+                break
+            waited = True
+            _t.sleep(1.0)
+        except Exception:
+            break
+    if waited:
+        with _cublas_fail_lock:
+            _cublas_ollama_waits += 1
+        log.info("CUBLAS retry: waited for Ollama model loading to settle")
+    return waited
+
+
+def _cublas_call_with_retry(label: str, fn):
+    """Run fn() with retry+backoff on transient CUBLAS errors.
+
+    Non-CUBLAS exceptions re-raise immediately on the first attempt.
+    After _CUBLAS_MAX_RETRIES exhausted: call _record_cublas_failure() and re-raise.
+    """
+    global _cublas_retry_attempts, _cublas_retry_recoveries
+    import time as _t
+    last_exc: BaseException | None = None
+    for attempt in range(_CUBLAS_MAX_RETRIES + 1):
+        try:
+            result = fn()
+            if attempt > 0:
+                with _cublas_fail_lock:
+                    _cublas_retry_recoveries += 1
+                log.info(
+                    "CUBLAS retry [%s]: recovered after %d attempt(s)", label, attempt + 1
+                )
+            return result
+        except Exception as exc:
+            if not _is_cublas_error(exc):
+                raise
+            last_exc = exc
+            if attempt >= _CUBLAS_MAX_RETRIES:
+                break
+            with _cublas_fail_lock:
+                _cublas_retry_attempts += 1
+            backoff = _CUBLAS_BACKOFF_BASE_S * (2 ** attempt)
+            log.warning(
+                "CUBLAS error on %s (attempt %d/%d), probing Ollama then retrying in %.1fs: %s",
+                label, attempt + 1, _CUBLAS_MAX_RETRIES, backoff, exc,
+            )
+            _probe_ollama_loading(_CUBLAS_OLLAMA_PROBE_TIMEOUT_S)
+            _t.sleep(backoff)
+    _record_cublas_failure()
+    raise last_exc  # type: ignore[misc]
 
 
 def _record_cublas_failure() -> None:
-    global _cublas_fail_time
+    global _cublas_fail_time, _cublas_hard_cooldowns_entered
     import time as _t
     with _cublas_fail_lock:
         _cublas_fail_time = _t.monotonic()
+        _cublas_hard_cooldowns_entered += 1
     log.error(
-        "CUBLAS resource allocation failed — blocking ONNX session creation for %.0fs. "
-        "If this repeats, restart the daemon after freeing GPU memory.",
+        "CUBLAS resource allocation failed after %d retries — blocking ONNX session "
+        "creation for %.0fs. Free GPU memory (stop Ollama large models) and retry, "
+        "or restart the daemon.",
+        _CUBLAS_MAX_RETRIES,
         _CUBLAS_COOLDOWN_S,
     )
 
@@ -726,6 +834,23 @@ def _cublas_in_cooldown() -> bool:
     import time as _t
     with _cublas_fail_lock:
         return (_t.monotonic() - _cublas_fail_time) < _CUBLAS_COOLDOWN_S
+
+
+def get_cublas_metrics() -> dict:
+    """Snapshot of CUBLAS circuit-breaker counters for /api/metrics."""
+    import time as _t
+    with _cublas_fail_lock:
+        fail_time = _cublas_fail_time
+        in_cd = (_t.monotonic() - fail_time) < _CUBLAS_COOLDOWN_S
+        remaining = max(0.0, _CUBLAS_COOLDOWN_S - (_t.monotonic() - fail_time)) if fail_time else 0.0
+        return {
+            "retry_attempts": _cublas_retry_attempts,
+            "retry_recoveries": _cublas_retry_recoveries,
+            "hard_cooldowns_entered": _cublas_hard_cooldowns_entered,
+            "ollama_waits": _cublas_ollama_waits,
+            "in_cooldown": in_cd,
+            "cooldown_remaining_s": round(remaining, 1),
+        }
 
 
 def _embedder(model: str):
@@ -782,19 +907,16 @@ def _embedder(model: str):
         provider_list = _build_provider_list_with_options(providers)
 
         import onnxruntime as _ort_ref
-        try:
-            embedder = TextEmbedding(
+        embedder = _cublas_call_with_retry(
+            "embedder",
+            lambda: TextEmbedding(
                 model_name=model, providers=provider_list,
                 enable_cpu_mem_arena=False, enable_mem_pattern=False,
                 execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
                 graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
                 log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
-            )
-        except Exception as _e:
-            _msg = str(_e)
-            if "CUBLAS" in _msg or "resource allocation" in _msg.lower() or "cublasCreate" in _msg:
-                _record_cublas_failure()
-            raise
+            ),
+        )
 
         # Verify which provider the ONNX session actually selected
         _verify_onnx_session_provider(embedder, "embedder")
@@ -857,19 +979,16 @@ def _reranker(model: str):
             raise RuntimeError(
                 f"Reranker blocked: CUBLAS OOM cooldown ({_CUBLAS_COOLDOWN_S:.0f}s)."
             )
-        try:
-            reranker = TextCrossEncoder(
+        reranker = _cublas_call_with_retry(
+            "reranker",
+            lambda: TextCrossEncoder(
                 model_name=model, providers=provider_list,
                 enable_cpu_mem_arena=False, enable_mem_pattern=False,
                 execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
                 graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
                 log_severity_level=_ONNX_LOG_SEVERITY_LEVEL,
-            )
-        except Exception as _e:
-            _msg = str(_e)
-            if "CUBLAS" in _msg or "resource allocation" in _msg.lower() or "cublasCreate" in _msg:
-                _record_cublas_failure()
-            raise
+            ),
+        )
 
         # Verify GPU provider and probe IOBinding for this model
         _verify_onnx_session_provider(reranker, "reranker")

@@ -219,3 +219,49 @@ print("OK", flush=True)
         assert "OK" in result.stdout, (
             f"Registry entries not preserved:\n{result.stdout}\n{result.stderr}"
         )
+
+
+class TestDeadCodeRemoval:
+    """Phase 68 Part A: verify dead code was actually removed."""
+
+    def test_compaction_module_removed(self):
+        """opencode_search.compaction must not be importable — file was deleted."""
+        import importlib
+        try:
+            importlib.import_module("opencode_search.compaction")
+            pytest.fail("opencode_search.compaction is still importable — dead code not removed")
+        except ModuleNotFoundError:
+            pass
+
+    def test_remove_stale_chunks_removed_keeps_remove_chunks_for_paths(self):
+        """remove_stale_chunks must be gone; remove_chunks_for_paths must still exist."""
+        import opencode_search.cleaner as c
+        assert hasattr(c, "remove_chunks_for_paths"), (
+            "remove_chunks_for_paths was removed — it's still live (called from handlers/_index.py)"
+        )
+        assert not hasattr(c, "remove_stale_chunks"), (
+            "remove_stale_chunks is still present in cleaner.py — dead code not removed"
+        )
+
+
+class TestCublasBreakerMetrics:
+    """Phase 68 Part C: /api/metrics must expose cublas_breaker snapshot."""
+
+    def test_api_metrics_includes_cublas_breaker(self, http):
+        """GET /api/metrics must include cublas_breaker with all expected keys."""
+        r = http.get("/api/metrics")
+        assert r.status_code == 200, f"/api/metrics returned {r.status_code}: {r.text[:300]}"
+        j = r.json()
+        assert "cublas_breaker" in j, (
+            f"/api/metrics JSON is missing 'cublas_breaker' key.\n"
+            f"Keys present: {list(j.keys())}"
+        )
+        expected_keys = {
+            "retry_attempts", "retry_recoveries", "hard_cooldowns_entered",
+            "ollama_waits", "in_cooldown", "cooldown_remaining_s",
+        }
+        missing = expected_keys - set(j["cublas_breaker"].keys())
+        assert not missing, (
+            f"cublas_breaker snapshot is missing keys: {missing}\n"
+            f"Got: {j['cublas_breaker']}"
+        )
