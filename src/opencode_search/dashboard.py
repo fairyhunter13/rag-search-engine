@@ -3,25 +3,17 @@
 Registers routes on the existing FastMCP Starlette app (no new server/port).
 Import this module in mcp.py to attach routes:  from opencode_search import dashboard
 
-Routes:
-  GET /dashboard                        — single-page HTML app
-  GET /api/projects                     — list all indexed projects
-  GET /api/overview?project=…           — directory tree + language breakdown + graph stats
-  GET /api/communities?project=…&top_k= — enriched code clusters (knowledge semantics)
-  GET /api/wiki?project=…               — wiki page list
-  GET /api/wiki/page?project=…&name=…   — wiki page content (markdown)
-  GET /api/ask?project=…&q=…&scope=     — architecture/wiki search
-  GET /api/search?project=…&q=…         — code search
-  GET /api/graph?project=…&symbol=…&relation= — callers/callees/impact/trace
-  GET /api/federation?project=…         — federation member list
-  GET /api/metrics                      — daemon session statistics
-  GET /api/patterns?project=…           — languages, deps, conventions, architecture
-  POST /api/analyze_patterns?project=…  — trigger LLM deep pattern analysis (async)
-  GET /api/kb_health?project=…          — KB completeness: enrichment %, wiki count, patterns cache
-  GET /api/auto_pipeline_status         — pipeline enabled flag + last 20 events
-  GET /api/prerelease_status            — last pre-release go/no-go report
-  POST /api/run_prerelease              — trigger pre-release check (background subprocess)
-  GET /api/prerelease_poll?id=          — poll background pre-release task status
+Routes are split into per-domain sub-registrars for maintainability:
+  _register_root_routes     — /, /dashboard, /static/
+  _register_project_routes  — /api/projects, /api/overview, /api/communities, watching
+  _register_wiki_routes     — /api/wiki, /api/wiki/page, /api/wiki_lint, /api/suggested_questions
+  _register_search_routes   — /api/ask, /api/feature, /api/search, /api/patterns, business
+  _register_graph_routes    — /api/graph, /api/graph_export, service_mesh, trace, impact, PR
+  _register_chat_routes     — /api/chat, /api/chat_stream, /api/debug
+  _register_kb_routes       — /api/kb_health, /api/dedup, /api/vacuum, /api/git_hooks, /api/reload
+  _register_ops_routes      — metrics, pipeline, prerelease, verify, QA, SSE, alerts, jobs
+
+register_dashboard_routes(mcp) is the public entry point — it calls all sub-registrars.
 """
 from __future__ import annotations
 
@@ -164,13 +156,89 @@ from opencode_search._dashboard_html import _DASHBOARD_HTML  # noqa: E402
 # _DASHBOARD_HTML is imported above.
 
 # ---------------------------------------------------------------------------
-# API route handlers
+# Module-level helpers (hoisted from the former mega-function for clarity)
 # ---------------------------------------------------------------------------
 
+# Background task stores — module-level so trigger + poll routes in the same
+# sub-registrar share state across requests (same semantics as before, when
+# they were function-local dicts created once at registration time).
+_PRERELEASE_TASKS: dict = {}
+_AUTOFIX_TASKS: dict = {}
+_QA_TASKS: dict = {}
 
-def register_dashboard_routes(mcp: FastMCP) -> None:
-    """Attach all dashboard routes to the FastMCP instance."""
 
+def _spawn_daemon_restart_thread(pid: int) -> None:
+    """Start a background thread that kills pid and respawns the daemon."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    import threading
+    import time as _t
+
+    def _restart() -> None:
+        _t.sleep(1.0)
+        subprocess.Popen(
+            [
+                sys.executable, "-c",
+                (
+                    "import time, subprocess, sys\n"
+                    "time.sleep(2)\n"
+                    "subprocess.Popen([sys.executable, '-m', 'opencode_search', 'daemon', 'ensure'],"
+                    " start_new_session=True)\n"
+                ),
+            ],
+            close_fds=True,
+            start_new_session=True,
+        )
+        _t.sleep(0.2)
+        os.kill(pid, signal.SIGTERM)
+
+    threading.Thread(target=_restart, daemon=False).start()
+
+
+def _hierarchy_build_sync(path: str) -> dict:
+    """Run Leiden hierarchy build synchronously (called via asyncio.to_thread)."""
+    import contextlib as _ctx
+
+    from opencode_search.graph.community import CommunityDetector
+    from opencode_search.handlers._graph import _open_graph
+    gs = _open_graph(path)
+    if gs is None:
+        return {"error": "Project not indexed"}
+    try:
+        levels = CommunityDetector().build_hierarchy(gs)
+        return {"status": "ok", "levels_built": levels, "max_level": gs.get_max_community_level()}
+    finally:
+        with _ctx.suppress(Exception):
+            gs.close()
+
+
+def _run_surprising_sync(path: str, top_n: int) -> dict:
+    """Detect cross-community bridges synchronously (called via asyncio.to_thread)."""
+    import contextlib as _ctx
+
+    from opencode_search.handlers._graph import _open_graph
+    gs = _open_graph(path)
+    if gs is None:
+        return {"error": "Project not indexed"}
+    try:
+        bridges = gs.get_cross_community_bridges(top_n=top_n)
+        return {
+            "project_path": path,
+            "surprising_connections": bridges,
+            "count": len(bridges),
+        }
+    finally:
+        with _ctx.suppress(Exception):
+            gs.close()
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: root + static
+# ---------------------------------------------------------------------------
+
+def _register_root_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/", methods=["GET"], include_in_schema=False)
     async def root_redirect(_request: Request) -> RedirectResponse:
         return RedirectResponse(url="/dashboard", status_code=307)
@@ -179,6 +247,21 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
     async def dashboard(_request: Request) -> HTMLResponse:
         return HTMLResponse(_DASHBOARD_HTML)
 
+    @mcp.custom_route("/static/{path:path}", methods=["GET"], include_in_schema=False)
+    async def static_files(request: Request) -> FileResponse:
+        """Serve static assets (chart.min.js, etc.)."""
+        filename = request.path_params.get("path", "")
+        file_path = _STATIC_DIR / filename
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: project management
+# ---------------------------------------------------------------------------
+
+def _register_project_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/projects", methods=["GET"], include_in_schema=False)
     async def api_projects(_request: Request) -> JSONResponse:
         from opencode_search.handlers import handle_list_indexed_projects, handle_project_status
@@ -225,6 +308,52 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await handle_get_communities(project_path=project, top_k=top_k)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/start_watching", methods=["POST"], include_in_schema=False)
+    async def api_start_watching(request: Request) -> JSONResponse:
+        """Start (or resume) the file watcher for a project. POST {project}."""
+        from opencode_search.handlers._watch import handle_ensure_project_watching
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_ensure_project_watching(path=project, persist=True)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/stop_watching", methods=["POST"], include_in_schema=False)
+    async def api_stop_watching(request: Request) -> JSONResponse:
+        """Stop the file watcher for a project. POST {project}."""
+        from opencode_search.handlers._watch import handle_stop_watching
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_stop_watching(path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/remove_project", methods=["POST"], include_in_schema=False)
+    async def api_remove_project(request: Request) -> JSONResponse:
+        """Remove a project from the registry. POST {project, delete_index?}."""
+        from opencode_search.handlers._vacuum import handle_remove_project
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        delete_index = bool(body.get("delete_index", False))
+        result = await handle_remove_project(project_path=project, delete_index=delete_index)
+        return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: wiki
+# ---------------------------------------------------------------------------
+
+def _register_wiki_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/wiki", methods=["GET"], include_in_schema=False)
     async def api_wiki_list(request: Request) -> JSONResponse:
         from opencode_search.config import get_project_wiki_dir
@@ -250,6 +379,36 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": f"Page not found: {name}"}, status_code=404)
         return JSONResponse({"name": name, "content": page_path.read_text(errors="replace")})
 
+    @mcp.custom_route("/api/wiki_lint", methods=["GET"], include_in_schema=False)
+    async def api_wiki_lint(request: Request) -> JSONResponse:
+        """Health-check the wiki: page count, stale pages, missing entries."""
+        from opencode_search.handlers._wiki import handle_wiki_lint
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_wiki_lint(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/suggested_questions", methods=["GET"], include_in_schema=False)
+    async def api_suggested_questions(request: Request) -> JSONResponse:
+        """Questions the graph is uniquely positioned to answer."""
+        from opencode_search.handlers._graph import handle_suggest_questions
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        try:
+            top_n = int(request.query_params.get("top_n", "7"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "top_n must be an integer"}, status_code=400)
+        result = await handle_suggest_questions(project_path=project, top_n=top_n)
+        return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: search + knowledge queries
+# ---------------------------------------------------------------------------
+
+def _register_search_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/ask", methods=["GET"], include_in_schema=False)
     async def api_ask(request: Request) -> JSONResponse:
         from opencode_search.handlers import handle_global_search
@@ -302,6 +461,72 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             ]
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/patterns", methods=["GET"], include_in_schema=False)
+    async def api_patterns(request: Request) -> JSONResponse:
+        from opencode_search.handlers import handle_detect_patterns
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_detect_patterns(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/analyze_patterns", methods=["POST"], include_in_schema=False)
+    async def api_analyze_patterns(request: Request) -> JSONResponse:
+        from opencode_search.handlers import handle_analyze_patterns_llm
+        project = request.query_params.get("project", "")
+        force = request.query_params.get("force", "").lower() in ("1", "true", "yes")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_analyze_patterns_llm(project_path=project, force=force)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/feature_map", methods=["GET"], include_in_schema=False)
+    async def api_feature_map(request: Request) -> JSONResponse:
+        """Business knowledge map: all communities grouped by semantic_type."""
+        from opencode_search.handlers._business import handle_feature_map
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_feature_map(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/business_rules", methods=["GET"], include_in_schema=False)
+    async def api_business_rules(request: Request) -> JSONResponse:
+        """Return communities classified as business_rule."""
+        from opencode_search.handlers._business import handle_business_rules
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_business_rules(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/process_flows", methods=["GET"], include_in_schema=False)
+    async def api_process_flows(request: Request) -> JSONResponse:
+        """Return communities classified as business_process."""
+        from opencode_search.handlers._business import handle_process_flows
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_process_flows(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/ask_business", methods=["GET"], include_in_schema=False)
+    async def api_ask_business(request: Request) -> JSONResponse:
+        """Answer business-domain questions using semantic-type–classified communities."""
+        from opencode_search.handlers._business import handle_ask_business
+        project = request.query_params.get("project", "")
+        q = request.query_params.get("q", "")
+        if not project or not q:
+            return JSONResponse({"error": "project and q params required"}, status_code=400)
+        result = await handle_ask_business(query=q, project_path=project)
+        return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: graph analysis
+# ---------------------------------------------------------------------------
+
+def _register_graph_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/graph", methods=["GET"], include_in_schema=False)
     async def api_graph(request: Request) -> JSONResponse:
         from opencode_search.handlers import (
@@ -341,123 +566,6 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": "Invalid relation or missing to param"}, status_code=400)
         return JSONResponse(result)
 
-    @mcp.custom_route("/api/federation", methods=["GET"], include_in_schema=False)
-    async def api_federation(request: Request) -> JSONResponse:
-        from opencode_search.handlers._federation import (
-            handle_add_federation_member,
-            handle_discover_federation,
-            handle_index_federation,
-            handle_list_federation,
-            handle_remove_federation_member,
-        )
-        project = request.query_params.get("project", "")
-        action = request.query_params.get("action", "list")
-        member = request.query_params.get("member", "")
-
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-
-        if action == "discover":
-            result = await handle_discover_federation(project_path=project)
-        elif action == "add":
-            if not member:
-                return JSONResponse({"error": "member param required for action=add"}, status_code=400)
-            result = await handle_add_federation_member(root_path=project, member_path=member)
-        elif action == "remove":
-            if not member:
-                return JSONResponse({"error": "member param required for action=remove"}, status_code=400)
-            result = await handle_remove_federation_member(root_path=project, member_path=member)
-        elif action == "index":
-            result = await handle_index_federation(root_path=project)
-        else:
-            result = await handle_list_federation(project_path=project)
-
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/metrics", methods=["GET"], include_in_schema=False)
-    async def api_metrics(_request: Request) -> JSONResponse:
-        import json as _json
-        import time
-
-        from opencode_search.daemon import _META_PATH
-        from opencode_search.daemon_runtime import runtime_state
-        from opencode_search.metrics import get_metrics, get_stream_metrics
-        data = get_metrics()
-        data["chat_stream"] = get_stream_metrics()
-        snap = runtime_state.snapshot()
-        data["connected_clients"] = snap.get("active_clients", 0)
-        data["client_ids"] = snap.get("client_ids", [])
-        try:
-            info = _json.loads(_META_PATH.read_text(encoding="utf-8"))
-            started_at = info.get("started_at")
-            data["uptime_s"] = round(time.time() - started_at, 1) if started_at else None
-        except Exception:
-            data["uptime_s"] = None
-        return JSONResponse(data)
-
-    @mcp.custom_route("/api/patterns", methods=["GET"], include_in_schema=False)
-    async def api_patterns(request: Request) -> JSONResponse:
-        from opencode_search.handlers import handle_detect_patterns
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_detect_patterns(project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/auto_pipeline_status", methods=["GET"], include_in_schema=False)
-    async def api_auto_pipeline_status(_request: Request) -> JSONResponse:
-        from opencode_search.handlers._autopipeline import (
-            auto_pipeline_enabled,
-            get_pipeline_events,
-        )
-        return JSONResponse({
-            "enabled": auto_pipeline_enabled(),
-            "events": get_pipeline_events()[-20:],  # last 20 events
-        })
-
-    @mcp.custom_route("/api/reload", methods=["POST"], include_in_schema=False)
-    async def api_reload(_request: Request) -> JSONResponse:
-        import os
-        import signal
-        import subprocess
-        import sys
-        import threading
-        import time as _t
-        pid = os.getpid()
-
-        def _restart() -> None:
-            _t.sleep(1.0)
-            # Spawn a watcher subprocess that waits for port to free then restarts daemon
-            subprocess.Popen(
-                [
-                    sys.executable, "-c",
-                    (
-                        "import time, subprocess, sys\n"
-                        "time.sleep(2)\n"
-                        "subprocess.Popen([sys.executable, '-m', 'opencode_search', 'daemon', 'ensure'],"
-                        " start_new_session=True)\n"
-                    ),
-                ],
-                close_fds=True,
-                start_new_session=True,
-            )
-            _t.sleep(0.2)
-            os.kill(pid, signal.SIGTERM)
-
-        threading.Thread(target=_restart, daemon=False).start()
-        return JSONResponse({"status": "reloading", "pid": pid,
-                             "note": "daemon restarting in ~3s"})
-
-    @mcp.custom_route("/api/analyze_patterns", methods=["POST"], include_in_schema=False)
-    async def api_analyze_patterns(request: Request) -> JSONResponse:
-        from opencode_search.handlers import handle_analyze_patterns_llm
-        project = request.query_params.get("project", "")
-        force = request.query_params.get("force", "").lower() in ("1", "true", "yes")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_analyze_patterns_llm(project_path=project, force=force)
-        return JSONResponse(result)
-
     @mcp.custom_route("/api/graph_export", methods=["GET"], include_in_schema=False)
     async def api_graph_export(request: Request):
         from starlette.responses import Response
@@ -480,6 +588,280 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
             )
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/service_mesh", methods=["GET"], include_in_schema=False)
+    async def api_service_mesh(request: Request) -> JSONResponse:
+        """Detect inter-service communication patterns for a project."""
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_detect_service_mesh(project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/impact_narrative", methods=["GET"], include_in_schema=False)
+    async def api_impact_narrative(request: Request) -> JSONResponse:
+        """Generate natural-language impact analysis for a symbol."""
+        from opencode_search.handlers._impact import handle_impact_narrative
+        project = request.query_params.get("project", "")
+        symbol = request.query_params.get("symbol", "")
+        if not project or not symbol:
+            return JSONResponse({"error": "project and symbol params required"}, status_code=400)
+        result = await handle_impact_narrative(symbol=symbol, project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/semantic_trace", methods=["GET"], include_in_schema=False)
+    async def api_semantic_trace(request: Request) -> JSONResponse:
+        """Trace a call flow from one concept to another."""
+        from opencode_search.handlers._trace import handle_semantic_trace
+        project = request.query_params.get("project", "")
+        from_q = request.query_params.get("from", "")
+        to_q = request.query_params.get("to", "")
+        if not project or not from_q or not to_q:
+            return JSONResponse({"error": "project, from, and to params required"}, status_code=400)
+        result = await handle_semantic_trace(from_query=from_q, to_query=to_q, project_path=project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/build_hierarchy", methods=["POST"], include_in_schema=False)
+    async def api_build_hierarchy(request: Request) -> JSONResponse:
+        """Trigger recursive Leiden hierarchy build for a project."""
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await asyncio.to_thread(_hierarchy_build_sync, project)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/enrich_hierarchy", methods=["POST"], include_in_schema=False)
+    async def api_enrich_hierarchy(request: Request) -> JSONResponse:
+        """Submit background job to LLM-enrich level-2+ macro-communities."""
+        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+        from opencode_search.jobs import submit_job
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        job = submit_job(
+            handle_enrich_hierarchy(project_path=project),
+            action="enrich_hierarchy",
+            project_path=project,
+        )
+        return JSONResponse({
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Hierarchy enrichment running in background.",
+        })
+
+    @mcp.custom_route("/api/import_cycles", methods=["GET"], include_in_schema=False)
+    async def api_import_cycles(request: Request) -> JSONResponse:
+        """Circular import dependencies — Tarjan SCC on file-level IMPORTS graph."""
+        from opencode_search.handlers._graph import handle_import_cycles
+        project = request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        try:
+            max_cycle_length = int(request.query_params.get("max_cycle_length", "8"))
+            top_n = int(request.query_params.get("top_n", "20"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "max_cycle_length and top_n must be integers"}, status_code=400)
+        result = await handle_import_cycles(
+            project_path=project, max_cycle_length=max_cycle_length, top_n=top_n,
+        )
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/graph_diff", methods=["GET"], include_in_schema=False)
+    async def api_graph_diff(request: Request) -> JSONResponse:
+        """What changed in the graph since a given ISO timestamp."""
+        from opencode_search.handlers._graph import handle_graph_diff
+        project = request.query_params.get("project", "")
+        since = request.query_params.get("since", "")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_graph_diff(project_path=project, since=since)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/callflow_html", methods=["GET"], include_in_schema=False)
+    async def api_callflow_html(request: Request) -> HTMLResponse:
+        """Render a call chain as a standalone Mermaid HTML page.
+
+        Params: project, symbol, direction=callees|callers, depth=5, format=html|mermaid
+        """
+        from opencode_search.handlers._graph import handle_callflow_html as _handle
+        project = request.query_params.get("project", "")
+        symbol = request.query_params.get("symbol", "")
+        direction = request.query_params.get("direction", "callees")
+        depth = int(request.query_params.get("depth", "5"))
+        fmt = request.query_params.get("format", "html")
+        if not project or not symbol:
+            return HTMLResponse("<h1>Error: project and symbol params required</h1>", status_code=400)
+        result = await _handle(
+            symbol=symbol, project_path=project, direction=direction, depth=depth, fmt=fmt,
+        )
+        if "error" in result:
+            return HTMLResponse(f"<h1>Error: {result['error']}</h1>", status_code=404)
+        if fmt == "mermaid":
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse(result.get("mermaid", ""))
+        return HTMLResponse(result.get("html", "<html><body>No diagram</body></html>"))
+
+    @mcp.custom_route("/api/surprising_connections", methods=["GET"], include_in_schema=False)
+    async def api_surprising_connections(request: Request) -> JSONResponse:
+        """Cross-community bridges: edges connecting nodes in different architectural clusters."""
+        project = request.query_params.get("project", "")
+        try:
+            top_n = int(request.query_params.get("top_n", "20"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "top_n must be an integer"}, status_code=400)
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        return JSONResponse(await asyncio.to_thread(_run_surprising_sync, project, top_n))
+
+    @mcp.custom_route("/api/pr_impact", methods=["GET", "POST"], include_in_schema=False)
+    async def api_pr_impact(request: Request) -> JSONResponse:
+        """PR impact: changed files → communities touched + risk level.
+
+        GET  ?project=...&base_branch=main
+        POST {project, files: [...], base_branch: "main"}
+        """
+        from opencode_search.handlers._pr_impact import handle_pr_impact
+        if request.method == "POST":
+            body: dict = {}
+            with contextlib.suppress(Exception):
+                body = await request.json()
+            project = body.get("project") or request.query_params.get("project", "")
+            files = body.get("files") or None
+            base_branch = body.get("base_branch", "main")
+        else:
+            project = request.query_params.get("project", "")
+            files = None
+            base_branch = request.query_params.get("base_branch", "main")
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_pr_impact(project_path=project, files=files, base_branch=base_branch)
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/tree_html", methods=["GET"], include_in_schema=False)
+    async def api_tree_html(request: Request):
+        """Interactive file tree HTML. ?project=...&format=html|json&max_files=2000"""
+        from starlette.responses import Response as _Resp
+
+        from opencode_search.handlers._tree_html import handle_tree_html
+        project = request.query_params.get("project", "")
+        fmt = request.query_params.get("format", "html")
+        try:
+            max_files = int(request.query_params.get("max_files", "2000"))
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "max_files must be an integer"}, status_code=400)
+        if not project:
+            return JSONResponse({"error": "project param required"}, status_code=400)
+        result = await handle_tree_html(project_path=project, fmt=fmt, max_files=max_files)
+        if "error" in result:
+            return JSONResponse(result, status_code=400)
+        if fmt == "html" and "html" in result:
+            return _Resp(content=result["html"], media_type="text/html")
+        return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: chat + debug
+# ---------------------------------------------------------------------------
+
+def _register_chat_routes(mcp: FastMCP) -> None:
+    @mcp.custom_route("/api/chat", methods=["POST"], include_in_schema=False)
+    async def api_kb_chat(request: Request) -> JSONResponse:
+        """Unified chat: auto-detects intent, returns humanized prose.
+
+        Body JSON: {"project": str, "query": str, "history": list[dict] | null}
+        """
+        from opencode_search.handlers._chat_router import handle_chat_auto
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        query = body.get("query", "")
+        history = body.get("history") or []
+        if not project or not query:
+            return JSONResponse({"error": "project and query required"}, status_code=400)
+        result = await handle_chat_auto(
+            query=query,
+            project_path=project,
+            conversation_history=history,
+        )
+        return JSONResponse(result)
+
+    @mcp.custom_route("/api/chat_stream", methods=["POST"], include_in_schema=False)
+    async def api_kb_chat_stream(request: Request) -> StreamingResponse | JSONResponse:
+        """Streaming chat: yields NDJSON tokens as they are generated.
+
+        Body JSON: {"project": str, "query": str, "history": list[dict] | null}
+        Each line: {"type":"token","text":"..."} or {"type":"done","intent":"...",...}
+        """
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        query = body.get("query", "")
+        history = body.get("history") or []
+        if not project or not query:
+            return JSONResponse({"error": "project and query required"}, status_code=400)
+
+        from opencode_search.handlers._chat_router import handle_chat_auto_stream
+        from opencode_search.metrics import record_stream_cancelled
+
+        async def _gen():
+            async for chunk in handle_chat_auto_stream(
+                query=query,
+                project_path=project,
+                conversation_history=history,
+            ):
+                if await request.is_disconnected():
+                    record_stream_cancelled()
+                    return
+                yield f"data: {json.dumps(chunk)}\n\n"
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @mcp.custom_route("/api/debug", methods=["POST"], include_in_schema=False)
+    async def api_debug_trace(request: Request) -> JSONResponse:
+        """Root-cause trace from a stack trace.
+
+        Body JSON: {"project": str, "traceback": str, "error_message": str, "include_fix": bool}
+        """
+        from opencode_search.handlers._debug_trace import handle_debug_trace
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        traceback_text = body.get("traceback", "")
+        error_message = body.get("error_message", "")
+        include_fix = bool(body.get("include_fix", True))
+        if not project or not traceback_text:
+            return JSONResponse({"error": "project and traceback required"}, status_code=400)
+        result = await handle_debug_trace(
+            traceback=traceback_text,
+            project_path=project,
+            error_message=error_message,
+            include_fix=include_fix,
+        )
+        return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: knowledge-base health + admin ops
+# ---------------------------------------------------------------------------
+
+def _register_kb_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/kb_health", methods=["GET"], include_in_schema=False)
     async def api_kb_health(request: Request) -> JSONResponse:
         """KB completeness snapshot: enrichment %, wiki count, patterns cache, last pipeline event."""
@@ -562,493 +944,6 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
 
         return JSONResponse(result)
 
-    # ── Pre-release status & trigger ─────────────────────────────────────
-
-    @mcp.custom_route("/api/prerelease_status", methods=["GET"], include_in_schema=False)
-    async def api_prerelease_status(_request: Request) -> JSONResponse:
-        """Return last pre-release report JSON, or 404 if none exists."""
-        import json as _json
-        from pathlib import Path as _Path
-        # Look for report adjacent to scripts dir
-        candidates = [
-            _Path(__file__).parent.parent.parent / ".prerelease_report.json",
-            _Path(".prerelease_report.json").resolve(),
-        ]
-        for report_path in candidates:
-            if report_path.exists():
-                try:
-                    data = _json.loads(report_path.read_text())
-                    return JSONResponse(data)
-                except Exception as exc:
-                    return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
-        return JSONResponse({"error": "No pre-release report found"}, status_code=404)
-
-    _prerelease_tasks: dict = {}
-
-    @mcp.custom_route("/api/run_prerelease", methods=["POST"], include_in_schema=False)
-    async def api_run_prerelease(request: Request) -> JSONResponse:
-        """Spawn prerelease.py as a background subprocess. Returns task_id."""
-        import asyncio as _aio
-        import sys as _sys
-        import uuid as _uuid
-        from pathlib import Path as _Path
-
-        body = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        task_id = str(_uuid.uuid4())[:8]
-
-        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
-        prerelease_script = scripts_dir / "prerelease.py"
-        if not prerelease_script.exists():
-            return JSONResponse({"error": "prerelease.py not found"}, status_code=503)
-
-        cmd = [_sys.executable, str(prerelease_script), "--fast", "--json"]
-        if project:
-            cmd += ["--project", project]
-
-        async def _run_bg():
-            try:
-                proc = await _aio.create_subprocess_exec(
-                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
-                )
-                _prerelease_tasks[task_id] = {"status": "running", "pid": proc.pid}
-                await proc.wait()
-                _prerelease_tasks[task_id] = {"status": "done", "returncode": proc.returncode}
-            except Exception as exc:
-                _prerelease_tasks[task_id] = {"status": "error", "error": str(exc)}
-
-        _prerelease_tasks[f"_task_{task_id}"] = _aio.create_task(_run_bg())
-        _prerelease_tasks[task_id] = {"status": "running"}
-        return JSONResponse({"task_id": task_id, "status": "started"})
-
-    @mcp.custom_route("/api/prerelease_poll", methods=["GET"], include_in_schema=False)
-    async def api_prerelease_poll(request: Request) -> JSONResponse:
-        """Poll status of a running pre-release task."""
-        task_id = request.query_params.get("id", "")
-        state = _prerelease_tasks.get(task_id, {"status": "not_found"})
-        return JSONResponse(state)
-
-    @mcp.custom_route("/api/verify_status", methods=["GET"], include_in_schema=False)
-    async def api_verify_status(_request: Request) -> JSONResponse:
-        """Return last verification run results + history from .opencode_verify_state.json."""
-        import json as _json
-        from pathlib import Path as _Path
-        state_path = _Path(__file__).parent.parent.parent / ".opencode_verify_state.json"
-        if not state_path.exists():
-            return JSONResponse({"last_run": None, "history": [], "verdict": "unknown"})
-        try:
-            state = _json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=500)
-        runs = state.get("run_history", [])
-        last = runs[-1] if runs else None
-        history = [
-            {"ts": r.get("timestamp"), "passed": r.get("passed", 0), "failed": r.get("failed", 0)}
-            for r in runs[-30:]
-        ]
-        verdict = "unknown"
-        if last:
-            p0 = last.get("p0_failures", 0)
-            failed = last.get("failed", 0)
-            verdict = "NO-GO" if p0 > 0 else ("WARNINGS" if failed > 0 else "GO")
-        # Per-category breakdown is in last_results, not run_history
-        categories = state.get("last_results", {})
-        failures = state.get("known_failures", []) or state.get("failures", [])
-        return JSONResponse({
-            "last_run": last,
-            "history": history,
-            "verdict": verdict,
-            "failures": failures,
-            "categories": categories,
-        })
-
-    # Background job store for auto-fix tasks
-    _autofix_tasks: dict[str, dict] = {}
-
-    @mcp.custom_route("/api/auto_fix_trigger", methods=["POST"], include_in_schema=False)
-    async def api_auto_fix_trigger(request: Request) -> JSONResponse:
-        """Trigger selfheal.py --apply to auto-fix known issues."""
-        import asyncio as _aio
-        import sys as _sys
-        import uuid as _uuid
-        from pathlib import Path as _Path
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        task_id = str(_uuid.uuid4())[:8]
-        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
-        selfheal_script = scripts_dir / "selfheal.py"
-        if not selfheal_script.exists():
-            return JSONResponse({"error": "selfheal.py not found"}, status_code=503)
-        cmd = [_sys.executable, str(selfheal_script), "--apply"]
-        if project:
-            cmd += ["--project", project]
-
-        async def _run_bg():
-            try:
-                proc = await _aio.create_subprocess_exec(
-                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
-                )
-                stdout, _ = await proc.communicate()
-                _autofix_tasks[task_id] = {
-                    "status": "done",
-                    "returncode": proc.returncode,
-                    "output": (stdout or b"").decode(errors="replace")[-4000:],
-                }
-            except Exception as exc:
-                _autofix_tasks[task_id] = {"status": "error", "error": str(exc)}
-
-        _autofix_tasks[f"_task_{task_id}"] = _aio.create_task(_run_bg())
-        _autofix_tasks[task_id] = {"status": "running"}
-        return JSONResponse({"task_id": task_id, "status": "started"})
-
-    @mcp.custom_route("/api/service_mesh", methods=["GET"], include_in_schema=False)
-    async def api_service_mesh(request: Request) -> JSONResponse:
-        """Detect inter-service communication patterns for a project."""
-        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_detect_service_mesh(project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/impact_narrative", methods=["GET"], include_in_schema=False)
-    async def api_impact_narrative(request: Request) -> JSONResponse:
-        """Generate natural-language impact analysis for a symbol."""
-        from opencode_search.handlers._impact import handle_impact_narrative
-        project = request.query_params.get("project", "")
-        symbol = request.query_params.get("symbol", "")
-        if not project or not symbol:
-            return JSONResponse({"error": "project and symbol params required"}, status_code=400)
-        result = await handle_impact_narrative(symbol=symbol, project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/semantic_trace", methods=["GET"], include_in_schema=False)
-    async def api_semantic_trace(request: Request) -> JSONResponse:
-        """Trace a call flow from one concept to another."""
-        from opencode_search.handlers._trace import handle_semantic_trace
-        project = request.query_params.get("project", "")
-        from_q = request.query_params.get("from", "")
-        to_q = request.query_params.get("to", "")
-        if not project or not from_q or not to_q:
-            return JSONResponse({"error": "project, from, and to params required"}, status_code=400)
-        result = await handle_semantic_trace(from_query=from_q, to_query=to_q, project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/build_hierarchy", methods=["POST"], include_in_schema=False)
-    async def api_build_hierarchy(request: Request) -> JSONResponse:
-        """Trigger recursive Leiden hierarchy build for a project."""
-        import contextlib
-
-        from opencode_search.graph.community import CommunityDetector
-        from opencode_search.handlers._graph import _open_graph
-        body = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project") or request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project required"}, status_code=400)
-        def _build(path: str) -> dict:
-            gs = _open_graph(path)
-            if gs is None:
-                return {"error": "Project not indexed"}
-            try:
-                levels = CommunityDetector().build_hierarchy(gs)
-                return {"status": "ok", "levels_built": levels, "max_level": gs.get_max_community_level()}
-            finally:
-                with contextlib.suppress(Exception):
-                    gs.close()
-        import asyncio
-        result = await asyncio.to_thread(_build, project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/enrich_hierarchy", methods=["POST"], include_in_schema=False)
-    async def api_enrich_hierarchy(request: Request) -> JSONResponse:
-        """Submit background job to LLM-enrich level-2+ macro-communities."""
-        import contextlib
-
-        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
-        from opencode_search.jobs import submit_job
-        body = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project") or request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project required"}, status_code=400)
-        job = submit_job(
-            handle_enrich_hierarchy(project_path=project),
-            action="enrich_hierarchy",
-            project_path=project,
-        )
-        return JSONResponse({
-            "status": "started",
-            "job_id": job.id,
-            "poll_url": f"/api/jobs/{job.id}",
-            "message": "Hierarchy enrichment running in background.",
-        })
-
-    @mcp.custom_route("/api/feature_map", methods=["GET"], include_in_schema=False)
-    async def api_feature_map(request: Request) -> JSONResponse:
-        """Business knowledge map: all communities grouped by semantic_type."""
-        from opencode_search.handlers._business import handle_feature_map
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project required"}, status_code=400)
-        result = await handle_feature_map(project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/business_rules", methods=["GET"], include_in_schema=False)
-    async def api_business_rules(request: Request) -> JSONResponse:
-        """Return communities classified as business_rule."""
-        from opencode_search.handlers._business import handle_business_rules
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project required"}, status_code=400)
-        result = await handle_business_rules(project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/process_flows", methods=["GET"], include_in_schema=False)
-    async def api_process_flows(request: Request) -> JSONResponse:
-        """Return communities classified as business_process."""
-        from opencode_search.handlers._business import handle_process_flows
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project required"}, status_code=400)
-        result = await handle_process_flows(project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/ask_business", methods=["GET"], include_in_schema=False)
-    async def api_ask_business(request: Request) -> JSONResponse:
-        """Answer business-domain questions using semantic-type–classified communities."""
-        from opencode_search.handlers._business import handle_ask_business
-        project = request.query_params.get("project", "")
-        q = request.query_params.get("q", "")
-        if not project or not q:
-            return JSONResponse({"error": "project and q params required"}, status_code=400)
-        result = await handle_ask_business(query=q, project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/chat", methods=["POST"], include_in_schema=False)
-    async def api_kb_chat(request: Request) -> JSONResponse:
-        """Unified chat: auto-detects intent, returns humanized prose.
-
-        Body JSON: {"project": str, "query": str, "history": list[dict] | null}
-        """
-        import contextlib
-
-        from opencode_search.handlers._chat_router import handle_chat_auto
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        query = body.get("query", "")
-        history = body.get("history") or []
-        if not project or not query:
-            return JSONResponse({"error": "project and query required"}, status_code=400)
-        result = await handle_chat_auto(
-            query=query,
-            project_path=project,
-            conversation_history=history,
-        )
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/chat_stream", methods=["POST"], include_in_schema=False)
-    async def api_kb_chat_stream(request: Request) -> StreamingResponse | JSONResponse:
-        """Streaming chat: yields NDJSON tokens as they are generated.
-
-        Body JSON: {"project": str, "query": str, "history": list[dict] | null}
-        Each line: {"type":"token","text":"..."} or {"type":"done","intent":"...",...}
-        """
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        query = body.get("query", "")
-        history = body.get("history") or []
-        if not project or not query:
-            return JSONResponse({"error": "project and query required"}, status_code=400)
-
-        from opencode_search.handlers._chat_router import handle_chat_auto_stream
-        from opencode_search.metrics import record_stream_cancelled
-
-        async def _gen():
-            async for chunk in handle_chat_auto_stream(
-                query=query,
-                project_path=project,
-                conversation_history=history,
-            ):
-                if await request.is_disconnected():
-                    record_stream_cancelled()
-                    return
-                yield f"data: {json.dumps(chunk)}\n\n"
-
-        return StreamingResponse(
-            _gen(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    @mcp.custom_route("/api/debug", methods=["POST"], include_in_schema=False)
-    async def api_debug_trace(request: Request) -> JSONResponse:
-        """Root-cause trace from a stack trace.
-
-        Body JSON: {"project": str, "traceback": str, "error_message": str, "include_fix": bool}
-        """
-        import contextlib
-
-        from opencode_search.handlers._debug_trace import handle_debug_trace
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        traceback_text = body.get("traceback", "")
-        error_message = body.get("error_message", "")
-        include_fix = bool(body.get("include_fix", True))
-        if not project or not traceback_text:
-            return JSONResponse({"error": "project and traceback required"}, status_code=400)
-        result = await handle_debug_trace(
-            traceback=traceback_text,
-            project_path=project,
-            error_message=error_message,
-            include_fix=include_fix,
-        )
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/surprising_connections", methods=["GET"], include_in_schema=False)
-    async def api_surprising_connections(request: Request) -> JSONResponse:
-        """Cross-community bridges: edges connecting nodes in different architectural clusters."""
-        import contextlib
-
-        from opencode_search.handlers._graph import _open_graph
-        project = request.query_params.get("project", "")
-        try:
-            top_n = int(request.query_params.get("top_n", "20"))
-        except (ValueError, TypeError):
-            return JSONResponse({"error": "top_n must be an integer"}, status_code=400)
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        def _run(path: str) -> dict:
-            gs = _open_graph(path)
-            if gs is None:
-                return {"error": "Project not indexed"}
-            try:
-                bridges = gs.get_cross_community_bridges(top_n=top_n)
-                return {
-                    "project_path": path,
-                    "surprising_connections": bridges,
-                    "count": len(bridges),
-                }
-            finally:
-                with contextlib.suppress(Exception):
-                    gs.close()
-        import asyncio as _aio
-        return JSONResponse(await _aio.to_thread(_run, project))
-
-    @mcp.custom_route("/api/git_hooks", methods=["GET", "POST"], include_in_schema=False)
-    async def api_git_hooks(request: Request) -> JSONResponse:
-        """Install (POST action=install) or uninstall (POST action=uninstall) git post-commit hooks."""
-        from opencode_search.handlers._hooks import handle_git_hooks
-        if request.method == "GET":
-            project = request.query_params.get("project", "")
-            if not project:
-                return JSONResponse({"error": "project param required"}, status_code=400)
-            from pathlib import Path as _Path
-            git_dir = _Path(project).expanduser().resolve() / ".git"
-            hook_path = git_dir / "hooks" / "post-commit"
-            installed = hook_path.exists() and "opencode-search managed hook" in hook_path.read_text()
-            return JSONResponse({"installed": installed, "hook_path": str(hook_path), "project_path": project})
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project") or request.query_params.get("project", "")
-        action = body.get("action", "install")
-        if not project:
-            return JSONResponse({"error": "project required"}, status_code=400)
-        result = await handle_git_hooks(project_path=project, install=(action == "install"))
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/wiki_lint", methods=["GET"], include_in_schema=False)
-    async def api_wiki_lint(request: Request) -> JSONResponse:
-        """Health-check the wiki: page count, stale pages, missing entries."""
-        from opencode_search.handlers._wiki import handle_wiki_lint
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_wiki_lint(project_path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/import_cycles", methods=["GET"], include_in_schema=False)
-    async def api_import_cycles(request: Request) -> JSONResponse:
-        """Circular import dependencies — Tarjan SCC on file-level IMPORTS graph."""
-        from opencode_search.handlers._graph import handle_import_cycles
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        try:
-            max_cycle_length = int(request.query_params.get("max_cycle_length", "8"))
-            top_n = int(request.query_params.get("top_n", "20"))
-        except (ValueError, TypeError):
-            return JSONResponse({"error": "max_cycle_length and top_n must be integers"}, status_code=400)
-        result = await handle_import_cycles(
-            project_path=project, max_cycle_length=max_cycle_length, top_n=top_n,
-        )
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/suggested_questions", methods=["GET"], include_in_schema=False)
-    async def api_suggested_questions(request: Request) -> JSONResponse:
-        """Questions the graph is uniquely positioned to answer."""
-        from opencode_search.handlers._graph import handle_suggest_questions
-        project = request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        try:
-            top_n = int(request.query_params.get("top_n", "7"))
-        except (ValueError, TypeError):
-            return JSONResponse({"error": "top_n must be an integer"}, status_code=400)
-        result = await handle_suggest_questions(project_path=project, top_n=top_n)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/graph_diff", methods=["GET"], include_in_schema=False)
-    async def api_graph_diff(request: Request) -> JSONResponse:
-        """What changed in the graph since a given ISO timestamp."""
-        from opencode_search.handlers._graph import handle_graph_diff
-        project = request.query_params.get("project", "")
-        since = request.query_params.get("since", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_graph_diff(project_path=project, since=since)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/callflow_html", methods=["GET"], include_in_schema=False)
-    async def api_callflow_html(request: Request) -> HTMLResponse:
-        """Render a call chain as a standalone Mermaid HTML page.
-
-        Params: project, symbol, direction=callees|callers, depth=5, format=html|mermaid
-        """
-        from opencode_search.handlers._graph import handle_callflow_html as _handle
-        project = request.query_params.get("project", "")
-        symbol = request.query_params.get("symbol", "")
-        direction = request.query_params.get("direction", "callees")
-        depth = int(request.query_params.get("depth", "5"))
-        fmt = request.query_params.get("format", "html")
-        if not project or not symbol:
-            return HTMLResponse("<h1>Error: project and symbol params required</h1>", status_code=400)
-        result = await _handle(
-            symbol=symbol, project_path=project, direction=direction, depth=depth, fmt=fmt,
-        )
-        if "error" in result:
-            return HTMLResponse(f"<h1>Error: {result['error']}</h1>", status_code=404)
-        if fmt == "mermaid":
-            from starlette.responses import PlainTextResponse
-            return PlainTextResponse(result.get("mermaid", ""))
-        return HTMLResponse(result.get("html", "<html><body>No diagram</body></html>"))
-
     @mcp.custom_route("/api/dedup", methods=["GET", "POST"], include_in_schema=False)
     async def api_dedup(request: Request) -> JSONResponse:
         """Deduplicate graph nodes. GET=dry_run preview; POST with {project,dry_run,threshold}."""
@@ -1093,112 +988,247 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         result = await handle_vacuum(project_path=project, dry_run=dry_run)
         return JSONResponse(result)
 
-    @mcp.custom_route("/api/stop_watching", methods=["POST"], include_in_schema=False)
-    async def api_stop_watching(request: Request) -> JSONResponse:
-        """Stop the file watcher for a project. POST {project}."""
-        from opencode_search.handlers._watch import handle_stop_watching
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project") or request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_stop_watching(path=project)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/start_watching", methods=["POST"], include_in_schema=False)
-    async def api_start_watching(request: Request) -> JSONResponse:
-        """Start (or resume) the file watcher for a project. POST {project}."""
-        from opencode_search.handlers._watch import handle_ensure_project_watching
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project") or request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_ensure_project_watching(path=project, persist=True)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/remove_project", methods=["POST"], include_in_schema=False)
-    async def api_remove_project(request: Request) -> JSONResponse:
-        """Remove a project from the registry. POST {project, delete_index?}."""
-        from opencode_search.handlers._vacuum import handle_remove_project
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project") or request.query_params.get("project", "")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        delete_index = bool(body.get("delete_index", False))
-        result = await handle_remove_project(project_path=project, delete_index=delete_index)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/pr_impact", methods=["GET", "POST"], include_in_schema=False)
-    async def api_pr_impact(request: Request) -> JSONResponse:
-        """PR impact: changed files → communities touched + risk level.
-
-        GET  ?project=...&base_branch=main
-        POST {project, files: [...], base_branch: "main"}
-        """
-        from opencode_search.handlers._pr_impact import handle_pr_impact
-        if request.method == "POST":
-            body: dict = {}
-            with contextlib.suppress(Exception):
-                body = await request.json()
-            project = body.get("project") or request.query_params.get("project", "")
-            files = body.get("files") or None
-            base_branch = body.get("base_branch", "main")
-        else:
+    @mcp.custom_route("/api/git_hooks", methods=["GET", "POST"], include_in_schema=False)
+    async def api_git_hooks(request: Request) -> JSONResponse:
+        """Install (POST action=install) or uninstall (POST action=uninstall) git post-commit hooks."""
+        from opencode_search.handlers._hooks import handle_git_hooks
+        if request.method == "GET":
             project = request.query_params.get("project", "")
-            files = None
-            base_branch = request.query_params.get("base_branch", "main")
+            if not project:
+                return JSONResponse({"error": "project param required"}, status_code=400)
+            from pathlib import Path as _Path
+            git_dir = _Path(project).expanduser().resolve() / ".git"
+            hook_path = git_dir / "hooks" / "post-commit"
+            installed = hook_path.exists() and "opencode-search managed hook" in hook_path.read_text()
+            return JSONResponse({"installed": installed, "hook_path": str(hook_path), "project_path": project})
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        action = body.get("action", "install")
         if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_pr_impact(project_path=project, files=files, base_branch=base_branch)
+            return JSONResponse({"error": "project required"}, status_code=400)
+        result = await handle_git_hooks(project_path=project, install=(action == "install"))
         return JSONResponse(result)
 
-    @mcp.custom_route("/api/tree_html", methods=["GET"], include_in_schema=False)
-    async def api_tree_html(request: Request):
-        """Interactive file tree HTML. ?project=...&format=html|json&max_files=2000"""
-        from starlette.responses import Response as _Resp
+    @mcp.custom_route("/api/reload", methods=["POST"], include_in_schema=False)
+    async def api_reload(_request: Request) -> JSONResponse:
+        import os
+        pid = os.getpid()
+        _spawn_daemon_restart_thread(pid)
+        return JSONResponse({"status": "reloading", "pid": pid,
+                             "note": "daemon restarting in ~3s"})
 
-        from opencode_search.handlers._tree_html import handle_tree_html
-        project = request.query_params.get("project", "")
-        fmt = request.query_params.get("format", "html")
+
+# ---------------------------------------------------------------------------
+# Sub-registrar: ops (metrics, pipeline, prerelease, QA, SSE, alerts, jobs)
+# ---------------------------------------------------------------------------
+
+def _register_ops_routes(mcp: FastMCP) -> None:
+    @mcp.custom_route("/api/metrics", methods=["GET"], include_in_schema=False)
+    async def api_metrics(_request: Request) -> JSONResponse:
+        import json as _json
+        import time
+
+        from opencode_search.daemon import _META_PATH
+        from opencode_search.daemon_runtime import runtime_state
+        from opencode_search.embeddings import get_cublas_metrics
+        from opencode_search.metrics import get_metrics, get_stream_metrics
+        data = get_metrics()
+        data["chat_stream"] = get_stream_metrics()
+        snap = runtime_state.snapshot()
+        data["connected_clients"] = snap.get("active_clients", 0)
+        data["client_ids"] = snap.get("client_ids", [])
         try:
-            max_files = int(request.query_params.get("max_files", "2000"))
-        except (ValueError, TypeError):
-            return JSONResponse({"error": "max_files must be an integer"}, status_code=400)
+            info = _json.loads(_META_PATH.read_text(encoding="utf-8"))
+            started_at = info.get("started_at")
+            data["uptime_s"] = round(time.time() - started_at, 1) if started_at else None
+        except Exception:
+            data["uptime_s"] = None
+        data["cublas_breaker"] = get_cublas_metrics()
+        return JSONResponse(data)
+
+    @mcp.custom_route("/api/auto_pipeline_status", methods=["GET"], include_in_schema=False)
+    async def api_auto_pipeline_status(_request: Request) -> JSONResponse:
+        from opencode_search.handlers._autopipeline import (
+            auto_pipeline_enabled,
+            get_pipeline_events,
+        )
+        return JSONResponse({
+            "enabled": auto_pipeline_enabled(),
+            "events": get_pipeline_events()[-20:],  # last 20 events
+        })
+
+    @mcp.custom_route("/api/federation", methods=["GET"], include_in_schema=False)
+    async def api_federation(request: Request) -> JSONResponse:
+        from opencode_search.handlers._federation import (
+            handle_add_federation_member,
+            handle_discover_federation,
+            handle_index_federation,
+            handle_list_federation,
+            handle_remove_federation_member,
+        )
+        project = request.query_params.get("project", "")
+        action = request.query_params.get("action", "list")
+        member = request.query_params.get("member", "")
+
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_tree_html(project_path=project, fmt=fmt, max_files=max_files)
-        if "error" in result:
-            return JSONResponse(result, status_code=400)
-        if fmt == "html" and "html" in result:
-            return _Resp(content=result["html"], media_type="text/html")
+
+        if action == "discover":
+            result = await handle_discover_federation(project_path=project)
+        elif action == "add":
+            if not member:
+                return JSONResponse({"error": "member param required for action=add"}, status_code=400)
+            result = await handle_add_federation_member(root_path=project, member_path=member)
+        elif action == "remove":
+            if not member:
+                return JSONResponse({"error": "member param required for action=remove"}, status_code=400)
+            result = await handle_remove_federation_member(root_path=project, member_path=member)
+        elif action == "index":
+            result = await handle_index_federation(root_path=project)
+        else:
+            result = await handle_list_federation(project_path=project)
+
         return JSONResponse(result)
 
-    @mcp.custom_route("/api/integrations_status", methods=["GET"], include_in_schema=False)
-    async def api_integrations_status(_request: Request) -> JSONResponse:
-        """Return all integration states by running configure_integrations.py --check --json."""
+    # ── Pre-release status & trigger ─────────────────────────────────────
+
+    @mcp.custom_route("/api/prerelease_status", methods=["GET"], include_in_schema=False)
+    async def api_prerelease_status(_request: Request) -> JSONResponse:
+        """Return last pre-release report JSON, or 404 if none exists."""
+        import json as _json
+        from pathlib import Path as _Path
+        # Look for report adjacent to scripts dir
+        candidates = [
+            _Path(__file__).parent.parent.parent / ".prerelease_report.json",
+            _Path(".prerelease_report.json").resolve(),
+        ]
+        for report_path in candidates:
+            if report_path.exists():
+                try:
+                    data = _json.loads(report_path.read_text())
+                    return JSONResponse(data)
+                except Exception as exc:
+                    return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
+        return JSONResponse({"error": "No pre-release report found"}, status_code=404)
+
+    @mcp.custom_route("/api/run_prerelease", methods=["POST"], include_in_schema=False)
+    async def api_run_prerelease(request: Request) -> JSONResponse:
+        """Spawn prerelease.py as a background subprocess. Returns task_id."""
         import asyncio as _aio
         import sys as _sys
+        import uuid as _uuid
         from pathlib import Path as _Path
+
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        task_id = str(_uuid.uuid4())[:8]
+
         scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
-        cfg_script = scripts_dir / "configure_integrations.py"
-        if not cfg_script.exists():
-            return JSONResponse({"error": "configure_integrations.py not found"}, status_code=404)
+        prerelease_script = scripts_dir / "prerelease.py"
+        if not prerelease_script.exists():
+            return JSONResponse({"error": "prerelease.py not found"}, status_code=503)
+
+        cmd = [_sys.executable, str(prerelease_script), "--fast", "--json"]
+        if project:
+            cmd += ["--project", project]
+
+        async def _run_bg():
+            try:
+                proc = await _aio.create_subprocess_exec(
+                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
+                )
+                _PRERELEASE_TASKS[task_id] = {"status": "running", "pid": proc.pid}
+                await proc.wait()
+                _PRERELEASE_TASKS[task_id] = {"status": "done", "returncode": proc.returncode}
+            except Exception as exc:
+                _PRERELEASE_TASKS[task_id] = {"status": "error", "error": str(exc)}
+
+        _PRERELEASE_TASKS[f"_task_{task_id}"] = _aio.create_task(_run_bg())
+        _PRERELEASE_TASKS[task_id] = {"status": "running"}
+        return JSONResponse({"task_id": task_id, "status": "started"})
+
+    @mcp.custom_route("/api/prerelease_poll", methods=["GET"], include_in_schema=False)
+    async def api_prerelease_poll(request: Request) -> JSONResponse:
+        """Poll status of a running pre-release task."""
+        task_id = request.query_params.get("id", "")
+        state = _PRERELEASE_TASKS.get(task_id, {"status": "not_found"})
+        return JSONResponse(state)
+
+    @mcp.custom_route("/api/verify_status", methods=["GET"], include_in_schema=False)
+    async def api_verify_status(_request: Request) -> JSONResponse:
+        """Return last verification run results + history from .opencode_verify_state.json."""
+        import json as _json
+        from pathlib import Path as _Path
+        state_path = _Path(__file__).parent.parent.parent / ".opencode_verify_state.json"
+        if not state_path.exists():
+            return JSONResponse({"last_run": None, "history": [], "verdict": "unknown"})
         try:
-            proc = await _aio.create_subprocess_exec(
-                _sys.executable, str(cfg_script), "--check", "--json",
-                stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE,
-            )
-            stdout, _ = await _aio.wait_for(proc.communicate(), timeout=15.0)
-            import json as _json
-            return JSONResponse(_json.loads(stdout.decode(errors="replace")))
+            state = _json.loads(state_path.read_text(encoding="utf-8"))
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=500)
+        runs = state.get("run_history", [])
+        last = runs[-1] if runs else None
+        history = [
+            {"ts": r.get("timestamp"), "passed": r.get("passed", 0), "failed": r.get("failed", 0)}
+            for r in runs[-30:]
+        ]
+        verdict = "unknown"
+        if last:
+            p0 = last.get("p0_failures", 0)
+            failed = last.get("failed", 0)
+            verdict = "NO-GO" if p0 > 0 else ("WARNINGS" if failed > 0 else "GO")
+        # Per-category breakdown is in last_results, not run_history
+        categories = state.get("last_results", {})
+        failures = state.get("known_failures", []) or state.get("failures", [])
+        return JSONResponse({
+            "last_run": last,
+            "history": history,
+            "verdict": verdict,
+            "failures": failures,
+            "categories": categories,
+        })
 
+    @mcp.custom_route("/api/auto_fix_trigger", methods=["POST"], include_in_schema=False)
+    async def api_auto_fix_trigger(request: Request) -> JSONResponse:
+        """Trigger selfheal.py --apply to auto-fix known issues."""
+        import asyncio as _aio
+        import sys as _sys
+        import uuid as _uuid
+        from pathlib import Path as _Path
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project", "")
+        task_id = str(_uuid.uuid4())[:8]
+        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
+        selfheal_script = scripts_dir / "selfheal.py"
+        if not selfheal_script.exists():
+            return JSONResponse({"error": "selfheal.py not found"}, status_code=503)
+        cmd = [_sys.executable, str(selfheal_script), "--apply"]
+        if project:
+            cmd += ["--project", project]
+
+        async def _run_bg():
+            try:
+                proc = await _aio.create_subprocess_exec(
+                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
+                )
+                stdout, _ = await proc.communicate()
+                _AUTOFIX_TASKS[task_id] = {
+                    "status": "done",
+                    "returncode": proc.returncode,
+                    "output": (stdout or b"").decode(errors="replace")[-4000:],
+                }
+            except Exception as exc:
+                _AUTOFIX_TASKS[task_id] = {"status": "error", "error": str(exc)}
+
+        _AUTOFIX_TASKS[f"_task_{task_id}"] = _aio.create_task(_run_bg())
+        _AUTOFIX_TASKS[task_id] = {"status": "running"}
+        return JSONResponse({"task_id": task_id, "status": "started"})
 
     # ── QA Gate status & trigger ──────────────────────────────────────────────
 
@@ -1218,8 +1248,6 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                 except Exception as exc:
                     return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
         return JSONResponse({"error": "No QA report found"}, status_code=404)
-
-    _qa_tasks: dict = {}
 
     @mcp.custom_route("/api/run_qa", methods=["POST"], include_in_schema=False)
     async def api_run_qa(request: Request) -> JSONResponse:
@@ -1245,25 +1273,23 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
                 proc = await _aio.create_subprocess_exec(
                     *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
                 )
-                _qa_tasks[task_id] = {"status": "running", "pid": proc.pid}
+                _QA_TASKS[task_id] = {"status": "running", "pid": proc.pid}
                 await proc.wait()
-                _qa_tasks[task_id] = {"status": "done", "returncode": proc.returncode}
+                _QA_TASKS[task_id] = {"status": "done", "returncode": proc.returncode}
             except Exception as exc:
-                _qa_tasks[task_id] = {"status": "error", "error": str(exc)}
+                _QA_TASKS[task_id] = {"status": "error", "error": str(exc)}
 
-        _qa_tasks[f"_bg_{task_id}"] = _aio.create_task(_run_bg())
-        _qa_tasks[task_id] = {"status": "running"}
+        _QA_TASKS[f"_bg_{task_id}"] = _aio.create_task(_run_bg())
+        _QA_TASKS[task_id] = {"status": "running"}
         return JSONResponse({"task_id": task_id, "status": "started"})
 
     @mcp.custom_route("/api/qa_poll", methods=["GET"], include_in_schema=False)
     async def api_qa_poll(request: Request) -> JSONResponse:
         task_id = request.query_params.get("id", "")
-        state = _qa_tasks.get(task_id, {"status": "not_found"})
+        state = _QA_TASKS.get(task_id, {"status": "not_found"})
         return JSONResponse(state)
 
-    # -------------------------------------------------------------------------
-    # NEW Phase 3 endpoints: metrics history, SSE, alerts, system status
-    # -------------------------------------------------------------------------
+    # ── Phase 3: metrics history, SSE, alerts, system status ─────────────
 
     @mcp.custom_route("/api/metrics/history", methods=["GET"], include_in_schema=False)
     async def api_metrics_history(request: Request) -> JSONResponse:
@@ -1503,6 +1529,27 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
 
         return JSONResponse({"status": "unavailable"})
 
+    @mcp.custom_route("/api/integrations_status", methods=["GET"], include_in_schema=False)
+    async def api_integrations_status(_request: Request) -> JSONResponse:
+        """Return all integration states by running configure_integrations.py --check --json."""
+        import asyncio as _aio
+        import sys as _sys
+        from pathlib import Path as _Path
+        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
+        cfg_script = scripts_dir / "configure_integrations.py"
+        if not cfg_script.exists():
+            return JSONResponse({"error": "configure_integrations.py not found"}, status_code=404)
+        try:
+            proc = await _aio.create_subprocess_exec(
+                _sys.executable, str(cfg_script), "--check", "--json",
+                stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE,
+            )
+            stdout, _ = await _aio.wait_for(proc.communicate(), timeout=15.0)
+            import json as _json
+            return JSONResponse(_json.loads(stdout.decode(errors="replace")))
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @mcp.custom_route("/api/jobs", methods=["GET"], include_in_schema=False)
     async def api_jobs_list(request: Request) -> JSONResponse:
         """List background build jobs. ?project=...&action=... to filter."""
@@ -1533,11 +1580,18 @@ def register_dashboard_routes(mcp: FastMCP) -> None:
         job = get_job(job_id)
         return JSONResponse({"cancelled": cancelled, "job": job_to_dict(job) if job else None})
 
-    @mcp.custom_route("/static/{path:path}", methods=["GET"], include_in_schema=False)
-    async def static_files(request: Request) -> FileResponse:
-        """Serve static assets (chart.min.js, etc.)."""
-        filename = request.path_params.get("path", "")
-        file_path = _STATIC_DIR / filename
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        return JSONResponse({"error": "not found"}, status_code=404)
+
+# ---------------------------------------------------------------------------
+# Public entry point — orchestrator
+# ---------------------------------------------------------------------------
+
+def register_dashboard_routes(mcp: FastMCP) -> None:
+    """Attach all dashboard routes to the FastMCP instance."""
+    _register_root_routes(mcp)
+    _register_project_routes(mcp)
+    _register_wiki_routes(mcp)
+    _register_search_routes(mcp)
+    _register_graph_routes(mcp)
+    _register_chat_routes(mcp)
+    _register_kb_routes(mcp)
+    _register_ops_routes(mcp)
