@@ -1269,20 +1269,23 @@ def assert_gpu_available() -> None:
     # CuPy is required when OPENCODE_GPU_NORMALIZE != "cpu" since the GPU
     # normalization path raises if CuPy is missing. Probe it eagerly so the
     # daemon refuses to start rather than crashing on the first large batch.
+    # IMPORTANT: use find_spec (not `import cupy`) — importing cupy here
+    # initializes the CUDA runtime in the main thread, which then conflicts
+    # with ONNX Runtime's cuBLAS handle created in the GPU worker thread,
+    # causing CUBLAS_STATUS_NOT_SUPPORTED (error 7) on the first inference call.
+    # find_spec checks that cupy is installed without initialising CUDA.
     if _GPU_NORMALIZE_MODE != "cpu":
-        try:
-            import cupy
-        except Exception as exc:  # pragma: no cover - exercised via subprocess test
+        import importlib.util
+        if importlib.util.find_spec("cupy") is None:  # pragma: no cover
             msg = (
-                "[GPU-REQUIRED] FATAL: CuPy is not importable but "
+                "[GPU-REQUIRED] FATAL: CuPy is not installed but "
                 f"OPENCODE_GPU_NORMALIZE={_GPU_NORMALIZE_MODE!r} requires it. "
                 "Install cupy-cuda12x (or set OPENCODE_GPU_NORMALIZE=cpu to "
                 "intentionally use CPU normalization — note this is a configured "
-                "choice, not a fallback). Underlying import error: "
-                f"{type(exc).__name__}: {exc}"
+                "choice, not a fallback)."
             )
             log.critical(msg)
-            raise GPUNotAvailableError(msg) from exc
+            raise GPUNotAvailableError(msg)
         log.info("[GPU-REQUIRED] CuPy check PASSED")
 
 
@@ -1520,16 +1523,13 @@ def _gpu_provider_options(provider: str) -> list[dict]:
             try:
                 cc_float = float(cc)
                 if cc_float >= 12.0:
-                    # Blackwell (SM 12.0+): NHWC layout for better tensor core utilization
-                    opts["prefer_nhwc"] = "1"
-                    # Disable CUDA Graphs on Blackwell — ORT 1.25 + CUDA 13 deadlocks
-                    # when mixing IOBinding with standard session.run() after graph capture.
-                    # Re-enable when ORT ships Blackwell-validated CUDA Graph support.
+                    # Blackwell (SM 12.0+): disable CUDA Graphs (ORT 1.25 + CUDA 13 deadlocks)
+                    # and use DEFAULT conv algo to avoid workspace cache accumulation.
+                    # NOTE: prefer_nhwc removed — NHWC is for CNNs; transformer MatMul ops
+                    # (jina-embeddings, BERT) get CUBLAS_STATUS_NOT_SUPPORTED (7) on Blackwell
+                    # when NHWC is active because the cuBLAS GEMM path doesn't support NHWC
+                    # input layout for these 2D attention projections.
                     del opts["enable_cuda_graph"]
-                    # Blackwell: switch from EXHAUSTIVE to DEFAULT conv algo search.
-                    # EXHAUSTIVE benchmarks and caches every cuDNN algorithm variant,
-                    # filling the CUDA workspace cache. On SM 12.0 this accumulates
-                    # across forward passes and triggers SIGSEGV after ~50 batches.
                     opts["cudnn_conv_algo_search"] = "DEFAULT"
                     log.info(
                         "Blackwell GPU (SM %.1f): disabled CUDA Graphs, DEFAULT conv algo (ORT compat)",
