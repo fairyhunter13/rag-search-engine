@@ -749,16 +749,11 @@ async def manage(
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
 
     if action == "reload":
-        import os
-        import signal
-        import threading
-        import time as _time
+        import os  # noqa: I001
+        from opencode_search.dashboard import _spawn_daemon_restart_thread
         pid = os.getpid()
-        threading.Thread(
-            target=lambda: (_time.sleep(0.5), os.kill(pid, signal.SIGTERM)),
-            daemon=True,
-        ).start()
-        return {"status": "reloading", "pid": pid, "note": "daemon will restart via systemd in ~1s"}
+        _spawn_daemon_restart_thread(pid)
+        return {"status": "reloading", "pid": pid, "note": "daemon restarting in ~3s"}
     if action == "stop_watching":
         return await handle_stop_watching(path=project_path)
     if action in ("install_hooks", "uninstall_hooks"):

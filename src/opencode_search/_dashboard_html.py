@@ -504,14 +504,14 @@ async function loadPulse(){
       enrichPct!=null?`${enrichPct}% enriched`:'enrichment unknown');
     const ep=enrichPct!=null?enrichPct:0;
     setTile('enrichment',enrichPct!=null?enrichPct+'%':null,
-      ep>=80?'ok':ep>=40?'warn':'err',
+      'enriched',
       ep>=80?'ok':ep>=40?'warn':'err',
       `${kbD.enriched_communities||0} / ${kbD.total_communities||0} communities`
     );
 
     // Wiki tile
     const wikiCt=kbD.wiki_page_count;
-    setTile('wiki',wikiCt,wikiCt>0?'ok':'warn',wikiCt>0?'ok':'warn',
+    setTile('wiki',wikiCt,'pages',wikiCt>0?'ok':'warn',
       'knowledge base pages');
 
     // Requests + uptime tiles
@@ -519,7 +519,7 @@ async function loadPulse(){
     const reqs=metD.total_requests||metD.requests||null;
     const errors=metD.errors||0;
     const errRate=reqs?Math.round(errors/reqs*100):0;
-    setTile('requests',reqs,errRate<5?'ok':errRate<20?'warn':'err',
+    setTile('requests',reqs,'served',
       errRate<5?'ok':errRate<20?'warn':'err',
       `${errors} errors · ${metD.connected_clients||0} clients`
     );
@@ -542,7 +542,9 @@ async function loadPulse(){
       csTotal>0?`${csSucc} ok · ${csErr} err`:'no calls yet'
     );
 
-    setDot('ok');
+    const _metOk=met.status==='fulfilled';
+    const _secondaryOk=[ovr,kb,sug].every(s=>s.status==='fulfilled');
+    setDot(!_metOk?'err':_secondaryOk?'ok':'warn');
 
     // Sparklines (push current value into rolling history)
     pushSpark('files',fileCount);
@@ -836,9 +838,9 @@ function finalizeStreamMsg(id,meta){
 function appendMsg(role,text,extraClass='',meta=null){
   const id='msg-'+(++_msgSeq);
   const hist=$('chat-history');
-  const cls=role==='user'?'user':extraClass.includes('thinking')?'ai thinking':'ai';
+  const cls=role==='user'?'user':extraClass?'ai '+extraClass:'ai';
   let metaHtml='';
-  if(meta&&role==='ai'&&!extraClass.includes('thinking')){
+  if(meta&&role==='ai'&&extraClass!=='thinking'){
     const tags=[];
     if(meta.intent)tags.push(`<span class="intent-tag">${esc(meta.intent)}</span>`);
     if(meta.elapsed)tags.push(`<span class="elapsed">${meta.elapsed}ms</span>`);
