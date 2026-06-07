@@ -8,11 +8,7 @@ Clients updated:
   - hermes       (~/.hermes/config.yaml         [agent.system_prompt])
 """
 from __future__ import annotations
-import json
-import os
 import re
-import sys
-import tomllib
 from pathlib import Path
 
 # ─── Canonical instruction text ───────────────────────────────────────────────
@@ -131,7 +127,7 @@ def update_codex_toml(path: Path, text: str) -> None:
         return
     content = path.read_text()
     wrapped = f"{START_MARKER}\n{text}\n{END_MARKER}"
-    pattern = re.compile(
+    re.compile(
         r'developer_instructions\s*=\s*"[^"]*(' + re.escape(START_MARKER) + r').*?(' + re.escape(END_MARKER) + r')[^"]*"',
         re.DOTALL,
     )
@@ -169,7 +165,7 @@ def update_opencode_jsonc(path: Path, text: str) -> None:
     if not path.exists():
         print(f"  ! {path} not found — skipping")
         return
-    content = path.read_text()
+    path.read_text()
     # opencode.jsonc has no instruction field to update — it registers the MCP server.
     # The instructions come from the daemon's FastMCP `instructions=` param and from CLAUDE.md.
     # No change needed; just report.

@@ -25,7 +25,6 @@ import argparse
 import importlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -457,7 +456,7 @@ def check_kb_health(project_path: str | None) -> list[Check]:
             else:
                 checks.append(Check(
                     "kb/hierarchy_enrichment", "kb_health", PASS,
-                    f"Hierarchy levels enriched: " + ", ".join(
+                    "Hierarchy levels enriched: " + ", ".join(
                         f"L{k}={by_level[k]['pct']:.0f}%" for k in sorted(level_keys, key=int)
                     ),
                 ))
@@ -582,7 +581,7 @@ def check_tests() -> list[Check]:
                             duration_ms=elapsed))
     else:
         checks.append(Check("tests/fast", "test_suite", WARN,
-                            f"0 tests passed — pytest may have failed to collect",
+                            "0 tests passed — pytest may have failed to collect",
                             detail=output[-500:],
                             duration_ms=elapsed))
     return checks
@@ -693,7 +692,7 @@ def print_report(report: Report, project: str | None, use_color: bool = True) ->
         print()
 
     # Coverage matrix
-    print(f"  FEATURE TEST COVERAGE")
+    print("  FEATURE TEST COVERAGE")
     print(f"  {'Feature':<16} {'Unit':>6} {'Integ':>6} {'E2E':>6} {'Real':>6}  Status")
     print(f"  {'-'*54}")
     for feat, counts in coverage["feature_test_counts"].items():

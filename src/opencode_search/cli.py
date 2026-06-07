@@ -90,6 +90,45 @@ async def _index_and_wait(path, watch, force, follow_symlinks):
     return result
 
 
+async def _index_and_build_pipeline(path, watch, force, follow_symlinks) -> dict:
+    """Index then run the full KB pipeline (enrich → hierarchy → wiki).
+
+    This is the default for `index` and `init` unless --raw is passed.
+    After the raw vector index completes the handle_pipeline step runs
+    entity enrichment (Ollama qwen3-enrich) + community hierarchy + wiki
+    pages so the project is immediately queryable end-to-end.
+    """
+    from pathlib import Path as _Path
+
+    from opencode_search.handlers._pipeline import handle_pipeline
+
+    index_result = await _index_and_wait(
+        path=path, watch=watch, force=force, follow_symlinks=follow_symlinks,
+    )
+    if "error" in index_result:
+        return index_result
+
+    project_path = index_result.get("path", str(_Path(path).resolve()))
+    typer.echo(
+        f"\n  Running full KB pipeline (enrich → hierarchy → wiki)…\n"
+        f"  Project: {project_path}\n"
+        f"  This runs on the RTX 5080 via Ollama — may take several minutes for large repos.\n",
+        err=True,
+    )
+    try:
+        pipeline_result = await handle_pipeline(project_path=project_path)
+        steps = pipeline_result.get("steps", [])
+        ok = sum(1 for s in steps if s.get("status") in ("ok", "skipped", "done"))
+        typer.echo(
+            f"  Pipeline done — {ok}/{len(steps)} steps ok. "
+            f"Project ready: `ocs ask 'how does X work?' {project_path}`\n",
+            err=True,
+        )
+    except Exception as exc:
+        typer.echo(f"  Pipeline warning: {exc} — raw index succeeded, pipeline incomplete.", err=True)
+    return index_result
+
+
 def _print_json(obj: object) -> None:
     typer.echo(json.dumps(obj, indent=2, default=str))
 
@@ -120,10 +159,21 @@ def init(
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
     follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
+    raw: bool = typer.Option(False, "--raw", help="Raw vector index only — skip KB pipeline (enrich/hierarchy/wiki)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
-    """Initialize semantic indexing for a project, defaulting to the current directory."""
-    result = _run(_index_and_wait(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks))
+    """Initialize semantic indexing for a project, defaulting to the current directory.
+
+    By default runs the full KB pipeline after indexing (entity enrichment,
+    community hierarchy, wiki pages) so the project is immediately queryable.
+    Pass --raw to skip the pipeline and do vector indexing only.
+    """
+    coro = (
+        _index_and_wait(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks)
+        if raw
+        else _index_and_build_pipeline(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks)
+    )
+    result = _run(coro)
     if json_output:
         _print_json(result)
         return
@@ -136,10 +186,22 @@ def index(
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
     follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
+    raw: bool = typer.Option(False, "--raw", help="Raw vector index only — skip KB pipeline (enrich/hierarchy/wiki)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
-    """Index a project directory for semantic code search."""
-    result = _run(_index_and_wait(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks))
+    """Index a project directory for semantic code search.
+
+    By default runs the full KB pipeline after indexing (entity enrichment,
+    community hierarchy, wiki pages) so the project is immediately queryable
+    via `ocs ask`, `ocs search`, etc. Pass --raw to skip the pipeline and do
+    vector indexing only.
+    """
+    coro = (
+        _index_and_wait(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks)
+        if raw
+        else _index_and_build_pipeline(path=path, watch=watch, force=force, follow_symlinks=follow_symlinks)
+    )
+    result = _run(coro)
     if json_output:
         _print_json(result)
         return

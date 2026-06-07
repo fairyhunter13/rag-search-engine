@@ -210,7 +210,7 @@ def main() -> int:
         ("Model", "VRAM", "Role", "Config Var"),
         (ENRICH_MODEL, "2.9 GB", "KB build", "OPENCODE_LLM_MODEL"),
         (QUERY_MODEL, "~5.5 GB", "Dashboard chat", "OPENCODE_QUERY_LLM_MODEL"),
-        ("Total", "~8.4 GB", "Both loaded", f"RTX 5080 16 GB ✓"),
+        ("Total", "~8.4 GB", "Both loaded", "RTX 5080 16 GB ✓"),
     ]
     _print_table(rows)
     print()

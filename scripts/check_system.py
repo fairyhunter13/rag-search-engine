@@ -290,11 +290,9 @@ def check_llm_provider() -> None:
     try:
         from opencode_search.config import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL
         from opencode_search.enricher.client import (
-            AnthropicClient,
             ClaudeCodeClient,
             CodexClient,
             OllamaClient,
-            OpenAIClient,
         )
     except ImportError as exc:
         _fail("enricher.client importable", str(exc))
