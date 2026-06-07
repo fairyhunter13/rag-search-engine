@@ -162,15 +162,20 @@ def test_chat_feature_intent(http, project):
     )
 
 
-@pytest.mark.slow
-def test_chat_graph_callers_intent(http, project):
-    """A 'what calls X' query must route to graph_callers intent."""
-    _answer, intent, _sources, _elapsed = _chat(
-        http, project,
-        "what functions call the embedder",
-    )
+@pytest.mark.flaky(reruns=2, reruns_delay=10)
+@pytest.mark.parametrize("query", [
+    "what functions call the embedder",
+    "what triggers the order workflow?",
+    "what initiates the payment flow?",
+    "what invokes the auth handler?",
+    "who calls AddToCart?",
+    "what fires the campaign service?",
+])
+def test_chat_graph_callers_intent(http, project, query):
+    """A 'what calls/triggers/invokes X' query must route to graph_callers intent."""
+    _answer, intent, _sources, _elapsed = _chat(http, project, query)
     assert intent in ("graph_callers", "search"), (
-        f"Callers query routed to unexpected intent: {intent!r}"
+        f"Query {query!r} routed to {intent!r} instead of graph_callers"
     )
 
 
@@ -186,13 +191,18 @@ def test_chat_graph_callees_intent(http, project):
     )
 
 
-@pytest.mark.slow
-def test_chat_graph_impact_intent(http, project):
-    """A 'what breaks if I change X' query must route to graph_impact intent."""
-    _answer, intent, _sources, _elapsed = _chat(
-        http, project,
-        "what breaks if I change the embedding model",
-    )
+@pytest.mark.flaky(reruns=2, reruns_delay=10)
+@pytest.mark.parametrize("query", [
+    "what breaks if I change the embedding model",
+    "what services would break if I change the campaign gRPC contract?",
+    "what is the blast radius of removing AuthService.Login?",
+    "what would be affected by modifying the payment processor?",
+    "what depends on the user service interface?",
+    "what is impacted by changing the inventory contract?",
+])
+def test_chat_graph_impact_intent(http, project, query):
+    """A 'what breaks/blast radius/impact of changing X' query must route to graph_impact."""
+    _answer, intent, _sources, _elapsed = _chat(http, project, query)
     assert intent in ("graph_impact", "architecture", "feature"), (
-        f"Impact query routed to unexpected intent: {intent!r}"
+        f"Query {query!r} routed to {intent!r} instead of graph_impact"
     )

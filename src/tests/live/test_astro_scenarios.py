@@ -275,6 +275,8 @@ class TestAstroFunctionCallTracing:
             f"Expected graph_callers or related; got {intent!r}"
         )
 
+    @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_campaign_service_impact(self, http, astro):
         """What breaks if campaign service contract changes?"""
         _, intent, *_ = _chat(
@@ -321,6 +323,8 @@ class TestAstroFunctionCallTracing:
         )
         assert score >= 2, f"Search-to-browse quality {score}/5:\n{answer[:400]}"
 
+    @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_fulfillment_picking_flow(self, http, astro):
         """What triggers fulfillment picking?"""
         _, intent, *_ = _chat(

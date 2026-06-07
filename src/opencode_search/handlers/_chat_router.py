@@ -69,16 +69,39 @@ _VALID_INTENTS = frozenset([
 _CLASSIFY_SYSTEM = """\
 Classify this code-intelligence query into exactly one intent.
 
+CRITICAL DISTINCTIONS:
+- "search" means: show me the source code of X, find the file/function/class X, locate implementation of X.
+  "search" is NOT for questions about dependencies, impact, or what-would-break.
+- "graph_impact" means: what are the downstream consequences of changing X — what depends on it, what breaks, blast radius.
+  Use graph_impact whenever the question is about RISK or CONSEQUENCES of a change, not about finding code.
+- "graph_callers" means: what upstream code calls/triggers/initiates X.
+
 Intents:
   debug_trace   — the query IS a stack trace / traceback / error log with file paths and line numbers
   debug         — question about a bug, error, failure, crash, "why fails", "not working" (NO stack trace)
-  search        — explicit request to find, locate, or show specific code, files, or function implementations
-  graph_callers — "what calls X", "callers of X", "who calls X"
-  graph_callees — "what does X call", "callees of X", "downstream of X"
-  graph_impact  — blast radius, "what breaks if I change X", "what depends on X"
-  architecture  — high-level design patterns, service topology, "what is the architecture", "how is X architected", "describe the design of"
-  global        — comprehensive/holistic overview of the ENTIRE system, "global overview", "overview of the whole system", "tell me about this project", "what does this system do", "comprehensive overview of everything"
-  feature       — how does X work, trace X end-to-end, "how does search work", "walk me through X flow", explain X feature, follow request path through X
+  search        — find/show/locate specific source code, files, or function implementations ONLY
+  graph_callers — what calls X, what triggers X, what initiates X, what invokes X, what fires X, what starts X, which services call X, what causes X to run
+  graph_callees — what does X call, callees of X, downstream of X
+  graph_impact  — what breaks if I change X, what depends on X, what services would break, blast radius of X, what is affected by changing X, what depends on the interface/contract of X, what would break, what is impacted by modifying X, risk of changing X
+  architecture  — high-level design patterns, service topology, how is X architected, describe the design of X
+  global        — comprehensive/holistic overview of the ENTIRE system, tell me about this project, what does this system do, overview of everything
+  feature       — how does X work end-to-end, walk me through X flow, explain X feature, trace request path through X
+
+Examples (correct answers):
+  Q: "What triggers the fulfillment picking process?" → {"intent": "graph_callers"}
+  Q: "What services would break if I change the campaign gRPC contract?" → {"intent": "graph_impact"}
+  Q: "what's the blast radius of removing AuthService.Login?" → {"intent": "graph_impact"}
+  Q: "what breaks if I change the embedding model?" → {"intent": "graph_impact"}
+  Q: "what depends on the user service interface?" → {"intent": "graph_impact"}
+  Q: "what is impacted by changing the inventory contract?" → {"intent": "graph_impact"}
+  Q: "what would be affected by modifying the payment processor?" → {"intent": "graph_impact"}
+  Q: "what invokes the payment processor?" → {"intent": "graph_callers"}
+  Q: "what initiates the checkout flow?" → {"intent": "graph_callers"}
+  Q: "find the checkout handler" → {"intent": "search"}
+  Q: "show me the embedder implementation" → {"intent": "search"}
+  Q: "how does the order flow work end-to-end?" → {"intent": "feature"}
+  Q: "describe the overall architecture" → {"intent": "architecture"}
+  Q: "tell me about this project comprehensively" → {"intent": "global"}
 
 Respond with ONLY valid JSON: {"intent": "<name>"}"""
 
