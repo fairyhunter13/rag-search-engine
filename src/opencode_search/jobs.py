@@ -6,6 +6,7 @@ Jobs are in-process only — not persisted across daemon restarts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import Coroutine
@@ -92,10 +93,8 @@ def submit_job(
     if dedup:
         existing = find_active_job(project_path=project_path, action=action)
         if existing is not None:
-            try:
+            with contextlib.suppress(Exception):
                 coro.close()
-            except Exception:
-                pass
             log.info(
                 "submit_job: dedup hit — returning existing job[%s] for %s(%s)",
                 existing.id, action, project_path,

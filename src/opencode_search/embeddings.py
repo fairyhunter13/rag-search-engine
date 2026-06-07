@@ -1271,7 +1271,7 @@ def assert_gpu_available() -> None:
     # daemon refuses to start rather than crashing on the first large batch.
     if _GPU_NORMALIZE_MODE != "cpu":
         try:
-            import cupy  # noqa: F401
+            import cupy
         except Exception as exc:  # pragma: no cover - exercised via subprocess test
             msg = (
                 "[GPU-REQUIRED] FATAL: CuPy is not importable but "

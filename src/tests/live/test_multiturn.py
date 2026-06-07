@@ -80,7 +80,7 @@ class TestMultiTurnAPI:
                 "OMS, fulfillment, IMS, WIMS, commercial, auth, search, fraud, notification."
             )},
         ]
-        answer, intent = _chat_with_history(
+        answer, _intent = _chat_with_history(
             http, astro, "Tell me more about the cart service specifically.", history=history,
         )
         assert len(answer) > 50, f"Follow-up answer too short: {answer!r}"
@@ -98,7 +98,7 @@ class TestMultiTurnAPI:
                 "initialized. Check service/campaign.go and look for missing initialization."
             )},
         ]
-        answer, intent = _chat_with_history(
+        answer, _intent = _chat_with_history(
             http, astro, "Which specific function should I look at first?", history=history,
         )
         assert len(answer) > 40, f"Debug follow-up answer too short: {answer!r}"

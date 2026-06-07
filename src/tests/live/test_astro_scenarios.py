@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import judge_answer, parse_sse
+from .conftest import judge_answer
 from .test_acme_e2e import _ASTRO, _chat
 
 pytestmark = pytest.mark.live
@@ -129,7 +129,7 @@ class TestAstroArchitecture:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_grpc_service_communication(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How do the gRPC services communicate with each other in Astro? "
             "What are the main gRPC service contracts?",
@@ -144,7 +144,7 @@ class TestAstroArchitecture:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_api_gateway_architecture(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How does the Kong API gateway route traffic to the backend services? "
             "How does API versioning work in the customer gateway?",
@@ -158,7 +158,7 @@ class TestAstroArchitecture:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_database_architecture(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "What databases does Astro use and how is the database-per-service pattern implemented? "
             "Which services use PostgreSQL, MongoDB, Redis, and ClickHouse?",
@@ -216,7 +216,7 @@ class TestAstroBusinessFeatures:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_loyalty_rewards_system(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How does the loyalty and rewards program work? "
             "How are loyalty points calculated and what tiers exist?",
@@ -230,7 +230,7 @@ class TestAstroBusinessFeatures:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_inventory_stock_validation(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How does inventory stock validation work to prevent overselling? "
             "What happens when multiple concurrent orders try to buy the same item?",
@@ -245,7 +245,7 @@ class TestAstroBusinessFeatures:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_event_driven_pubsub_flow(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How does Google Cloud Pub/Sub enable asynchronous communication between services? "
             "What events are published when an order is placed?",
@@ -358,7 +358,7 @@ class TestAstroDebugging:
         )
         # Raw stack trace tests intent routing, not answer quality — the KB may lack
         # the exact file context. Require a non-empty response, not a score threshold.
-        assert len(answer) > 0, f"No response returned for panic stack trace"
+        assert len(answer) > 0, "No response returned for panic stack trace"
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_503_error_investigation(self, http, astro):
@@ -422,7 +422,7 @@ class TestAstroSecurityAndObservability:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_authentication_flow(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How does authentication and authorization work in Astro? "
             "How are auth tokens propagated through gRPC inter-service calls?",
@@ -436,7 +436,7 @@ class TestAstroSecurityAndObservability:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_datadog_tracing(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How does distributed tracing with DataDog work across the gRPC services? "
             "How are trace IDs propagated between service calls?",
@@ -450,7 +450,7 @@ class TestAstroSecurityAndObservability:
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_feature_flags_implementation(self, http, astro):
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How are feature flags implemented in Astro? "
             "Where are they checked and how do they control service behavior?",
@@ -494,7 +494,7 @@ class TestAstroOnboardingAndDeveloperExperience:
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_go_service_structure(self, http, astro):
         """Understand typical Go microservice patterns in Astro."""
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "What is the typical structure of a Go microservice in Astro? "
             "How is dependency injection, gRPC setup, and graceful shutdown implemented?",
@@ -509,7 +509,7 @@ class TestAstroOnboardingAndDeveloperExperience:
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_add_new_grpc_endpoint(self, http, astro):
         """How to add a new gRPC endpoint to an existing service."""
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How do I add a new gRPC endpoint to an existing service in Astro? "
             "What files do I need to create or modify in the proto and service layers?",
@@ -525,7 +525,7 @@ class TestAstroOnboardingAndDeveloperExperience:
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_local_development_setup(self, http, astro):
         """How to set up a local development environment."""
-        answer, intent, *_ = _chat(
+        answer, _intent, *_ = _chat(
             http, astro,
             "How do I set up a local development environment to run and test "
             "an Astro microservice?",

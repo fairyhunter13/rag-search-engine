@@ -946,9 +946,17 @@ async def _stream_feature(
     model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
 
     if llm is None:
-        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER."
-        for i in range(0, len(err), chunk_size):
-            yield {"type": "token", "text": err[i:i + chunk_size]}
+        record_stream_error("feature")
+        yield {
+            "type": "error", "code": "llm_unavailable",
+            "message": "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER.",
+            "intent": "feature",
+        }
+        yield {
+            "type": "done", "intent": "feature", "sources": [],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "none",
+        }
+        return
     elif hasattr(llm, "stream_chat"):
         # Native streaming — tokens arrive in real time
         try:
@@ -964,15 +972,15 @@ async def _stream_feature(
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
             record_stream_success()
+            for i in range(0, max(len(answer), 1), chunk_size):
+                chunk = answer[i:i + chunk_size]
+                if chunk:
+                    yield {"type": "token", "text": chunk}
+                await asyncio.sleep(0)
         except Exception as _ce:
             log.warning("_stream_feature: chat failed: %s", _ce)
             record_stream_error("feature")
-            answer = f"Feature analysis unavailable: {type(_ce).__name__}"
-        for i in range(0, max(len(answer), 1), chunk_size):
-            chunk = answer[i:i + chunk_size]
-            if chunk:
-                yield {"type": "token", "text": chunk}
-            await asyncio.sleep(0)
+            yield {"type": "error", "code": "chat_failed", "message": str(_ce), "intent": "feature"}
 
     # Step 5: append feature trace as supplement (if ready and meaningful)
     feature_result = await feature_task
@@ -1139,15 +1147,15 @@ async def _stream_global(
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=2048)
             record_stream_success()
+            for i in range(0, max(len(answer), 1), chunk_size):
+                chunk = answer[i:i + chunk_size]
+                if chunk:
+                    yield {"type": "token", "text": chunk}
+                await asyncio.sleep(0)
         except Exception as _ce:
             log.warning("_stream_global: chat failed: %s", _ce)
             record_stream_error("global")
-            answer = f"Global analysis unavailable: {type(_ce).__name__}"
-        for i in range(0, max(len(answer), 1), chunk_size):
-            chunk = answer[i:i + chunk_size]
-            if chunk:
-                yield {"type": "token", "text": chunk}
-            await asyncio.sleep(0)
+            yield {"type": "error", "code": "chat_failed", "message": str(_ce), "intent": "global"}
 
     yield {
         "type": "done",
@@ -1289,9 +1297,17 @@ async def _stream_debug(
     model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
 
     if llm is None:
-        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER."
-        for i in range(0, len(err), chunk_size):
-            yield {"type": "token", "text": err[i:i + chunk_size]}
+        record_stream_error("debug")
+        yield {
+            "type": "error", "code": "llm_unavailable",
+            "message": "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER.",
+            "intent": "debug",
+        }
+        yield {
+            "type": "done", "intent": "debug", "sources": [],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "none",
+        }
+        return
     elif hasattr(llm, "stream_chat"):
         try:
             async for token in _bridge_stream(llm, messages, max_tokens=1024):
@@ -1305,15 +1321,15 @@ async def _stream_debug(
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
             record_stream_success()
+            for i in range(0, max(len(answer), 1), chunk_size):
+                chunk = answer[i:i + chunk_size]
+                if chunk:
+                    yield {"type": "token", "text": chunk}
+                await asyncio.sleep(0)
         except Exception as _ce:
             log.warning("_stream_debug: chat failed: %s", _ce)
             record_stream_error("debug")
-            answer = f"Debug analysis unavailable: {type(_ce).__name__}"
-        for i in range(0, max(len(answer), 1), chunk_size):
-            chunk = answer[i:i + chunk_size]
-            if chunk:
-                yield {"type": "token", "text": chunk}
-            await asyncio.sleep(0)
+            yield {"type": "error", "code": "chat_failed", "message": str(_ce), "intent": "debug"}
 
     hotspot_files = [ep.get("file", "") for ep in eps[:4] if ep.get("file")]
     yield {
@@ -1411,9 +1427,17 @@ async def _stream_architecture(
     model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
 
     if llm is None:
-        err = "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER."
-        for i in range(0, len(err), chunk_size):
-            yield {"type": "token", "text": err[i:i + chunk_size]}
+        record_stream_error("architecture")
+        yield {
+            "type": "error", "code": "llm_unavailable",
+            "message": "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER.",
+            "intent": "architecture",
+        }
+        yield {
+            "type": "done", "intent": "architecture", "sources": [],
+            "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "none",
+        }
+        return
     elif hasattr(llm, "stream_chat"):
         try:
             async for token in _bridge_stream(llm, messages, max_tokens=1536):
@@ -1422,20 +1446,20 @@ async def _stream_architecture(
         except Exception as _se:
             log.warning("_stream_architecture: stream_chat failed: %s", _se)
             record_stream_error("architecture")
-            yield {"type": "token", "text": f" [response incomplete: {type(_se).__name__}]"}
+            yield {"type": "error", "code": "stream_failed", "message": str(_se), "intent": "architecture"}
     else:
         try:
             answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1536)
             record_stream_success()
+            for i in range(0, max(len(answer), 1), chunk_size):
+                chunk = answer[i:i + chunk_size]
+                if chunk:
+                    yield {"type": "token", "text": chunk}
+                await asyncio.sleep(0)
         except Exception as _ce:
             log.warning("_stream_architecture: chat failed: %s", _ce)
             record_stream_error("architecture")
-            answer = f"Architecture analysis unavailable: {type(_ce).__name__}"
-        for i in range(0, max(len(answer), 1), chunk_size):
-            chunk = answer[i:i + chunk_size]
-            if chunk:
-                yield {"type": "token", "text": chunk}
-            await asyncio.sleep(0)
+            yield {"type": "error", "code": "chat_failed", "message": str(_ce), "intent": "architecture"}
 
     sources = list(dict.fromkeys(c["title"] for c in comm_list))[:8]
     yield {
