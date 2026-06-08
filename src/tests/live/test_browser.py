@@ -1570,3 +1570,299 @@ class TestGlobalUIGaps:
         toast_count = page.locator("#toast div").count()
         # At minimum one toast must appear; ideally 2 stack
         assert toast_count >= 1, "No toast appeared after triggering admin ops"
+
+
+# ---------------------------------------------------------------------------
+# Phase 71 gap additions: TestDashboardCoverage (top 10 from Phase 69 audit)
+# ---------------------------------------------------------------------------
+
+class TestDashboardCoverage:
+    """Covers 10 user-visible dashboard surfaces identified in the Phase 69 audit
+    as having no Playwright test. Uses real LLM/daemon except where a Playwright
+    route intercept is the surface under test."""
+
+    def test_switch_to_chat_view_autofocuses_input(self, page):
+        """switchView('chat') must focus #chat-in — exercises the autofocus side-effect."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Navigate to pulse first so the chat switch is a real transition
+        page.click("#vbtn-pulse")
+        page.wait_for_timeout(200)
+        page.click("#vbtn-chat")
+        page.wait_for_timeout(300)
+        focused_id = page.evaluate("document.activeElement?.id")
+        assert focused_id == "chat-in", (
+            f"#chat-in must receive focus on switchView('chat'); activeElement.id={focused_id!r}"
+        )
+
+    def test_activity_feed_renders_populated_event(self, page, live_project):
+        """When kb_health returns a last_pipeline_event the feed must show an .act-item."""
+        import json as _json
+        stub_kb = {
+            "total_communities": 10, "enriched_communities": 8,
+            "enrichment_pct": 80.0, "wiki_page_count": 5,
+            "last_pipeline_event": {"action": "index complete", "ts": "2026-06-08T12:00:00"},
+        }
+        page.route(
+            "**/api/kb_health**",
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=_json.dumps(stub_kb)),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => { const s = document.getElementById('project-sel'); "
+                "return s && s.options.length > 0 && s.value !== ''; }",
+                timeout=45_000,
+            )
+            page.evaluate("loadPulse()")
+            page.wait_for_function(
+                "document.querySelector('.act-item') !== null",
+                timeout=10_000,
+            )
+            items = page.locator(".act-item")
+            assert items.count() > 0, ".act-item not rendered despite last_pipeline_event in stub"
+            content = items.first.inner_text(timeout=5_000)
+            assert "index complete" in content, (
+                f".act-item text does not contain event msg; got: {content!r}"
+            )
+        finally:
+            page.unroute("**/api/kb_health**")
+
+    def test_admin_project_link_switches_active_project(self, page):
+        """Clicking the inline project-name <a> in the admin table must update _proj."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); "
+            "return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        sel = page.locator("#project-sel")
+        opts = sel.locator("option").all()
+        all_paths = [o.get_attribute("value") for o in opts if o.get_attribute("value")]
+        if len(all_paths) < 2:
+            pytest.skip("Need ≥2 indexed projects to test admin project-link switch")
+        before = page.evaluate("_proj")
+        # Use a project from the dropdown that is different from the active one
+        target_path = next((p for p in all_paths if p != before), None)
+        if target_path is None:
+            pytest.skip("No alternative project path found in project selector")
+        # Switch to target first so the admin table shows it with the active-row class
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        page.wait_for_function(
+            "document.querySelectorAll('#projects-body tr').length > 0",
+            timeout=20_000,
+        )
+        # Click the admin table link for our target project
+        target_link = page.locator(f"#projects-body a[onclick*={target_path!r}]").first
+        if target_link.count() == 0:
+            pytest.skip(f"No admin table <a> link for path {target_path!r}")
+        target_link.click()
+        page.wait_for_timeout(1_000)
+        after = page.evaluate("_proj")
+        assert after == target_path, (
+            f"_proj must equal clicked link's path; expected {target_path!r}, got {after!r}"
+        )
+
+    def test_runwiki_sends_action_wiki_query_param(self, page, live_project):
+        """runWiki() must POST to /api/build_hierarchy with action=wiki query param."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); "
+            "return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        page.click("#vbtn-admin")
+        page.wait_for_function(
+            "document.getElementById('view-admin')?.classList?.contains('active')",
+            timeout=10_000,
+        )
+        captured_urls: list[str] = []
+        page.on("request", lambda req: captured_urls.append(req.url)
+                if "build_hierarchy" in req.url else None)
+        wiki_btn = page.locator("button:has-text('Wiki')").first
+        assert wiki_btn.count() > 0, "Wiki op-button not found"
+        wiki_btn.click()
+        page.wait_for_timeout(2_000)
+        wiki_urls = [u for u in captured_urls if "build_hierarchy" in u]
+        assert wiki_urls, "No /api/build_hierarchy request fired after clicking Wiki button"
+        assert any("action=wiki" in u for u in wiki_urls), (
+            f"Wiki button request missing action=wiki param; URLs: {wiki_urls}"
+        )
+
+    def test_askquestion_produces_ai_response_e2e(self, page, live_project):
+        """Clicking a .sq-btn must produce a full AI response via askQuestion() → sendChat()."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); "
+            "return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        # Wait for suggested questions to load (requires Pulse view to be active and loaded)
+        page.wait_for_function(
+            "document.querySelectorAll('.sq-btn').length > 0",
+            timeout=30_000,
+        )
+        sq_btn = page.locator(".sq-btn").first
+        assert sq_btn.count() > 0, "No .sq-btn (suggested question) found on Pulse view"
+        sq_btn.click()
+        # askQuestion() switches to Chat view and calls sendChat()
+        page.wait_for_function(
+            "document.getElementById('view-chat')?.classList?.contains('active')",
+            timeout=5_000,
+        )
+        text = _wait_for_ai_response(page, timeout_ms=_TIMEOUT_CHAT_LONG)
+        assert len(text) > 30, f"askQuestion AI response too short: {text!r}"
+
+    def test_sse_error_event_renders_ai_err_class(self, page, live_project):
+        """SSE error events must render a .msg.ai.ai-err bubble with the error message."""
+        import json as _json
+        sse_body = (
+            "data: " + _json.dumps({
+                "type": "error", "message": "forced-test-error", "intent": "search",
+            }) + "\n\n"
+        )
+        page.route(
+            "**/api/chat_stream",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                body=sse_body,
+            ),
+        )
+        try:
+            _navigate_to_chat(page)
+            _send_message(page, "test error path")
+            page.wait_for_selector(".msg.ai.ai-err", timeout=10_000)
+            err_msg = page.locator(".msg.ai.ai-err").first
+            assert err_msg.count() > 0, ".msg.ai.ai-err not rendered for SSE error event"
+            content = err_msg.inner_text(timeout=5_000)
+            assert "forced-test-error" in content, (
+                f"Error bubble does not contain the error message; got: {content!r}"
+            )
+        finally:
+            page.unroute("**/api/chat_stream")
+
+    @pytest.mark.slow
+    def test_pulse_auto_refresh_updates_sparklines_after_20s(self, page, live_project):
+        """The 20s setInterval must trigger a second loadPulse, adding a new sparkline point."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); "
+            "return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        # Stay on Pulse so the setInterval fires
+        page.click("#vbtn-pulse")
+        page.wait_for_timeout(500)
+        initial_len = page.evaluate(
+            "(_sparkHistory.files || []).length"
+        )
+        # Wait past the 20s interval
+        page.wait_for_timeout(22_000)
+        new_len = page.evaluate("(_sparkHistory.files || []).length")
+        assert new_len > initial_len, (
+            f"Sparkline history did not grow after 22s on Pulse view "
+            f"(initial={initial_len}, after={new_len}) — setInterval not firing"
+        )
+
+    def test_project_switch_clears_spark_history(self, page):
+        """Switching project via selector must reset _sparkHistory (setProj side-effect)."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => { const s = document.getElementById('project-sel'); "
+            "return s && s.options.length > 0 && s.value !== ''; }",
+            timeout=45_000,
+        )
+        # Accumulate at least one sparkline point
+        page.evaluate("loadPulse()")
+        page.wait_for_timeout(3_000)
+        initial_history_len = page.evaluate(
+            "Object.keys(_sparkHistory).reduce((sum, k) => sum + (_sparkHistory[k]||[]).length, 0)"
+        )
+        sel = page.locator("#project-sel")
+        options = sel.locator("option").all()
+        if len(options) < 2:
+            pytest.skip("Need ≥2 indexed projects to test project-switch clear")
+        current = sel.input_value()
+        target = next((o.get_attribute("value") for o in options
+                       if o.get_attribute("value") != current and o.get_attribute("value")), None)
+        if not target:
+            pytest.skip("No alternative project path found")
+        sel.select_option(value=target)
+        page.wait_for_timeout(500)
+        after_history_len = page.evaluate(
+            "Object.keys(_sparkHistory).reduce((sum, k) => sum + (_sparkHistory[k]||[]).length, 0)"
+        )
+        assert after_history_len < initial_history_len or after_history_len == 0, (
+            f"_sparkHistory not cleared after project switch; "
+            f"was {initial_history_len} points, now {after_history_len}"
+        )
+
+    def test_daemon_dot_warn_state_from_chat_view(self, page, live_project):
+        """Daemon dot must reflect warn state even when Chat view is active (loadPulse is global)."""
+        page.route("**/api/suggested_questions**", lambda r: r.abort())
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => { const s = document.getElementById('project-sel'); "
+                "return s && s.options.length > 0 && s.value !== ''; }",
+                timeout=45_000,
+            )
+            page.click("#vbtn-chat")
+            page.wait_for_function(
+                "document.getElementById('view-chat')?.classList?.contains('active')",
+                timeout=5_000,
+            )
+            page.evaluate("loadPulse()")
+            page.wait_for_function(
+                "document.querySelector('.sdot')?.classList?.contains('warn') || "
+                "document.querySelector('.sdot')?.classList?.contains('ok') || "
+                "document.querySelector('.sdot')?.classList?.contains('err')",
+                timeout=35_000,
+            )
+            dot_classes = page.locator(".sdot").first.get_attribute("class") or ""
+            assert "warn" in dot_classes, (
+                f"Dot must be 'warn' on Chat view when suggested_questions blocked; "
+                f"got: {dot_classes!r}"
+            )
+        finally:
+            page.unroute("**/api/suggested_questions**")
+
+    def test_kpi_tiles_show_dash_when_kb_health_empty(self, page, live_project):
+        """When /api/kb_health returns empty {}, #kpi-communities must show '—', not '0'."""
+        page.route(
+            "**/api/kb_health**",
+            lambda r: r.fulfill(status=200, content_type="application/json", body="{}"),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => { const s = document.getElementById('project-sel'); "
+                "return s && s.options.length > 0 && s.value !== ''; }",
+                timeout=45_000,
+            )
+            page.evaluate("loadPulse()")
+            page.wait_for_function(
+                "document.getElementById('kpi-communities')?.textContent?.trim() !== '—' || "
+                "document.getElementById('kpi-communities')?.textContent?.trim() === '—'",
+                timeout=10_000,
+            )
+            val = (page.locator("#kpi-communities").text_content(timeout=5_000) or "").strip()
+            assert val == "—", (
+                f"#kpi-communities must show '—' when communities is null; got: {val!r}"
+            )
+        finally:
+            page.unroute("**/api/kb_health**")
