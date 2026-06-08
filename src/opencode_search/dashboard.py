@@ -812,19 +812,25 @@ def _register_chat_routes(mcp: FastMCP) -> None:
 
         async def _gen():
             from opencode_search.daemon_runtime import reload_pending
+            from opencode_search.metrics import record_stream_error
             _RELOAD_NOTICE = json.dumps({"type": "reload", "retry_after_ms": 3000})
-            async for chunk in handle_chat_auto_stream(
-                query=query,
-                project_path=project,
-                conversation_history=history,
-            ):
-                if reload_pending.is_set():
-                    yield f"data: {_RELOAD_NOTICE}\n\n"
-                    return
-                if await request.is_disconnected():
-                    record_stream_cancelled()
-                    return
-                yield f"data: {json.dumps(chunk)}\n\n"
+            try:
+                async for chunk in handle_chat_auto_stream(
+                    query=query,
+                    project_path=project,
+                    conversation_history=history,
+                ):
+                    if reload_pending.is_set():
+                        yield f"data: {_RELOAD_NOTICE}\n\n"
+                        return
+                    if await request.is_disconnected():
+                        record_stream_cancelled()
+                        return
+                    yield f"data: {json.dumps(chunk)}\n\n"
+            except Exception as exc:
+                record_stream_error("unknown")
+                err_payload = json.dumps({"type": "error", "message": str(exc)[:500]})
+                yield f"data: {err_payload}\n\n"
 
         return StreamingResponse(
             _gen(),

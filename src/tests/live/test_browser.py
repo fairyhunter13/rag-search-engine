@@ -109,6 +109,21 @@ def _wait_for_ai_response(page, timeout_ms: int = _TIMEOUT_CHAT):
     return page.locator(done_sel).last.inner_text()
 
 
+def _wait_for_chat_ready(page, timeout_ms: int = _TIMEOUT_CHAT_LONG) -> None:
+    """Wait until the chat is fully idle and safe to send the next turn.
+
+    _wait_for_ai_response returns on the first token, but _chatInFlight stays
+    true until the SSE stream closes after the 'done' event.  Sending before
+    that moment is silently dropped by the JS in-flight guard.
+    """
+    page.wait_for_function(
+        "() => { const b = document.getElementById('send-btn'); "
+        "return b && !b.disabled "
+        "&& document.querySelectorAll('.msg.ai.thinking').length === 0; }",
+        timeout=timeout_ms,
+    )
+
+
 # ---------------------------------------------------------------------------
 # View: Dashboard loads
 # ---------------------------------------------------------------------------
@@ -425,15 +440,20 @@ class TestChatStreaming:
         _send_message(page, "what files are in this project?")
         first_text = _wait_for_ai_response(page)
         assert len(first_text) > 20, f"First response too short: {first_text!r}"
+        # Wait for the SSE stream to fully close before sending the next turn;
+        # _chatInFlight stays true until the 'done' event closes the stream.
+        _wait_for_chat_ready(page)
         # Count existing messages before second turn
         msg_count_before = page.locator(".msg.ai:not(.thinking)").count()
         # Second turn: simple follow-up
         _send_message(page, "list the main directories")
-        # Wait for a new AI message to appear
+        # wait_for_function fires on the FIRST token (bubble appears), not full response;
+        # call _wait_for_chat_ready after to ensure complete content before reading.
         page.wait_for_function(
             f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {msg_count_before}",
-            timeout=_TIMEOUT_CHAT,
+            timeout=_TIMEOUT_CHAT_LONG,
         )
+        _wait_for_chat_ready(page)
         second_text = page.locator(".msg.ai:not(.thinking)").last.inner_text()
         assert len(second_text) > 20, f"Second response too short: {second_text!r}"
         assert second_text != first_text, "Second response identical to first — multi-turn may be broken"
@@ -500,21 +520,27 @@ class TestChatStreaming:
         r1 = _wait_for_ai_response(page)
         assert len(r1) > 20, f"First response too short: {r1!r}"
 
+        # Wait for turn 1 stream to close before sending turn 2
+        _wait_for_chat_ready(page)
         count1 = page.locator(".msg.ai:not(.thinking)").count()
         _send_message(page, "tell me about the first one")
+        # wait_for_function fires on first token; _wait_for_chat_ready ensures full content
         page.wait_for_function(
             f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {count1}",
-            timeout=_TIMEOUT_CHAT,
+            timeout=_TIMEOUT_CHAT_LONG,
         )
+        _wait_for_chat_ready(page)
         r2 = page.locator(".msg.ai:not(.thinking)").last.inner_text()
         assert len(r2) > 20, f"Second response too short: {r2!r}"
 
         count2 = page.locator(".msg.ai:not(.thinking)").count()
         _send_message(page, "how is it tested?")
+        # wait_for_function fires on first token; _wait_for_chat_ready ensures full content
         page.wait_for_function(
             f"document.querySelectorAll('.msg.ai:not(.thinking)').length > {count2}",
-            timeout=_TIMEOUT_CHAT,
+            timeout=_TIMEOUT_CHAT_LONG,
         )
+        _wait_for_chat_ready(page)
         r3 = page.locator(".msg.ai:not(.thinking)").last.inner_text()
         assert len(r3) > 20, f"Third response too short: {r3!r}"
 
