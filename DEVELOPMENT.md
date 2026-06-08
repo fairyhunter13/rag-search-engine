@@ -6,13 +6,13 @@ Canonical local workflow for this repository:
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools wheel
 .venv/bin/python -m pip install -e 'src[dev,gpu]'
-./scripts/validate-local-gpu.sh
+.venv/bin/python scripts/check_system.py
 ```
 
 Rules for local validation:
 
 - GPU is mandatory. CPU fallback is forbidden.
-- `./scripts/validate-local-gpu.sh` is the canonical validation entrypoint.
+- `.venv/bin/python scripts/check_system.py` is the canonical validation entrypoint.
 - Validation is strict: any skipped test fails the run.
 - The script uses the repo-local `.venv` automatically when present.
 
@@ -31,7 +31,7 @@ Reproducibility:
 - Refresh it from the repo-local `.venv` with:
 
 ```bash
-./scripts/refresh-lock.sh
+.venv/bin/pip freeze > requirements-lock-py312-linux-gpu.txt
 ```
 
 Reindex and migration rules:
@@ -43,6 +43,6 @@ Reindex and migration rules:
 Release checklist:
 
 - Refresh the lock file if dependencies changed.
-- Run `./scripts/validate-local-gpu.sh`.
+- Run `.venv/bin/python scripts/check_system.py`.
 - Confirm the validation output has zero skipped tests.
 - Smoke MCP usage from the target assistant config if the release changes MCP wiring.

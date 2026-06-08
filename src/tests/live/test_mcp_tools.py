@@ -927,3 +927,73 @@ class TestMCPReload:
             else:
                 pytest.fail("Daemon did not come back up within 15s after reload")
         time.sleep(2)  # extra buffer so session pool settles
+
+
+# ---------------------------------------------------------------------------
+# Phase 77 coverage gaps
+# ---------------------------------------------------------------------------
+
+class TestMCPCoverageGaps:
+    """Phase 77 — fill highest-leverage MCP variant gaps."""
+
+    @pytest.mark.slow
+    def test_ask_scope_architecture(self, http, quality_project):
+        """ask(scope='architecture') must return 200 with non-empty content."""
+        r = http.get("/api/ask", params={
+            "q": "describe the dashboard layer",
+            "project": quality_project,
+            "scope": "architecture",
+        })
+        assert r.status_code == 200, f"ask architecture scope failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+        has_content = (
+            data.get("answer") or data.get("text") or data.get("summary")
+            or data.get("communities") or data.get("results")
+        )
+        assert has_content, f"ask architecture scope returned empty response: {data}"
+
+    @pytest.mark.slow
+    def test_ask_scope_business(self, http, quality_project):
+        """ask(scope='business') must call handle_ask_business and return content."""
+        r = http.get("/api/ask", params={
+            "q": "what business rules govern indexing",
+            "project": quality_project,
+            "scope": "business",
+        })
+        assert r.status_code == 200, f"ask business scope failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+        has_content = (
+            data.get("answer") or data.get("text") or data.get("summary")
+            or data.get("communities") or data.get("results")
+        )
+        assert has_content, f"ask business scope returned empty response: {data}"
+
+    def test_overview_business_rules_core(self, http, quality_project):
+        """overview(what='business_rules') on the core project must return a dict."""
+        r = http.get("/api/overview", params={"project": quality_project, "what": "business_rules"})
+        assert r.status_code == 200, f"overview business_rules on core failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+
+    def test_overview_process_flows_core(self, http, quality_project):
+        """overview(what='process_flows') on the core project must return a dict."""
+        r = http.get("/api/overview", params={"project": quality_project, "what": "process_flows"})
+        assert r.status_code == 200, f"overview process_flows on core failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+
+    def test_build_job_dispatch_and_lookup(self, http, quality_project):
+        """build(action='hierarchy') returns job_id; manage(jobs, job_id) looks it up."""
+        r = http.post("/api/build_hierarchy", json={"project": quality_project})
+        assert r.status_code == 200, f"build_hierarchy failed: {r.text[:200]}"
+        data = r.json()
+        assert isinstance(data, dict)
+        job_id = data.get("job_id")
+        if job_id:
+            jr = http.get(f"/api/jobs/{job_id}")
+            assert jr.status_code in (200, 404), (
+                f"jobs/{job_id} unexpected status: {jr.status_code}"
+            )
+            assert isinstance(jr.json(), dict), "job lookup must return a dict"

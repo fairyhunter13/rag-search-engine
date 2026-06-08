@@ -93,13 +93,15 @@ opencode-search health --json
 
 ### MCP integration (AI assistants)
 
-The MCP server exposes five tools to AI assistants:
+The MCP server exposes seven tools to AI assistants (v2 API):
 
-- `index_project(path, tier, watch, force)` — index a directory
-- `search_code(query, project_paths, top_k, use_rerank)` — search
-- `project_status(path)` — get indexing status
-- `list_indexed_projects()` — enumerate projects
-- `stop_watching(path)` — stop file-watcher
+- `search(query, scope, project_paths)` — find specific code, files, or functions
+- `ask(query, project_path, scope)` — answer architectural questions (scope: all|architecture|wiki|global|feature|business)
+- `graph(symbol, project_path, relation)` — call graph analysis (callers, callees, impact, semantic trace)
+- `overview(project_path, what)` — project structure, communities, status, patterns
+- `build(project_path, action)` — async KB build (index, enrich, wiki, hierarchy)
+- `federation(root_path)` — list and manage sub-repositories
+- `manage(project_path, action)` — project lifecycle (vacuum, dedup, jobs, reload)
 
 #### Workspace Scoping (Important)
 
@@ -120,17 +122,13 @@ For a shared MCP daemon across Claude Code, Codex, and Hermes:
 .venv/bin/python -m opencode_search daemon status
 ```
 
-#### Deterministic MCP Harness (No LLM)
+#### System Validation
 
-To validate the full MCP stdio flow (including indexing, hybrid retrieval, and enforced reranking)
-without involving Claude/Codex, run:
+To validate GPU, CUDA execution provider, and runtime dependencies:
 
 ```bash
-.venv/bin/python scripts/mcp_stdio_harness.py
+.venv/bin/python scripts/check_system.py
 ```
-
-This harness spawns the stdio bridge and speaks MCP over stdio using the official MCP Python SDK.
-It is meant to catch regressions like stale docs/benchmarks outranking implementation code.
 
 #### Notes On Codex CLI
 
@@ -196,7 +194,7 @@ See `mcp-config/hermes.json`.
 | `OPENCODE_STAGE1_VECTOR_K`            | `20`                        | Per-project vector candidates                   |
 | `OPENCODE_STAGE1_RERANK_K`            | `15`                        | Per-project rerank top-k                        |
 | `OPENCODE_GLOBAL_RERANK_MAX`          | `100`                       | Max candidates before global rerank             |
-| `OPENCODE_FINAL_TOP_K`                | `10`                        | Default `top_k` for `search_code`               |
+| `OPENCODE_FINAL_TOP_K`                | `10`                        | Default `top_k` for `search`                    |
 | `OPENCODE_SKIP_STAGE1_RERANK_N`       | `5`                         | Skip per-project rerank above this many projects|
 | `OPENCODE_ONNX_LOG_SEVERITY`          | `3`                         | ONNX Runtime log level (`3` hides warnings)     |
 | `OPENCODE_RERANK_NORMALIZE`           | `sigmoid`                   | `sigmoid` or `minmax`                           |
@@ -240,7 +238,7 @@ sudo sysctl -p
 ## Running tests
 
 ```bash
-./scripts/validate-local-gpu.sh
+.venv/bin/python scripts/check_system.py
 ```
 
 That local validation path is strict:
@@ -258,7 +256,7 @@ This repo keeps a Python 3.12 Linux GPU lock snapshot at `requirements-lock-py31
 Refresh it only from the repo-local `.venv`:
 
 ```bash
-./scripts/refresh-lock.sh
+.venv/bin/pip freeze > requirements-lock-py312-linux-gpu.txt
 ```
 
 ## Reindexing and migrations
@@ -288,7 +286,7 @@ Mixed-tier federated search is rejected by design because the underlying embeddi
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │   opencode-search mcp  ──  FastMCP stdio server             │
-│   ├── 5 tools (index_project, search_code, …)               │
+│   ├── 7 tools (search, ask, graph, …)                        │
 │   ├── GPU guard at startup (CPU forbidden)                  │
 │   └── Watcher resume from registry                          │
 └──────────────────────────┬──────────────────────────────────┘

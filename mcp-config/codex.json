@@ -13,8 +13,13 @@
       "transport": "stdio"
     },
     "tools": [
-      "index_project",
-      "search_code"
+      "search",
+      "ask",
+      "graph",
+      "overview",
+      "build",
+      "federation",
+      "manage"
     ]
   }
 }

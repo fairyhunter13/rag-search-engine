@@ -10,7 +10,11 @@
       },
       "description": "GPU-accelerated local semantic code search. Index your projects and search with natural language.",
       "alwaysAllow": [
-        "search_code"
+        "search",
+        "ask",
+        "graph",
+        "overview",
+        "federation"
       ]
     }
   }

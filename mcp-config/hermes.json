@@ -9,13 +9,33 @@
     "OPENCODE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"
   },
   "tools": {
-    "index_project": {
-      "description": "Index a project directory for semantic code search",
+    "search": {
+      "description": "Find specific code, files, or functions with natural language",
+      "always_allowed": true
+    },
+    "ask": {
+      "description": "Answer architectural and conceptual questions about a project",
+      "always_allowed": true
+    },
+    "graph": {
+      "description": "Call graph analysis: callers, callees, impact, semantic trace",
+      "always_allowed": true
+    },
+    "overview": {
+      "description": "Project structure, communities, status, patterns",
+      "always_allowed": true
+    },
+    "build": {
+      "description": "Async KB build: index, enrich, wiki, hierarchy",
       "always_allowed": false
     },
-    "search_code": {
-      "description": "Search indexed projects with natural language",
+    "federation": {
+      "description": "List and manage sub-repositories",
       "always_allowed": true
+    },
+    "manage": {
+      "description": "Project lifecycle: vacuum, dedup, jobs, reload",
+      "always_allowed": false
     }
   }
 }

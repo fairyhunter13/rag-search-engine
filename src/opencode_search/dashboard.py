@@ -424,6 +424,9 @@ def _register_search_routes(mcp: FastMCP) -> None:
         elif scope == "feature":
             from opencode_search.handlers._feature import handle_ask_feature
             result = await handle_ask_feature(query=q, project_path=project)
+        elif scope == "business":
+            from opencode_search.handlers._business import handle_ask_business
+            result = await handle_ask_business(query=q, project_path=project, top_k=10)
         else:
             result = await handle_global_search(query=q, project_path=project, top_k=10)
         return JSONResponse(result)
