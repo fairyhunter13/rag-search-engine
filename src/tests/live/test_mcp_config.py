@@ -208,3 +208,63 @@ class TestGlobalInstructionSync:
                 f"{profile} only has {count}/7 tools in system prompt. "
                 f"Run scripts/sync_global_instructions.py to fix."
             )
+
+
+# ---------------------------------------------------------------------------
+# Repo template files — drift gate (no daemon required)
+# ---------------------------------------------------------------------------
+
+_REPO = Path(__file__).parents[3]  # src/tests/live/ → 3 levels up → repo root
+
+
+class TestMCPConfigTemplates:
+    """mcp-config/*.json templates must stay consistent with the 7-tool API and CANONICAL_MCP_ENV.
+
+    These tests run against repo files only — no daemon, no user home dir.
+    They catch the case where someone updates the API without updating a template.
+    """
+
+    def test_claude_code_template_alwaysallow_is_subset_of_seven_tools(self):
+        data = json.loads((_REPO / "mcp-config" / "claude-code.json").read_text())
+        always_allow = data["mcpServers"]["opencode-search"]["alwaysAllow"]
+        assert set(always_allow) <= set(_7_TOOLS), (
+            f"alwaysAllow contains unknown tools: {set(always_allow) - set(_7_TOOLS)}"
+        )
+        read_only = {"search", "ask", "graph", "overview", "federation"}
+        assert read_only <= set(always_allow), (
+            f"claude-code.json must allow all read-only tools {read_only}; "
+            f"got {always_allow}"
+        )
+
+    def test_codex_template_lists_seven_tools(self):
+        data = json.loads((_REPO / "mcp-config" / "codex.json").read_text())
+        tools = data["mcp"]["tools"]
+        assert set(tools) == set(_7_TOOLS), (
+            f"codex.json mcp.tools mismatch: {sorted(tools)} != {sorted(_7_TOOLS)}"
+        )
+
+    def test_hermes_template_tools_dict_matches_seven(self):
+        data = json.loads((_REPO / "mcp-config" / "hermes.json").read_text())
+        tool_keys = set(data["tools"].keys())
+        assert tool_keys == set(_7_TOOLS), (
+            f"hermes.json tools keys mismatch: {sorted(tool_keys)} != {sorted(_7_TOOLS)}"
+        )
+        assert data["tools"]["build"]["always_allowed"] is False, (
+            "build must be always_allowed=false in hermes.json (mutating operation)"
+        )
+        assert data["tools"]["manage"]["always_allowed"] is False, (
+            "manage must be always_allowed=false in hermes.json (mutating operation)"
+        )
+
+    def test_canonical_env_has_both_provider_vars(self):
+        import sys
+        sys.path.insert(0, str(_REPO / "scripts"))
+        from integrations.canonical import CANONICAL_MCP_ENV
+        assert CANONICAL_MCP_ENV.get("OPENCODE_LLM_PROVIDER") == "ollama", (
+            f"CANONICAL_MCP_ENV must set OPENCODE_LLM_PROVIDER=ollama; "
+            f"got {CANONICAL_MCP_ENV.get('OPENCODE_LLM_PROVIDER')!r}"
+        )
+        assert CANONICAL_MCP_ENV.get("OPENCODE_QUERY_LLM_PROVIDER") == "ollama", (
+            f"CANONICAL_MCP_ENV must set OPENCODE_QUERY_LLM_PROVIDER=ollama; "
+            f"got {CANONICAL_MCP_ENV.get('OPENCODE_QUERY_LLM_PROVIDER')!r}"
+        )
