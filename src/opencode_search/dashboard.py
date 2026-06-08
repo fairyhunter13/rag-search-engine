@@ -676,13 +676,20 @@ def _register_graph_routes(mcp: FastMCP) -> None:
 
     @mcp.custom_route("/api/graph_diff", methods=["GET"], include_in_schema=False)
     async def api_graph_diff(request: Request) -> JSONResponse:
-        """What changed in the graph since a given ISO timestamp."""
+        """What changed in the graph since a given ISO timestamp or hours window."""
         from opencode_search.handlers._graph import handle_graph_diff
         project = request.query_params.get("project", "")
         since = request.query_params.get("since", "")
+        since_hours_str = request.query_params.get("since_hours", "")
         if not project:
             return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_graph_diff(project_path=project, since=since)
+        since_hours = None
+        if since_hours_str:
+            try:
+                since_hours = int(since_hours_str)
+            except (ValueError, TypeError):
+                return JSONResponse({"error": "since_hours must be an integer"}, status_code=400)
+        result = await handle_graph_diff(project_path=project, since=since, since_hours=since_hours)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/callflow_html", methods=["GET"], include_in_schema=False)

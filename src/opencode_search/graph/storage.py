@@ -987,14 +987,16 @@ class GraphStorage:
 
         return questions[:top_n]
 
-    def graph_diff(self, since_iso: str) -> dict:
+    def graph_diff(self, since_iso: str = "", since_hours: int | None = None) -> dict:
         """Return what changed in the graph since a given ISO timestamp.
 
         Uses the updated_at column on nodes to find additions and modifications
         since `since_iso`. Useful for "what changed in my codebase?" queries.
 
         Args:
-            since_iso: ISO 8601 timestamp string (e.g. "2026-06-01T00:00:00")
+            since_iso: ISO 8601 timestamp string (e.g. "2026-06-01T00:00:00").
+                       If empty, `since_hours` is used. Defaults to 24h when both absent.
+            since_hours: Look back this many hours from now (overridden by since_iso).
 
         Returns:
             {
@@ -1005,6 +1007,11 @@ class GraphStorage:
               "since": since_iso,
             }
         """
+        if not since_iso:
+            from datetime import UTC, datetime, timedelta
+            hours = since_hours if since_hours is not None else 24
+            since_iso = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+
         db = self._db()
         new_nodes = db.execute(
             """

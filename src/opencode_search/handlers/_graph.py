@@ -926,9 +926,10 @@ async def handle_suggest_questions(
 
 async def handle_graph_diff(
     project_path: str,
-    since: str,
+    since: str = "",
+    since_hours: int | None = None,
 ) -> dict[str, Any]:
-    """Return what changed in the graph since a given ISO timestamp."""
+    """Return what changed in the graph since a given ISO timestamp or hours window."""
     import asyncio
 
     def _run() -> dict[str, Any]:
@@ -936,7 +937,7 @@ async def handle_graph_diff(
         if gs is None:
             return {"error": "project not indexed or graph not built"}
         try:
-            return gs.graph_diff(since_iso=since)
+            return gs.graph_diff(since_iso=since, since_hours=since_hours)
         finally:
             gs.close()
 
