@@ -157,14 +157,16 @@ class TestMCPBridgeProviderConfig:
         assert config.exists(), f"Codex config not found at {config}"
         text = config.read_text()
         assert 'OPENCODE_LLM_PROVIDER = "ollama"' in text or "OPENCODE_LLM_PROVIDER='ollama'" in text, (
-            "Codex MCP bridge must have OPENCODE_LLM_PROVIDER=ollama in [mcp_servers.opencode-search.env]"
+            "Codex MCP bridge must have OPENCODE_LLM_PROVIDER=ollama in [mcp_servers.opencode-search.env]. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
         )
 
     def test_codex_config_bridge_forces_ollama_for_queries(self):
         config = _HOME / ".codex" / "config.toml"
         text = config.read_text()
         assert 'OPENCODE_QUERY_LLM_PROVIDER = "ollama"' in text or "OPENCODE_QUERY_LLM_PROVIDER='ollama'" in text, (
-            "Codex MCP bridge must have OPENCODE_QUERY_LLM_PROVIDER=ollama"
+            "Codex MCP bridge must have OPENCODE_QUERY_LLM_PROVIDER=ollama. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
         )
 
     def test_hermes_config_bridge_forces_ollama_for_kb(self):
@@ -173,7 +175,8 @@ class TestMCPBridgeProviderConfig:
             pytest.skip("Hermes not installed")
         text = config.read_text()
         assert "OPENCODE_LLM_PROVIDER: ollama" in text, (
-            "Hermes MCP bridge must have OPENCODE_LLM_PROVIDER: ollama in env section"
+            "Hermes MCP bridge must have OPENCODE_LLM_PROVIDER: ollama in env section. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
         )
 
     def test_hermes_config_bridge_forces_ollama_for_queries(self):
@@ -182,7 +185,8 @@ class TestMCPBridgeProviderConfig:
             pytest.skip("Hermes not installed")
         text = config.read_text()
         assert "OPENCODE_QUERY_LLM_PROVIDER: ollama" in text, (
-            "Hermes MCP bridge must have OPENCODE_QUERY_LLM_PROVIDER: ollama"
+            "Hermes MCP bridge must have OPENCODE_QUERY_LLM_PROVIDER: ollama. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
         )
 
 
@@ -280,7 +284,8 @@ class TestOpencodeBridgeConfig:
         env = data.get("mcp", {}).get("opencode-search", {}).get("env", {})
         assert env.get("OPENCODE_LLM_PROVIDER") == "ollama", (
             "opencode MCP bridge must set OPENCODE_LLM_PROVIDER=ollama to prevent "
-            f"circular API calls; got env={env}"
+            f"circular API calls; got env={env}. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
         )
 
     def test_opencode_query_provider_is_ollama(self):
@@ -288,7 +293,8 @@ class TestOpencodeBridgeConfig:
         env = data.get("mcp", {}).get("opencode-search", {}).get("env", {})
         assert env.get("OPENCODE_QUERY_LLM_PROVIDER") == "ollama", (
             "opencode MCP bridge must set OPENCODE_QUERY_LLM_PROVIDER=ollama; "
-            f"got env={env}"
+            f"got env={env}. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
         )
 
 
@@ -313,7 +319,10 @@ class TestConfigureIntegrationsScript:
         )
         data = json.loads(result.stdout)
         bad = [r for r in data if r["status"] not in ("already_ok", "skipped")]
-        assert not bad, f"Integrations not fully configured: {bad}"
+        assert not bad, (
+            f"Integrations not fully configured: {bad}. "
+            "Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
+        )
 
     def test_repair_opencode_missing_env(self, tmp_path):
         """Script must inject ollama env vars into opencode.jsonc when they're absent."""
