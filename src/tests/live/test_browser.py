@@ -606,7 +606,7 @@ class TestAdminView:
             "document.getElementById('view-admin')?.classList?.contains('active')",
             timeout=10_000,
         )
-        btn = page.locator(f"button:has-text('{btn_text}')").first
+        btn = page.locator("#view-admin").locator(f"button:has-text('{btn_text}')").first
         if not btn.count():
             pytest.skip(f"Button '{btn_text}' not found in Admin view")
         btn.click()
@@ -1687,7 +1687,7 @@ class TestDashboardCoverage:
         captured_urls: list[str] = []
         page.on("request", lambda req: captured_urls.append(req.url)
                 if "build_hierarchy" in req.url else None)
-        wiki_btn = page.locator("button:has-text('Wiki')").first
+        wiki_btn = page.locator("#view-admin").locator("button:has-text('Wiki')").first
         assert wiki_btn.count() > 0, "Wiki op-button not found"
         wiki_btn.click()
         page.wait_for_timeout(2_000)
