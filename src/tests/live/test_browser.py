@@ -1866,3 +1866,427 @@ class TestDashboardCoverage:
             )
         finally:
             page.unroute("**/api/kb_health**")
+
+
+# ---------------------------------------------------------------------------
+# Phase 73: Graph view (TestGraphView)
+# ---------------------------------------------------------------------------
+
+_GRAPH_STUB = {
+    "nodes": [
+        {"id": "n1", "label": "main.py", "attributes": {"kind": "file"}},
+        {"id": "n2", "label": "funcA", "attributes": {"kind": "symbol"}},
+        {"id": "n3", "label": "funcB", "attributes": {"kind": "symbol"}},
+    ],
+    "edges": [
+        {"source": "n1", "target": "n2"},
+        {"source": "n1", "target": "n3"},
+    ],
+}
+
+
+def _stub_graph(page, data=None) -> None:
+    import json as _json
+    body = _json.dumps(data or _GRAPH_STUB)
+    page.route(
+        "**/api/graph_export**",
+        lambda r: r.fulfill(status=200, content_type="application/json", body=body),
+    )
+
+
+def _load_graph_view(page) -> None:
+    _goto_with_retry(page, DASHBOARD_URL)
+    page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+    page.wait_for_function(
+        "() => { const s = document.getElementById('project-sel'); "
+        "return s && s.options.length > 0 && s.value !== ''; }",
+        timeout=45_000,
+    )
+    page.evaluate("switchView('graph')")
+    # Wait for loadGraph() to complete (window.__graph set, or error shown)
+    page.wait_for_function(
+        "() => window.__graph != null || document.getElementById('graph-empty')?.style.display === 'flex'",
+        timeout=15_000,
+    )
+
+
+class TestGraphView:
+    """Phase 73: Graph view powered by Sigma.js."""
+
+    def test_graph_view_renders_canvas_with_nodes(self, page, live_project):
+        """Stub /api/graph_export; graph view must set window.__graph with correct node count."""
+        _stub_graph(page, _GRAPH_STUB)
+        try:
+            _load_graph_view(page)
+            order = page.evaluate("() => window.__graph?.sigma?.getGraph().order ?? -1")
+            assert order == len(_GRAPH_STUB["nodes"]), (
+                f"Expected {len(_GRAPH_STUB['nodes'])} nodes in graph, got {order}"
+            )
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_view_shows_node_count_hint(self, page, live_project):
+        """#graph-node-count hint must display node/edge counts after load."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            hint = (page.locator("#graph-node-count").text_content(timeout=5_000) or "").strip()
+            assert "nodes" in hint, f"#graph-node-count should mention 'nodes'; got: {hint!r}"
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_view_handles_empty_export_gracefully(self, page, live_project):
+        """Empty node list must not crash — #graph-canvas should exist."""
+        _stub_graph(page, {"nodes": [], "edges": []})
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => { const s = document.getElementById('project-sel'); "
+                "return s && s.options.length > 0 && s.value !== ''; }",
+                timeout=45_000,
+            )
+            page.evaluate("switchView('graph')")
+            page.wait_for_timeout(3_000)
+            # Canvas div must exist; JS must not have thrown a fatal uncaught error
+            assert page.locator("#graph-canvas").count() == 1, "#graph-canvas div must be present"
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_search_affects_node_colors(self, page, live_project):
+        """Typing into #graph-search must call searchGraphNode without error."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            # Wait for graph to load
+            page.wait_for_function("() => window.__graph != null", timeout=10_000)
+            page.fill("#graph-search", "main")
+            page.wait_for_timeout(500)
+            # Verify no JS error: node attribute access works
+            color = page.evaluate(
+                "() => window.__graph?.graph?.getNodeAttribute('n1', 'color')"
+            )
+            assert color is not None, "Node color should be set after search"
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_node_click_populates_detail_panel(self, page, live_project):
+        """Clicking a node via page.evaluate must populate #graph-detail."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            page.wait_for_function("() => window.__graph != null", timeout=10_000)
+            page.evaluate("_showNodeDetail('n1')")
+            page.wait_for_timeout(300)
+            detail = (page.locator("#graph-detail").inner_html(timeout=5_000) or "")
+            assert "main.py" in detail, (
+                f"#graph-detail should contain node label 'main.py'; got: {detail[:200]}"
+            )
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_filter_kind_file_only(self, page, live_project):
+        """Applying file filter via page.evaluate must hide non-file nodes."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            page.wait_for_function("() => window.__graph != null", timeout=10_000)
+            page.evaluate("applyGraphFilter('file')")
+            page.wait_for_timeout(300)
+            # symbol nodes should be hidden
+            hidden_n2 = page.evaluate(
+                "() => window.__graph?.graph?.getNodeAttribute('n2', 'hidden')"
+            )
+            assert hidden_n2 is True, f"Symbol node n2 should be hidden after file filter; got {hidden_n2}"
+        finally:
+            page.unroute("**/api/graph_export**")
+
+
+# ---------------------------------------------------------------------------
+# Phase 73: Wiki view (TestWikiView)
+# ---------------------------------------------------------------------------
+
+_WIKI_PAGES = ["README", "Architecture", "API"]
+_WIKI_PAGE_CONTENT = """# Architecture
+
+This project uses a **layered** approach:
+
+1. Indexing layer
+2. Graph layer
+3. Query layer
+
+See also [README](/wiki/README).
+
+| Layer | Purpose |
+|-------|---------|
+| Index | file vectors |
+| Graph | community detection |
+"""
+
+
+def _stub_wiki(page) -> None:
+    import json as _json
+
+    def _handle_wiki(r):
+        url = r.request.url
+        if "wiki_lint" in url:
+            r.fulfill(
+                status=200,
+                content_type="application/json",
+                body=_json.dumps({"warnings": ["stale: OldPage"], "warning_count": 1}),
+            )
+        elif "wiki/page" in url or "page?" in url:
+            name = url.split("name=")[-1].split("&")[0] if "name=" in url else "Page"
+            r.fulfill(
+                status=200,
+                content_type="application/json",
+                body=_json.dumps({"name": name, "content": _WIKI_PAGE_CONTENT}),
+            )
+        else:
+            r.fulfill(
+                status=200,
+                content_type="application/json",
+                body=_json.dumps({"pages": _WIKI_PAGES, "total": len(_WIKI_PAGES)}),
+            )
+
+    page.route("**/api/wiki**", _handle_wiki)
+
+
+def _load_wiki_view(page) -> None:
+    _goto_with_retry(page, DASHBOARD_URL)
+    page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+    page.wait_for_function(
+        "() => { const s = document.getElementById('project-sel'); "
+        "return s && s.options.length > 0 && s.value !== ''; }",
+        timeout=45_000,
+    )
+    page.evaluate("switchView('wiki')")
+    page.wait_for_function(
+        "() => document.querySelectorAll('.wiki-page-link').length > 0 || "
+        "document.getElementById('wiki-pages')?.textContent?.includes('No wiki')",
+        timeout=10_000,
+    )
+
+
+class TestWikiView:
+    """Phase 73: Wiki view — two-pane page browser."""
+
+    def test_wiki_view_shows_page_list(self, page, live_project):
+        """Stub /api/wiki; wiki view must render .wiki-page-link buttons for each page."""
+        _stub_wiki(page)
+        try:
+            _load_wiki_view(page)
+            count = page.locator(".wiki-page-link").count()
+            assert count == len(_WIKI_PAGES), (
+                f"Expected {len(_WIKI_PAGES)} wiki-page-link buttons; got {count}"
+            )
+        finally:
+            page.unroute("**/api/wiki**")
+
+    def test_wiki_open_page_renders_markdown(self, page, live_project):
+        """Opening a wiki page must fetch content and render it as HTML in #wiki-content."""
+        _stub_wiki(page)
+        try:
+            _load_wiki_view(page)
+            # Use evaluate (awaits the Promise) so the fetch+render completes before we check
+            page.evaluate("openWikiPage(_wikiPages[0])")
+            page.wait_for_function(
+                "document.getElementById('wiki-content')?.querySelector('h1, h2, h3') != null",
+                timeout=10_000,
+            )
+            html = page.locator("#wiki-content").inner_html(timeout=5_000)
+            assert "<h1>" in html, f"#wiki-content must render markdown headings; got: {html[:300]}"
+        finally:
+            page.unroute("**/api/wiki**")
+
+    def test_wiki_search_filters_page_list(self, page, live_project):
+        """Typing in #wiki-search must filter the page list."""
+        _stub_wiki(page)
+        try:
+            _load_wiki_view(page)
+            page.fill("#wiki-search", "README")
+            page.wait_for_timeout(300)
+            count = page.locator(".wiki-page-link").count()
+            assert count == 1, f"Search for 'README' should show 1 result; got {count}"
+        finally:
+            page.unroute("**/api/wiki**")
+
+    def test_wiki_lint_panel_shows_warnings_count(self, page, live_project):
+        """Stub /api/wiki_lint with 1 warning; lint panel must become visible."""
+        _stub_wiki(page)
+        try:
+            _load_wiki_view(page)
+            page.wait_for_function(
+                "document.getElementById('wiki-lint-panel')?.style.display !== 'none'",
+                timeout=8_000,
+            )
+            count_text = (page.locator("#wiki-lint-count").text_content(timeout=5_000) or "").strip()
+            assert count_text != "0", f"#wiki-lint-count should show >0; got: {count_text!r}"
+        finally:
+            page.unroute("**/api/wiki**")
+
+    def test_mdsafe_renders_link_with_safe_url(self, page, live_project):
+        """mdSafe must render [text](https://…) as <a> with target=_blank."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => document.getElementById('project-sel')?.options?.length > 0",
+            timeout=30_000,
+        )
+        page.evaluate("switchView('chat')")
+        page.evaluate("appendMsg('ai', '[opencode](https://example.com)')")
+        page.wait_for_timeout(300)
+        html = page.locator(".msg.ai .msg-bubble").last.inner_html(timeout=5_000)
+        assert 'href="https://example.com"' in html, (
+            f"mdSafe must render https link; got: {html[:300]}"
+        )
+        assert 'target="_blank"' in html, "Link must have target=_blank"
+
+    def test_mdsafe_strips_javascript_url(self, page, live_project):
+        """mdSafe must NOT render javascript: URLs as <a> tags (XSS guard)."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => document.getElementById('project-sel')?.options?.length > 0",
+            timeout=30_000,
+        )
+        page.evaluate("switchView('chat')")
+        page.evaluate("appendMsg('ai', '[bad](javascript:alert(1))')")
+        page.wait_for_timeout(300)
+        html = page.locator(".msg.ai .msg-bubble").last.inner_html(timeout=5_000)
+        assert 'href="javascript:' not in html, (
+            f"mdSafe must not render javascript: as href (XSS guard); got: {html[:300]}"
+        )
+
+    def test_mdsafe_renders_ordered_list(self, page, live_project):
+        """mdSafe must convert '1. a\\n2. b\\n3. c' into <ol> with 3 <li>."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => document.getElementById('project-sel')?.options?.length > 0",
+            timeout=30_000,
+        )
+        page.evaluate("switchView('chat')")
+        page.evaluate("appendMsg('ai', '1. alpha\\n2. beta\\n3. gamma')")
+        page.wait_for_timeout(300)
+        html = page.locator(".msg.ai .msg-bubble").last.inner_html(timeout=5_000)
+        assert "<ol>" in html, f"mdSafe must render ordered list <ol>; got: {html[:300]}"
+        li_count = html.count("<li>")
+        assert li_count == 3, f"Ordered list must have 3 <li>; got {li_count}: {html[:300]}"
+
+    def test_mdsafe_renders_table(self, page, live_project):
+        """mdSafe must convert pipe-table into <table> with <thead> and <tbody>."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => document.getElementById('project-sel')?.options?.length > 0",
+            timeout=30_000,
+        )
+        page.evaluate("switchView('chat')")
+        page.evaluate("appendMsg('ai', '| Col A | Col B |\\n|-------|-------|\\n| v1 | v2 |')")
+        page.wait_for_timeout(300)
+        html = page.locator(".msg.ai .msg-bubble").last.inner_html(timeout=5_000)
+        assert "<table>" in html, f"mdSafe must render <table>; got: {html[:300]}"
+        assert "<thead>" in html, f"Table must have <thead>; got: {html[:300]}"
+        assert "<th>" in html, f"Table must have <th>; got: {html[:300]}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 73: Admin SSE chips + dead endpoint removal (TestAdminSSE)
+# ---------------------------------------------------------------------------
+
+class TestAdminSSE:
+    """Phase 73: Admin SSE job chips, auto-pipeline panel, dead endpoints removed."""
+
+    def test_admin_job_chip_appears_on_sse_running_event(self, page, live_project):
+        """Stubbed SSE stream with a job event must produce an .admin-chip in Admin view."""
+        import json as _json
+        sse_body = (
+            "data: "
+            + _json.dumps({
+                "type": "job",
+                "job_id": "test-chip-1",
+                "action": "vacuum",
+                "status": "running",
+                "project": "/tmp/test",
+                "error": None,
+            })
+            + "\n\n"
+            + "data: "
+            + _json.dumps({"type": "metrics", "requests": 0, "errors": 0, "uptime_s": 10})
+            + "\n\n"
+        )
+        page.route(
+            "**/api/events/stream**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+                body=sse_body,
+            ),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => document.getElementById('project-sel')?.options?.length > 0",
+                timeout=45_000,
+            )
+            page.evaluate("switchView('admin')")
+            page.wait_for_function(
+                "() => document.getElementById('admin-job-chips')?.children?.length > 0",
+                timeout=8_000,
+            )
+            chip = page.locator("#chip-test-chip-1")
+            assert chip.count() == 1, "Job chip #chip-test-chip-1 must appear in Admin view"
+            class_attr = chip.get_attribute("class") or ""
+            assert "running" in class_attr, f"Chip should have 'running' class; got: {class_attr}"
+        finally:
+            page.unroute("**/api/events/stream**")
+
+    def test_admin_auto_pipeline_panel_renders_entries(self, page, live_project):
+        """If /api/auto_pipeline_status has events, #admin-autopipeline-log must show .ap-entry elements."""
+        import json as _json
+        pipeline_body = _json.dumps({
+            "enabled": True,
+            "events": [
+                {"project": "/home/user/myproject", "scheduled_at": "2026-06-08T10:00:00", "status": "ok"},
+                {"project": "/home/user/otherproject", "scheduled_at": "2026-06-08T11:00:00", "status": "error"},
+            ],
+        })
+        page.route(
+            "**/api/auto_pipeline_status**",
+            lambda r: r.fulfill(status=200, content_type="application/json", body=pipeline_body),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => document.getElementById('project-sel')?.options?.length > 0",
+                timeout=45_000,
+            )
+            page.evaluate("switchView('admin')")
+            page.wait_for_function(
+                "() => document.querySelectorAll('.ap-entry').length > 0 || "
+                "document.getElementById('admin-autopipeline-log')?.textContent?.includes('No auto-pipeline')",
+                timeout=8_000,
+            )
+            count = page.locator(".ap-entry").count()
+            assert count > 0, (
+                "#admin-autopipeline-log must render .ap-entry elements from stubbed events"
+            )
+        finally:
+            page.unroute("**/api/auto_pipeline_status**")
+
+    def test_dead_prerelease_endpoints_removed(self, live_project):
+        """Deleted endpoints must return 404, not 503 or 200."""
+        for path in ["/api/prerelease_status", "/api/qa_status", "/api/run_prerelease",
+                     "/api/verify_status", "/api/auto_fix_trigger", "/api/run_qa"]:
+            method = "POST" if path.startswith("/api/run") or path == "/api/auto_fix_trigger" else "GET"
+            if method == "GET":
+                r = httpx.get(f"{DAEMON_URL}{path}", timeout=5)
+            else:
+                r = httpx.post(f"{DAEMON_URL}{path}", json={}, timeout=5)
+            assert r.status_code == 404, (
+                f"Dead endpoint {path} must return 404 after deletion; got {r.status_code}"
+            )

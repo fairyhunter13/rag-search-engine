@@ -11,7 +11,7 @@ Routes are split into per-domain sub-registrars for maintainability:
   _register_graph_routes    — /api/graph, /api/graph_export, service_mesh, trace, impact, PR
   _register_chat_routes     — /api/chat, /api/chat_stream, /api/debug
   _register_kb_routes       — /api/kb_health, /api/dedup, /api/vacuum, /api/git_hooks, /api/reload
-  _register_ops_routes      — metrics, pipeline, prerelease, verify, QA, SSE, alerts, jobs
+  _register_ops_routes      — metrics, pipeline, SSE, alerts, jobs
 
 register_dashboard_routes(mcp) is the public entry point — it calls all sub-registrars.
 """
@@ -159,12 +159,6 @@ from opencode_search._dashboard_html import _DASHBOARD_HTML  # noqa: E402
 # Module-level helpers (hoisted from the former mega-function for clarity)
 # ---------------------------------------------------------------------------
 
-# Background task stores — module-level so trigger + poll routes in the same
-# sub-registrar share state across requests (same semantics as before, when
-# they were function-local dicts created once at registration time).
-_PRERELEASE_TASKS: dict = {}
-_AUTOFIX_TASKS: dict = {}
-_QA_TASKS: dict = {}
 
 
 def _spawn_daemon_restart_thread(pid: int) -> None:
@@ -1030,7 +1024,7 @@ def _register_kb_routes(mcp: FastMCP) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sub-registrar: ops (metrics, pipeline, prerelease, QA, SSE, alerts, jobs)
+# Sub-registrar: ops (metrics, pipeline, SSE, alerts, jobs)
 # ---------------------------------------------------------------------------
 
 def _register_ops_routes(mcp: FastMCP) -> None:
@@ -1101,204 +1095,7 @@ def _register_ops_routes(mcp: FastMCP) -> None:
 
         return JSONResponse(result)
 
-    # ── Pre-release status & trigger ─────────────────────────────────────
-
-    @mcp.custom_route("/api/prerelease_status", methods=["GET"], include_in_schema=False)
-    async def api_prerelease_status(_request: Request) -> JSONResponse:
-        """Return last pre-release report JSON, or 404 if none exists."""
-        import json as _json
-        from pathlib import Path as _Path
-        # Look for report adjacent to scripts dir
-        candidates = [
-            _Path(__file__).parent.parent.parent / ".prerelease_report.json",
-            _Path(".prerelease_report.json").resolve(),
-        ]
-        for report_path in candidates:
-            if report_path.exists():
-                try:
-                    data = _json.loads(report_path.read_text())
-                    return JSONResponse(data)
-                except Exception as exc:
-                    return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
-        return JSONResponse({"error": "No pre-release report found"}, status_code=404)
-
-    @mcp.custom_route("/api/run_prerelease", methods=["POST"], include_in_schema=False)
-    async def api_run_prerelease(request: Request) -> JSONResponse:
-        """Spawn prerelease.py as a background subprocess. Returns task_id."""
-        import asyncio as _aio
-        import sys as _sys
-        import uuid as _uuid
-        from pathlib import Path as _Path
-
-        body = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        task_id = str(_uuid.uuid4())[:8]
-
-        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
-        prerelease_script = scripts_dir / "prerelease.py"
-        if not prerelease_script.exists():
-            return JSONResponse({"error": "prerelease.py not found"}, status_code=503)
-
-        cmd = [_sys.executable, str(prerelease_script), "--fast", "--json"]
-        if project:
-            cmd += ["--project", project]
-
-        async def _run_bg():
-            try:
-                proc = await _aio.create_subprocess_exec(
-                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
-                )
-                _PRERELEASE_TASKS[task_id] = {"status": "running", "pid": proc.pid}
-                await proc.wait()
-                _PRERELEASE_TASKS[task_id] = {"status": "done", "returncode": proc.returncode}
-            except Exception as exc:
-                _PRERELEASE_TASKS[task_id] = {"status": "error", "error": str(exc)}
-
-        _PRERELEASE_TASKS[f"_task_{task_id}"] = _aio.create_task(_run_bg())
-        _PRERELEASE_TASKS[task_id] = {"status": "running"}
-        return JSONResponse({"task_id": task_id, "status": "started"})
-
-    @mcp.custom_route("/api/prerelease_poll", methods=["GET"], include_in_schema=False)
-    async def api_prerelease_poll(request: Request) -> JSONResponse:
-        """Poll status of a running pre-release task."""
-        task_id = request.query_params.get("id", "")
-        state = _PRERELEASE_TASKS.get(task_id, {"status": "not_found"})
-        return JSONResponse(state)
-
-    @mcp.custom_route("/api/verify_status", methods=["GET"], include_in_schema=False)
-    async def api_verify_status(_request: Request) -> JSONResponse:
-        """Return last verification run results + history from .opencode_verify_state.json."""
-        import json as _json
-        from pathlib import Path as _Path
-        state_path = _Path(__file__).parent.parent.parent / ".opencode_verify_state.json"
-        if not state_path.exists():
-            return JSONResponse({"last_run": None, "history": [], "verdict": "unknown"})
-        try:
-            state = _json.loads(state_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=500)
-        runs = state.get("run_history", [])
-        last = runs[-1] if runs else None
-        history = [
-            {"ts": r.get("timestamp"), "passed": r.get("passed", 0), "failed": r.get("failed", 0)}
-            for r in runs[-30:]
-        ]
-        verdict = "unknown"
-        if last:
-            p0 = last.get("p0_failures", 0)
-            failed = last.get("failed", 0)
-            verdict = "NO-GO" if p0 > 0 else ("WARNINGS" if failed > 0 else "GO")
-        # Per-category breakdown is in last_results, not run_history
-        categories = state.get("last_results", {})
-        failures = state.get("known_failures", []) or state.get("failures", [])
-        return JSONResponse({
-            "last_run": last,
-            "history": history,
-            "verdict": verdict,
-            "failures": failures,
-            "categories": categories,
-        })
-
-    @mcp.custom_route("/api/auto_fix_trigger", methods=["POST"], include_in_schema=False)
-    async def api_auto_fix_trigger(request: Request) -> JSONResponse:
-        """Trigger selfheal.py --apply to auto-fix known issues."""
-        import asyncio as _aio
-        import sys as _sys
-        import uuid as _uuid
-        from pathlib import Path as _Path
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        task_id = str(_uuid.uuid4())[:8]
-        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
-        selfheal_script = scripts_dir / "selfheal.py"
-        if not selfheal_script.exists():
-            return JSONResponse({"error": "selfheal.py not found"}, status_code=503)
-        cmd = [_sys.executable, str(selfheal_script), "--apply"]
-        if project:
-            cmd += ["--project", project]
-
-        async def _run_bg():
-            try:
-                proc = await _aio.create_subprocess_exec(
-                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
-                )
-                stdout, _ = await proc.communicate()
-                _AUTOFIX_TASKS[task_id] = {
-                    "status": "done",
-                    "returncode": proc.returncode,
-                    "output": (stdout or b"").decode(errors="replace")[-4000:],
-                }
-            except Exception as exc:
-                _AUTOFIX_TASKS[task_id] = {"status": "error", "error": str(exc)}
-
-        _AUTOFIX_TASKS[f"_task_{task_id}"] = _aio.create_task(_run_bg())
-        _AUTOFIX_TASKS[task_id] = {"status": "running"}
-        return JSONResponse({"task_id": task_id, "status": "started"})
-
-    # ── QA Gate status & trigger ──────────────────────────────────────────────
-
-    @mcp.custom_route("/api/qa_status", methods=["GET"], include_in_schema=False)
-    async def api_qa_status(_request: Request) -> JSONResponse:
-        import json as _json
-        from pathlib import Path as _Path
-        candidates = [
-            _Path(__file__).parent.parent.parent / ".qa_report.json",
-            _Path(".qa_report.json").resolve(),
-        ]
-        for report_path in candidates:
-            if report_path.exists():
-                try:
-                    data = _json.loads(report_path.read_text())
-                    return JSONResponse(data)
-                except Exception as exc:
-                    return JSONResponse({"error": f"Failed to read report: {exc}"}, status_code=500)
-        return JSONResponse({"error": "No QA report found"}, status_code=404)
-
-    @mcp.custom_route("/api/run_qa", methods=["POST"], include_in_schema=False)
-    async def api_run_qa(request: Request) -> JSONResponse:
-        import asyncio as _aio
-        import sys as _sys
-        import uuid as _uuid
-        from pathlib import Path as _Path
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        task_id = str(_uuid.uuid4())[:8]
-        scripts_dir = _Path(__file__).parent.parent.parent / "scripts"
-        qa_script = scripts_dir / "qa_gate.py"
-        if not qa_script.exists():
-            return JSONResponse({"error": "qa_gate.py not found"}, status_code=503)
-        cmd = [_sys.executable, str(qa_script), "--fix"]
-        if project:
-            cmd += ["--project", project]
-
-        async def _run_bg() -> None:
-            try:
-                proc = await _aio.create_subprocess_exec(
-                    *cmd, stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.STDOUT
-                )
-                _QA_TASKS[task_id] = {"status": "running", "pid": proc.pid}
-                await proc.wait()
-                _QA_TASKS[task_id] = {"status": "done", "returncode": proc.returncode}
-            except Exception as exc:
-                _QA_TASKS[task_id] = {"status": "error", "error": str(exc)}
-
-        _QA_TASKS[f"_bg_{task_id}"] = _aio.create_task(_run_bg())
-        _QA_TASKS[task_id] = {"status": "running"}
-        return JSONResponse({"task_id": task_id, "status": "started"})
-
-    @mcp.custom_route("/api/qa_poll", methods=["GET"], include_in_schema=False)
-    async def api_qa_poll(request: Request) -> JSONResponse:
-        task_id = request.query_params.get("id", "")
-        state = _QA_TASKS.get(task_id, {"status": "not_found"})
-        return JSONResponse(state)
-
-    # ── Phase 3: metrics history, SSE, alerts, system status ─────────────
+    # ── Metrics history, SSE, alerts, system status ──────────────────────
 
     @mcp.custom_route("/api/metrics/history", methods=["GET"], include_in_schema=False)
     async def api_metrics_history(request: Request) -> JSONResponse:
