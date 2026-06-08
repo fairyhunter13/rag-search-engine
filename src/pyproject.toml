@@ -63,12 +63,10 @@ gpu = [
     # GPU matrix ops (L2 normalization)
     "cupy-cuda12x>=13.0.0",
 ]
-prerelease = [
-    # Headless browser for human-simulation UI tests
+browser = [
+    # Headless browser for Playwright UI tests
     "playwright>=1.44",
     "pytest-playwright>=0.5.0",
-    # TOML writer for codex config.toml patching
-    "tomli-w>=1.0",
 ]
 graph-extras = [
     # Entity deduplication: MinHash/LSH blocking + Jaro-Winkler verification

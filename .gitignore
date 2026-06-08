@@ -3,12 +3,12 @@ indexer/target/
 
 # Python
 .venv/
-embedder/__pycache__/
-embedder/build/
-embedder/dist/
-embedder/*.egg-info/
-embedder/.venv/
+__pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
 
 # IDE
 .idea/
@@ -18,4 +18,10 @@ embedder/.venv/
 # OS
 .DS_Store
 Thumbs.db
-embedder/opencode_embedder/_version.py
+
+# Stale feature-run artifacts (prerelease / QA / HPV systems removed in Phase 39)
+.prerelease_report.*
+.qa_report.*
+.opencode_verify_report.*
+.opencode_verify_state.*
+.hpv_proof.*
