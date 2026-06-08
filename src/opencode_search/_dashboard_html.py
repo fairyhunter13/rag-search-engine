@@ -528,7 +528,7 @@ async function loadPulse(){
     const watchers=metD.active_watchers||metD.watchers||0;
     $('kpi-uptime').textContent=uptStr;
     $('ks-uptime').textContent=`active watchers: ${watchers}`;
-    $('tile-uptime').className='tile ok';
+    $('tile-uptime').className='tile '+(uptS!=null&&uptS>=60?'ok':'warn');
 
     const cs=metD.chat_stream||{};
     const csErr=cs.stream_error_count||0;
@@ -553,6 +553,7 @@ async function loadPulse(){
     pushSpark('wiki',wikiCt);
     pushSpark('requests',reqs);
     pushSpark('stream',csTotal);
+    pushSpark('uptime',uptS);
     renderSparks();
 
     // Activity feed from pipeline events
@@ -908,7 +909,7 @@ function cmdKey(e){
   else if(e.key==='ArrowUp'){e.preventDefault();_cmdIdx=Math.max(_cmdIdx-1,0);}
   else if(e.key==='Enter'){
     const hi=$('cmd-results').querySelector('.hi');
-    if(hi){const idx=Array.from(hi.parentNode.children).indexOf(hi);const txt=hi.querySelector('span')?.previousSibling?.textContent?.trim();const found=_CMD_ITEMS.find(i=>i.label===hi.childNodes[0].textContent.trim());if(found){found.action();hideCmdPalette();}}
+    if(hi){const found=_CMD_ITEMS.find(i=>i.label===hi.childNodes[0].textContent.trim());if(found){found.action();hideCmdPalette();}}
     return;
   }
   else if(e.key==='Escape'){hideCmdPalette();return;}
@@ -920,6 +921,7 @@ const _LIGHT={
   '--bg':'#f5f7ff','--surface':'#fff','--surface-2':'#f0f2fa','--surface-3':'#e8ecf8',
   '--border':'rgba(0,0,0,.08)','--border-2':'rgba(0,0,0,.14)',
   '--text':'#1a1f3c','--text-2':'#4a5280','--text-3':'#8891b8',
+  '--purple':'#6a4ddb','--cyan':'#0098b8',
 };
 let _dark=true;
 function toggleTheme(){
