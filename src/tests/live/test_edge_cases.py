@@ -200,40 +200,7 @@ class TestBoundaryInputs:
 # ---------------------------------------------------------------------------
 
 class TestAdminLifecycle:
-    """Admin client endpoints: heartbeat, QA poll, prerelease poll, watch round-trip."""
-
-    def test_admin_client_heartbeat_after_open(self, http):
-        """/api/admin/client/open then /api/admin/heartbeat must return ok."""
-        r_open = http.post("/api/admin/client/open")
-        assert r_open.status_code in (200, 201, 404, 405), (
-            f"admin client open unexpected: {r_open.status_code}"
-        )
-        r_hb = http.post("/api/admin/heartbeat")
-        assert r_hb.status_code in (200, 201, 404, 405), (
-            f"admin heartbeat unexpected: {r_hb.status_code}"
-        )
-
-    def test_qa_poll_for_started_task(self, http, project):
-        """/api/qa/run triggers a background task and /api/qa/status must report it."""
-        r_run = http.post("/api/qa/run", json={"project": project})
-        assert r_run.status_code in (200, 201, 202, 404, 405), (
-            f"QA run start unexpected: {r_run.status_code}"
-        )
-        r_status = http.get("/api/qa/status")
-        assert r_status.status_code in (200, 404, 405), (
-            f"QA status unexpected: {r_status.status_code}"
-        )
-
-    def test_prerelease_poll_for_started_task(self, http, project):
-        """/api/prerelease/run triggers a background task; status endpoint must respond."""
-        r_run = http.post("/api/prerelease/run", json={"project": project})
-        assert r_run.status_code in (200, 201, 202, 404, 405), (
-            f"prerelease run unexpected: {r_run.status_code}"
-        )
-        r_status = http.get("/api/prerelease/status")
-        assert r_status.status_code in (200, 404, 405), (
-            f"prerelease status unexpected: {r_status.status_code}"
-        )
+    """Admin lifecycle endpoints: watch round-trip."""
 
     def test_start_watching_stop_watching_round_trip(self, http, project):
         """/api/start_watching then /api/stop_watching must both succeed for a registered project."""

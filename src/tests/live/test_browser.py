@@ -1,6 +1,6 @@
 """Live browser tests — Playwright drives real Chromium against the live dashboard.
 
-Covers all three views (Pulse / Chat / Admin), all chat intents, streaming SSE,
+Covers all five views (Pulse / Chat / Graph / Wiki / Admin), all chat intents, streaming SSE,
 and admin actions (vacuum, dedup).
 
 Run separately (conflicts with pytest-asyncio mode=auto):
