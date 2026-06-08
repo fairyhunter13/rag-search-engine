@@ -128,8 +128,9 @@ def _pin_ollama_model_resident():
     Reverts to 10m keep-alive at teardown to match the production systemd setting."""
     with contextlib.suppress(Exception):
         httpx.post("http://localhost:11434/api/generate",
-                   json={"model": "qwen3-query:8b", "prompt": "", "keep_alive": -1},
-                   timeout=5.0)
+                   json={"model": "qwen3-query:8b", "prompt": "Hello", "stream": False,
+                         "options": {"num_predict": 1}, "keep_alive": -1},
+                   timeout=30.0)
     yield
     with contextlib.suppress(Exception):
         httpx.post("http://localhost:11434/api/generate",

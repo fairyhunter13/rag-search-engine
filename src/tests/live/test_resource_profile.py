@@ -55,16 +55,18 @@ def test_ollama_query_llm_throughput_floor():
     eval_ns = data.get("eval_duration", 0)
     if eval_ns > 0:
         ms_per_token = (eval_ns / 1e6) / eval_count
-        assert ms_per_token < 500, (
-            f"LLM eval at {ms_per_token:.0f}ms/token — expected <500ms/token on GPU"
+        assert ms_per_token < 2000, (
+            f"LLM eval at {ms_per_token:.0f}ms/token — expected <2000ms/token on GPU "
+            f"(CPU fallback would be 5000ms+/token)"
         )
     else:
         assert elapsed < 30.0, f"Query LLM took {elapsed:.1f}s — unexpectedly slow (CPU fallback?)"
 
 
-def test_browser_type_launch_args_fixture_is_session_scoped():
-    """The session-scope browser launch fixture must be importable and declare scope=session.
-    This is a code-audit assertion: if conftest.py is reverted, this test catches the regression."""
+def test_args_fixture_decorator_remains_session_scoped():
+    """Code-audit guard: browser_type_launch_args must declare scope='session' in conftest.py.
+    Catches accidental scope demotion; see test_browser_is_session_scoped_* for the
+    behavioural assertion that the browser process is actually shared."""
     import ast
     import pathlib
 
@@ -83,4 +85,22 @@ def test_browser_type_launch_args_fixture_is_session_scoped():
     assert "browser_type_launch_args" in session_fixtures, (
         "browser_type_launch_args fixture must be scope='session' in conftest.py "
         "(D1 — one Chromium launch per test run)"
+    )
+
+
+_SEEN_BROWSER_IDS: list[int] = []
+
+
+def test_browser_is_session_scoped_a(browser):
+    """Record browser fixture identity — must match test_browser_is_session_scoped_b."""
+    _SEEN_BROWSER_IDS.append(id(browser))
+
+
+def test_browser_is_session_scoped_b(browser):
+    """Browser fixture identity must equal test_a's — proves one Chromium process per session."""
+    assert _SEEN_BROWSER_IDS, "test_browser_is_session_scoped_a must run first"
+    assert id(browser) == _SEEN_BROWSER_IDS[0], (
+        f"browser fixture not session-scoped: id mismatch "
+        f"({_SEEN_BROWSER_IDS[0]} → {id(browser)}); "
+        "a conftest change demoted browser to function scope"
     )

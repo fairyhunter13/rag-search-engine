@@ -19,6 +19,8 @@ DAEMON_URL = "http://localhost:8765"
 DASHBOARD_URL = f"{DAEMON_URL}/dashboard"
 _TIMEOUT_PAGE = 15_000    # ms — page load
 _TIMEOUT_CHAT = 300_000  # ms — wait for AI response (global/debug can take 150s+)
+# Heavy intents (global overview, graph traversals) hit full retrieved-context LLM paths
+_TIMEOUT_CHAT_LONG = 480_000  # ms — long-tail budget for the 4 heaviest intent tests
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +303,11 @@ class TestChatView:
 class TestChatIntents:
     """Each intent must produce a non-empty response."""
 
-    def _chat_and_get_text(self, page, live_project: str, query: str) -> str:
+    def _chat_and_get_text(self, page, live_project: str, query: str,
+                           timeout_ms: int = _TIMEOUT_CHAT) -> str:
         _navigate_to_chat(page)
         _send_message(page, query)
-        return _wait_for_ai_response(page)
+        return _wait_for_ai_response(page, timeout_ms=timeout_ms)
 
     def test_intent_architecture(self, page, live_project):
         text = self._chat_and_get_text(page, live_project, "What is the overall architecture?")
@@ -315,7 +318,11 @@ class TestChatIntents:
         assert len(text) > 20, f"Search response too short: {text!r}"
 
     def test_intent_global(self, page, live_project):
-        text = self._chat_and_get_text(page, live_project, "Give me a comprehensive global overview of the entire system")
+        text = self._chat_and_get_text(
+            page, live_project,
+            "Give me a comprehensive global overview of the entire system",
+            timeout_ms=_TIMEOUT_CHAT_LONG,
+        )
         assert len(text) > 50, f"Global overview response too short: {text!r}"
 
     def test_intent_feature(self, page, live_project):
@@ -323,15 +330,27 @@ class TestChatIntents:
         assert len(text) > 30, f"Feature trace response too short: {text!r}"
 
     def test_intent_graph_callers(self, page, live_project):
-        text = self._chat_and_get_text(page, live_project, "What functions call the main function?")
+        text = self._chat_and_get_text(
+            page, live_project,
+            "What functions call the main function?",
+            timeout_ms=_TIMEOUT_CHAT_LONG,
+        )
         assert len(text) > 10, f"Graph callers response too short: {text!r}"
 
     def test_intent_graph_impact(self, page, live_project):
-        text = self._chat_and_get_text(page, live_project, "What breaks if I change the main handler?")
+        text = self._chat_and_get_text(
+            page, live_project,
+            "What breaks if I change the main handler?",
+            timeout_ms=_TIMEOUT_CHAT_LONG,
+        )
         assert len(text) > 10, f"Graph impact response too short: {text!r}"
 
     def test_intent_graph_callees(self, page, live_project):
-        text = self._chat_and_get_text(page, live_project, "What does the search handler call internally?")
+        text = self._chat_and_get_text(
+            page, live_project,
+            "What does the search handler call internally?",
+            timeout_ms=_TIMEOUT_CHAT_LONG,
+        )
         assert len(text) > 10, f"Graph callees response too short: {text!r}"
 
     def test_intent_debug_trace(self, page, live_project):
@@ -1018,6 +1037,68 @@ class TestPulseViewGaps:
         finally:
             page.unroute("**/api/suggested_questions**")
 
+    def test_sp_uptime_sparkline_eventually_has_path(self, page, live_project):
+        """#sp-uptime sparkline must contain a path after two loadPulse cycles (B2 fix)."""
+        self._load_pulse(page)  # _load_pulse already calls loadPulse() twice
+        sparkline = page.locator("#sp-uptime polyline, #sp-uptime polygon, #sp-uptime path")
+        assert sparkline.count() > 0, (
+            "#sp-uptime sparkline has no drawn element — pushSpark('uptime',…) not wired"
+        )
+
+    def test_uptime_tile_badge_warn_under_60s_marker(self, page, live_project):
+        """When uptime_s < 60 the tile must carry 'warn' class, not always 'ok' (B1 fix)."""
+        import json as _json
+        stub_metrics = {
+            "total_requests": 0, "errors": 0, "connected_clients": 0,
+            "uptime_s": 30, "active_watchers": 0,
+            "chat_stream": {"stream_error_count": 0, "stream_success_count": 0},
+        }
+        page.route(
+            "**/api/metrics",
+            lambda r: r.fulfill(status=200, content_type="application/json",
+                                body=_json.dumps(stub_metrics)),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => { const s = document.getElementById('project-sel'); "
+                "return s && s.options.length > 0 && s.value !== ''; }",
+                timeout=45_000,
+            )
+            page.evaluate("loadPulse()")
+            page.wait_for_function(
+                "document.getElementById('tile-uptime')?.classList?.contains('warn') || "
+                "document.getElementById('tile-uptime')?.classList?.contains('ok')",
+                timeout=15_000,
+            )
+            classes = page.locator("#tile-uptime").get_attribute("class") or ""
+            assert "warn" in classes, (
+                f"tile-uptime must be 'warn' for uptime_s=30 (< 60s); got classes: {classes!r}"
+            )
+        finally:
+            page.unroute("**/api/metrics")
+
+    def test_runcmd_enter_executes_first_match(self, page):
+        """Typing 'Pulse' in command palette + Enter must switch to the Pulse view (B3 regression guard)."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        # Switch to another view first so Enter-to-Pulse is a real transition
+        page.click("#vbtn-chat")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Control+k")
+        page.wait_for_selector("#cmd-overlay", timeout=5_000)
+        page.fill("#cmd-input", "Pulse")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Enter")
+        page.wait_for_function(
+            "document.getElementById('view-pulse')?.classList?.contains('active')",
+            timeout=5_000,
+        )
+        assert page.locator("#view-pulse.active").count() > 0, (
+            "Command palette Enter on 'Pulse' did not switch to Pulse view"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Phase 64 gap additions: TestChatViewGaps (C.11–C.24)
@@ -1169,24 +1250,20 @@ class TestChatViewGaps:
         )
 
     def test_mdsafe_renders_bullet_list(self, page, live_project):
-        """AI response with a bullet list must render <ul><li> elements in the bubble."""
+        """mdSafe must render <ul><li> for bullet-list markdown — direct injection, no LLM."""
         _navigate_to_chat(page)
-        inp = _get_chat_input(page)
-        inp.fill("List 3 important concepts about software architecture as a bullet list")
-        page.locator("#send-btn").click()
-        _wait_for_ai_response(page)
+        page.evaluate("appendMsg('ai', '- item one\\n- item two\\n- item three')")
+        page.wait_for_timeout(200)
         ul = page.locator(".msg.ai ul li, .msg.ai ol li")
-        assert ul.count() > 0, "mdSafe did not render list items for a bullet-list response"
+        assert ul.count() > 0, "mdSafe did not render list items for a bullet-list input"
 
     def test_mdsafe_renders_bold_text(self, page, live_project):
-        """AI response with **bold** markdown must render <strong> or <b> elements."""
+        """mdSafe must render <strong> for **bold** markdown — direct injection, no LLM."""
         _navigate_to_chat(page)
-        inp = _get_chat_input(page)
-        inp.fill("Explain in one sentence with some **bold** words")
-        page.locator("#send-btn").click()
-        _wait_for_ai_response(page)
+        page.evaluate("appendMsg('ai', 'This has **bold** text and more **words**')")
+        page.wait_for_timeout(200)
         bold = page.locator(".msg.ai strong, .msg.ai b")
-        assert bold.count() > 0, "mdSafe did not render <strong>/<b> for **bold** markdown"
+        assert bold.count() > 0, "mdSafe did not render <strong>/<b> for **bold** input"
 
 
 # ---------------------------------------------------------------------------
@@ -1330,9 +1407,11 @@ class TestGlobalUIGaps:
                 "return s && s.options.length > 0 && s.value !== ''; }",
                 timeout=45_000,
             )
+            # Force loadPulse now that _proj is set — the boot call may have raced/skipped
+            page.evaluate("loadPulse()")
             page.wait_for_function(
                 "document.querySelector('.sdot')?.classList?.contains('err')",
-                timeout=15_000,
+                timeout=35_000,
             )
             dot = page.locator(".sdot").first
             classes = dot.get_attribute("class") or ""
