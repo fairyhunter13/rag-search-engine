@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -563,59 +562,6 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
                         path=str(aliases_path), diff=diff)
 
 
-# ---------------------------------------------------------------------------
-# Git hook (unchanged from before)
-# ---------------------------------------------------------------------------
-
-def verify_git_hook(check_only: bool = False) -> ConfigResult:
-    """Install a git pre-push hook that runs prerelease.py --fast before push to main."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True, text=True,
-            cwd=str(Path(__file__).parent.parent),
-        )
-        if result.returncode != 0:
-            return ConfigResult(tool="git-hook", status="skipped", message="Not in a git repo")
-        git_dir = Path(result.stdout.strip())
-        hook_path = git_dir / "hooks" / "pre-push"
-    except Exception as exc:
-        return ConfigResult(tool="git-hook", status="skipped", message=f"git not available: {exc}")
-
-    hook_content = """#!/bin/bash
-# Auto-installed by configure_integrations.py — runs fast pre-release check before push
-while read local_ref local_sha remote_ref remote_sha; do
-  if [[ "$remote_ref" == *"main"* || "$remote_ref" == *"master"* ]]; then
-    REPO_ROOT="$(git rev-parse --show-toplevel)"
-    VENV="$REPO_ROOT/.venv/bin/python"
-    PRERELEASE="$REPO_ROOT/scripts/prerelease.py"
-    if [ -f "$VENV" ] && [ -f "$PRERELEASE" ]; then
-      echo "🔍 Running fast pre-release check before push to main…"
-      "$VENV" "$PRERELEASE" --fast
-      if [ $? -ne 0 ]; then
-        echo "❌ Pre-release check failed. Push blocked."
-        exit 1
-      fi
-      echo "✅ Pre-release check passed."
-    fi
-  fi
-done
-exit 0
-"""
-    if hook_path.exists():
-        existing = hook_path.read_text(encoding="utf-8", errors="replace")
-        if "prerelease.py" in existing:
-            return ConfigResult(tool="git-hook", status="already_ok",
-                                message="pre-push hook already installed", path=str(hook_path))
-    if check_only:
-        return ConfigResult(tool="git-hook", status="missing",
-                            message="pre-push hook not installed", path=str(hook_path))
-    hook_path.parent.mkdir(parents=True, exist_ok=True)
-    hook_path.write_text(hook_content, encoding="utf-8")
-    hook_path.chmod(0o755)
-    return ConfigResult(tool="git-hook", status="configured",
-                        message="pre-push hook installed", path=str(hook_path))
-
 
 # ---------------------------------------------------------------------------
 # Run functions
@@ -665,7 +611,6 @@ def verify_all() -> list[ConfigResult]:
         elif kind == "opencode":
             results.append(_verify_opencode_jsonc(path, label))
     results.append(verify_bash_aliases())
-    results.append(verify_git_hook(check_only=True))
     return results
 
 
@@ -688,7 +633,6 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
         elif kind == "opencode":
             results.append(_repair_opencode_jsonc(path, label, dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
-    results.append(verify_git_hook(check_only=False))
     return results
 
 

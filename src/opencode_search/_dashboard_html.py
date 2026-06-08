@@ -1,6 +1,6 @@
 """Self-contained dashboard HTML — imported by dashboard.py.
 
-Datadog DRUIDS design: 3-view top navbar (Pulse / Chat / Admin).
+Datadog DRUIDS design: 5-view top navbar (Pulse / Chat / Graph / Wiki / Admin).
 No sidebar. No accordion. Bento KPI grid + inline SVG sparklines.
 """
 from __future__ import annotations

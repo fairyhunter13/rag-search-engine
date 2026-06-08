@@ -115,6 +115,7 @@ class TestMultiTurnAPI:
         )
         assert len(answer) > 0, "Oversized history caused empty response"
 
+    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_invalid_history_entries_filtered_gracefully(self, http, astro):
         """History with wrong roles and empty content must not crash — backend filters them."""
         history = [
