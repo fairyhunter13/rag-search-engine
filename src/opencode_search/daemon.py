@@ -167,6 +167,20 @@ def _wait_for_port_free(host: str, port: int, *, timeout_s: float = 5.0, poll_s:
     return False
 
 
+def _broadcast_reload_notice() -> None:
+    """Signal all open SSE generators to emit a reload event and exit.
+
+    Called from _spawn_daemon_restart_thread (dashboard.py) before os.kill(SIGTERM)
+    so clients receive a {"type":"reload"} frame within ~100 ms instead of having
+    their TCP connection severed abruptly.  Best-effort: never raises.
+    """
+    try:
+        from opencode_search.daemon_runtime import reload_pending
+        reload_pending.set()
+    except Exception:
+        pass
+
+
 def _find_pid_by_port(host: str, port: int) -> int | None:
     try:
         connections = psutil.net_connections(kind="tcp")

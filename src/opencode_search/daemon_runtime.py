@@ -134,3 +134,7 @@ class _RuntimeState:
 
 
 runtime_state = _RuntimeState()
+
+# Set by _broadcast_reload_notice() before SIGTERM so open SSE generators can
+# emit a {"type":"reload"} frame and close cleanly instead of being severed.
+reload_pending = threading.Event()

@@ -102,3 +102,115 @@ def test_port_release_wait_returns_true_when_free():
     # Port 8766 is not used by the daemon (8765 is)
     result = _wait_for_port_free("127.0.0.1", 8766, timeout_s=2.0)
     assert result is True, "_wait_for_port_free should return True for a free port"
+
+
+@pytest.mark.flaky(reruns=2)
+def test_reload_sends_sse_reload_event_to_open_streams(http):
+    """POST /api/reload must deliver a reload SSE event to open /api/events streams.
+
+    Proves the graceful-reload path: _broadcast_reload_notice() sets reload_pending
+    before SIGTERM so SSE generators emit {"type":"reload"} instead of being severed.
+    """
+    import contextlib
+    import json as _json
+    import threading
+
+    events: list[dict] = []
+    error_holder: list[Exception] = []
+
+    def _stream() -> None:
+        try:
+            import httpx as _httpx
+            with _httpx.stream("GET", f"{DAEMON_URL}/api/events/stream", timeout=30.0) as r:
+                for raw_line in r.iter_lines():
+                    if not raw_line.startswith("data:"):
+                        continue
+                    payload = raw_line[5:].strip()
+                    if not payload:
+                        continue
+                    with contextlib.suppress(_json.JSONDecodeError):
+                        evt = _json.loads(payload)
+                        events.append(evt)
+                        if evt.get("type") == "reload":
+                            return
+        except Exception as exc:
+            error_holder.append(exc)
+
+    t = threading.Thread(target=_stream, daemon=True)
+    t.start()
+    # Wait until we have received at least one metrics event (stream is live)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and not any(e.get("type") == "metrics" for e in events):
+        time.sleep(0.2)
+
+    assert any(e.get("type") == "metrics" for e in events), (
+        "SSE stream did not produce a metrics event within 10s — stream not live"
+    )
+
+    http.post("/api/reload", timeout=5.0)
+    t.join(timeout=6.0)
+
+    reload_events = [e for e in events if e.get("type") == "reload"]
+    assert reload_events, (
+        f"No reload event received in /api/events stream after POST /api/reload. "
+        f"Events received: {events[:5]}"
+    )
+    assert reload_events[0].get("retry_after_ms") == 3000
+
+    assert _wait_healthy(http), f"Daemon did not recover within {_RECOVER_TIMEOUT}s after reload"
+
+
+@pytest.mark.flaky(reruns=2)
+def test_reload_does_not_strand_simulated_external_client(http):
+    """A client streaming /api/events must exit cleanly after reload, not hang.
+
+    Simulates the 2h-hang scenario where a Claude Code session in another project
+    was stuck on an opencode-search MCP call because the daemon was reloaded mid-flight.
+    """
+    import subprocess
+    import sys
+
+    # The subprocess streams /api/events/stream indefinitely.
+    # After a reload, it should exit cleanly within 10s — either because it
+    # received {"type":"reload"} from our graceful-reload path, or because
+    # the connection was closed by the dying daemon.  Either way, not hanging.
+    client_script = (
+        "import httpx, json, sys, contextlib\n"
+        "try:\n"
+        "    with httpx.stream('GET', 'http://localhost:8765/api/events/stream', timeout=30.0) as r:\n"
+        "        for line in r.iter_lines():\n"
+        "            if not line.startswith('data:'):\n"
+        "                continue\n"
+        "            payload = line[5:].strip()\n"
+        "            if not payload:\n"
+        "                continue\n"
+        "            with contextlib.suppress(Exception):\n"
+        "                event = json.loads(payload)\n"
+        "                if event.get('type') == 'reload':\n"
+        "                    sys.exit(0)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "sys.exit(0)\n"
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", client_script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    # Wait for the subprocess to connect and receive at least one metrics event (~2s)
+    time.sleep(2.5)
+
+    http.post("/api/reload", timeout=5.0)
+
+    try:
+        proc.wait(timeout=10.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        pytest.fail(
+            "External client subprocess did not exit within 10s after reload — "
+            "simulates the 2h-hang bug where SIGTERM severed TCP without a close frame"
+        )
+
+    assert _wait_healthy(http), f"Daemon did not recover within {_RECOVER_TIMEOUT}s after reload"

@@ -191,6 +191,10 @@ def _spawn_daemon_restart_thread(pid: int) -> None:
             close_fds=True,
             start_new_session=True,
         )
+        # Notify open SSE streams before killing: clients receive a reload frame
+        # instead of having their TCP connection severed (fixes the 2h-hang case).
+        from opencode_search.daemon import _broadcast_reload_notice
+        _broadcast_reload_notice()
         _t.sleep(0.2)
         os.kill(pid, signal.SIGTERM)
 
@@ -813,11 +817,16 @@ def _register_chat_routes(mcp: FastMCP) -> None:
         from opencode_search.metrics import record_stream_cancelled
 
         async def _gen():
+            from opencode_search.daemon_runtime import reload_pending
+            _RELOAD_NOTICE = json.dumps({"type": "reload", "retry_after_ms": 3000})
             async for chunk in handle_chat_auto_stream(
                 query=query,
                 project_path=project,
                 conversation_history=history,
             ):
+                if reload_pending.is_set():
+                    yield f"data: {_RELOAD_NOTICE}\n\n"
+                    return
                 if await request.is_disconnected():
                     record_stream_cancelled()
                     return
@@ -1366,12 +1375,17 @@ def _register_ops_routes(mcp: FastMCP) -> None:
             max_events = 0
 
         async def _generate():
+            from opencode_search.daemon_runtime import reload_pending
             from opencode_search.jobs import list_jobs
+            _RELOAD_NOTICE = json.dumps({"type": "reload", "retry_after_ms": 3000})
             count = 0
             _last_job_states: dict[str, str] = {}
             try:
                 interval = 5
                 while True:
+                    if reload_pending.is_set():
+                        yield f"data: {_RELOAD_NOTICE}\n\n"
+                        return
                     if max_events and count >= max_events:
                         return
                     if await request.is_disconnected():
@@ -1408,8 +1422,11 @@ def _register_ops_routes(mcp: FastMCP) -> None:
                     count += 1
                     if max_events and count >= max_events:
                         return
-                    # Sleep in small increments so disconnect is detected quickly
+                    # Sleep in small increments so disconnect/reload is detected quickly
                     for _ in range(interval * 10):
+                        if reload_pending.is_set():
+                            yield f"data: {_RELOAD_NOTICE}\n\n"
+                            return
                         if await request.is_disconnected():
                             return
                         await asyncio.sleep(0.1)
