@@ -345,6 +345,7 @@ async def overview(
     top_k: int = 100,
     export_format: Literal["json", "graphml"] = "json",
     max_nodes: int = 5000,
+    since_hours: int | None = None,
 ) -> dict[str, Any]:
     """Get a structural or status overview of a project or the search engine.
 
@@ -495,9 +496,8 @@ async def overview(
     elif what == "graph_diff":
         if not project_path:
             return {"error": "project_path required for what='graph_diff'"}
-        since = ""
         from opencode_search.handlers._graph import handle_graph_diff
-        return await handle_graph_diff(project_path=project_path, since=since)
+        return await handle_graph_diff(project_path=project_path, since_hours=since_hours)
     elif what == "pr_impact":
         if not project_path:
             return {"error": "project_path required for what='pr_impact'"}

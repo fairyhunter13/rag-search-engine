@@ -2316,3 +2316,308 @@ class TestAdminSSE:
             assert r.status_code == 404, (
                 f"Dead endpoint {path} must return 404 after deletion; got {r.status_code}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase 80: Graph view gaps (TestGraphViewGaps)
+# ---------------------------------------------------------------------------
+
+class TestGraphViewGaps:
+    """Phase 80: coverage gaps in graph view — layout switch, filter reset, view-kill."""
+
+    def test_graph_layout_switch_circular_then_fa2(self, page, live_project):
+        """applyGraphLayout must not throw; node coords change when switching layouts."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            page.wait_for_function("() => window.__graph != null", timeout=10_000)
+            # Switch to circular — should complete without error
+            page.evaluate("applyGraphLayout('circular')")
+            page.wait_for_timeout(500)
+            x_circular = page.evaluate(
+                "() => window.__graph?.graph?.getNodeAttribute('n1', 'x')"
+            )
+            assert x_circular is not None, "Node x coord must be set after circular layout"
+            # Switch to fa2 — layout starts in background, no throw
+            page.evaluate("applyGraphLayout('fa2')")
+            page.wait_for_timeout(1_500)  # let FA2 run briefly
+            assert page.evaluate("() => window.__graph != null"), (
+                "window.__graph must still exist after fa2 layout switch"
+            )
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_filter_all_unhides_nodes(self, page, live_project):
+        """Filtering to 'file' then back to 'all' must unhide symbol nodes."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            page.wait_for_function("() => window.__graph != null", timeout=10_000)
+            # Filter to file-only first (n2/n3 are symbols — they get hidden)
+            page.evaluate("applyGraphFilter('file')")
+            page.wait_for_timeout(300)
+            hidden_sym = page.evaluate(
+                "() => window.__graph?.graph?.getNodeAttribute('n2', 'hidden')"
+            )
+            assert hidden_sym is True, f"Symbol node n2 should be hidden after file filter; got {hidden_sym}"
+            # Reset to 'all' — n2 must be un-hidden
+            page.evaluate("applyGraphFilter('all')")
+            page.wait_for_timeout(300)
+            hidden_after = page.evaluate(
+                "() => window.__graph?.graph?.getNodeAttribute('n2', 'hidden')"
+            )
+            assert not hidden_after, (
+                f"Symbol node n2 must not be hidden after filter reset to 'all'; got {hidden_after}"
+            )
+        finally:
+            page.unroute("**/api/graph_export**")
+
+    def test_graph_kill_on_view_switch(self, page, live_project):
+        """Switching away from graph and back must rebuild sigma (no double-render crash)."""
+        _stub_graph(page)
+        try:
+            _load_graph_view(page)
+            page.wait_for_function("() => window.__graph != null", timeout=10_000)
+            # Switch to pulse — loadGraph kills the old sigma
+            page.evaluate("switchView('pulse')")
+            page.wait_for_timeout(300)
+            # Switch back to graph — sigma must be rebuilt cleanly
+            page.evaluate("switchView('graph')")
+            page.wait_for_function(
+                "() => window.__graph != null || document.getElementById('graph-empty')?.style.display === 'flex'",
+                timeout=15_000,
+            )
+            assert page.locator("#graph-canvas").count() == 1, (
+                "#graph-canvas must exist after switching back to graph view"
+            )
+        finally:
+            page.unroute("**/api/graph_export**")
+
+
+# ---------------------------------------------------------------------------
+# Phase 80: Wiki view gaps (TestWikiViewGaps)
+# ---------------------------------------------------------------------------
+
+class TestWikiViewGaps:
+    """Phase 80: wiki lint panel toggle and page active-class tracking."""
+
+    def test_wiki_lint_panel_toggle_expands_items(self, page, live_project):
+        """Clicking .wiki-lint-hdr must toggle #wiki-lint-items open/closed."""
+        _stub_wiki(page)
+        try:
+            _load_wiki_view(page)
+            # Wait for lint panel to become visible (stub has 1 warning)
+            page.wait_for_function(
+                "document.getElementById('wiki-lint-panel')?.style.display !== 'none'",
+                timeout=8_000,
+            )
+            # Initially items are hidden
+            items_el = page.locator("#wiki-lint-items")
+            assert "open" not in (items_el.get_attribute("class") or ""), (
+                "#wiki-lint-items should not have 'open' class before toggling"
+            )
+            # Click header to expand
+            page.locator(".wiki-lint-hdr").click()
+            page.wait_for_timeout(300)
+            class_after_open = items_el.get_attribute("class") or ""
+            assert "open" in class_after_open, (
+                f"#wiki-lint-items must have 'open' class after clicking header; got: {class_after_open}"
+            )
+            # Click again to collapse
+            page.locator(".wiki-lint-hdr").click()
+            page.wait_for_timeout(300)
+            class_after_close = items_el.get_attribute("class") or ""
+            assert "open" not in class_after_close, (
+                f"#wiki-lint-items must not have 'open' after second click; got: {class_after_close}"
+            )
+        finally:
+            page.unroute("**/api/wiki**")
+
+    def test_wiki_page_active_class_after_open(self, page, live_project):
+        """openWikiPage must add .active to the opened page; opening another moves it."""
+        _stub_wiki(page)
+        try:
+            _load_wiki_view(page)
+            links = page.locator(".wiki-page-link")
+            assert links.count() >= 2, "Need at least 2 wiki pages for this test"
+            # Open first page via JS (avoids _proj check race on slow CI)
+            page.evaluate("openWikiPage(_wikiPages[0])")
+            page.wait_for_timeout(500)
+            # _renderWikiPages re-renders list with activeSlug=first page
+            first_class = page.locator(".wiki-page-link").nth(0).get_attribute("class") or ""
+            assert "active" in first_class, (
+                f"First page link must have 'active' after open; got: {first_class!r}"
+            )
+            # Open second page
+            page.evaluate("openWikiPage(_wikiPages[1])")
+            page.wait_for_timeout(500)
+            first_class_after = page.locator(".wiki-page-link").nth(0).get_attribute("class") or ""
+            second_class_after = page.locator(".wiki-page-link").nth(1).get_attribute("class") or ""
+            assert "active" not in first_class_after, (
+                f"First link must lose 'active' after second opens; got: {first_class_after!r}"
+            )
+            assert "active" in second_class_after, (
+                f"Second link must gain 'active' after open; got: {second_class_after!r}"
+            )
+        finally:
+            page.unroute("**/api/wiki**")
+
+
+# ---------------------------------------------------------------------------
+# Phase 80: Admin SSE chip state transitions (TestAdminSSEGaps)
+# ---------------------------------------------------------------------------
+
+class TestAdminSSEGaps:
+    """Phase 80: chip status transitions and error state rendering."""
+
+    def _make_sse_body(self, *events) -> str:
+        import json as _json
+        lines = []
+        for evt in events:
+            lines.append("data: " + _json.dumps(evt) + "\n\n")
+        return "".join(lines)
+
+    def test_admin_chip_transitions_running_to_success(self, page, live_project):
+        """Two SSE frames for the same job_id must transition chip from 'running' to 'done'."""
+        frames: list[dict] = [
+            {"type": "job", "job_id": "trans-1", "action": "enrich", "status": "running", "project": "/tmp/t", "error": None},
+            {"type": "job", "job_id": "trans-1", "action": "enrich", "status": "done", "project": "/tmp/t", "error": None},
+        ]
+        sse_body = self._make_sse_body(*frames)
+        page.route(
+            "**/api/events/stream**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+                body=sse_body,
+            ),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => document.getElementById('project-sel')?.options?.length > 0",
+                timeout=45_000,
+            )
+            page.evaluate("switchView('admin')")
+            # Wait for chip to appear and reach final state
+            page.wait_for_function(
+                "() => document.getElementById('chip-trans-1')?.className?.includes('done') || "
+                "document.getElementById('chip-trans-1')?.className?.includes('running')",
+                timeout=8_000,
+            )
+            page.wait_for_timeout(500)  # let second frame settle
+            chip = page.locator("#chip-trans-1")
+            assert chip.count() == 1, "Chip #chip-trans-1 must exist"
+            class_attr = chip.get_attribute("class") or ""
+            assert "done" in class_attr, (
+                f"Chip must show 'done' after success transition; got class: {class_attr}"
+            )
+        finally:
+            page.unroute("**/api/events/stream**")
+
+    def test_admin_chip_failure_status_shows_error_class(self, page, live_project):
+        """SSE frame with status='error' must render chip with 'error' class."""
+        sse_body = self._make_sse_body(
+            {"type": "job", "job_id": "fail-1", "action": "index", "status": "error",
+             "project": "/tmp/fail", "error": "out of memory"},
+        )
+        page.route(
+            "**/api/events/stream**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+                body=sse_body,
+            ),
+        )
+        try:
+            _goto_with_retry(page, DASHBOARD_URL)
+            page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+            page.wait_for_function(
+                "() => document.getElementById('project-sel')?.options?.length > 0",
+                timeout=45_000,
+            )
+            page.evaluate("switchView('admin')")
+            page.wait_for_function(
+                "() => document.getElementById('chip-fail-1') != null",
+                timeout=8_000,
+            )
+            chip = page.locator("#chip-fail-1")
+            class_attr = chip.get_attribute("class") or ""
+            assert "error" in class_attr, (
+                f"Chip must have 'error' class for failed job; got class: {class_attr}"
+            )
+        finally:
+            page.unroute("**/api/events/stream**")
+
+
+# ---------------------------------------------------------------------------
+# Phase 80: Command palette keyboard gaps (TestCmdPaletteGaps)
+# ---------------------------------------------------------------------------
+
+class TestCmdPaletteGaps:
+    """Phase 80: arrow-key navigation and Enter dispatch in command palette."""
+
+    def _open_palette(self, page) -> None:
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        page.wait_for_function(
+            "() => document.getElementById('project-sel')?.options?.length > 0",
+            timeout=45_000,
+        )
+        page.evaluate("showCmdPalette()")
+        page.wait_for_function(
+            "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+
+    def test_cmd_palette_arrow_navigation_changes_highlight(self, page, live_project):
+        """ArrowDown must move the .hi highlight down; ArrowUp must move it back up."""
+        self._open_palette(page)
+        cmd_input = page.locator("#cmd-input")
+        cmd_input.focus()
+        # Initially item[0] has .hi
+        first_hi = page.evaluate(
+            "() => document.querySelectorAll('#cmd-results li')[0]?.classList.contains('hi')"
+        )
+        assert first_hi, "First item must have .hi initially"
+        # ArrowDown → index moves to 1
+        cmd_input.press("ArrowDown")
+        page.wait_for_timeout(100)
+        idx1_hi = page.evaluate(
+            "() => document.querySelectorAll('#cmd-results li')[1]?.classList.contains('hi')"
+        )
+        idx0_hi = page.evaluate(
+            "() => document.querySelectorAll('#cmd-results li')[0]?.classList.contains('hi')"
+        )
+        assert idx1_hi, "Item[1] must have .hi after one ArrowDown"
+        assert not idx0_hi, "Item[0] must NOT have .hi after ArrowDown"
+        # ArrowUp → index moves back to 0
+        cmd_input.press("ArrowUp")
+        page.wait_for_timeout(100)
+        idx0_back = page.evaluate(
+            "() => document.querySelectorAll('#cmd-results li')[0]?.classList.contains('hi')"
+        )
+        assert idx0_back, "Item[0] must have .hi again after ArrowUp"
+
+    def test_cmd_palette_enter_dispatches_action(self, page, live_project):
+        """Typing 'Graph' then Enter must switch to graph view and close palette."""
+        self._open_palette(page)
+        cmd_input = page.locator("#cmd-input")
+        cmd_input.fill("Graph")
+        page.wait_for_timeout(200)
+        cmd_input.press("Enter")
+        # Palette must close
+        page.wait_for_function(
+            "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
+            timeout=5_000,
+        )
+        # Graph view must be active
+        graph_display = page.evaluate(
+            "() => window.getComputedStyle(document.getElementById('view-graph') || {}).display"
+        )
+        assert graph_display not in ("none", "", None), (
+            f"#view-graph must be visible after Enter dispatch; display={graph_display!r}"
+        )

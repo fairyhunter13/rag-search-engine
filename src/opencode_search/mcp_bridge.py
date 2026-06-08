@@ -142,14 +142,24 @@ bridge = FastMCP(
 
 async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     await asyncio.to_thread(ensure_daemon_running)
-    try:
-        async with streamable_http_client(daemon_url(), terminate_on_close=False) as streams:
-            read_stream, write_stream, _ = streams
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                result = await session.call_tool(name, arguments)
-    except urllib.error.URLError as exc:
-        return {"status": "error", "error": str(exc)}
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        if attempt:
+            await asyncio.sleep(0.2)
+        try:
+            async with streamable_http_client(daemon_url(), terminate_on_close=False) as streams:
+                read_stream, write_stream, _ = streams
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    result = await session.call_tool(name, arguments)
+            break  # success — exit retry loop
+        except urllib.error.URLError as exc:
+            last_exc = exc
+            continue
+        except Exception:
+            raise
+    else:
+        return {"status": "error", "error": str(last_exc)}
 
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
@@ -293,6 +303,7 @@ async def overview(
     what: str = "structure",
     max_depth: int = 4,
     top_k: int = 100,
+    since_hours: int | None = None,
 ) -> dict[str, Any]:
     """Get a structural or status overview of a project or the search engine.
 
@@ -303,6 +314,7 @@ async def overview(
           | "service_mesh" (detected inter-service gRPC/HTTP/MQ topology)
           | "import_cycles" | "suggested_questions" | "graph_diff" | "surprising_connections"
     project_path: not required for what="projects" or what="metrics".
+    since_hours: for what="graph_diff" — look back this many hours (default 24).
     Do NOT use to search code — use `search` or `ask` for that.
     """
     resolved = _resolve_path_like(project_path) if project_path else None
@@ -313,6 +325,7 @@ async def overview(
     return await _forward_tool("overview", {
         "project_path": resolved, "what": what,
         "max_depth": max_depth, "top_k": top_k,
+        "since_hours": since_hours,
     })
 
 

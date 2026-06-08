@@ -137,12 +137,6 @@ async def _fetch_community_context(
         query_lower = query.lower()
         tokens = [t for t in query_lower.split() if len(t) > 2]
 
-        def _score(title: str | None, summary: str | None) -> float:
-            hay = " ".join(filter(None, [title, summary])).lower()
-            if not hay or not tokens:
-                return 0.0
-            return sum(1 for t in tokens if t in hay) / len(tokens)
-
         paths = [project_path]
         if include_federation:
             with contextlib.suppress(Exception):
@@ -165,7 +159,7 @@ async def _fetch_community_context(
                         "summary": c.summary or "",
                         "semantic_type": c.semantic_type or "utility",
                         "node_count": c.node_count,
-                        "score": _score(c.title, c.summary),
+                        "score": 0.0,  # filled below after IDF is computed
                     }
                     for c in enriched
                 ]
@@ -176,6 +170,28 @@ async def _fetch_community_context(
         all_comms: list[dict[str, Any]] = []
         for comms in await asyncio.gather(*[asyncio.to_thread(_load, p) for p in paths]):
             all_comms.extend(comms)
+
+        # BM25-lite scoring over title+summary (k1=1.5, b=0.75)
+        if tokens and all_comms:
+            import math
+            _k1, _b = 1.5, 0.75
+            _docs = [" ".join([c["title"], c["summary"]]).lower() for c in all_comms]
+            _lens = [len(d.split()) for d in _docs]
+            _avg_len = sum(_lens) / len(_lens) if _lens else 1.0
+            _N = len(all_comms)
+            for idx, comm in enumerate(all_comms):
+                doc_words = _docs[idx].split()
+                doc_len = _lens[idx]
+                _bm25 = 0.0
+                for tok in tokens:
+                    tf = doc_words.count(tok)
+                    if tf == 0:
+                        continue
+                    df = sum(1 for d in _docs if tok in d.split())
+                    idf = math.log((_N - df + 0.5) / (df + 0.5) + 1.0)
+                    norm_tf = (tf * (_k1 + 1)) / (tf + _k1 * (1 - _b + _b * doc_len / _avg_len))
+                    _bm25 += idf * norm_tf
+                comm["score"] = _bm25
 
         all_comms.sort(key=lambda c: (c["score"], c["node_count"]), reverse=True)
         selected = all_comms[:top_k]
