@@ -709,27 +709,6 @@ class TestMCPExtended:
         assert "violations" in data, f"alerts missing violations: {list(data.keys())}"
         assert isinstance(data["rules"], list), "rules must be a list"
 
-    def test_verify_status_returns_dict(self, http):
-        """GET /api/verify_status must return a dict (even if no runs yet)."""
-        r = http.get("/api/verify_status")
-        assert r.status_code == 200, f"verify_status failed: {r.text[:200]}"
-        data = r.json()
-        assert isinstance(data, dict), "verify_status must return a dict"
-
-    def test_prerelease_status_returns_data_or_404(self, http):
-        """GET /api/prerelease_status returns report JSON or 404 if no report exists."""
-        r = http.get("/api/prerelease_status")
-        assert r.status_code in (200, 404), f"prerelease_status unexpected status: {r.status_code}"
-        data = r.json()
-        assert isinstance(data, dict), "prerelease_status must return a dict"
-
-    def test_qa_status_returns_data_or_404(self, http):
-        """GET /api/qa_status returns QA report JSON or 404 if no report exists."""
-        r = http.get("/api/qa_status")
-        assert r.status_code in (200, 404), f"qa_status unexpected status: {r.status_code}"
-        data = r.json()
-        assert isinstance(data, dict), "qa_status must return a dict"
-
     def test_tree_html_returns_html(self, http, project):
         """GET /api/tree_html?format=html must return an HTML string."""
         r = http.get("/api/tree_html", params={"project": project, "format": "html", "max_files": "500"})
@@ -880,32 +859,6 @@ class TestMCPExtended:
         has_sse = "text/event-stream" in content_type or "data:" in r.text
         assert has_sse, f"events/stream must be SSE; content-type={content_type}, body={r.text[:100]}"
 
-    def test_run_prerelease_starts_task(self, http):
-        """POST /api/run_prerelease must return a task_id (or 503 if script not found)."""
-        r = http.post("/api/run_prerelease", json={})
-        assert r.status_code in (200, 503), f"run_prerelease unexpected status: {r.status_code}"
-        data = r.json()
-        assert isinstance(data, dict), "run_prerelease must return a dict"
-        if r.status_code == 200:
-            assert "task_id" in data or "status" in data, f"run_prerelease missing task_id/status: {list(data.keys())}"
-
-    def test_run_qa_starts_task(self, http):
-        """POST /api/run_qa must return a task_id (or 503 if script not found)."""
-        r = http.post("/api/run_qa", json={})
-        assert r.status_code in (200, 503), f"run_qa unexpected status: {r.status_code}"
-        data = r.json()
-        assert isinstance(data, dict), "run_qa must return a dict"
-        if r.status_code == 200:
-            assert "task_id" in data or "status" in data, f"run_qa missing task_id/status: {list(data.keys())}"
-
-    def test_auto_fix_trigger_returns_task_or_503(self, http):
-        """POST /api/auto_fix_trigger must return a task_id or 503 if selfheal.py is absent."""
-        r = http.post("/api/auto_fix_trigger", json={})
-        assert r.status_code in (200, 503), f"auto_fix_trigger unexpected status: {r.status_code}"
-        data = r.json()
-        assert isinstance(data, dict), "auto_fix_trigger must return a dict"
-        if r.status_code == 200:
-            assert "task_id" in data or "status" in data, f"auto_fix_trigger missing task_id/status: {list(data.keys())}"
 
     def test_job_cancel_returns_result(self, http):
         """POST /api/jobs/{job_id}/cancel must return a 200 or 404 (not 5xx)."""

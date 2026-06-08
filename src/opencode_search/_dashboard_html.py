@@ -175,9 +175,76 @@ a{color:inherit;text-decoration:none}
 .toast.err{border-color:rgba(255,64,96,.4);color:var(--red)}
 .toast.info{color:var(--text)}
 @keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+/* ── Graph view ─────────────────────────────────────────────────────────── */
+#view-graph{flex-direction:column;overflow:hidden}
+.graph-toolbar{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--surface);flex-wrap:wrap}
+#graph-search{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:6px 10px;font-size:.78rem;width:180px;transition:border-color var(--trans)}
+#graph-search:focus{border-color:var(--purple)}
+#graph-layout-sel,#graph-filter-sel{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:5px 8px;font-size:.75rem;cursor:pointer}
+#graph-canvas{flex:1;background:var(--surface);position:relative;min-height:300px}
+#graph-canvas canvas{width:100% !important;height:100% !important}
+.graph-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:.83rem;pointer-events:none}
+#graph-detail{flex-shrink:0;padding:12px 16px;border-top:1px solid var(--border);background:var(--surface);min-height:64px;max-height:180px;overflow-y:auto;font-size:.78rem;color:var(--text-2)}
+.gd-name{font-weight:700;color:var(--text);margin-bottom:4px}
+.gd-meta{color:var(--text-3);font-size:.7rem;margin-bottom:6px}
+.gd-neighbours{display:flex;flex-wrap:wrap;gap:4px}
+.gd-nb{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:2px 8px;font-size:.68rem;cursor:pointer;transition:border-color var(--trans)}
+.gd-nb:hover{border-color:var(--purple);color:var(--text)}
+/* ── Wiki view ──────────────────────────────────────────────────────────── */
+#view-wiki{flex-direction:row;overflow:hidden}
+.wiki-sidebar{width:220px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:var(--surface);overflow:hidden}
+#wiki-search{background:var(--surface-2);border:none;border-bottom:1px solid var(--border);color:var(--text);padding:10px 14px;font-size:.78rem;width:100%;transition:background var(--trans)}
+#wiki-search:focus{background:var(--surface-3);outline:none}
+#wiki-pages{flex:1;overflow-y:auto;padding:6px 0;scrollbar-width:thin}
+.wiki-page-link{display:block;width:100%;background:none;border:none;text-align:left;padding:7px 14px;font-size:.77rem;color:var(--text-2);cursor:pointer;transition:background var(--trans),color var(--trans)}
+.wiki-page-link:hover,.wiki-page-link.active{background:rgba(123,97,255,.1);color:var(--text)}
+.wiki-content-pane{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#wiki-content{flex:1;overflow-y:auto;padding:20px 24px;font-size:.83rem;line-height:1.65;color:var(--text);scrollbar-width:thin}
+#wiki-content h1,#wiki-content h2,#wiki-content h3{color:var(--text);font-weight:600;margin:.8em 0 .4em;line-height:1.3}
+#wiki-content h1{font-size:1.2rem}#wiki-content h2{font-size:1rem}#wiki-content h3{font-size:.9rem}
+#wiki-content p{margin:.4em 0}
+#wiki-content ul,#wiki-content ol{padding-left:1.4em;margin:.4em 0}
+#wiki-content li{margin:.15em 0}
+#wiki-content code{font-family:'JetBrains Mono','Fira Code',monospace;font-size:.8rem;background:var(--surface-3);border:1px solid var(--border);border-radius:3px;padding:0 4px}
+#wiki-content pre{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;overflow-x:auto;margin:.5em 0}
+#wiki-content pre code{background:none;border:none;padding:0;font-size:.78rem}
+#wiki-content blockquote{border-left:3px solid var(--purple);padding-left:10px;color:var(--text-2);margin:.5em 0}
+#wiki-content a{color:var(--cyan);text-decoration:underline}
+#wiki-content strong{color:var(--text);font-weight:600}
+#wiki-content table{border-collapse:collapse;width:100%;margin:.5em 0;font-size:.8rem}
+#wiki-content th,#wiki-content td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+#wiki-content th{background:var(--surface-2);color:var(--text-3);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em}
+.wiki-empty{display:flex;align-items:center;justify-content:center;flex:1;color:var(--text-3);font-size:.83rem}
+.wiki-lint-panel{flex-shrink:0;border-top:1px solid var(--border);background:var(--surface);padding:8px 16px}
+.wiki-lint-hdr{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem;color:var(--text-3);padding:2px 0}
+.wiki-lint-hdr:hover{color:var(--text)}
+#wiki-lint-count{font-weight:700;color:var(--amber)}
+.wiki-lint-items{font-size:.72rem;color:var(--text-2);max-height:100px;overflow-y:auto;display:none;margin-top:6px}
+.wiki-lint-items.open{display:block}
+.wiki-lint-item{padding:2px 0;border-bottom:1px solid var(--border)}
+.wiki-lint-item:last-child{border-bottom:none}
+/* ── mdSafe table (chat bubbles) */
+.msg.ai .msg-bubble table{border-collapse:collapse;width:100%;margin:.4em 0;font-size:.78rem}
+.msg.ai .msg-bubble th,.msg.ai .msg-bubble td{border:1px solid var(--border);padding:5px 8px;text-align:left}
+.msg.ai .msg-bubble th{background:var(--surface-2);color:var(--text-3);font-size:.7rem;text-transform:uppercase}
+/* ── Admin SSE chips + auto-pipeline ────────────────────────────────────── */
+#admin-job-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;min-height:24px}
+.admin-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px 3px 10px;border-radius:12px;font-size:.7rem;font-weight:600;border:1px solid var(--border);background:var(--surface-2);color:var(--text-2);transition:all var(--trans)}
+.admin-chip.queued{border-color:var(--border);color:var(--text-2)}
+.admin-chip.running{border-color:rgba(245,166,35,.5);background:var(--amber-dim);color:var(--amber)}
+.admin-chip.done{border-color:rgba(0,194,142,.4);background:var(--green-dim);color:var(--green)}
+.admin-chip.error{border-color:rgba(255,64,96,.4);background:var(--red-dim);color:var(--red)}
+.chip-dismiss{background:none;border:none;color:inherit;opacity:.6;cursor:pointer;padding:0;font-size:.75rem;line-height:1;margin-left:2px}
+.chip-dismiss:hover{opacity:1}
+#admin-autopipeline-log{margin-top:10px;font-size:.72rem;color:var(--text-2);max-height:120px;overflow-y:auto;scrollbar-width:thin}
+.ap-entry{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)}
+.ap-entry:last-child{border-bottom:none}
+.ap-ts{color:var(--text-3);flex-shrink:0}
+.ap-msg{flex:1;word-break:break-word}
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:2px}
 </style>
+<script src="/static/sigma-graph.min.js" defer></script>
 </head>
 <body>
 
@@ -188,6 +255,8 @@ a{color:inherit;text-decoration:none}
     <button class="vbtn active" id="vbtn-pulse" onclick="switchView('pulse')">Pulse</button>
     <button class="vbtn" id="vbtn-chat" onclick="switchView('chat')">Chat</button>
     <button class="vbtn" id="vbtn-admin" onclick="switchView('admin')">Admin</button>
+    <button class="vbtn" id="vbtn-graph" onclick="switchView('graph')">Graph</button>
+    <button class="vbtn" id="vbtn-wiki" onclick="switchView('wiki')">Wiki</button>
   </div>
   <div class="nav-right">
     <span class="sdot" id="daemon-dot" title="Daemon status"></span>
@@ -318,7 +387,48 @@ a{color:inherit;text-decoration:none}
             <button class="op-btn" onclick="loadAdmin()">🔄 Refresh</button>
           </div>
           <div class="op-log" id="op-log"></div>
+          <div id="admin-job-chips"></div>
+          <div class="panel-hdr" style="margin-top:10px">Auto-Pipeline Events</div>
+          <div id="admin-autopipeline-log"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Graph ─────────────────────────────────────────────────────────── -->
+  <div id="view-graph" class="view">
+    <div class="graph-toolbar">
+      <input id="graph-search" placeholder="Search node…" oninput="searchGraphNode(this.value)" autocomplete="off"/>
+      <select id="graph-layout-sel" onchange="applyGraphLayout(this.value)" title="Layout">
+        <option value="fa2">Force-Directed</option>
+        <option value="circular">Circular</option>
+      </select>
+      <select id="graph-filter-sel" onchange="applyGraphFilter(this.value)" title="Filter">
+        <option value="all">All types</option>
+        <option value="file">Files only</option>
+        <option value="symbol">Symbols only</option>
+      </select>
+      <button class="iBtn" onclick="loadGraph()" title="Reload graph">⟳ Reload</button>
+      <span id="graph-node-count" style="font-size:.72rem;color:var(--text-3)"></span>
+    </div>
+    <div id="graph-canvas"><div class="graph-empty" id="graph-empty">Select a project and click ⟳ Reload</div></div>
+    <div id="graph-detail" style="color:var(--text-3);font-size:.78rem">Click a node to see details</div>
+  </div>
+
+  <!-- ── Wiki ──────────────────────────────────────────────────────────── -->
+  <div id="view-wiki" class="view">
+    <div class="wiki-sidebar">
+      <input id="wiki-search" placeholder="Search pages…" oninput="searchWiki(this.value)" autocomplete="off"/>
+      <div id="wiki-pages"><div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div></div>
+    </div>
+    <div class="wiki-content-pane">
+      <div id="wiki-content"><div class="wiki-empty">← Pick a page to read</div></div>
+      <div class="wiki-lint-panel" id="wiki-lint-panel" style="display:none">
+        <div class="wiki-lint-hdr" onclick="toggleWikiLint()">
+          ⚠ Lint warnings: <span id="wiki-lint-count">0</span>
+          <span id="wiki-lint-chevron" style="margin-left:auto">▾</span>
+        </div>
+        <div class="wiki-lint-items" id="wiki-lint-items"></div>
       </div>
     </div>
   </div>
@@ -370,8 +480,23 @@ function mdSafe(s){
   h=h.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
   // 6. Blockquote (already escaped, so &gt;)
   h=h.replace(/^&gt; (.+)$/gm,'<blockquote>$1</blockquote>');
-  // 7. Unordered lists
+  // 6b. Links: [text](url) — only http/https/relative allowed (XSS guard via URL prefix check)
+  h=h.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/)[^\s)]*)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // 7a. Tables: | header | \n | --- | \n | body |
+  h=h.replace(/((?:^\|.+\|[ \t]*$\n?)+)/gm,m=>{
+    const rows=m.trim().split('\n');
+    if(rows.length<2)return m;
+    const isSep=r=>/^\|[\s\-\|:]+\|[ \t]*$/.test(r);
+    if(!isSep(rows[1]))return m;
+    const cells=r=>r.replace(/^[ \t]*\||\|[ \t]*$/g,'').split('|').map(c=>c.trim());
+    const thead='<thead><tr>'+cells(rows[0]).map(c=>'<th>'+c+'</th>').join('')+'</tr></thead>';
+    const tbody='<tbody>'+rows.slice(2).filter(r=>r.trim()&&!isSep(r)).map(r=>'<tr>'+cells(r).map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody>';
+    return '<table>'+thead+tbody+'</table>';
+  });
+  // 7b. Unordered lists
   h=h.replace(/((?:^[*\-] .+$\n?)+)/gm,m=>'<ul>'+m.replace(/^[*\-] (.+)$/gm,'<li>$1</li>')+'</ul>');
+  // 7c. Ordered lists
+  h=h.replace(/((?:^\d+\. .+$\n?)+)/gm,m=>'<ol>'+m.replace(/^\d+\. (.+)$/gm,'<li>$1</li>')+'</ol>');
   // 8. Horizontal rule
   h=h.replace(/^---+$/gm,'<hr>');
   // 9. Paragraphs: split on blank lines
@@ -379,7 +504,7 @@ function mdSafe(s){
   h=parts.map(p=>{
     p=p.trim();
     if(!p)return '';
-    if(/^<(h[1-3]|pre|ul|blockquote|hr)/.test(p))return p;
+    if(/^<(h[1-3]|pre|ul|ol|table|blockquote|hr)/.test(p))return p;
     return '<p>'+p.replace(/\n/g,'<br>')+'</p>';
   }).join('\n');
   return h;
@@ -413,13 +538,15 @@ async function fetchWithTimeout(url,opts={},ms=30000){
 
 /* ── View switching ──────────────────────────────────────────────────────── */
 function switchView(name){
-  ['pulse','chat','admin'].forEach(v=>{
+  ['pulse','chat','admin','graph','wiki'].forEach(v=>{
     $('view-'+v).classList.toggle('active',v===name);
     $('vbtn-'+v).classList.toggle('active',v===name);
   });
   if(name==='pulse')loadPulse();
   else if(name==='admin')loadAdmin();
   else if(name==='chat'&&$('chat-in'))$('chat-in').focus();
+  else if(name==='graph'&&!window.__graph)loadGraph();
+  else if(name==='wiki')loadWiki();
 }
 
 /* ── Project selector ────────────────────────────────────────────────────── */
@@ -447,9 +574,13 @@ function switchProject(path){
   _sparkHistory={};
   _chatHistory=[];
   _chatInFlight=false;
+  _wikiPages=[];
+  if(window.__graph){try{window.__graph.sigma.kill();}catch(_){}window.__graph=null;}
   const active=document.querySelector('.view.active');
   if(active&&active.id==='view-pulse')loadPulse();
   else if(active&&active.id==='view-admin')loadAdmin();
+  else if(active&&active.id==='view-graph')loadGraph();
+  else if(active&&active.id==='view-wiki')loadWiki();
 }
 
 /* ── Sparkline ───────────────────────────────────────────────────────────── */
@@ -630,8 +761,251 @@ function renderSparks(){
   }
 }
 
+/* ── Graph ───────────────────────────────────────────────────────────────── */
+let _graphAllNodes=[];
+let _graphHiddenKind=null;
+
+async function loadGraph(){
+  if(!_proj){toast('Select a project first','err');return;}
+  const emptyEl=$('graph-empty');
+  if(emptyEl)emptyEl.textContent='Loading graph…';
+  if(window.__graph){
+    try{window.__graph.sigma.kill();}catch(_){}
+    window.__graph=null;
+  }
+  $('graph-detail').innerHTML='<span style="color:var(--text-3)">Click a node to see details</span>';
+  try{
+    const r=await fetchWithTimeout(`/api/graph_export?project=${encodeURIComponent(_proj)}&format=json&max_nodes=2000`);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const data=await r.json();
+    const nodes=data.nodes||[];
+    const edges=data.edges||[];
+    _graphAllNodes=nodes;
+    if(emptyEl)emptyEl.style.display='none';
+    $('graph-node-count').textContent=`${nodes.length} nodes · ${edges.length} edges`;
+    _renderGraph(nodes,edges);
+  }catch(e){
+    if(emptyEl){emptyEl.style.display='flex';emptyEl.textContent='Failed to load graph: '+e.message;}
+    toast('Graph load error: '+e.message,'err');
+  }
+}
+
+function _renderGraph(nodes,edges){
+  if(typeof window.Graph==='undefined'||typeof window.Sigma==='undefined'){
+    const el=$('graph-empty');
+    if(el){el.style.display='flex';el.textContent='sigma-graph.min.js not loaded';}
+    return;
+  }
+  const graph=new window.Graph({multi:false,allowSelfLoops:false});
+  const kindColors={file:'#7b61ff',symbol:'#00d4ff',community:'#00c28e',default:'#8891b8'};
+  nodes.forEach(n=>{
+    const kind=(n.attributes&&n.attributes.kind)||n.kind||'default';
+    graph.addNode(n.id||n.key||String(n),{
+      label:n.label||n.id||String(n),
+      kind:kind,
+      size:4,
+      color:kindColors[kind]||kindColors.default,
+      x:Math.random()*200-100,
+      y:Math.random()*200-100,
+    });
+  });
+  edges.forEach((e,i)=>{
+    try{graph.addEdge(e.source||e.from,e.target||e.to,{color:'rgba(255,255,255,.08)',size:1});}catch(_){}
+  });
+  const container=$('graph-canvas');
+  const sigma=new window.Sigma(graph,container,{
+    renderEdgeLabels:false,
+    defaultEdgeColor:'rgba(255,255,255,.08)',
+    labelColor:{color:'#8891b8'},
+    labelSize:10,
+    labelWeight:'normal',
+    stagePadding:20,
+  });
+  window.__graph={sigma,graph};
+  sigma.on('clickNode',({node})=>{_showNodeDetail(node);});
+  applyGraphLayout($('graph-layout-sel').value);
+}
+
+function applyGraphLayout(name){
+  if(!window.__graph)return;
+  const {sigma,graph}=window.__graph;
+  if(name==='circular'&&window.circularLayout){
+    const pos=window.circularLayout(graph);
+    graph.forEachNode(n=>{const p=pos[n];if(p){graph.setNodeAttribute(n,'x',p.x);graph.setNodeAttribute(n,'y',p.y);}});
+    sigma.refresh();
+  }else if(name==='fa2'&&window.FA2Layout){
+    if(window.__graph.layout){try{window.__graph.layout.stop();}catch(_){}}
+    const layout=new window.FA2Layout(graph,{settings:{gravity:1,scalingRatio:2,slowDown:5,barnesHutOptimize:true}});
+    window.__graph.layout=layout;
+    layout.start();
+    setTimeout(()=>{try{layout.stop();}catch(_){}},1500);
+  }
+}
+
+function applyGraphFilter(kind){
+  if(!window.__graph)return;
+  const {sigma,graph}=window.__graph;
+  _graphHiddenKind=kind==='all'?null:kind;
+  graph.forEachNode(n=>{
+    const nKind=graph.getNodeAttribute(n,'kind')||'default';
+    const hidden=_graphHiddenKind&&nKind!==_graphHiddenKind;
+    graph.setNodeAttribute(n,'hidden',hidden);
+  });
+  sigma.refresh();
+}
+
+function searchGraphNode(query){
+  if(!window.__graph)return;
+  const {sigma,graph}=window.__graph;
+  const q=query.trim().toLowerCase();
+  graph.forEachNode(n=>{
+    const lbl=(graph.getNodeAttribute(n,'label')||'').toLowerCase();
+    const hidden=_graphHiddenKind&&(graph.getNodeAttribute(n,'kind')||'default')!==_graphHiddenKind;
+    if(hidden){graph.setNodeAttribute(n,'hidden',true);return;}
+    if(!q){graph.setNodeAttribute(n,'hidden',false);graph.setNodeAttribute(n,'color',_nodeColor(n));return;}
+    const match=lbl.includes(q);
+    graph.setNodeAttribute(n,'hidden',false);
+    graph.setNodeAttribute(n,'color',match?'#fff':'rgba(255,255,255,.15)');
+  });
+  sigma.refresh();
+}
+
+function _nodeColor(nodeId){
+  if(!window.__graph)return '#8891b8';
+  const kind=window.__graph.graph.getNodeAttribute(nodeId,'kind')||'default';
+  return {file:'#7b61ff',symbol:'#00d4ff',community:'#00c28e',default:'#8891b8'}[kind]||'#8891b8';
+}
+
+function _showNodeDetail(nodeId){
+  if(!window.__graph)return;
+  const {graph}=window.__graph;
+  const label=graph.getNodeAttribute(nodeId,'label')||nodeId;
+  const kind=graph.getNodeAttribute(nodeId,'kind')||'node';
+  const degree=graph.degree(nodeId);
+  const neighbours=[];
+  graph.forEachNeighbor(nodeId,nb=>neighbours.push({id:nb,label:graph.getNodeAttribute(nb,'label')||nb}));
+  const nbHtml=neighbours.slice(0,10).map(nb=>`<span class="gd-nb" onclick="_showNodeDetail(${JSON.stringify(nb.id)})">${esc(nb.label)}</span>`).join('');
+  $('graph-detail').innerHTML=`<div class="gd-name">${esc(label)}</div><div class="gd-meta">${esc(kind)} · degree ${degree}</div><div class="gd-neighbours">${nbHtml||'<span style="color:var(--text-3)">No neighbours</span>'}</div>`;
+}
+
+/* ── Wiki ────────────────────────────────────────────────────────────────── */
+let _wikiPages=[];
+
+async function loadWiki(){
+  if(!_proj)return;
+  const pagesEl=$('wiki-pages');
+  pagesEl.innerHTML='<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div>';
+  $('wiki-content').innerHTML='<div class="wiki-empty">← Pick a page to read</div>';
+  $('wiki-lint-panel').style.display='none';
+  try{
+    const r=await fetchWithTimeout(`/api/wiki?project=${encodeURIComponent(_proj)}`);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    _wikiPages=d.pages||[];
+    _renderWikiPages(_wikiPages,null);
+    if(_wikiPages.length)loadWikiLint();
+  }catch(e){
+    pagesEl.innerHTML='<div style="padding:12px 14px;color:var(--red);font-size:.76rem">'+esc(e.message)+'</div>';
+  }
+}
+
+function _renderWikiPages(pages,activeSlug){
+  const el=$('wiki-pages');
+  if(!pages.length){el.innerHTML='<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">No wiki pages. Run the Wiki op to generate.</div>';return;}
+  el.innerHTML=pages.map(p=>`<button class="wiki-page-link${p===activeSlug?' active':''}" onclick="openWikiPage(${JSON.stringify(p)})">${esc(p)}</button>`).join('');
+}
+
+async function openWikiPage(name){
+  if(!_proj)return;
+  _renderWikiPages(_wikiPages,name);
+  const content=$('wiki-content');
+  content.innerHTML='<div class="wiki-empty" style="color:var(--text-3)">Loading…</div>';
+  try{
+    const r=await fetchWithTimeout(`/api/wiki/page?project=${encodeURIComponent(_proj)}&name=${encodeURIComponent(name)}`);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    content.innerHTML=mdSafe(d.content||'');
+  }catch(e){
+    content.innerHTML='<div class="wiki-empty" style="color:var(--red)">'+esc(e.message)+'</div>';
+  }
+}
+
+function searchWiki(q){
+  const lower=q.trim().toLowerCase();
+  const filtered=lower?_wikiPages.filter(p=>p.toLowerCase().includes(lower)):_wikiPages;
+  _renderWikiPages(filtered,null);
+}
+
+async function loadWikiLint(){
+  if(!_proj)return;
+  try{
+    const r=await fetchWithTimeout(`/api/wiki_lint?project=${encodeURIComponent(_proj)}`);
+    if(!r.ok)return;
+    const d=await r.json();
+    const warns=(d.warnings||d.issues||d.errors||[]);
+    const count=warns.length||(d.warning_count||0);
+    if(count>0){
+      $('wiki-lint-count').textContent=count;
+      $('wiki-lint-items').innerHTML=warns.slice(0,20).map(w=>`<div class="wiki-lint-item">${esc(typeof w==='string'?w:JSON.stringify(w))}</div>`).join('');
+      $('wiki-lint-panel').style.display='block';
+    }
+  }catch(_){}
+}
+
+function toggleWikiLint(){
+  const items=$('wiki-lint-items');
+  const open=items.classList.toggle('open');
+  $('wiki-lint-chevron').textContent=open?'▴':'▾';
+}
+
 /* ── Admin ───────────────────────────────────────────────────────────────── */
+let _adminSSE=null;
+function _setupAdminSSE(){
+  if(_adminSSE)return;
+  _adminSSE=new EventSource('/api/events/stream');
+  _adminSSE.onmessage=e=>{
+    let evt;try{evt=JSON.parse(e.data);}catch{return;}
+    if(evt.type==='job')_upsertJobChip(evt);
+  };
+  _adminSSE.onerror=()=>{_adminSSE=null;};
+}
+
+function _upsertJobChip(evt){
+  const id='chip-'+evt.job_id;
+  const label=evt.action||evt.job_id;
+  const status=evt.status||'queued';
+  const icon={queued:'⏸',running:'⟳',done:'✓',error:'✗'}[status]||'';
+  let chip=document.getElementById(id);
+  if(!chip){
+    chip=document.createElement('span');
+    chip.id=id;
+    chip.className='admin-chip';
+    chip.dataset.jobId=evt.job_id;
+    $('admin-job-chips').appendChild(chip);
+  }
+  chip.className='admin-chip '+status;
+  chip.innerHTML=esc(label)+' '+icon+' <button class="chip-dismiss" onclick="this.parentElement.remove()" title="Dismiss">✕</button>';
+}
+
+async function loadAutoPipeline(){
+  try{
+    const r=await fetchWithTimeout('/api/auto_pipeline_status');
+    if(!r.ok)return;
+    const d=await r.json();
+    const events=(d.events||[]).slice(-20).reverse();
+    const log=$('admin-autopipeline-log');
+    if(!events.length){log.innerHTML='<div style="color:var(--text-3)">No auto-pipeline events yet</div>';return;}
+    log.innerHTML=events.map(ev=>{
+      const ts=(ev.scheduled_at||ev.ts||'').slice(0,16);
+      const msg=ev.project?ev.project.split('/').slice(-2).join('/')+' → '+(ev.status||'?'):'event';
+      return `<div class="ap-entry"><span class="ap-ts">${esc(ts)}</span><span class="ap-msg">${esc(msg)}</span></div>`;
+    }).join('');
+  }catch(_){}
+}
+
 async function loadAdmin(){
+  _setupAdminSSE();
+  loadAutoPipeline();
   const projs=await loadProjects();
   const tbody=$('projects-body');
   tbody.innerHTML=projs.map(p=>{
@@ -869,6 +1243,8 @@ const _CMD_ITEMS=[
   {label:'Pulse — KPI dashboard',action:()=>switchView('pulse'),cat:'view'},
   {label:'Chat — Ask the codebase',action:()=>switchView('chat'),cat:'view'},
   {label:'Admin — Projects & ops',action:()=>switchView('admin'),cat:'view'},
+  {label:'Graph — Knowledge graph',action:()=>switchView('graph'),cat:'view'},
+  {label:'Wiki — Knowledge base pages',action:()=>switchView('wiki'),cat:'view'},
   {label:'Run Vacuum',action:runVacuum,cat:'op'},
   {label:'Run Dedup',action:runDedup,cat:'op'},
   {label:'Re-index project',action:runReindex,cat:'op'},
