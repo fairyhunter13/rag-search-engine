@@ -238,6 +238,9 @@ class TestSSEStreamingErrorRegression:
         if not error_events:
             pytest.skip("No error events emitted — stream completed gracefully")
         for evt in error_events:
+            # PROJECT_NOT_REGISTERED errors fire before intent routing — no intent is known.
+            if evt.get("code") == "PROJECT_NOT_REGISTERED":
+                continue
             assert evt.get("intent") in self._VALID_INTENTS, (
                 f"error event 'intent' must be a valid intent; got: {evt.get('intent')!r}. "
                 f"Valid: {sorted(self._VALID_INTENTS)}"

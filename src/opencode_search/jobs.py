@@ -35,6 +35,7 @@ class Job:
     completed_at: str | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
+    progress: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,4 +185,5 @@ def job_to_dict(job: Job) -> dict[str, Any]:
         "completed_at": job.completed_at,
         "error": job.error,
         "result": job.result,
+        "progress": job.progress,
     }

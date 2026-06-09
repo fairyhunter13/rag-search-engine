@@ -50,6 +50,8 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
     ("/api/semantic_trace", "GET", None),
     ("/api/build_hierarchy", "POST", {"project": "/tmp/does-not-exist"}),
     ("/api/enrich_hierarchy", "POST", {"project": "/tmp/does-not-exist"}),
+    ("/api/enrich_symbols", "POST", {"project": "/tmp/does-not-exist"}),
+    ("/api/symbol_intent", "GET", None),
     ("/api/import_cycles", "GET", None),
     ("/api/graph_diff", "GET", None),
     ("/api/callflow_html", "GET", None),

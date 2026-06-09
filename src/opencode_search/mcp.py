@@ -529,6 +529,7 @@ async def build(
     action: Literal[
         "index", "pipeline", "enrich", "wiki", "ingest",
         "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
+        "enrich_symbols",
     ] = "pipeline",
     source_path: str | None = None,
     symbol: str | None = None,
@@ -557,7 +558,7 @@ async def build(
     valid = {
         "index", "pipeline", "enrich", "wiki", "ingest",
         "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
-        "enrich_hierarchy",
+        "enrich_hierarchy", "enrich_symbols",
     }
     if action not in valid:
         return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
@@ -674,6 +675,20 @@ async def build(
             "job_id": job.id,
             "poll_url": f"/api/jobs/{job.id}",
             "message": "Hierarchy enrichment running in background. Poll /api/jobs/{job_id} for progress.",
+        }
+    elif action == "enrich_symbols":
+        from opencode_search.handlers._enrichment import handle_enrich_symbols_background
+        job = submit_job(
+            handle_enrich_symbols_background(project_path),
+            action="enrich_symbols",
+            project_path=project_path,
+            dedup=True,
+        )
+        return {
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Background symbol enrichment submitted. Poll /api/jobs/{job_id} for progress.",
         }
     else:
         if not symbol:

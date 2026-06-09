@@ -657,6 +657,41 @@ def _register_graph_routes(mcp: FastMCP) -> None:
             "message": "Hierarchy enrichment running in background.",
         })
 
+    @mcp.custom_route("/api/enrich_symbols", methods=["POST"], include_in_schema=False)
+    async def api_enrich_symbols(request: Request) -> JSONResponse:
+        """Submit background job to enrich all unenriched function/method nodes."""
+        from opencode_search.handlers._enrichment import handle_enrich_symbols_background
+        from opencode_search.jobs import submit_job
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        job = submit_job(
+            handle_enrich_symbols_background(project),
+            action="enrich_symbols",
+            project_path=project,
+            dedup=True,
+        )
+        return JSONResponse({
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Background symbol enrichment submitted.",
+        })
+
+    @mcp.custom_route("/api/symbol_intent", methods=["GET"], include_in_schema=False)
+    async def api_symbol_intent(request: Request) -> JSONResponse:
+        """Get or generate LLM intent for a single function/method symbol."""
+        from opencode_search.handlers._enrichment import handle_get_symbol_intent
+        name = request.query_params.get("name", "")
+        project = request.query_params.get("project", "")
+        if not name or not project:
+            return JSONResponse({"error": "name and project are required"}, status_code=400)
+        result = await handle_get_symbol_intent(name=name, project_path=project)
+        return JSONResponse(result)
+
     @mcp.custom_route("/api/import_cycles", methods=["GET"], include_in_schema=False)
     async def api_import_cycles(request: Request) -> JSONResponse:
         """Circular import dependencies — Tarjan SCC on file-level IMPORTS graph."""
@@ -827,6 +862,7 @@ def _register_chat_routes(mcp: FastMCP) -> None:
             _RELOAD_NOTICE = json.dumps({"type": "reload", "retry_after_ms": 3000})
             if project not in load_registry():
                 yield f"data: {json.dumps({'type': 'error', 'code': 'PROJECT_NOT_REGISTERED', 'message': f'Project is not indexed: {project}. Run build(action=pipeline) to index it first.'})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'elapsed_ms': 0, 'sources': []})}\n\n"
                 return
             try:
                 async for chunk in handle_chat_auto_stream(
@@ -1396,12 +1432,16 @@ def _register_ops_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/jobs/{job_id}", methods=["GET"], include_in_schema=False)
     async def api_job_status(request: Request) -> JSONResponse:
         """Get status of a specific background job."""
+        from opencode_search.handlers._enrichment import _enrich_symbols_progress
         from opencode_search.jobs import get_job, job_to_dict
         job_id = request.path_params.get("job_id", "")
         job = get_job(job_id)
         if job is None:
             return JSONResponse({"error": f"Job {job_id!r} not found"}, status_code=404)
-        return JSONResponse(job_to_dict(job))
+        d = job_to_dict(job)
+        if job.action == "enrich_symbols" and job.project_path in _enrich_symbols_progress:
+            d["progress"] = _enrich_symbols_progress[job.project_path]
+        return JSONResponse(d)
 
     @mcp.custom_route("/api/jobs/{job_id}/cancel", methods=["POST"], include_in_schema=False)
     async def api_job_cancel(request: Request) -> JSONResponse:

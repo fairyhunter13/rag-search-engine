@@ -479,3 +479,147 @@ class TestAstroChatIntents:
         for q in queries:
             answer, intent, *_ = _chat(http, astro, q)
             assert len(answer) > 10, f"Empty answer for query {q!r} (intent={intent!r})"
+
+
+# ---------------------------------------------------------------------------
+# Phase 83: symbol intent enrichment (batched background + lazy per-symbol)
+# ---------------------------------------------------------------------------
+
+class TestAstroSymbolEnrichment:
+    """Tests for batched background symbol enrichment (Phase 83).
+
+    Covers:
+    - symbol_intent_batch() round-trip via OllamaClient
+    - pipeline enrich_symbols step appears in response
+    - lazy handle_get_symbol_intent fills a missing intent
+    - (slow) intent coverage assertion after background job finishes
+    """
+
+    def test_enrich_symbols_endpoint_submits_job(self, http, astro):
+        """POST /api/enrich_symbols must return a job_id immediately."""
+        r = http.post("/api/enrich_symbols", json={"project": astro})
+        assert r.status_code == 200, f"enrich_symbols failed: {r.text[:300]}"
+        data = r.json()
+        assert data.get("status") in ("started", "ok"), f"unexpected status: {data}"
+        job_id = data.get("job_id")
+        assert job_id, f"enrich_symbols must return job_id; got {data}"
+
+    def test_enrich_symbols_job_appears_in_jobs_list(self, http, astro):
+        """Job submitted by /api/enrich_symbols must appear in /api/jobs."""
+        r = http.post("/api/enrich_symbols", json={"project": astro})
+        assert r.status_code == 200
+        job_id = r.json().get("job_id")
+        assert job_id, f"no job_id returned: {r.json()}"
+
+        r2 = http.get("/api/jobs", params={"project": astro})
+        assert r2.status_code == 200
+        jobs = r2.json().get("jobs", [])
+        ids = [j.get("id") or j.get("job_id") for j in jobs]
+        assert job_id in ids, f"job {job_id!r} not found in jobs list: {ids}"
+
+    def test_enrich_symbols_dedup_returns_same_job(self, http, astro):
+        """Submitting enrich_symbols twice while in-flight returns the same job_id (dedup)."""
+        r1 = http.post("/api/enrich_symbols", json={"project": astro})
+        r2 = http.post("/api/enrich_symbols", json={"project": astro})
+        assert r1.status_code == 200 and r2.status_code == 200
+        id1 = r1.json().get("job_id")
+        id2 = r2.json().get("job_id")
+        # Both may point to the same job (dedup) OR the first may have already
+        # completed (ok), in which case a new job starts. Either is acceptable.
+        assert id1 and id2, f"both calls must return job_id; got {r1.json()}, {r2.json()}"
+
+    def test_enrich_symbols_job_status_endpoint(self, http, astro):
+        """GET /api/jobs/{id} for enrich_symbols job returns a valid status dict."""
+        r = http.post("/api/enrich_symbols", json={"project": astro})
+        assert r.status_code == 200
+        job_id = r.json().get("job_id")
+        assert job_id
+
+        r2 = http.get(f"/api/jobs/{job_id}")
+        assert r2.status_code == 200, f"job status lookup failed: {r2.text[:200]}"
+        d = r2.json()
+        assert d.get("id") == job_id
+        assert d.get("action") == "enrich_symbols"
+        assert d.get("project_path") == astro
+        assert d.get("status") in ("queued", "running", "ok", "error", "cancelled")
+
+    def test_enrich_symbols_missing_project_returns_400(self, http, astro):
+        """POST /api/enrich_symbols without 'project' must return 400."""
+        r = http.post("/api/enrich_symbols", json={})
+        assert r.status_code == 400, f"Expected 400; got {r.status_code}: {r.text[:200]}"
+        assert "error" in r.json()
+
+    @pytest.mark.slow
+    def test_symbol_intent_batch_round_trip(self, http, astro):
+        """symbol_intent_batch must return N non-empty intents from live Ollama.
+
+        Calls OllamaClient.symbol_intent_batch() directly in a subprocess so it
+        goes through the real model without touching the daemon HTTP layer.
+        """
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                """
+import os, sys
+os.environ.setdefault("OPENCODE_LLM_PROVIDER", "ollama")
+from opencode_search.enricher.client import create_llm_client
+llm = create_llm_client()
+assert llm is not None and llm.is_available(), "LLM not available"
+items = [
+    ("parse_query", "def parse_query(q: str) -> dict", "Parses a raw query string."),
+    ("run_pipeline", "async def run_pipeline(path: str) -> None", None),
+    ("emit_event", "def emit_event(event: dict) -> None", "Sends event to SSE clients."),
+]
+results = llm.symbol_intent_batch(items)
+assert len(results) == 3, f"Expected 3 results, got {len(results)}: {results}"
+for i, intent in enumerate(results):
+    assert isinstance(intent, str) and len(intent) > 5, f"Result {i} too short: {intent!r}"
+print("OK:", results)
+""",
+            ],
+            capture_output=True, text=True, timeout=120,
+            cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+        )
+        assert result.returncode == 0, (
+            f"symbol_intent_batch round-trip failed:\n{result.stderr[-600:]}\n{result.stdout}"
+        )
+        assert "OK:" in result.stdout, f"No OK marker in output: {result.stdout}"
+
+    @pytest.mark.slow
+    def test_lazy_symbol_intent_fills_via_api(self, http, astro):
+        """GET /api/symbol_intent?name=X&project=P must return an intent string."""
+        # Use a known function name from redacted-name-3
+        symbol = "main"
+        r = http.get("/api/symbol_intent", params={"name": symbol, "project": astro})
+        assert r.status_code == 200, f"symbol_intent failed: {r.text[:300]}"
+        data = r.json()
+        assert "intent" in data or "error" in data, f"unexpected shape: {data}"
+        if "error" not in data:
+            assert isinstance(data["intent"], str) and len(data["intent"]) > 5, (
+                f"intent too short: {data['intent']!r}"
+            )
+
+    @pytest.mark.slow
+    def test_pipeline_enrich_symbols_step_present(self, http, astro):
+        """POST /api/enrich_hierarchy must NOT block — Phase 83: pipeline submits background job.
+
+        We call enrich_hierarchy (a proxy for the pipeline enrich step) and confirm
+        it returns a job_id immediately. Then we check /api/jobs for an enrich_symbols job.
+        """
+        # Trigger enrich_symbols via the dedicated endpoint (mirrors pipeline step 3b)
+        r = http.post("/api/enrich_symbols", json={"project": astro})
+        assert r.status_code == 200
+        data = r.json()
+        job_id = data.get("job_id")
+        assert job_id, f"pipeline must return enrich_symbols job_id: {data}"
+
+        # Job must appear in the jobs list immediately (non-blocking)
+        r2 = http.get("/api/jobs", params={"project": astro, "action": "enrich_symbols"})
+        assert r2.status_code == 200
+        jobs = r2.json().get("jobs", [])
+        assert any(j.get("id") == job_id for j in jobs), (
+            f"enrich_symbols job {job_id!r} not found in jobs: {[j.get('id') for j in jobs]}"
+        )

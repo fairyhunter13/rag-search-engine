@@ -177,26 +177,130 @@ async def handle_get_symbol_intent(name: str, project_path: str) -> dict[str, An
 
 
 async def _enrich_symbols(gs: Any, llm: Any) -> int:
-    """Enrich all nodes without intent."""
+    """Enrich all function/method nodes without intent, using batched LLM calls."""
     nodes = [n for n in gs.all_nodes() if not n.intent and n.kind in ("function", "method")]
+    if not nodes:
+        return 0
+    sem = asyncio.Semaphore(_LLM_CONCURRENCY)
     count = 0
-    for node in nodes[:100]:  # cap per call to avoid long-running enrichment
-        try:
-            intent = await asyncio.to_thread(
-                llm.symbol_intent,
-                node.name,
-                node.signature or node.qualified_name,
-                node.docstring,
-            )
-            now = datetime.now(UTC).isoformat()
-            gs.set_node_intent(node.id, intent, now)
-            count += 1
-        except Exception as exc:
-            log.debug("intent generation failed for %s: %s", node.name, exc)
+    now = datetime.now(UTC).isoformat()
+
+    async def _process_batch(batch: list[Any]) -> int:
+        items = [(n.name, n.signature or n.qualified_name, n.docstring) for n in batch]
+        async with sem:
+            try:
+                intents = await asyncio.to_thread(llm.symbol_intent_batch, items)
+            except Exception as exc:
+                log.debug("batch intent failed: %s", exc)
+                return 0
+        enriched = 0
+        for node, intent in zip(batch, intents, strict=False):
+            if intent:
+                gs.set_node_intent(node.id, intent, now)
+                enriched += 1
+        return enriched
+
+    batches = [nodes[i:i + _SYMBOL_INTENT_BATCH_SIZE] for i in range(0, len(nodes), _SYMBOL_INTENT_BATCH_SIZE)]
+    results = await asyncio.gather(*[_process_batch(b) for b in batches])
+    count = sum(results)
     return count
 
 
+async def handle_enrich_symbols_background(project_path: str) -> dict[str, Any]:
+    """Enrich all unenriched function/method nodes in batches. Resumable + idempotent.
+
+    Runs as a background job — the pipeline returns immediately after submitting this.
+    Progress is written to _enrich_symbols_progress[project_path] every 500 nodes
+    and is available via GET /api/jobs/{id}.
+    """
+    llm = _get_llm()
+    if llm is None:
+        return {"error": "LLM not available", "project_path": project_path}
+    if not llm.is_available():
+        return {"error": "LLM provider not reachable", "project_path": project_path}
+
+    gs = _open_graph(project_path)
+    if gs is None:
+        return {"error": "graph not built", "project_path": project_path}
+
+    t0 = time.perf_counter()
+    try:
+        all_nodes = [n for n in gs.all_nodes() if n.kind in ("function", "method")]
+        unenriched = [n for n in all_nodes if not n.intent]
+        total = len(all_nodes)
+        already_done = total - len(unenriched)
+
+        if not unenriched:
+            _enrich_symbols_progress[project_path] = {"enriched": total, "total": total}
+            return {"status": "ok", "enriched": 0, "total": total, "elapsed_s": 0.0}
+
+        log.info(
+            "handle_enrich_symbols_background: %s — %d/%d to enrich",
+            project_path, len(unenriched), total,
+        )
+        _enrich_symbols_progress[project_path] = {
+            "enriched": already_done, "total": total,
+        }
+
+        sem = asyncio.Semaphore(_LLM_CONCURRENCY)
+        enriched_count = already_done
+        now = datetime.now(UTC).isoformat()
+
+        async def _process_batch(batch: list[Any]) -> int:
+            items = [(n.name, n.signature or n.qualified_name, n.docstring) for n in batch]
+            async with sem:
+                try:
+                    intents = await asyncio.to_thread(llm.symbol_intent_batch, items)
+                except Exception as exc:
+                    log.debug("symbol_intent_batch failed: %s", exc)
+                    return 0
+            done = 0
+            for node, intent in zip(batch, intents, strict=False):
+                if intent:
+                    gs.set_node_intent(node.id, intent, now)
+                    done += 1
+            return done
+
+        batches = [
+            unenriched[i:i + _SYMBOL_INTENT_BATCH_SIZE]
+            for i in range(0, len(unenriched), _SYMBOL_INTENT_BATCH_SIZE)
+        ]
+        for i in range(0, len(batches), _LLM_CONCURRENCY):
+            chunk = batches[i:i + _LLM_CONCURRENCY]
+            results = await asyncio.gather(*[_process_batch(b) for b in chunk])
+            enriched_count += sum(results)
+            if enriched_count % 500 < _SYMBOL_INTENT_BATCH_SIZE * _LLM_CONCURRENCY:
+                _enrich_symbols_progress[project_path] = {
+                    "enriched": enriched_count, "total": total,
+                }
+                log.info(
+                    "enrich_symbols_background: %s — %d/%d enriched",
+                    project_path, enriched_count, total,
+                )
+
+        _enrich_symbols_progress[project_path] = {
+            "enriched": enriched_count, "total": total,
+        }
+        elapsed = round(time.perf_counter() - t0, 2)
+        log.info(
+            "enrich_symbols_background done: %s — %d new intents in %.1fs",
+            project_path, enriched_count - already_done, elapsed,
+        )
+        return {
+            "status": "ok",
+            "enriched": enriched_count - already_done,
+            "total": total,
+            "elapsed_s": elapsed,
+        }
+    finally:
+        gs.close()
+
+
 _LLM_CONCURRENCY: int = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", "2"))
+_SYMBOL_INTENT_BATCH_SIZE: int = int(os.environ.get("OPENCODE_SYMBOL_BATCH_SIZE", "20"))
+
+# Per-project progress for long-running background enrichment — polled via /api/jobs
+_enrich_symbols_progress: dict[str, dict[str, int]] = {}
 
 _VALID_SEMANTIC_TYPES = frozenset([
     "api_boundary", "data_model", "business_process", "business_rule",

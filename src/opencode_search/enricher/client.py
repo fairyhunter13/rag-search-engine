@@ -105,6 +105,22 @@ class LLMClient:
             max_tokens=128,
         )
 
+    def symbol_intent_batch(
+        self, items: list[tuple[str, str, str | None]]
+    ) -> list[str]:
+        """Generate intent strings for N (name, signature, docstring) tuples.
+
+        Returns a list of N strings in input order. Empty string means the model
+        failed to produce an intent for that item. Default: sequential fallback.
+        """
+        results: list[str] = []
+        for name, sig, doc in items:
+            try:
+                results.append(self.symbol_intent(name, sig, doc))
+            except Exception:
+                results.append("")
+        return results
+
     def community_summary(
         self,
         node_summaries: list[str],
@@ -616,6 +632,58 @@ class OllamaClient(LLMClient):
             raise RuntimeError(f"Ollama HTTP {exc.code}: {exc.read().decode()}") from exc
         except urllib.error.URLError as exc:
             raise ConnectionError(f"Ollama connection error: {exc.reason}") from exc
+
+
+    def symbol_intent_batch(
+        self, items: list[tuple[str, str, str | None]]
+    ) -> list[str]:
+        """Batched symbol intent — N (name, sig, doc) tuples in one Ollama call.
+
+        Prompt asks for N numbered one-sentence intents.  Parses output by
+        "N. " line prefix. Falls back to per-item sequential calls if parse
+        fails for the whole batch.
+        """
+        import re as _re
+
+        if not items:
+            return []
+        n = len(items)
+        lines: list[str] = []
+        for i, (name, sig, doc) in enumerate(items, start=1):
+            doc_part = f" | {doc[:80]}" if doc else ""
+            lines.append(f"{i}. {name} | {sig[:120]}{doc_part}")
+        numbered_text = "\n".join(lines)
+        prompt = (
+            "You are a code documentation assistant. "
+            f"For each of the {n} functions below, write exactly one sentence "
+            "describing what it does. Number your responses to match. "
+            "Format: '1. <sentence>' on its own line, then '2. <sentence>', etc. "
+            "No preamble. No extra text.\n\n"
+            f"{numbered_text}"
+        )
+        try:
+            raw = self.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=max(32 * n, 64),
+            )
+        except Exception:
+            return [""] * n
+
+        # Parse "N. sentence" output
+        results: list[str] = [""] * n
+        pattern = _re.compile(r"^\s*(\d+)[.)]\s*(.+)", _re.MULTILINE)
+        matched = 0
+        for m in pattern.finditer(raw):
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < n:
+                results[idx] = m.group(2).strip()
+                matched += 1
+
+        # If fewer than half parsed, fall back to sequential for better coverage
+        if matched < n // 2:
+            fallback = super().symbol_intent_batch(items)
+            return fallback
+        return results
 
 
 # ---------------------------------------------------------------------------
