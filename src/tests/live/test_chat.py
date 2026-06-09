@@ -279,3 +279,22 @@ def test_chat_graph_impact_intent(http, project, query):
     assert intent in ("graph_impact", "architecture", "feature"), (
         f"Query {query!r} routed to {intent!r} instead of graph_impact"
     )
+
+
+@pytest.mark.live
+def test_chat_stream_unregistered_project_emits_structured_error(http):
+    """SSE stream for an unregistered project must emit a structured error, not a raw exception."""
+    r = http.post(
+        "/api/chat_stream",
+        json={"project": "/tmp/this-project-does-not-exist-in-registry", "query": "hello"},
+        headers={"Accept": "text/event-stream"},
+    )
+    assert r.status_code == 200, f"Expected SSE 200, got {r.status_code}: {r.text[:200]}"
+    from .conftest import parse_sse
+    events = parse_sse(r)
+    error_events = [e for e in events if e.get("type") == "error"]
+    assert error_events, f"No error event in SSE stream; got events: {events}"
+    err = error_events[0]
+    assert err.get("code") == "PROJECT_NOT_REGISTERED", (
+        f"Expected code=PROJECT_NOT_REGISTERED, got: {err}"
+    )

@@ -821,9 +821,13 @@ def _register_chat_routes(mcp: FastMCP) -> None:
         from opencode_search.metrics import record_stream_cancelled
 
         async def _gen():
+            from opencode_search.config import load_registry
             from opencode_search.daemon_runtime import reload_pending
             from opencode_search.metrics import record_stream_error
             _RELOAD_NOTICE = json.dumps({"type": "reload", "retry_after_ms": 3000})
+            if project not in load_registry():
+                yield f"data: {json.dumps({'type': 'error', 'code': 'PROJECT_NOT_REGISTERED', 'message': f'Project is not indexed: {project}. Run build(action=pipeline) to index it first.'})}\n\n"
+                return
             try:
                 async for chunk in handle_chat_auto_stream(
                     query=query,
