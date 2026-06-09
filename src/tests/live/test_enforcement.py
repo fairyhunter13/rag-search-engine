@@ -28,6 +28,22 @@ _MCP_BRIDGE_ENV_VARS = {
     "OPENCODE_LLM_PROVIDER": "ollama",
     "OPENCODE_QUERY_LLM_PROVIDER": "ollama",
 }
+_REPO = Path("/home/user/git/github.com/fairyhunter13/opencode-search-engine")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_integrations_configured():
+    """Sync all tool configs before running enforcement checks.
+
+    External tools (Codex, opencode) rewrite their configs during normal use and
+    strip the env section. This fixture repairs drift so that the enforcement tests
+    verify configure_integrations.py correctly sets the env vars, not just whether
+    the user happened to run --apply-all recently.
+    """
+    subprocess.run(
+        [str(_VENV_PYTHON), "scripts/configure_integrations.py", "--apply-all"],
+        capture_output=True, text=True, cwd=str(_REPO), check=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +317,6 @@ class TestOpencodeBridgeConfig:
 # ---------------------------------------------------------------------------
 # configure_integrations.py self-repair
 # ---------------------------------------------------------------------------
-
-_REPO = Path("/home/user/git/github.com/fairyhunter13/opencode-search-engine")
 
 
 class TestConfigureIntegrationsScript:
