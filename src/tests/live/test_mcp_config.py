@@ -268,3 +268,69 @@ class TestMCPConfigTemplates:
             f"CANONICAL_MCP_ENV must set OPENCODE_QUERY_LLM_PROVIDER=ollama; "
             f"got {CANONICAL_MCP_ENV.get('OPENCODE_QUERY_LLM_PROVIDER')!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Secondary Claude accounts
+# ---------------------------------------------------------------------------
+
+class TestClaudeAccountProfiles:
+    """~/.claude-account1 and ~/.claude-account2 must mirror the primary profile."""
+
+    def _check_account(self, account_dir: Path) -> None:
+        if not account_dir.exists():
+            pytest.skip(f"{account_dir} not found")
+        settings_path = account_dir / "settings.json"
+        claude_md = account_dir / "CLAUDE.md"
+        assert settings_path.exists(), f"{settings_path} not found"
+        data = json.loads(settings_path.read_text())
+        servers = data.get("mcpServers", {})
+        assert "opencode-search" in servers, (
+            f"opencode-search not in {settings_path}; found: {list(servers.keys())}"
+        )
+        assert claude_md.exists(), f"{claude_md} not found — sync_global_instructions may need to run"
+        text = claude_md.read_text()
+        for tool in _7_TOOLS:
+            assert tool in text, f"Tool '{tool}' missing from {claude_md}"
+
+    def test_claude_account1_has_mcp_and_prompt(self):
+        self._check_account(_HOME / ".claude-account1")
+
+    def test_claude_account2_has_mcp_and_prompt(self):
+        self._check_account(_HOME / ".claude-account2")
+
+
+# ---------------------------------------------------------------------------
+# Bash aliases sentinel block
+# ---------------------------------------------------------------------------
+
+class TestBashAliasesSentinel:
+    """~/.bash_aliases must contain the sentinel-managed opencode-search alias block."""
+
+    _ALIASES_PATH = _HOME / ".bash_aliases"
+
+    def test_aliases_block_present(self):
+        if not self._ALIASES_PATH.exists():
+            pytest.skip("~/.bash_aliases not found")
+        text = self._ALIASES_PATH.read_text()
+        assert "[opencode-search-aliases:start]" in text, (
+            "~/.bash_aliases missing [opencode-search-aliases:start] sentinel — "
+            "run scripts/configure_integrations.py to install aliases"
+        )
+        assert "[opencode-search-aliases:end]" in text, (
+            "~/.bash_aliases missing [opencode-search-aliases:end] sentinel"
+        )
+        # Key aliases must appear somewhere in the file (block may only be a comment header)
+        for alias in ("ocs-index", "ocs-dash", "ocs"):
+            assert alias in text, (
+                f"Alias '{alias}' missing from ~/.bash_aliases"
+            )
+
+    def test_aliases_block_not_duplicated(self):
+        if not self._ALIASES_PATH.exists():
+            pytest.skip("~/.bash_aliases not found")
+        text = self._ALIASES_PATH.read_text()
+        count = text.count("[opencode-search-aliases:start]")
+        assert count == 1, (
+            f"[opencode-search-aliases:start] appears {count}× in ~/.bash_aliases; expected exactly 1"
+        )

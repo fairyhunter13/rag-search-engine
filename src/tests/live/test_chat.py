@@ -4,9 +4,18 @@ Tests POST /api/chat_stream which returns text/event-stream SSE.
 """
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 pytestmark = [pytest.mark.live, pytest.mark.slow]
+
+# Query-tier models: any of these are valid for dashboard chat responses.
+# qwen3-query:8b — used when daemon runs via systemd (OPENCODE_QUERY_LLM_PROVIDER=ollama)
+# gpt-5.4-mini / haiku — used in interactive shell where bash_aliases sets OPENCODE_QUERY_LLM_PROVIDER=codex
+_QUERY_TIER_MODELS = {"gpt-5.4-mini", "claude-haiku-4-5-20251001", "qwen3-query:8b"}
+# Build-tier model: FORBIDDEN for chat — it's the KB enrichment model (weak, non-instructable)
+_BUILD_TIER_MODELS = {"qwen3-enrich:1.7b"}
 
 from .conftest import parse_sse  # noqa: E402
 
@@ -188,6 +197,70 @@ def test_chat_graph_callees_intent(http, project):
     )
     assert intent in ("graph_callees", "search", "feature"), (
         f"Callees query routed to unexpected intent: {intent!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LLM tier guard — dashboard chat must never use the build-tier (ollama) LLM
+# ---------------------------------------------------------------------------
+
+def test_api_chat_uses_query_tier_llm(http, project):
+    """POST /api/chat must return a query-tier model, not the build/enrich model.
+
+    Catches the regression where handle_kb_chat used create_llm_client (qwen3-enrich:1.7b)
+    instead of create_query_llm_client (qwen3-query:8b via systemd, or codex → haiku in shell).
+    """
+    r = http.post(
+        "/api/chat",
+        json={"project": project, "query": "list all features and components of this project"},
+    )
+    assert r.status_code == 200, f"/api/chat failed: {r.status_code} {r.text[:200]}"
+    data = r.json()
+    model = data.get("model", "")
+    assert model not in _BUILD_TIER_MODELS, (
+        f"/api/chat returned build-tier model {model!r}; dashboard chat must use "
+        f"query-tier ({_QUERY_TIER_MODELS}). "
+        f"Root cause: _kb_chat.py was using create_llm_client instead of create_query_llm_client."
+    )
+    assert any(m in model for m in _QUERY_TIER_MODELS) or model, (
+        f"/api/chat returned empty model field: {data}"
+    )
+
+
+async def test_kb_chat_handler_uses_query_tier(project):
+    """handle_kb_chat must use create_query_llm_client, not the build-tier LLM."""
+    if not shutil.which("codex") and not shutil.which("claude"):
+        pytest.skip("Neither codex nor claude CLI installed — query-tier unavailable")
+    from opencode_search.handlers._kb_chat import handle_kb_chat
+    result = await handle_kb_chat(
+        query="what are the main features",
+        project_path=project,
+        mode="quick",
+        top_k=5,
+    )
+    model = result.get("model", "")
+    assert model not in _BUILD_TIER_MODELS, (
+        f"handle_kb_chat used build-tier model {model!r}; expected query-tier "
+        f"({_QUERY_TIER_MODELS})"
+    )
+
+
+def test_chat_router_global_intent_reports_query_tier_model(http, project):
+    """A comprehensive KB-chat query must use a query-tier model, not the build/enrich tier.
+
+    Uses /api/chat (blocking) to avoid SSE stream timeout. Covers the code path where
+    chat_router routes to handle_kb_chat for global/feature intents.
+    """
+    r = http.post(
+        "/api/chat",
+        json={"project": project, "query": "list all the business features and capabilities this project provides"},
+    )
+    assert r.status_code == 200, f"/api/chat failed: {r.status_code} {r.text[:200]}"
+    data = r.json()
+    model = data.get("model", "")
+    assert model not in _BUILD_TIER_MODELS, (
+        f"/api/chat (global path) used build-tier model {model!r}; expected query-tier "
+        f"({_QUERY_TIER_MODELS})"
     )
 
 
