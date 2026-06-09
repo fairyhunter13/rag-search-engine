@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 import uuid
 from collections.abc import Coroutine
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ class Job:
 _jobs: dict[str, Job] = {}
 _bg_tasks: set[asyncio.Task] = set()
 _job_tasks: dict[str, asyncio.Task] = {}  # job_id → task, for cancellation
+_dedup_lock = threading.Lock()  # serialises the check-then-create in submit_job(dedup=True)
 
 
 def _now_iso() -> str:
@@ -91,25 +93,26 @@ def submit_job(
     is returned instead of spawning a new one — the passed-in coroutine is
     closed to silence the "coroutine was never awaited" warning.
     """
-    if dedup:
-        existing = find_active_job(project_path=project_path, action=action)
-        if existing is not None:
-            with contextlib.suppress(Exception):
-                coro.close()
-            log.info(
-                "submit_job: dedup hit — returning existing job[%s] for %s(%s)",
-                existing.id, action, project_path,
-            )
-            return existing
-    job_id = str(uuid.uuid4())[:8]
-    job = Job(
-        id=job_id,
-        action=action,
-        project_path=project_path,
-        status="queued",
-        queued_at=_now_iso(),
-    )
-    _jobs[job_id] = job
+    with _dedup_lock:
+        if dedup:
+            existing = find_active_job(project_path=project_path, action=action)
+            if existing is not None:
+                with contextlib.suppress(Exception):
+                    coro.close()
+                log.info(
+                    "submit_job: dedup hit — returning existing job[%s] for %s(%s)",
+                    existing.id, action, project_path,
+                )
+                return existing
+        job_id = str(uuid.uuid4())[:8]
+        job = Job(
+            id=job_id,
+            action=action,
+            project_path=project_path,
+            status="queued",
+            queued_at=_now_iso(),
+        )
+        _jobs[job_id] = job
     _evict_old_jobs()
 
     # Persist the queued state to SQLite for restart recovery.
