@@ -365,11 +365,18 @@ class TestLLMRoutingAudit:
     """Structural audit: handler files must not import the query-tier LLM client."""
 
     def test_no_handler_imports_query_llm_client(self):
-        """Grep all handler files for create_query_llm_client; only _chat_router.py is allowed."""
+        """Grep all handler files for create_query_llm_client.
+
+        Allowed: _chat_router.py (chat orchestrator) and _kb_chat.py (KB context
+        assembly called from chat_router for global/feature intents — must use
+        query tier, not the build/enrich tier).
+        All other handlers must use create_llm_client (ollama KB tier only).
+        """
+        _ALLOWED = {"_chat_router.py", "_kb_chat.py"}
         handlers_dir = _REPO / "src" / "opencode_search" / "handlers"
         violations = []
         for py_file in handlers_dir.glob("*.py"):
-            if py_file.name == "_chat_router.py":
+            if py_file.name in _ALLOWED:
                 continue
             text = py_file.read_text(encoding="utf-8")
             if "create_query_llm_client" in text:
