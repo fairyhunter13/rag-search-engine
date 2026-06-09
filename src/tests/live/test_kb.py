@@ -34,8 +34,7 @@ class TestEnrichment:
             # Fall back to counting communities directly
             r2 = http.get("/api/communities", params={"project": project, "top_k": 200})
             communities = r2.json().get("communities", [])
-            if not communities:
-                pytest.skip("No communities found")
+            assert communities, "No communities found — enrichment_pct=0 and no communities in /api/communities"
             enriched = sum(1 for c in communities if c.get("title") and c["title"].strip())
             pct = enriched / len(communities) * 100
         assert pct >= 80, (
@@ -74,7 +73,7 @@ class TestEnrichment:
                     "Run: ollama pull qwen3-enrich:1.7b"
                 )
         except urllib.error.URLError as e:
-            pytest.skip(f"Ollama not reachable at localhost:11434: {e}")
+            pytest.fail(f"Ollama not reachable at localhost:11434: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +132,7 @@ class TestWiki:
         r = http.get("/api/wiki", params={"project": project})
         assert r.status_code == 200
         pages = r.json().get("pages", r.json().get("wiki_pages", []))
-        if not pages:
-            pytest.skip("No wiki pages found")
+        assert pages, "No wiki pages found — run build(action='wiki') first"
         first_page = pages[0].get("name", pages[0]) if isinstance(pages[0], dict) else pages[0]
         r2 = http.get("/api/wiki/page", params={"project": project, "name": first_page})
         assert r2.status_code == 200, f"wiki page fetch failed: {r2.text[:200]}"
@@ -169,8 +167,9 @@ class TestPatternsCache:
         assert r.status_code == 200
         data = r.json()
         patterns_cached = data.get("patterns_cached", data.get("has_patterns_cache"))
-        if patterns_cached is None:
-            pytest.skip("patterns_cached not in kb_health response")
+        assert patterns_cached is not None, (
+            f"patterns_cached not in kb_health response; keys={list(data.keys())}"
+        )
         # Warn but don't fail if cache is empty — first run might not have it
         if not patterns_cached:
             pytest.xfail("Patterns cache is empty — run build(action='analyze_patterns')")
@@ -215,8 +214,7 @@ class TestIndexingCompleteness:
     def test_embedding_uses_gpu_device(self, http):
         """Embedding device must be reported as CUDA in system status."""
         r = http.get("/api/system_status")
-        if r.status_code != 200:
-            pytest.skip("system_status endpoint not available")
+        assert r.status_code == 200, f"system_status endpoint returned {r.status_code}: {r.text[:200]}"
         data = r.json()
         embed_device = (
             data.get("embed_device")

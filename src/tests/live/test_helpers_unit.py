@@ -113,8 +113,7 @@ class TestKBChatHelpers:
         from opencode_search.enricher import create_llm_client
         from opencode_search.handlers._kb_chat import _quick_answer
         llm = create_llm_client()
-        if llm is None:
-            pytest.skip("LLM unavailable — check OPENCODE_LLM_PROVIDER=ollama")
+        assert llm is not None, "LLM unavailable — check OPENCODE_LLM_PROVIDER=ollama"
         answer = asyncio.run(
             _quick_answer(
                 "What is the main entry point of the search engine?",
@@ -133,14 +132,12 @@ class TestKBChatHelpers:
         from opencode_search.enricher import create_llm_client
         from opencode_search.handlers._kb_chat import _fetch_community_context, _map_reduce_answer
         llm = create_llm_client()
-        if llm is None:
-            pytest.skip("LLM unavailable — check OPENCODE_LLM_PROVIDER=ollama")
+        assert llm is not None, "LLM unavailable — check OPENCODE_LLM_PROVIDER=ollama"
         _, comms, _ = asyncio.run(
             _fetch_community_context("search architecture", quality_project,
                                      top_k=16, include_federation=False)
         )
-        if not comms:
-            pytest.skip("No communities to run map-reduce on")
+        assert comms, "No communities returned for map-reduce on quality_project"
         answer = asyncio.run(_map_reduce_answer(
             "List the main architectural components", comms[:8], llm
         ))
@@ -182,8 +179,7 @@ class TestGetSymbolIntent:
     def test_returns_cached_for_enriched_symbol(self, quality_project):
         from opencode_search.handlers._enrichment import handle_get_symbol_intent
         name = self._pick_enriched_symbol(quality_project)
-        if name is None:
-            pytest.skip("No node with cached intent in graph.db")
+        assert name is not None, "No enriched node found in graph.db — run enrichment first"
         result = asyncio.run(handle_get_symbol_intent(name, quality_project))
         assert "error" not in result, f"Unexpected error: {result}"
         assert result.get("cached") is True, f"Expected cached=True; got {result}"
@@ -205,13 +201,39 @@ class TestGetSymbolIntent:
 
     @pytest.mark.slow
     def test_generates_for_uncached_symbol(self, quality_project):
+        """Verifies lazy intent generation by temporarily clearing one node's intent."""
+        from opencode_search.config import get_project_graph_db_path
         from opencode_search.handlers._enrichment import handle_get_symbol_intent
-        name = self._pick_uncached_symbol(quality_project)
-        if name is None:
-            pytest.skip("All nodes already have cached intent — nothing to generate")
-        result = asyncio.run(handle_get_symbol_intent(name, quality_project))
-        if "error" in result and "LLM" in result.get("error", ""):
-            pytest.skip(f"LLM unavailable: {result['error']}")
-        assert "error" not in result, f"Unexpected error: {result}"
-        assert result.get("intent"), f"Expected non-empty intent; got {result}"
-        assert result.get("cached") is False, f"Expected cached=False; got {result}"
+
+        # Pick an enriched symbol and temporarily clear its intent to test generation
+        name = self._pick_enriched_symbol(quality_project)
+        assert name is not None, "No enriched node found — graph not built"
+
+        db_path = get_project_graph_db_path(quality_project)
+        conn = sqlite3.connect(db_path, timeout=2.0)
+        try:
+            # Save current intent and clear it
+            row = conn.execute("SELECT intent FROM nodes WHERE name=? LIMIT 1", (name,)).fetchone()
+            original_intent = row[0] if row else None
+            conn.execute("UPDATE nodes SET intent=NULL, intent_at=NULL WHERE name=?", (name,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        try:
+            result = asyncio.run(handle_get_symbol_intent(name, quality_project))
+            assert "error" not in result, f"Unexpected error: {result}"
+            assert result.get("intent"), f"Expected non-empty intent; got {result}"
+            assert result.get("cached") is False, f"Expected cached=False; got {result}"
+        finally:
+            # Restore original intent (idempotent if generation already wrote it back)
+            if original_intent:
+                conn2 = sqlite3.connect(db_path, timeout=2.0)
+                try:
+                    conn2.execute(
+                        "UPDATE nodes SET intent=?, intent_at=datetime('now') WHERE name=? AND (intent IS NULL OR intent='')",
+                        (original_intent, name),
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()

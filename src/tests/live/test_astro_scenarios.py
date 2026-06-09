@@ -16,22 +16,10 @@ from __future__ import annotations
 import pytest
 
 from .conftest import judge_answer
-from .test_astro_e2e import _ASTRO, _chat
+from .test_astro_e2e import _chat
 
 pytestmark = pytest.mark.live
 
-
-@pytest.fixture(scope="module")
-def astro(http):
-    """Return astro-project path; skip if not indexed or has no communities."""
-    r = http.get("/api/projects")
-    projects = {p["path"]: p for p in r.json().get("projects", [])}
-    if _ASTRO not in projects:
-        pytest.skip(f"astro-project not in registry: {_ASTRO}")
-    info = projects[_ASTRO]
-    if info.get("communities", 0) == 0:
-        pytest.skip("astro-project has no communities — run build(action='pipeline') first")
-    return _ASTRO
 
 
 # ---------------------------------------------------------------------------

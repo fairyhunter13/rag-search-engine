@@ -29,11 +29,11 @@ _TIMEOUT_CHAT_LONG = 480_000  # ms — long-tail budget for the 4 heaviest inten
 
 @pytest.fixture(scope="module", autouse=True)
 def require_daemon():
-    """Skip entire module if daemon is not reachable."""
+    """Fail if daemon is not reachable — daemon must be running for browser tests."""
     try:
         httpx.get(f"{DAEMON_URL}/api/projects", timeout=5).raise_for_status()
     except Exception as exc:
-        pytest.skip(f"Daemon not reachable: {exc}")
+        pytest.fail(f"Daemon not reachable: {exc}")
 
 
 @pytest.fixture(scope="module")
@@ -42,8 +42,7 @@ def live_project():
     r = httpx.get(f"{DAEMON_URL}/api/projects", timeout=10)
     projects = r.json().get("projects", [])
     all_indexed = [p for p in projects if p.get("communities", 0) > 0]
-    if not all_indexed:
-        pytest.skip("No indexed project with communities")
+    assert all_indexed, "No indexed project with communities"
     large = [p["path"] for p in all_indexed if p.get("communities", 0) > 100]
     return large[0] if large else all_indexed[0]["path"]
 
@@ -565,9 +564,8 @@ class TestAdminView:
     def _open_admin(self, page):
         _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
-        admin_tab = page.locator("button:has-text('Admin'), a:has-text('Admin'), [data-tab='admin']").first
-        if admin_tab.count() == 0:
-            pytest.skip("No Admin tab visible")
+        admin_tab = page.locator("#vbtn-admin").first
+        assert admin_tab.count() > 0, "Admin nav button (#vbtn-admin) not found in dashboard"
         admin_tab.click()
         page.wait_for_timeout(500)
 
@@ -618,7 +616,7 @@ class TestAdminView:
         # Click Vacuum button
         vacuum_btn = page.locator("button:has-text('Vacuum')").first
         if not vacuum_btn.count():
-            pytest.skip("Vacuum button not found in Admin view")
+            pytest.fail("Vacuum button not found in Admin view")
         vacuum_btn.click()
         # Wait for op-log to receive at least one entry (dry-run is fast)
         page.wait_for_function(
@@ -643,7 +641,7 @@ class TestAdminView:
         )
         btn = page.locator("#view-admin").locator(f"button:has-text('{btn_text}')").first
         if not btn.count():
-            pytest.skip(f"Button '{btn_text}' not found in Admin view")
+            pytest.fail(f"Button '{btn_text}' not found in Admin view")
         btn.click()
         page.wait_for_function(
             "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
@@ -695,7 +693,7 @@ class TestAdminView:
         )
         vacuum_btn = page.locator("button:has-text('Vacuum')").first
         if not vacuum_btn.count():
-            pytest.skip("Vacuum button not found in Admin view")
+            pytest.fail("Vacuum button not found in Admin view")
         vacuum_btn.click()
         page.wait_for_function(
             "document.querySelector('#toast div') !== null",
@@ -740,7 +738,7 @@ class TestAdminView:
         )
         vacuum_btn = page.locator("button:has-text('Vacuum')").first
         if not vacuum_btn.count():
-            pytest.skip("Vacuum button not found in Admin view")
+            pytest.fail("Vacuum button not found in Admin view")
         vacuum_btn.click()
         page.wait_for_function(
             "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
@@ -922,7 +920,7 @@ class TestGlobalUI:
         )
         vacuum_btn = page.locator("button:has-text('Vacuum')").first
         if not vacuum_btn.count():
-            pytest.skip("Vacuum button not found in Admin view")
+            pytest.fail("Vacuum button not found in Admin view")
         vacuum_btn.click()
         page.wait_for_selector("#toast div", state="visible", timeout=15_000)
         # Toast must auto-dismiss within 8s (4s display timeout + 4s buffer for animation)
@@ -1242,7 +1240,7 @@ class TestChatViewGaps:
         thinking_bubble = page.locator(".msg.ai.thinking")
         if thinking_bubble.count() == 0:
             # LLM responded before the 10s thinking event interval — nothing to assert
-            pytest.skip("LLM responded before first thinking event; timer not exercised")
+            pytest.fail("LLM responded before first thinking event — timer not exercised")
         text = thinking_bubble.locator(".msg-bubble").inner_text(timeout=5_000)
         assert "s)" in text, (
             f"Thinking timer did not show elapsed seconds; got: {text!r}"
@@ -1327,7 +1325,7 @@ class TestAdminViewGaps:
         self._load_admin(page)
         vacuum_btn = page.locator("button:has-text('Vacuum')").first
         if not vacuum_btn.count():
-            pytest.skip("Vacuum button not found")
+            pytest.fail("Vacuum button not found")
         op_log = page.locator("#op-log")
         # Double-click rapidly
         vacuum_btn.click()
@@ -1358,7 +1356,7 @@ class TestAdminViewGaps:
             page.wait_for_timeout(500)
             vacuum_btn = page.locator("button:has-text('Vacuum')").first
             if not vacuum_btn.count():
-                pytest.skip("Vacuum button not found")
+                pytest.fail("Vacuum button not found")
             vacuum_btn.click()
             page.wait_for_selector("#toast .err, .toast.err, [class*='err']", timeout=5_000)
             toast = page.locator("#toast .err, .toast.err")
@@ -1388,15 +1386,13 @@ class TestAdminViewGaps:
         sel = page.locator("#project-sel")
         assert sel.count() > 0, "#project-sel not found"
         options = sel.locator("option").all()
-        if len(options) < 2:
-            pytest.skip("Need at least 2 projects to test dropdown switch")
+        assert len(options) >= 2, "Need at least 2 indexed projects to test dropdown switch"
         # Get current selector value via DOM (let _proj is not on window)
         current = sel.input_value()
         # Select a different option
         all_values = [opt.get_attribute("value") for opt in options]
         target = next((v for v in all_values if v != current and v), None)
-        if not target:
-            pytest.skip("No alternative project path found in selector")
+        assert target is not None, "No alternative project path found in selector"
         sel.select_option(value=target)
         page.wait_for_timeout(500)
         # Read _proj via JS (let variable is in Script scope, accessible from page.evaluate)
@@ -1503,8 +1499,7 @@ class TestGlobalUIGaps:
             timeout=5_000,
         )
         first_result = page.locator("#cmd-results li").first
-        if not first_result.count():
-            pytest.skip("No palette results found")
+        assert first_result.count() > 0, "No palette results found after opening command palette"
         first_result.click()
         page.wait_for_function(
             "document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
@@ -1534,25 +1529,10 @@ class TestGlobalUIGaps:
         _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         initial_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
-        # Find theme toggle button
-        theme_btn = page.locator(
-            "button:has-text('Theme'), button[title*='theme'], button[title*='Theme'], "
-            "button[onclick*='theme'], button[onclick*='dark'], button[onclick*='light']"
-        ).first
-        if not theme_btn.count():
-            # Try the command palette
-            page.keyboard.press("Control+k")
-            page.wait_for_timeout(200)
-            page.locator("#cmd-input").fill("Theme")
-            page.wait_for_timeout(200)
-            result = page.locator("#cmd-results li").first
-            if result.count():
-                result.click()
-            else:
-                page.keyboard.press("Escape")
-                pytest.skip("Theme toggle button not found")
-        else:
-            theme_btn.click()
+        # Find theme toggle button via its fixed ID
+        theme_btn = page.locator("#theme-btn").first
+        assert theme_btn.count() > 0, "Theme toggle button (#theme-btn) not found in dashboard"
+        theme_btn.click()
         page.wait_for_timeout(500)
         new_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
         assert initial_bg != new_bg, (
@@ -1593,8 +1573,8 @@ class TestGlobalUIGaps:
         )
         vacuum_btn = page.locator("button:has-text('Vacuum')").first
         dedup_btn = page.locator("button:has-text('Dedup')").first
-        if not vacuum_btn.count() or not dedup_btn.count():
-            pytest.skip("Vacuum or Dedup button not found")
+        assert vacuum_btn.count() > 0, "Vacuum button not found in Admin view"
+        assert dedup_btn.count() > 0, "Dedup button not found in Admin view"
         # Click both rapidly
         vacuum_btn.click()
         page.wait_for_timeout(100)
@@ -1677,13 +1657,11 @@ class TestDashboardCoverage:
         sel = page.locator("#project-sel")
         opts = sel.locator("option").all()
         all_paths = [o.get_attribute("value") for o in opts if o.get_attribute("value")]
-        if len(all_paths) < 2:
-            pytest.skip("Need ≥2 indexed projects to test admin project-link switch")
+        assert len(all_paths) >= 2, "Need ≥2 indexed projects to test admin project-link switch"
         before = page.evaluate("_proj")
         # Use a project from the dropdown that is different from the active one
         target_path = next((p for p in all_paths if p != before), None)
-        if target_path is None:
-            pytest.skip("No alternative project path found in project selector")
+        assert target_path is not None, "No alternative project path found in project selector"
         # Switch to target first so the admin table shows it with the active-row class
         page.click("#vbtn-admin")
         page.wait_for_function(
@@ -1695,9 +1673,8 @@ class TestDashboardCoverage:
             timeout=20_000,
         )
         # Click the admin table link for our target project
-        target_link = page.locator(f"#projects-body a[onclick*={target_path!r}]").first
-        if target_link.count() == 0:
-            pytest.skip(f"No admin table <a> link for path {target_path!r}")
+        target_link = page.locator(f"#projects-body a[data-path={target_path!r}]").first
+        assert target_link.count() > 0, f"No admin table <a> link for path {target_path!r}"
         target_link.click()
         page.wait_for_timeout(1_000)
         after = page.evaluate("_proj")
@@ -1827,13 +1804,11 @@ class TestDashboardCoverage:
         )
         sel = page.locator("#project-sel")
         options = sel.locator("option").all()
-        if len(options) < 2:
-            pytest.skip("Need ≥2 indexed projects to test project-switch clear")
+        assert len(options) >= 2, "Need ≥2 indexed projects to test project-switch clear"
         current = sel.input_value()
         target = next((o.get_attribute("value") for o in options
                        if o.get_attribute("value") != current and o.get_attribute("value")), None)
-        if not target:
-            pytest.skip("No alternative project path found")
+        assert target is not None, "No alternative project path found in project selector"
         sel.select_option(value=target)
         page.wait_for_timeout(500)
         after_history_len = page.evaluate(

@@ -39,13 +39,12 @@ def test_ollama_qwen3_query_is_gpu_resident():
     try:
         r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
     except Exception as exc:
-        pytest.skip(f"Ollama not reachable at {_OLLAMA_PS_URL}: {exc}")
+        pytest.fail(f"Ollama not reachable at {_OLLAMA_PS_URL}: {exc}")
     assert r.status_code == 200, f"Unexpected status from /api/ps: {r.status_code}"
     models = r.json().get("models", [])
     query_models = [m for m in models if "qwen3-query" in m.get("name", "").lower()
                     or "qwen3-query" in m.get("model", "").lower()]
-    if not query_models:
-        pytest.skip("qwen3-query:8b is not currently loaded — run a chat query first")
+    assert query_models, "qwen3-query:8b is not currently loaded — _pin_ollama_model_resident should keep it loaded"
     for m in query_models:
         size_vram = m.get("size_vram", 0)
         assert size_vram > 0, (
@@ -65,7 +64,7 @@ def test_ollama_query_llm_throughput_floor():
         )
         elapsed = time.monotonic() - start
     except Exception as exc:
-        pytest.skip(f"Ollama not reachable: {exc}")
+        pytest.fail(f"Ollama not reachable: {exc}")
     assert r.status_code == 200, f"Unexpected status from /api/generate: {r.status_code}"
     data = r.json()
     eval_count = data.get("eval_count") or data.get("prompt_eval_count") or 1

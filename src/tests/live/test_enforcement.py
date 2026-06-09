@@ -187,8 +187,7 @@ class TestMCPBridgeProviderConfig:
 
     def test_hermes_config_bridge_forces_ollama_for_kb(self):
         config = _HOME / ".hermes" / "config.yaml"
-        if not config.exists():
-            pytest.skip("Hermes not installed")
+        assert config.exists(), f"Hermes config not found at {config}"
         text = config.read_text()
         assert "OPENCODE_LLM_PROVIDER: ollama" in text, (
             "Hermes MCP bridge must have OPENCODE_LLM_PROVIDER: ollama in env section. "
@@ -197,8 +196,7 @@ class TestMCPBridgeProviderConfig:
 
     def test_hermes_config_bridge_forces_ollama_for_queries(self):
         config = _HOME / ".hermes" / "config.yaml"
-        if not config.exists():
-            pytest.skip("Hermes not installed")
+        assert config.exists(), f"Hermes config not found at {config}"
         text = config.read_text()
         assert "OPENCODE_QUERY_LLM_PROVIDER: ollama" in text, (
             "Hermes MCP bridge must have OPENCODE_QUERY_LLM_PROVIDER: ollama. "

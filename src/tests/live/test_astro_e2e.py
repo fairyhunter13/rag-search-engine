@@ -24,23 +24,6 @@ _MIN_SCORE = 3  # LLM judge minimum
 
 
 # ---------------------------------------------------------------------------
-# Fixture: ensure astro-project is indexed
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def astro(http):
-    """Return astro-project path; skip if not indexed."""
-    r = http.get("/api/projects")
-    projects = {p["path"]: p for p in r.json().get("projects", [])}
-    if _ASTRO not in projects:
-        pytest.skip(f"astro-project not in registry: {_ASTRO}")
-    info = projects[_ASTRO]
-    if info.get("communities", 0) == 0:
-        pytest.skip("astro-project has no communities — run build(action='pipeline') first")
-    return _ASTRO
-
-
-# ---------------------------------------------------------------------------
 # Tool 1: search
 # ---------------------------------------------------------------------------
 
@@ -634,8 +617,7 @@ print("OK:", results)
         # Find the most recent enrich_symbols job for astro
         r = http.get("/api/jobs", params={"project": astro, "action": "enrich_symbols"})
         jobs = r.json().get("jobs", [])
-        if not jobs:
-            pytest.skip("No enrich_symbols job found for astro-project")
+        assert jobs, "No enrich_symbols job found for astro-project — daemon should auto-submit on startup"
 
         # Wait for all running enrich_symbols jobs for astro to finish (up to 30 min)
         deadline = time.time() + 1800
@@ -647,7 +629,7 @@ print("OK:", results)
                 break
             time.sleep(30)
         else:
-            pytest.skip("enrich_symbols job still running after 30 min — skipping coverage check")
+            pytest.fail("enrich_symbols job still running after 30 min — enrichment may be stuck")
 
         # Check intent coverage via the graph stats endpoint
         r2 = http.get("/api/overview", params={"project": astro, "what": "status"})
@@ -656,13 +638,10 @@ print("OK:", results)
 
         # Find symbol intent coverage in the status response
         intent_coverage = data.get("symbol_intent_coverage")
-        if intent_coverage is None:
-            # Fallback: hit the graph DB directly via search for nodes without intent
-            r3 = http.get("/api/search", params={
-                "q": "function method intent", "project": astro, "top_k": 1
-            })
-            assert r3.status_code == 200, "search fallback failed"
-            pytest.skip("symbol_intent_coverage not in status response — cannot assert coverage")
+        assert intent_coverage is not None, (
+            "symbol_intent_coverage not in status response — "
+            "daemon may be missing the /api/overview?what=status field"
+        )
 
         assert intent_coverage >= 0.90, (
             f"Symbol intent coverage {intent_coverage:.1%} < 90% — "
@@ -693,8 +672,7 @@ class TestPhase85AutoResumeAndPersistence:
         from pathlib import Path
         jobs_db = Path(os.environ.get("OPENCODE_JOBS_DB",
             str(Path.home() / ".local" / "share" / "opencode-search" / "jobs.db")))
-        if not jobs_db.exists():
-            pytest.skip("jobs.db not found — daemon may not have started with Phase 85")
+        assert jobs_db.exists(), f"jobs.db not found at {jobs_db} — daemon may be missing Phase 85"
         conn = sqlite3.connect(str(jobs_db))
         count = conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE action='enrich_symbols'"

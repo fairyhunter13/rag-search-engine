@@ -229,8 +229,9 @@ def test_api_chat_uses_query_tier_llm(http, project):
 
 async def test_kb_chat_handler_uses_query_tier(project):
     """handle_kb_chat must use create_query_llm_client, not the build-tier LLM."""
-    if not shutil.which("codex") and not shutil.which("claude"):
-        pytest.skip("Neither codex nor claude CLI installed — query-tier unavailable")
+    assert shutil.which("codex") or shutil.which("claude"), (
+        "Neither codex nor claude CLI installed — query-tier unavailable"
+    )
     from opencode_search.handlers._kb_chat import handle_kb_chat
     result = await handle_kb_chat(
         query="what are the main features",
