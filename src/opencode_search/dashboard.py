@@ -332,6 +332,34 @@ def _register_project_routes(mcp: FastMCP) -> None:
         result = await handle_stop_watching(path=project)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/projects/register", methods=["POST"], include_in_schema=False)
+    async def api_register_project(request: Request) -> JSONResponse:
+        """Add a project to the registry without indexing it. POST {path}."""
+        from opencode_search.config import (
+            ProjectEntry,
+            get_project_db_path,
+            load_registry,
+            save_registry,
+        )
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        path = body.get("path") or request.query_params.get("path", "")
+        if not path:
+            return JSONResponse({"error": "path param required"}, status_code=400)
+        from pathlib import Path as _Path
+        resolved = str(_Path(path).expanduser().resolve())
+        registry = load_registry()
+        if resolved in registry:
+            return JSONResponse({"status": "already_registered", "path": resolved}, status_code=409)
+        entry = ProjectEntry(
+            path=resolved,
+            db_path=str(get_project_db_path(resolved)),
+        )
+        registry[resolved] = entry
+        save_registry(registry)
+        return JSONResponse({"status": "registered", "path": resolved}, status_code=201)
+
     @mcp.custom_route("/api/remove_project", methods=["POST"], include_in_schema=False)
     async def api_remove_project(request: Request) -> JSONResponse:
         """Remove a project from the registry. POST {project, delete_index?}."""

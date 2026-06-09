@@ -17,6 +17,23 @@ _OLLAMA_PS_URL = os.environ.get("OPENCODE_OLLAMA_PS_URL", "http://localhost:1143
 _OLLAMA_GEN_URL = "http://localhost:11434/api/generate"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _warmup_qwen3_query():
+    """Ensure qwen3-query:8b is loaded in Ollama before GPU residency tests run.
+
+    Without this, test_ollama_qwen3_query_is_gpu_resident skips because the model
+    is evicted from VRAM when no recent queries have been made.
+    """
+    import contextlib
+    with contextlib.suppress(Exception):
+        httpx.post(
+            _OLLAMA_GEN_URL,
+            json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
+                  "options": {"num_predict": 1}},
+            timeout=60.0,
+        )
+
+
 def test_ollama_qwen3_query_is_gpu_resident():
     """qwen3-query:8b must be loaded with VRAM > 0 (GPU, not CPU-only)."""
     try:

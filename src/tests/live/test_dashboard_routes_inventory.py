@@ -26,6 +26,7 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
     ("/api/communities", "GET", None),
     ("/api/start_watching", "POST", {"project": "/tmp/does-not-exist"}),
     ("/api/stop_watching", "POST", {"project": "/tmp/does-not-exist"}),
+    ("/api/projects/register", "POST", {"path": "/tmp/does-not-exist"}),
     ("/api/remove_project", "POST", {"project": "/tmp/does-not-exist"}),
     # wiki routes
     ("/api/wiki", "GET", None),
