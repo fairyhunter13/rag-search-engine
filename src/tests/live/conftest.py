@@ -15,20 +15,20 @@ DAEMON_URL = "http://localhost:8765"
 
 @pytest.fixture(scope="session")
 def http():
-    """HTTP client connected to the live daemon. Skips if daemon is not running."""
+    """HTTP client connected to the live daemon."""
     # retries=2: handles stale keepalive connections (server closes after N requests)
     transport = httpx.HTTPTransport(retries=2)
     with httpx.Client(base_url=DAEMON_URL, timeout=300.0, transport=transport) as client:
         try:
             client.get("/api/projects").raise_for_status()
         except Exception as exc:
-            pytest.skip(f"Live daemon not available at {DAEMON_URL}: {exc}")
+            pytest.fail(f"Live daemon not available at {DAEMON_URL}: {exc}")
         yield client
 
 
 @pytest.fixture(scope="session")
 def gpu():
-    """Verify CUDA GPU embedding is working. Skips if GPU is unavailable."""
+    """Verify CUDA GPU embedding is working."""
     result = subprocess.run(
         [
             sys.executable, "-c",
@@ -41,23 +41,41 @@ def gpu():
         text=True,
         cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
     )
-    if result.returncode != 0:
-        pytest.skip(f"GPU embedding unavailable: {result.stderr[-300:]}")
+    assert result.returncode == 0, f"GPU embedding unavailable: {result.stderr[-300:]}"
+
+
+_ACME_PATH = "/home/user/git/github.com/fairyhunter13/redacted-name-3"
+
+
+@pytest.fixture(scope="session")
+def astro(http):
+    """Return redacted-name-3 path. Fails if not indexed with communities."""
+    r = http.get("/api/projects")
+    projects = r.json().get("projects", [])
+    match = next((p for p in projects if p.get("path") == _ACME_PATH), None)
+    assert match is not None, f"redacted-name-3 not in registry: {_ACME_PATH}"
+    assert match.get("communities", 0) > 0, (
+        "redacted-name-3 has no communities — run build(action='pipeline') first"
+    )
+    return _ACME_PATH
 
 
 @pytest.fixture(scope="session")
 def project(http):
     """Return the path of an indexed project that has communities.
 
-    Prefers larger projects (communities > 100) to ensure richer patterns data.
-    Falls back to any project with communities if no large ones are found.
+    Prefers redacted-name-3 as the canonical test target; falls back to any
+    large indexed project if redacted-name-3 is unavailable.
     """
     r = http.get("/api/projects")
     projects = r.json().get("projects", [])
     all_indexed = [p for p in projects if p.get("communities", 0) > 0]
-    if not all_indexed:
-        pytest.skip("No indexed project with communities — run build(action='pipeline') first")
-    # Prefer the largest well-enriched project (>50% enrichment, accessible graph)
+    assert all_indexed, "No indexed project with communities — run build(action='pipeline') first"
+    # Prefer redacted-name-3 as canonical test target
+    acme_match = next((p for p in all_indexed if p.get("path") == _ACME_PATH), None)
+    if acme_match:
+        return _ACME_PATH
+    # Fall back to largest well-enriched project
     large = sorted(
         [p for p in all_indexed if p.get("communities", 0) > 100],
         key=lambda p: p.get("communities", 0),
@@ -85,8 +103,7 @@ def quality_project(http):
     r = http.get("/api/projects")
     projects = r.json().get("projects", [])
     matches = [p["path"] for p in projects if p.get("path", "").endswith("opencode-search-engine")]
-    if not matches:
-        pytest.skip("opencode-search-engine not in registry — run build(action='pipeline') first")
+    assert matches, "opencode-search-engine not in registry — run build(action='pipeline') first"
     return matches[0]
 
 

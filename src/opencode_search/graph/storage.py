@@ -560,6 +560,18 @@ class GraphStorage:
         ).fetchone()
         return row is not None
 
+    def symbol_intent_coverage(self) -> float:
+        """Return fraction of function/method nodes that have intent set (0.0–1.0)."""
+        db = self._db()
+        row = db.execute(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN intent IS NOT NULL AND intent != '' THEN 1 ELSE 0 END) AS enriched "
+            "FROM nodes WHERE kind IN ('function','method')"
+        ).fetchone()
+        if row is None or not row["total"]:
+            return 0.0
+        return round(row["enriched"] / row["total"], 4)
+
     def all_edges(self) -> list[EdgeData]:
         db = self._db()
         rows = db.execute("SELECT * FROM edges").fetchall()

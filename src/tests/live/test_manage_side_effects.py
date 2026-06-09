@@ -125,8 +125,9 @@ class TestRemoveProject:
 
         # Register the project
         r_reg = http.post("/api/projects/register", json={"path": str(fake_proj)})
-        if r_reg.status_code not in (200, 201, 409):
-            pytest.skip(f"Cannot register project: {r_reg.status_code}: {r_reg.text[:200]}")
+        assert r_reg.status_code in (200, 201, 409), (
+            f"Cannot register project: {r_reg.status_code}: {r_reg.text[:200]}"
+        )
 
         index_dir = get_project_index_dir(str(fake_proj))
 

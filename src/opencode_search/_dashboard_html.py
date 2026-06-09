@@ -1062,7 +1062,7 @@ async function loadAdmin(){
     const chunks=p.chunks!=null?fmtNum(p.chunks):'—';
     const w=p.watching?'<span style="color:var(--green)">●</span>':'<span style="color:var(--text-3)">○</span>';
     return `<tr class="${active?'active-row':''}">
-      <td><a style="cursor:pointer;color:var(--purple)" onclick="switchProject(${JSON.stringify(p.path)})">${esc(name)}</a></td>
+      <td><a style="cursor:pointer;color:var(--purple)" data-path="${esc(p.path)}" onclick="switchProject(this.dataset.path)">${esc(name)}</a></td>
       <td>${chunks}</td>
       <td><span style="color:var(--green);font-size:.7rem">${active?'active':''}</span></td>
       <td>${w}</td>

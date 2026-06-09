@@ -254,12 +254,13 @@ def _repair_codex_toml(config_path: Path, dry_run: bool = False) -> ConfigResult
     )
 
     # Check if entry already exists — if so, update the env table in place
-    if "[mcp_servers.opencode-search]" in old_text:
-        # Remove old env table and rewrite just that section
-        import re
-        # Remove entire opencode-search section (command + args + env table)
+    import re
+    has_any = bool(re.search(r"\[mcp_servers\.opencode-search[^\]]*\]", old_text))
+    if has_any:
+        # Remove ALL opencode-search subsections (parent + .env + any other subtables)
+        # so that re-running the script never accumulates duplicate sections.
         old_text_stripped = re.sub(
-            r"\n\[mcp_servers\.opencode-search\].*?(?=\n\[|\Z)",
+            r"\n\[mcp_servers\.opencode-search[^\]]*\].*?(?=\n\[|\Z)",
             "",
             old_text,
             flags=re.DOTALL,

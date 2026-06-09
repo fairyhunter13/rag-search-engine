@@ -112,6 +112,17 @@ async def handle_project_status(path: str) -> dict[str, Any]:
     # intent. Show True if either.
     watching = watcher_manager.is_active(project_path) or entry.watch
 
+    # Compute symbol intent coverage from graph DB (fraction of function/method nodes with intent)
+    intent_coverage: float | None = None
+    with contextlib.suppress(Exception):
+        from opencode_search.handlers._graph import _open_graph
+        gs = _open_graph(project_path)
+        if gs is not None:
+            with contextlib.suppress(Exception):
+                intent_coverage = gs.symbol_intent_coverage()
+            with contextlib.suppress(Exception):
+                gs.close()
+
     return {
         "indexed": True,
         "path": project_path,
@@ -121,6 +132,7 @@ async def handle_project_status(path: str) -> dict[str, Any]:
         "indexed_at": entry.indexed_at,
         "file_count": entry.file_count,
         "indexing_running": in_progress.get("running", False),
+        "symbol_intent_coverage": intent_coverage,
     }
 
 

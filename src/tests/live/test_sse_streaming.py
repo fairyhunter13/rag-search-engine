@@ -73,8 +73,10 @@ class TestSSEStreamingErrors:
         assert r.status_code == 200
         events = _parse_sse_events(r.text)
         error_events = [e for e in events if e.get("type") == "error"]
-        if not error_events:
-            pytest.skip("No error events emitted for nonexistent project — stream returned done instead")
+        assert error_events, (
+            "Expected error events for unregistered project but stream completed without errors — "
+            "registry guard may not be working"
+        )
         for evt in error_events:
             assert evt.get("type") == "error"
             assert isinstance(evt.get("code"), str) and evt["code"], (
@@ -235,8 +237,10 @@ class TestSSEStreamingErrorRegression:
         assert r.status_code == 200
         events = _parse_sse_events(r.text)
         error_events = [e for e in events if e.get("type") == "error"]
-        if not error_events:
-            pytest.skip("No error events emitted — stream completed gracefully")
+        assert error_events, (
+            "Expected error events for unregistered project but stream completed without errors — "
+            "registry guard may not be working"
+        )
         for evt in error_events:
             # PROJECT_NOT_REGISTERED errors fire before intent routing — no intent is known.
             if evt.get("code") == "PROJECT_NOT_REGISTERED":
@@ -264,8 +268,10 @@ class TestSSEStreamingErrorRegression:
         assert r.status_code == 200
         events = _parse_sse_events(r.text)
         event_types = [e.get("type") for e in events]
-        if "error" not in event_types:
-            pytest.skip("No error events in stream — nothing to verify")
+        assert "error" in event_types, (
+            "Expected an error event for unregistered project but stream contained no error events — "
+            "registry guard may not be working"
+        )
         error_idx = event_types.index("error")
         done_indices = [i for i, t in enumerate(event_types) if t == "done"]
         assert any(i > error_idx for i in done_indices), (

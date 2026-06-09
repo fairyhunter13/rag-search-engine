@@ -45,8 +45,7 @@ class TestClaudeProfile:
 
     def test_claude_mcp_command_points_to_venv(self):
         settings_path = _HOME / ".claude" / "settings.json"
-        if not settings_path.exists():
-            pytest.skip("Claude settings not found")
+        assert settings_path.exists(), f"Claude settings not found at {settings_path}"
         data = json.loads(settings_path.read_text())
         cmd = data.get("mcpServers", {}).get("opencode-search", {}).get("command", "")
         assert cmd, "opencode-search MCP command is empty"
@@ -63,8 +62,7 @@ class TestClaudeProfile:
 
     def test_claude_md_has_quick_decision_guide(self):
         claude_md = _HOME / ".claude" / "CLAUDE.md"
-        if not claude_md.exists():
-            pytest.skip("~/.claude/CLAUDE.md not found")
+        assert claude_md.exists(), "~/.claude/CLAUDE.md not found — sync_global_instructions may need to run"
         text = claude_md.read_text()
         assert "QUICK DECISION GUIDE" in text, "QUICK DECISION GUIDE missing from ~/.claude/CLAUDE.md"
 
@@ -75,8 +73,7 @@ class TestClaudeProfile:
             Path("/home/user/git/github.com/fairyhunter13/opencode-search-engine/CLAUDE.md"),
         ]
         texts = [p.read_text() for p in candidates if p.exists()]
-        if not texts:
-            pytest.skip("No CLAUDE.md found to check CPU prohibition")
+        assert texts, "No CLAUDE.md found to check CPU prohibition — sync_global_instructions may need to run"
         combined = "\n".join(texts)
         assert "CPU" in combined and ("forbidden" in combined.lower() or "prohibited" in combined.lower()), (
             "CPU fallback prohibition not found in any CLAUDE.md"
@@ -100,8 +97,7 @@ class TestCodexProfile:
 
     def test_codex_config_command_points_to_venv(self):
         config_path = _HOME / ".codex" / "config.toml"
-        if not config_path.exists():
-            pytest.skip("Codex config not found")
+        assert config_path.exists(), f"Codex config not found at {config_path}"
         text = config_path.read_text()
         assert "opencode_search" in text or ".venv" in text, (
             "Codex MCP command doesn't reference opencode_search"
@@ -135,8 +131,7 @@ class TestHermesProfile:
 
     def test_hermes_config_has_mcp_server(self):
         config_path = _HOME / ".hermes" / "config.yaml"
-        if not config_path.exists():
-            pytest.skip("Hermes not installed (~/.hermes/config.yaml not found)")
+        assert config_path.exists(), f"Hermes config not found at {config_path}"
         text = config_path.read_text()
         assert "opencode-search" in text, (
             "opencode-search MCP not found in ~/.hermes/config.yaml"
@@ -144,8 +139,7 @@ class TestHermesProfile:
 
     def test_hermes_system_prompt_has_7_tools(self):
         config_path = _HOME / ".hermes" / "config.yaml"
-        if not config_path.exists():
-            pytest.skip("Hermes not installed")
+        assert config_path.exists(), f"Hermes config not found at {config_path}"
         text = config_path.read_text()
         for tool in _7_TOOLS:
             assert tool in text, f"Tool '{tool}' missing from hermes config (system_prompt)"
@@ -166,7 +160,7 @@ class TestOpenCodeProfile:
         ]:
             if candidate.exists():
                 return candidate.read_text()
-        pytest.skip("OpenCode config not found in ~/.config/opencode/")
+        pytest.fail("OpenCode config not found in ~/.config/opencode/")
         return ""
 
     def test_opencode_config_has_mcp_server(self):
@@ -278,8 +272,7 @@ class TestClaudeAccountProfiles:
     """~/.claude-account1 and ~/.claude-account2 must mirror the primary profile."""
 
     def _check_account(self, account_dir: Path) -> None:
-        if not account_dir.exists():
-            pytest.skip(f"{account_dir} not found")
+        assert account_dir.exists(), f"{account_dir} not found"
         settings_path = account_dir / "settings.json"
         claude_md = account_dir / "CLAUDE.md"
         assert settings_path.exists(), f"{settings_path} not found"
@@ -310,8 +303,7 @@ class TestBashAliasesSentinel:
     _ALIASES_PATH = _HOME / ".bash_aliases"
 
     def test_aliases_block_present(self):
-        if not self._ALIASES_PATH.exists():
-            pytest.skip("~/.bash_aliases not found")
+        assert self._ALIASES_PATH.exists(), f"~/.bash_aliases not found at {self._ALIASES_PATH}"
         text = self._ALIASES_PATH.read_text()
         assert "[opencode-search-aliases:start]" in text, (
             "~/.bash_aliases missing [opencode-search-aliases:start] sentinel — "
@@ -327,8 +319,7 @@ class TestBashAliasesSentinel:
             )
 
     def test_aliases_block_not_duplicated(self):
-        if not self._ALIASES_PATH.exists():
-            pytest.skip("~/.bash_aliases not found")
+        assert self._ALIASES_PATH.exists(), f"~/.bash_aliases not found at {self._ALIASES_PATH}"
         text = self._ALIASES_PATH.read_text()
         count = text.count("[opencode-search-aliases:start]")
         assert count == 1, (

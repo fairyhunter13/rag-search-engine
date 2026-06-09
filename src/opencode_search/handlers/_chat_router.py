@@ -72,20 +72,23 @@ Classify this code-intelligence query into exactly one intent.
 CRITICAL DISTINCTIONS:
 - "search" means: show me the source code of X, find the file/function/class X, locate implementation of X.
   "search" is NOT for questions about dependencies, impact, or what-would-break.
-- "graph_impact" means: what are the downstream consequences of changing X — what depends on it, what breaks, blast radius.
-  Use graph_impact whenever the question is about RISK or CONSEQUENCES of a change, not about finding code.
+- "graph_impact" means: what are the downstream consequences of changing a SPECIFIC NAMED symbol/contract/service.
+  REQUIRES a concrete named target (e.g. "AuthService.Login", "payment gRPC contract", "the embedding model").
+  "graph_impact" is NOT for vague "how are things connected" or "how do function calls relate" questions — those are "feature".
 - "graph_callers" means: what upstream code calls/triggers/initiates X.
+- "debug" means: a SPECIFIC bug, crash, or error (e.g. "my code fails with X", "this function throws Y").
+  "debug" is NOT for GENERAL questions about how to debug, trace, or investigate bugs — those are "feature" or "architecture".
 
 Intents:
   debug_trace   — the query IS a stack trace / traceback / error log with file paths and line numbers
-  debug         — question about a bug, error, failure, crash, "why fails", "not working" (NO stack trace)
+  debug         — SPECIFIC bug/crash/error: "X fails", "why does Y throw Z", "not working" (NO stack trace) — requires a specific error scenario, not general debugging methodology
   search        — find/show/locate specific source code, files, or function implementations ONLY
   graph_callers — what calls X, what triggers X, what initiates X, what invokes X, what fires X, what starts X, which services call X, what causes X to run
   graph_callees — what does X call, callees of X, downstream of X
-  graph_impact  — what breaks if I change X, what depends on X, what services would break, blast radius of X, what is affected by changing X, what depends on the interface/contract of X, what would break, what is impacted by modifying X, risk of changing X
+  graph_impact  — what breaks if I change NAMED-X, what depends on NAMED-X, blast radius of changing NAMED-X — REQUIRES a specific named symbol/contract/service
   architecture  — high-level design patterns, service topology, how is X architected, describe the design of X
   global        — comprehensive/holistic overview of the ENTIRE system, tell me about this project, what does this system do, overview of everything
-  feature       — how does X work end-to-end, walk me through X flow, explain X feature, trace request path through X
+  feature       — how does X work end-to-end, walk me through X flow, explain X feature, trace request path through X, how are function calls related in Y, how do the services connect
 
 Examples (correct answers):
   Q: "What triggers the fulfillment picking process?" → {"intent": "graph_callers"}
@@ -100,6 +103,10 @@ Examples (correct answers):
   Q: "find the checkout handler" → {"intent": "search"}
   Q: "show me the embedder implementation" → {"intent": "search"}
   Q: "how does the order flow work end-to-end?" → {"intent": "feature"}
+  Q: "how are function calls traced and related in the business processes?" → {"intent": "feature"}
+  Q: "how do the services connect to each other?" → {"intent": "feature"}
+  Q: "how can I debug a bug and find which line of code to fix?" → {"intent": "feature"}
+  Q: "what is the debugging process in this codebase?" → {"intent": "feature"}
   Q: "describe the overall architecture" → {"intent": "architecture"}
   Q: "tell me about this project comprehensively" → {"intent": "global"}
 
@@ -820,6 +827,7 @@ async def handle_chat_auto_stream(
         result = code_prefetch if code_prefetch is not None else await handle_search_code(query=query, project_paths=[project_path], top_k=10)
         answer = _prose_search(result, query)
         sources = [r.get("path", "") for r in result.get("results", []) if r.get("path")]
+        record_stream_success()
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
             if chunk:
@@ -879,6 +887,7 @@ async def handle_chat_auto_stream(
 
     result = await task
     answer = result.get("answer", "")
+    record_stream_success()
     for i in range(0, max(len(answer), 1), chunk_size):
         chunk = answer[i:i + chunk_size]
         if chunk:

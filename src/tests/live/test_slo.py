@@ -31,18 +31,6 @@ pytestmark = pytest.mark.live
 _ACME_PATH = _ASTRO
 
 
-@pytest.fixture(scope="module")
-def astro(http):
-    """Return redacted-name-3 path; skip if not indexed."""
-    r = http.get("/api/projects")
-    projects = {p["path"]: p for p in r.json().get("projects", [])}
-    if _ACME_PATH not in projects:
-        pytest.skip(f"redacted-name-3 not in registry: {_ACME_PATH}")
-    info = projects[_ACME_PATH]
-    if info.get("communities", 0) == 0:
-        pytest.skip("redacted-name-3 has no communities — run build(action='pipeline') first")
-    return _ACME_PATH
-
 
 # ---------------------------------------------------------------------------
 # Class 1: chat_stream SLOs (extract elapsed_ms from done event)

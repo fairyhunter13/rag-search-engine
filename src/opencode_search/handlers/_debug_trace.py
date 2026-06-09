@@ -17,6 +17,7 @@ Algorithm:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -135,11 +136,12 @@ async def _parse_with_llm(text: str) -> list[dict]:
             "No explanation — only the JSON array.\n\n"
             f"Traceback:\n{text}"
         )
-        response = await llm.chat(
-            messages=[{"role": "user", "content": prompt}],
-            system="You are a stack trace parser. Extract structured frame data from error tracebacks. Return only valid JSON.",
+        raw = await asyncio.to_thread(
+            llm.chat,
+            [{"role": "system", "content": "You are a stack trace parser. Extract structured frame data from error tracebacks. Return only valid JSON."},
+             {"role": "user", "content": prompt}],
+            max_tokens=2048,
         )
-        raw = response.get("content", "") if isinstance(response, dict) else str(response)
         raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```\w*\n?", "", raw)
@@ -410,11 +412,12 @@ async def handle_debug_trace(
             f"Debug this error:\n\n{prompt_ctx}\n\n"
             "Identify the root cause and explain why it happens based on the architecture context."
         )
-        response = await llm.chat(
-            messages=[{"role": "user", "content": user_msg}],
-            system=system_prompt,
+        full_text = await asyncio.to_thread(
+            llm.chat,
+            [{"role": "system", "content": system_prompt},
+             {"role": "user", "content": user_msg}],
+            max_tokens=1024,
         )
-        full_text = response.get("content", "") if isinstance(response, dict) else str(response)
 
         # Split into root_cause + fix
         if include_fix and "Fix" in full_text:
