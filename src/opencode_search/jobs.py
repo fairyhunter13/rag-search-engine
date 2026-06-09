@@ -112,10 +112,19 @@ def submit_job(
     _jobs[job_id] = job
     _evict_old_jobs()
 
+    # Persist the queued state to SQLite for restart recovery.
+    import contextlib as _ctx
+    with _ctx.suppress(Exception):
+        from opencode_search.jobs_store import upsert_job as _upsert
+        _upsert(job)
+
     async def _run() -> None:
         job.status = "running"
         job.started_at = _now_iso()
         log.info("job[%s] %s(%s) started", job_id, action, project_path)
+        with _ctx.suppress(Exception):
+            from opencode_search.jobs_store import upsert_job as _upsert
+            _upsert(job)
         try:
             result = await coro
             job.result = result
@@ -132,6 +141,9 @@ def submit_job(
             log.warning("job[%s] %s error: %s", job_id, action, exc)
         finally:
             job.completed_at = _now_iso()
+            with _ctx.suppress(Exception):
+                from opencode_search.jobs_store import upsert_job as _upsert
+                _upsert(job)
 
     try:
         loop = asyncio.get_running_loop()
@@ -145,6 +157,9 @@ def submit_job(
         job.error = "no running event loop"
         job.completed_at = _now_iso()
         log.warning("job[%s]: no running event loop — cannot schedule", job_id)
+        with _ctx.suppress(Exception):
+            from opencode_search.jobs_store import upsert_job as _upsert
+            _upsert(job)
 
     return job
 

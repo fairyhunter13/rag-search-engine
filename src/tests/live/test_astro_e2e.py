@@ -623,3 +623,85 @@ print("OK:", results)
         assert any(j.get("id") == job_id for j in jobs), (
             f"enrich_symbols job {job_id!r} not found in jobs: {[j.get('id') for j in jobs]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 85: auto-resume + progress UI + SQLite-backed job persistence
+# ---------------------------------------------------------------------------
+
+class TestPhase85AutoResumeAndPersistence:
+    """Phase 85 features: auto-resume on startup, SQLite job persistence, progress UI."""
+
+    def test_jobs_db_exists_and_has_rows(self, http, astro):
+        """jobs.db must exist after daemon starts and contain rows (auto-resume ran)."""
+        import os
+        from pathlib import Path
+        jobs_db = Path(os.environ.get("OPENCODE_JOBS_DB",
+            str(Path.home() / ".local" / "share" / "opencode-search" / "jobs.db")))
+        assert jobs_db.exists(), f"jobs.db not found at {jobs_db}"
+        assert jobs_db.stat().st_size > 0, "jobs.db is empty"
+
+    def test_jobs_db_has_enrich_symbols_rows(self, http, astro):
+        """After auto-resume, jobs.db must have at least one enrich_symbols row."""
+        import os
+        import sqlite3
+        from pathlib import Path
+        jobs_db = Path(os.environ.get("OPENCODE_JOBS_DB",
+            str(Path.home() / ".local" / "share" / "opencode-search" / "jobs.db")))
+        if not jobs_db.exists():
+            pytest.skip("jobs.db not found — daemon may not have started with Phase 85")
+        conn = sqlite3.connect(str(jobs_db))
+        count = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE action='enrich_symbols'"
+        ).fetchone()[0]
+        conn.close()
+        assert count > 0, "No enrich_symbols rows in jobs.db — SQLite write-through not working"
+
+    def test_auto_resume_submits_jobs_for_indexed_projects(self, http, astro):
+        """After daemon restart, enrich_symbols jobs must be present for indexed projects."""
+        r = http.get("/api/jobs", params={"action": "enrich_symbols"})
+        assert r.status_code == 200
+        data = r.json()
+        total = data.get("total", 0)
+        assert total > 0, (
+            f"No enrich_symbols jobs found — auto-resume did not run. Response: {data}"
+        )
+
+    def test_sym_enrich_pulse_tile_present(self, http, astro):
+        """Dashboard HTML must include the sym-enrich tile."""
+        r = http.get("/dashboard")
+        assert r.status_code == 200
+        html = r.text
+        assert "tile-sym-enrich" in html, "Symbol Enrichment tile missing from dashboard HTML"
+        assert "sym-enrich-bar" in html, "Symbol enrichment progress bar missing from dashboard HTML"
+        assert "Symbol Intents" in html, "Symbol Intents label missing from dashboard HTML"
+
+    def test_jobs_api_returns_status_for_enrich_symbols(self, http, astro):
+        """GET /api/jobs/{id} for an enrich_symbols job must return a valid status dict."""
+        r = http.post("/api/enrich_symbols", json={"project": astro})
+        assert r.status_code == 200
+        job_id = r.json().get("job_id")
+        assert job_id
+
+        r2 = http.get(f"/api/jobs/{job_id}")
+        assert r2.status_code == 200
+        d = r2.json()
+        assert d.get("id") == job_id
+        assert d.get("status") in ("queued", "running", "ok", "error")
+
+    def test_projects_register_endpoint(self, http, tmp_path):
+        """POST /api/projects/register must add a project to the registry."""
+        import os
+        fake_path = str(tmp_path / "phase85_register_test")
+        os.makedirs(fake_path, exist_ok=True)
+
+        r = http.post("/api/projects/register", json={"path": fake_path})
+        assert r.status_code in (201, 409), f"unexpected status: {r.status_code}: {r.text}"
+        data = r.json()
+        assert data.get("status") in ("registered", "already_registered")
+
+        r2 = http.get("/api/projects")
+        paths = [p.get("path") for p in r2.json().get("projects", [])]
+        assert any(fake_path in p for p in paths), "registered project not in /api/projects"
+
+        http.post("/api/remove_project", json={"project": fake_path})
