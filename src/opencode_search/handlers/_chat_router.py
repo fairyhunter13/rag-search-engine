@@ -826,7 +826,7 @@ async def handle_chat_auto_stream(
                 yield {"type": "token", "text": chunk}
             await asyncio.sleep(0)
         yield {"type": "done", "intent": "search", "sources": sources[:10],
-               "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": ""}
+               "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "vector-index"}
         return
 
     # ── feature: context assembly → native LLM streaming ─────────────────────

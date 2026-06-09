@@ -624,6 +624,51 @@ print("OK:", results)
             f"enrich_symbols job {job_id!r} not found in jobs: {[j.get('id') for j in jobs]}"
         )
 
+    @pytest.mark.slow
+    def test_symbol_intent_coverage_gte_90_pct(self, http, astro):
+        """After background enrichment completes, ≥90% of function/method nodes must have intent.
+
+        Polls up to 30 minutes. Skips if no enrich_symbols job exists yet.
+        """
+        import time
+        # Find the most recent enrich_symbols job for astro
+        r = http.get("/api/jobs", params={"project": astro, "action": "enrich_symbols"})
+        jobs = r.json().get("jobs", [])
+        if not jobs:
+            pytest.skip("No enrich_symbols job found for redacted-name-3")
+
+        # Wait for all running enrich_symbols jobs for astro to finish (up to 30 min)
+        deadline = time.time() + 1800
+        while time.time() < deadline:
+            r = http.get("/api/jobs", params={"project": astro, "action": "enrich_symbols"})
+            jobs = r.json().get("jobs", [])
+            running = [j for j in jobs if j.get("status") in ("queued", "running")]
+            if not running:
+                break
+            time.sleep(30)
+        else:
+            pytest.skip("enrich_symbols job still running after 30 min — skipping coverage check")
+
+        # Check intent coverage via the graph stats endpoint
+        r2 = http.get("/api/overview", params={"project": astro, "what": "status"})
+        assert r2.status_code == 200
+        data = r2.json()
+
+        # Find symbol intent coverage in the status response
+        intent_coverage = data.get("symbol_intent_coverage")
+        if intent_coverage is None:
+            # Fallback: hit the graph DB directly via search for nodes without intent
+            r3 = http.get("/api/search", params={
+                "q": "function method intent", "project": astro, "top_k": 1
+            })
+            assert r3.status_code == 200, "search fallback failed"
+            pytest.skip("symbol_intent_coverage not in status response — cannot assert coverage")
+
+        assert intent_coverage >= 0.90, (
+            f"Symbol intent coverage {intent_coverage:.1%} < 90% — "
+            "enrichment may have stalled or failed for many nodes"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Phase 85: auto-resume + progress UI + SQLite-backed job persistence

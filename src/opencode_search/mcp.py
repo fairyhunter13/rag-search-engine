@@ -211,10 +211,7 @@ async def resume_symbol_enrichment() -> None:
             if gs is None:
                 continue
             try:
-                needs_enrich = any(
-                    n.kind in ("function", "method") and not n.intent
-                    for n in gs.all_nodes()
-                )
+                needs_enrich = gs.has_unenriched_symbols()
             finally:
                 gs.close()
             if not needs_enrich:

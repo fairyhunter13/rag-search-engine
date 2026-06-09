@@ -264,6 +264,15 @@ class TestPulseView:
         # A user message bubble must appear (sendChat was called)
         page.wait_for_selector(".msg.user", timeout=10_000)
 
+    def test_pulse_sym_enrich_tile_present(self, page):
+        """Symbol Intents tile (#tile-sym-enrich) must be rendered in the Pulse view."""
+        _goto_with_retry(page, DASHBOARD_URL)
+        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
+        tile = page.locator("#tile-sym-enrich")
+        assert tile.count() > 0, "Symbol Intents tile (#tile-sym-enrich) missing from Pulse view"
+        bar = page.locator("#sym-enrich-bar")
+        assert bar.count() > 0, "Symbol enrichment progress bar (#sym-enrich-bar) missing"
+
 
 # ---------------------------------------------------------------------------
 # View: Chat — basic behavior
@@ -2620,4 +2629,28 @@ class TestCmdPaletteGaps:
         )
         assert graph_display not in ("none", "", None), (
             f"#view-graph must be visible after Enter dispatch; display={graph_display!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Browser fixture scope guard (moved from test_resource_profile.py)
+# ---------------------------------------------------------------------------
+
+_SEEN_BROWSER_IDS: list[int] = []
+
+
+class TestBrowserFixtureScope:
+    """Verify browser fixture is session-scoped (one Chromium process per test run)."""
+
+    def test_browser_is_session_scoped_a(self, browser):
+        """Record browser fixture identity — must match test_browser_is_session_scoped_b."""
+        _SEEN_BROWSER_IDS.append(id(browser))
+
+    def test_browser_is_session_scoped_b(self, browser):
+        """Browser fixture identity must equal test_a's — proves one Chromium process per session."""
+        assert _SEEN_BROWSER_IDS, "test_browser_is_session_scoped_a must run first"
+        assert id(browser) == _SEEN_BROWSER_IDS[0], (
+            f"browser fixture not session-scoped: id mismatch "
+            f"({_SEEN_BROWSER_IDS[0]} → {id(browser)}); "
+            "a conftest change demoted browser to function scope"
         )

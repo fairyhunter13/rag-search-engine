@@ -105,19 +105,3 @@ def test_args_fixture_decorator_remains_session_scoped():
     )
 
 
-_SEEN_BROWSER_IDS: list[int] = []
-
-
-def test_browser_is_session_scoped_a(browser):
-    """Record browser fixture identity — must match test_browser_is_session_scoped_b."""
-    _SEEN_BROWSER_IDS.append(id(browser))
-
-
-def test_browser_is_session_scoped_b(browser):
-    """Browser fixture identity must equal test_a's — proves one Chromium process per session."""
-    assert _SEEN_BROWSER_IDS, "test_browser_is_session_scoped_a must run first"
-    assert id(browser) == _SEEN_BROWSER_IDS[0], (
-        f"browser fixture not session-scoped: id mismatch "
-        f"({_SEEN_BROWSER_IDS[0]} → {id(browser)}); "
-        "a conftest change demoted browser to function scope"
-    )

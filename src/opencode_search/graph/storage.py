@@ -551,6 +551,15 @@ class GraphStorage:
         rows = db.execute("SELECT * FROM nodes").fetchall()
         return [_row_to_node(r) for r in rows]
 
+    def has_unenriched_symbols(self) -> bool:
+        """Return True if any function/method node has no intent set."""
+        db = self._db()
+        row = db.execute(
+            "SELECT 1 FROM nodes WHERE kind IN ('function','method') "
+            "AND (intent IS NULL OR intent='') LIMIT 1"
+        ).fetchone()
+        return row is not None
+
     def all_edges(self) -> list[EdgeData]:
         db = self._db()
         rows = db.execute("SELECT * FROM edges").fetchall()
