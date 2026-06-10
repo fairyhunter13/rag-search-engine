@@ -8,6 +8,7 @@ from opencode_search.cuda_setup import configure_cuda_paths as _configure_cuda_p
 _configure_cuda_paths()
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -1185,6 +1186,122 @@ def _start_shutdown_monitor() -> None:
     monitor.start()
 
 
+# ── KB self-healing maintenance sweep ─────────────────────────────────────────
+# Runs in the background; finishes hierarchy enrichment for any project where
+# level-2+ communities are unenriched.  This is the "enforced by default" path
+# that recovers from interrupted auto-pipeline runs (thermal throttle, OOM,
+# daemon restart) without waiting for a new index event.
+
+_KB_SWEEP_INTERVAL_S: int = int(os.environ.get("OPENCODE_KB_SWEEP_INTERVAL_S", "600"))
+_KB_SWEEP_ENABLED: bool = os.environ.get("OPENCODE_KB_SWEEP_ENABLED", "1").strip().lower() not in {
+    "0", "false", "no", "off",
+}
+_kb_sweep_log = logging.getLogger(__name__ + ".kb_sweep")
+
+
+def _kb_sweep_monitor() -> None:
+    """Daemon thread: periodically sweep all registered projects for incomplete KB.
+
+    - Waits _KB_SWEEP_INTERVAL_S between sweeps.
+    - Each sweep: calls _run_kb_sweep() as a coroutine in the daemon's event loop.
+    - The sweep itself gates on: GPU temperature, active client count, and
+      _project_needs_hierarchy_enrich() from _autopipeline.
+    """
+    import asyncio as _asyncio
+    # Wait one full interval before the first sweep so startup indexing finishes first.
+    time.sleep(min(_KB_SWEEP_INTERVAL_S, 120))
+    while True:
+        try:
+            loop = _asyncio.get_event_loop()
+            future = _asyncio.run_coroutine_threadsafe(_run_kb_sweep(), loop)
+            future.result(timeout=3600)  # max 1h per sweep
+        except Exception as exc:
+            _kb_sweep_log.warning("kb_sweep: error in sweep cycle: %s", exc)
+        time.sleep(_KB_SWEEP_INTERVAL_S)
+
+
+async def _run_kb_sweep() -> None:
+    """Async coroutine: find and enrich any unenriched hierarchy communities.
+
+    Runs inside the daemon's event loop (dispatched from _kb_sweep_monitor thread).
+    Respects thermal guard and active-client gate.
+    """
+    if not _KB_SWEEP_ENABLED:
+        return
+
+    # Gate: skip while GPU is hot to avoid thermal throttling
+    try:
+        from opencode_search.embeddings import _get_gpu_temp_c
+        from opencode_search.indexer import _MAX_GPU_TEMP
+        temp = _get_gpu_temp_c()
+        if temp is not None and temp > _MAX_GPU_TEMP:
+            _kb_sweep_log.info("kb_sweep: GPU %d°C > threshold %d°C — skipping sweep", temp, _MAX_GPU_TEMP)
+            return
+    except Exception:
+        pass  # if temp check fails, proceed cautiously
+
+    # Gate: skip while clients are actively querying (don't compete with live requests)
+    with runtime_state.lock:
+        active = len(runtime_state.active_clients)
+    if active > 0:
+        _kb_sweep_log.debug("kb_sweep: %d active clients — deferring sweep", active)
+        return
+
+    try:
+        from opencode_search.config import load_registry
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+        from opencode_search.handlers._federation import _expand_with_federation
+
+        registry = load_registry()
+        root_paths = list(registry.keys())
+        # Include all federated members too
+        all_paths = _expand_with_federation(root_paths, registry)
+        _kb_sweep_log.info("kb_sweep: scanning %d projects", len(all_paths))
+
+        swept = 0
+        for project_path in all_paths:
+            try:
+                if not _project_needs_hierarchy_enrich(project_path):
+                    continue
+                # Re-check GPU before each project (long sweeps span many minutes)
+                temp = _get_gpu_temp_c()
+                if temp is not None and temp > _MAX_GPU_TEMP:
+                    _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing sweep", temp)
+                    return
+                with runtime_state.lock:
+                    active = len(runtime_state.active_clients)
+                if active > 0:
+                    _kb_sweep_log.debug("kb_sweep: client connected — pausing sweep")
+                    return
+                _kb_sweep_log.info("kb_sweep: enriching hierarchy for %s", project_path)
+                result = await handle_enrich_hierarchy(project_path=project_path)
+                enriched = result.get("enriched", 0)
+                _kb_sweep_log.info("kb_sweep: %s enriched=%d", project_path, enriched)
+                swept += 1
+            except Exception as exc:
+                _kb_sweep_log.warning("kb_sweep: skipping %s: %s", project_path, exc)
+
+        _kb_sweep_log.info("kb_sweep: done — %d projects updated", swept)
+    except Exception as exc:
+        _kb_sweep_log.warning("kb_sweep: unexpected error: %s", exc)
+
+
+def _start_kb_sweep_monitor() -> None:
+    if not _KB_SWEEP_ENABLED:
+        return
+    sweep = threading.Thread(
+        target=_kb_sweep_monitor,
+        daemon=True,
+        name="opencode-search-kb-sweep",
+    )
+    sweep.start()
+    _kb_sweep_log.info(
+        "kb_sweep: monitor started (interval=%ds, enabled=%s)",
+        _KB_SWEEP_INTERVAL_S, _KB_SWEEP_ENABLED,
+    )
+
+
 def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_DAEMON_PORT) -> None:
     from opencode_search.embeddings import assert_gpu_available
     from opencode_search.mcp import run_mcp_http_server
@@ -1202,6 +1319,7 @@ def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_
     _write_pidfile(host=host, port=port)
     try:
         _start_shutdown_monitor()
+        _start_kb_sweep_monitor()
         run_mcp_http_server(host=host, port=port)
     finally:
         _clear_pidfile()

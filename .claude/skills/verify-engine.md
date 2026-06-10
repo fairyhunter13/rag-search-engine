@@ -65,12 +65,12 @@ Stop when ALL of:
 
 ## Model strategy
 
-Do **not** hardcode model selection here or in `engine-coverage.js`. Instead, use the `/model` setting:
+Use the `/model` setting, not hardcoded model names:
 
-- **Planning / investigation / debugging** → enter plan mode first (`/model opusplan` activates Opus automatically when you enter plan mode). Use plan mode to investigate failures, root-cause bugs, and design fixes.
-- **Execution / editing / committing** → exit plan mode; the session reverts to Sonnet for code edits, test runs, git operations.
+- **Planning / investigation / debugging** → enter plan mode (`/model opus` activates Opus automatically).
+- **Execution / editing / committing** → exit plan mode; Sonnet handles code edits, test runs, git operations.
 
-The workflow script (`engine-coverage.js`) agents omit `opts.model` — each inherits the resolved session model. This is correct and intentional: agent model selection follows the session, which follows `/model`.
+For a full autonomous loop (probes + fixes + re-arming), use `/engine-loop` instead of this skill.
 
 ## What it will NOT do
 - Skip failing tests

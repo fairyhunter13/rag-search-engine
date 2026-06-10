@@ -101,10 +101,11 @@ def _project_needs_hierarchy(project_path: str) -> bool:
 
 
 def _project_needs_hierarchy_enrich(project_path: str) -> bool:
-    """Return True if level-2+ communities exist but have unenriched (NULL) titles.
+    """Return True if any level ≥2 community exists with an unenriched (NULL) title.
 
-    Catches the case where hierarchy was built but LLM enrichment was never
-    triggered — or was interrupted — leaving macro-communities without titles.
+    Scans ALL hierarchy levels (not just level-2) so a project like redacted-name-3
+    where level-3 is 0% enriched still triggers the self-heal path even after
+    level-2 is partially enriched.
     """
     try:
         from opencode_search.config import get_project_graph_db_path
@@ -116,10 +117,14 @@ def _project_needs_hierarchy_enrich(project_path: str) -> bool:
         gs = GraphStorage(graph_db)
         gs.open()
         try:
-            if gs.get_max_community_level() <= 1:
+            max_level = gs.get_max_community_level()
+            if max_level <= 1:
                 return False
-            level2 = gs.get_communities(level=2)
-            return any(not c.title and (c.node_count or 0) >= 2 for c in level2)
+            for lvl in range(2, max_level + 1):
+                comms = gs.get_communities(level=lvl)
+                if any(not c.title and (c.node_count or 0) >= 2 for c in comms):
+                    return True
+            return False
         finally:
             gs.close()
     except Exception:
@@ -149,12 +154,16 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
     _record_event(pp, "running")
 
     # ── Step 1: Enrich + Wiki + Ingest ──────────────────────────────────────
+    # Use a high cap so every level-1 community is enriched on the first run.
+    # 10_000 is effectively unbounded for any real project (astro has 1761 L1).
+    # Previously 200, which left most communities unenriched and relied on the
+    # incremental file-watcher to backfill — making KB quality non-deterministic.
     try:
         from opencode_search.handlers._pipeline import handle_pipeline
         pipeline_result = await handle_pipeline(
             project_path=pp,
-            enrich_max_communities=200,
-            wiki_max_communities=200,
+            enrich_max_communities=10_000,
+            wiki_max_communities=10_000,
             ingest_docs=True,
         )
         steps.append({"step": "pipeline", "status": pipeline_result.get("status", "ok")})
