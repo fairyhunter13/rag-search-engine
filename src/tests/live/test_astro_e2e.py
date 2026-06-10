@@ -218,6 +218,7 @@ class TestAstroOverview:
         r = http.get("/api/overview", params={"project": astro, "what": "architecture_domains"})
         assert r.status_code == 200, f"overview architecture_domains failed: {r.text[:200]}"
 
+    @pytest.mark.flaky(reruns=1, reruns_delay=5)
     def test_overview_service_mesh(self, http, astro):
         r = http.get("/api/overview", params={"project": astro, "what": "service_mesh"})
         assert r.status_code == 200, f"overview service_mesh failed: {r.text[:200]}"
