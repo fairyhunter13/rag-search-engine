@@ -26,19 +26,37 @@ class TestEnrichment:
     """Communities must have LLM-assigned titles and semantic types."""
 
     def test_enrichment_pct_above_80(self, http, project):
+        """Level-1 community enrichment must be >=80%.
+
+        Level-1 = base Leiden communities produced by the standard pipeline.
+        Level-2+ (hierarchy meta-communities) require a separate enrich_hierarchy
+        run and are not checked here.
+        """
         r = http.get("/api/kb_health", params={"project": project})
         assert r.status_code == 200, f"kb_health failed: {r.text[:200]}"
         data = r.json()
-        pct = data.get("enrichment_pct") or data.get("enriched_pct") or 0
-        if pct == 0:
-            # Fall back to counting communities directly
+
+        by_level = data.get("enrichment_by_level", {})
+        l1 = by_level.get("1", {})
+        total = l1.get("total", 0)
+        enriched_count = l1.get("enriched", 0)
+
+        if total > 0:
+            pct = l1.get("pct", enriched_count / total * 100)
+        else:
+            # No per-level breakdown — fall back to overall pct
+            pct = data.get("enrichment_pct") or data.get("enriched_pct") or 0
+
+        if pct == 0 and total == 0:
+            # Last resort: count communities directly
             r2 = http.get("/api/communities", params={"project": project, "top_k": 200})
             communities = r2.json().get("communities", [])
             assert communities, "No communities found — enrichment_pct=0 and no communities in /api/communities"
             enriched = sum(1 for c in communities if c.get("title") and c["title"].strip())
             pct = enriched / len(communities) * 100
+
         assert pct >= 80, (
-            f"Enrichment is only {pct:.0f}% — run build(action='enrich') to fix"
+            f"Level-1 enrichment is only {pct:.0f}% — run build(action='enrich') to fix"
         )
 
     def test_communities_have_semantic_types(self, http, project):
