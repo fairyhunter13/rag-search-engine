@@ -959,10 +959,14 @@ async def _stream_feature(
     )
     wiki_task = asyncio.ensure_future(_fetch_wiki_context(query, project_path, top_k=5))
 
-    # Step 2: context assembly (usually 2-5s)
-    (code_ctx, code_sources, _), (comm_ctx, _, _), (wiki_ctx, _) = await asyncio.gather(
-        code_task, community_task, wiki_task
-    )
+    # Step 2: context assembly — heartbeat every 10s under GPU load
+    _ctx_task2 = asyncio.ensure_future(asyncio.gather(code_task, community_task, wiki_task))
+    while not _ctx_task2.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(_ctx_task2), timeout=10.0)
+        except TimeoutError:
+            yield {"type": "thinking"}
+    (code_ctx, code_sources, _), (comm_ctx, _, _), (wiki_ctx, _) = await _ctx_task2
 
     # Step 3: build messages
     sections: list[str] = []
@@ -1094,13 +1098,19 @@ async def _stream_global(
                     if _reg.get(m) and _reg[m].indexed_at is not None]
 
     # Parallel context assembly: vector similarity + structural hierarchy + wiki
-    (_, code_sources, _), (_, comm_list, _), (wiki_ctx, _), hier_comms = \
-        await asyncio.gather(
-            _fetch_code_context(query, project_path, top_k=15, extra_paths=_fed_members or None),
-            _fetch_community_context(query, project_path, top_k=60, include_federation=_is_fed),
-            _fetch_wiki_context(query, project_path, top_k=5),
-            _fetch_hierarchy_communities(project_path, max_count=30),
-        )
+    # Heartbeat every 10s — top_k=60 + federation can take 10-20s under load
+    _ctx_task = asyncio.ensure_future(asyncio.gather(
+        _fetch_code_context(query, project_path, top_k=15, extra_paths=_fed_members or None),
+        _fetch_community_context(query, project_path, top_k=60, include_federation=_is_fed),
+        _fetch_wiki_context(query, project_path, top_k=5),
+        _fetch_hierarchy_communities(project_path, max_count=30),
+    ))
+    while not _ctx_task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(_ctx_task), timeout=10.0)
+        except TimeoutError:
+            yield {"type": "thinking"}
+    (_, code_sources, _), (_, comm_list, _), (wiki_ctx, _), hier_comms = await _ctx_task
 
     # Merge hierarchy communities (structural breadth) with vector-similarity communities
     # Deduplicate by title to avoid repeating the same community in MAP batches

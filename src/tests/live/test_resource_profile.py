@@ -19,19 +19,32 @@ _OLLAMA_GEN_URL = "http://localhost:11434/api/generate"
 
 @pytest.fixture(scope="module", autouse=True)
 def _warmup_qwen3_query():
-    """Ensure qwen3-query:8b is loaded in Ollama before GPU residency tests run.
+    """Ensure qwen3-query:8b is loaded and GPU-resident before residency tests run.
 
-    Without this, test_ollama_qwen3_query_is_gpu_resident skips because the model
-    is evicted from VRAM when no recent queries have been made.
+    Uses keep_alive=-1 to pin the model, then polls /api/ps until size_vram > 0
+    to avoid a race where VRAM allocation is still in progress when the test checks.
     """
-    import contextlib
-    with contextlib.suppress(Exception):
+    try:
         httpx.post(
             _OLLAMA_GEN_URL,
             json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
-                  "options": {"num_predict": 1}},
-            timeout=60.0,
+                  "options": {"num_predict": 1}, "keep_alive": "-1"},
+            timeout=90.0,
         )
+    except Exception:
+        return  # Ollama unreachable — test will fail with a clear error
+
+    # Poll until the model reports VRAM > 0 (GPU allocation may lag the generate call)
+    for _ in range(15):
+        try:
+            r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
+            models = r.json().get("models", [])
+            for m in models:
+                if "qwen3-query" in m.get("name", "").lower() and m.get("size_vram", 0) > 0:
+                    return  # GPU-resident, proceed
+        except Exception:
+            pass
+        time.sleep(2)
 
 
 def test_ollama_qwen3_query_is_gpu_resident():
