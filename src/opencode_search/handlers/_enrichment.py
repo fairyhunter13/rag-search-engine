@@ -491,7 +491,10 @@ async def handle_enrich_hierarchy(
             # so we can safely use higher concurrency than level-1 enrichment.
             # Process in batches of _HIER_BATCH_SIZE so progress is saved
             # incrementally — avoids losing all work if the process is killed.
-            _hier_concurrency = min(_LLM_CONCURRENCY * 2, 8)
+            # Cap at OLLAMA_NUM_PARALLEL (1) + 1 queue slot = 2 max.
+            # Old value (_LLM_CONCURRENCY * 2 = 4) caused sustained 100% GPU
+            # load across the full enrichment run, contributing to thermal crashes.
+            _hier_concurrency = min(_LLM_CONCURRENCY, 2)
             _hier_batch_size = 50
             _sem = asyncio.Semaphore(_hier_concurrency)
 

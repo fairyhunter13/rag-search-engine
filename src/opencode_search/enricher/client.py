@@ -44,6 +44,54 @@ _OLLAMA_DEFAULT_MODEL = os.environ.get("OPENCODE_LLM_MODEL", "qwen3-enrich:1.7b"
 _OLLAMA_DEFAULT_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 _OLLAMA_DEFAULT_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 
+# ---------------------------------------------------------------------------
+# GPU thermal guard — blocks inference when the GPU is too hot.
+# Necessary because the RTX 5080 Laptop SBIOS cannot report temperature limits
+# to the NVIDIA driver (NV_ERR_INVALID_DATA), leaving the OS with no HW thermal
+# protection fallback. This guard is our software-level circuit breaker.
+# ---------------------------------------------------------------------------
+_GPU_TEMP_THROTTLE: int = int(os.environ.get("OPENCODE_GPU_TEMP_MAX", "85"))
+_GPU_TEMP_RESUME: int = int(os.environ.get("OPENCODE_GPU_TEMP_RESUME", "78"))
+
+
+def _read_gpu_temp() -> int | None:
+    """Return current GPU temp in °C via nvidia-smi, or None if unavailable."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
+def _wait_for_gpu_cool() -> None:
+    """Block until GPU temp is below the throttle threshold.
+
+    Called before every Ollama inference call. If the GPU temp cannot be read
+    (nvidia-smi unavailable), this is a no-op — caller proceeds immediately.
+    """
+    import logging
+    import time
+    _log = logging.getLogger(__name__)
+    temp = _read_gpu_temp()
+    if temp is None or temp < _GPU_TEMP_THROTTLE:
+        return  # Fast path — no throttling needed
+    _log.warning(
+        "GPU at %d°C (≥ %d°C limit) — pausing inference until ≤ %d°C",
+        temp, _GPU_TEMP_THROTTLE, _GPU_TEMP_RESUME,
+    )
+    while True:
+        time.sleep(15)
+        temp = _read_gpu_temp()
+        if temp is None or temp <= _GPU_TEMP_RESUME:
+            _log.info("GPU cooled to %s°C — resuming inference", temp)
+            return
+        _log.warning("GPU still at %d°C — waiting 15s more", temp)
+
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -553,6 +601,7 @@ class OllamaClient(LLMClient):
         temperature: float = 0.1,
         max_tokens: int = 1024,
     ) -> str:
+        _wait_for_gpu_cool()
         self._assert_gpu_only()
         payload: dict[str, Any] = {
             "model": self.model,
