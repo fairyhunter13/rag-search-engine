@@ -12,6 +12,24 @@
     "baseRef": "head"
   },
 
+  "permissions": {
+    "allow": [
+      "Bash(curl *)",
+      "Bash(.venv/bin/ruff check *)",
+      "Bash(../.venv/bin/ruff check *)",
+      "Bash(journalctl --user *)",
+      "Bash(systemctl --user status *)",
+      "Bash(systemctl --user is-active *)",
+      "Bash(systemctl --user is-enabled *)",
+      "Bash(nvidia-smi *)",
+      "mcp__opencode-search__search",
+      "mcp__opencode-search__overview",
+      "mcp__opencode-search__ask",
+      "mcp__opencode-search__graph",
+      "mcp__opencode-search__federation"
+    ]
+  },
+
   "skillOverrides": {
     "deep-research": "user-invocable-only",
     "code-review": "user-invocable-only",
