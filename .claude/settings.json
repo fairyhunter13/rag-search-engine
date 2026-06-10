@@ -2,7 +2,37 @@
   "env": {
     "OPENCODE_ALLOW_INDEX_OUTSIDE_CWD": "1"
   },
+
+  "fallbackModel": ["claude-sonnet-4-6", "claude-haiku-4-5"],
+
+  "effortLevel": "xhigh",
+
+  "worktree": {
+    "bgIsolation": "none",
+    "baseRef": "head"
+  },
+
+  "skillOverrides": {
+    "deep-research": "user-invocable-only",
+    "code-review": "user-invocable-only",
+    "security-review": "user-invocable-only",
+    "job-search-end-to-end": "off"
+  },
+
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/session-start.sh",
+            "timeout": 8,
+            "statusMessage": "Loading session context..."
+          }
+        ]
+      }
+    ],
+
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -10,11 +40,13 @@
           {
             "type": "command",
             "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/guard-engine-indexes.sh",
-            "timeout": 5
+            "timeout": 5,
+            "if": "Bash(rm *)"
           }
         ]
       }
     ],
+
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
@@ -22,7 +54,46 @@
           {
             "type": "command",
             "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/auto-ruff.sh",
-            "timeout": 10
+            "timeout": 10,
+            "async": true,
+            "statusMessage": "Auto-fixing lint..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // \"\"' | grep -qE '^git (commit|push)' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Git operation completed. Remember zero-unpushed policy: push after every commit.\"}}' || true",
+            "timeout": 5,
+            "if": "Bash(git commit *)|Bash(git push *)"
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/stop-check.sh",
+            "timeout": 8,
+            "statusMessage": "Checking git state..."
+          }
+        ]
+      }
+    ],
+
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/post-compact.sh",
+            "timeout": 5,
+            "statusMessage": "Restoring project context..."
           }
         ]
       }
