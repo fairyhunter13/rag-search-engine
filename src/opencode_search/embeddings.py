@@ -1602,12 +1602,12 @@ def _gpu_provider_options(provider: str) -> list[dict]:
     caps = _get_gpu_capabilities()
 
     base: dict = {"arena_extend_strategy": "kSameAsRequested"}
-    # Hard cap the ONNX BFC arena at 3 GB.
+    # Hard cap the ONNX BFC arena at 4 GB (was 3 GB).
     # The old value (80% of VRAM = 12.8 GB) allowed the arena's high-water mark to
     # accumulate across thousands of calls, consuming nearly all VRAM and starving
-    # Ollama and other processes. jina-embeddings-v2-base-code never needs > 2 GB
-    # even for the largest batch sizes we use during indexing.
-    _ONNX_ARENA_CAP_MB: int = int(os.environ.get("OPENCODE_ONNX_ARENA_MB", "3072"))
+    # Ollama and other processes. With batch_size=8, peak attention workspace is
+    # ~400 MB; 4 GB cap gives models (~800 MB) + workspace (~400 MB) + 2.8 GB headroom.
+    _ONNX_ARENA_CAP_MB: int = int(os.environ.get("OPENCODE_ONNX_ARENA_MB", "4096"))
     base["gpu_mem_limit"] = str(_ONNX_ARENA_CAP_MB * 1024 * 1024)
 
     if provider == "TensorrtExecutionProvider":
@@ -1787,9 +1787,9 @@ def _embed_batch_iobinding(
 def _get_onnx_batch_size() -> int:
     """Get optimal ONNX batch size based on GPU VRAM.
 
-    Self-attention memory is O(batch × L²). At seq_len=1024 and batch=32:
-    activation ≈ 800 MB — safe on 16 GB with 11 GB already used by model +
-    CUDA workspace. Increasing to 64 or 128 causes OOM on this configuration.
+    Self-attention memory is O(batch × L²). At seq_len=1024:
+    - batch=32: 1.6 GB attention scores (32×12×1024×1024×4B) → OOM with 3GB arena cap
+    - batch=8:  400 MB attention scores → safe with 3GB arena + 800MB model weights
     Override via OPENCODE_ONNX_BATCH_SIZE env var for manual tuning.
 
     Sizes:
@@ -1797,7 +1797,8 @@ def _get_onnx_batch_size() -> int:
     - No GPU: 8 (CPU-safe)
     - <8 GB VRAM: 6
     - 8–14 GB VRAM: 8
-    - ≥14 GB VRAM: 32 (RTX 5080 16 GB with seq_len≤1024 — proven safe)
+    - ≥14 GB VRAM: 8 (Blackwell/RTX 5080: 3GB arena cap leaves ~2.2GB for workspace;
+      batch=32 needs 1.6GB attention scores → OOM under concurrent query+index load)
     """
     env = os.environ.get("OPENCODE_ONNX_BATCH_SIZE", "").strip()
     if env:
@@ -1819,13 +1820,9 @@ def _get_onnx_batch_size() -> int:
 
     vram_gb = vram_mb / 1024
 
-    if vram_gb < 8:
-        batch_size = 6
-    elif vram_gb < 14:
-        batch_size = 8
-    else:
-        # ≥14 GB (RTX 5080 Laptop 15.9 GB, etc.): 32 is proven safe at seq_len≤1024
-        batch_size = 32
+    # ≥8 GB: 8 is safe at seq_len≤1024 within the 4GB arena cap.
+    # batch=32 requires 1.6GB self-attention scores → OOM under concurrent ops.
+    batch_size = 6 if vram_gb < 8 else 8
 
     log.info("Auto-configured ONNX batch_size=%d for %.1fGB VRAM", batch_size, vram_gb)
     return batch_size

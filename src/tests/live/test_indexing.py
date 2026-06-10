@@ -29,24 +29,30 @@ def test_indexed_project_has_communities(http, project):
 
 
 def test_enrichment_above_80pct(http, project):
-    """At least 80% of communities must have a non-null title after enrichment."""
-    r = http.get("/api/overview", params={"project": project, "what": "status"})
-    assert r.status_code == 200, f"status failed: {r.status_code} {r.text[:200]}"
+    """At least 80% of level-1 communities must have a title after enrichment.
+
+    Level-1 communities are produced by the standard pipeline enrich step.
+    Level-2+ (hierarchy meta-communities) require a separate enrich_hierarchy run
+    and are excluded from this gate.
+    """
+    r = http.get("/api/kb_health", params={"project": project})
+    assert r.status_code == 200, f"kb_health failed: {r.status_code} {r.text[:200]}"
     data = r.json()
 
-    total = data.get("community_count", 0) or data.get("total_communities", 0)
-    enriched = data.get("enriched_count", 0) or data.get("communities_with_title", 0)
+    by_level = data.get("enrichment_by_level", {})
+    l1 = by_level.get("1", {})
+    total = l1.get("total", 0)
+    enriched = l1.get("enriched", 0)
 
     if total == 0:
-        r2 = http.get("/api/overview", params={"project": project, "what": "communities"})
-        communities = r2.json().get("communities", [])
-        total = len(communities)
-        enriched = sum(1 for c in communities if c.get("title"))
+        # kb_health may not have per-level breakdown — fall back to overall
+        total = data.get("total_communities", 0)
+        enriched = data.get("enriched_communities", 0)
 
     assert total > 0, f"Project has no communities to check enrichment: {data}"
     pct = enriched / total * 100
     assert pct >= 80, (
-        f"Enrichment is only {pct:.0f}% ({enriched}/{total} communities have titles). "
+        f"Level-1 enrichment is only {pct:.0f}% ({enriched}/{total} communities have titles). "
         "Run build(action='enrich') to fix."
     )
 
