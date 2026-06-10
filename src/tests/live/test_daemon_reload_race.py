@@ -45,18 +45,23 @@ def _systemd_is_active() -> bool:
     return result.stdout.strip() == "active"
 
 
-def test_mcp_manage_reload_uses_shared_helper():
-    """mcp.py manage(action=reload) must delegate to _spawn_daemon_restart_thread (B2 audit)."""
-    import inspect  # noqa: I001
-    from opencode_search import mcp as mcp_mod
+def test_reload_uses_shared_helper_in_dashboard():
+    """Reload path must delegate to _spawn_daemon_restart_thread in dashboard.py (B2 audit).
+
+    Phase 100: manage() removed from MCP; reload now lives only in dashboard /api/reload.
+    """
+    import inspect
+
+    from opencode_search import dashboard as dash_mod
     from opencode_search.dashboard import _spawn_daemon_restart_thread  # noqa: F401
-    src = inspect.getsource(mcp_mod)
+    src = inspect.getsource(dash_mod)
     assert "_spawn_daemon_restart_thread" in src, (
-        "mcp.py manage handler must call _spawn_daemon_restart_thread — unified reload path"
+        "dashboard.py /api/reload must call _spawn_daemon_restart_thread — unified reload path"
     )
-    assert "signal.SIGTERM" not in src.split("def manage(")[1].split("\ndef ")[0], (
-        "mcp.py manage handler must NOT inline its own SIGTERM logic anymore"
-    )
+    # MCP must NOT have any inline SIGTERM reload logic
+    from opencode_search import mcp as mcp_mod
+    mcp_src = inspect.getsource(mcp_mod)
+    assert "SIGTERM" not in mcp_src, "mcp.py must not contain inline SIGTERM reload logic"
 
 
 @pytest.mark.flaky(reruns=2)

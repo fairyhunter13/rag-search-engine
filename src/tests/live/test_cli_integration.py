@@ -31,7 +31,7 @@ _CLAUDE_CONFIG = str(Path.home() / ".claude")
 _CODEX_AUTH = Path.home() / ".codex" / "auth.json"
 _CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
 
-_MCP_TOOL_NAMES = {"search", "ask", "graph", "overview", "build", "federation", "manage"}
+_MCP_TOOL_NAMES = {"search", "ask", "graph", "overview", "index"}
 _MCP_TOOL_PREFIX = "mcp__opencode-search__"
 
 

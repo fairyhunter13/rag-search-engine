@@ -56,7 +56,7 @@ class TestEnrichment:
             pct = enriched / len(communities) * 100
 
         assert pct >= 80, (
-            f"Level-1 enrichment is only {pct:.0f}% — run build(action='enrich') to fix"
+            f"Level-1 enrichment is only {pct:.0f}% — run POST /api/enrich_hierarchy to fix"
         )
 
     def test_communities_have_semantic_types(self, http, project):
@@ -73,7 +73,7 @@ class TestEnrichment:
         pct = len(with_type) / len(communities) * 100
         assert pct >= 50, (
             f"Only {pct:.0f}% of top-20 communities have semantic_type — "
-            "run build(action='enrich') to backfill"
+            "run POST /api/enrich_hierarchy to backfill"
         )
 
     def test_enrichment_uses_local_llm(self):
@@ -143,14 +143,14 @@ class TestWiki:
         data = r.json()
         pages = data.get("pages", data.get("wiki_pages", []))
         assert len(pages) > 0, (
-            "No wiki pages — run build(action='wiki') or build(action='pipeline')"
+            "No wiki pages — run POST /api/index or index(enabled=True) [daemon auto-builds KB]"
         )
 
     def test_wiki_page_has_content(self, http, project):
         r = http.get("/api/wiki", params={"project": project})
         assert r.status_code == 200
         pages = r.json().get("pages", r.json().get("wiki_pages", []))
-        assert pages, "No wiki pages found — run build(action='wiki') first"
+        assert pages, "No wiki pages found — run POST /api/index first"
         first_page = pages[0].get("name", pages[0]) if isinstance(pages[0], dict) else pages[0]
         r2 = http.get("/api/wiki/page", params={"project": project, "name": first_page})
         assert r2.status_code == 200, f"wiki page fetch failed: {r2.text[:200]}"
@@ -190,7 +190,7 @@ class TestPatternsCache:
         )
         # Warn but don't fail if cache is empty — first run might not have it
         if not patterns_cached:
-            pytest.xfail("Patterns cache is empty — run build(action='analyze_patterns')")
+            pytest.xfail("Patterns cache is empty — run POST /api/analyze_patterns")
 
     def test_patterns_llm_analysis_present(self, http, project):
         r = http.get("/api/patterns", params={"project": project})
@@ -198,7 +198,7 @@ class TestPatternsCache:
         data = r.json()
         llm_analysis = data.get("llm_analysis")
         if llm_analysis is None:
-            pytest.xfail("LLM analysis not yet run — build(action='analyze_patterns') needed")
+            pytest.xfail("LLM analysis not yet run — POST /api/analyze_patterns needed")
         assert isinstance(llm_analysis, (dict, str)), (
             f"llm_analysis has unexpected type: {type(llm_analysis)}"
         )
@@ -378,8 +378,8 @@ class TestKbSweep:
         assert r.status_code == 200
         before = r.json().get("enrichment_by_level", {}).get("2", {}).get("pct", 0)
 
-        # Trigger one sweep cycle via the HTTP API (build action=enrich_hierarchy)
-        r2 = http.post("/api/build", json={"project": project, "action": "enrich_hierarchy"})
+        # Trigger one sweep cycle via the dedicated HTTP endpoint
+        r2 = http.post("/api/enrich_hierarchy", json={"project": project})
         assert r2.status_code in (200, 202), f"enrich_hierarchy failed: {r2.text[:200]}"
 
         # Wait for enrichment to progress (up to 5 minutes)
@@ -458,11 +458,12 @@ class TestKbQueryRouting:
         try:
             os.environ["OPENCODE_LLM_PROVIDER"] = "codex"
             import importlib
+
             import opencode_search.enricher.client as _mod
             importlib.reload(_mod)
             try:
                 _mod.create_llm_client()
-                assert False, "Expected RuntimeError for codex provider in enrich tier"
+                raise AssertionError("Expected RuntimeError for codex provider in enrich tier")
             except RuntimeError as exc:
                 assert "FORBIDDEN" in str(exc), f"RuntimeError message should mention FORBIDDEN: {exc}"
         finally:
@@ -471,6 +472,7 @@ class TestKbQueryRouting:
             else:
                 os.environ["OPENCODE_LLM_PROVIDER"] = old
             import importlib
+
             import opencode_search.enricher.client as _mod2
             importlib.reload(_mod2)
 
@@ -500,6 +502,7 @@ class TestKbQueryRouting:
     def test_note_query_distinct_from_heartbeat(self):
         """note_query() must update last_query_monotonic; client_heartbeat() must not."""
         import time
+
         from opencode_search.daemon_runtime import _RuntimeState
         state = _RuntimeState()
         # heartbeat should NOT advance last_query_monotonic

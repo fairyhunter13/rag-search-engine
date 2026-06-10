@@ -1309,6 +1309,233 @@ def _start_kb_sweep_monitor() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Auto-index loop: pick up registered-but-unindexed projects automatically
+# ---------------------------------------------------------------------------
+
+_AUTO_INDEX_INTERVAL_S: int = int(os.environ.get("OPENCODE_AUTO_INDEX_INTERVAL_S", "120"))
+_AUTO_INDEX_ENABLED: bool = os.environ.get("OPENCODE_AUTO_INDEX_ENABLED", "1").strip().lower() not in {
+    "0", "false", "no", "off",
+}
+_auto_index_log = logging.getLogger(__name__ + ".auto_index")
+
+
+def _auto_index_monitor() -> None:
+    """Daemon thread: periodically pick up registered-but-not-yet-indexed projects.
+
+    Fills the gap left by /api/projects/register and _auto_update_federation:
+    both pre-register projects without indexing them. Once the MCP `build` tool
+    is removed (Phase 100), this loop is the only way a flagged project gets indexed.
+    """
+    import asyncio as _asyncio
+    # Short initial wait so startup watchers/pipeline resumes go first
+    time.sleep(min(_AUTO_INDEX_INTERVAL_S, 30))
+    while True:
+        try:
+            loop = _asyncio.get_event_loop()
+            future = _asyncio.run_coroutine_threadsafe(_run_auto_index_sweep(), loop)
+            future.result(timeout=3600)
+        except Exception as exc:
+            _auto_index_log.warning("auto_index: error in sweep cycle: %s", exc)
+        time.sleep(_AUTO_INDEX_INTERVAL_S)
+
+
+async def _run_auto_index_sweep() -> None:
+    """Async coroutine: find and start indexing any registered-but-unindexed projects."""
+    if not _AUTO_INDEX_ENABLED:
+        return
+
+    try:
+        from opencode_search.config import load_registry
+        from opencode_search.daemon_runtime import yield_while_busy
+        from opencode_search.handlers._common import _indexing_status
+        from opencode_search.handlers._federation import _expand_with_federation
+
+        registry = load_registry()
+        root_paths = list(registry.keys())
+        all_paths = _expand_with_federation(root_paths, registry)
+
+        queued = 0
+        for project_path in all_paths:
+            entry = registry.get(project_path)
+            # Check if already indexed: has file_count > 0 means it has been indexed before
+            already_indexed = entry is not None and getattr(entry, "file_count", 0) > 0
+            if already_indexed:
+                continue
+            # Skip if currently indexing
+            if _indexing_status.get(project_path):
+                _auto_index_log.debug("auto_index: %s — already indexing, skipping", project_path)
+                continue
+
+            await yield_while_busy()
+            _auto_index_log.info("auto_index: starting index for unindexed project %s", project_path)
+            try:
+                from opencode_search.handlers import handle_index_project
+                await handle_index_project(path=project_path, watch=True)
+                queued += 1
+            except Exception as exc:
+                _auto_index_log.warning("auto_index: failed to start index for %s: %s", project_path, exc)
+
+        if queued:
+            _auto_index_log.info("auto_index: queued %d project(s) for indexing", queued)
+    except Exception as exc:
+        _auto_index_log.warning("auto_index: unexpected error: %s", exc)
+
+
+def _start_auto_index_monitor() -> None:
+    if not _AUTO_INDEX_ENABLED:
+        return
+    t = threading.Thread(
+        target=_auto_index_monitor,
+        daemon=True,
+        name="opencode-search-auto-index",
+    )
+    t.start()
+    _auto_index_log.info(
+        "auto_index: monitor started (interval=%ds)",
+        _AUTO_INDEX_INTERVAL_S,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Maintenance loop: vacuum + dedup + graph VACUUM + wiki self-heal (every 6h)
+# ---------------------------------------------------------------------------
+
+_MAINTENANCE_INTERVAL_S: int = int(os.environ.get("OPENCODE_MAINTENANCE_INTERVAL_S", "21600"))
+_MAINTENANCE_ENABLED: bool = os.environ.get("OPENCODE_MAINTENANCE_ENABLED", "1").strip().lower() not in {
+    "0", "false", "no", "off",
+}
+_maintenance_log = logging.getLogger(__name__ + ".maintenance")
+
+
+def _maintenance_monitor() -> None:
+    """Daemon thread: run periodic maintenance (vacuum/dedup/graph-VACUUM/wiki-lint).
+
+    Interval defaults to 6h (OPENCODE_MAINTENANCE_INTERVAL_S). Tests override to seconds.
+    Each pass is gated by yield_while_busy() so it never competes with live queries.
+    """
+    import asyncio as _asyncio
+    # Start after one full interval so the first runs aren't during startup
+    time.sleep(min(_MAINTENANCE_INTERVAL_S, 60))
+    while True:
+        try:
+            loop = _asyncio.get_event_loop()
+            future = _asyncio.run_coroutine_threadsafe(_run_maintenance_sweep(), loop)
+            future.result(timeout=7200)  # max 2h per sweep
+        except Exception as exc:
+            _maintenance_log.warning("maintenance: error in sweep cycle: %s", exc)
+        time.sleep(_MAINTENANCE_INTERVAL_S)
+
+
+async def _run_maintenance_sweep() -> None:
+    """Run vacuum + dedup + graph VACUUM + wiki self-heal for every indexed project."""
+    if not _MAINTENANCE_ENABLED:
+        return
+
+    try:
+        from opencode_search.config import load_registry
+        from opencode_search.daemon_runtime import yield_while_busy
+        from opencode_search.handlers._federation import _expand_with_federation
+
+        registry = load_registry()
+        root_paths = list(registry.keys())
+        all_paths = _expand_with_federation(root_paths, registry)
+
+        indexed = [p for p in all_paths if registry.get(p) is not None and getattr(registry.get(p), "file_count", 0) > 0]
+        if not indexed:
+            _maintenance_log.debug("maintenance: no indexed projects — skipping")
+            return
+
+        _maintenance_log.info("maintenance: starting sweep for %d indexed projects", len(indexed))
+        swept = 0
+        for project_path in indexed:
+            try:
+                await yield_while_busy()
+
+                freed_mb = 0.0
+                merged = 0
+                wiki_status = "ok"
+
+                # 1. Vacuum orphan tier dirs
+                try:
+                    from opencode_search.handlers._vacuum import handle_vacuum
+                    vac = await handle_vacuum(project_path=project_path, dry_run=False)
+                    freed_mb = vac.get("freed_mb", 0.0) or 0.0
+                except Exception as exc:
+                    _maintenance_log.debug("maintenance: vacuum failed for %s: %s", project_path, exc)
+
+                await yield_while_busy()
+
+                # 2. Dedup graph nodes (MinHash/LSH)
+                try:
+                    from opencode_search.handlers._graph import handle_dedup_nodes
+                    ded = await handle_dedup_nodes(project_path=project_path, dry_run=False)
+                    merged = ded.get("merged", 0) or 0
+                except Exception as exc:
+                    _maintenance_log.debug("maintenance: dedup failed for %s: %s", project_path, exc)
+
+                await yield_while_busy()
+
+                # 3. GraphStorage SQLite VACUUM + prune singletons
+                try:
+                    from opencode_search.config import get_project_graph_db_path
+                    from opencode_search.graph.storage import GraphStorage
+                    import asyncio as _aio
+                    db_path = get_project_graph_db_path(project_path)
+                    def _graph_vacuum(_db=db_path) -> None:
+                        gs = GraphStorage(_db)
+                        gs.open()
+                        try:
+                            gs.vacuum()
+                        finally:
+                            gs.close()
+                    await _aio.to_thread(_graph_vacuum)
+                except Exception as exc:
+                    _maintenance_log.debug("maintenance: graph vacuum failed for %s: %s", project_path, exc)
+
+                await yield_while_busy()
+
+                # 4. Wiki lint → auto-regenerate if broken/stale
+                try:
+                    from opencode_search.handlers._wiki import handle_wiki_lint
+                    lint = await handle_wiki_lint(project_path=project_path)
+                    wiki_status = lint.get("status", "ok")
+                    if wiki_status in ("broken", "stale", "empty", "missing"):
+                        _maintenance_log.info("maintenance: wiki %s for %s — regenerating", wiki_status, project_path)
+                        from opencode_search.handlers._autopipeline import schedule_auto_pipeline
+                        schedule_auto_pipeline(project_path)
+                        wiki_status = f"{wiki_status}→regenerating"
+                except Exception as exc:
+                    _maintenance_log.debug("maintenance: wiki lint failed for %s: %s", project_path, exc)
+
+                _maintenance_log.info(
+                    "maintenance: %s — freed=%.1fMB merged=%d wiki=%s",
+                    project_path, freed_mb, merged, wiki_status,
+                )
+                swept += 1
+            except Exception as exc:
+                _maintenance_log.warning("maintenance: skipping %s: %s", project_path, exc)
+
+        _maintenance_log.info("maintenance: done — %d projects swept", swept)
+    except Exception as exc:
+        _maintenance_log.warning("maintenance: unexpected error: %s", exc)
+
+
+def _start_maintenance_monitor() -> None:
+    if not _MAINTENANCE_ENABLED:
+        return
+    t = threading.Thread(
+        target=_maintenance_monitor,
+        daemon=True,
+        name="opencode-search-maintenance",
+    )
+    t.start()
+    _maintenance_log.info(
+        "maintenance: monitor started (interval=%ds)",
+        _MAINTENANCE_INTERVAL_S,
+    )
+
+
 def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_DAEMON_PORT) -> None:
     from opencode_search.embeddings import assert_gpu_available
     from opencode_search.mcp import run_mcp_http_server
@@ -1327,6 +1554,8 @@ def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_
     try:
         _start_shutdown_monitor()
         _start_kb_sweep_monitor()
+        _start_auto_index_monitor()
+        _start_maintenance_monitor()
         run_mcp_http_server(host=host, port=port)
     finally:
         _clear_pidfile()

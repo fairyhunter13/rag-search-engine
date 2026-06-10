@@ -53,7 +53,7 @@ def test_enrichment_above_80pct(http, project):
     pct = enriched / total * 100
     assert pct >= 80, (
         f"Level-1 enrichment is only {pct:.0f}% ({enriched}/{total} communities have titles). "
-        "Run build(action='enrich') to fix."
+        "Run POST /api/enrich_hierarchy to fix."
     )
 
 

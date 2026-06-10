@@ -17,9 +17,7 @@
       "ask",
       "graph",
       "overview",
-      "build",
-      "federation",
-      "manage"
+      "index"
     ]
   }
 }

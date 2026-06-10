@@ -23,7 +23,7 @@ import pytest
 pytestmark = pytest.mark.live
 
 _HOME = Path.home()
-_7_TOOLS = ["search", "ask", "graph", "overview", "build", "federation", "manage"]
+_5_TOOLS = ["search", "ask", "graph", "overview", "index"]
 _EXPECTED_CONTENT = ["QUICK DECISION GUIDE", "opencode-search"]
 
 
@@ -53,11 +53,11 @@ class TestClaudeProfile:
             f"MCP command doesn't point to opencode_search: {cmd!r}"
         )
 
-    def test_claude_md_has_7_tools(self):
+    def test_claude_md_has_5_tools(self):
         claude_md = _HOME / ".claude" / "CLAUDE.md"
         assert claude_md.exists(), "~/.claude/CLAUDE.md not found — sync_global_instructions may need to run"
         text = claude_md.read_text()
-        for tool in _7_TOOLS:
+        for tool in _5_TOOLS:
             assert tool in text, f"Tool '{tool}' missing from ~/.claude/CLAUDE.md"
 
     def test_claude_md_has_quick_decision_guide(self):
@@ -103,13 +103,13 @@ class TestCodexProfile:
             "Codex MCP command doesn't reference opencode_search"
         )
 
-    def test_codex_agents_md_has_7_tools(self):
+    def test_codex_agents_md_has_5_tools(self):
         agents_md = _HOME / ".codex" / "AGENTS.md"
         assert agents_md.exists(), (
             "~/.codex/AGENTS.md not found — run scripts/configure_integrations.py"
         )
         text = agents_md.read_text()
-        for tool in _7_TOOLS:
+        for tool in _5_TOOLS:
             assert tool in text, f"Tool '{tool}' missing from ~/.codex/AGENTS.md"
 
     def test_codex_has_developer_instructions_or_agents_md(self):
@@ -137,11 +137,11 @@ class TestHermesProfile:
             "opencode-search MCP not found in ~/.hermes/config.yaml"
         )
 
-    def test_hermes_system_prompt_has_7_tools(self):
+    def test_hermes_system_prompt_has_5_tools(self):
         config_path = _HOME / ".hermes" / "config.yaml"
         assert config_path.exists(), f"Hermes config not found at {config_path}"
         text = config_path.read_text()
-        for tool in _7_TOOLS:
+        for tool in _5_TOOLS:
             assert tool in text, f"Tool '{tool}' missing from hermes config (system_prompt)"
 
 
@@ -181,13 +181,13 @@ class TestOpenCodeProfile:
 # ---------------------------------------------------------------------------
 
 class TestGlobalInstructionSync:
-    """All profiles must have the same version of the 7-tool instruction block."""
+    """All profiles must have the same version of the 5-tool instruction block (Phase 100)."""
 
     def _get_tool_count(self, text: str) -> int:
-        """Count how many of the 7 tools appear in the text."""
-        return sum(1 for t in _7_TOOLS if t in text)
+        """Count how many of the 5 tools appear in the text."""
+        return sum(1 for t in _5_TOOLS if t in text)
 
-    def test_all_profiles_have_all_7_tools(self):
+    def test_all_profiles_have_all_5_tools(self):
         results: dict[str, int] = {}
         for profile, path in [
             ("claude_CLAUDE.md", _HOME / ".claude" / "CLAUDE.md"),
@@ -198,8 +198,8 @@ class TestGlobalInstructionSync:
                 results[profile] = self._get_tool_count(path.read_text())
 
         for profile, count in results.items():
-            assert count == 7, (
-                f"{profile} only has {count}/7 tools in system prompt. "
+            assert count == 5, (
+                f"{profile} only has {count}/5 tools in system prompt. "
                 f"Run scripts/sync_global_instructions.py to fix."
             )
 
@@ -212,42 +212,39 @@ _REPO = Path(__file__).parents[3]  # src/tests/live/ → 3 levels up → repo ro
 
 
 class TestMCPConfigTemplates:
-    """mcp-config/*.json templates must stay consistent with the 7-tool API and CANONICAL_MCP_ENV.
+    """mcp-config/*.json templates must stay consistent with the 5-tool API and CANONICAL_MCP_ENV.
 
     These tests run against repo files only — no daemon, no user home dir.
     They catch the case where someone updates the API without updating a template.
     """
 
-    def test_claude_code_template_alwaysallow_is_subset_of_seven_tools(self):
+    def test_claude_code_template_alwaysallow_is_subset_of_five_tools(self):
         data = json.loads((_REPO / "mcp-config" / "claude-code.json").read_text())
         always_allow = data["mcpServers"]["opencode-search"]["alwaysAllow"]
-        assert set(always_allow) <= set(_7_TOOLS), (
-            f"alwaysAllow contains unknown tools: {set(always_allow) - set(_7_TOOLS)}"
+        assert set(always_allow) <= set(_5_TOOLS), (
+            f"alwaysAllow contains unknown tools: {set(always_allow) - set(_5_TOOLS)}"
         )
-        read_only = {"search", "ask", "graph", "overview", "federation"}
+        read_only = {"search", "ask", "graph", "overview"}
         assert read_only <= set(always_allow), (
             f"claude-code.json must allow all read-only tools {read_only}; "
             f"got {always_allow}"
         )
 
-    def test_codex_template_lists_seven_tools(self):
+    def test_codex_template_lists_five_tools(self):
         data = json.loads((_REPO / "mcp-config" / "codex.json").read_text())
         tools = data["mcp"]["tools"]
-        assert set(tools) == set(_7_TOOLS), (
-            f"codex.json mcp.tools mismatch: {sorted(tools)} != {sorted(_7_TOOLS)}"
+        assert set(tools) == set(_5_TOOLS), (
+            f"codex.json mcp.tools mismatch: {sorted(tools)} != {sorted(_5_TOOLS)}"
         )
 
-    def test_hermes_template_tools_dict_matches_seven(self):
+    def test_hermes_template_tools_dict_matches_five(self):
         data = json.loads((_REPO / "mcp-config" / "hermes.json").read_text())
         tool_keys = set(data["tools"].keys())
-        assert tool_keys == set(_7_TOOLS), (
-            f"hermes.json tools keys mismatch: {sorted(tool_keys)} != {sorted(_7_TOOLS)}"
+        assert tool_keys == set(_5_TOOLS), (
+            f"hermes.json tools keys mismatch: {sorted(tool_keys)} != {sorted(_5_TOOLS)}"
         )
-        assert data["tools"]["build"]["always_allowed"] is False, (
-            "build must be always_allowed=false in hermes.json (mutating operation)"
-        )
-        assert data["tools"]["manage"]["always_allowed"] is False, (
-            "manage must be always_allowed=false in hermes.json (mutating operation)"
+        assert data["tools"]["index"]["always_allowed"] is False, (
+            "index must be always_allowed=false in hermes.json (write/destructive operation)"
         )
 
     def test_canonical_env_has_both_provider_vars(self):
@@ -283,7 +280,7 @@ class TestClaudeAccountProfiles:
         )
         assert claude_md.exists(), f"{claude_md} not found — sync_global_instructions may need to run"
         text = claude_md.read_text()
-        for tool in _7_TOOLS:
+        for tool in _5_TOOLS:
             assert tool in text, f"Tool '{tool}' missing from {claude_md}"
 
     def test_claude_account1_has_mcp_and_prompt(self):

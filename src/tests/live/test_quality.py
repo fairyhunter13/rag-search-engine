@@ -153,5 +153,5 @@ def test_quality_project_is_well_enriched(http, quality_project):
     pct = r.json().get("enrichment_pct", 0)
     assert pct >= 80, (
         f"opencode-search-engine enrichment too low ({pct:.1f}%) — "
-        "run build(action='enrich') to fix before quality tests"
+        "run POST /api/enrich_hierarchy to fix before quality tests"
     )

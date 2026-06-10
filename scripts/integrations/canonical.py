@@ -48,7 +48,7 @@ call returns no useful results. This rule has NO exceptions.
 To onboard a brand-new repo in one step: `ocs-index <path>`
 (builds the full KB: index → entity enrichment → community hierarchy → wiki)
 
-opencode-search: GPU-accelerated code intelligence. 7 tools — pick the right one:
+opencode-search: GPU-accelerated code intelligence. 5 tools — pick the right one:
 
 WHICH TOOL TO CALL:
   search(query, scope, project_paths)   → find specific code, files, functions. scope: code|docs|all
@@ -73,22 +73,12 @@ WHICH TOOL TO CALL:
     what="feature_map"                  — business knowledge map: all communities by semantic type
     what="business_rules"               — communities classified as constraints/policies/validations
     what="process_flows"                — communities classified as workflows/business processes
-  build(project_path, action)           → async index/enrich/wiki — returns {job_id} immediately
-    action="pipeline"                    — full KB build (recommended first-run)
-    action="hierarchy"                   — build recursive community hierarchy (GraphRAG-like)
-    action="analyze_patterns"            — LLM-powered deep pattern analysis
-    action="enrich"                      — enrich unannotated communities
-    action="wiki"                        — generate/refresh wiki pages
-  federation(root_path)                 → list/manage sub-repositories
-  manage(project_path, action)          → project lifecycle operations
-    action="wiki_lint"                   — health-check the wiki
-    action="stop_watching"               — stop file watcher
-    action="install_hooks"               — install git post-commit hook for auto-reindex
-    action="uninstall_hooks"             — remove git post-commit hook
-    action="dedup"                       — deduplicate graph nodes (dry_run=True to preview)
-    action="vacuum"                      — remove orphan index tier dirs; free disk space
-    action="jobs"                        — list background build jobs; job_id= for one job
-    action="remove_project"              — remove project from registry; delete_index=True also removes on-disk index
+  index(project_path, enabled)          → flag a project for the search engine (THE ONLY WRITE TOOL)
+    enabled=True  → register project; daemon auto-indexes, builds KB, watches, indexes federation members
+    enabled=False → DESTRUCTIVE: stop watching + remove from registry + delete all on-disk index data
+
+The daemon handles ALL indexing, KB building, watching, federation, and maintenance
+automatically. No manual triggers needed. Everything stays healthy on its own.
 
 QUICK DECISION GUIDE:
   'find the payment handler'           → search('payment handler')
@@ -108,7 +98,7 @@ QUICK DECISION GUIDE:
   'tell me about this project'         → overview(project_path, what='structure')
   'what packages/dependencies?'        → overview(project_path, what='patterns')
   'list all indexed projects'          → overview(what='projects')
-  'index this project' [explicit ask]  → build(project_path, action='pipeline')
+  'index this project' [explicit ask]  → index(project_path, enabled=True)
   'what business features exist?'      → overview(project_path, what='feature_map')
   'what business rules govern X?'      → ask('rules for X', project_path, scope='business')
   'what are the checkout workflows?'   → overview(project_path, what='process_flows')
@@ -121,7 +111,7 @@ RULES:
 - Use graph(relation="impact_narrative") instead of raw impact for human-readable analysis.
 - overview(what='structure') returns the project tree, language breakdown, graph stats, and top communities.
 - overview(what='patterns') returns languages, dependencies, package versions, coding conventions, frameworks, architecture, and module structure.
-- NEVER auto-index. Only call build when the user explicitly asks.
+- NEVER auto-index. Only call index(enabled=True) when the user explicitly asks to index a project.
 - If the project is not indexed, say so and ask before indexing.
 - Do NOT delegate codebase questions to sub-agents — they don't inherit these instructions.
 - After indexing, the daemon watches files automatically — no need to re-index on every change.\

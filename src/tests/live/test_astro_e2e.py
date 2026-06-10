@@ -259,11 +259,11 @@ class TestAstroOverview:
 
 
 # ---------------------------------------------------------------------------
-# Tool 5: build (non-destructive: just check job API)
+# HTTP KB endpoints (auto-triggered by daemon in Phase 100)
 # ---------------------------------------------------------------------------
 
 class TestAstroBuild:
-    """build(project_path, action) — async job API."""
+    """HTTP KB endpoints: /api/jobs, /api/enrich_hierarchy."""
 
     def test_build_jobs_api_works(self, http, astro):
         r = http.get("/api/jobs", params={"project": astro})
@@ -286,11 +286,11 @@ class TestAstroBuild:
 
 
 # ---------------------------------------------------------------------------
-# Tool 6: federation
+# HTTP federation endpoints (still exposed at /api/federation)
 # ---------------------------------------------------------------------------
 
 class TestAstroFederation:
-    """federation(root_path) — list sub-repositories."""
+    """HTTP federation endpoints: /api/federation list/add/remove."""
 
     def test_federation_list_returns_response(self, http, astro):
         r = http.get("/api/federation", params={"project": astro})
@@ -336,11 +336,11 @@ class TestAstroFederation:
 
 
 # ---------------------------------------------------------------------------
-# Tool 7: manage
+# HTTP maintenance endpoints (auto-run by daemon; HTTP is escape hatch)
 # ---------------------------------------------------------------------------
 
 class TestAstroManage:
-    """manage(project_path, action) — project lifecycle operations."""
+    """HTTP maintenance endpoints: /api/kb_health, /api/dedup, /api/vacuum."""
 
     def test_manage_kb_health_returns_info(self, http, astro):
         r = http.get("/api/kb_health", params={"project": astro})

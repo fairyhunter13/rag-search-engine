@@ -374,6 +374,26 @@ def _register_project_routes(mcp: FastMCP) -> None:
         result = await handle_remove_project(project_path=project, delete_index=delete_index)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/index", methods=["POST"], include_in_schema=False)
+    async def api_index_project(request: Request) -> JSONResponse:
+        """Trigger on-demand indexing for a project. POST {path, watch?, force?}.
+
+        Explicit/power-user index trigger (escape hatch). The MCP flag tool and
+        the daemon auto-indexer are the normal paths — this exists for the dashboard,
+        CLI, and emergency use.
+        """
+        from opencode_search.handlers import handle_index_project
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        path = body.get("path") or request.query_params.get("path", "")
+        if not path:
+            return JSONResponse({"error": "path param required"}, status_code=400)
+        watch = bool(body.get("watch", True))
+        force = bool(body.get("force", False))
+        result = await handle_index_project(path=path, watch=watch, force=force, follow_symlinks=True)
+        return JSONResponse(result)
+
 
 # ---------------------------------------------------------------------------
 # Sub-registrar: wiki

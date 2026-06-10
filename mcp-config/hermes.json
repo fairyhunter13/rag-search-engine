@@ -25,16 +25,8 @@
       "description": "Project structure, communities, status, patterns",
       "always_allowed": true
     },
-    "build": {
-      "description": "Async KB build: index, enrich, wiki, hierarchy",
-      "always_allowed": false
-    },
-    "federation": {
-      "description": "List and manage sub-repositories",
-      "always_allowed": true
-    },
-    "manage": {
-      "description": "Project lifecycle: vacuum, dedup, jobs, reload",
+    "index": {
+      "description": "Flag a project for indexing (enabled=True) or delete all its data (enabled=False)",
       "always_allowed": false
     }
   }

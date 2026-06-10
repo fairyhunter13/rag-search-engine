@@ -1,9 +1,10 @@
-"""Live MCP tool behavior tests — all 7 tools exercised via HTTP API.
+"""Live MCP tool behavior tests — search/ask/graph/overview/index exercised via HTTP API.
 
 The HTTP endpoints exposed by the daemon call the exact same handlers as the
 MCP stdio bridge.  Testing via HTTP is equivalent to testing the MCP tools.
 
-Tools under test: search, ask, graph, overview, build, federation, manage.
+Phase 100: MCP surface is search, ask, graph, overview, index (read-only + one flag tool).
+KB build, federation, and maintenance are automatic (daemon loops) or HTTP-only escape hatches.
 Requires: daemon at :8765, indexed project with communities.
 """
 from __future__ import annotations
@@ -293,7 +294,7 @@ class TestMCPOverview:
 # ---------------------------------------------------------------------------
 
 class TestMCPBuild:
-    """build(project_path, action) — async KB build; verify results via status endpoints."""
+    """HTTP KB endpoints (/api/jobs, /api/kb_health, /api/wiki, /api/enrich_hierarchy, /api/overview)."""
 
     def test_jobs_endpoint_accessible(self, http, project):
         """Jobs endpoint must return a list (pipeline history visible)."""
@@ -373,7 +374,7 @@ class TestMCPBuild:
 # ---------------------------------------------------------------------------
 
 class TestMCPFederation:
-    """federation(root_path) — list/manage sub-repositories."""
+    """HTTP federation endpoints (/api/federation) — list/discover/add/remove/index sub-repos."""
 
     def test_federation_list_returns_structure(self, http, project):
         r = http.get("/api/federation", params={"project": project})
@@ -421,7 +422,7 @@ class TestMCPFederation:
 # ---------------------------------------------------------------------------
 
 class TestMCPManage:
-    """manage(project_path, action) — project lifecycle: vacuum, dedup, jobs."""
+    """HTTP maintenance endpoints (/api/vacuum, /api/dedup, /api/jobs)."""
 
     @pytest.mark.slow
     def test_manage_vacuum_real(self, http, project):

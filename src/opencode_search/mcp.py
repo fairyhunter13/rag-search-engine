@@ -1,13 +1,14 @@
 """MCP server for opencode-search — stdio and streamable-HTTP transports via FastMCP.
 
-Exposes 7 intent-focused tools (v2 API, May 2026):
-  search     — find code/docs by query (scope: code|docs|all|similar)
-  ask        — answer architectural questions (scope: architecture|wiki|all)
-  graph      — code graph: definition|callers|callees|impact|path
-  overview   — project structure|communities|status|projects|metrics
-  build      — index|pipeline|enrich|wiki|ingest|reindex_wiki|describe_symbol
-  federation — discover|list|add|remove|index federation members
-  manage     — stop_watching|wiki_lint
+Exposes 5 intent-focused tools (v3 API, June 2026 Phase 100):
+  search   — find code/docs by query (scope: code|docs|all|similar)
+  ask      — answer architectural questions (scope: architecture|wiki|all)
+  graph    — code graph: definition|callers|callees|impact|path
+  overview — project structure|communities|status|projects|metrics
+  index    — flag project for indexing (enabled=True) or delete all data (enabled=False)
+
+The daemon handles ALL indexing, KB building, watching, federation, and maintenance
+automatically. The MCP is strictly read-only + the single `index` flag tool.
 
 Usage:
   opencode-search mcp           # stdio (for AI assistants)
@@ -56,40 +57,25 @@ from opencode_search.daemon import (
 )
 from opencode_search.daemon_runtime import runtime_state
 from opencode_search.handlers import (
-    handle_add_federation_member,
-    handle_analyze_patterns_llm,
     handle_ask_feature,
     handle_detect_impact,
     handle_detect_patterns,
-    handle_discover_federation,
-    handle_enrich_hierarchy,
-    handle_enrich_project,
     handle_ensure_project_watching,
     handle_get_callees,
     handle_get_callers,
     handle_get_communities,
     handle_get_symbol,
-    handle_get_symbol_intent,
     handle_global_search,
     handle_global_synthesis,
     handle_graph_export,
-    handle_index_federation,
-    handle_index_project,
-    handle_list_federation,
     handle_list_indexed_projects,
-    handle_pipeline,
     handle_project_status,
     handle_project_structure,
     handle_release_project_watch,
-    handle_remove_federation_member,
     handle_search_code,
     handle_stop_watching,
     handle_trace_path,
-    handle_wiki_generate,
-    handle_wiki_ingest,
-    handle_wiki_lint,
     handle_wiki_query,
-    handle_wiki_reindex,
     resolve_indexed_project_path,
 )
 
@@ -640,278 +626,55 @@ async def overview(
 
 
 @mcp.tool()
-async def build(
+async def index(
     project_path: str,
-    action: Literal[
-        "index", "pipeline", "enrich", "wiki", "ingest",
-        "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
-        "enrich_symbols",
-    ] = "pipeline",
-    source_path: str | None = None,
-    symbol: str | None = None,
-    max_communities: int = 200,
-    include_federation: bool = True,
-    force: bool = False,
-    watch: bool = True,
+    enabled: bool = True,
 ) -> dict[str, Any]:
-    """Index a project or build/update its knowledge base.
+    """Flag a project for the search engine. The ONLY write operation the agent can perform.
 
-    Use this to index a new project or build/refresh the knowledge base.
-    Start with action='pipeline' for a complete one-call setup.
-    Do NOT use for searching — use `search` or `ask` for that.
-
-    action: "pipeline" (default, recommended) | "index" | "enrich" | "wiki"
-            | "ingest" | "reindex_wiki" | "describe_symbol"
-            | "analyze_patterns" (LLM-powered deep code pattern analysis; requires LLM provider)
-            | "hierarchy" (build recursive Leiden hierarchy — run after pipeline for GraphRAG-like levels)
-            | "enrich_hierarchy" (LLM-enrich level-2+ macro-communities — run after hierarchy)
-    source_path: required for action="ingest"
-    symbol: required for action="describe_symbol"
-    max_communities: cap on communities to enrich/wiki (default 200)
-    force: for analyze_patterns, re-run even if cached result exists
+    enabled=True  → Register/flag the project and return immediately. The daemon then
+                    indexes it, builds the knowledge base, starts watching, and indexes
+                    federation members — all automatically in the background.
+    enabled=False → DESTRUCTIVE: stop watching, remove from the registry, and delete the
+                    on-disk index + knowledge base. All search-engine data for this
+                    project is permanently gone. Use with care.
     """
     runtime_state.note_activity()
-    valid = {
-        "index", "pipeline", "enrich", "wiki", "ingest",
-        "reindex_wiki", "describe_symbol", "analyze_patterns", "hierarchy",
-        "enrich_hierarchy", "enrich_symbols",
-    }
-    if action not in valid:
-        return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
+    from pathlib import Path as _Path
 
-    from opencode_search.jobs import submit_job
+    resolved = str(_Path(project_path).expanduser().resolve())
 
-    if action == "index":
-        async def _post_index(result: dict) -> None:
-            pp = str(result.get("path", ""))
-            if result.get("status") == "ok" and pp and runtime_state.bind_clients_to_project(pp) > 0:
-                await handle_ensure_project_watching(pp, persist=False)
-                # schedule_auto_pipeline is now called from within _run_index_project
-                # so the pipeline fires regardless of who called handle_index_project.
-        return await handle_index_project(
-            path=project_path, watch=watch, force=force,
-            follow_symlinks=True, on_complete=_post_index,
+    if enabled:
+        from opencode_search.config import (
+            ProjectEntry,
+            get_project_db_path,
+            load_registry,
+            save_registry,
         )
-    elif action == "pipeline":
-        job = submit_job(
-            handle_pipeline(
-                project_path=project_path,
-                enrich_max_communities=max_communities,
-                wiki_max_communities=max_communities,
-                ingest_docs=True,
-                watch=watch,
-            ),
-            action="pipeline",
-            project_path=project_path,
-            dedup=True,
+        registry = load_registry()
+        if resolved in registry:
+            return {"status": "already_registered", "path": resolved,
+                    "note": "Already flagged. Daemon will index if not yet indexed."}
+        entry = ProjectEntry(
+            path=resolved,
+            db_path=str(get_project_db_path(resolved)),
         )
+        registry[resolved] = entry
+        save_registry(registry)
         return {
-            "status": "started",
-            "job_id": job.id,
-            "poll_url": f"/api/jobs/{job.id}",
-            "message": "Pipeline running in background. Poll /api/jobs/{job_id} for progress.",
-        }
-    elif action == "enrich":
-        job = submit_job(
-            handle_enrich_project(
-                project_path=project_path,
-                scope="communities",
-                max_communities=max_communities,
-                include_federation=include_federation,
+            "status": "flagged",
+            "path": resolved,
+            "note": (
+                "Project registered. The daemon will index it, build the knowledge base, "
+                "start watching for changes, and index federation members automatically."
             ),
-            action="enrich",
-            project_path=project_path,
-            dedup=True,
-        )
-        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
-    elif action == "wiki":
-        job = submit_job(
-            handle_wiki_generate(
-                project_path=project_path,
-                max_communities=max_communities,
-                include_federation=include_federation,
-            ),
-            action="wiki",
-            project_path=project_path,
-            dedup=True,
-        )
-        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
-    elif action == "ingest":
-        if not source_path:
-            return {"error": "action='ingest' requires source_path parameter"}
-        return await handle_wiki_ingest(source_path=source_path, project_path=project_path)
-    elif action == "reindex_wiki":
-        return await handle_wiki_reindex(project_path=project_path)
-    elif action == "analyze_patterns":
-        job = submit_job(
-            handle_analyze_patterns_llm(project_path=project_path, force=force),
-            action="analyze_patterns",
-            project_path=project_path,
-        )
-        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
-    elif action == "hierarchy":
-        import contextlib
-
-        from opencode_search.graph.community import CommunityDetector
-        from opencode_search.handlers._graph import _open_graph
-
-        async def _build_hierarchy_async(path: str) -> dict:
-            import asyncio as _aio
-            def _run() -> dict:
-                gs = _open_graph(path)
-                if gs is None:
-                    return {"error": "Project not indexed or graph DB not found"}
-                try:
-                    levels = CommunityDetector().build_hierarchy(gs)
-                    return {
-                        "status": "ok",
-                        "levels_built": levels,
-                        "max_level": gs.get_max_community_level(),
-                        "project_path": path,
-                    }
-                finally:
-                    with contextlib.suppress(Exception):
-                        gs.close()
-            return await _aio.to_thread(_run)
-
-        job = submit_job(
-            _build_hierarchy_async(project_path),
-            action="hierarchy",
-            project_path=project_path,
-        )
-        return {"status": "started", "job_id": job.id, "poll_url": f"/api/jobs/{job.id}"}
-    elif action == "enrich_hierarchy":
-        job = submit_job(
-            handle_enrich_hierarchy(project_path=project_path),
-            action="enrich_hierarchy",
-            project_path=project_path,
-        )
-        return {
-            "status": "started",
-            "job_id": job.id,
-            "poll_url": f"/api/jobs/{job.id}",
-            "message": "Hierarchy enrichment running in background. Poll /api/jobs/{job_id} for progress.",
-        }
-    elif action == "enrich_symbols":
-        from opencode_search.handlers._enrichment import handle_enrich_symbols_background
-        job = submit_job(
-            handle_enrich_symbols_background(project_path),
-            action="enrich_symbols",
-            project_path=project_path,
-            dedup=True,
-        )
-        return {
-            "status": "started",
-            "job_id": job.id,
-            "poll_url": f"/api/jobs/{job.id}",
-            "message": "Background symbol enrichment submitted. Poll /api/jobs/{job_id} for progress.",
         }
     else:
-        if not symbol:
-            return {"error": "action='describe_symbol' requires symbol parameter"}
-        return await handle_get_symbol_intent(name=symbol, project_path=project_path)
-
-
-@mcp.tool()
-async def federation(
-    root_path: str,
-    action: Literal["discover", "list", "add", "remove", "index"] = "list",
-    member_path: str | None = None,
-    watch: bool = False,
-) -> dict[str, Any]:
-    """Manage multi-repo federation: discover, list, add, remove, or index members.
-
-    Use this to manage which sub-repos are included in federation-aware operations.
-    Members are auto-discovered from symlinks, go.work, pnpm-workspace.yaml, package.json.
-    Do NOT use this to search or build KB — use `search`, `ask`, or `build` for that.
-
-    action: "list" (default) | "discover" | "add" | "remove" | "index"
-    member_path: required for action="add" or "remove"
-    """
-    runtime_state.note_activity()
-    valid = {"discover", "list", "add", "remove", "index"}
-    if action not in valid:
-        return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
-
-    if action == "discover":
-        return await handle_discover_federation(project_path=root_path)
-    elif action == "list":
-        return await handle_list_federation(project_path=root_path)
-    elif action == "add":
-        if not member_path:
-            return {"error": "action='add' requires member_path parameter"}
-        return await handle_add_federation_member(root_path=root_path, member_path=member_path)
-    elif action == "remove":
-        if not member_path:
-            return {"error": "action='remove' requires member_path parameter"}
-        return await handle_remove_federation_member(root_path=root_path, member_path=member_path)
-    else:
-        return await handle_index_federation(root_path=root_path, watch=watch)
-
-
-@mcp.tool()
-async def manage(
-    project_path: str,
-    action: Literal[
-        "stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks",
-        "dedup", "vacuum", "jobs", "remove_project", "reload",
-    ] = "wiki_lint",
-    dry_run: bool = False,
-    job_id: str | None = None,
-    delete_index: bool = False,
-) -> dict[str, Any]:
-    """Project lifecycle: stop watchers, health-check wiki, manage git hooks, dedup graph, or check jobs.
-
-    action: "wiki_lint" (default) | "stop_watching"
-            | "install_hooks" — install git post-commit hook for auto-reindex
-            | "uninstall_hooks" — remove git post-commit hook
-            | "dedup" — deduplicate graph nodes (MinHash/LSH + Jaro-Winkler when available)
-            | "vacuum" — remove orphan index_budget/index_balanced tier dirs; free disk space
-            | "jobs" — list background build jobs (or check one with job_id=)
-            | "remove_project" — remove project from registry (delete_index=True also deletes index)
-            | "reload" — gracefully restart the daemon (systemd auto-restarts it within ~1s)
-    dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting
-    job_id: for action="jobs" — return status of a specific job instead of all jobs
-    delete_index: for action="remove_project" — also delete the on-disk index (frees space)
-    """
-    runtime_state.note_activity()
-    valid = {"stop_watching", "wiki_lint", "install_hooks", "uninstall_hooks", "dedup", "vacuum", "jobs", "remove_project", "reload"}
-    if action not in valid:
-        return {"error": f"Invalid action {action!r}", "valid_actions": sorted(valid)}
-
-    if action == "reload":
-        import os  # noqa: I001
-        from opencode_search.dashboard import _spawn_daemon_restart_thread
-        pid = os.getpid()
-        _spawn_daemon_restart_thread(pid)
-        return {"status": "reloading", "pid": pid, "note": "daemon restarting in ~3s"}
-    if action == "stop_watching":
-        return await handle_stop_watching(path=project_path)
-    if action in ("install_hooks", "uninstall_hooks"):
-        from opencode_search.handlers._hooks import handle_git_hooks
-        return await handle_git_hooks(
-            project_path=project_path,
-            install=(action == "install_hooks"),
-        )
-    if action == "dedup":
-        from opencode_search.handlers._graph import handle_dedup_nodes
-        return await handle_dedup_nodes(project_path=project_path, dry_run=dry_run)
-    if action == "vacuum":
-        from opencode_search.handlers._vacuum import handle_vacuum
-        return await handle_vacuum(project_path=project_path, dry_run=dry_run)
-    if action == "jobs":
-        from opencode_search.jobs import get_job, job_to_dict, list_jobs
-        if job_id:
-            job = get_job(job_id)
-            if job is None:
-                return {"error": f"Job {job_id!r} not found"}
-            return job_to_dict(job)
-        jobs = list_jobs(project_path=project_path if project_path else None)
-        return {"jobs": [job_to_dict(j) for j in jobs], "total": len(jobs)}
-    if action == "remove_project":
+        # DESTRUCTIVE: stop watching → remove from registry → delete on-disk index
+        await handle_stop_watching(path=resolved)
         from opencode_search.handlers._vacuum import handle_remove_project
-        return await handle_remove_project(project_path=project_path, delete_index=delete_index)
-    return await handle_wiki_lint(project_path=project_path)
+        result = await handle_remove_project(project_path=resolved, delete_index=True)
+        return result
 
 
 # ---------------------------------------------------------------------------

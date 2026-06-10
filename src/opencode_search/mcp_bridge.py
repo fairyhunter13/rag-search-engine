@@ -330,77 +330,25 @@ async def overview(
 
 
 @bridge.tool()
-async def build(
+async def index(
     project_path: str,
-    action: str = "pipeline",
-    source_path: str | None = None,
-    symbol: str | None = None,
-    max_communities: int = 200,
-    include_federation: bool = True,
-    force: bool = False,
-    watch: bool = True,
+    enabled: bool = True,
 ) -> dict[str, Any]:
-    """Index, enrich, or generate the knowledge base for a project.
+    """Flag a project for the search engine. The ONLY write operation the agent can perform.
 
-    action: "pipeline" (default, full KB build) | "index" | "enrich" | "wiki" |
-            "ingest" | "reindex_wiki" | "describe_symbol" |
-            "analyze_patterns" (LLM deep pattern analysis, requires LLM provider) |
-            "hierarchy" (build recursive community hierarchy) |
-            "enrich_hierarchy" (LLM-enrich level-2+ macro-communities)
-    Only call index/pipeline when the user explicitly asks to index the project.
+    enabled=True  → Register/flag the project and return immediately. The daemon then
+                    indexes it, builds the knowledge base, starts watching, and indexes
+                    federation members — all automatically in the background.
+    enabled=False → DESTRUCTIVE: stop watching, remove from the registry, and delete the
+                    on-disk index + knowledge base. All search-engine data for this
+                    project is permanently gone. Use with care.
     """
     resolved = _resolve_path_like(project_path)
-    err = _ensure_within_workspace(resolved, what="build")
+    err = _ensure_within_workspace(resolved, what="index")
     if err is not None:
         return err
-    return await _forward_tool("build", {
-        "project_path": resolved, "action": action, "source_path": source_path,
-        "symbol": symbol, "max_communities": max_communities,
-        "include_federation": include_federation, "force": force, "watch": watch,
-    })
-
-
-@bridge.tool()
-async def federation(
-    root_path: str,
-    action: str = "list",
-    member_path: str | None = None,
-    watch: bool = False,
-) -> dict[str, Any]:
-    """Discover, list, add, remove, or index federation sub-repositories.
-
-    action: "list" (default) | "discover" | "add" | "remove" | "index"
-    """
-    resolved = _resolve_path_like(root_path)
-    err = _ensure_within_workspace(resolved, what="federation")
-    if err is not None:
-        return err
-    return await _forward_tool("federation", {
-        "root_path": resolved, "action": action,
-        "member_path": member_path, "watch": watch,
-    })
-
-
-@bridge.tool()
-async def manage(
-    project_path: str,
-    action: str = "wiki_lint",
-    dry_run: bool = False,
-) -> dict[str, Any]:
-    """Project lifecycle management: lifecycle actions for a project.
-
-    action: "wiki_lint" (default) | "stop_watching" | "install_hooks" | "uninstall_hooks"
-            | "dedup" (entity deduplication via MinHash/LSH; use dry_run=True to preview)
-            | "vacuum" (remove orphan index_budget/index_balanced dirs; use dry_run=True to preview)
-            | "reload" (gracefully restart the daemon; systemd auto-restarts it within ~1s)
-    dry_run: for "dedup" — preview merges; for "vacuum" — report without deleting.
-    """
-    resolved = _resolve_path_like(project_path)
-    err = _ensure_within_workspace(resolved, what="manage")
-    if err is not None:
-        return err
-    return await _forward_tool("manage", {
-        "project_path": resolved, "action": action, "dry_run": dry_run,
+    return await _forward_tool("index", {
+        "project_path": resolved, "enabled": enabled,
     })
 
 
