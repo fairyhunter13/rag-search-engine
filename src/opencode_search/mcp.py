@@ -159,6 +159,53 @@ async def resume_watchers() -> None:
             log.info("Resumed watcher for %s", path_str)
 
 
+async def resume_stalled_pipelines(startup_delay: float = 10.0) -> None:
+    """On daemon startup, resume KB pipeline for projects stranded at 0 communities.
+
+    A project can be stranded when the daemon restarts mid-pipeline (fire-and-forget
+    asyncio.create_task dies with the process). This scan detects projects that have
+    a vector index (file_count > 0) but no enrichment yet (_project_is_fresh), and
+    re-schedules the auto-pipeline for each — idempotent because _project_is_fresh
+    returns False once enrichment completes.
+
+    Args:
+        startup_delay: Seconds to wait before scanning, giving watchers and symbol-
+            enrichment tasks time to start first. Tests pass 0 to skip the wait.
+    """
+    import asyncio as _aio
+
+    from opencode_search.config import load_registry
+    from opencode_search.handlers._autopipeline import (
+        _project_is_fresh,
+        auto_pipeline_enabled,
+        schedule_auto_pipeline,
+    )
+
+    if not auto_pipeline_enabled():
+        return
+
+    # Delay so watchers and symbol-enrichment tasks start first, avoiding GPU
+    # contention on the hot path (embedding warmup, qwen3 load).
+    if startup_delay > 0:
+        await _aio.sleep(startup_delay)
+
+    registry = load_registry()
+    scheduled = 0
+    for path_str, entry in registry.items():
+        if not entry.file_count:
+            continue
+        try:
+            if _project_is_fresh(path_str):
+                schedule_auto_pipeline(path_str)
+                log.info("resume_stalled_pipelines: scheduled pipeline for %s", path_str)
+                scheduled += 1
+        except Exception as exc:
+            log.debug("resume_stalled_pipelines: skipped %s: %s", path_str, exc)
+
+    if scheduled:
+        log.info("resume_stalled_pipelines: %d stalled project(s) re-queued", scheduled)
+
+
 async def resume_symbol_enrichment() -> None:
     """On daemon startup, resume background symbol enrichment for any indexed project
     that has function/method nodes with intent IS NULL.
@@ -988,16 +1035,21 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
         resume_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         enrich_task = asyncio.create_task(resume_symbol_enrichment(), name="opencode-resume-enrich")
         enrich_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        pipeline_task = asyncio.create_task(resume_stalled_pipelines(), name="opencode-resume-pipelines")
+        pipeline_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         async with mcp.session_manager.run():
             _sd_notify("READY=1\n")
             _sd_notify(f"STATUS=listening on http://{host}:{port}/mcp\n")
             yield
         cleanup_task.cancel()
         enrich_task.cancel()
+        pipeline_task.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup_task
         with suppress(asyncio.CancelledError):
             await enrich_task
+        with suppress(asyncio.CancelledError):
+            await pipeline_task
         _sd_notify("STOPPING=1\n")
 
     starlette_app.router.lifespan_context = _lifespan

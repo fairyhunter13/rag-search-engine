@@ -1,5 +1,31 @@
 {
   "env": {
     "OPENCODE_ALLOW_INDEX_OUTSIDE_CWD": "1"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/guard-engine-indexes.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/auto-ruff.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
