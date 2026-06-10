@@ -48,21 +48,41 @@ def _warmup_qwen3_query():
 
 
 def test_ollama_qwen3_query_is_gpu_resident():
-    """qwen3-query:8b must be loaded with VRAM > 0 (GPU, not CPU-only)."""
+    """qwen3-query:8b must be loaded with VRAM > 0 (GPU, not CPU-only).
+
+    Re-triggers a load immediately before checking so the test is self-contained
+    and not susceptible to model eviction during the test run.
+    """
+    # Load fresh — model may have been evicted during the suite run
     try:
-        r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
-    except Exception as exc:
-        pytest.fail(f"Ollama not reachable at {_OLLAMA_PS_URL}: {exc}")
-    assert r.status_code == 200, f"Unexpected status from /api/ps: {r.status_code}"
-    models = r.json().get("models", [])
-    query_models = [m for m in models if "qwen3-query" in m.get("name", "").lower()
-                    or "qwen3-query" in m.get("model", "").lower()]
-    assert query_models, "qwen3-query:8b is not currently loaded — _pin_ollama_model_resident should keep it loaded"
-    for m in query_models:
-        size_vram = m.get("size_vram", 0)
-        assert size_vram > 0, (
-            f"qwen3-query model has size_vram={size_vram} — running on CPU, not GPU"
+        httpx.post(
+            _OLLAMA_GEN_URL,
+            json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
+                  "options": {"num_predict": 1}, "keep_alive": "-1"},
+            timeout=90.0,
         )
+    except Exception as exc:
+        pytest.fail(f"Ollama not reachable at {_OLLAMA_GEN_URL}: {exc}")
+
+    # Poll until GPU-resident (VRAM allocation may lag the generate response)
+    last_vram = -1
+    for _ in range(15):
+        try:
+            r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
+            models = r.json().get("models", [])
+            for m in models:
+                if "qwen3-query" in m.get("name", "").lower() or "qwen3-query" in m.get("model", "").lower():
+                    last_vram = m.get("size_vram", 0)
+                    if last_vram > 0:
+                        return  # GPU-resident — pass
+        except Exception:
+            pass
+        time.sleep(2)
+
+    pytest.fail(
+        f"qwen3-query:8b has size_vram={last_vram} after 30s — "
+        "running on CPU, not GPU (CPU fallback is forbidden)"
+    )
 
 
 def test_ollama_query_llm_throughput_floor():
