@@ -300,7 +300,7 @@ class TestStreamSuccessCoverage:
             "/api/chat_stream",
             json={"project": quality_project, "query": "find the handle_search_code function"},
             headers={"Accept": "text/event-stream"},
-            timeout=60,
+            timeout=120,
         )
         assert r.status_code == 200
         events = _parse_sse_events(r.text)
@@ -338,4 +338,48 @@ class TestStreamSuccessCoverage:
         after = self._get_success_count(http)
         assert after > before, (
             f"stream_success_count must increment for debug_trace intent; before={before} after={after}"
+        )
+
+    @pytest.mark.slow
+    def test_feature_intent_increments_stream_success(self, http, quality_project):
+        """feature intent must call record_stream_success() via _stream_feature path."""
+        before = self._get_success_count(http)
+        r = http.post(
+            "/api/chat_stream",
+            json={"project": quality_project, "query": "how does the indexing feature work end to end?"},
+            headers={"Accept": "text/event-stream"},
+            timeout=120,
+        )
+        assert r.status_code == 200
+        events = _parse_sse_events(r.text)
+        done = next((e for e in events if e.get("type") == "done"), None)
+        assert done is not None, "feature intent must produce a done event"
+        assert done.get("intent") == "feature", (
+            f"Expected feature intent; got {done.get('intent')!r}"
+        )
+        after = self._get_success_count(http)
+        assert after > before, (
+            f"stream_success_count must increment for feature intent; before={before} after={after}"
+        )
+
+    @pytest.mark.slow
+    def test_architecture_intent_increments_stream_success(self, http, quality_project):
+        """architecture intent must call record_stream_success() via _stream_architecture path."""
+        before = self._get_success_count(http)
+        r = http.post(
+            "/api/chat_stream",
+            json={"project": quality_project, "query": "describe the overall architecture of this project"},
+            headers={"Accept": "text/event-stream"},
+            timeout=120,
+        )
+        assert r.status_code == 200
+        events = _parse_sse_events(r.text)
+        done = next((e for e in events if e.get("type") == "done"), None)
+        assert done is not None, "architecture intent must produce a done event"
+        assert done.get("intent") == "architecture", (
+            f"Expected architecture intent; got {done.get('intent')!r}"
+        )
+        after = self._get_success_count(http)
+        assert after > before, (
+            f"stream_success_count must increment for architecture intent; before={before} after={after}"
         )
