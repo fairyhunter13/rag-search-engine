@@ -241,6 +241,13 @@ def _spawn_daemon(host: str, port: int) -> int:
     python_bin = Path(sys.executable)
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # Persistent ONNX cache: /tmp is tmpfs and cleared on boot; ensure daemon always
+    # uses the persistent path regardless of whether the shell has the var set
+    # (the reload path spawns a new subprocess without the systemd env vars).
+    env.setdefault(
+        "FASTEMBED_CACHE_PATH",
+        str(Path.home() / ".cache" / "opencode" / "fastembed"),
+    )
     with _LOG_PATH.open("a", encoding="utf-8") as log_fh:
         proc = subprocess.Popen(
             [
@@ -1264,15 +1271,15 @@ async def _run_kb_sweep() -> None:
             try:
                 if not _project_needs_hierarchy_enrich(project_path):
                     continue
-                # Re-check GPU before each project (long sweeps span many minutes)
+                # Re-check GPU and query activity before each project.
+                # yield_while_busy() blocks until no active query for GRACE_S seconds
+                # and GPU is below the thermal threshold.
+                from opencode_search.daemon_runtime import yield_while_busy
+                await yield_while_busy()
+                # Hard-check GPU temp after yield (belt-and-suspenders for extreme heat).
                 temp = _get_gpu_temp_c()
                 if temp is not None and temp > _MAX_GPU_TEMP:
                     _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing sweep", temp)
-                    return
-                with runtime_state.lock:
-                    active = len(runtime_state.active_clients)
-                if active > 0:
-                    _kb_sweep_log.debug("kb_sweep: client connected — pausing sweep")
                     return
                 _kb_sweep_log.info("kb_sweep: enriching hierarchy for %s", project_path)
                 result = await handle_enrich_hierarchy(project_path=project_path)

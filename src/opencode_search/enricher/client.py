@@ -1327,6 +1327,39 @@ def create_llm_client() -> LLMClient | None:
     )
 
 
+def create_kb_query_llm_client() -> LLMClient | None:
+    """Create the GPU-local LLM client for interactive KB queries (ask/search/graph handlers).
+
+    Pinned to ollama qwen3-query:8b — never codex/cloud, never the enrich model.
+    This is the third tier: ENRICH (build) → qwen3-enrich:1.7b, KB-QUERY (MCP ask) →
+    qwen3-query:8b, CHAT (dashboard) → codex→haiku.
+
+    If qwen3-query:8b is unavailable, falls back to create_llm_client() with a warning —
+    degraded-but-GPU; never silently routes to cloud or CPU.
+    """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
+    model = os.environ.get("OPENCODE_KB_QUERY_LLM_MODEL", "qwen3-query:8b")
+    timeout = int(os.environ.get("OPENCODE_KB_QUERY_LLM_TIMEOUT", "180"))
+    num_ctx = 8192
+
+    client: LLMClient = OllamaClient(
+        base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
+        model=model,
+        timeout=timeout,
+        num_ctx=num_ctx,
+    )
+    if not client.is_available():
+        _log.warning(
+            "KB query model %r unavailable — falling back to enrich model "
+            "(interactive ask may be slow while a build is running)",
+            model,
+        )
+        return create_llm_client()
+    return client
+
+
 def create_query_llm_client() -> LLMClient | None:
     """Create the LLM client for dashboard queries (higher quality than enrich tier).
 

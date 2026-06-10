@@ -16,10 +16,27 @@ class _RuntimeState:
     client_projects: dict[str, str] = field(default_factory=dict)
     closing_clients: set[str] = field(default_factory=set)
     last_activity_monotonic: float = field(default_factory=time.monotonic)
+    # Tracks the last time a real interactive query (ask/search/graph) was dispatched.
+    # Updated only by explicit tool calls — NOT by 15s heartbeats — so background
+    # build loops can distinguish "user is actively querying" from "client is idle".
+    last_query_monotonic: float = field(default_factory=lambda: 0.0)
 
     def note_activity(self) -> None:
         with self.lock:
             self.last_activity_monotonic = time.monotonic()
+
+    def note_query(self) -> None:
+        """Called when a real interactive query (ask/search/graph) is dispatched."""
+        with self.lock:
+            now = time.monotonic()
+            self.last_query_monotonic = now
+            self.last_activity_monotonic = now
+
+    def seconds_since_last_query(self) -> float:
+        with self.lock:
+            if self.last_query_monotonic == 0.0:
+                return float("inf")
+            return time.monotonic() - self.last_query_monotonic
 
     def client_open(self, client_id: str, cwd: str | None = None, project_path: str | None = None) -> None:
         now = time.monotonic()
@@ -138,3 +155,44 @@ runtime_state = _RuntimeState()
 # Set by _broadcast_reload_notice() before SIGTERM so open SSE generators can
 # emit a {"type":"reload"} frame and close cleanly instead of being severed.
 reload_pending = threading.Event()
+
+
+async def yield_while_busy(
+    grace_s: float | None = None,
+    max_wait_s: float = 300.0,
+    check_interval_s: float = 5.0,
+) -> None:
+    """Pause a background build loop while an interactive query is active or GPU is hot.
+
+    Call this at each batch boundary inside enrichment/pipeline loops so that
+    interactive ask/search/graph calls always get the full GPU with no eviction
+    of qwen3-query:8b. The build resumes automatically once the query finishes
+    and the GPU cools below the thermal threshold.
+
+    grace_s: seconds after a query to keep yielding (default: OPENCODE_BUILD_QUERY_GRACE_S or 30)
+    max_wait_s: safety cap — never block longer than this (default 300 s)
+    """
+    import asyncio
+    import os
+
+    if grace_s is None:
+        grace_s = float(os.environ.get("OPENCODE_BUILD_QUERY_GRACE_S", "30"))
+
+    waited = 0.0
+    while waited < max_wait_s:
+        age = runtime_state.seconds_since_last_query()
+        if age < grace_s:
+            await asyncio.sleep(check_interval_s)
+            waited += check_interval_s
+            continue
+        try:
+            from opencode_search.embeddings import _get_gpu_temp_c
+            from opencode_search.indexer import _MAX_GPU_TEMP
+            temp = _get_gpu_temp_c()
+            if temp is not None and temp > _MAX_GPU_TEMP:
+                await asyncio.sleep(check_interval_s)
+                waited += check_interval_s
+                continue
+        except Exception:
+            pass
+        break

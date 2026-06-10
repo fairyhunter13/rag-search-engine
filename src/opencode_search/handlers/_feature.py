@@ -46,7 +46,7 @@ async def handle_ask_feature(
     was designed that way.
     """
     from opencode_search.config import get_project_graph_db_path
-    from opencode_search.enricher import create_llm_client
+    from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.graph.storage import GraphStorage
     from opencode_search.handlers._kb_chat import _fetch_community_context
     from opencode_search.handlers._query import handle_search_code
@@ -176,11 +176,11 @@ async def handle_ask_feature(
         ]
 
     # ── Step 5: LLM synthesis ─────────────────────────────────────────────────
-    llm = await asyncio.to_thread(create_llm_client)
+    llm = await asyncio.to_thread(create_kb_query_llm_client)
     if llm is None or not llm.is_available():
         msg = (
-            "Feature trace unavailable: local KB LLM client could not be "
-            "initialized. Ensure Ollama is running on GPU and qwen3-enrich "
+            "Feature trace unavailable: local KB query LLM client could not be "
+            "initialized. Ensure Ollama is running on GPU and qwen3-query:8b "
             "is installed. Raw call chain (if any) is included below."
         )
         return {

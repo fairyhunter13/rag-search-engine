@@ -8,6 +8,7 @@ from .client import (
     LLMClient,
     OllamaClient,
     OpenAIClient,
+    create_kb_query_llm_client,
     create_llm_client,
     create_query_llm_client,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "LLMClient",
     "OllamaClient",
     "OpenAIClient",
+    "create_kb_query_llm_client",
     "create_llm_client",
     "create_query_llm_client",
 ]

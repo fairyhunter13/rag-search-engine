@@ -398,8 +398,13 @@ async def _enrich_communities(
 
     # Pre-fetch node summaries and sample actual code — SQLite reads must stay
     # on this thread; code file reads happen in the same loop.
+    # Yield to the event loop every 50 communities so HTTP requests are not
+    # blocked during large pre-load passes (otherwise 10k communities would
+    # block the loop for ~30s, causing ConnectError on concurrent requests).
     community_data: list[tuple[Any, list[str], list[tuple[str, str]]]] = []
-    for community in communities:
+    for i, community in enumerate(communities):
+        if i > 0 and i % 50 == 0:
+            await asyncio.sleep(0)
         nodes = gs.get_community_nodes(community.id)
         summaries = [
             f"{n.qualified_name} ({n.kind})"
@@ -441,6 +446,9 @@ async def _enrich_communities(
             gs.upsert_community(community)
             count += 1
 
+    # Yield GPU to interactive queries before the L1 enrichment gather.
+    from opencode_search.daemon_runtime import yield_while_busy
+    await yield_while_busy()
     await asyncio.gather(*[_call_llm(c, s, cs) for c, s, cs in community_data])
     return count
 
@@ -526,6 +534,9 @@ async def handle_enrich_hierarchy(
             # Process in batches: write after each batch so partial progress
             # is visible in the DB and survives if the process is killed.
             for batch_start in range(0, len(unenriched), _hier_batch_size):
+                # Yield GPU to interactive queries between batches.
+                from opencode_search.daemon_runtime import yield_while_busy
+                await yield_while_busy()
                 batch = unenriched[batch_start:batch_start + _hier_batch_size]
                 log.info(
                     "enrich_hierarchy[L%d]: batch %d/%d (%d communities)",

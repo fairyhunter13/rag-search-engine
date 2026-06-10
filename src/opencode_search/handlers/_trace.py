@@ -33,7 +33,7 @@ async def handle_semantic_trace(
     """
     import asyncio
 
-    from opencode_search.enricher import create_llm_client
+    from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.handlers._graph import handle_trace_path
     from opencode_search.handlers._query import handle_search_code
 
@@ -88,7 +88,7 @@ async def handle_semantic_trace(
     # Generate narrative
     narrative = ""
     try:
-        llm = await asyncio.to_thread(create_llm_client)
+        llm = await asyncio.to_thread(create_kb_query_llm_client)
         if found and path_nodes:
             narrative = await asyncio.to_thread(
                 llm.trace_narrative,

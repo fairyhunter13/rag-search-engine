@@ -317,6 +317,7 @@ async def search(
     scope: "code" (default) | "docs" (wiki/markdown only) | "all" | "similar"
     """
     runtime_state.note_activity()
+    runtime_state.note_query()
     valid = {"code", "docs", "all", "similar"}
     if scope not in valid:
         return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
@@ -359,6 +360,7 @@ async def ask(
            | "business" (answer from business-classified communities: features, processes, rules)
     """
     runtime_state.note_activity()
+    runtime_state.note_query()
     valid = {"architecture", "wiki", "all", "global", "feature", "business"}
     if scope not in valid:
         return {"error": f"Invalid scope {scope!r}", "valid_scopes": sorted(valid)}
@@ -410,6 +412,7 @@ async def graph(
     depth: BFS depth for callers/callees (default 5)
     """
     runtime_state.note_activity()
+    runtime_state.note_query()
     valid = {"definition", "callers", "callees", "impact", "path",
              "impact_narrative", "semantic_trace"}
     if relation not in valid:

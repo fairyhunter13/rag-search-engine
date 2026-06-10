@@ -145,7 +145,7 @@ def main() -> int:
     # ── Pull base models ────────────────────────────────────────────────────
     models = [
         (ENRICH_BASE, ENRICH_MODEL, ENRICH_MODELFILE, "2.9 GB", "~270 t/s", "KB enrichment"),
-        (QUERY_BASE, QUERY_MODEL, QUERY_MODELFILE, "~5.5 GB", "~50-80 t/s", "Dashboard chat"),
+        (QUERY_BASE, QUERY_MODEL, QUERY_MODELFILE, "~5.5 GB", "~50-80 t/s", "MCP ask + Dashboard chat"),
     ]
 
     print()
@@ -172,6 +172,35 @@ def main() -> int:
                 print(f"  ✓ {name} created")
             else:
                 print(f"  [DRY RUN] Would run: ollama create {name} -f {modelfile}")
+
+    # ── Ensure OLLAMA_MAX_LOADED_MODELS=2 in the memory-limits drop-in ────────
+    memory_dropin = Path("/etc/systemd/system/ollama.service.d/memory-limits.conf")
+    print(f"\n  Ollama drop-in: {memory_dropin}")
+    if dry:
+        print("  [DRY RUN] Would ensure OLLAMA_MAX_LOADED_MODELS=2 in memory-limits.conf")
+    elif memory_dropin.exists():
+        text = memory_dropin.read_text()
+        if "OLLAMA_MAX_LOADED_MODELS=1" in text:
+            try:
+                updated = text.replace(
+                    'Environment="OLLAMA_MAX_LOADED_MODELS=1"',
+                    'Environment="OLLAMA_MAX_LOADED_MODELS=2"',
+                )
+                import subprocess as _sp
+                _sp.run(["sudo", "tee", str(memory_dropin)], input=updated.encode(), check=True, capture_output=True)
+                _sp.run(["sudo", "systemctl", "daemon-reload"], check=True)
+                _sp.run(["sudo", "systemctl", "restart", "ollama"], check=True)
+                print("  ✓ Updated to OLLAMA_MAX_LOADED_MODELS=2 and restarted ollama")
+            except Exception as exc:
+                print(f"  WARN: Could not update drop-in automatically: {exc}")
+                print("  Run manually: sudo sed -i 's/MAX_LOADED_MODELS=1/MAX_LOADED_MODELS=2/' "
+                      f"{memory_dropin} && sudo systemctl daemon-reload && sudo systemctl restart ollama")
+        elif "OLLAMA_MAX_LOADED_MODELS=2" in text:
+            print("  ✓ Already set to OLLAMA_MAX_LOADED_MODELS=2")
+        else:
+            print("  INFO: OLLAMA_MAX_LOADED_MODELS not found in drop-in — verify manually")
+    else:
+        print("  INFO: Drop-in not found — ollama will load models on demand")
 
     # ── Systemd service ─────────────────────────────────────────────────────
     current_user = os.environ.get("USER", os.environ.get("LOGNAME", "user"))
@@ -209,8 +238,8 @@ def main() -> int:
     rows = [
         ("Model", "VRAM", "Role", "Config Var"),
         (ENRICH_MODEL, "2.9 GB", "KB build", "OPENCODE_LLM_MODEL"),
-        (QUERY_MODEL, "~5.5 GB", "Dashboard chat", "OPENCODE_QUERY_LLM_MODEL"),
-        ("Total", "~8.4 GB", "Both loaded", "RTX 5080 16 GB ✓"),
+        (QUERY_MODEL, "~5.5 GB", "MCP ask + chat", "OPENCODE_KB_QUERY_LLM_MODEL"),
+        ("Total", "~8.4 GB", "Resident together", "OLLAMA_MAX_LOADED_MODELS=2 ✓"),
     ]
     _print_table(rows)
     print()

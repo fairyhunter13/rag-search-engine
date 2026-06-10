@@ -405,3 +405,116 @@ class TestKbSweep:
             f"Level-2 enrichment did not increase within 5 minutes (stuck at {after:.1f}%). "
             "This may be a slow GPU or Ollama queue issue rather than a code bug."
         )
+
+
+# ---------------------------------------------------------------------------
+# KB query model routing (Phase 99)
+# ---------------------------------------------------------------------------
+
+class TestKbQueryRouting:
+    """Interactive ask handlers must use qwen3-query:8b (not qwen3-enrich:1.7b / not codex)."""
+
+    def test_kb_query_client_is_ollama_gpu(self):
+        """create_kb_query_llm_client() must return an OllamaClient targeting qwen3-query:8b."""
+        from opencode_search.enricher import create_kb_query_llm_client
+        from opencode_search.enricher.client import OllamaClient
+        client = create_kb_query_llm_client()
+        assert client is not None, "create_kb_query_llm_client() returned None"
+        assert isinstance(client, OllamaClient), (
+            f"Expected OllamaClient for GPU-local KB queries, got {type(client).__name__}. "
+            "KB queries must never use cloud (codex/anthropic) — GPU-only enforcement."
+        )
+        assert "qwen3-query" in client.model, (
+            f"KB query model is '{client.model}' — expected qwen3-query:8b. "
+            "Interactive ask must not share the qwen3-enrich:1.7b build model."
+        )
+
+    def test_kb_query_client_differs_from_enrich_client(self):
+        """KB query client must use a different model than the enrich/build client."""
+        import os
+        # Temporarily ensure no env override hides the default
+        env_override = os.environ.get("OPENCODE_KB_QUERY_LLM_MODEL")
+        try:
+            if env_override:
+                del os.environ["OPENCODE_KB_QUERY_LLM_MODEL"]
+            from opencode_search.enricher import create_kb_query_llm_client, create_llm_client
+            from opencode_search.enricher.client import OllamaClient
+            enrich_client = create_llm_client()
+            query_client = create_kb_query_llm_client()
+            assert enrich_client is not None and query_client is not None
+            if isinstance(enrich_client, OllamaClient) and isinstance(query_client, OllamaClient):
+                assert enrich_client.model != query_client.model, (
+                    f"Enrich model == KB query model ({enrich_client.model!r}). "
+                    "These must be distinct so interactive ask doesn't queue behind the build."
+                )
+        finally:
+            if env_override:
+                os.environ["OPENCODE_KB_QUERY_LLM_MODEL"] = env_override
+
+    def test_enrich_client_rejects_codex(self):
+        """create_llm_client(provider='codex') must raise RuntimeError — GPU-only enforcement."""
+        import os
+        old = os.environ.get("OPENCODE_LLM_PROVIDER")
+        try:
+            os.environ["OPENCODE_LLM_PROVIDER"] = "codex"
+            import importlib
+            import opencode_search.enricher.client as _mod
+            importlib.reload(_mod)
+            try:
+                _mod.create_llm_client()
+                assert False, "Expected RuntimeError for codex provider in enrich tier"
+            except RuntimeError as exc:
+                assert "FORBIDDEN" in str(exc), f"RuntimeError message should mention FORBIDDEN: {exc}"
+        finally:
+            if old is None:
+                os.environ.pop("OPENCODE_LLM_PROVIDER", None)
+            else:
+                os.environ["OPENCODE_LLM_PROVIDER"] = old
+            import importlib
+            import opencode_search.enricher.client as _mod2
+            importlib.reload(_mod2)
+
+    def test_ollama_two_models_max_loaded(self):
+        """OLLAMA_MAX_LOADED_MODELS must be ≥2 so enrich + query models are resident together."""
+        import subprocess
+        result = subprocess.run(
+            ["systemctl", "show", "ollama.service", "-p", "Environment"],
+            capture_output=True, text=True, check=False,
+        )
+        env_line = result.stdout.strip()
+        # Parse all OLLAMA_MAX_LOADED_MODELS values
+        import re
+        matches = re.findall(r'OLLAMA_MAX_LOADED_MODELS=(\d+)', env_line)
+        assert matches, (
+            "OLLAMA_MAX_LOADED_MODELS not found in ollama.service environment. "
+            "Set OLLAMA_MAX_LOADED_MODELS=2 in /etc/systemd/system/ollama.service.d/memory-limits.conf "
+            "so qwen3-enrich:1.7b and qwen3-query:8b can be resident together."
+        )
+        max_loaded = int(matches[-1])
+        assert max_loaded >= 2, (
+            f"OLLAMA_MAX_LOADED_MODELS={max_loaded} — must be ≥2. "
+            "With MAX_LOADED_MODELS=1, every enrich↔query switch evicts and cold-reloads the other "
+            "model, causing interactive ask to queue behind the build."
+        )
+
+    def test_note_query_distinct_from_heartbeat(self):
+        """note_query() must update last_query_monotonic; client_heartbeat() must not."""
+        import time
+        from opencode_search.daemon_runtime import _RuntimeState
+        state = _RuntimeState()
+        # heartbeat should NOT advance last_query_monotonic
+        state.client_open("c1")
+        before = state.last_query_monotonic
+        time.sleep(0.01)
+        state.client_heartbeat("c1")
+        assert state.last_query_monotonic == before, (
+            "client_heartbeat() must not update last_query_monotonic — "
+            "heartbeats should not look like interactive queries."
+        )
+        # note_query() should advance it
+        time.sleep(0.01)
+        state.note_query()
+        after = state.last_query_monotonic
+        assert after > before, "note_query() must advance last_query_monotonic"
+        age = state.seconds_since_last_query()
+        assert age < 1.0, f"seconds_since_last_query() returned {age}s — should be near 0"

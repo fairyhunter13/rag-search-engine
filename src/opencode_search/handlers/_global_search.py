@@ -54,7 +54,7 @@ async def handle_global_synthesis(
         level: Community hierarchy level to query (1=micro, 2+=macro).
     """
     from opencode_search.config import load_registry
-    from opencode_search.enricher import create_llm_client
+    from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.handlers._graph import _open_graph
 
     t0 = time.perf_counter()
@@ -119,7 +119,7 @@ async def handle_global_synthesis(
     )
 
     # ── Step 2: MAP — batch communities → LLM extracts relevant info ──────────
-    llm = await asyncio.to_thread(create_llm_client)
+    llm = await asyncio.to_thread(create_kb_query_llm_client)
     batches: list[list[str]] = []
     for i in range(0, len(selected), _MAP_BATCH_SIZE):
         batch = selected[i:i + _MAP_BATCH_SIZE]
