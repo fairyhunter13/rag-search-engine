@@ -704,6 +704,30 @@ async def handle_chat_auto(
             result = await handle_detect_impact(symbol=symbol, project_path=project_path)
             answer = _prose_impact(result, query)
             sources = result.get("affected_files", [])
+            # Fallback to feature handler when no impact data was found
+            if "No impact data found" in answer:
+                import asyncio
+
+                from opencode_search.handlers._feature import handle_ask_feature
+                from opencode_search.handlers._kb_chat import handle_kb_chat
+                feat, kb = await asyncio.gather(
+                    handle_ask_feature(query=query, project_path=project_path, top_k=12),
+                    handle_kb_chat(query=query, project_path=project_path, mode="quick", top_k=20),
+                    return_exceptions=True,
+                )
+                if isinstance(kb, Exception):
+                    kb = {}
+                if isinstance(feat, Exception):
+                    feat = {}
+                kb_answer = kb.get("answer", "") if isinstance(kb, dict) else ""
+                feat_prose = _prose_feature(feat, query) if isinstance(feat, dict) and feat.get("status") == "ok" else ""
+                if kb_answer and feat_prose and len(feat_prose) > 100:
+                    answer = f"{kb_answer}\n\n---\n\n**Detailed trace:**\n\n{feat_prose}"
+                elif kb_answer:
+                    answer = kb_answer
+                elif feat_prose:
+                    answer = feat_prose
+                sources = list(set(kb.get("sources", []) + [ep.get("file", "") for ep in feat.get("entry_points", []) if isinstance(feat, dict)]))
 
     # ── architecture: end-to-end layered narrative ───────────────────────────
     elif intent == "architecture":
@@ -1232,6 +1256,7 @@ async def _stream_debug(
         except Exception as exc:
             result = {"root_cause": f"Debug trace failed: {exc}", "hotspot_files": []}
         answer = _prose_debug(result)
+        record_stream_success()
         for i in range(0, max(len(answer), 1), chunk_size):
             chunk = answer[i:i + chunk_size]
             if chunk:
@@ -1407,13 +1432,19 @@ async def _stream_architecture(
         except Exception:
             return {}
 
-    # Parallel context assembly
-    (_, comm_list, _comm_count), (code_ctx, _, _), patterns, (wiki_ctx, _) = await asyncio.gather(
+    # Parallel context assembly — heartbeat every 10s so the UI shows elapsed time
+    _gather_task = asyncio.ensure_future(asyncio.gather(
         _fetch_community_context(query, project_path, top_k=25, include_federation=False),
         _fetch_code_context(query, project_path, top_k=12),
         _get_patterns(),
         _fetch_wiki_context(query, project_path, top_k=5),
-    )
+    ))
+    while not _gather_task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(_gather_task), timeout=10.0)
+        except TimeoutError:
+            yield {"type": "thinking"}
+    (_, comm_list, _comm_count), (code_ctx, _, _), patterns, (wiki_ctx, _) = await _gather_task
 
     ctx_sections: list[str] = []
 
