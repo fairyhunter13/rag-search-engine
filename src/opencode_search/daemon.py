@@ -953,6 +953,8 @@ def _render_systemd_service(
             "Environment=OPENCODE_AUTO_PIPELINE=1",
             "Environment=OPENCODE_QUERY_LLM_PROVIDER=ollama",
             "Environment=OPENCODE_QUERY_LLM_MODEL=qwen3-query:8b",
+            # Persistent ONNX model cache — survives reboots (/tmp is tmpfs and is cleared on boot)
+            f"Environment=FASTEMBED_CACHE_PATH={Path.home()}/.cache/opencode/fastembed",
             *env_lines,
             "Nice=10",
             "IOSchedulingClass=best-effort",
