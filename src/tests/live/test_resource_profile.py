@@ -28,14 +28,15 @@ def _warmup_qwen3_query():
         httpx.post(
             _OLLAMA_GEN_URL,
             json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
-                  "options": {"num_predict": 1}, "keep_alive": "-1"},
+                  "options": {"num_predict": 1}, "keep_alive": -1},
             timeout=90.0,
         )
     except Exception:
         return  # Ollama unreachable — test will fail with a clear error
 
-    # Poll until the model reports VRAM > 0 (GPU allocation may lag the generate call)
-    for _ in range(15):
+    # Poll until the model reports VRAM > 0 (GPU allocation may lag the generate call).
+    # 30 polls (60s) to handle OLLAMA_NUM_PARALLEL=1 queue depth.
+    for _ in range(30):
         try:
             r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
             models = r.json().get("models", [])
@@ -58,15 +59,16 @@ def test_ollama_qwen3_query_is_gpu_resident():
         httpx.post(
             _OLLAMA_GEN_URL,
             json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
-                  "options": {"num_predict": 1}, "keep_alive": "-1"},
+                  "options": {"num_predict": 1}, "keep_alive": -1},
             timeout=90.0,
         )
     except Exception as exc:
         pytest.fail(f"Ollama not reachable at {_OLLAMA_GEN_URL}: {exc}")
 
-    # Poll until GPU-resident (VRAM allocation may lag the generate response)
+    # Poll until GPU-resident (VRAM allocation may lag the generate response).
+    # Use 30 polls (60s) — with OLLAMA_NUM_PARALLEL=1, model load may queue.
     last_vram = -1
-    for _ in range(15):
+    for _ in range(30):
         try:
             r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
             models = r.json().get("models", [])
@@ -79,10 +81,16 @@ def test_ollama_qwen3_query_is_gpu_resident():
             pass
         time.sleep(2)
 
-    pytest.fail(
-        f"qwen3-query:8b has size_vram={last_vram} after 30s — "
-        "running on CPU, not GPU (CPU fallback is forbidden)"
-    )
+    if last_vram == -1:
+        pytest.fail(
+            "qwen3-query:8b never appeared in /api/ps after 60s — "
+            "model may not have loaded (check Ollama logs)"
+        )
+    else:
+        pytest.fail(
+            f"qwen3-query:8b has size_vram={last_vram} after 60s — "
+            "running on CPU, not GPU (CPU fallback is forbidden)"
+        )
 
 
 def test_ollama_query_llm_throughput_floor():

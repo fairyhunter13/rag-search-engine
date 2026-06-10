@@ -29,6 +29,8 @@ def http():
 @pytest.fixture(scope="session")
 def gpu():
     """Verify CUDA GPU embedding is working."""
+    import os
+    env = {**os.environ, "FASTEMBED_CACHE_PATH": os.path.expanduser("~/.cache/opencode/fastembed")}
     result = subprocess.run(
         [
             sys.executable, "-c",
@@ -40,6 +42,7 @@ def gpu():
         capture_output=True,
         text=True,
         cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+        env=env,
     )
     assert result.returncode == 0, f"GPU embedding unavailable: {result.stderr[-300:]}"
 
