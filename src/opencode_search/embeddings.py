@@ -1600,12 +1600,15 @@ def _gpu_provider_options(provider: str) -> list[dict]:
     - do_copy_in_default_stream: reduces sync overhead (NVIDIA only)
     """
     caps = _get_gpu_capabilities()
-    vram_mb = caps.get("vram_mb") or _get_gpu_vram_mb()
 
     base: dict = {"arena_extend_strategy": "kSameAsRequested"}
-    if vram_mb:
-        # Reserve 80% of VRAM; leave headroom for OS and other processes
-        base["gpu_mem_limit"] = str(int(vram_mb * 0.8 * 1024 * 1024))
+    # Hard cap the ONNX BFC arena at 3 GB.
+    # The old value (80% of VRAM = 12.8 GB) allowed the arena's high-water mark to
+    # accumulate across thousands of calls, consuming nearly all VRAM and starving
+    # Ollama and other processes. jina-embeddings-v2-base-code never needs > 2 GB
+    # even for the largest batch sizes we use during indexing.
+    _ONNX_ARENA_CAP_MB: int = int(os.environ.get("OPENCODE_ONNX_ARENA_MB", "3072"))
+    base["gpu_mem_limit"] = str(_ONNX_ARENA_CAP_MB * 1024 * 1024)
 
     if provider == "TensorrtExecutionProvider":
         # TensorRT manages its own memory via trt_max_workspace_size;

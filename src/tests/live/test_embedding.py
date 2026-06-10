@@ -23,11 +23,14 @@ def require_gpu(gpu):
 
 
 def _run_embed_script(code: str) -> subprocess.CompletedProcess:
+    import os
+    env = {**os.environ, "FASTEMBED_CACHE_PATH": os.path.expanduser("~/.cache/opencode/fastembed")}
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+        env=env,
     )
 
 
