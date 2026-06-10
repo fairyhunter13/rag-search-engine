@@ -134,9 +134,8 @@ async def _stale_cleanup_loop() -> None:
                     _models_cleaned = False
                 elif not _models_cleaned:
                     log.info("models idle >%ds — unloading to free RAM/VRAM", DEFAULT_MODEL_IDLE_UNLOAD_S)
-                    released = await asyncio.to_thread(cleanup_models)
-                    if released:
-                        _models_cleaned = True
+                    await asyncio.to_thread(cleanup_models)
+                    _models_cleaned = True
         except asyncio.CancelledError:
             raise
         except Exception as exc:
