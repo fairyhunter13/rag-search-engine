@@ -719,11 +719,14 @@ def _register_graph_routes(mcp: FastMCP) -> None:
         if not project:
             return JSONResponse({"error": "project required"}, status_code=400)
         max_communities = int(body.get("max_communities", 10_000))
+        level_raw = body.get("level") or request.query_params.get("level")
+        level = int(level_raw) if level_raw is not None else None
         job = submit_job(
             handle_enrich_project(
                 project_path=project,
-                scope="all",
+                scope="communities",
                 max_communities=max_communities,
+                level=level,
             ),
             action="enrich_project",
             project_path=project,
