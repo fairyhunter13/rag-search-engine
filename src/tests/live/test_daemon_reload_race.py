@@ -219,3 +219,66 @@ def test_reload_does_not_strand_simulated_external_client(http):
         )
 
     assert _wait_healthy(http), f"Daemon did not recover within {_RECOVER_TIMEOUT}s after reload"
+
+
+# ---------------------------------------------------------------------------
+# Single-owner regression: exactly one supervisor owns the daemon port.
+#
+# Root cause of the false "GPU guard failed 5x" HARD-FAIL notification: an MCP
+# bridge's ensure_daemon_running() raw-spawned a `daemon serve` that raced the
+# systemd unit for port 8765. The loser crash-looped past StartLimitBurst and
+# fired OnFailure. The fix: ensure_daemon_running defers to systemd when the
+# unit is installed, and run_http_daemon_server exits cleanly if a healthy
+# daemon already owns the port. These guard against the split-brain returning.
+# ---------------------------------------------------------------------------
+
+def _pids_listening_on(port: int) -> set[int]:
+    """Return the set of PIDs with a LISTEN socket on the given TCP port."""
+    import re
+    result = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True)
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        local = parts[3] if len(parts) > 3 else ""
+        if not local.endswith(f":{port}"):
+            continue
+        for m in re.finditer(r"pid=(\d+)", line):
+            pids.add(int(m.group(1)))
+    return pids
+
+
+def test_exactly_one_process_owns_daemon_port(http):
+    """No split-brain: exactly one process may listen on the daemon port 8765.
+
+    Two supervisors (a bridge-spawned raw daemon + the systemd unit) both binding
+    8765 is what produced the false HARD-FAIL notification. There must be one owner.
+    """
+    assert _wait_healthy(http, timeout=8.0), "Daemon must be healthy before ownership check"
+    pids = _pids_listening_on(8765)
+    assert len(pids) == 1, (
+        f"Expected exactly one process listening on :8765, found {sorted(pids)} — "
+        "split-brain supervision (bridge raw-spawn racing the systemd unit) has returned."
+    )
+
+
+def test_daemon_port_owner_is_systemd_mainpid(http):
+    """When the systemd unit is active, it must be the single owner of port 8765.
+
+    Proves ensure_daemon_running deferred to systemd rather than raw-spawning a
+    competing daemon — the permanent fix for the dual-ownership crash-loop.
+    """
+    if not _systemd_is_active():
+        pytest.fail(
+            "systemd unit is not active — the managed daemon should own :8765. "
+            "A raw-spawned daemon racing the unit is the split-brain this test guards."
+        )
+    main_pid = subprocess.run(
+        ["systemctl", "--user", "show", "opencode-search-mcp-daemon", "-p", "MainPID", "--value"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert main_pid.isdigit() and int(main_pid) > 0, f"systemd MainPID not set: {main_pid!r}"
+    listeners = _pids_listening_on(8765)
+    assert listeners == {int(main_pid)}, (
+        f"Port 8765 owner {sorted(listeners)} != systemd MainPID {main_pid} — "
+        "the daemon was raw-spawned outside systemd (dual ownership)."
+    )
