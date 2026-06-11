@@ -1290,6 +1290,7 @@ async def _run_kb_sweep() -> None:
         from opencode_search.daemon_runtime import yield_while_busy
         from opencode_search.handlers._autopipeline import (
             _project_needs_community_enrich,
+            _project_needs_hierarchy,
             _project_needs_hierarchy_enrich,
         )
         from opencode_search.handlers._enrichment import (
@@ -1314,9 +1315,10 @@ async def _run_kb_sweep() -> None:
         swept = 0
         for project_path in all_paths:
             try:
+                needs_hierarchy_build = _project_needs_hierarchy(project_path)
                 needs_l1 = _project_needs_community_enrich(project_path)
                 needs_l2 = _project_needs_hierarchy_enrich(project_path)
-                if not needs_l1 and not needs_l2:
+                if not needs_hierarchy_build and not needs_l1 and not needs_l2:
                     continue
 
                 # Acquire per-project lock (non-blocking): skip if already enriching
@@ -1335,6 +1337,42 @@ async def _run_kb_sweep() -> None:
                     if temp is not None and temp > _MAX_GPU_TEMP:
                         _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing sweep", temp)
                         return
+
+                    # ── Step 0: Rebuild Leiden hierarchy if wiped ────────────────────
+                    # The maintenance sweep's graph vacuum prunes "orphan" L2+
+                    # communities (they are not referenced by nodes.community_id).
+                    # If the hierarchy was wiped (max_level==1), rebuild it here
+                    # so subsequent L2+ enrichment has something to work with.
+                    if needs_hierarchy_build:
+                        await yield_while_busy()
+                        temp = _get_gpu_temp_c()
+                        if temp is not None and temp > _MAX_GPU_TEMP:
+                            _kb_sweep_log.info("kb_sweep: GPU %d°C — skip hierarchy build for %s", temp, project_path)
+                        else:
+                            _kb_sweep_log.info("kb_sweep: rebuilding Leiden hierarchy for %s", project_path)
+                            try:
+                                from opencode_search.config import get_project_graph_db_path
+                                from opencode_search.graph.community import CommunityDetector
+                                from opencode_search.graph.storage import GraphStorage
+                                db_path = get_project_graph_db_path(project_path)
+                                import asyncio as _aio
+                                _rebuild_db_path = db_path
+                                def _rebuild(_db=_rebuild_db_path) -> int:
+                                    gs = GraphStorage(_db)
+                                    gs.open()
+                                    try:
+                                        return CommunityDetector().build_hierarchy(gs)
+                                    finally:
+                                        gs.close()
+                                levels_built = await _aio.to_thread(_rebuild)
+                                _kb_sweep_log.info(
+                                    "kb_sweep: hierarchy rebuilt (%d additional levels) for %s",
+                                    levels_built, project_path,
+                                )
+                                # Re-detect L2 flag after rebuild
+                                needs_l2 = _project_needs_hierarchy_enrich(project_path)
+                            except Exception as exc_h:
+                                _kb_sweep_log.warning("kb_sweep: hierarchy rebuild failed for %s: %s", project_path, exc_h)
 
                     # ── Step 1: L1 loop-until-dry ───────────────────────────────────
                     if needs_l1:

@@ -709,9 +709,14 @@ class GraphStorage:
     def vacuum(self) -> dict:
         """Run SQLite VACUUM + WAL checkpoint + prune singleton/orphan communities.
 
-        Singletons (node_count=1) and orphans (no nodes reference them) waste
-        space without providing enrichment value. Pruning them, then running
+        Singletons (node_count=1) and orphans (no nodes OR child communities reference
+        them) waste space without providing enrichment value. Pruning them, then running
         VACUUM, can reclaim 10-50 MB on large projects.
+
+        IMPORTANT: L2+ meta-communities are only referenced via child.parent_community_id,
+        NOT via nodes.community_id (which only holds L1 community IDs). The orphan check
+        must preserve communities that appear as any child's parent_community_id to avoid
+        wiping the Leiden hierarchy.
 
         Returns before/after file size so the caller can log reclaimed bytes.
         """
@@ -732,12 +737,17 @@ class GraphStorage:
                 """)
                 # Delete singleton communities
                 db.execute("DELETE FROM communities WHERE node_count = 1")
-                # Delete orphan communities (no nodes reference them)
+                # Delete orphan communities: only those not referenced by any node AND
+                # not referenced as a parent by any child community (L2+ preservation).
                 db.execute("""
                     DELETE FROM communities
                     WHERE id NOT IN (
                         SELECT DISTINCT community_id FROM nodes
                         WHERE community_id IS NOT NULL
+                    )
+                    AND id NOT IN (
+                        SELECT DISTINCT parent_community_id FROM communities
+                        WHERE parent_community_id IS NOT NULL
                     )
                 """)
             db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
