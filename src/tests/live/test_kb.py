@@ -661,7 +661,13 @@ class TestDedicatedReadInstance:
 
     @pytest.mark.slow
     def test_read_instance_available(self):
-        """If :11435 is up, create_kb_query_llm_client() must be_available()."""
+        """create_kb_query_llm_client() must return an available GPU-local client.
+
+        Resilience contract: it prefers the dedicated read instance (:11435), but
+        when that is down it must fall back to the shared :11434 instance with the
+        SAME query model — never None, never cloud, never CPU. We verify the client
+        is available regardless of whether :11435 happens to be running (no skip).
+        """
         import socket
         try:
             s = socket.create_connection(("127.0.0.1", 11435), timeout=2)
@@ -670,13 +676,13 @@ class TestDedicatedReadInstance:
         except OSError:
             read_instance_up = False
 
-        if not read_instance_up:
-            pytest.skip(":11435 read Ollama instance not running (run setup_llm_services.py)")
-
         from opencode_search.enricher.client import create_kb_query_llm_client
         client = create_kb_query_llm_client()
-        assert client is not None, "create_kb_query_llm_client() returned None"
+        assert client is not None, (
+            "create_kb_query_llm_client() returned None — no GPU-local query client "
+            f"available (:11435 up={read_instance_up}; the :11434 fallback also failed)."
+        )
         assert client.is_available(), (
-            "create_kb_query_llm_client().is_available() returned False — "
-            ":11435 is up but the client cannot reach the model."
+            "create_kb_query_llm_client().is_available() is False "
+            f"(:11435 up={read_instance_up}). The :11434 fallback must keep it available."
         )

@@ -531,6 +531,10 @@ async def _handle_nl_debug(query: str, project_path: str) -> dict[str, Any]:
 _ARCH_SYSTEM_PROMPT = (
     "You are a senior software architect. "
     "Write a comprehensive end-to-end architecture narrative. "
+    "OPEN with a short first paragraph that explicitly names the platform's main "
+    "services/components by their concrete names from the provided context (e.g. the "
+    "listed platform services), and say what each does — do not start with a generic "
+    "'this is a microservices platform' preamble. Then describe how they relate. "
     "Organise the code communities into meaningful architectural layers or domains based on "
     "their semantic type and purpose. For each layer or domain, name the key files and functions. "
     "Close with a concrete example: one request traced through all layers. "
@@ -555,6 +559,23 @@ async def _handle_architecture(
 
     t0 = time.perf_counter()
 
+    # Federation root? Then the platform's "services" ARE the member repos. The
+    # thin root's own graph is just docs/markdown with no service detail, so fan
+    # community context across the indexed members and name them concretely —
+    # otherwise the overview stays generic ("a microservices platform") instead of
+    # describing the actual services (cart, promo, OMS, fulfillment, Kong, …).
+    from pathlib import Path as _P
+
+    from opencode_search.config import load_registry as _load_registry
+    _reg = await asyncio.to_thread(_load_registry)
+    _entry = _reg.get(project_path)
+    _is_fed = bool(_entry and _entry.federation)
+    _fed_services = sorted({
+        _P(m).name
+        for m in (_entry.federation if _entry else [])
+        if _reg.get(m) and _reg[m].indexed_at is not None
+    }) if _is_fed else []
+
     async def _get_patterns() -> dict:
         try:
             from opencode_search.handlers._graph import handle_detect_patterns
@@ -564,13 +585,20 @@ async def _handle_architecture(
 
     (_, comm_list, comm_count), (code_ctx, _code_sources, _), patterns, (wiki_ctx, _) = \
         await asyncio.gather(
-            _fetch_community_context(query, project_path, top_k=25, include_federation=False),
+            _fetch_community_context(query, project_path, top_k=25, include_federation=_is_fed),
             _fetch_code_context(query, project_path, top_k=12),
             _get_patterns(),
             _fetch_wiki_context(query, project_path, top_k=5),
         )
 
     ctx_sections: list[str] = []
+
+    if _fed_services:
+        ctx_sections.append(
+            f"**Platform services ({len(_fed_services)} member repositories — these ARE the "
+            "services; name the relevant ones concretely in the answer):**\n"
+            + ", ".join(_fed_services)
+        )
 
     if comm_list:
         comm_lines = "\n".join(
@@ -1200,6 +1228,21 @@ async def _stream_global(
     reduce_context = "\n\n".join(f"Finding {i+1}:\n{p}" for i, p in enumerate(partial[:20]))
     if wiki_ctx:
         reduce_context += f"\n\n[WIKI KNOWLEDGE]\n{wiki_ctx}"
+
+    # Federation root: ground the synthesis with the concrete service names. Each
+    # member repo IS a service, and a platform overview must name them — the capped
+    # community sample alone may not surface every service, leaving the answer
+    # generic ("microservices platform") instead of concrete ("acme-cart-be,
+    # acme-promo-be, …"). Inject the authoritative member list.
+    if _is_fed and _fed_members:
+        from pathlib import Path as _P
+        svc_names = sorted({_P(m).name for m in _fed_members})
+        if svc_names:
+            reduce_context += (
+                f"\n\n[PLATFORM SERVICES] The platform is composed of these {len(svc_names)} "
+                "services — name the relevant ones concretely in the overview: "
+                + ", ".join(svc_names)
+            )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": f"{reduce_system}\n\nPartial findings:\n{reduce_context}"},
