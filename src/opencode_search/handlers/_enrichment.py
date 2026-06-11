@@ -441,6 +441,10 @@ async def _enrich_communities(
             except Exception as exc:
                 log.warning("community LLM call failed for community %d: %s", community.id, exc)
                 return
+            if not title or not title.strip():
+                # LLM returned an empty title — do not persist; community stays
+                # unenriched so the sweep loop can retry it next cycle.
+                return
             now = datetime.now(UTC).isoformat()
             community.title = title
             community.summary = summary
