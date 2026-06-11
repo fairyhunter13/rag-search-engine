@@ -35,6 +35,21 @@ _PIPELINE_EVENTS: list[dict[str, Any]] = []
 _MAX_EVENTS = 100  # cap to avoid unbounded growth
 _BG_TASKS: set[asyncio.Task] = set()  # strong refs to prevent GC of fire-and-forget tasks
 
+# KB-level refresh cooldown — prevents a burst of file changes from triggering N refreshes.
+# The index update is always immediate; only the heavier KB refresh is coalesced.
+_KB_REFRESH_COOLDOWN_S: float = float(os.environ.get("OPENCODE_KB_REFRESH_COOLDOWN_S", "120"))
+_KB_REFRESH_LAST: dict[str, float] = {}   # project_path → monotonic time of last KB refresh
+_KB_REFRESH_IN_FLIGHT: set[str] = set()   # projects whose KB refresh task is currently running
+
+
+def _should_schedule_kb_refresh(project_path: str) -> bool:
+    """Return True if the cooldown has passed and no refresh is already running."""
+    import time as _time
+    if project_path in _KB_REFRESH_IN_FLIGHT:
+        return False
+    last = _KB_REFRESH_LAST.get(project_path, 0.0)
+    return _time.monotonic() - last >= _KB_REFRESH_COOLDOWN_S
+
 
 def get_pipeline_events() -> list[dict[str, Any]]:
     """Return the last N auto-pipeline events for this daemon process."""
@@ -225,6 +240,16 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
         log.info("auto_pipeline[%s]: hierarchy skipped: %s", root.name, exc)
         steps.append({"step": "hierarchy", "status": "skipped", "reason": str(exc)})
 
+    # ── Step 4: Warm service_mesh cache (post-build, so reads are instant) ───
+    try:
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+        await handle_detect_service_mesh(project_path=pp, force=True)
+        steps.append({"step": "service_mesh_warm", "status": "ok"})
+        log.info("auto_pipeline[%s]: service_mesh cache warmed", root.name)
+    except Exception as exc:
+        log.debug("auto_pipeline[%s]: service_mesh warm skipped: %s", root.name, exc)
+        steps.append({"step": "service_mesh_warm", "status": "skipped", "reason": str(exc)})
+
     log.info("auto_pipeline[%s]: all steps complete", root.name)
     _record_event(pp, "ok", steps=steps)
     return {"status": "ok", "project_path": pp, "steps": steps}
@@ -282,6 +307,35 @@ async def _run_incremental_enrichment(project_path: str, modified_files: list[st
         log.info("incremental_enrich[%s]: patterns cache refreshed", root.name)
     except Exception as exc:
         log.debug("incremental_enrich[%s]: patterns refresh failed: %s", root.name, exc)
+
+    # ── KB-level refresh (debounced by _KB_REFRESH_COOLDOWN_S) ──────────────
+    # service_mesh cache: invalidate immediately so the next read recomputes the
+    # now-fast bounded scan; re-warm eagerly if cooldown has passed.
+    try:
+        from opencode_search.handlers._service_mesh import (
+            handle_detect_service_mesh,
+            invalidate_service_mesh_cache,
+        )
+        invalidate_service_mesh_cache(pp)
+        log.info("incremental_enrich[%s]: service_mesh cache invalidated", root.name)
+
+        if _should_schedule_kb_refresh(pp):
+            _KB_REFRESH_IN_FLIGHT.add(pp)
+            try:
+                import time as _t
+                await handle_detect_service_mesh(project_path=pp, force=True)
+                _KB_REFRESH_LAST[pp] = _t.monotonic()
+                log.info("incremental_enrich[%s]: service_mesh re-warmed", root.name)
+            finally:
+                _KB_REFRESH_IN_FLIGHT.discard(pp)
+        else:
+            log.debug(
+                "incremental_enrich[%s]: service_mesh re-warm skipped "
+                "(cooldown or in-flight)",
+                root.name,
+            )
+    except Exception as exc:
+        log.debug("incremental_enrich[%s]: service_mesh refresh failed: %s", root.name, exc)
 
 
 def schedule_incremental_enrichment(project_path: str, modified_files: list[str]) -> None:

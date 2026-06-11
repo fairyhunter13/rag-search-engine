@@ -1344,20 +1344,39 @@ def create_kb_query_llm_client() -> LLMClient | None:
     timeout = int(os.environ.get("OPENCODE_KB_QUERY_LLM_TIMEOUT", "180"))
     num_ctx = 8192
 
-    client: LLMClient = OllamaClient(
-        base_url=os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
+    # 1. Try dedicated read instance (:11435)
+    primary: LLMClient = OllamaClient(
+        base_url=os.environ.get("OPENCODE_KB_QUERY_LLM_BASE_URL", "http://localhost:11435"),
         model=model,
         timeout=timeout,
         num_ctx=num_ctx,
     )
-    if not client.is_available():
-        _log.warning(
-            "KB query model %r unavailable — falling back to enrich model "
-            "(interactive ask may be slow while a build is running)",
-            model,
-        )
-        return create_llm_client()
-    return client
+    if primary.is_available():
+        return primary
+
+    # 2. Fall back to the enrich instance (:11434) with the same query model.
+    #    Keeps the correct model (qwen3-query:8b) even without the dedicated server.
+    enrich_base = os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434")
+    _log.warning(
+        "KB query model %r unavailable on :11435 — trying :11434 "
+        "(interactive ask may be slow while a build is running)",
+        model,
+    )
+    shared: LLMClient = OllamaClient(
+        base_url=enrich_base,
+        model=model,
+        timeout=timeout,
+        num_ctx=num_ctx,
+    )
+    if shared.is_available():
+        return shared
+
+    # 3. Last resort: enrich client with enrich model (degraded quality, still GPU)
+    _log.warning(
+        "KB query model %r unavailable on :11434 — falling back to enrich model (last resort)",
+        model,
+    )
+    return create_llm_client()
 
 
 def create_query_llm_client() -> LLMClient | None:

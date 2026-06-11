@@ -1508,9 +1508,25 @@ async def _run_maintenance_sweep() -> None:
                 except Exception as exc:
                     _maintenance_log.debug("maintenance: wiki lint failed for %s: %s", project_path, exc)
 
+                await yield_while_busy()
+
+                # 5. Warm service_mesh cache (full scan + LLM description)
+                sm_services = 0
+                sm_edges = 0
+                sm_truncated = False
+                try:
+                    from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+                    sm = await handle_detect_service_mesh(project_path=project_path, force=True)
+                    sm_services = sm.get("service_count", 0)
+                    sm_edges = sm.get("edge_count", 0)
+                    sm_truncated = sm.get("truncated", False)
+                except Exception as exc:
+                    _maintenance_log.debug("maintenance: service_mesh warm failed for %s: %s", project_path, exc)
+
                 _maintenance_log.info(
-                    "maintenance: %s — freed=%.1fMB merged=%d wiki=%s",
+                    "maintenance: %s — freed=%.1fMB merged=%d wiki=%s mesh=%ds/%de trunc=%s",
                     project_path, freed_mb, merged, wiki_status,
+                    sm_services, sm_edges, sm_truncated,
                 )
                 swept += 1
             except Exception as exc:
