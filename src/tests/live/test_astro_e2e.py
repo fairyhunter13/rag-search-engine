@@ -31,13 +31,27 @@ class TestAstroSearch:
     """search(query, scope, project_paths) — vector index over redacted-name-3."""
 
     def test_search_returns_go_files(self, http, astro):
-        r = http.get("/api/search", params={"q": "HTTP handler route", "project": astro, "scope": "code"})
+        """After federation-first indexing, Go source files live in member projects.
+        Search a Go member directly to verify source code is still indexed and searchable.
+        """
+        # Federation-first: root's vector index has only its own files (markdown/HTML).
+        # Go source code lives in member projects — find one and search it.
+        r_fed = http.get("/api/federation", params={"project": astro, "action": "list"})
+        assert r_fed.status_code == 200, f"federation list failed: {r_fed.text[:200]}"
+        go_members = [
+            m for m in r_fed.json().get("members", [])
+            if m.get("file_count", 0) > 0 and "/go/src/" in m.get("path", "")
+        ]
+        assert go_members, "No indexed Go federation members found — re-index may be needed"
+        member_path = go_members[0]["path"]
+
+        r = http.get("/api/search", params={"q": "HTTP handler route", "project": member_path, "scope": "code"})
         assert r.status_code == 200, f"search failed: {r.text[:200]}"
         results = r.json().get("results", [])
-        assert len(results) > 0, "search returned no results for 'HTTP handler route'"
+        assert len(results) > 0, f"search returned no results for 'HTTP handler route' in {member_path}"
         paths = [res.get("path") or res.get("file") or "" for res in results]
         assert any(p.endswith(".go") or p.endswith(".py") or p.endswith(".java") for p in paths), (
-            f"No source code files in results; paths: {paths[:5]}"
+            f"No source code files in Go member {member_path}; paths: {paths[:5]}"
         )
 
     def test_search_grpc_finds_proto_or_go(self, http, astro):

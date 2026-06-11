@@ -8,9 +8,14 @@ pytestmark = pytest.mark.live
 _CODE_EXTENSIONS = {".go", ".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".rs", ".kt", ".rb", ".cpp", ".c"}
 
 
-def test_search_returns_file_paths(http, project):
-    """Search results must include real source file paths."""
-    r = http.get("/api/search", params={"q": "main handler function", "project": project, "top_k": 5})
+def test_search_returns_file_paths(http, quality_project):
+    """Search results must include real source file paths.
+
+    Uses quality_project (opencode-search-engine) which always has Python source code
+    indexed — unlike a federation root (e.g. redacted-name-3) whose own files may be
+    mostly markdown after federation-first indexing.
+    """
+    r = http.get("/api/search", params={"q": "main handler function", "project": quality_project, "top_k": 5})
     assert r.status_code == 200, f"Search failed: {r.status_code} {r.text[:200]}"
     data = r.json()
     results = data.get("results", [])
