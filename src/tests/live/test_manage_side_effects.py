@@ -90,27 +90,25 @@ print(result["status"])
             )
 
 
-class TestVacuumDryRun:
-    """vacuum dry_run=True must not change anything on disk."""
+class TestStorageHealthEndpoint:
+    """GET /api/storage_health returns valid storage diagnostics."""
 
-    def test_vacuum_dry_run_no_disk_delta(self, http, project):
-        """POST /api/vacuum?dry_run=true must return 200 and produce zero bytes freed (dry run)."""
-        r = http.post(
-            "/api/vacuum",
-            params={"project": project, "dry_run": "true"},
-        )
+    def test_storage_health_returns_ok(self, http, project):
+        """GET /api/storage_health?project=<p> must return 200 with status=ok."""
+        r = http.get("/api/storage_health", params={"project": project})
         assert r.status_code == 200, (
-            f"vacuum dry_run failed: {r.status_code}: {r.text[:200]}"
+            f"storage_health failed: {r.status_code}: {r.text[:200]}"
         )
         data = r.json()
-        assert "error" not in data or data.get("error") is None, (
-            f"vacuum dry_run returned error: {data}"
-        )
-        # dry_run must not remove anything — freed_mb should be 0 or absent
-        freed = data.get("freed_mb", 0) or data.get("freed_bytes", 0)
-        assert freed == 0, (
-            f"vacuum dry_run must not free any bytes; freed={freed}: {data}"
-        )
+        assert data.get("status") == "ok", f"storage_health not ok: {data}"
+
+    def test_storage_health_fields_present(self, http, project):
+        r = http.get("/api/storage_health", params={"project": project})
+        projects = r.json().get("projects", [])
+        assert len(projects) >= 1, f"expected at least 1 project in storage_health: {r.json()}"
+        stats = projects[0]
+        for field in ("total_bytes", "wal_bytes", "active_index_count", "stale_index_dirs", "recoverable_mb"):
+            assert field in stats, f"missing field {field!r} in storage_health: {stats}"
 
 
 class TestRemoveProject:

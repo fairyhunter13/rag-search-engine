@@ -968,6 +968,13 @@ def _render_systemd_service(
             "IOSchedulingClass=best-effort",
             "IOSchedulingPriority=7",
             "OOMScoreAdj=200",
+            # Memory caps prevent runaway swap thrash when indexing large repos.
+            # MemoryHigh is the soft throttle (kernel reclaims pages above this);
+            # MemoryMax is the hard ceiling; MemorySwapMax limits swap usage.
+            # Daemon RSS is ~6.5 GB legit; these leave ample headroom on 62 GB.
+            "MemoryHigh=16G",
+            "MemoryMax=24G",
+            "MemorySwapMax=2G",
             "",
             "[Install]",
             "WantedBy=default.target",
@@ -1466,6 +1473,37 @@ async def _run_maintenance_sweep() -> None:
 
                 await yield_while_busy()
 
+                # 1b. Deep-vacuum: reclaim stale LanceDB _indices/ dirs and old dataset versions.
+                # Every watch-triggered re-index calls ensure_ivf_pq_index(replace=True) which
+                # writes a NEW _indices/<uuid>/ dir; without this step they accumulate indefinitely.
+                # Storage.vacuum() calls table.optimize(cleanup_older_than=0) which prunes them.
+                try:
+                    from opencode_search.config import load_registry as _load_registry_deep
+                    from opencode_search.storage import Storage as _Storage
+                    _reg_deep = _load_registry_deep()
+                    _entry_deep = _reg_deep.get(project_path)
+                    if _entry_deep is not None:
+                        _db_path = str(getattr(_entry_deep, "db_path", "") or "")
+                        _dims = int(getattr(_entry_deep, "dims", 768) or 768)
+                        if _db_path:
+                            from pathlib import Path as _PathDeep
+                            if _PathDeep(_db_path).exists():
+                                _storage_deep = _Storage(db_path=_db_path, dims=_dims)
+                                await _storage_deep.open()
+                                try:
+                                    ldb_vac = await _storage_deep.vacuum()
+                                    freed_mb += ldb_vac.get("saved_mb", 0.0) or 0.0
+                                    _maintenance_log.debug(
+                                        "maintenance: LanceDB deep-vacuum %s: saved=%.1fMB",
+                                        project_path, ldb_vac.get("saved_mb", 0.0),
+                                    )
+                                finally:
+                                    await _storage_deep.close()
+                except Exception as exc:
+                    _maintenance_log.debug("maintenance: deep-vacuum failed for %s: %s", project_path, exc)
+
+                await yield_while_busy()
+
                 # 2. Dedup graph nodes (MinHash/LSH)
                 try:
                     from opencode_search.handlers._graph import handle_dedup_nodes
@@ -1552,6 +1590,37 @@ def _start_maintenance_monitor() -> None:
     )
 
 
+def _assert_ollama_gpu_placement() -> None:
+    """Startup check: warn if any currently-loaded ollama model has CPU layers.
+
+    This is best-effort (ollama may have no models loaded at cold start —
+    the hard per-chat gate is _assert_gpu_only() in enricher/client.py).
+    Logs a WARNING rather than crashing so a cold start isn't blocked.
+    """
+    import json as _json
+    import urllib.request as _ureq
+
+    ollama_url = os.environ.get("OPENCODE_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    try:
+        req = _ureq.Request(f"{ollama_url}/api/ps")
+        with _ureq.urlopen(req, timeout=3) as resp:
+            ps = _json.loads(resp.read().decode("utf-8"))
+        for entry in ps.get("models", []):
+            size_total = entry.get("size", 0)
+            size_vram = entry.get("size_vram", 0)
+            cpu_bytes = size_total - size_vram
+            if cpu_bytes > 10_000_000:
+                cpu_gb = cpu_bytes / 1e9
+                logging.getLogger(__name__).warning(
+                    "[GPU-REQUIRED] Startup check: ollama model '%s' has %.2f GB offloaded to CPU. "
+                    "CPU inference is FORBIDDEN. Free up VRAM or use a smaller model. "
+                    "This will raise a fatal error on the first inference call.",
+                    entry.get("name", "?"), cpu_gb,
+                )
+    except Exception as exc:
+        logging.getLogger(__name__).debug("Startup ollama GPU placement check skipped: %s", exc)
+
+
 def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_DAEMON_PORT) -> None:
     from opencode_search.embeddings import assert_gpu_available
     from opencode_search.mcp import run_mcp_http_server
@@ -1561,6 +1630,7 @@ def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_
     # by tests via OPENCODE_SKIP_GPU_ASSERT=1, never in production.
     if os.environ.get("OPENCODE_SKIP_GPU_ASSERT") != "1":
         assert_gpu_available()
+        _assert_ollama_gpu_placement()
 
     if _tcp_port_open(host, port):
         grace = float(os.environ.get("OPENCODE_DAEMON_BIND_WAIT_S", "5"))

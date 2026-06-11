@@ -80,13 +80,6 @@ class TestInvalidParamTypes:
         )
         assert "error" in r.json()
 
-    def test_dedup_non_float_threshold_returns_400(self, http, project):
-        r = http.get("/api/dedup", params={"project": project, "threshold": "invalid"})
-        assert r.status_code == 400, (
-            f"dedup with threshold=invalid should be 400; got {r.status_code}: {r.text[:200]}"
-        )
-        assert "error" in r.json()
-
     def test_graph_export_non_integer_max_nodes_returns_400(self, http, project):
         r = http.get("/api/graph_export", params={"project": project, "max_nodes": "huge"})
         assert r.status_code == 400, (

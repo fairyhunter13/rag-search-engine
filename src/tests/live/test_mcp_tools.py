@@ -422,29 +422,19 @@ class TestMCPFederation:
 # ---------------------------------------------------------------------------
 
 class TestMCPManage:
-    """HTTP maintenance endpoints (/api/vacuum, /api/dedup, /api/jobs)."""
+    """HTTP maintenance info (/api/storage_health, /api/jobs) — write ops auto-run by daemon sweep."""
 
-    @pytest.mark.slow
-    def test_manage_vacuum_real(self, http, project):
-        """Vacuum real (GET ?dry_run=false) must free orphan dirs and return freed_bytes."""
-        r = http.get("/api/vacuum", params={"project": project, "dry_run": "false"})
-        assert r.status_code == 200, f"vacuum real failed: {r.text[:200]}"
+    def test_manage_storage_health(self, http, project):
+        """GET /api/storage_health must return per-project storage diagnostics."""
+        r = http.get("/api/storage_health", params={"project": project})
+        assert r.status_code == 200, f"storage_health failed: {r.text[:200]}"
         data = r.json()
-        assert "freed_bytes" in data or "freed_mb" in data or "orphan_dirs_removed" in data, (
-            f"Vacuum real response missing freed stats: {data}"
-        )
-        assert "error" not in data, f"vacuum returned error: {data}"
-
-    @pytest.mark.slow
-    def test_manage_dedup_real(self, http, project):
-        """Dedup real (GET ?dry_run=false) must return merged_count and candidate_pairs_checked."""
-        r = http.get("/api/dedup", params={"project": project, "dry_run": "false"})
-        assert r.status_code == 200, f"dedup real failed: {r.text[:200]}"
-        data = r.json()
-        assert "merged_count" in data or "candidate_pairs_checked" in data, (
-            f"Real dedup response missing merge stats: {data}"
-        )
-        assert data.get("dry_run") is not True, f"dedup still in dry_run mode: {data}"
+        assert data.get("status") == "ok", f"storage_health not ok: {data}"
+        projects = data.get("projects", [])
+        assert len(projects) >= 1, f"expected at least 1 project: {data}"
+        stats = projects[0]
+        for field in ("total_bytes", "wal_bytes", "stale_index_dirs", "recoverable_mb"):
+            assert field in stats, f"missing field {field!r}: {stats}"
 
     def test_manage_jobs_list(self, http, project):
         """Jobs list must be accessible (action='jobs')."""

@@ -1,7 +1,7 @@
 """Live browser tests — Playwright drives real Chromium against the live dashboard.
 
 Covers all five views (Pulse / Chat / Graph / Wiki / Admin), all chat intents, streaming SSE,
-and admin actions (vacuum, dedup).
+and the read-only storage panel (maintenance is fully automatic — no manual vacuum/dedup buttons).
 
 Run separately (conflicts with pytest-asyncio mode=auto):
     .venv/bin/pytest src/tests/live/test_browser.py --browser chromium --timeout=180
@@ -572,18 +572,8 @@ class TestAdminView:
     def test_admin_tab_opens(self, page):
         self._open_admin(page)
         content = page.content()
-        has_admin = any(w in content.lower() for w in ("vacuum", "dedup", "project", "build", "index", "jobs"))
+        has_admin = any(w in content.lower() for w in ("project", "build", "index", "jobs", "storage"))
         assert has_admin, "Admin tab opened but no admin controls found"
-
-    def test_admin_vacuum_button_present(self, page):
-        self._open_admin(page)
-        vacuum = page.locator("button:has-text('Vacuum'), button:has-text('vacuum')").first
-        assert vacuum.count() > 0, "No Vacuum button in Admin view"
-
-    def test_admin_dedup_button_present(self, page):
-        self._open_admin(page)
-        dedup = page.locator("button:has-text('Dedup'), button:has-text('dedup'), button:has-text('Deduplicate')").first
-        assert dedup.count() > 0, "No Dedup button in Admin view"
 
     def test_admin_projects_table_visible(self, page):
         self._open_admin(page)
@@ -597,34 +587,18 @@ class TestAdminView:
         has_jobs = any(w in content.lower() for w in ("jobs", "pipeline", "background", "running"))
         assert has_jobs, "No jobs/pipeline section in admin view"
 
-    def test_admin_vacuum_executes_and_logs(self, page):
-        """Clicking Vacuum must trigger the operation and write output to #op-log."""
-        _goto_with_retry(page, DASHBOARD_URL)
-        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
-        # Wait for a project to be auto-selected (runVacuum requires _proj)
+    def test_admin_storage_panel_renders(self, page):
+        """Storage Health panel must appear in Admin view and display recoverable MB."""
+        self._open_admin(page)
+        # Wait for loadStorageHealth() to populate the panel
         page.wait_for_function(
-            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
-            timeout=45_000,
-        )
-        # Navigate to Admin using the exact button ID
-        page.click("#vbtn-admin")
-        # Wait for admin view to become active (op-log is 0-height when empty, so check view)
-        page.wait_for_function(
-            "document.getElementById('view-admin')?.classList?.contains('active')",
-            timeout=10_000,
-        )
-        # Click Vacuum button
-        vacuum_btn = page.locator("button:has-text('Vacuum')").first
-        if not vacuum_btn.count():
-            pytest.fail("Vacuum button not found in Admin view")
-        vacuum_btn.click()
-        # Wait for op-log to receive at least one entry (dry-run is fast)
-        page.wait_for_function(
-            "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
+            "document.getElementById('storage-health-body')?.textContent?.trim()?.length > 5",
             timeout=15_000,
         )
-        log_text = (page.locator("#op-log").text_content() or "").strip()
-        assert log_text, "op-log empty after clicking Vacuum"
+        content = (page.locator("#storage-health-body").text_content() or "").strip()
+        assert "recoverable" in content.lower(), (
+            f"Storage Health panel did not render recoverable MB; got: {content[:200]}"
+        )
 
     def _click_admin_op(self, page, btn_text: str) -> str:
         """Open admin, click an operation button, return op-log text."""
@@ -648,11 +622,6 @@ class TestAdminView:
             timeout=20_000,
         )
         return (page.locator("#op-log").text_content() or "").strip()
-
-    def test_admin_dedup_executes_and_logs(self, page):
-        """Clicking Dedup must write output to #op-log."""
-        log_text = self._click_admin_op(page, "Dedup")
-        assert log_text, "op-log empty after clicking Dedup"
 
     def test_admin_reindex_submits_job(self, page):
         """Clicking Re-index must submit a background job and log it."""
@@ -679,7 +648,7 @@ class TestAdminView:
         assert page.url.startswith(DASHBOARD_URL), "Page navigated away after Refresh click"
 
     def test_admin_operation_shows_toast(self, page):
-        """Clicking an Admin operation button must produce a toast notification."""
+        """Clicking an Admin operation button (Re-index) must produce a toast notification."""
         _goto_with_retry(page, DASHBOARD_URL)
         page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
         page.wait_for_function(
@@ -691,16 +660,16 @@ class TestAdminView:
             "document.getElementById('view-admin')?.classList?.contains('active')",
             timeout=10_000,
         )
-        vacuum_btn = page.locator("button:has-text('Vacuum')").first
-        if not vacuum_btn.count():
-            pytest.fail("Vacuum button not found in Admin view")
-        vacuum_btn.click()
+        reindex_btn = page.locator("button:has-text('Re-index')").first
+        if not reindex_btn.count():
+            pytest.fail("Re-index button not found in Admin view")
+        reindex_btn.click()
         page.wait_for_function(
             "document.querySelector('#toast div') !== null",
             timeout=8_000,
         )
         toast_el = page.locator("#toast div").first
-        assert toast_el.count() > 0, "#toast div never appeared after Vacuum"
+        assert toast_el.count() > 0, "#toast div never appeared after Re-index"
 
     def test_admin_active_project_row_highlighted(self, page, live_project):
         """The currently selected project has .active-row class in the projects table."""
@@ -722,30 +691,6 @@ class TestAdminView:
         )
         active_rows = page.locator(".projects-table tr.active-row, table tr.active-row")
         assert active_rows.count() >= 1, "No .active-row found in projects table after project selected"
-
-    def test_admin_op_log_shows_intermediate_message(self, page, live_project):
-        """Clicking Vacuum writes an immediate message to #op-log."""
-        _goto_with_retry(page, DASHBOARD_URL)
-        page.wait_for_load_state("load", timeout=_TIMEOUT_PAGE)
-        page.wait_for_function(
-            "() => { const s = document.getElementById('project-sel'); return s && s.options.length > 0 && s.value !== ''; }",
-            timeout=45_000,
-        )
-        page.click("#vbtn-admin")
-        page.wait_for_function(
-            "document.getElementById('view-admin')?.classList?.contains('active')",
-            timeout=10_000,
-        )
-        vacuum_btn = page.locator("button:has-text('Vacuum')").first
-        if not vacuum_btn.count():
-            pytest.fail("Vacuum button not found in Admin view")
-        vacuum_btn.click()
-        page.wait_for_function(
-            "document.querySelector('#op-log')?.textContent?.trim()?.length > 0",
-            timeout=10_000,
-        )
-        log_text = (page.locator("#op-log").text_content() or "").strip()
-        assert len(log_text) > 0, "op-log empty after vacuum click"
 
 
 # ---------------------------------------------------------------------------
@@ -823,13 +768,13 @@ class TestGlobalUI:
             "!document.getElementById('cmd-overlay')?.classList?.contains('hidden')",
             timeout=5_000,
         )
-        page.locator("#cmd-input").type("vacuum")
+        page.locator("#cmd-input").type("index")
         page.wait_for_timeout(200)
         items = page.locator("#cmd-results li")
-        assert items.count() >= 1, "Filter returned no results for 'vacuum'"
+        assert items.count() >= 1, "Filter returned no results for 'index'"
         labels = [(items.nth(i).text_content() or "") for i in range(items.count())]
-        assert any("vacuum" in lbl.lower() for lbl in labels), (
-            f"Filter did not show vacuum-related items: {labels}"
+        assert any("index" in lbl.lower() for lbl in labels), (
+            f"Filter did not show index-related items: {labels}"
         )
         page.keyboard.press("Escape")
 

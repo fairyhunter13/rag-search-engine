@@ -65,8 +65,7 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
     ("/api/debug", "POST", {"message": "hello", "project": "/tmp/does-not-exist"}),
     # kb routes
     ("/api/kb_health", "GET", None),
-    ("/api/dedup", "POST", {"project": "/tmp/does-not-exist", "dry_run": True}),
-    ("/api/vacuum", "POST", {"project": "/tmp/does-not-exist"}),
+    ("/api/storage_health", "GET", None),
     ("/api/git_hooks", "POST", {"project": "/tmp/does-not-exist", "action": "install"}),
     ("/api/reload", "POST", {}),
     # ops routes

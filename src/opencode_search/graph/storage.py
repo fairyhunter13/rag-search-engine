@@ -157,6 +157,10 @@ class GraphStorage:
             stmt = stmt.strip()
             if stmt:
                 self._conn.execute(stmt)
+        # Bound WAL growth between full VACUUM sweeps: auto-checkpoint every 1000 pages
+        # (~4 MB) and cap WAL file size at 64 MB so it self-truncates continuously.
+        self._conn.execute("PRAGMA wal_autocheckpoint=1000")
+        self._conn.execute("PRAGMA journal_size_limit=67108864")  # 64 MB
         self._conn.commit()
         self._migrate()
 

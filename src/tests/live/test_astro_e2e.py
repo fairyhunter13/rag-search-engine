@@ -336,11 +336,11 @@ class TestAstroFederation:
 
 
 # ---------------------------------------------------------------------------
-# HTTP maintenance endpoints (auto-run by daemon; HTTP is escape hatch)
+# HTTP maintenance endpoints (auto-run by daemon's 6 h sweep)
 # ---------------------------------------------------------------------------
 
 class TestAstroManage:
-    """HTTP maintenance endpoints: /api/kb_health, /api/dedup, /api/vacuum."""
+    """HTTP read-only maintenance info: /api/kb_health, /api/storage_health."""
 
     def test_manage_kb_health_returns_info(self, http, astro):
         r = http.get("/api/kb_health", params={"project": astro})
@@ -350,27 +350,17 @@ class TestAstroManage:
             f"kb_health must report communities; got {data}"
         )
 
-    @pytest.mark.slow
-    def test_manage_dedup_real(self, http, astro):
-        """Dedup real (GET ?dry_run=false) on redacted-name-3 — idempotent, returns merge stats."""
-        r = http.get("/api/dedup", params={"project": astro, "dry_run": "false"})
-        assert r.status_code == 200, f"dedup real failed: {r.text[:200]}"
+    def test_manage_storage_health_returns_info(self, http, astro):
+        """GET /api/storage_health must return per-project stats for redacted-name-3."""
+        r = http.get("/api/storage_health", params={"project": astro})
+        assert r.status_code == 200, f"storage_health failed: {r.text[:200]}"
         data = r.json()
-        assert "merged_count" in data or "candidate_pairs_checked" in data, (
-            f"dedup real must return merge stats; got keys={list(data.keys())}"
-        )
-        assert data.get("dry_run") is not True, f"dedup still in dry_run mode: {data}"
-
-    @pytest.mark.slow
-    def test_manage_vacuum_real(self, http, astro):
-        """Vacuum real (GET ?dry_run=false) on redacted-name-3 — idempotent, returns freed stats."""
-        r = http.get("/api/vacuum", params={"project": astro, "dry_run": "false"})
-        assert r.status_code == 200, f"vacuum real failed: {r.text[:200]}"
-        data = r.json()
-        assert "freed_bytes" in data or "freed_mb" in data or "orphan_dirs_removed" in data, (
-            f"vacuum real must return freed stats; got keys={list(data.keys())}"
-        )
-        assert "error" not in data, f"vacuum returned error: {data}"
+        assert data.get("status") == "ok", f"storage_health not ok: {data}"
+        projects = data.get("projects", [])
+        assert len(projects) == 1, f"expected 1 project; got {len(projects)}: {projects}"
+        stats = projects[0]
+        for field in ("total_bytes", "wal_bytes", "active_index_count", "stale_index_dirs", "recoverable_mb"):
+            assert field in stats, f"missing field {field!r}: {stats}"
 
 
 # ---------------------------------------------------------------------------

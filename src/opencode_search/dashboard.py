@@ -10,7 +10,7 @@ Routes are split into per-domain sub-registrars for maintainability:
   _register_search_routes   — /api/ask, /api/feature, /api/search, /api/patterns, business
   _register_graph_routes    — /api/graph, /api/graph_export, service_mesh, trace, impact, PR
   _register_chat_routes     — /api/chat, /api/chat_stream, /api/debug
-  _register_kb_routes       — /api/kb_health, /api/dedup, /api/vacuum, /api/git_hooks, /api/reload
+  _register_kb_routes       — /api/kb_health, /api/storage_health, /api/git_hooks, /api/reload
   _register_ops_routes      — metrics, pipeline, SSE, alerts, jobs
 
 register_dashboard_routes(mcp) is the public entry point — it calls all sub-registrars.
@@ -61,6 +61,8 @@ _db_lock = threading.Lock()
 def _get_metrics_db() -> sqlite3.Connection:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_METRICS_DB))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.row_factory = sqlite3.Row
     conn.execute("""
         CREATE TABLE IF NOT EXISTS search_events (
@@ -1079,48 +1081,12 @@ def _register_kb_routes(mcp: FastMCP) -> None:
 
         return JSONResponse(result)
 
-    @mcp.custom_route("/api/dedup", methods=["GET", "POST"], include_in_schema=False)
-    async def api_dedup(request: Request) -> JSONResponse:
-        """Deduplicate graph nodes. GET=dry_run preview; POST with {project,dry_run,threshold}."""
-        from opencode_search.handlers._graph import handle_dedup_nodes
-        if request.method == "POST":
-            body: dict = {}
-            with contextlib.suppress(Exception):
-                body = await request.json()
-            project = body.get("project") or request.query_params.get("project", "")
-            dry_run = bool(body.get("dry_run", False))
-            try:
-                threshold = float(body.get("threshold", 0.88))
-            except (ValueError, TypeError):
-                return JSONResponse({"error": "threshold must be a float"}, status_code=400)
-        else:
-            project = request.query_params.get("project", "")
-            dry_run = request.query_params.get("dry_run", "true").lower() != "false"
-            try:
-                threshold = float(request.query_params.get("threshold", "0.88"))
-            except (ValueError, TypeError):
-                return JSONResponse({"error": "threshold must be a float"}, status_code=400)
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_dedup_nodes(project_path=project, threshold=threshold, dry_run=dry_run)
-        return JSONResponse(result)
-
-    @mcp.custom_route("/api/vacuum", methods=["GET", "POST"], include_in_schema=False)
-    async def api_vacuum(request: Request) -> JSONResponse:
-        """Storage cleanup: remove orphan index tier dirs. GET=dry_run; POST with {project,dry_run}."""
-        from opencode_search.handlers._vacuum import handle_vacuum
-        if request.method == "POST":
-            body: dict = {}
-            with contextlib.suppress(Exception):
-                body = await request.json()
-            project = body.get("project") or request.query_params.get("project", "")
-            dry_run = bool(body.get("dry_run", False))
-        else:
-            project = request.query_params.get("project", "")
-            dry_run = request.query_params.get("dry_run", "true").lower() != "false"
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_vacuum(project_path=project, dry_run=dry_run)
+    @mcp.custom_route("/api/storage_health", methods=["GET"], include_in_schema=False)
+    async def api_storage_health(request: Request) -> JSONResponse:
+        """Storage diagnostics: stale index dirs, WAL size, recoverable MB. project param optional."""
+        from opencode_search.handlers._storage_health import handle_storage_health
+        project = request.query_params.get("project") or None
+        result = await handle_storage_health(project_path=project)
         return JSONResponse(result)
 
     @mcp.custom_route("/api/git_hooks", methods=["GET", "POST"], include_in_schema=False)

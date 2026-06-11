@@ -467,7 +467,7 @@ async def overview(
           | "feature_map" (all communities grouped by business semantic type: feature|process|rule|...)
           | "business_rules" (communities classified as constraints/policies/validations)
           | "process_flows" (communities classified as workflows/business processes)
-    project_path: not required for what="projects" or what="metrics"
+    project_path: not required for what="projects" or "metrics"
     export_format: "json" | "graphml" (only for what="graph_export")
     max_nodes: cap for graph_export (default 5000)
     """

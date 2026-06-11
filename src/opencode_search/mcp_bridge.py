@@ -218,7 +218,7 @@ async def _default_scoped_project_paths() -> list[str] | None:
 
 
 # ---------------------------------------------------------------------------
-# 7-tool intent API — mirrors opencode_search.mcp exactly, forwards via HTTP
+# 5-tool intent API — mirrors opencode_search.mcp exactly, forwards via HTTP
 # ---------------------------------------------------------------------------
 
 

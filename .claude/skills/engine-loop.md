@@ -39,6 +39,17 @@ All levels checked via `GET /api/kb_health?project=.../redacted-name-3`:
 - **Global integration**: `scripts/configure_integrations.py --apply-all` → 7/7 profiles OK (bash_aliases + codex + hermes + 3 claude + opencode)
 - **Dashboard chat**: `POST /api/chat_stream` with an astro query → SSE streams a real non-empty answer (intent ≠ null)
 
+### 5. Storage health
+Poll `GET /api/storage_health?project=<redacted-name-3>`. Assert:
+- `stale_index_dirs ≤ active_index_count + 2` (no unbounded accumulation of dead `_indices/` UUIDs)
+- `wal_bytes < 67108864` (WAL under 64 MB — bounded by `journal_size_limit` pragma)
+- `recoverable_mb < 50` (less than 50 MB of recoverable waste per project)
+
+Storage is fully automatic — the maintenance sweep reclaims stale dirs and bounds the WAL (every 6 h;
+first run within 60 s of daemon startup). There is no manual vacuum trigger. If a threshold is
+exceeded: report it and wait for the next sweep (each loop iteration that commits + reloads the
+daemon re-arms the 60 s startup sweep). The thresholds are convergence targets, not instant gates.
+
 ## Loop body
 
 ```
@@ -55,6 +66,9 @@ while stopping conditions not met:
        POST /api/build (project=astro, action=enrich_hierarchy); wait and re-poll
     5. Probe all 7 KB question categories → assert non-empty answers
     6. Assert invariants (GPU, auto-pipeline, global integration, dashboard chat)
+    6b. Check storage health (GET /api/storage_health):
+        stale_index_dirs ≤ active+2, wal_bytes < 64 MB, recoverable_mb < 50
+        → if red: report it; sweep fires within 60 s of next daemon reload (no manual trigger)
     7. Commit all changes: "Phase N: <what changed>"
        git push origin main (zero unpushed — invariant)
     8. If all stopping conditions met → DONE (no ScheduleWakeup)
@@ -73,6 +87,7 @@ while stopping conditions not met:
 - Auto-pipeline enabled=true
 - 7/7 global profiles OK (configure_integrations.py)
 - Dashboard chat streams a real astro answer
+- Storage: stale_index_dirs ≤ active+2, WAL < 64 MB, recoverable_mb < 50
 
 ## What this loop will NOT do
 
@@ -103,6 +118,7 @@ GPU enforcement: codex → RuntimeError ✓
 Auto-pipeline: enabled=true ✓
 Global integration: 7/7 profiles OK ✓
 Dashboard chat: "astro uses gRPC..." 2341 chars intent=architecture ✓
+Storage: 2 active / 2 on-disk idx, WAL 8MB, 0MB recoverable ✓
 Committed: abc1234 "Phase 98: KB self-healing sweep + engine-loop skill"
 Pushed to origin/main ✓
 L2/L3 still incomplete → ScheduleWakeup 270s (sweep in-flight)

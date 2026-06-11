@@ -10,6 +10,7 @@ Commands:
   mcp            — start the MCP stdio server (for AI assistants)
   daemon         — manage the shared singleton MCP HTTP daemon
   health         — GPU and system health check
+  storage        — show storage health (stale index dirs, WAL size, recoverable MB)
 
 GPU enforcement:  CPUExecutionProvider is FORBIDDEN.
                   GPUNotAvailableError is raised at startup if no CUDA device.
@@ -622,6 +623,53 @@ def daemon_install_global(
         _print_json(result)
         return
     typer.echo(f"Installed global MCP integration: {result['url']}")
+
+
+# ---------------------------------------------------------------------------
+# storage
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def storage(
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path to report on (default: all)."),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
+) -> None:
+    """Show storage health: stale index dirs, WAL size, recoverable MB.
+
+    Reports per-project LanceDB index dir counts (active vs on-disk), graph WAL
+    size, and estimated recoverable MB. Maintenance is fully automatic — the
+    daemon's sweep (every 6 h, first run within 60 s of startup) reclaims stale
+    index dirs and bounds the WAL. Use this command to observe current state.
+    """
+    from opencode_search.handlers._storage_health import handle_storage_health
+
+    result = _run(handle_storage_health(project_path=project))
+    if json_output:
+        _print_json(result)
+        return
+
+    total_rec = result.get("total_recoverable_mb", 0.0)
+    typer.echo(f"Storage health — {result.get('project_count', 0)} project(s)  recoverable: {total_rec:.1f} MB\n")
+    for p in result.get("projects", []):
+        if "error" in p:
+            typer.echo(f"  {p['project_path']}: ERROR — {p['error']}")
+            continue
+        path = p["project_path"]
+        name = path.rstrip("/").split("/")[-1]
+        total_mb = p.get("total_mb", 0)
+        indices_mb = round(p.get("indices_bytes", 0) / 1024 / 1024, 1)
+        wal_mb = p.get("wal_mb", 0)
+        active = p.get("active_index_count", 0)
+        on_disk = p.get("on_disk_index_dirs", 0)
+        stale = p.get("stale_index_dirs", 0)
+        rec = p.get("recoverable_mb", 0.0)
+        stale_flag = " !" if stale > active + 2 else ""
+        typer.echo(
+            f"  {name}: {total_mb:.0f} MB total  indices {indices_mb:.0f} MB "
+            f"({active} active / {on_disk} on-disk / {stale} stale{stale_flag})  "
+            f"WAL {wal_mb:.0f} MB  recoverable {rec:.1f} MB"
+        )
 
 
 # ---------------------------------------------------------------------------

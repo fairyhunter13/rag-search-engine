@@ -390,8 +390,6 @@ a{color:inherit;text-decoration:none}
         <div class="panel">
           <div class="panel-hdr">Operations</div>
           <div class="ops-grid">
-            <button class="op-btn" onclick="runVacuum()">🧹 Vacuum</button>
-            <button class="op-btn" onclick="runDedup()">🔗 Dedup</button>
             <button class="op-btn" onclick="runReindex()">⚡ Re-index</button>
             <button class="op-btn" onclick="runEnrich()">✨ Enrich</button>
             <button class="op-btn" onclick="runWiki()">📚 Wiki</button>
@@ -401,6 +399,12 @@ a{color:inherit;text-decoration:none}
           <div id="admin-job-chips"></div>
           <div class="panel-hdr" style="margin-top:10px">Auto-Pipeline Events</div>
           <div id="admin-autopipeline-log"></div>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <div class="panel-hdr">Storage Health</div>
+          <div id="storage-health-body" style="font-size:12px;color:var(--fg-dim)">Loading…</div>
         </div>
       </div>
     </div>
@@ -1054,6 +1058,7 @@ async function loadAutoPipeline(){
 async function loadAdmin(){
   _setupAdminSSE();
   loadAutoPipeline();
+  loadStorageHealth();
   const projs=await loadProjects();
   const tbody=$('projects-body');
   tbody.innerHTML=projs.map(p=>{
@@ -1077,26 +1082,27 @@ function opLog(msg,cls=''){
   el.scrollTop=el.scrollHeight;
 }
 
-async function runVacuum(){
-  if(!_proj){toast('Select a project first','err');return;}
-  opLog('Running vacuum…');
+async function loadStorageHealth(){
+  const el=$('storage-health-body');
+  if(!el)return;
   try{
-    const r=await fetchWithTimeout(`/api/vacuum?project=${encodeURIComponent(_proj)}`,{method:'POST'});
+    const url=_proj?`/api/storage_health?project=${encodeURIComponent(_proj)}`:'/api/storage_health';
+    const r=await fetchWithTimeout(url);
     const d=await r.json();
-    opLog(d.message||JSON.stringify(d),'ok');
-    toast('Vacuum complete','info');
-  }catch(e){opLog('Error: '+e.message,'err');}
-}
-
-async function runDedup(){
-  if(!_proj){toast('Select a project first','err');return;}
-  opLog('Running dedup…');
-  try{
-    const r=await fetchWithTimeout(`/api/dedup?project=${encodeURIComponent(_proj)}`,{method:'POST'});
-    const d=await r.json();
-    opLog(d.message||JSON.stringify(d),'ok');
-    toast('Dedup complete','info');
-  }catch(e){opLog('Error: '+e.message,'err');}
+    const rows=(d.projects||[]).map(p=>{
+      if(p.error)return`<div style="color:var(--err)">${esc(p.project_path||'?')}: ${esc(p.error)}</div>`;
+      const name=(p.project_path||'').split('/').pop();
+      const staleFlag=p.stale_index_dirs>p.active_index_count+2?' <span style="color:var(--warn)">!</span>':'';
+      return`<div style="margin:2px 0"><b>${esc(name)}</b>: ${(p.total_mb||0).toFixed(0)} MB total &nbsp;`+
+        `indices ${((p.indices_bytes||0)/1048576).toFixed(0)} MB (${p.active_index_count||0} active / `+
+        `${p.on_disk_index_dirs||0} on-disk / ${p.stale_index_dirs||0} stale${staleFlag}) &nbsp;`+
+        `WAL ${(p.wal_mb||0).toFixed(0)} MB &nbsp;`+
+        `<span style="color:var(--ok)">recoverable ${(p.recoverable_mb||0).toFixed(1)} MB</span></div>`;
+    });
+    const rec=(d.total_recoverable_mb||0).toFixed(1);
+    el.innerHTML=`<div style="margin-bottom:4px;color:var(--fg-dim)">Total recoverable: ${rec} MB &mdash; `+
+      `auto-maintained by sweep (every 6 h, within 60 s of startup)</div>`+rows.join('')||'<em>no projects</em>';
+  }catch(e){if(el)el.textContent='Error: '+e.message;}
 }
 
 async function runReindex(){
@@ -1293,8 +1299,6 @@ const _CMD_ITEMS=[
   {label:'Admin — Projects & ops',action:()=>switchView('admin'),cat:'view'},
   {label:'Graph — Knowledge graph',action:()=>switchView('graph'),cat:'view'},
   {label:'Wiki — Knowledge base pages',action:()=>switchView('wiki'),cat:'view'},
-  {label:'Run Vacuum',action:runVacuum,cat:'op'},
-  {label:'Run Dedup',action:runDedup,cat:'op'},
   {label:'Re-index project',action:runReindex,cat:'op'},
   {label:'Enrich hierarchy',action:runEnrich,cat:'op'},
   {label:'Generate wiki',action:runWiki,cat:'op'},
