@@ -9,6 +9,49 @@ Autonomous full-coverage loop: probe every search-engine surface against astro-p
 - **fallbackModel + effortLevel**: session settings, not hardcoded here; `/model opus` activates Opus when investigating failures
 - No `Workflow`, no `CronCreate`, no `workflows/` scripts
 
+## Current stack (June 2026)
+
+- **ollama 0.30.7** (upgraded from 0.24.0; speed-neutral, newer Blackwell backend). Rollback binary: `/usr/local/bin/ollama.0.24.0.bak`.
+- **Model-tier MAP**: global map-reduce runs MAP on `qwen3-enrich:1.7b`, REDUCE on `qwen3-query:8b` → global synthesis ~65s (was 276s). See `docs/PERFORMANCE.md`.
+- **Thermal config** (systemd drop-in `…/opencode-search-mcp-daemon.service.d/thermal-max.conf`): `OPENCODE_GPU_TEMP_MAX=85` (inference) / `OPENCODE_EMBED_MAX_TEMP=82` (indexing). GPU hardware limits: Tjmax 89°C, slowdown 100°C, shutdown 103°C.
+
+## Thermal-aware execution (cool-mode safe — MANDATORY for heavy runs)
+
+This is a **firmware-locked MSI laptop** (RTX 5080 Laptop, sm_120). Power limit and fan
+control are NOT user-settable (`nvidia-smi -pl` → "not supported"; `msi-ec` rejects the
+firmware). The slow suite is the hottest load and **heat-soaks the whole chassis** (after
+long runs: GPU 65°C+ at idle, CPU 72–74°C, **SSD ~79°C** — SSDs throttle ~70-80°C). So:
+
+- **Before a slow-suite run, check GPU temp** (`nvidia-smi --query-gpu=temperature.gpu`).
+  If GPU > ~70°C (heat-soaked), **let it idle-cool first** — a hot start makes the run
+  slower (more thermal pauses) and stresses the SSD/chassis.
+- **Never run heavy suites back-to-back** without an idle cooldown between them.
+- The slow suite's `test_global_intent_slo` already gates on `_await_gpu_cool()` so its
+  SLO is measured under nominal (non-throttled) conditions — keep that pattern for any
+  new latency-SLO test.
+- The 85/82 software guards pause inference when hot; the hardware 100/103°C limits are
+  the real backstop. **Do NOT raise the guards toward 90°C** to "go faster" — the laptop
+  is thermal-bound, not compute-bound; cooling (a cooling pad) is the only real lever.
+- If the user is in "cool mode", **defer the slow suite** until the laptop has cooled and
+  prefer the fast suite for iteration.
+
+## Inference-efficient testing (no mocks, no coverage loss)
+
+Comprehensive real-LLM coverage is inherently inference-heavy (and hot). When adding or
+fixing slow tests, **reduce redundant inference without mocking or dropping coverage** —
+the "compute the real artifact once, assert many properties against it" pattern:
+
+- **Build the enriched KB once per session** (session-scoped fixture) instead of each
+  test re-triggering enrichment.
+- **Judge shared answers once** — don't re-synthesize + re-judge the same answer in
+  multiple tests; assert against one real, judged golden answer.
+- **Canonicalize near-duplicate queries** (e.g. "overall architecture" asked 4 ways) →
+  one real synthesis shared, plus a couple of cheap phrasing-robustness checks.
+- **Classify-only for pure routing tests** — a test that only asserts "query → intent"
+  doesn't need the full 8B synthesis.
+- Real LLM output, **never mocks**; **never skip**; **never continue-on-error**; 100%
+  edge-case coverage preserved. The goal is fewer *redundant* calls, not fewer scenarios.
+
 ## What this loop verifies
 
 ### 1. Test suites
@@ -80,6 +123,11 @@ while stopping conditions not met:
        b. Classify: code-bug vs infra (cold Ollama model → reload qwen3-query:8b)
        c. Minimal fix → rerun that test → confirm green
        d. Never skip, never mock, never CPU fallback
+    2b. THERMAL GATE before the slow suite (heaviest/hottest load):
+        nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv,noheader
+        - If GPU > ~70°C (chassis heat-soaked) OR the user is in "cool mode":
+          idle-cool first (or defer the slow suite this iteration and report).
+        - A hot start = more thermal pauses (slower) + SSD/chassis stress.
     3. Run slow non-browser suite → fix any RED (same rules)
     4. Check KB convergence: GET /api/kb_health → check enrichment_by_level
        every level must be ≥ 99%. If not: report it; reload the daemon (arms the
