@@ -34,6 +34,7 @@ _DONE_PCT = 99.0  # threshold for "done" at each level
 class TestAllLevelsEnriched:
     """Every hierarchy level must be ≥ 99% enriched after auto-queue converges."""
 
+    @pytest.mark.slow
     def test_all_levels_enriched(self, http, astro):
         """Guarantee: /api/kb_health reports ≥ 99% enrichment at every level.
 
@@ -70,6 +71,7 @@ class TestAllLevelsEnriched:
             "Check daemon logs for 'kb_sweep: draining L1' and 'kb_sweep: enriching L2+'."
         )
 
+    @pytest.mark.slow
     def test_l1_enriched_above_99(self, http, astro):
         """Level-1 specifically must be ≥ 99% (it was the primary stuck level)."""
         r = http.get("/api/kb_health", params={"project": astro})
@@ -84,6 +86,7 @@ class TestAllLevelsEnriched:
             "The _run_kb_sweep L1-drain loop must drive this to ≥ 99%."
         )
 
+    @pytest.mark.slow
     def test_l2_enriched_above_99_after_l1_done(self, http, astro):
         """L2 must reach ≥ 99% once L1 is complete (parents synthesise from children)."""
         r = http.get("/api/kb_health", params={"project": astro})
@@ -110,6 +113,7 @@ class TestAllLevelsEnriched:
 class TestCommunityEnrichDetection:
     """_project_needs_community_enrich correctly sees L1 deficit."""
 
+    @pytest.mark.slow
     def test_needs_community_enrich_returns_false_when_done(self, astro):
         """After full convergence, _project_needs_community_enrich must return False."""
         from opencode_search.handlers._autopipeline import _project_needs_community_enrich
@@ -119,6 +123,7 @@ class TestCommunityEnrichDetection:
             "unenriched L1 communities still exist in the graph DB."
         )
 
+    @pytest.mark.slow
     def test_needs_hierarchy_enrich_returns_false_when_done(self, astro):
         """After full convergence, _project_needs_hierarchy_enrich must also return False."""
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
@@ -136,6 +141,7 @@ class TestCommunityEnrichDetection:
 class TestCLIKbStatus:
     """opencode-search kb-status --json must report DONE for astro-project."""
 
+    @pytest.mark.slow
     def test_cli_kb_status_reports_done(self):
         """kb-status --json returns per-level pct + DONE verdict when enrichment is complete."""
         cli_path = str(Path(sys.executable).parent / "opencode-search")
