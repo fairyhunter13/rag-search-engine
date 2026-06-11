@@ -25,6 +25,15 @@ while failures exist:
     4. If same test still fails after fix: escalate to user
 ```
 
+## Thermal & inference-efficiency (firmware-locked MSI RTX 5080 Laptop)
+
+- Iterate on the **fast suite** (no LLM, no heat). Only run the slow LLM suite when
+  needed, and **check GPU temp first** (`nvidia-smi --query-gpu=temperature.gpu`) — if
+  > ~70°C, idle-cool first; in "cool mode", defer the slow suite.
+- When a fix requires adding/changing a slow test, make it **inference-efficient**:
+  reuse a real shared LLM artifact (session fixture) instead of a fresh synthesis — real
+  output, never mocks, never fewer scenarios. See `engine-loop.md` for the pattern.
+
 ## What it will NOT do
 
 - Skip failing tests
@@ -32,6 +41,8 @@ while failures exist:
 - Use CPU for inference
 - Amend existing commits
 - Touch tests it didn't break
+- Raise the GPU thermal guard toward 90°C to "go faster" (laptop is thermal-bound;
+  cooling is the only real lever — see `docs/PERFORMANCE.md`)
 
 ## Output per iteration
 
