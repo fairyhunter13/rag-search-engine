@@ -709,19 +709,24 @@ def kb_status(
     _reg = _lr()
 
     def _verdict(data: dict, is_federation_root: bool = False) -> str:
-        """DONE if all levels ≥ 99%. Federation roots don't require L2."""
+        """DONE if all non-empty levels ≥ 99%.
+
+        Empty levels (total=0) are vacuously satisfied — the Leiden meta-graph
+        simply couldn't form communities at that tier.  Definition-only repos
+        (0 communities total) also have nothing to enrich, so they are DONE.
+        The historical `len(by_level) >= 2` requirement is dropped: a project
+        that genuinely produces only L1 (< 5 communities) is DONE once L1 ≥ 99%.
+        """
         if "error" in data:
             return "ERROR"
         by_level = data.get("enrichment_by_level", {})
-        if not by_level:
-            # A thin federation root with no communities is DONE (nothing to enrich).
-            return "DONE" if is_federation_root else "PENDING"
-        for _lvl, stats in by_level.items():
+        non_empty = {k: v for k, v in by_level.items() if v.get("total", 0) > 0}
+        if not non_empty:
+            # No communities to enrich (definitions-only, 0-edge, or thin root).
+            return "DONE"
+        for _lvl, stats in non_empty.items():
             if stats.get("pct", 0) < 99.0:
                 return "PENDING"
-        # Non-federation projects must have at least 2 hierarchy levels.
-        if not is_federation_root and len(by_level) < 2:
-            return "PENDING"
         return "DONE"
 
     # Collect projects to report on

@@ -59,6 +59,8 @@ class TestAllLevelsEnriched:
             pct = stats.get("pct", 0)
             total = stats.get("total", 0)
             enriched = stats.get("enriched", 0)
+            if total == 0:
+                continue  # empty level — the Leiden meta-graph couldn't form communities here
             if pct < _DONE_PCT:
                 failed_levels.append(
                     f"L{lvl}: {pct:.1f}% ({enriched}/{total} enriched) < {_DONE_PCT}%"
@@ -296,6 +298,9 @@ class TestFederationRootKbStatusDone:
         if not by_level:
             return  # no communities = nothing to enrich = DONE
         for lvl, stats in sorted(by_level.items(), key=lambda kv: int(kv[0])):
+            total = stats.get("total", 0)
+            if total == 0:
+                continue  # empty level — vacuously satisfied
             pct = stats.get("pct", 0)
             assert pct >= _DONE_PCT, (
                 f"Federation root L{lvl} enrichment only {pct:.1f}% — should be ≥ {_DONE_PCT}%"
@@ -352,3 +357,101 @@ class TestIterFilesSkipsExternalSymlinks:
 
         yielded = {str(p) for p in iter_files(root, follow_symlinks=True)}
         assert str(real_subdir / "app.py") in yielded, "Internal symlink file was not yielded"
+
+
+# ---------------------------------------------------------------------------
+# Phase 103: corrected DONE verdict — every federation member converges.
+# These exercise the REAL cli._verdict via `opencode-search kb-status --json`
+# (no local verdict copies, no mocks, no skips).
+# ---------------------------------------------------------------------------
+
+def _kb_status_json(project: str | None = None) -> list[dict]:
+    """Run the real CLI kb-status and return its per-project list."""
+    cli_path = str(Path(sys.executable).parent / "opencode-search")
+    args = [cli_path, "kb-status", "--json"]
+    if project:
+        args += ["--project", project]
+    result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, (
+        f"CLI kb-status failed (exit {result.returncode}): {result.stderr[:300]}"
+    )
+    return json.loads(result.stdout).get("projects", [])
+
+
+def _astro_members(http, astro) -> list[str]:
+    """Return indexed federation member paths for astro-project."""
+    r = http.get("/api/federation", params={"project": astro, "action": "list"})
+    assert r.status_code == 200, f"federation list failed: {r.status_code} {r.text[:200]}"
+    return [m["path"] for m in r.json().get("members", []) if m.get("file_count", 0) > 0]
+
+
+class TestAllFederationMembersConverge:
+    """Every indexed astro-project federation member must verdict DONE.
+
+    Phase 103: after federation-first indexing the root is a thin aggregator and the
+    federation's health == its members' health. A member is DONE when every non-empty
+    community level is ≥ 99% enriched; thin (L1-only) and definitions-only (0-community)
+    members are DONE with nothing more to do. This asserts the REAL CLI verdict, so it
+    fails loudly (never skips) if any member is genuinely unconverged.
+    """
+
+    @pytest.mark.slow
+    def test_all_members_done(self, http, astro):
+        members = set(_astro_members(http, astro))
+        assert len(members) >= 15, f"Expected ≥ 15 indexed members, got {len(members)}"
+
+        by_path = {p.get("project_path"): p for p in _kb_status_json()}
+        pending = []
+        for pp in sorted(members):
+            entry = by_path.get(pp)
+            if entry is None:
+                pending.append(f"{pp.rsplit('/', 1)[-1]}: missing from kb-status output")
+                continue
+            if entry.get("verdict") != "DONE":
+                levels = {
+                    k: f"{v['pct']}%({v['total']})"
+                    for k, v in entry.get("enrichment_by_level", {}).items()
+                    if v.get("total", 0) > 0
+                }
+                pending.append(f"{pp.rsplit('/', 1)[-1]}: {entry.get('verdict')} {levels}")
+
+        assert not pending, (
+            "Federation members not converged to DONE:\n"
+            + "\n".join(f"  {p}" for p in pending)
+        )
+
+    @pytest.mark.slow
+    def test_definitions_only_member_is_done(self, http, astro):
+        """A 0-community member (generated proto/gRPC stubs, 0 internal edges) verdicts DONE."""
+        members = set(_astro_members(http, astro))
+        zero_comm = []
+        for entry in _kb_status_json():
+            if entry.get("project_path") not in members:
+                continue
+            if entry.get("total_communities") == 0:
+                zero_comm.append(entry["project_path"])
+                assert entry.get("verdict") == "DONE", (
+                    f"0-community member {entry['project_path']} verdicts "
+                    f"{entry.get('verdict')} — definitions-only repos must be DONE"
+                )
+        assert zero_comm, (
+            "No 0-community member found — expected ≥ 1 definitions-only repo (e.g. astro-proto)"
+        )
+
+    @pytest.mark.slow
+    def test_thin_single_level_member_is_done(self, http, astro):
+        """A member with only a non-empty L1 ≥ 99% (no L2) verdicts DONE — L2 not required."""
+        members = set(_astro_members(http, astro))
+        found_thin = False
+        for entry in _kb_status_json():
+            if entry.get("project_path") not in members:
+                continue
+            by_level = entry.get("enrichment_by_level", {})
+            non_empty = {k: v for k, v in by_level.items() if v.get("total", 0) > 0}
+            if list(non_empty.keys()) == ["1"] and non_empty["1"]["pct"] >= _DONE_PCT:
+                found_thin = True
+                assert entry.get("verdict") == "DONE", (
+                    f"Thin L1-only member {entry['project_path']} verdicts "
+                    f"{entry.get('verdict')} — verdict must not require a second level"
+                )
+        assert found_thin, "No thin L1-only member found among federation members"
