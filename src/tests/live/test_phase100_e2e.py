@@ -146,11 +146,11 @@ class TestAutoIndexOnFlag:
         entry_before = _project_entry(http, clone_path)
         db_path = entry_before.get("db_path", "") if entry_before else ""
 
-        # Call the MCP index tool via the MCP HTTP endpoint
-        # The index(enabled=False) maps to stop_watching + remove_project(delete_index=True)
+        # index(enabled=False) maps to stop_watching + remove_project(delete_index=True).
+        # Phase 100 removed /api/manage; the dedicated route is /api/remove_project.
         r = http.post(
-            "/api/manage",
-            json={"project": clone_path, "action": "remove_project", "delete_index": True},
+            "/api/remove_project",
+            json={"project": clone_path, "delete_index": True},
         )
         assert r.status_code == 200, (
             f"remove_project failed (status {r.status_code}): {r.text[:300]}"
@@ -215,7 +215,21 @@ class TestMCPSurfacePhase100:
                             tool_names.add(name)
 
         if not tool_names:
-            pytest.skip("Cannot introspect MCP tool list via module inspection — skipping surface check")
+            # FastMCP internals vary by version; fall back to deterministic source
+            # inspection (same approach as test_mcp_source_has_all_five_required_tools).
+            # Never skip — populate the set so the surface check always runs.
+            src = inspect.getsource(mcp_module)
+            for name in ("search", "ask", "graph", "overview", "index",
+                         "build", "federation", "manage"):
+                for def_kw in (f"async def {name}(", f"def {name}("):
+                    idx = src.find(def_kw)
+                    if idx != -1 and "@mcp.tool()" in src[max(0, idx - 300):idx]:
+                        tool_names.add(name)
+                        break
+        assert tool_names, (
+            "Could not determine the MCP tool surface via introspection or source "
+            "inspection — the check must run, not be skipped."
+        )
 
         for forbidden in self._FORBIDDEN_TOOLS:
             assert forbidden not in tool_names, (
@@ -396,9 +410,10 @@ class TestAutoMaintenanceFires:
         if r.status_code != 200:
             errors.append(f"search failed during maintenance: {r.status_code} {r.text[:200]}")
 
-        r2 = http.post("/api/ask", json={
-            "query": "what is the top-level architecture of this project",
-            "project_path": astro,
+        # /api/ask is GET-only (q, project, scope query params).
+        r2 = http.get("/api/ask", params={
+            "q": "what is the top-level architecture of this project",
+            "project": astro,
             "scope": "global",
         })
         if r2.status_code != 200:
