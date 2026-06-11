@@ -38,25 +38,15 @@ class WatcherHandle:
 
 
 def _build_symlink_map(root: str) -> dict[str, str]:
-    """Walk *root* (non-recursively through symlinks) and return a mapping of
-    resolved real directory paths to their symlink paths under *root*.
+    """Return an empty symlink map.
 
-    Only top-level symlinked directories are registered — watchdog will handle
-    recursive discovery inside each real target once it is scheduled.
-    Symlink targets that fall inside *root* are skipped to avoid duplicates.
+    External-symlink directories are federation members — each is registered as
+    its own project with its own dedicated watcher. Watching them from the root
+    would cause double-indexing (the same file re-indexed into both the member
+    project and the root). Internal symlinks are covered by the main recursive
+    Observer schedule.
     """
-    symlink_map: dict[str, str] = {}
-    for dirpath, dirnames, _ in os.walk(root, followlinks=False, topdown=True):
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
-        for dirname in dirnames:
-            subdir = Path(dirpath) / dirname
-            if subdir.is_symlink() and subdir.is_dir():
-                real_target = str(subdir.resolve())
-                # Skip targets already under the project root — they would get
-                # a duplicate inotify watch from the main recursive schedule.
-                if real_target != root and not real_target.startswith(root + os.sep):
-                    symlink_map[real_target] = str(subdir)
-    return symlink_map
+    return {}
 
 
 class WatcherManager:

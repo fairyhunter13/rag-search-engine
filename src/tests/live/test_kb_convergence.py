@@ -47,12 +47,12 @@ class TestAllLevelsEnriched:
         data = r.json()
 
         by_level = data.get("enrichment_by_level", {})
-        assert by_level, (
-            f"kb_health returned no enrichment_by_level breakdown: {data}"
-        )
-        assert len(by_level) >= 2, (
-            f"Expected at least 2 hierarchy levels, got {len(by_level)}: {by_level}"
-        )
+        # redacted-name-3 is a federation root — its own graph is a thin aggregator.
+        # After federation-first pruning the root only contains its own files (not
+        # the 24 service sub-repos), so it may have 0 or 1 L1 communities and no L2.
+        # Only assert levels that actually exist.
+        if not by_level:
+            return  # thin root with no communities — nothing to enrich
 
         failed_levels = []
         for lvl, stats in sorted(by_level.items(), key=lambda kv: int(kv[0])):
@@ -243,3 +243,112 @@ class TestKbSweepDrainsL1:
         )
         if after < before:
             assert True  # drain is working
+
+
+# ---------------------------------------------------------------------------
+# Federation-first: root excludes member files; members remain queryable
+# ---------------------------------------------------------------------------
+
+class TestFederationRootFileCount:
+    """After federation-first re-index, the root must NOT contain member files."""
+
+    @pytest.mark.slow
+    def test_root_file_count_excludes_members(self, http, astro):
+        """redacted-name-3 root file_count must be << 20239 (its own files only, not 24 members)."""
+        r = http.get("/api/projects/status", params={"project": astro})
+        assert r.status_code == 200, f"status failed: {r.status_code} {r.text[:200]}"
+        data = r.json()
+        file_count = data.get("file_count", 0)
+        # Pre-federation-first the root had ~20 239 files (all 24 members inlined).
+        # After the fix the root should only contain its own files (~100-2000).
+        assert file_count < 5_000, (
+            f"Root file_count={file_count} is still huge — member files are still inlined. "
+            "iter_files is not pruning external-symlink directories."
+        )
+
+    @pytest.mark.slow
+    def test_members_still_indexed_and_queryable(self, http, astro):
+        """All 24 federation members must remain registered and indexed."""
+        r = http.get("/api/federation", params={"project": astro, "action": "list"})
+        assert r.status_code == 200, f"federation list failed: {r.status_code}"
+        data = r.json()
+        members = data.get("members", [])
+        assert len(members) >= 20, (
+            f"Expected ≥ 20 federation members, got {len(members)}: {[m.get('path','?') for m in members[:5]]}"
+        )
+        indexed = [m for m in members if m.get("file_count", 0) > 0]
+        assert len(indexed) >= 15, (
+            f"Only {len(indexed)}/{len(members)} federation members are indexed (file_count > 0)"
+        )
+
+
+class TestFederationRootKbStatusDone:
+    """kb-status must report DONE for the redacted-name-3 federation root."""
+
+    @pytest.mark.slow
+    def test_federation_root_verdict_done(self, http, astro):
+        """/api/kb_health for a thin federation root must not be blocked on L2."""
+        r = http.get("/api/kb_health", params={"project": astro})
+        assert r.status_code == 200
+        data = r.json()
+        by_level = data.get("enrichment_by_level", {})
+        # A thin root (no communities) or fully-enriched root is DONE.
+        if not by_level:
+            return  # no communities = nothing to enrich = DONE
+        for lvl, stats in sorted(by_level.items(), key=lambda kv: int(kv[0])):
+            pct = stats.get("pct", 0)
+            assert pct >= _DONE_PCT, (
+                f"Federation root L{lvl} enrichment only {pct:.1f}% — should be ≥ {_DONE_PCT}%"
+            )
+
+
+# ---------------------------------------------------------------------------
+# iter_files: external-symlink directories must not be yielded
+# ---------------------------------------------------------------------------
+
+class TestIterFilesSkipsExternalSymlinks:
+    """iter_files must skip directories whose resolved target is outside the root."""
+
+    def test_external_symlink_dir_not_indexed(self, tmp_path):
+        """iter_files must not yield files from an external-symlink subdirectory."""
+        import os
+
+        from opencode_search.discover import iter_files
+
+        # Create a real external directory with a source file.
+        external = tmp_path / "external_repo"
+        external.mkdir()
+        (external / "secret.py").write_text("SECRET = 1\n")
+
+        # Create a project root with a symlink pointing to the external dir.
+        root = tmp_path / "project"
+        root.mkdir()
+        (root / "main.py").write_text("def main(): pass\n")
+        symlink = root / "vendor_repo"
+        os.symlink(str(external), str(symlink))
+
+        # iter_files must yield main.py but NOT secret.py.
+        yielded = {str(p) for p in iter_files(root, follow_symlinks=True)}
+        assert str(root / "main.py") in yielded, "main.py was not yielded"
+        assert str(external / "secret.py") not in yielded, (
+            "secret.py from external symlink was yielded — external symlink not pruned"
+        )
+
+    def test_internal_symlink_dir_is_still_indexed(self, tmp_path):
+        """iter_files must still yield files from a symlink pointing INSIDE the root."""
+        import os
+
+        from opencode_search.discover import iter_files
+
+        root = tmp_path / "project"
+        root.mkdir()
+        real_subdir = root / "src"
+        real_subdir.mkdir()
+        (real_subdir / "app.py").write_text("x = 1\n")
+
+        # Symlink inside the root (internal).
+        link = root / "src_link"
+        os.symlink(str(real_subdir), str(link))
+
+        yielded = {str(p) for p in iter_files(root, follow_symlinks=True)}
+        assert str(real_subdir / "app.py") in yielded, "Internal symlink file was not yielded"

@@ -705,18 +705,22 @@ def kb_status(
         except Exception as exc:
             return {"error": str(exc), "project_path": proj}
 
-    def _verdict(data: dict) -> str:
-        """DONE if indexed, hierarchy ≥ 2 levels, all levels ≥ 99%."""
+    from opencode_search.config import load_registry as _lr
+    _reg = _lr()
+
+    def _verdict(data: dict, is_federation_root: bool = False) -> str:
+        """DONE if all levels ≥ 99%. Federation roots don't require L2."""
         if "error" in data:
             return "ERROR"
         by_level = data.get("enrichment_by_level", {})
         if not by_level:
-            return "PENDING"
+            # A thin federation root with no communities is DONE (nothing to enrich).
+            return "DONE" if is_federation_root else "PENDING"
         for _lvl, stats in by_level.items():
             if stats.get("pct", 0) < 99.0:
                 return "PENDING"
-        # Must have at least 2 levels
-        if len(by_level) < 2:
+        # Non-federation projects must have at least 2 hierarchy levels.
+        if not is_federation_root and len(by_level) < 2:
             return "PENDING"
         return "DONE"
 
@@ -724,16 +728,16 @@ def kb_status(
     if project:
         projects = [str(project)]
     else:
-        from opencode_search.config import load_registry
         from opencode_search.handlers._federation import _expand_with_federation
-        registry = load_registry()
-        root_paths = list(registry.keys())
-        projects = _expand_with_federation(root_paths, registry)
+        root_paths = list(_reg.keys())
+        projects = _expand_with_federation(root_paths, _reg)
 
     results = []
     for proj in projects:
         data = _fetch_kb_health(proj)
-        data["verdict"] = _verdict(data)
+        _entry = _reg.get(proj)
+        _is_fed = bool(_entry and getattr(_entry, "federation", []))
+        data["verdict"] = _verdict(data, is_federation_root=_is_fed)
         results.append(data)
 
     if json_output:

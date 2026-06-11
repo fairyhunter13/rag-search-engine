@@ -387,6 +387,15 @@ def iter_files(root: Path, follow_symlinks: bool = False) -> Iterator[Path]:
         _spec_cache[directory] = combined
         return combined
 
+    _root_str = str(root)
+
+    def _is_external_sym(parent: str, name: str) -> bool:
+        full = os.path.join(parent, name)
+        if not os.path.islink(full):
+            return False
+        real = os.path.realpath(full)
+        return real != _root_str and not real.startswith(_root_str + os.sep)
+
     for dirpath, dirnames, filenames in os.walk(
         root, followlinks=follow_symlinks, topdown=True
     ):
@@ -395,10 +404,12 @@ def iter_files(root: Path, follow_symlinks: bool = False) -> Iterator[Path]:
         # Prune ignored directory names in-place (modifies os.walk).
         # If `use_default_ignores` is disabled, keep most directories; still
         # prune internal state and VCS metadata to avoid self-indexing loops.
+        # External-symlink subdirs are also pruned — federation members are indexed
+        # as separate projects and must not be inlined into the root's index.
         if project_cfg.index.use_default_ignores:
-            dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+            dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS and not _is_external_sym(dirpath, d)]
         else:
-            dirnames[:] = [d for d in dirnames if d not in {".opencode", ".git", ".hg", ".svn"}]
+            dirnames[:] = [d for d in dirnames if d not in {".opencode", ".git", ".hg", ".svn"} and not _is_external_sym(dirpath, d)]
 
         spec = _get_spec(current_dir)
 
