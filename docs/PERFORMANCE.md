@@ -34,10 +34,32 @@ Global synthesis latency: **276s → ~65s** after the MAP fan-out cap + model-ti
   175 W max), still hits 84 °C → the daemon's 80 °C guard pauses inference in 15 s
   steps. The compute isn't the wall; the cooling is.
 
-## The two real wins — both require a v2 inference migration (ollama → vLLM/TensorRT-LLM)
+## v2 status (June 2026): BLOCKED on this GPU — wait for upstream
 
-These are genuinely *faster without quality loss* (in fact, higher quality), but each
-replaces the ollama runtime, so they are a planned migration — NOT a mid-session tweak.
+The two real wins (NVFP4, speculative decoding) require replacing ollama with
+vLLM/TensorRT-LLM. **As of June 2026 this is not viable on this specific GPU** —
+verified against the vLLM issue tracker:
+
+- This GPU is **sm_120 (consumer Blackwell)**; vLLM's NVFP4 kernels target **sm_100
+  (datacenter B200)**. sm_120 is NOT a superset of sm_100.
+- Open vLLM bugs: #33416 (NVFP4 MoE kernels miss SM120 in capability check),
+  #30707 (SM120 NVFP4 pre-flight memory check fails), **#38718 (NVFP4 produces
+  garbage output on SM120)**, #29030 (undefined symbol on 5080), #31085 (open
+  feature req for native SM120 NVFP4). Track #31085/#33416 — migrate when they close.
+- Precompiled vLLM does not support sm_120 → must build from source (CUDA 12.8 +
+  torch 2.6 + `FLASHINFER_CUDA_ARCH_LIST=12.0f`). Fragile, hours of work, high
+  failure odds today.
+- vLLM's advantage is **batched throughput**, not the **single-stream latency** the
+  daemon needs — so even working, it may not beat ollama for one-query-at-a-time.
+- The NVFP4 model exists (RedHatAI/Qwen3-8B-NVFP4); the *runtime* is the blocker.
+
+**Hardware "unlock" is also firmware-locked:** `nvidia-smi -pl` returns "not supported
+for GPU" (power management locked by MSI vBIOS); the GPU auto-boosts via Dynamic Boost
+to its thermal ceiling already. No user knob — only physical cooling lets it boost higher.
+
+**Conclusion:** the current ollama (0.30.7, Q4_K_M, model-tier MAP) setup is the
+pragmatic optimum for this hardware right now. Revisit vLLM+NVFP4 when consumer-Blackwell
+(sm_120) support matures upstream. The two wins, once unblocked:
 
 1. **NVFP4 on Blackwell** (biggest prize). The RTX 5080 has native FP4 tensor cores;
    ollama/llama.cpp Q4_K_M uses *software* dequant and never touches them. Serving the
