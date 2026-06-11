@@ -315,7 +315,14 @@ async def handle_wiki_query(
     db_path = get_project_db_path(project_path)
 
     try:
-        query_vec = await asyncio.to_thread(embed_query, query, model=DEFAULT_EMBED_MODEL, dimensions=dims)
+        # Route through the query executor (same thread as search.py:_GPU_INFER_EXECUTOR)
+        # so wiki queries never block on the shared passage/build path.
+        from opencode_search.search import _GPU_INFER_EXECUTOR
+        loop = asyncio.get_event_loop()
+        query_vec = await loop.run_in_executor(
+            _GPU_INFER_EXECUTOR,
+            lambda: embed_query(query, model=DEFAULT_EMBED_MODEL, dimensions=dims),
+        )
     except Exception as exc:
         log.warning("wiki_query: embed failed: %s", exc)
         return {"query": query, "results": [], "total": 0}

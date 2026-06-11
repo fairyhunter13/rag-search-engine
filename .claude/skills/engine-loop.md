@@ -45,7 +45,21 @@ The CLI `opencode-search kb-status --project <path>` prints the DONE/PENDING ver
 - **Global integration**: `scripts/configure_integrations.py --apply-all` → 7/7 profiles OK (bash_aliases + codex + hermes + 3 claude + opencode)
 - **Dashboard chat**: `POST /api/chat_stream` with an astro query → SSE streams a real non-empty answer (intent ≠ null)
 
-### 5. Storage health
+### 5. Search SLO and GPU isolation health
+```bash
+LOG=~/.local/state/opencode-search/daemon.log
+echo "embedding reloads: $(grep -c 'Loading embedding model' $LOG)"
+echo "CUBLAS errors:     $(grep -ic 'cublas' $LOG)"
+```
+`curl -s http://localhost:8765/api/metrics` — check `cublas.hard_cooldowns_entered == 0` (or stable/not growing).
+Live SLO probe: `curl -s "http://localhost:8765/api/search?q=authentication+handler&project=<astro>&top_k=5"` → assert `elapsed_ms < 5000`.
+
+If CUBLAS errors are growing or search takes > 5s:
+- The query-embedder isolation fix may have regressed.
+- Reload the daemon (`POST /api/reload`) to reinitialise the pinned query sessions.
+- This loop must NOT restart the daemon service — only the HTTP reload endpoint.
+
+### 6. Storage health
 Poll `GET /api/storage_health?project=<redacted-name-3>`. Assert:
 - `stale_index_dirs ≤ active_index_count + 2` (no unbounded accumulation of dead `_indices/` UUIDs)
 - `wal_bytes < 67108864` (WAL under 64 MB — bounded by `journal_size_limit` pragma)
@@ -72,12 +86,16 @@ while stopping conditions not met:
        startup sweep within a few minutes); wait and re-poll.
        Use `opencode-search kb-status --project <astro>` for a compact DONE/PENDING view.
        DO NOT POST /api/enrich_project or /api/enrich_hierarchy — the daemon owns convergence.
-    5. Probe all 7 KB question categories → assert non-empty answers
-    6. Assert invariants (GPU, auto-pipeline, global integration, dashboard chat)
-    6b. Check storage health (GET /api/storage_health):
+    5. Check search SLO + GPU isolation health:
+       - Probe /api/search → assert elapsed_ms < 5000
+       - Check daemon log CUBLAS error count is not growing
+       - If growing: reload daemon to reinitialise pinned query sessions; report
+    6. Probe all 7 KB question categories → assert non-empty answers
+    7. Assert invariants (GPU, auto-pipeline, global integration, dashboard chat)
+    7b. Check storage health (GET /api/storage_health):
         stale_index_dirs ≤ active+2, wal_bytes < 64 MB, recoverable_mb < 50
         → if red: report it; sweep fires within 60 s of next daemon reload (no manual trigger)
-    7. Commit all changes: "Phase N: <what changed>"
+    8. Commit all changes: "Phase N: <what changed>"
        git push origin main (zero unpushed — invariant)
     8. If all stopping conditions met → DONE (no ScheduleWakeup)
        Else → ScheduleWakeup:

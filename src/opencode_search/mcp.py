@@ -796,6 +796,19 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
 
     @asynccontextmanager
     async def _lifespan(app: Any) -> Any:
+        # Warmup: load and pin the query embedder + reranker FIRST so they claim
+        # VRAM before indexing/enrichment starts.  Runs in the build executor so
+        # it doesn't block the event loop; awaited before background tasks arm.
+        async def _warmup() -> None:
+            try:
+                from opencode_search.embeddings import _BUILD_INFER_EXECUTOR, warmup_query_models
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(_BUILD_INFER_EXECUTOR, warmup_query_models)
+            except Exception as exc:
+                log.warning("warmup_query_models failed (non-fatal): %s", exc)
+
+        await _warmup()
+
         cleanup_task = asyncio.create_task(_stale_cleanup_loop(), name="opencode-stale-cleanup")
         resume_task = asyncio.create_task(resume_watchers(), name="opencode-resume-watchers")
         resume_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)

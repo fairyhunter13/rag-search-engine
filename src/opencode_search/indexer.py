@@ -200,10 +200,16 @@ class _GpuBatcher:
         try:
             import numpy as _np
             if miss_texts:
-                # _return_numpy=True skips the O(N·dims) mat.tolist() allocation
-                miss_vectors = await asyncio.to_thread(
-                    embed_passages, miss_texts, model=self._embed_model, dimensions=self._dims,
-                    _return_numpy=True,
+                # Use the dedicated single-thread build executor (not asyncio.to_thread)
+                # so passage embeds share one persistent cuBLAS handle and never storm.
+                from opencode_search.embeddings import _BUILD_INFER_EXECUTOR
+                loop = asyncio.get_event_loop()
+                miss_vectors = await loop.run_in_executor(
+                    _BUILD_INFER_EXECUTOR,
+                    lambda: embed_passages(
+                        miss_texts, model=self._embed_model, dimensions=self._dims,
+                        _return_numpy=True,
+                    ),
                 )
                 for mi, mv in zip(miss_indices, miss_vectors, strict=True):
                     self._content_vec_cache[all_content_hashes[mi]] = mv
@@ -318,8 +324,11 @@ async def index_file(
     texts = [c.content for c in chunks]
     try:
         async with embed_sem:
-            vectors = await asyncio.to_thread(
-                embed_passages, texts, model=embed_model, dimensions=dims
+            from opencode_search.embeddings import _BUILD_INFER_EXECUTOR
+            loop = asyncio.get_event_loop()
+            vectors = await loop.run_in_executor(
+                _BUILD_INFER_EXECUTOR,
+                lambda: embed_passages(texts, model=embed_model, dimensions=dims),
             )
     except Exception as e:
         log.error("embedding failed for %s: %s", path, e)

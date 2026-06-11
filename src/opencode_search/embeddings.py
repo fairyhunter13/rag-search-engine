@@ -10,6 +10,7 @@ Notes:
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import gc
 import logging
@@ -569,13 +570,76 @@ def _normalize_embeddings(mat: np.ndarray) -> np.ndarray:
             return _normalize_embeddings_cpu(mat)
 
 
-# Manual model cache (replaces @lru_cache to support explicit unloading).
-# When idle in watch mode, models are unloaded to free ~1-2 GB of RAM.
-# They reload on-demand when the next file change is detected (~2-5s cost).
-# Thread-safe access via locks to prevent race conditions.
+# ---------------------------------------------------------------------------
+# Two-role embedder cache: "query" (pinned, interactive) vs "passage" (batch)
+#
+# ARCHITECTURE: the query/search path must NEVER be blocked by indexing/enrichment.
+# Single ONNX session shared by query + passage (VRAM can only hold one session
+# alongside Ollama models).  Isolation is achieved via:
+#   - Cache-first lookup: once warmed up, the session bypasses the CUBLAS cooldown
+#     gate so search is never blocked by a passage-path OOM.
+#   - _BUILD_INFER_EXECUTOR (single thread) for the passage/indexing path: one
+#     persistent cuBLAS handle per process, no handle storm.
+#   - Priority gate (yield_to_interactive) so batch work pauses between sub-batches
+#     when a search is in flight.
+# ---------------------------------------------------------------------------
 _embedder_lock = threading.Lock()
 _cached_embedder: object | None = None
 _cached_embedder_model: str | None = None
+
+# Single-thread executor for the build/indexing path (passage embeds).
+# One persistent thread → one cuBLAS handle per process → no handle storm.
+# The query path keeps its own _GPU_INFER_EXECUTOR in search.py.
+_BUILD_INFER_EXECUTOR: concurrent.futures.ThreadPoolExecutor = (
+    concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="gpu-build"
+    )
+)
+
+# ---------------------------------------------------------------------------
+# Priority GPU admission gate (layer 2)
+#
+# Interactive ops (search embed, rerank) are HIGH priority — they acquire the
+# gate immediately and are never queued behind batch work.
+# Batch ops (passage embed between sub-batches) are LOW priority — they yield
+# when interactive work is in flight and resume once the GPU is free.
+#
+# Implementation: a counter of in-flight interactive ops + an asyncio.Event
+# that batch waiters poll between sub-batches.
+# ---------------------------------------------------------------------------
+_interactive_in_flight: int = 0
+_interactive_lock = threading.Lock()
+
+
+def _interactive_start() -> None:
+    """Mark start of an interactive (high-priority) GPU op."""
+    global _interactive_in_flight
+    with _interactive_lock:
+        _interactive_in_flight += 1
+
+
+def _interactive_done() -> None:
+    """Mark completion of an interactive GPU op."""
+    global _interactive_in_flight
+    with _interactive_lock:
+        _interactive_in_flight = max(0, _interactive_in_flight - 1)
+
+
+def interactive_in_flight() -> bool:
+    """True when at least one interactive GPU op is running — batch ops should yield."""
+    with _interactive_lock:
+        return _interactive_in_flight > 0
+
+
+def yield_to_interactive(timeout_s: float = 0.05) -> None:
+    """If interactive ops are in flight, sleep briefly to let them finish.
+
+    Called between sub-batches in the passage/build path so a pending search
+    can preempt a long indexing run within one sub-batch boundary (~10-50 ms).
+    """
+    import time as _t
+    if interactive_in_flight():
+        _t.sleep(timeout_s)
 
 # Idle inference tracking — used by the daemon cleanup loop to unload models
 # after a configurable period of no embed/rerank calls.
@@ -875,17 +939,42 @@ def get_cublas_metrics() -> dict:
         }
 
 
-def _embedder(model: str):
-    """Return (and cache) a FastEmbed TextEmbedding model loaded with GPU providers."""
+def _embedder(model: str, role: str = "passage"):
+    """Return (and cache) a FastEmbed TextEmbedding model loaded with GPU providers.
+
+    A single ONNX session is shared by both role="query" and role="passage".
+    VRAM can only fit one embedding session alongside the Ollama LLM models on
+    this GPU, so creating two sessions causes CUBLAS OOM.
+
+    Isolation guarantee: once warmed up at startup the session is always in the
+    hot cache and the CUBLAS cooldown gate is bypassed (cache check runs first).
+    The passage/build path is isolated via _BUILD_INFER_EXECUTOR (single thread
+    = one cuBLAS handle, no handle storm), and the priority gate
+    (yield_to_interactive) pauses batch work when a search is in flight.
+    """
     global _cached_embedder, _cached_embedder_model
     if not model:
         model = DEFAULT_EMBED_MODEL
+
+    # --- HOT PATH: cache check BEFORE cooldown gate ---
+    # If the session is already resident (normal after warmup_query_models()),
+    # return it immediately regardless of cooldown state.  This is the key
+    # protection for the query/search path: a passage-path CUBLAS failure sets
+    # the cooldown flag but the query path is unaffected because the session
+    # object is already in the cache.
+    with _embedder_lock:
+        if _cached_embedder is not None and _cached_embedder_model == model:
+            return _cached_embedder
+
+    # --- COLD LOAD PATH: check cooldown before creating a new session ---
     if _cublas_in_cooldown():
         raise RuntimeError(
             f"ONNX session creation blocked: CUBLAS OOM cooldown ({_CUBLAS_COOLDOWN_S:.0f}s). "
             "Free GPU memory and retry, or restart the daemon."
         )
+
     with _embedder_lock:
+        # Re-check under lock (another thread may have loaded while we waited).
         if _cached_embedder is not None and _cached_embedder_model == model:
             return _cached_embedder
 
@@ -899,14 +988,9 @@ def _embedder(model: str):
             old = _cached_embedder
             _cached_embedder = None
             _cached_embedder_model = None
-            # Release the FastEmbed instance (which holds ONNX session + CUDA memory)
             del old
-            # Multiple GC passes: first pass finds unreachable, second pass
-            # collects objects with __del__ (like ONNX sessions).
             gc.collect()
             gc.collect()
-            # Synchronize CUDA to flush any pending deallocations before
-            # allocating VRAM for the next model load.
             _cuda_sync_and_empty_cache()
 
         _apply_fastembed_patch()
@@ -919,8 +1003,6 @@ def _embedder(model: str):
             providers or "default (CPU)",
         )
 
-        # Bug fix: always inject provider options regardless of list length.
-        # Previously guarded on len>=2 which skipped CUDA options for single-item lists.
         if not providers:
             _raise_no_gpu(
                 available=_onnx_available_providers(),
@@ -941,10 +1023,7 @@ def _embedder(model: str):
             ),
         )
 
-        # Verify which provider the ONNX session actually selected
         _verify_onnx_session_provider(embedder, "embedder")
-
-        # Cap token length to prevent O(nu00b2) attention memory explosion
         with contextlib.suppress(Exception):
             embedder.model.tokenizer.enable_truncation(max_length=_MAX_TOKENS)
 
@@ -2023,6 +2102,9 @@ def embed_passages(
     all_items: list = []
     t_embed_total = 0.0
     for start in range(0, len(texts), _EMBED_SUB_BATCH):
+        # Priority gate: yield GPU to interactive (search) ops between sub-batches.
+        if start > 0:
+            yield_to_interactive()
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]
         t_embed_start = time.perf_counter()
@@ -2072,6 +2154,22 @@ def embed_passages(
         return out
 
 
+def warmup_query_models(model: str | None = None, rerank_model: str | None = None) -> None:
+    """Load and pin the query embedder + reranker at startup so search is never cold.
+
+    Called once during MCP/daemon startup BEFORE watchers and the KB sweep arm.
+    This ensures the small query sessions claim VRAM first.  Idempotent; GPU-only
+    (raises on CPU fallback, never degrades silently).
+    """
+    from opencode_search.config import DEFAULT_EMBED_MODEL, DEFAULT_RERANK_MODEL
+    embed_model = model or DEFAULT_EMBED_MODEL
+    rank_model = rerank_model or DEFAULT_RERANK_MODEL
+    log.info("warmup_query_models: loading query embedder (%s) + reranker (%s)", embed_model, rank_model)
+    _embedder(embed_model, role="query")
+    _reranker(rank_model)
+    log.info("warmup_query_models: query models pinned and resident")
+
+
 def embed_query(text: str, *, model: str, dimensions: int) -> list[float]:
     if not text:
         return []
@@ -2079,7 +2177,7 @@ def embed_query(text: str, *, model: str, dimensions: int) -> list[float]:
     import time
 
     t_start = time.perf_counter()
-    embedder = _embedder(model)
+    embedder = _embedder(model, role="query")
 
     # Track GPU vs CPU operations
     provider = get_active_provider()
@@ -2089,7 +2187,11 @@ def embed_query(text: str, *, model: str, dimensions: int) -> list[float]:
     else:
         _increment_cpu_ops()
 
-    items = list(embedder.embed([f"query: {text}"], batch_size=get_onnx_batch_size()))
+    _interactive_start()
+    try:
+        items = list(embedder.embed([f"query: {text}"], batch_size=get_onnx_batch_size()))
+    finally:
+        _interactive_done()
     t_end = time.perf_counter()
 
     if not items:
@@ -2170,6 +2272,9 @@ def embed_passages_f32_bytes(
     all_items: list = []
     t_embed_total = 0.0
     for start in range(0, len(texts), _EMBED_SUB_BATCH):
+        # Priority gate: yield GPU to interactive (search) ops between sub-batches.
+        if start > 0:
+            yield_to_interactive()
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]
 
@@ -2246,7 +2351,7 @@ def embed_query_f32_bytes(text: str, *, model: str, dimensions: int) -> tuple[by
     import sys
     import time
 
-    embedder = _embedder(model)
+    embedder = _embedder(model, role="query")
 
     provider = get_active_provider()
     is_gpu = provider in _GPU_PROVIDERS
@@ -2256,7 +2361,11 @@ def embed_query_f32_bytes(text: str, *, model: str, dimensions: int) -> tuple[by
         _increment_cpu_ops()
 
     t_start = time.perf_counter()
-    items = list(embedder.embed([f"query: {text}"], batch_size=get_onnx_batch_size()))
+    _interactive_start()
+    try:
+        items = list(embedder.embed([f"query: {text}"], batch_size=get_onnx_batch_size()))
+    finally:
+        _interactive_done()
     if not items:
         return b"", dimensions
 
@@ -2415,6 +2524,27 @@ def rerank(query: str, docs: list[str], *, model: str, top_k: int) -> list[tuple
         _increment_gpu_ops()
     else:
         _increment_cpu_ops()
+
+    # Rerank is always interactive (query path) — mark it high-priority so
+    # background passage-embed batches yield at their next sub-batch boundary.
+    _interactive_start()
+    try:
+        return _rerank_inner(reranker, provider, is_gpu, query, docs, model, top_k, t_start)
+    finally:
+        _interactive_done()
+
+
+def _rerank_inner(
+    reranker: object,
+    provider: str,
+    is_gpu: bool,
+    query: str,
+    docs: list[str],
+    model: str,
+    top_k: int,
+    t_start: float,
+) -> list[tuple[int, float]]:
+    import time
 
     batch_size = _get_rerank_batch_size()
     scores: list[float] | None = None
