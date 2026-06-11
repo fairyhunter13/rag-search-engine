@@ -276,6 +276,34 @@ def _spawn_daemon(host: str, port: int) -> int:
     return proc.pid
 
 
+def _systemd_unit_installed() -> bool:
+    """True if the systemd user unit is installed and systemctl is available.
+
+    When this holds, systemd is the daemon's owner — `ensure_daemon_running`
+    must defer to it instead of spawning a competing raw `daemon serve`, which
+    would race the unit for port 8765 and trip its restart limit (the false
+    "GPU HARD FAIL" desktop notification).
+    """
+    return bool(shutil.which("systemctl")) and _SYSTEMD_SERVICE_PATH.exists()
+
+
+def _systemd_start_daemon() -> bool:
+    """Clear any rate-limited/failed state and (re)start the systemd-managed daemon.
+
+    Uses --no-block so the caller controls the readiness timeout via
+    `_wait_for_healthy`. Returns False if systemctl is unavailable so the caller
+    can fall back to a raw spawn (non-systemd environments, e.g. CI).
+    """
+    systemctl = shutil.which("systemctl")
+    if not systemctl or not _SYSTEMD_SERVICE_PATH.exists():
+        return False
+    # reset-failed clears a prior crash-loop's StartLimitBurst lockout so the
+    # subsequent start is not rejected with "Start request repeated too quickly".
+    _run_command([systemctl, "--user", "reset-failed", _SYSTEMD_SERVICE_NAME])
+    result = _run_command([systemctl, "--user", "start", "--no-block", _SYSTEMD_SERVICE_NAME])
+    return result.returncode == 0
+
+
 def ensure_daemon_running(
     host: str = DEFAULT_DAEMON_HOST,
     port: int = DEFAULT_DAEMON_PORT,
@@ -296,6 +324,19 @@ def ensure_daemon_running(
             raise RuntimeError(
                 f"Port {host}:{port} is already in use by a non-opencode-search process"
             )
+
+        # Single-owner rule: when the systemd user unit is installed, it owns the
+        # daemon. Defer to it rather than spawning a raw `daemon serve` — two
+        # supervisors racing for port 8765 is what crash-loops the unit into the
+        # false "GPU guard failed 5x" hard-fail notification.
+        if (
+            _systemd_unit_installed()
+            and _systemd_start_daemon()
+            and _wait_for_healthy(host, port, timeout_s)
+        ):
+            return {"status": "started_via_systemd", "url": daemon_url(host, port)}
+        # If systemd is absent or couldn't bring the daemon up (masked unit,
+        # non-systemd env, e.g. CI), fall through to a raw spawn so it still starts.
 
         pid = _spawn_daemon(host, port)
         if not _wait_for_healthy(host, port, timeout_s):
@@ -997,10 +1038,13 @@ def _render_systemd_notify_failure_service() -> str:
     itself never blocks recovery.
     """
     title = "opencode-search: HARD FAIL — daemon stopped"
+    # Cause-agnostic: OnFailure fires for ANY repeated start failure (GPU guard,
+    # port conflict, OOM, …). Do not assert a specific cause — point the user at
+    # the journal, which holds the real traceback.
     body = (
-        "GPU guard failed 5x in 120s. Automatic restarts exhausted.\\n"
-        "Fix the GPU/CUDA issue then run:\\n"
-        "  journalctl --user -u opencode-search-mcp-daemon -n 30\\n"
+        "Daemon stopped after repeated start failures (restarts exhausted).\\n"
+        "Check the real cause in the journal, then recover:\\n"
+        "  journalctl --user -u opencode-search-mcp-daemon -n 40\\n"
         "  systemctl --user reset-failed opencode-search-mcp-daemon\\n"
         "  systemctl --user start opencode-search-mcp-daemon"
     )
@@ -1790,6 +1834,19 @@ def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_
         _assert_ollama_gpu_placement()
 
     if _tcp_port_open(host, port):
+        # Idempotent singleton: if a *healthy* opencode daemon already owns the
+        # port (e.g. a bridge-spawned daemon raced this systemd unit, or a reload
+        # overlapped), this launch is redundant. Exit cleanly instead of raising —
+        # a non-zero exit here trips systemd's StartLimitBurst and fires the false
+        # "HARD FAIL — GPU guard failed" notification even though the GPU is fine.
+        if daemon_is_healthy(host, port):
+            logging.getLogger(__name__).info(
+                "daemon already healthy on %s:%s — exiting cleanly (singleton already serving)",
+                host, port,
+            )
+            _sd_notify("READY=1\n")  # satisfy Type=notify so systemd records a clean start
+            _sd_notify("STATUS=another healthy daemon already serving; exiting cleanly\n")
+            return
         grace = float(os.environ.get("OPENCODE_DAEMON_BIND_WAIT_S", "5"))
         if not _wait_for_port_free(host, port, timeout_s=grace):
             raise RuntimeError(f"Cannot start daemon on {host}:{port}; still in use after {grace}s wait")
