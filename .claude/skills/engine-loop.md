@@ -15,13 +15,19 @@ Autonomous full-coverage loop: probe every search-engine surface against redacte
 - Fast live suite: `.venv/bin/pytest src/tests/live/ -m "live and not slow" -q`
 - Slow non-browser suite: `.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q`
 
-### 2. KB completeness (the core requirement — "wikipedia for a project")
-All levels checked via `GET /api/kb_health?project=.../redacted-name-3`:
-- Level-1: must be ≥ 99% enriched
-- Level-2: must be > 30% enriched (rising toward 100% via periodic sweep)
-- Level-3: must be > 0% enriched (sweep convergence)
+### 2. KB completeness — auto-queue done (the core requirement)
+Poll `GET /api/kb_health?project=.../redacted-name-3`. Check `enrichment_by_level`:
+- **Every level** must be ≥ 99% enriched (L1 + L2 + L3 all ≥ 99%)
 - `wiki_page_count > 0`
 - `patterns_cached = true`
+
+The daemon's `_run_kb_sweep` (every 6 h; first run within the startup window) now
+fully converges enrichment: L1-drain-before-L2+, loop-until-dry, dedup guard.
+**This loop must NOT POST /api/enrich_project or /api/enrich_hierarchy** — those are
+internal daemon surfaces. The loop's job is to observe and report. If any level is
+below 99%, report it and wait; reload the daemon to arm the startup sweep immediately.
+The CLI `opencode-search kb-status --project <path>` prints the DONE/PENDING verdict.
+
 
 ### 3. The 7 KB question categories (must return non-empty grounded answers)
 1. "What are the business processes in astro?" → `ask(scope='business')` + `overview(what='process_flows')`
@@ -61,9 +67,11 @@ while stopping conditions not met:
        c. Minimal fix → rerun that test → confirm green
        d. Never skip, never mock, never CPU fallback
     3. Run slow non-browser suite → fix any RED (same rules)
-    4. Check KB completeness via kb_health → if any level below target,
-       trigger handle_enrich_hierarchy via MCP build(action='enrich_hierarchy') or
-       POST /api/build (project=astro, action=enrich_hierarchy); wait and re-poll
+    4. Check KB convergence: GET /api/kb_health → check enrichment_by_level
+       every level must be ≥ 99%. If not: report it; reload the daemon (arms the
+       startup sweep within a few minutes); wait and re-poll.
+       Use `opencode-search kb-status --project <astro>` for a compact DONE/PENDING view.
+       DO NOT POST /api/enrich_project or /api/enrich_hierarchy — the daemon owns convergence.
     5. Probe all 7 KB question categories → assert non-empty answers
     6. Assert invariants (GPU, auto-pipeline, global integration, dashboard chat)
     6b. Check storage health (GET /api/storage_health):
@@ -81,7 +89,7 @@ while stopping conditions not met:
 
 - Fast suite: 0 failed
 - Slow suite: 0 failed
-- KB level-1 ≥ 99%, level-2 > 0%, level-3 > 0%, wiki_count > 0, patterns_cached
+- KB **every level ≥ 99%** (L1, L2, L3 all ≥ 99%), wiki_count > 0, patterns_cached
 - 7/7 KB question categories return non-empty answers
 - GPU enforcement: create_llm_client(codex) raises for build path
 - Auto-pipeline enabled=true
@@ -106,7 +114,7 @@ while stopping conditions not met:
 === ENGINE LOOP (iter N) ===
 Fast suite:   333 passed / 0 failed ✓
 Slow suite:   145 passed / 0 failed ✓
-KB L1: 100% ✓  L2: 68% ↑  L3: 12% ↑  wiki: 1022 ✓  patterns: ✓
+KB L1: 100% ✓  L2: 99% ✓  L3: 99% ✓  wiki: 1022 ✓  patterns: ✓  verdict: DONE ✓
 KB Q1 business: 1247 chars ✓
 KB Q2 checkout code: 18 related symbols ✓
 KB Q3 gRPC: feature trace found 6 entry points ✓

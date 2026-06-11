@@ -36,7 +36,7 @@ def _open_graph(project_path: str) -> GraphStorage | None:
 
 
 _DEFAULT_ENRICH_MAX_COMMUNITIES: int = int(
-    os.environ.get("OPENCODE_ENRICH_MAX_COMMUNITIES", "200")
+    os.environ.get("OPENCODE_ENRICH_MAX_COMMUNITIES", "10000")
 )
 
 
@@ -46,12 +46,13 @@ async def handle_enrich_project(
     max_communities: int | None = None,
     community_ids: list[int] | None = None,
     include_federation: bool = False,
+    level: int | None = None,
 ) -> dict[str, Any]:
     """Trigger LLM enrichment. scope: symbols|communities|wiki|all.
 
     Args:
         max_communities: Cap on the number of communities to enrich in this call.
-            Defaults to OPENCODE_ENRICH_MAX_COMMUNITIES env var (default 200).
+            Defaults to OPENCODE_ENRICH_MAX_COMMUNITIES env var (default 10000).
             Communities are processed largest-first (by node_count). Set to a
             small value (e.g. 10) for a quick smoke-test on a large project.
     """
@@ -99,7 +100,7 @@ async def handle_enrich_project(
                 enriched_symbols = await _enrich_symbols(gs, llm)
             if scope in ("communities", "all"):
                 enriched_communities = await _enrich_communities(
-                    gs, llm, max_communities=cap, community_ids=this_community_ids,
+                    gs, llm, max_communities=cap, community_ids=this_community_ids, level=level,
                 )
         finally:
             gs.close()
@@ -360,8 +361,9 @@ async def _backfill_semantic_types(gs: Any, all_communities: list[Any], llm: Any
 async def _enrich_communities(
     gs: Any,
     llm: Any,
-    max_communities: int = 200,
+    max_communities: int = 10000,
     community_ids: list[int] | None = None,
+    level: int | None = None,
 ) -> int:
     """Generate titles and summaries for communities.
 
@@ -371,8 +373,10 @@ async def _enrich_communities(
         community_ids: When set, only enrich these specific community IDs (used
             for incremental refresh after file changes). Already-enriched
             communities in this set are re-enriched to pick up code changes.
+        level: When set, restrict to this hierarchy level (1 = micro-communities).
+            None (default) considers all levels — existing callers are unaffected.
     """
-    all_communities = gs.get_communities(min_node_count=2, order_by_size=True)
+    all_communities = gs.get_communities(min_node_count=2, order_by_size=True, level=level)
 
     if community_ids is not None:
         # Selective incremental refresh: include target communities regardless
@@ -398,12 +402,11 @@ async def _enrich_communities(
 
     # Pre-fetch node summaries and sample actual code — SQLite reads must stay
     # on this thread; code file reads happen in the same loop.
-    # Yield to the event loop every 50 communities so HTTP requests are not
-    # blocked during large pre-load passes (otherwise 10k communities would
-    # block the loop for ~30s, causing ConnectError on concurrent requests).
+    # Yield every 8 communities (was 50) so HTTP requests (e.g. /api/reload) are
+    # served promptly even during large enrichment passes (2k+ communities).
     community_data: list[tuple[Any, list[str], list[tuple[str, str]]]] = []
     for i, community in enumerate(communities):
-        if i > 0 and i % 50 == 0:
+        if i > 0 and i % 8 == 0:
             await asyncio.sleep(0)
         nodes = gs.get_community_nodes(community.id)
         summaries = [

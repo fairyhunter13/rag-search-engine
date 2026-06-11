@@ -804,6 +804,11 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
         pipeline_task = asyncio.create_task(resume_stalled_pipelines(), name="opencode-resume-pipelines")
         pipeline_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         async with mcp.session_manager.run():
+            # Publish the running event loop so background sweep threads can find it
+            # (Python 3.12 asyncio.get_event_loop() raises RuntimeError in non-main threads).
+            from opencode_search import daemon as _daemon_mod
+            _daemon_mod._DAEMON_LOOP = asyncio.get_running_loop()
+            _daemon_mod._DAEMON_LOOP_READY.set()
             _sd_notify("READY=1\n")
             _sd_notify(f"STATUS=listening on http://{host}:{port}/mcp\n")
             yield

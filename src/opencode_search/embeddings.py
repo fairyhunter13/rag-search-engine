@@ -518,7 +518,8 @@ def _normalize_embeddings_gpu(mat: np.ndarray) -> np.ndarray:
     mat_gpu = cp_mod.asarray(mat, dtype=cp_mod.float32)
     try:
         norms = cp_mod.linalg.norm(mat_gpu, axis=1, keepdims=True)
-        cp_mod.divide(mat_gpu, norms, out=mat_gpu, where=norms > 0)
+        norms = cp_mod.maximum(norms, cp_mod.float32(1e-12))  # clamp: avoids div-by-zero; where= unsupported on this CuPy build
+        cp_mod.divide(mat_gpu, norms, out=mat_gpu)
         result = cp_mod.asnumpy(mat_gpu)
     finally:
         del mat_gpu

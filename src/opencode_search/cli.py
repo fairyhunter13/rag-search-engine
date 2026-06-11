@@ -673,6 +673,93 @@ def storage(
 
 
 # ---------------------------------------------------------------------------
+# kb-status
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="kb-status")
+def kb_status(
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path to report on (default: all registered projects)."),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
+) -> None:
+    """Show KB enrichment status: per-level enrichment % and DONE/PENDING verdict.
+
+    Definition of DONE: indexed (file_count > 0), hierarchy built (max_level ≥ 2),
+    and every level enriched ≥ 99 %. The daemon's KB sweep (every 6 h, first run
+    within a few minutes of startup) converges all levels to ~100% automatically —
+    no manual trigger needed. Use this command to observe current progress.
+    """
+    import httpx
+
+    from opencode_search.daemon import DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT
+
+    host = DEFAULT_DAEMON_HOST
+    port = DEFAULT_DAEMON_PORT
+    base = f"http://{host}:{port}"
+
+    def _fetch_kb_health(proj: str) -> dict:
+        try:
+            r = httpx.get(f"{base}/api/kb_health", params={"project": proj}, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            return {"error": str(exc), "project_path": proj}
+
+    def _verdict(data: dict) -> str:
+        """DONE if indexed, hierarchy ≥ 2 levels, all levels ≥ 99%."""
+        if "error" in data:
+            return "ERROR"
+        by_level = data.get("enrichment_by_level", {})
+        if not by_level:
+            return "PENDING"
+        for _lvl, stats in by_level.items():
+            if stats.get("pct", 0) < 99.0:
+                return "PENDING"
+        # Must have at least 2 levels
+        if len(by_level) < 2:
+            return "PENDING"
+        return "DONE"
+
+    # Collect projects to report on
+    if project:
+        projects = [str(project)]
+    else:
+        from opencode_search.config import load_registry
+        from opencode_search.handlers._federation import _expand_with_federation
+        registry = load_registry()
+        root_paths = list(registry.keys())
+        projects = _expand_with_federation(root_paths, registry)
+
+    results = []
+    for proj in projects:
+        data = _fetch_kb_health(proj)
+        data["verdict"] = _verdict(data)
+        results.append(data)
+
+    if json_output:
+        _print_json({"projects": results, "total": len(results)})
+        return
+
+    all_done = all(r.get("verdict") == "DONE" for r in results)
+    typer.echo(f"KB enrichment status — {len(results)} project(s)  overall: {'✅ DONE' if all_done else '⏳ PENDING'}\n")
+    for r in results:
+        if "error" in r:
+            typer.echo(f"  {r.get('project_path','?')}: ERROR — {r['error']}")
+            continue
+        path = r.get("project_path", "?")
+        name = path.rstrip("/").split("/")[-1]
+        verdict = r.get("verdict", "?")
+        flag = "✅" if verdict == "DONE" else "⏳"
+        by_level = r.get("enrichment_by_level", {})
+        overall_pct = r.get("enrichment_pct", 0)
+        level_summary = "  ".join(
+            f"L{lvl}={stats['enriched']}/{stats['total']} ({stats['pct']:.0f}%)"
+            for lvl, stats in sorted(by_level.items(), key=lambda kv: int(kv[0]))
+        )
+        typer.echo(f"  {flag} {name}: {verdict}  overall {overall_pct:.1f}%  {level_summary}")
+
+
+# ---------------------------------------------------------------------------
 # dashboard
 # ---------------------------------------------------------------------------
 

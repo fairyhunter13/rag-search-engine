@@ -146,6 +146,30 @@ def _project_needs_hierarchy_enrich(project_path: str) -> bool:
         return False
 
 
+def _project_needs_community_enrich(project_path: str) -> bool:
+    """Return True if any level-1 community (node_count ≥ 2) has no title yet.
+
+    Used by the KB sweep to detect when L1 enrichment has not converged —
+    a prerequisite for L2/L3 parents to synthesise accurate summaries.
+    """
+    try:
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+
+        graph_db = get_project_graph_db_path(project_path)
+        if not Path(graph_db).exists():
+            return False
+        gs = GraphStorage(graph_db)
+        gs.open()
+        try:
+            comms = gs.get_communities(level=1, min_node_count=2)
+            return any(not c.title for c in comms)
+        finally:
+            gs.close()
+    except Exception:
+        return False
+
+
 async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[str, Any]:
     """Run the full knowledge-base pipeline automatically after indexing.
 

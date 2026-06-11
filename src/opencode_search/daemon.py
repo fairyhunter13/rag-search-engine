@@ -32,6 +32,11 @@ from opencode_search.daemon_runtime import runtime_state
 
 DEFAULT_DAEMON_HOST = os.environ.get("OPENCODE_MCP_DAEMON_HOST", "127.0.0.1")
 DEFAULT_DAEMON_PORT = int(os.environ.get("OPENCODE_MCP_DAEMON_PORT", "8765"))
+
+# Shared event loop reference for background sweep threads (Python 3.12 asyncio.get_event_loop()
+# raises RuntimeError in non-main threads; the server lifespan sets this once on startup).
+_DAEMON_LOOP: object = None
+_DAEMON_LOOP_READY = threading.Event()
 DEFAULT_IDLE_SHUTDOWN_S = int(os.environ.get("OPENCODE_MCP_IDLE_SHUTDOWN_S", "900"))
 DEFAULT_CLIENT_STALE_S = int(os.environ.get("OPENCODE_MCP_CLIENT_STALE_S", "60"))
 # Unload embedding/reranker models after this many seconds of no inference.
@@ -1222,11 +1227,15 @@ def _kb_sweep_monitor() -> None:
       _project_needs_hierarchy_enrich() from _autopipeline.
     """
     import asyncio as _asyncio
-    # Wait one full interval before the first sweep so startup indexing finishes first.
+    # Wait for the server's event loop to be published (set by mcp.py lifespan on startup).
+    # Then wait one full interval before the first sweep so startup indexing finishes first.
+    _DAEMON_LOOP_READY.wait(timeout=300)
     time.sleep(min(_KB_SWEEP_INTERVAL_S, 120))
     while True:
         try:
-            loop = _asyncio.get_event_loop()
+            loop = _DAEMON_LOOP
+            if loop is None:
+                raise RuntimeError("daemon event loop not yet available")
             future = _asyncio.run_coroutine_threadsafe(_run_kb_sweep(), loop)
             future.result(timeout=3600)  # max 1h per sweep
         except Exception as exc:
@@ -1235,10 +1244,25 @@ def _kb_sweep_monitor() -> None:
 
 
 async def _run_kb_sweep() -> None:
-    """Async coroutine: find and enrich any unenriched hierarchy communities.
+    """Async coroutine: drain every project's KB enrichment to ~100% on all levels.
+
+    Order per project:
+      1. L1 drain (loop-until-dry): call handle_enrich_project(scope="communities")
+         repeatedly until 0 unenriched level-1 communities remain or no progress
+         is made (breaks infinite spin on un-summarisable communities).
+      2. L2+ hierarchy enrich: handle_enrich_hierarchy synthesises parent titles
+         from children — only effective once L1 is complete.
+
+    Detection (F2):
+      - Acts if _project_needs_community_enrich (L1 has unenriched communities)
+        OR _project_needs_hierarchy_enrich (L2+ has unenriched communities).
+
+    De-dup (F3):
+      - Keys a per-project "_kb_sweep_enrich" lock so this sweep cannot overlap
+        with handle_auto_pipeline's enrichment step on the same project.
 
     Runs inside the daemon's event loop (dispatched from _kb_sweep_monitor thread).
-    Respects thermal guard and active-client gate.
+    Respects thermal guard and active-client gate throughout.
     """
     if not _KB_SWEEP_ENABLED:
         return
@@ -1263,8 +1287,15 @@ async def _run_kb_sweep() -> None:
 
     try:
         from opencode_search.config import load_registry
-        from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
-        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+        from opencode_search.daemon_runtime import yield_while_busy
+        from opencode_search.handlers._autopipeline import (
+            _project_needs_community_enrich,
+            _project_needs_hierarchy_enrich,
+        )
+        from opencode_search.handlers._enrichment import (
+            handle_enrich_hierarchy,
+            handle_enrich_project,
+        )
         from opencode_search.handlers._federation import _expand_with_federation
 
         registry = load_registry()
@@ -1273,25 +1304,107 @@ async def _run_kb_sweep() -> None:
         all_paths = _expand_with_federation(root_paths, registry)
         _kb_sweep_log.info("kb_sweep: scanning %d projects", len(all_paths))
 
+        # Per-project in-flight lock: prevents overlap with handle_auto_pipeline Step 3.
+        # Simple dict keyed by project_path; lock is an asyncio.Lock created on demand.
+        # Stored as a module-level dict so it survives across sweep invocations.
+        global _kb_sweep_project_locks
+        if "_kb_sweep_project_locks" not in globals():
+            _kb_sweep_project_locks = {}
+
         swept = 0
         for project_path in all_paths:
             try:
-                if not _project_needs_hierarchy_enrich(project_path):
+                needs_l1 = _project_needs_community_enrich(project_path)
+                needs_l2 = _project_needs_hierarchy_enrich(project_path)
+                if not needs_l1 and not needs_l2:
                     continue
-                # Re-check GPU and query activity before each project.
-                # yield_while_busy() blocks until no active query for GRACE_S seconds
-                # and GPU is below the thermal threshold.
-                from opencode_search.daemon_runtime import yield_while_busy
-                await yield_while_busy()
-                # Hard-check GPU temp after yield (belt-and-suspenders for extreme heat).
-                temp = _get_gpu_temp_c()
-                if temp is not None and temp > _MAX_GPU_TEMP:
-                    _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing sweep", temp)
-                    return
-                _kb_sweep_log.info("kb_sweep: enriching hierarchy for %s", project_path)
-                result = await handle_enrich_hierarchy(project_path=project_path)
-                enriched = result.get("enriched", 0)
-                _kb_sweep_log.info("kb_sweep: %s enriched=%d", project_path, enriched)
+
+                # Acquire per-project lock (non-blocking): skip if already enriching
+                if project_path not in _kb_sweep_project_locks:
+                    import asyncio as _asyncio
+                    _kb_sweep_project_locks[project_path] = _asyncio.Lock()
+                lock = _kb_sweep_project_locks[project_path]
+                if lock.locked():
+                    _kb_sweep_log.debug("kb_sweep: %s — enrich already in-flight, skipping", project_path)
+                    continue
+
+                async with lock:
+                    # Re-check GPU and query activity before each project.
+                    await yield_while_busy()
+                    temp = _get_gpu_temp_c()
+                    if temp is not None and temp > _MAX_GPU_TEMP:
+                        _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing sweep", temp)
+                        return
+
+                    # ── Step 1: L1 loop-until-dry ───────────────────────────────────
+                    if needs_l1:
+                        _kb_sweep_log.info("kb_sweep: draining L1 communities for %s", project_path)
+                        prev_unenriched = -1
+                        l1_total_enriched = 0
+                        while True:
+                            await yield_while_busy()
+                            temp = _get_gpu_temp_c()
+                            if temp is not None and temp > _MAX_GPU_TEMP:
+                                _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing L1 drain for %s", temp, project_path)
+                                break
+                            # Count unenriched L1 before this batch
+                            try:
+                                from opencode_search.config import get_project_graph_db_path
+                                from opencode_search.graph.storage import GraphStorage
+                                db_path = get_project_graph_db_path(project_path)
+                                gs_check = GraphStorage(db_path)
+                                gs_check.open()
+                                try:
+                                    cur_unenriched = sum(
+                                        1 for c in gs_check.get_communities(level=1, min_node_count=2)
+                                        if not c.title
+                                    )
+                                finally:
+                                    gs_check.close()
+                            except Exception:
+                                break
+                            if cur_unenriched == 0:
+                                _kb_sweep_log.info("kb_sweep: L1 fully enriched for %s", project_path)
+                                break
+                            if cur_unenriched == prev_unenriched:
+                                _kb_sweep_log.warning(
+                                    "kb_sweep: L1 no progress for %s (%d unenriched remain) — stopping",
+                                    project_path, cur_unenriched,
+                                )
+                                break
+                            prev_unenriched = cur_unenriched
+                            result = await handle_enrich_project(
+                                project_path,
+                                scope="communities",
+                                max_communities=10000,
+                                level=1,
+                            )
+                            batch_enriched = result.get("enriched_communities", 0)
+                            l1_total_enriched += batch_enriched
+                            _kb_sweep_log.info(
+                                "kb_sweep: L1 batch +%d (still unenriched=%d) for %s",
+                                batch_enriched, cur_unenriched - batch_enriched, project_path,
+                            )
+
+                        _kb_sweep_log.info(
+                            "kb_sweep: L1 drain complete — total enriched=%d for %s",
+                            l1_total_enriched, project_path,
+                        )
+
+                    # ── Step 2: L2+ hierarchy enrich ─────────────────────────────────
+                    # Always run after an L1 pass (parents need refreshed children),
+                    # and also when only L2+ was flagged.
+                    await yield_while_busy()
+                    temp = _get_gpu_temp_c()
+                    if temp is not None and temp > _MAX_GPU_TEMP:
+                        _kb_sweep_log.info("kb_sweep: GPU %d°C — skipping L2+ for %s", temp, project_path)
+                    else:
+                        if _project_needs_hierarchy_enrich(project_path):
+                            _kb_sweep_log.info("kb_sweep: enriching L2+ hierarchy for %s", project_path)
+                            h_result = await handle_enrich_hierarchy(project_path=project_path)
+                            h_enriched = h_result.get("enriched", 0)
+                            _kb_sweep_log.info("kb_sweep: L2+ enriched=%d for %s", h_enriched, project_path)
+
                 swept += 1
             except Exception as exc:
                 _kb_sweep_log.warning("kb_sweep: skipping %s: %s", project_path, exc)
@@ -1335,11 +1448,14 @@ def _auto_index_monitor() -> None:
     is removed (Phase 100), this loop is the only way a flagged project gets indexed.
     """
     import asyncio as _asyncio
+    _DAEMON_LOOP_READY.wait(timeout=300)
     # Short initial wait so startup watchers/pipeline resumes go first
     time.sleep(min(_AUTO_INDEX_INTERVAL_S, 30))
     while True:
         try:
-            loop = _asyncio.get_event_loop()
+            loop = _DAEMON_LOOP
+            if loop is None:
+                raise RuntimeError("daemon event loop not yet available")
             future = _asyncio.run_coroutine_threadsafe(_run_auto_index_sweep(), loop)
             future.result(timeout=3600)
         except Exception as exc:
@@ -1422,11 +1538,14 @@ def _maintenance_monitor() -> None:
     Each pass is gated by yield_while_busy() so it never competes with live queries.
     """
     import asyncio as _asyncio
+    _DAEMON_LOOP_READY.wait(timeout=300)
     # Start after one full interval so the first runs aren't during startup
     time.sleep(min(_MAINTENANCE_INTERVAL_S, 60))
     while True:
         try:
-            loop = _asyncio.get_event_loop()
+            loop = _DAEMON_LOOP
+            if loop is None:
+                raise RuntimeError("daemon event loop not yet available")
             future = _asyncio.run_coroutine_threadsafe(_run_maintenance_sweep(), loop)
             future.result(timeout=7200)  # max 2h per sweep
         except Exception as exc:
