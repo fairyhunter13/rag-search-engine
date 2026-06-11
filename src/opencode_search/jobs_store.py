@@ -54,6 +54,7 @@ def _get_conn() -> sqlite3.Connection:
         return _conn
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     _conn = sqlite3.connect(str(_JOBS_DB_PATH), check_same_thread=False)
+    _conn.executescript("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
     _conn.executescript(_SCHEMA)
     _conn.commit()
     return _conn

@@ -655,6 +655,24 @@ def _build_provider_list_with_options(providers: list[str]) -> list:
 _fastembed_patch_applied: bool = False
 
 
+def _fastembed_cache_dir() -> str:
+    """Return the permanent FastEmbed model cache directory — never /tmp.
+
+    Honors FASTEMBED_CACHE_PATH if already set, otherwise defaults to the
+    persistent ~/.cache/opencode/fastembed (same path daemon.py pins on spawn).
+    Also writes the resolved path back into the environment via setdefault so
+    any child subprocess (index pipeline, reload) inherits it and never falls
+    back to FastEmbed's own default of tempfile.gettempdir()/fastembed_cache
+    (/tmp), which is tmpfs and wiped on reboot.
+    """
+    path = os.environ.get("FASTEMBED_CACHE_PATH") or os.path.expanduser(
+        "~/.cache/opencode/fastembed"
+    )
+    os.environ.setdefault("FASTEMBED_CACHE_PATH", path)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _apply_fastembed_patch() -> None:
     """Monkey-patch FastEmbed to accept extra ORT SessionOptions.
 
@@ -668,6 +686,9 @@ def _apply_fastembed_patch() -> None:
     if _fastembed_patch_applied:
         return
     _fastembed_patch_applied = True
+    # Pin the cache dir into the env before any subprocess can be spawned so
+    # child processes (index pipeline, reload) never land on /tmp.
+    _fastembed_cache_dir()
     try:
         from fastembed.common.onnx_model import OnnxModel as _OnnxModel
         if "enable_mem_pattern" not in _OnnxModel.EXPOSED_SESSION_OPTIONS:
@@ -911,6 +932,7 @@ def _embedder(model: str):
             "embedder",
             lambda: TextEmbedding(
                 model_name=model, providers=provider_list,
+                cache_dir=_fastembed_cache_dir(),
                 enable_cpu_mem_arena=False, enable_mem_pattern=False,
                 execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
                 graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
@@ -983,6 +1005,7 @@ def _reranker(model: str):
             "reranker",
             lambda: TextCrossEncoder(
                 model_name=model, providers=provider_list,
+                cache_dir=_fastembed_cache_dir(),
                 enable_cpu_mem_arena=False, enable_mem_pattern=False,
                 execution_mode=_ort_ref.ExecutionMode.ORT_SEQUENTIAL,
                 graph_optimization_level=_ort_ref.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,

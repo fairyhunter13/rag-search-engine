@@ -635,10 +635,32 @@ class Storage:
         - int8 quantization cuts index RAM by ~4× vs float32 IVF_FLAT
         - HNSW navigation gives better recall/latency than pure IVF probing
         - Falls back to legacy IVF_PQ for older LanceDB installations
+
+        Retraining is skipped when row count has not grown by more than
+        IVF_PQ_RETRAIN_FRAC (10%) and IVF_PQ_RETRAIN_MIN_DELTA (500 rows)
+        since the last successful train — avoiding write amplification during
+        incremental indexing bursts.
         """
         n = await self.count()
         if n < IVF_PQ_THRESHOLD:
             return
+
+        # Skip retrain if the index is already representative of current data.
+        try:
+            last_str = self.get_config("ivf_pq_last_trained_count")
+            last_n = int(last_str) if last_str is not None else 0
+        except Exception:
+            last_n = 0
+        delta = n - last_n
+        retrain_frac = float(__import__("os").environ.get("OPENCODE_IVF_PQ_RETRAIN_FRAC", "0.10"))
+        retrain_min_delta = int(__import__("os").environ.get("OPENCODE_IVF_PQ_RETRAIN_MIN_DELTA", "500"))
+        if last_n > 0 and delta < retrain_min_delta and delta < last_n * retrain_frac:
+            logger.debug(
+                "IVF index retrain skipped: rows=%d last_trained=%d delta=%d (threshold: %d or %.0f%%)",
+                n, last_n, delta, retrain_min_delta, retrain_frac * 100,
+            )
+            return
+
         n_partitions = min(IVF_NUM_PARTITIONS_MAX, max(1, n // 10))
         table = self._table
         # Try IVF_HNSW_SQ first (available since LanceDB 0.12, preferred Jun 2026)
@@ -655,6 +677,7 @@ class Storage:
                 "IVF_HNSW_SQ index created/refreshed (rows=%d, partitions=%d)",
                 n, n_partitions,
             )
+            self.set_config("ivf_pq_last_trained_count", str(n))
             return
         except Exception as exc:
             logger.debug("IVF_HNSW_SQ unavailable, falling back to IVF_PQ: %s", exc)
@@ -676,6 +699,7 @@ class Storage:
                 "IVF-PQ index created/refreshed (rows=%d, partitions=%d, sub_vectors=%d)",
                 n, n_partitions, n_sub_vectors,
             )
+            self.set_config("ivf_pq_last_trained_count", str(n))
         except Exception as exc:
             logger.warning("Vector index creation failed: %s", exc)
 
