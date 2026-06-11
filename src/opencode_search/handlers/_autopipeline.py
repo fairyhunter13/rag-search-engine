@@ -91,10 +91,18 @@ def _project_is_fresh(project_path: str) -> bool:
 
 
 def _project_needs_hierarchy(project_path: str) -> bool:
-    """Return True if project has enriched communities but no hierarchy (max_level == 1).
+    """Return True if project has enriched communities but no hierarchy (max_level == 1)
+    AND a level-2 is actually buildable (≥1 cross-community edge exists).
 
     Used to trigger hierarchy build on already-enriched projects that were
     indexed before hierarchy support was added.
+
+    The cross-community-edge gate is essential: build_hierarchy forms level-2 from
+    cross-community CALLS/IMPORTS edges, so a graph with none can NEVER produce a
+    level. Without this gate such projects (mutually-disconnected communities —
+    e.g. a thin federation root, or service repos with no resolved inter-community
+    calls) would be flagged every sweep, re-attempting a futile build + re-enrich
+    indefinitely — perpetual GPU/CPU churn that keeps the GPU warm.
     """
     try:
         from opencode_search.config import get_project_graph_db_path
@@ -108,7 +116,10 @@ def _project_needs_hierarchy(project_path: str) -> bool:
         try:
             max_level = gs.get_max_community_level()
             n_level1 = len(gs.get_communities(level=1, min_node_count=2))
-            return max_level == 1 and n_level1 >= 5
+            if not (max_level == 1 and n_level1 >= 5):
+                return False
+            # Only attempt a build that can actually yield a level.
+            return gs.has_cross_community_edges()
         finally:
             gs.close()
     except Exception:

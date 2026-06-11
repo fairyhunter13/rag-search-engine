@@ -676,6 +676,30 @@ class GraphStorage:
         row = db.execute("SELECT MAX(level) AS max_level FROM communities").fetchone()
         return int(row["max_level"] or 1)
 
+    def has_cross_community_edges(self) -> bool:
+        """True if ≥1 CALLS/IMPORTS edge connects two different communities.
+
+        build_hierarchy forms level-2 from cross-community edges; with none, it can
+        never produce a level. Callers use this to avoid re-attempting a futile
+        hierarchy build every sweep (perpetual churn) for graphs whose communities
+        are mutually disconnected. Short-circuits via LIMIT 1.
+        """
+        db = self._db()
+        row = db.execute(
+            """
+            SELECT 1
+            FROM edges e
+            JOIN nodes a ON e.from_id = a.id
+            JOIN nodes b ON e.to_id = b.id
+            WHERE e.kind IN ('CALLS', 'IMPORTS')
+              AND a.community_id IS NOT NULL
+              AND b.community_id IS NOT NULL
+              AND a.community_id != b.community_id
+            LIMIT 1
+            """
+        ).fetchone()
+        return row is not None
+
     def get_community_hierarchy(self, root_level: int | None = None) -> dict[int, list[CommunityData]]:
         """Return all communities grouped by level, from highest (root) to lowest (micro).
 

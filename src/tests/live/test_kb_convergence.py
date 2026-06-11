@@ -460,3 +460,39 @@ class TestAllFederationMembersConverge:
                     f"{entry.get('verdict')} — verdict must not require a second level"
                 )
         assert found_thin, "No thin L1-only member found among federation members"
+
+
+# ---------------------------------------------------------------------------
+# Hierarchy-churn guard: never re-attempt a build that can't form a level.
+# ---------------------------------------------------------------------------
+
+class TestHierarchyChurnGuard:
+    """A graph with no cross-community edges can never form a level-2, so the
+    sweep must NOT flag it for a hierarchy build — otherwise it re-attempts a
+    futile build_hierarchy + re-enrich every cycle, keeping the GPU warm forever.
+    """
+
+    def test_no_cross_community_edges_means_no_hierarchy_needed(self, astro):
+        """_project_needs_hierarchy must be False whenever there are no
+        cross-community edges (build_hierarchy would always return 0)."""
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+        from opencode_search.handlers._autopipeline import _project_needs_hierarchy
+
+        gs = GraphStorage(get_project_graph_db_path(astro))
+        gs.open()
+        try:
+            has_cross = gs.has_cross_community_edges()
+            max_level = gs.get_max_community_level()
+            n_l1 = len(gs.get_communities(level=1, min_node_count=2))
+        finally:
+            gs.close()
+
+        needs = _project_needs_hierarchy(astro)
+        # Core invariant: no cross-community edges ⇒ never flag a hierarchy build.
+        if not has_cross:
+            assert not needs, (
+                f"_project_needs_hierarchy({astro!r}) returned True with 0 "
+                "cross-community edges — futile-rebuild churn would result "
+                f"(max_level={max_level}, n_l1={n_l1})."
+            )
