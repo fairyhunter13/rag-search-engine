@@ -1120,6 +1120,17 @@ async def _stream_global(
             comm_list.append(hc)
             seen_titles.add(hc["title"])
 
+    # Bound the MAP fan-out. Each MAP batch is one 8B-model LLM call; a large
+    # federation root can assemble ~90 communities → ~11 serial-ish calls → a
+    # multi-minute synthesis that heat-soaks the GPU mid-run and throttles every
+    # subsequent call (violating the global SLO). Cap to the most-relevant head —
+    # vector-similarity communities lead the list, so the cap keeps the strongest
+    # query matches plus leading hierarchy breadth.
+    import os as _os
+    _map_cap = int(_os.environ.get("OPENCODE_GLOBAL_MAP_MAX_COMMUNITIES", "40"))
+    if len(comm_list) > _map_cap:
+        comm_list = comm_list[:_map_cap]
+
     llm = await asyncio.to_thread(create_query_llm_client)
     model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
 

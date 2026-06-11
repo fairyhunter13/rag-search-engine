@@ -31,6 +31,38 @@ pytestmark = pytest.mark.live
 _ACME_PATH = _ASTRO
 
 
+def _await_gpu_cool(threshold_c: int = 72, timeout_s: float = 240.0, poll_s: float = 10.0) -> int | None:
+    """Wait until the GPU is at/below threshold_c, so latency SLOs are measured
+    under nominal (non-thermally-throttled) conditions rather than while the GPU
+    is heat-soaked by the preceding LLM-heavy tests.
+
+    A real user issues a global query against a cool/idle GPU; the daemon's 85°C
+    thermal guard pauses inference mid-synthesis when the GPU is hot, which is not
+    the condition the SLO describes. No-op (returns None) if nvidia-smi is absent.
+    Bounded by timeout_s. Returns the last observed temperature.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("nvidia-smi") is None:
+        return None
+    deadline = time.monotonic() + timeout_s
+    temp: int | None = None
+    while time.monotonic() < deadline:
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip().splitlines()
+            temp = int(out[0]) if out and out[0].strip().isdigit() else None
+        except Exception:
+            return temp
+        if temp is None or temp <= threshold_c:
+            return temp
+        time.sleep(poll_s)
+    return temp
+
+
 
 # ---------------------------------------------------------------------------
 # Class 1: chat_stream SLOs (extract elapsed_ms from done event)
@@ -83,7 +115,14 @@ class TestChatStreamSLOs:
         assert elapsed < 60_000, f"debug_trace SLO violated: {elapsed}ms >= 60000ms"
 
     def test_global_intent_slo(self, http, astro):
-        """global intent (MAP-REDUCE synthesis) must complete in < 120s."""
+        """global intent (MAP-REDUCE synthesis) must complete in < 120s.
+
+        Measured under nominal conditions: wait for the GPU to leave the
+        thermally-throttled state first (the preceding LLM-heavy slow tests can
+        heat-soak a laptop GPU past the daemon's 85°C guard, which would pause
+        inference mid-synthesis — not representative of a real global query).
+        """
+        _await_gpu_cool()
         _, intent, _, elapsed, _ = _chat(http, astro,
             "give me a comprehensive global overview of the entire astro platform")
         assert intent == "global", f"Expected global; got {intent!r}"
