@@ -1435,3 +1435,26 @@ def create_query_llm_client() -> LLMClient | None:
     if not client.is_available():
         return create_llm_client()
     return client
+
+
+def create_map_llm_client() -> LLMClient | None:
+    """Create the GPU-local LLM client for the MAP phase of global map-reduce synthesis.
+
+    Pinned to the lightweight enrich model (qwen3-enrich:1.7b) on Ollama. MAP is a
+    "summarize these community summaries with respect to the query" task — exactly
+    what the enrich model already does during KB builds — so it runs ~4x faster and
+    cooler than the 8B query model, while the quality-critical REDUCE stays on
+    qwen3-query:8b. GPU-only, never cloud, never CPU.
+
+    Returns None if the model is unreachable, so callers fall back to their main
+    (8B) client and behave exactly as before the split.
+    """
+    model = os.environ.get("OPENCODE_MAP_LLM_MODEL", "qwen3-enrich:1.7b")
+    timeout = int(os.environ.get("OPENCODE_MAP_LLM_TIMEOUT", "120"))
+    base_url = os.environ.get(
+        "OPENCODE_MAP_LLM_BASE_URL",
+        os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
+    )
+    num_ctx = int(os.environ.get("OPENCODE_MAP_LLM_NUM_CTX", "8192"))
+    client: LLMClient = OllamaClient(base_url=base_url, model=model, timeout=timeout, num_ctx=num_ctx)
+    return client if client.is_available() else None
