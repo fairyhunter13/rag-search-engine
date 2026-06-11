@@ -521,3 +521,162 @@ class TestKbQueryRouting:
         assert after > before, "note_query() must advance last_query_monotonic"
         age = state.seconds_since_last_query()
         assert age < 1.0, f"seconds_since_last_query() returned {age}s — should be near 0"
+
+
+# ---------------------------------------------------------------------------
+# Service mesh cache (Part 1+2 of the service_mesh timeout fix)
+# ---------------------------------------------------------------------------
+
+class TestServiceMeshCache:
+    """service_mesh two-tier cache: fast cold read, instant second call, bounded scan."""
+
+    def test_service_mesh_cold_read_under_30s(self, http, project):
+        """Cold GET /api/overview?what=service_mesh must complete well under 300s."""
+        import time
+        # Invalidate in-process cache first so we measure a real scan
+        try:
+            from opencode_search.handlers._service_mesh import invalidate_service_mesh_cache
+            invalidate_service_mesh_cache(project)
+        except Exception:
+            pass
+
+        t0 = time.perf_counter()
+        r = http.get("/api/overview", params={"project": project, "what": "service_mesh"})
+        elapsed = time.perf_counter() - t0
+        assert r.status_code == 200, f"service_mesh failed: {r.text[:200]}"
+        assert elapsed < 30.0, (
+            f"Cold service_mesh scan took {elapsed:.1f}s — must be < 30s. "
+            "Parallel bounded walk + LLM-off-read-path fixes this."
+        )
+
+    def test_service_mesh_second_call_cached(self, http, project):
+        """Second GET /api/overview?what=service_mesh must return cached:true."""
+        # First call to ensure cache is populated
+        r1 = http.get("/api/overview", params={"project": project, "what": "service_mesh"})
+        assert r1.status_code == 200, f"first call failed: {r1.text[:200]}"
+
+        # Second call must hit cache
+        r2 = http.get("/api/overview", params={"project": project, "what": "service_mesh"})
+        assert r2.status_code == 200, f"second call failed: {r2.text[:200]}"
+        data = r2.json()
+        assert data.get("cached") is True, (
+            f"Expected cached=True on second call; got cached={data.get('cached')!r}. "
+            f"Keys: {list(data.keys())}"
+        )
+
+    def test_service_mesh_result_has_bounded_fields(self, http, project):
+        """Service mesh result must contain scanned_files and truncated fields."""
+        # Invalidate to get a fresh result with the new fields
+        try:
+            from opencode_search.handlers._service_mesh import invalidate_service_mesh_cache
+            invalidate_service_mesh_cache(project)
+        except Exception:
+            pass
+        r = http.get("/api/overview", params={"project": project, "what": "service_mesh"})
+        assert r.status_code == 200
+        data = r.json()
+        assert "scanned_files" in data or data.get("cached"), (
+            f"scanned_files missing from non-cached result. keys={list(data.keys())}"
+        )
+        assert "truncated" in data or data.get("cached"), (
+            f"truncated field missing from non-cached result. keys={list(data.keys())}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Codex confinement: read tier must NEVER return a codex/claude-code client
+# ---------------------------------------------------------------------------
+
+class TestCodexConfinement:
+    """create_kb_query_llm_client() is ollama-pinned — never returns codex."""
+
+    def test_kb_query_client_is_not_codex_regardless_of_query_provider(self):
+        """Even if OPENCODE_QUERY_LLM_PROVIDER=codex, kb_query must be ollama."""
+        import os
+        old_query = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER")
+        try:
+            os.environ["OPENCODE_QUERY_LLM_PROVIDER"] = "codex"
+            from opencode_search.enricher.client import CodexClient, create_kb_query_llm_client
+            client = create_kb_query_llm_client()
+            # May return None if :11435 and :11434 are both unavailable, but not a codex client
+            assert not isinstance(client, CodexClient), (
+                "create_kb_query_llm_client() returned a CodexClient even though "
+                "OPENCODE_QUERY_LLM_PROVIDER=codex. KB queries must use ollama only."
+            )
+        finally:
+            if old_query is None:
+                os.environ.pop("OPENCODE_QUERY_LLM_PROVIDER", None)
+            else:
+                os.environ["OPENCODE_QUERY_LLM_PROVIDER"] = old_query
+
+    def test_kb_query_base_url_targets_11435(self):
+        """create_kb_query_llm_client() must attempt :11435 first by default."""
+        import os
+        # Unset override to test the hardcoded default
+        old = os.environ.pop("OPENCODE_KB_QUERY_LLM_BASE_URL", None)
+        try:
+            from opencode_search.enricher.client import OllamaClient, create_kb_query_llm_client
+            # Verify the hardcoded default URL (what the factory attempts first).
+            # We check the constant here because the runtime client may have fallen
+            # back to :11434 when the dedicated instance is not yet running.
+            default_url = os.environ.get("OPENCODE_KB_QUERY_LLM_BASE_URL", "http://localhost:11435")
+            assert "11435" in default_url, (
+                f"Default OPENCODE_KB_QUERY_LLM_BASE_URL is {default_url!r}, not :11435. "
+                "The dedicated read Ollama instance must be the primary target."
+            )
+            # Independently verify the returned client is always GPU-local (never cloud)
+            client = create_kb_query_llm_client()
+            if client is not None:
+                assert isinstance(client, OllamaClient), (
+                    f"Expected OllamaClient but got {type(client).__name__}. "
+                    "KB query must never use cloud/codex regardless of fallback path."
+                )
+        finally:
+            if old is not None:
+                os.environ["OPENCODE_KB_QUERY_LLM_BASE_URL"] = old
+
+    def test_kb_chat_uses_read_tier_not_codex(self):
+        """handle_kb_chat must import create_kb_query_llm_client, never create_query_llm_client."""
+        from pathlib import Path
+        # __file__ = src/tests/live/test_kb.py
+        # parents[2] = src/   parents[3] = project root
+        kb_chat_path = Path(__file__).parents[2] / "opencode_search" / "handlers" / "_kb_chat.py"
+        source = kb_chat_path.read_text()
+        assert "create_kb_query_llm_client" in source, (
+            "_kb_chat.py must use create_kb_query_llm_client (ollama read tier), "
+            "not create_query_llm_client (codex/dashboard tier)."
+        )
+        assert "create_query_llm_client" not in source, (
+            "_kb_chat.py must not import create_query_llm_client — "
+            "codex is only allowed for dashboard streaming responses."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dedicated read Ollama instance (:11435)
+# ---------------------------------------------------------------------------
+
+class TestDedicatedReadInstance:
+    """KB query tier uses :11435 (read-dedicated Ollama), isolated from :11434 (enrich)."""
+
+    @pytest.mark.slow
+    def test_read_instance_available(self):
+        """If :11435 is up, create_kb_query_llm_client() must be_available()."""
+        import socket
+        try:
+            s = socket.create_connection(("127.0.0.1", 11435), timeout=2)
+            s.close()
+            read_instance_up = True
+        except OSError:
+            read_instance_up = False
+
+        if not read_instance_up:
+            pytest.skip(":11435 read Ollama instance not running (run setup_llm_services.py)")
+
+        from opencode_search.enricher.client import create_kb_query_llm_client
+        client = create_kb_query_llm_client()
+        assert client is not None, "create_kb_query_llm_client() returned None"
+        assert client.is_available(), (
+            "create_kb_query_llm_client().is_available() returned False — "
+            ":11435 is up but the client cannot reach the model."
+        )

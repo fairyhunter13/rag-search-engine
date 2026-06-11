@@ -705,6 +705,34 @@ def _register_graph_routes(mcp: FastMCP) -> None:
             "message": "Hierarchy enrichment running in background.",
         })
 
+    @mcp.custom_route("/api/enrich_project", methods=["POST"], include_in_schema=False)
+    async def api_enrich_project(request: Request) -> JSONResponse:
+        """Submit background job to LLM-enrich level-1 communities."""
+        from opencode_search.handlers._enrichment import handle_enrich_project
+        from opencode_search.jobs import submit_job
+        body = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        max_communities = int(body.get("max_communities", 10_000))
+        job = submit_job(
+            handle_enrich_project(
+                project_path=project,
+                scope="all",
+                max_communities=max_communities,
+            ),
+            action="enrich_project",
+            project_path=project,
+        )
+        return JSONResponse({
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Level-1 community enrichment running in background.",
+        })
+
     @mcp.custom_route("/api/enrich_symbols", methods=["POST"], include_in_schema=False)
     async def api_enrich_symbols(request: Request) -> JSONResponse:
         """Submit background job to enrich all unenriched function/method nodes."""

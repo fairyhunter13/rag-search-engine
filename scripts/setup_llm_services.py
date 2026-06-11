@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Auto-configure local LLM services for opencode-search.
 
-Sets up two Ollama models:
-  qwen3-enrich:1.7b  — KB building (lightweight, fast JSON, ~270 t/s, 2.9 GB VRAM)
-  qwen3-query:8b     — Dashboard queries (higher quality, ~50-80 t/s, ~5.5 GB VRAM)
+Sets up TWO Ollama instances (model partition — VRAM-neutral):
+  :11434 (enrich)  — qwen3-enrich:1.7b, MAX_LOADED_MODELS=1, KB building only
+  :11435 (read)    — qwen3-query:8b,    MAX_LOADED_MODELS=1, MCP ask + KB chat
+
+Partitioning prevents head-of-line blocking: reads on :11435 are never queued
+behind background enrichment on :11434. Total resident VRAM (~7.6 GB) stays
+neutral vs the previous single-server MAX_LOADED_MODELS=2 setup.
 
 Also installs an ollama-models.service systemd oneshot that ensures both models
 are present on every boot (survives reboots, re-creates custom modelfiles).
@@ -36,6 +40,7 @@ ENRICH_MODEL = "qwen3-enrich:1.7b"
 QUERY_MODEL = "qwen3-query:8b"
 
 SYSTEMD_SERVICE_PATH = Path("/etc/systemd/system/ollama-models.service")
+OLLAMA_READ_SERVICE_PATH = Path("/etc/systemd/system/ollama-read.service")
 
 QUERY_MODELFILE_CONTENT = """\
 FROM qwen3:8b
@@ -49,8 +54,8 @@ SYSTEM "You are a senior software architect. Answer questions about codebases fa
 SYSTEMD_SERVICE_TEMPLATE = """\
 [Unit]
 Description=Auto-pull and create Ollama models for opencode-search
-After=ollama.service
-Requires=ollama.service
+After=ollama.service ollama-read.service
+Requires=ollama.service ollama-read.service
 
 [Service]
 Type=oneshot
@@ -59,9 +64,39 @@ ExecStart=/bin/bash -c '\
     until curl -sf http://localhost:11434/ > /dev/null 2>&1; do sleep 1; done; \
     /usr/local/bin/ollama pull {enrich_base}; \
     /usr/local/bin/ollama create {enrich_model} -f {enrich_modelfile}; \
-    /usr/local/bin/ollama pull {query_base}; \
-    /usr/local/bin/ollama create {query_model} -f {query_modelfile}'
+    until curl -sf http://localhost:11435/ > /dev/null 2>&1; do sleep 1; done; \
+    OLLAMA_HOST=127.0.0.1:11435 /usr/local/bin/ollama pull {query_base}; \
+    OLLAMA_HOST=127.0.0.1:11435 /usr/local/bin/ollama create {query_model} -f {query_modelfile}'
 RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# Dedicated read Ollama instance on :11435 — holds only qwen3-query:8b.
+# MAX_LOADED_MODELS=1: keeps qwen3-query resident; evicts nothing (only model).
+# KEEP_ALIVE=-1: never evict the query model between requests.
+# GPU-only: CUDA_VISIBLE_DEVICES inherits from the environment.
+OLLAMA_READ_SERVICE_TEMPLATE = """\
+[Unit]
+Description=Ollama read instance for opencode-search (qwen3-query:8b, port 11435)
+After=network-online.target ollama.service
+Wants=network-online.target
+PartOf=ollama.service
+
+[Service]
+Type=simple
+User={user}
+Environment="OLLAMA_HOST=127.0.0.1:11435"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_KEEP_ALIVE=-1"
+Environment="OLLAMA_MODELS={ollama_models_dir}"
+ExecStart=/usr/local/bin/ollama serve
+Restart=always
+RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
@@ -173,36 +208,63 @@ def main() -> int:
             else:
                 print(f"  [DRY RUN] Would run: ollama create {name} -f {modelfile}")
 
-    # ── Ensure OLLAMA_MAX_LOADED_MODELS=2 in the memory-limits drop-in ────────
+    # ── Ensure OLLAMA_MAX_LOADED_MODELS=1 on :11434 (enrich-only) ─────────────
+    # Now that qwen3-query:8b lives exclusively on :11435, :11434 only needs to
+    # hold qwen3-enrich:1.7b. MAX_LOADED_MODELS=1 prevents inadvertent loading of
+    # the query model on the enrich server and frees ~0.4 GB headroom.
     memory_dropin = Path("/etc/systemd/system/ollama.service.d/memory-limits.conf")
-    print(f"\n  Ollama drop-in: {memory_dropin}")
+    print(f"\n  Ollama :11434 drop-in: {memory_dropin}")
     if dry:
-        print("  [DRY RUN] Would ensure OLLAMA_MAX_LOADED_MODELS=2 in memory-limits.conf")
+        print("  [DRY RUN] Would set OLLAMA_MAX_LOADED_MODELS=1 in memory-limits.conf (enrich-only)")
     elif memory_dropin.exists():
         text = memory_dropin.read_text()
-        if "OLLAMA_MAX_LOADED_MODELS=1" in text:
+        if "OLLAMA_MAX_LOADED_MODELS=2" in text:
             try:
                 updated = text.replace(
-                    'Environment="OLLAMA_MAX_LOADED_MODELS=1"',
                     'Environment="OLLAMA_MAX_LOADED_MODELS=2"',
+                    'Environment="OLLAMA_MAX_LOADED_MODELS=1"',
                 )
                 import subprocess as _sp
                 _sp.run(["sudo", "tee", str(memory_dropin)], input=updated.encode(), check=True, capture_output=True)
                 _sp.run(["sudo", "systemctl", "daemon-reload"], check=True)
                 _sp.run(["sudo", "systemctl", "restart", "ollama"], check=True)
-                print("  ✓ Updated to OLLAMA_MAX_LOADED_MODELS=2 and restarted ollama")
+                print("  ✓ Updated to OLLAMA_MAX_LOADED_MODELS=1 (enrich-only) and restarted ollama")
             except Exception as exc:
                 print(f"  WARN: Could not update drop-in automatically: {exc}")
-                print("  Run manually: sudo sed -i 's/MAX_LOADED_MODELS=1/MAX_LOADED_MODELS=2/' "
+                print("  Run manually: sudo sed -i 's/MAX_LOADED_MODELS=2/MAX_LOADED_MODELS=1/' "
                       f"{memory_dropin} && sudo systemctl daemon-reload && sudo systemctl restart ollama")
-        elif "OLLAMA_MAX_LOADED_MODELS=2" in text:
-            print("  ✓ Already set to OLLAMA_MAX_LOADED_MODELS=2")
+        elif "OLLAMA_MAX_LOADED_MODELS=1" in text:
+            print("  ✓ Already set to OLLAMA_MAX_LOADED_MODELS=1 (enrich-only)")
         else:
             print("  INFO: OLLAMA_MAX_LOADED_MODELS not found in drop-in — verify manually")
     else:
         print("  INFO: Drop-in not found — ollama will load models on demand")
 
-    # ── Systemd service ─────────────────────────────────────────────────────
+    # ── Install :11435 read Ollama service (ollama-read.service) ──────────────
+    ollama_models_dir = os.environ.get("OLLAMA_MODELS", os.path.expanduser("~/.ollama/models"))
+    current_user = os.environ.get("USER", os.environ.get("LOGNAME", "user"))
+    read_service_content = OLLAMA_READ_SERVICE_TEMPLATE.format(
+        user=current_user,
+        ollama_models_dir=ollama_models_dir,
+    )
+    print(f"\n  Read Ollama service (:11435): {OLLAMA_READ_SERVICE_PATH}")
+    if dry:
+        print(f"  [DRY RUN] Would write:\n{textwrap.indent(read_service_content, '    ')}")
+    else:
+        try:
+            OLLAMA_READ_SERVICE_PATH.write_text(read_service_content)
+            _run(["sudo", "systemctl", "daemon-reload"])
+            _run(["sudo", "systemctl", "enable", "--now", "ollama-read.service"])
+            print("  ✓ ollama-read.service installed, enabled and started")
+        except PermissionError:
+            print("  WARN: No sudo access — write service file manually:")
+            print(f"\n--- {OLLAMA_READ_SERVICE_PATH} ---")
+            print(read_service_content)
+            print("---")
+            print("  Then run: sudo systemctl daemon-reload && "
+                  "sudo systemctl enable --now ollama-read.service")
+
+    # ── Systemd models oneshot ───────────────────────────────────────────────
     current_user = os.environ.get("USER", os.environ.get("LOGNAME", "user"))
     service_content = SYSTEMD_SERVICE_TEMPLATE.format(
         user=current_user,
@@ -236,10 +298,10 @@ def main() -> int:
     print("\n  Summary")
     print("  " + "-" * 38)
     rows = [
-        ("Model", "VRAM", "Role", "Config Var"),
-        (ENRICH_MODEL, "2.9 GB", "KB build", "OPENCODE_LLM_MODEL"),
-        (QUERY_MODEL, "~5.5 GB", "MCP ask + chat", "OPENCODE_KB_QUERY_LLM_MODEL"),
-        ("Total", "~8.4 GB", "Resident together", "OLLAMA_MAX_LOADED_MODELS=2 ✓"),
+        ("Instance", "Model", "VRAM", "Role", "Config Var"),
+        (":11434 (enrich)", ENRICH_MODEL, "2.9 GB", "KB build", "OPENCODE_LLM_BASE_URL"),
+        (":11435 (read)",   QUERY_MODEL, "~5.5 GB", "MCP ask + KB chat", "OPENCODE_KB_QUERY_LLM_BASE_URL"),
+        ("", "Total", "~7.6 GB", "Partition (neutral VRAM)", "MAX_LOADED_MODELS=1 each"),
     ]
     _print_table(rows)
     print()

@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Any
 
-from opencode_search.enricher import create_query_llm_client
+from opencode_search.enricher import create_kb_query_llm_client
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ async def handle_kb_chat(
     all_sources = list(dict.fromkeys(code_sources))  # deduplicated, preserving order
 
     # ── Step 2: LLM synthesis ─────────────────────────────────────────────────
-    llm = await asyncio.to_thread(create_query_llm_client)
+    llm = await asyncio.to_thread(create_kb_query_llm_client)
     if llm is None:
         return {
             "answer": "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER / OPENCODE_LLM_PROVIDER.",
