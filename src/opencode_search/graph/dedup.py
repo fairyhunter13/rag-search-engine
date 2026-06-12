@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util as _iutil
 import logging
+import math
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -63,12 +64,23 @@ class DedupResult:
 # Text helpers
 # ---------------------------------------------------------------------------
 
-_GENERIC_NAMES: frozenset[str] = frozenset([
-    "main", "init", "new", "get", "set", "add", "remove", "delete", "update",
-    "create", "handle", "process", "run", "start", "stop", "close", "open",
-    "read", "write", "load", "save", "init_app", "setup", "teardown",
-    "helper", "utils", "util", "base", "test", "tests", "__init__", "__main__",
-])
+# Information threshold for the entropy gate: H(t) * len(t) must exceed this
+# value for a symbol name to be considered worth deduplicating.
+# Tuned so that short/common words ("teardown" max score: 8 chars × 3.0 bits = 24.0)
+# fall below it while compound names score well above (e.g. "process_order"=37.3,
+# "PaymentGateway"=44.8).  Derived from character-level information, not a keyword list.
+_INFO_THRESHOLD: float = 25.0
+
+
+def _info_score(text: str) -> float:
+    """Shannon entropy × length (character-level information content)."""
+    if not text:
+        return 0.0
+    freq: dict[str, int] = {}
+    for ch in text:
+        freq[ch] = freq.get(ch, 0) + 1
+    n = len(text)
+    return -n * sum((c / n) * math.log2(c / n) for c in freq.values())
 
 
 def _norm(text: str) -> str:
@@ -77,13 +89,17 @@ def _norm(text: str) -> str:
 
 
 def _entropy(text: str, min_len: int = 4) -> bool:
-    """Return True if the text has enough information to be worth deduping."""
+    """Return True iff the text has enough information to be worth deduping.
+
+    Derived from character-level information content (Shannon entropy × length)
+    compared against _INFO_THRESHOLD — not a fixed keyword denylist.
+    """
     t = _norm(text)
     if len(t) < min_len:
         return False
-    if t in _GENERIC_NAMES:
+    if t.isdigit():
         return False
-    return not t.isdigit()
+    return _info_score(t) >= _INFO_THRESHOLD
 
 
 def _shingles(text: str, k: int = 3) -> set[str]:

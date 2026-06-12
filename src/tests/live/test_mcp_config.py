@@ -1073,6 +1073,66 @@ class TestNoRegexInStringOps:
         assert _safe_name("___leading") == "leading"
 
 
+class TestDedupEntropyNoDenylist:
+    """Unit J guard: dedup entropy gate must use computed info score, not a keyword denylist."""
+
+    def test_no_generic_names_literal(self):
+        """dedup.py must not contain the _GENERIC_NAMES denylist."""
+        from pathlib import Path
+
+        src = Path("src/opencode_search/graph/dedup.py").read_text()
+        assert "_GENERIC_NAMES" not in src, (
+            "dedup.py still has _GENERIC_NAMES denylist; must be replaced by _info_score()."
+        )
+
+    def test_generic_names_score_below_threshold(self):
+        """Generic symbol names (the old denylist entries) must score below _INFO_THRESHOLD."""
+        from opencode_search.graph.dedup import _INFO_THRESHOLD, _info_score, _norm
+
+        generics = ["main", "init", "get", "utils", "process", "teardown", "update", "handle"]
+        for name in generics:
+            score = _info_score(_norm(name))
+            assert score < _INFO_THRESHOLD, (
+                f"Generic name {name!r} scored {score:.1f} >= _INFO_THRESHOLD {_INFO_THRESHOLD}; "
+                "threshold may need tuning."
+            )
+
+    def test_real_names_score_above_threshold(self):
+        """Real compound symbol names must score above _INFO_THRESHOLD."""
+        from opencode_search.graph.dedup import _INFO_THRESHOLD, _info_score, _norm
+
+        real_names = ["process_order", "PaymentGateway", "UserAuthentication", "handle_request"]
+        for name in real_names:
+            score = _info_score(_norm(name))
+            assert score >= _INFO_THRESHOLD, (
+                f"Real name {name!r} scored {score:.1f} < _INFO_THRESHOLD {_INFO_THRESHOLD}; "
+                "threshold is too high and will skip meaningful dedup candidates."
+            )
+
+    def test_entropy_gate_still_skips_generic(self):
+        """_entropy() must return False for generic names and True for compound names."""
+        from opencode_search.graph.dedup import _entropy
+
+        for name in ["main", "init", "utils", "get", "run"]:
+            assert _entropy(name) is False, (
+                f"_entropy({name!r}) returned True — generic name should be skipped."
+            )
+        for name in ["process_order", "PaymentGateway", "UserAuthentication"]:
+            assert _entropy(name) is True, (
+                f"_entropy({name!r}) returned False — compound name should be included."
+            )
+
+    def test_live_dedup_dry_run_no_errors(self, project):
+        """A dry-run dedup on the indexed project must complete without errors."""
+        import asyncio
+
+        from opencode_search.handlers._graph import handle_dedup_nodes
+
+        result = asyncio.run(handle_dedup_nodes(project, dry_run=True))
+        assert "error" not in result, f"dedup dry-run errored: {result.get('error')}"
+        assert result.get("dry_run") is True
+
+
 class TestRepoWideNoRegex:
     """Repo-wide guard: non-test opencode_search source must not use `re` for meaning inference.
 
