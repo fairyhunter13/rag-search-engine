@@ -410,13 +410,14 @@ class TestAstroChatIntents:
         intent = classify("what is the overall system architecture?")
         assert intent in ("architecture", "global"), f"Expected architecture/global intent; got {intent!r}"
 
-    def test_chat_global_intent(self, classify, chat_cache, astro):
-        # Routing check via classify; answer length via shared chat_cache (one synthesis
-        # shared with test_chat_answer_quality_global — same canonical key).
+    def test_chat_global_intent(self, classify):
+        # Routing-only via classify (~32 tokens, no synthesis). Answer length/quality is
+        # checked by test_chat_answer_quality_global which populates the chat_cache first.
+        # Keeping these separate ensures the quality test always synthesises with its own
+        # query ("Give me a comprehensive global overview of this entire system") — the one
+        # that reliably scores ≥ _MIN_SCORE — rather than sharing from this cheaper call.
         intent = classify("give me a comprehensive global overview of the entire system")
         assert intent == "global", f"Expected intent=global; got {intent!r}"
-        answer, *_ = chat_cache(astro, "give me a comprehensive global overview of the entire system")
-        assert len(answer) > 200, f"Global answer too short: {answer!r}"
 
     def test_chat_feature_intent(self, classify):
         intent = classify("how does the ad display search work end to end?")
@@ -440,7 +441,9 @@ class TestAstroChatIntents:
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_chat_answer_quality_global(self, chat_cache, judge_once, astro):
-        # chat_cache deduplicates synthesis — shares result with test_chat_global_intent.
+        # chat_cache: this test populates the "global_overview" cache entry first (since
+        # test_chat_global_intent now uses only classify). Downstream tests
+        # (test_quality_global_overview) share this synthesis via the canonical key.
         answer, *_ = chat_cache(astro, "Give me a comprehensive global overview of this entire system")
         score = judge_once(answer, "Does this provide a broad, multi-domain system overview with concrete details?")
         assert score >= _MIN_SCORE, f"Global overview quality {score}/5 too low:\n{answer[:400]}"
