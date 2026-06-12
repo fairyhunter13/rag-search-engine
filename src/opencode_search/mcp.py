@@ -214,73 +214,6 @@ async def resume_stalled_pipelines(startup_delay: float = 10.0) -> None:
         log.info("resume_stalled_pipelines: %d stalled project(s) re-queued", scheduled)
 
 
-async def resume_symbol_enrichment() -> None:
-    """On daemon startup, resume background symbol enrichment for any indexed project
-    that has function/method nodes with intent IS NULL.
-
-    Two paths:
-    1. SQLite replay: if jobs.db has non-terminal enrich_symbols jobs from the
-       last run, re-submit them (idempotent — per-node writes mean no re-work).
-    2. Registry scan: for any project in the registry that has unenriched nodes
-       but no in-flight job (not in SQLite), submit a new job.
-
-    Uses dedup=True so concurrent re-submissions are collapsed.
-    """
-    import asyncio as _aio
-
-    from opencode_search.config import load_registry
-    from opencode_search.handlers._enrichment import handle_enrich_symbols_background
-    from opencode_search.handlers._graph import _open_graph
-    from opencode_search.jobs import submit_job
-    from opencode_search.jobs_store import load_nonterminal_jobs, mark_interrupted
-
-    # Small delay: let the server finish binding and the session manager start up.
-    await _aio.sleep(2)
-
-    # Path 1: replay non-terminal jobs from SQLite
-    resumed_paths: set[str] = set()
-    for job_row in load_nonterminal_jobs():
-        path_str = job_row["project_path"]
-        action = job_row["action"]
-        if action == "enrich_symbols":
-            submit_job(
-                handle_enrich_symbols_background(path_str),
-                action="enrich_symbols",
-                project_path=path_str,
-                dedup=True,
-            )
-            resumed_paths.add(path_str)
-            log.info("resume_symbol_enrichment: replayed job[%s] for %s", job_row["id"], path_str)
-        else:
-            mark_interrupted(job_row["id"])
-            log.info("resume_symbol_enrichment: marked job[%s] (%s) as interrupted", job_row["id"], action)
-
-    # Path 2: registry scan for projects with unenriched nodes not already replayed
-    registry = load_registry()
-    for path_str in list(registry.keys()):
-        if path_str in resumed_paths:
-            continue
-        try:
-            gs = _open_graph(path_str)
-            if gs is None:
-                continue
-            try:
-                needs_enrich = gs.has_unenriched_symbols()
-            finally:
-                gs.close()
-            if not needs_enrich:
-                continue
-            submit_job(
-                handle_enrich_symbols_background(path_str),
-                action="enrich_symbols",
-                project_path=path_str,
-                dedup=True,
-            )
-            log.info("resume_symbol_enrichment: submitted job for %s", path_str)
-        except Exception as exc:
-            log.debug("resume_symbol_enrichment: skipped %s: %s", path_str, exc)
-
-
 # ---------------------------------------------------------------------------
 # FastMCP instance
 # ---------------------------------------------------------------------------
@@ -834,8 +767,6 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
         cleanup_task = asyncio.create_task(_stale_cleanup_loop(), name="opencode-stale-cleanup")
         resume_task = asyncio.create_task(resume_watchers(), name="opencode-resume-watchers")
         resume_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        enrich_task = asyncio.create_task(resume_symbol_enrichment(), name="opencode-resume-enrich")
-        enrich_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         pipeline_task = asyncio.create_task(resume_stalled_pipelines(), name="opencode-resume-pipelines")
         pipeline_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         async with mcp.session_manager.run():
@@ -848,12 +779,9 @@ def run_mcp_http_server(host: str = "127.0.0.1", port: int = 8765) -> None:
             _sd_notify(f"STATUS=listening on http://{host}:{port}/mcp\n")
             yield
         cleanup_task.cancel()
-        enrich_task.cancel()
         pipeline_task.cancel()
         with suppress(asyncio.CancelledError):
             await cleanup_task
-        with suppress(asyncio.CancelledError):
-            await enrich_task
         with suppress(asyncio.CancelledError):
             await pipeline_task
         _sd_notify("STOPPING=1\n")

@@ -153,22 +153,6 @@ async def handle_pipeline(
             root, enrich_result.get("enriched_communities", 0),
         )
 
-        # Submit background symbol enrichment — non-blocking; pipeline returns immediately.
-        from opencode_search.handlers._enrichment import handle_enrich_symbols_background
-        from opencode_search.jobs import submit_job
-        sym_job = submit_job(
-            handle_enrich_symbols_background(root),
-            action="enrich_symbols",
-            project_path=root,
-            dedup=True,
-        )
-        steps.append({
-            "step": "enrich_symbols",
-            "status": "running_background",
-            "job_id": sym_job.id,
-        })
-        log.info("pipeline[%s]: background symbol enrichment submitted as job[%s]", root, sym_job.id)
-
     # ── Step 4: Generate wiki ────────────────────────────────────────────────
     from opencode_search.handlers._wiki import handle_wiki_generate
 

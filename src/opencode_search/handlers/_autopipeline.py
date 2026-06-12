@@ -65,7 +65,7 @@ def auto_pipeline_enabled() -> bool:
 def _project_is_fresh(project_path: str) -> bool:
     """Return True if the project has never been enriched (no LLM knowledge yet)."""
     try:
-        from opencode_search.config import get_project_graph_db_path, get_project_wiki_dir
+        from opencode_search.config import get_project_graph_db_path
         from opencode_search.graph.storage import GraphStorage
 
         graph_db = get_project_graph_db_path(project_path)
@@ -79,10 +79,6 @@ def _project_is_fresh(project_path: str) -> bool:
                     return False
             finally:
                 gs.close()
-
-        wiki_dir = get_project_wiki_dir(project_path)
-        if wiki_dir.exists() and any(wiki_dir.glob("*.md")):
-            return False
 
         from opencode_search.handlers._patterns import load_patterns_cache
         return load_patterns_cache(project_path) is None
@@ -103,7 +99,7 @@ def _project_kb_incomplete(project_path: str) -> bool:
     Returns False on any error (safe-fail: prefer not to over-trigger recovery loops).
     """
     try:
-        from opencode_search.config import get_project_graph_db_path, get_project_wiki_dir
+        from opencode_search.config import get_project_graph_db_path
         from opencode_search.graph.storage import GraphStorage
 
         graph_db = get_project_graph_db_path(project_path)
@@ -137,16 +133,6 @@ def _project_kb_incomplete(project_path: str) -> bool:
                     continue
                 enriched = sum(1 for c in eligible if c.title)
                 if enriched / len(eligible) < 0.99:
-                    return True
-
-            # Gap B: wiki content pages lag eligible communities.
-            # The 0.8 ratio + the 6h maintenance cadence guarantee convergence without
-            # churn: a regenerated wiki hits ~1.0 and stops re-firing next sweep.
-            eligible_total = sum(1 for c in all_comms if (c.node_count or 0) >= 2)
-            if eligible_total > 0:
-                wiki_dir = get_project_wiki_dir(project_path)
-                content_pages = len(list(wiki_dir.glob("community_*.md"))) if wiki_dir.exists() else 0
-                if content_pages < 0.8 * eligible_total:
                     return True
 
             return False
@@ -260,9 +246,8 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
     pp = str(root)
 
     needs_h = _project_needs_hierarchy(pp)
-    needs_h_enrich = _project_needs_hierarchy_enrich(pp)
     kb_incomplete = _project_kb_incomplete(pp)
-    if not force and not _project_is_fresh(pp) and not needs_h and not needs_h_enrich and not kb_incomplete:
+    if not force and not _project_is_fresh(pp) and not needs_h and not kb_incomplete:
         log.info("auto_pipeline[%s]: already enriched — skipping", root.name)
         return {"status": "skipped", "reason": "already_enriched", "project_path": pp}
 
@@ -344,45 +329,26 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
         log.info("auto_pipeline[%s]: pattern analysis skipped/failed: %s", root.name, exc)
         steps.append({"step": "analyze_patterns", "status": "skipped", "reason": str(exc)})
 
-    # ── Step 3: Build + enrich community hierarchy ───────────────────────────
-    # Runs when: hierarchy not yet built (max_level==1) OR hierarchy exists but
-    # level-2+ communities are unenriched (title=NULL) — catches interrupted
-    # enrichment runs and hierarchy rebuilds that didn't re-enrich.
+    # ── Step 3: Build structural community hierarchy (Leiden only) ───────────
+    # Builds the multi-level Leiden tree when max_level==1 and cross-community
+    # edges exist. L2+ LLM enrichment (title/summary) is handled lazily by the
+    # background kb_sweep — not on the hot first-index path (essentials-only).
     try:
-        _needs_h = _project_needs_hierarchy(pp)
-        _needs_h_enrich = _project_needs_hierarchy_enrich(pp)
-        if _needs_h or _needs_h_enrich:
-            levels_built = 0
-            if _needs_h:
-                from opencode_search.config import get_project_graph_db_path
-                from opencode_search.graph.community import CommunityDetector
-                from opencode_search.graph.storage import GraphStorage
-                db_path = get_project_graph_db_path(pp)
-                gs = GraphStorage(db_path)
-                gs.open()
-                try:
-                    levels_built = await asyncio.to_thread(CommunityDetector().build_hierarchy, gs)
-                finally:
-                    gs.close()
-                log.info("auto_pipeline[%s]: hierarchy built (%d levels)", root.name, levels_built)
-            from opencode_search.handlers._enrichment import handle_enrich_hierarchy
-            h_result = await handle_enrich_hierarchy(project_path=pp)
-            steps.append({
-                "step": "hierarchy",
-                "status": "ok",
-                "levels_built": levels_built,
-                "enriched": h_result.get("enriched", 0),
-            })
-            log.info(
-                "auto_pipeline[%s]: hierarchy enrich complete (enriched=%d)",
-                root.name, h_result.get("enriched", 0),
-            )
+        if _project_needs_hierarchy(pp):
+            from opencode_search.config import get_project_graph_db_path
+            from opencode_search.graph.community import CommunityDetector
+            from opencode_search.graph.storage import GraphStorage
+            db_path = get_project_graph_db_path(pp)
+            gs = GraphStorage(db_path)
+            gs.open()
+            try:
+                levels_built = await asyncio.to_thread(CommunityDetector().build_hierarchy, gs)
+            finally:
+                gs.close()
+            log.info("auto_pipeline[%s]: hierarchy built (%d levels)", root.name, levels_built)
+            steps.append({"step": "hierarchy", "status": "ok", "levels_built": levels_built})
         else:
-            steps.append({
-                "step": "hierarchy",
-                "status": "skipped",
-                "reason": "hierarchy already built and enriched",
-            })
+            steps.append({"step": "hierarchy", "status": "skipped", "reason": "already built"})
     except Exception as exc:
         log.info("auto_pipeline[%s]: hierarchy skipped: %s", root.name, exc)
         steps.append({"step": "hierarchy", "status": "skipped", "reason": str(exc)})
