@@ -74,6 +74,7 @@ from opencode_search.config import (
     STAGE1_VECTOR_K,
     ProjectEntry,
 )
+from opencode_search.discover import is_document_language
 from opencode_search.storage import Storage
 
 log = logging.getLogger(__name__)
@@ -131,17 +132,7 @@ def _get_rerank_sem() -> asyncio.Semaphore:
         _rerank_sem_loop = loop
     return _rerank_sem
 
-_DOCUMENT_LANGUAGES = frozenset(
-    {
-        "markdown",
-        "text",
-        "restructuredtext",
-        "rst",
-        "adoc",
-        "asciidoc",
-        "unknown",
-    }
-)
+# is_document_language() from discover.py is the single source of truth for doc/code split.
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -300,7 +291,7 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
 
     if "src" in parts:
         weight *= _env_weight("OPENCODE_WEIGHT_SRC", 2.0)
-    elif language and language not in _DOCUMENT_LANGUAGES:
+    elif language and not is_document_language(language):
         weight *= _env_weight("OPENCODE_WEIGHT_CODE_NON_DOC", 1.0)
 
     # Tests often contain dense natural-language docstrings and question-shaped
@@ -317,7 +308,7 @@ def _authority_weight(row: dict, *, query: str = "") -> float:
     if "scripts" in parts:
         weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 0.1)
 
-    if language in _DOCUMENT_LANGUAGES or language == "markdown":
+    if is_document_language(language):
         weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.1)
 
     # Allow very low weights so stale/low-authority sources cannot dominate

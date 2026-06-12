@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from opencode_search.config import get_project_graph_db_path
+from opencode_search.discover import is_document_language
 
 if TYPE_CHECKING:
     from opencode_search.graph.storage import GraphStorage
@@ -297,7 +298,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
     }
 
 
-_DOC_LANGS = frozenset({"markdown", "text", "unknown"})
+# is_document_language() from discover.py replaces this frozenset — single source of truth.
 
 
 def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, Any]]:
@@ -313,7 +314,7 @@ def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, A
         source_total = 0
         for path in iter_files(root, follow_symlinks=True):
             lang = detect_language(path)
-            if lang in _DOC_LANGS:
+            if is_document_language(lang):
                 continue  # skip docs/unknown — don't count toward cap
             counter[lang] += 1
             source_total += 1

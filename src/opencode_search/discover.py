@@ -168,6 +168,84 @@ def detect_language(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Language → tree-sitter grammar name (single canonical grammar-selection map)
+# ---------------------------------------------------------------------------
+
+# This is the ONE map that selects which tree-sitter grammar to invoke for a
+# given language identifier.  Moving it here (from chunker) makes it the single
+# source of truth and allows is_document_language() to be computed from it.
+LANG_TO_GRAMMAR: dict[str, str] = {
+    "rust": "rust",
+    "go": "go",
+    "typescript": "typescript",
+    "tsx": "tsx",
+    "javascript": "javascript",
+    "jsx": "javascript",
+    "python": "python",
+    "java": "java",
+    "c": "c",
+    "cpp": "cpp",
+    "ruby": "ruby",
+    "php": "php",
+    "swift": "swift",
+    "kotlin": "kotlin",
+    "scala": "scala",
+    "csharp": "csharp",
+    "lua": "lua",
+    "r": "r",
+    "perl": "perl",
+    "elixir": "elixir",
+    "erlang": "erlang",
+    "haskell": "haskell",
+    "elm": "elm",
+    "clojure": "clojure",
+    "clojurescript": "clojure",
+    "lisp": "commonlisp",
+    "scheme": "scheme",
+    "racket": "racket",
+    "ocaml": "ocaml",
+    "fsharp": "fsharp",
+    "nim": "nim",
+    "zig": "zig",
+    "v": "v",
+    "d": "d",
+    "dart": "dart",
+    "julia": "julia",
+    "sql": "sql",
+    "bash": "bash",
+    "zsh": "bash",
+    "fish": "fish",
+    "powershell": "powershell",
+    "protobuf": "proto",
+    "graphql": "graphql",
+    "css": "css",
+    "scss": "scss",
+    "sass": "scss",
+    "vue": "vue",
+    "svelte": "svelte",
+    "astro": "astro",
+    "dockerfile": "dockerfile",
+    "makefile": "make",
+    "cmake": "cmake",
+    "gradle": "groovy",
+    "latex": "latex",
+}
+
+_LANG_TO_GRAMMAR_KEYS: frozenset[str] = frozenset(LANG_TO_GRAMMAR)
+
+
+def is_document_language(lang: str) -> bool:
+    """Return True iff *lang* is a document/data format (no code grammar available).
+
+    Derived from LANG_TO_GRAMMAR: a language is "document/prose" iff it has no
+    tree-sitter code grammar entry.  This is the single source of truth replacing
+    the three hand-maintained frozensets that previously existed in search.py,
+    chunker.py, and handlers/_graph.py.
+    """
+    return lang not in _LANG_TO_GRAMMAR_KEYS
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
