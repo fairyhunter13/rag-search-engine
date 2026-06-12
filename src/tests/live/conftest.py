@@ -197,13 +197,16 @@ def judge_answer(answer: str, question: str) -> int:
 # synthesis. Phrasing-robustness is verified cheaply via /api/classify (intent
 # only), NOT by re-synthesizing the same answer. Keys are lowercased + stripped.
 _CANONICAL_QUERIES: dict[str, str] = {
+    # Architecture / global overview — map semantically-equivalent phrasings to one synthesis
     "what is the overall architecture of this codebase?": "arch_overview",
     "what is the overall system architecture?": "arch_overview",
     "what are the main entry points of this system?": "arch_overview",
     "give me a comprehensive global overview of this entire system": "global_overview",
     "give me a comprehensive global overview of the entire system": "global_overview",
     "give me a comprehensive global overview of the entire astro platform": "global_overview",
+    "give me a global overview of the entire system and all its components": "global_overview",
     "what does this project do?": "global_overview",
+    # Feature traces
     "how does search work end to end?": "feature_search",
     "how does the search feature work end to end?": "feature_search",
 }

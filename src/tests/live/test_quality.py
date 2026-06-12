@@ -27,48 +27,60 @@ def _ask_chat(http, project: str, query: str) -> str:
     return "".join(e.get("text", "") for e in events if e.get("type") == "token")
 
 
-def test_quality_architecture_answer(http, project):
-    """Architecture answer must score ≥ 3/5 for describing system structure."""
-    answer = _ask_chat(http, project, "What is the overall architecture of this codebase?")
+def test_quality_architecture_answer(chat_cache, judge_once, project):
+    """Architecture answer must score ≥ 3/5 for describing system structure.
+
+    Uses chat_cache — deduplicates synthesis with other arch_overview tests in the session.
+    """
+    answer, *_ = chat_cache(project, "What is the overall architecture of this codebase?")
     assert len(answer) > 50, f"Architecture answer too short: {answer!r}"
-    score = judge_answer(answer, "Does this describe system architecture with concrete components or layers?")
+    score = judge_once(answer, "Does this describe system architecture with concrete components or layers?")
     assert score >= _MIN_SCORE, f"Architecture answer quality {score}/5 too low:\n{answer[:400]}"
 
 
-def test_quality_search_explanation(http, project):
+def test_quality_search_explanation(chat_cache, judge_once, project):
     """Search explanation must score ≥ 2/5 for describing how search works.
 
+    Uses chat_cache — deduplicates synthesis with test_chat_answer_quality_feature
+    (both map to canonical key 'feature_search').
     Uses ≥2 (not ≥3) because large multi-service projects may have many search
     implementations — the answer legitimately describes distributed paths
     rather than a single call chain, which judges score as 2.
     """
-    answer = _ask_chat(http, project, "How does search work end to end?")
+    answer, *_ = chat_cache(project, "How does search work end to end?")
     assert len(answer) > 50, f"Search answer too short: {answer!r}"
-    score = judge_answer(answer, "Does this explain how search works with implementation details?")
+    score = judge_once(answer, "Does this explain how search works with implementation details?")
     assert score >= 2, f"Search answer quality {score}/5 too low:\n{answer[:400]}"
 
 
 @pytest.mark.flaky(reruns=4, reruns_delay=20)
-def test_quality_entry_points_answer(http, project):
+def test_quality_entry_points_answer(chat_cache, judge_once, project):
     """Entry points answer must score ≥ 2/5 for naming real code entry points.
 
+    Uses chat_cache (deduplicates synthesis with other arch_overview tests) and
+    judge_once (memoized judge call — real qwen3-query:8b, never repeated for the same answer).
     Uses ≥2 (not ≥3) because large multi-service projects may have multiple distributed
     entry surfaces rather than one monolith main() — valid descriptions of distributed
     entry points get scored 2 by the judge.
     Extra reruns because the codex judge is non-deterministic about scoring 1 vs 2 for
     high-level API-boundary descriptions of large multi-service systems.
     """
-    answer = _ask_chat(http, project, "What are the main entry points of this system?")
+    answer, *_ = chat_cache(project, "What are the main entry points of this system?")
     assert len(answer) > 50, f"Entry points answer too short: {answer!r}"
-    score = judge_answer(answer, "Does this identify concrete code entry points (functions, handlers, main)?")
+    score = judge_once(answer, "Does this identify concrete code entry points (functions, handlers, main)?")
     assert score >= 2, f"Entry points answer quality {score}/5 too low:\n{answer[:400]}"
 
 
-def test_quality_global_overview(http, project):
-    """Global overview must score ≥ 3/5 for breadth of system coverage."""
-    answer = _ask_chat(http, project, "Give me a comprehensive global overview of this entire system")
+def test_quality_global_overview(chat_cache, judge_once, project):
+    """Global overview must score ≥ 3/5 for breadth of system coverage.
+
+    Uses chat_cache — deduplicates synthesis with test_chat_global_intent,
+    test_chat_answer_quality_global, and test_global_intent_routes_correctly (all
+    map to canonical key 'global_overview').
+    """
+    answer, *_ = chat_cache(project, "Give me a comprehensive global overview of this entire system")
     assert len(answer) > 100, f"Global overview too short: {answer!r}"
-    score = judge_answer(answer, "Does this provide a broad, multi-domain system overview?")
+    score = judge_once(answer, "Does this provide a broad, multi-domain system overview?")
     assert score >= _MIN_SCORE, f"Global overview quality {score}/5 too low:\n{answer[:400]}"
 
 

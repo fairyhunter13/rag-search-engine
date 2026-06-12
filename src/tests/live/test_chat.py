@@ -87,15 +87,15 @@ def test_chat_returns_non_empty_answer(http, project):
     assert len(answer) > 20, f"Answer suspiciously short ({len(answer)} chars): {answer!r}"
 
 
-def test_chat_architecture_intent(http, project):
+def test_chat_architecture_intent(classify):
     """An architecture question must route to architecture or global intent."""
-    _answer, intent, _sources, _elapsed = _chat(http, project, "What is the overall architecture of this codebase?")
+    intent = classify("What is the overall architecture of this codebase?")
     assert intent in ("architecture", "global", "feature"), (
         f"Architecture query routed to unexpected intent: {intent!r}"
     )
 
 
-def test_chat_debug_trace_intent(http, project):
+def test_chat_debug_trace_intent(classify):
     """A Python traceback must route to debug_trace intent."""
     traceback = (
         "Traceback (most recent call last):\n"
@@ -103,7 +103,7 @@ def test_chat_debug_trace_intent(http, project):
         "    result = process(data)\n"
         "KeyError: 'content'"
     )
-    _answer, intent, _sources, _elapsed = _chat(http, project, traceback)
+    intent = classify(traceback)
     assert intent == "debug_trace", (
         f"Python traceback must route to debug_trace; got: {intent!r}"
     )
@@ -118,54 +118,38 @@ def test_chat_sources_are_real_paths(http, project):
 
 
 @pytest.mark.slow
-def test_chat_debug_intent(http, project):
+def test_chat_debug_intent(classify):
     """A 'why is X slow/broken' question must route to debug intent."""
-    _answer, intent, _sources, _elapsed = _chat(
-        http, project,
-        "why is the indexer slow and how can I debug it?",
-    )
+    intent = classify("why is the indexer slow and how can I debug it?")
     assert intent == "debug", f"Expected intent=debug for debug question; got: {intent!r}"
 
 
 @pytest.mark.slow
-def test_global_intent_routes_correctly(http, project):
-    """Global query must route to 'global' intent and return a substantive answer."""
-    r = http.post(
-        "/api/chat_stream",
-        json={"project": project,
-              "query": "give me a global overview of the entire system and all its components"},
-        headers={"Accept": "text/event-stream"},
-    )
-    assert r.status_code == 200
-    events = parse_sse(r)
-    tokens = [e for e in events if e.get("type") == "token"]
-    done = next((e for e in events if e.get("type") == "done"), {})
-    assert done.get("intent") == "global", (
-        f"Expected global intent, got {done.get('intent')!r}"
-    )
-    answer = "".join(e.get("text", "") for e in tokens)
+def test_global_intent_routes_correctly(classify, chat_cache, project):
+    """Global query must route to 'global' intent and return a substantive answer.
+
+    Routing verified cheaply via classify; answer length via shared chat_cache synthesis
+    (deduplicates with any other global_overview tests in the same session).
+    """
+    intent = classify("give me a global overview of the entire system and all its components")
+    assert intent == "global", f"Expected global intent, got {intent!r}"
+    answer, *_ = chat_cache(project, "give me a global overview of the entire system and all its components")
     assert len(answer) > 100, f"Global answer too short: {len(answer)} chars"
 
 
 @pytest.mark.slow
-def test_chat_search_intent(http, project):
+def test_chat_search_intent(classify):
     """An explicit 'find/show me the source code' query must route to search intent."""
-    _answer, intent, _sources, _elapsed = _chat(
-        http, project,
-        "show me the source code of the main HTTP route handler",
-    )
+    intent = classify("show me the source code of the main HTTP route handler")
     assert intent in ("search", "architecture", "feature"), (
         f"Search query routed to unexpected intent: {intent!r}"
     )
 
 
 @pytest.mark.slow
-def test_chat_feature_intent(http, project):
+def test_chat_feature_intent(classify):
     """An 'end-to-end how does X work' query must route to feature intent."""
-    _answer, intent, _sources, _elapsed = _chat(
-        http, project,
-        "explain step by step how the indexing feature works from file discovery to storage",
-    )
+    intent = classify("explain step by step how the indexing feature works from file discovery to storage")
     assert intent in ("feature", "architecture", "global"), (
         f"Feature query routed to unexpected intent: {intent!r}"
     )
@@ -180,21 +164,18 @@ def test_chat_feature_intent(http, project):
     "who calls AddToCart?",
     "what fires the campaign service?",
 ])
-def test_chat_graph_callers_intent(http, project, query):
+def test_chat_graph_callers_intent(classify, query):
     """A 'what calls/triggers/invokes X' query must route to graph_callers intent."""
-    _answer, intent, _sources, _elapsed = _chat(http, project, query)
+    intent = classify(query)
     assert intent in ("graph_callers", "search"), (
         f"Query {query!r} routed to {intent!r} instead of graph_callers"
     )
 
 
 @pytest.mark.slow
-def test_chat_graph_callees_intent(http, project):
+def test_chat_graph_callees_intent(classify):
     """A 'what does X call' query must route to graph_callees intent."""
-    _answer, intent, _sources, _elapsed = _chat(
-        http, project,
-        "what does the main search handler call internally",
-    )
+    intent = classify("what does the main search handler call internally")
     assert intent in ("graph_callees", "search", "feature"), (
         f"Callees query routed to unexpected intent: {intent!r}"
     )
@@ -274,9 +255,9 @@ def test_chat_router_global_intent_reports_query_tier_model(http, project):
     "what depends on the user service interface?",
     "what is impacted by changing the inventory contract?",
 ])
-def test_chat_graph_impact_intent(http, project, query):
+def test_chat_graph_impact_intent(classify, query):
     """A 'what breaks/blast radius/impact of changing X' query must route to graph_impact."""
-    _answer, intent, _sources, _elapsed = _chat(http, project, query)
+    intent = classify(query)
     assert intent in ("graph_impact", "architecture", "feature"), (
         f"Query {query!r} routed to {intent!r} instead of graph_impact"
     )
