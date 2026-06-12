@@ -437,6 +437,30 @@ def _register_wiki_routes(mcp: FastMCP) -> None:
         result = await handle_wiki_lint(project_path=project)
         return JSONResponse(result)
 
+    @mcp.custom_route("/api/generate_wiki", methods=["POST"], include_in_schema=False)
+    async def api_generate_wiki(request: Request) -> JSONResponse:
+        """Submit background job to generate missing community wiki pages. POST {project, max_communities?}."""
+        from opencode_search.handlers._wiki import handle_wiki_generate
+        from opencode_search.jobs import submit_job
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        project = body.get("project") or request.query_params.get("project", "")
+        if not project:
+            return JSONResponse({"error": "project required"}, status_code=400)
+        max_communities = int(body.get("max_communities", 10_000))
+        job = submit_job(
+            handle_wiki_generate(project_path=project, max_communities=max_communities),
+            action="generate_wiki",
+            project_path=project,
+        )
+        return JSONResponse({
+            "status": "started",
+            "job_id": job.id,
+            "poll_url": f"/api/jobs/{job.id}",
+            "message": "Wiki community page generation running in background.",
+        })
+
     @mcp.custom_route("/api/suggested_questions", methods=["GET"], include_in_schema=False)
     async def api_suggested_questions(request: Request) -> JSONResponse:
         """Questions the graph is uniquely positioned to answer."""
