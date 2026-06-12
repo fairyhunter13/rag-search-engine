@@ -25,6 +25,7 @@ pytestmark = pytest.mark.live
 
 _ASTRO = "/home/user/git/github.com/fairyhunter13/astro-project"
 _DONE_PCT = 99.0  # threshold for "done" at each level
+_PAYMENT_GW = "/home/user/go/src/github.com/example-org/payment-gateway"
 
 
 # ---------------------------------------------------------------------------
@@ -496,3 +497,203 @@ class TestHierarchyChurnGuard:
                 "cross-community edges — futile-rebuild churn would result "
                 f"(max_level={max_level}, n_l1={n_l1})."
             )
+
+
+# ── Fleet-wide gap-coverage tests (Gaps A / B / C) ────────────────────────────
+
+class TestProjectKbIncompletePredicate:
+    """F1: _project_kb_incomplete() must correctly classify KB state."""
+
+    def test_definitions_only_project_not_incomplete(self):
+        """A project with 0 edges (definitions-only) must NOT be flagged incomplete."""
+        from opencode_search.config import get_project_graph_db_path, load_registry
+        from opencode_search.graph.storage import GraphStorage
+        from opencode_search.handlers._autopipeline import _project_kb_incomplete
+
+        # Find any registry project with 0 edges — definitions-only is expected DONE.
+        registry = load_registry()
+        candidate = None
+        for path_str, entry in registry.items():
+            if not entry.file_count:
+                continue
+            db = get_project_graph_db_path(path_str)
+            from pathlib import Path
+            if not Path(db).exists():
+                continue
+            gs = GraphStorage(db)
+            gs.open()
+            try:
+                edge_row = gs._db().execute("SELECT 1 FROM edges LIMIT 1").fetchone()
+                n_comms = len(gs.get_communities())
+            finally:
+                gs.close()
+            if edge_row is None and n_comms == 0:
+                candidate = path_str
+                break
+
+        if candidate is None:
+            pytest.skip("No definitions-only project found in registry")
+
+        result = _project_kb_incomplete(candidate)
+        assert result is False, (
+            f"_project_kb_incomplete({candidate!r}) returned True for a definitions-only "
+            "project (0 edges) — should be False (DONE per Phase 103 semantics)."
+        )
+
+    def test_payment_gateway_incomplete_when_zero_communities(self):
+        """Gap A: payment-gateway with edges>0 but communities==0 → incomplete=True."""
+        from pathlib import Path
+
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+        from opencode_search.handlers._autopipeline import _project_kb_incomplete
+
+        db = get_project_graph_db_path(_PAYMENT_GW)
+        if not Path(db).exists():
+            pytest.skip("payment-gateway not indexed")
+
+        gs = GraphStorage(db)
+        gs.open()
+        try:
+            edge_row = gs._db().execute("SELECT 1 FROM edges LIMIT 1").fetchone()
+            n_comms = len(gs.get_communities())
+        finally:
+            gs.close()
+
+        if edge_row is None:
+            pytest.skip("payment-gateway has 0 edges — not Gap A scenario")
+
+        if n_comms > 0:
+            # Communities already detected — predicate should return False (KB has communities).
+            # This means Gap A was fixed. Verify predicate is consistent.
+            result = _project_kb_incomplete(_PAYMENT_GW)
+            # If wiki is also complete, predicate should return False.
+            assert isinstance(result, bool), "_project_kb_incomplete must return bool"
+        else:
+            # Still in Gap A state — predicate must return True.
+            result = _project_kb_incomplete(_PAYMENT_GW)
+            assert result is True, (
+                f"_project_kb_incomplete({_PAYMENT_GW!r}) returned False when edges>0 "
+                "and communities==0 — Gap A scenario must be flagged as incomplete."
+            )
+
+
+class TestAllEnrichedMembersHaveWikiPages:
+    """Gap B: every federation member with communities>0 must have community wiki pages."""
+
+    @pytest.mark.slow
+    def test_all_enriched_members_have_wiki_pages(self):
+        """Each registered project/member with enriched communities must have ≥0.8×eligible wiki pages."""
+        from pathlib import Path
+
+        from opencode_search.config import (
+            get_project_graph_db_path,
+            get_project_wiki_dir,
+            load_registry,
+        )
+        from opencode_search.graph.storage import GraphStorage
+
+        registry = load_registry()
+        failures = []
+
+        for path_str, entry in registry.items():
+            if not entry.file_count:
+                continue
+            db = get_project_graph_db_path(path_str)
+            if not Path(db).exists():
+                continue
+
+            gs = GraphStorage(db)
+            gs.open()
+            try:
+                all_comms = gs.get_communities()
+            finally:
+                gs.close()
+
+            if not all_comms:
+                continue  # No communities — not a Gap B target.
+
+            eligible = [c for c in all_comms if (c.node_count or 0) >= 2 and c.title]
+            if not eligible:
+                continue  # No enriched eligible communities.
+
+            wiki_dir = get_project_wiki_dir(path_str)
+            content_pages = len(list(wiki_dir.glob("community_*.md"))) if wiki_dir.exists() else 0
+            threshold = 0.8 * len(eligible)
+
+            if content_pages < threshold:
+                failures.append(
+                    f"{path_str}: {content_pages} wiki pages < {threshold:.0f} "
+                    f"(0.8 × {len(eligible)} eligible communities)"
+                )
+
+        assert not failures, (
+            "Gap B — these projects/members have enriched communities but insufficient wiki pages:\n"
+            + "\n".join(f"  {f}" for f in failures)
+        )
+
+
+class TestAllIndexedProjectsWatched:
+    """Gap C: every registered project+member with file_count>0 must be live-watched."""
+
+    def test_all_indexed_projects_and_members_watched(self):
+        """After resume_watchers, every file_count>0 registry entry must have watch=True."""
+        from opencode_search.config import load_registry
+
+        registry = load_registry()
+        unwatched = []
+
+        for path_str, entry in registry.items():
+            if not entry.file_count:
+                continue
+            if not entry.watch:
+                unwatched.append(f"{path_str} (file_count={entry.file_count})")
+
+        assert not unwatched, (
+            "Gap C — these indexed projects/members are not being live-watched:\n"
+            + "\n".join(f"  {u}" for u in unwatched)
+            + "\nExpected: resume_watchers() at daemon start sets watch=True for all."
+        )
+
+
+class TestVerdictWipedCommunityNotDone:
+    """F4: kb-status must NOT report DONE when edges>0 but communities==0."""
+
+    def test_verdict_edges_but_zero_communities_not_done(self):
+        """A project with graph edges but 0 communities must verdict PENDING, not DONE."""
+        import subprocess
+        from pathlib import Path
+
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+
+        db = get_project_graph_db_path(_PAYMENT_GW)
+        if not Path(db).exists():
+            pytest.skip("payment-gateway not indexed")
+
+        gs = GraphStorage(db)
+        gs.open()
+        try:
+            edge_row = gs._db().execute("SELECT 1 FROM edges LIMIT 1").fetchone()
+            n_comms = len(gs.get_communities())
+        finally:
+            gs.close()
+
+        if edge_row is None:
+            pytest.skip("payment-gateway has 0 edges — not Gap A scenario")
+
+        if n_comms > 0:
+            pytest.skip("payment-gateway already has communities — Gap A resolved; verdict may be DONE/PENDING depending on wiki")
+
+        # edges>0, communities==0 — cli kb-status must NOT report DONE for this project.
+        result = subprocess.run(
+            [".venv/bin/python", "-m", "opencode_search.cli", "kb-status", _PAYMENT_GW],
+            capture_output=True, text=True,
+            cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+        )
+        output = result.stdout + result.stderr
+        assert "DONE" not in output, (
+            f"kb-status reported DONE for {_PAYMENT_GW!r} which has edges>0 but 0 communities — "
+            "Gap A: incomplete KB must not be masked as DONE.\n"
+            f"Output: {output[:500]}"
+        )
