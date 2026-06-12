@@ -135,6 +135,16 @@ def _project_kb_incomplete(project_path: str) -> bool:
                 if enriched / len(eligible) < 0.99:
                     return True
 
+            # Gap B: wiki page coverage — if fewer than 80% of eligible communities have
+            # a wiki page the maintenance loop should re-trigger the pipeline.
+            from opencode_search.config import get_project_wiki_dir
+            eligible_total = sum(1 for c in all_comms if (c.node_count or 0) >= 2)
+            if eligible_total > 0:
+                wiki_dir = Path(get_project_wiki_dir(project_path))
+                content_pages = len(list(wiki_dir.glob("community_*.md"))) if wiki_dir.exists() else 0
+                if content_pages < 0.8 * eligible_total:
+                    return True
+
             return False
         finally:
             gs.close()

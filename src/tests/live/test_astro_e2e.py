@@ -381,11 +381,11 @@ class TestAstroManage:
 # Chat — all intents against redacted-name-3
 # ---------------------------------------------------------------------------
 
-def _chat(http, project: str, query: str) -> tuple[str, str, list[str], int, str]:
+def _chat(http, project: str, query: str, use_cache: bool = True) -> tuple[str, str, list[str], int, str]:
     """Send a chat_stream query, return (answer, intent, sources, elapsed_ms, model)."""
     r = http.post(
         "/api/chat_stream",
-        json={"project": project, "query": query},
+        json={"project": project, "query": query, "use_cache": use_cache},
         headers={"Accept": "text/event-stream"},
     )
     assert r.status_code == 200, f"chat_stream failed: {r.status_code} {r.text[:200]}"

@@ -15,7 +15,7 @@ Environment variables:
   OPENCODE_LLM_NO_FALLBACK=1  disable automatic rate-limit fallback to claude-haiku-4.5
 
 Provider defaults:
-  ollama:      base_url=http://localhost:11434  model=phi4-mini:3.8b
+  ollama:      base_url=http://localhost:11434  model=qwen3-enrich:1.7b
   anthropic:   base_url=https://api.anthropic.com  model=claude-haiku-4-5-20251001
   openai:      base_url=https://api.openai.com  model=gpt-4o-mini
   claude-code: uses locally installed `claude` CLI; model=claude-haiku-4-5-20251001
@@ -533,7 +533,7 @@ class OllamaClient(LLMClient):
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        model: str = "phi4-mini:3.8b",
+        model: str = _OLLAMA_DEFAULT_MODEL,
         timeout: int = 120,
         num_ctx: int = 2048,
     ) -> None:
