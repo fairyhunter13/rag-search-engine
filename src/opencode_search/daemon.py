@@ -321,6 +321,12 @@ def ensure_daemon_running(
             _clear_pidfile()
 
         if _tcp_port_open(host, port) and not daemon_is_healthy(host, port):
+            # The port is occupied but the health endpoint isn't responding yet.
+            # This is normal during startup: the daemon binds the port before ONNX
+            # model loading completes (10-20s on Blackwell/RTX 5080). Wait up to
+            # 30s before concluding the occupant is a non-opencode-search process.
+            if _wait_for_healthy(host, port, timeout_s=30.0):
+                return {"status": "already_running", "url": daemon_url(host, port)}
             raise RuntimeError(
                 f"Port {host}:{port} is already in use by a non-opencode-search process"
             )
@@ -1865,7 +1871,7 @@ def run_http_daemon_server(host: str = DEFAULT_DAEMON_HOST, port: int = DEFAULT_
             _sd_notify("READY=1\n")  # satisfy Type=notify so systemd records a clean start
             _sd_notify("STATUS=another healthy daemon already serving; exiting cleanly\n")
             return
-        grace = float(os.environ.get("OPENCODE_DAEMON_BIND_WAIT_S", "5"))
+        grace = float(os.environ.get("OPENCODE_DAEMON_BIND_WAIT_S", "30"))
         if not _wait_for_port_free(host, port, timeout_s=grace):
             raise RuntimeError(f"Cannot start daemon on {host}:{port}; still in use after {grace}s wait")
     _write_pidfile(host=host, port=port)

@@ -96,12 +96,18 @@ async def _notify_daemon(path: str, payload: dict[str, Any]) -> None:
 
 async def _register_bridge_client() -> None:
     payload = {"client_id": _bridge_client_id, "cwd": os.getcwd()}
-    try:
-        await _notify_daemon("/admin/client/open", payload)
-    except Exception:
-        await asyncio.to_thread(stop_daemon)
-        await asyncio.to_thread(ensure_daemon_running)
-        await _notify_daemon("/admin/client/open", payload)
+    for attempt in range(4):
+        try:
+            await _notify_daemon("/admin/client/open", payload)
+            return
+        except Exception:
+            if attempt < 3:
+                await asyncio.sleep(2.0 * (attempt + 1))  # 2s, 4s, 6s
+            else:
+                # Last resort: restart daemon only after all retries exhausted.
+                await asyncio.to_thread(stop_daemon)
+                await asyncio.to_thread(ensure_daemon_running)
+                await _notify_daemon("/admin/client/open", payload)
 
 
 async def _heartbeat_loop() -> None:
