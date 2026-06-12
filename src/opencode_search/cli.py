@@ -713,16 +713,28 @@ def kb_status(
 
         Empty levels (total=0) are vacuously satisfied — the Leiden meta-graph
         simply couldn't form communities at that tier.  Definition-only repos
-        (0 communities total) also have nothing to enrich, so they are DONE.
+        (edges==0, 0 communities) also have nothing to enrich, so they are DONE.
         The historical `len(by_level) >= 2` requirement is dropped: a project
         that genuinely produces only L1 (< 5 communities) is DONE once L1 ≥ 99%.
+
+        Gap A case (edges>0 & communities==0): _project_kb_incomplete returns
+        True, so we surface PENDING instead of the misleading DONE verdict.
         """
         if "error" in data:
             return "ERROR"
         by_level = data.get("enrichment_by_level", {})
         non_empty = {k: v for k, v in by_level.items() if v.get("total", 0) > 0}
         if not non_empty:
-            # No communities to enrich (definitions-only, 0-edge, or thin root).
+            # Could be definitions-only (DONE) or edges>0/communities==0 (PENDING).
+            # Use _project_kb_incomplete to distinguish.
+            proj_path = data.get("project_path", "")
+            if proj_path:
+                try:
+                    from opencode_search.handlers._autopipeline import _project_kb_incomplete
+                    if _project_kb_incomplete(proj_path):
+                        return "PENDING"
+                except Exception:
+                    pass
             return "DONE"
         for _lvl, stats in non_empty.items():
             if stats.get("pct", 0) < 99.0:
