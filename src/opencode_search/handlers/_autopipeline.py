@@ -270,6 +270,51 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
     steps: list[dict[str, Any]] = []
     _record_event(pp, "running")
 
+    # ── Step 0: Re-detect communities when graph has edges but 0 communities ─
+    # Gap A: redacted-name-0 had 370 edges and 0 communities because Leiden
+    # never ran (or communities were wiped) while the graph was non-empty.
+    # Without this step, handle_pipeline's enrich pass finds nothing to enrich
+    # and the project stays permanently stuck at 0% enrichment.
+    # Definitions-only graphs (edges==0) are exempt — they correctly have 0 communities.
+    try:
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.community import CommunityDetector
+        from opencode_search.graph.storage import GraphStorage as _GS0
+        _db0 = get_project_graph_db_path(pp)
+        if Path(_db0).exists():
+            _gs0 = _GS0(_db0)
+            _gs0.open()
+            try:
+                _n_comms0 = len(_gs0.get_communities())
+                if _n_comms0 == 0:
+                    _has_edges = _gs0._db().execute("SELECT 1 FROM edges LIMIT 1").fetchone()
+                    if _has_edges:
+                        log.info(
+                            "auto_pipeline[%s]: 0 communities with edges present — re-running Leiden",
+                            root.name,
+                        )
+                        _n_detected = await asyncio.to_thread(
+                            lambda gs=_gs0: len(CommunityDetector().detect_communities(gs))
+                        )
+                        steps.append({
+                            "step": "community_redetect",
+                            "status": "ok",
+                            "communities_detected": _n_detected,
+                        })
+                        log.info(
+                            "auto_pipeline[%s]: Leiden re-run complete (%d communities)",
+                            root.name, _n_detected,
+                        )
+                    else:
+                        steps.append({"step": "community_redetect", "status": "skipped", "reason": "no_edges"})
+                else:
+                    steps.append({"step": "community_redetect", "status": "skipped", "reason": "already_detected"})
+            finally:
+                _gs0.close()
+    except Exception as exc:
+        log.warning("auto_pipeline[%s]: community_redetect failed: %s", root.name, exc)
+        steps.append({"step": "community_redetect", "status": "error", "error": str(exc)})
+
     # ── Step 1: Enrich + Wiki + Ingest ──────────────────────────────────────
     # Use a high cap so every level-1 community is enriched on the first run.
     # 10_000 is effectively unbounded for any real project (astro has 1761 L1).
