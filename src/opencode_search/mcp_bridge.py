@@ -17,7 +17,13 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.fastmcp import FastMCP
 
-from opencode_search.daemon import daemon_url, ensure_daemon_running, health_url, stop_daemon
+from opencode_search.daemon import (
+    daemon_is_healthy,
+    daemon_url,
+    ensure_daemon_running,
+    health_url,
+    stop_daemon,
+)
 
 _bridge_client_id = f"bridge-{uuid.uuid4()}"
 _heartbeat_task: asyncio.Task[None] | None = None
@@ -159,21 +165,28 @@ _DEFAULT_DEADLINE = 8.0
 
 
 async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    await asyncio.to_thread(ensure_daemon_running)
+    # Hot-path health check: skip the file-locked ensure_daemon_running() when the
+    # daemon is already up (the common case).  Only take the lock when unhealthy.
+    if not await asyncio.to_thread(daemon_is_healthy):
+        await asyncio.to_thread(ensure_daemon_running)
+
     deadline = _TOOL_DEADLINES.get(name, _DEFAULT_DEADLINE)
     last_exc: Exception | None = None
+
+    async def _one_attempt() -> Any:
+        async with streamable_http_client(daemon_url(), terminate_on_close=False) as streams:
+            read_stream, write_stream, _ = streams
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                return await session.call_tool(name, arguments)
+
     for attempt in range(3):
         if attempt:
             await asyncio.sleep(0.2)
         try:
-            async with streamable_http_client(daemon_url(), terminate_on_close=False) as streams:
-                read_stream, write_stream, _ = streams
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    result = await asyncio.wait_for(
-                        session.call_tool(name, arguments),
-                        timeout=deadline,
-                    )
+            # Wrap the ENTIRE attempt — connection, initialize, and call — under the
+            # deadline so a flock contention or a slow server cannot block forever.
+            result = await asyncio.wait_for(_one_attempt(), timeout=deadline)
             break  # success — exit retry loop
         except TimeoutError:
             return {
@@ -190,7 +203,7 @@ async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             raise
     else:
-        return {"status": "error", "error": str(last_exc)}
+        return {"status": "error", "error": str(last_exc), "fallback": True}
 
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
