@@ -895,6 +895,27 @@ def _register_graph_routes(mcp: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 def _register_chat_routes(mcp: FastMCP) -> None:
+    @mcp.custom_route("/api/classify", methods=["POST"], include_in_schema=False)
+    async def api_classify(request: Request) -> JSONResponse:
+        """Cheap intent-only classification — no synthesis.
+
+        Body JSON: {"query": str}. Returns {"intent": str}. One short LLM call
+        (~32 tokens) instead of the full MAP-reduce synthesis — for UIs and routing
+        tests that only need the intent, not the answer.
+        """
+        from opencode_search.handlers._chat_router import classify_intent_llm
+        body: dict = {}
+        with contextlib.suppress(Exception):
+            body = await request.json()
+        query = body.get("query", "")
+        if not query:
+            return JSONResponse({"error": "query required"}, status_code=400)
+        try:
+            intent = await classify_intent_llm(query)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc), "query": query}, status_code=500)
+        return JSONResponse({"intent": intent, "query": query})
+
     @mcp.custom_route("/api/chat", methods=["POST"], include_in_schema=False)
     async def api_kb_chat(request: Request) -> JSONResponse:
         """Unified chat: auto-detects intent, returns humanized prose.

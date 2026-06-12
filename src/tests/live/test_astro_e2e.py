@@ -400,37 +400,38 @@ class TestAstroChatIntents:
 
     pytestmark = pytest.mark.slow
 
-    def test_chat_search_intent(self, http, astro):
-        answer, intent, *_ = _chat(http, astro, "find the gRPC service definition files")
+    def test_chat_search_intent(self, classify):
+        # Routing only — classify is ~32 tokens, no synthesis. Answer quality covered
+        # by test_chat_stream_no_empty_answers and scenario quality tests.
+        intent = classify("find the gRPC service definition files")
         assert intent == "search", f"Expected intent=search; got {intent!r}"
-        assert len(answer) > 20, f"Search answer too short: {answer!r}"
 
-    def test_chat_architecture_intent(self, http, astro):
-        answer, intent, *_ = _chat(http, astro, "what is the overall system architecture?")
+    def test_chat_architecture_intent(self, classify):
+        intent = classify("what is the overall system architecture?")
         assert intent in ("architecture", "global"), f"Expected architecture/global intent; got {intent!r}"
-        assert len(answer) > 100, f"Architecture answer too short: {answer!r}"
 
-    def test_chat_global_intent(self, http, astro):
-        answer, intent, *_ = _chat(http, astro, "give me a comprehensive global overview of the entire system")
+    def test_chat_global_intent(self, classify, chat_cache, astro):
+        # Routing check via classify; answer length via shared chat_cache (one synthesis
+        # shared with test_chat_answer_quality_global — same canonical key).
+        intent = classify("give me a comprehensive global overview of the entire system")
         assert intent == "global", f"Expected intent=global; got {intent!r}"
+        answer, *_ = chat_cache(astro, "give me a comprehensive global overview of the entire system")
         assert len(answer) > 200, f"Global answer too short: {answer!r}"
 
-    def test_chat_feature_intent(self, http, astro):
-        answer, intent, *_ = _chat(http, astro, "how does the ad display search work end to end?")
+    def test_chat_feature_intent(self, classify):
+        intent = classify("how does the ad display search work end to end?")
         assert intent == "feature", f"Expected intent=feature; got {intent!r}"
-        assert len(answer) > 50, f"Feature answer too short: {answer!r}"
 
-    def test_chat_graph_callers_intent(self, http, astro):
-        _, intent, *_ = _chat(http, astro, "what calls the DisplaySearch handler?")
+    def test_chat_graph_callers_intent(self, classify):
+        intent = classify("what calls the DisplaySearch handler?")
         assert intent == "graph_callers", f"Expected intent=graph_callers; got {intent!r}"
 
-    def test_chat_graph_impact_intent(self, http, astro):
-        _, intent, *_ = _chat(http, astro, "what breaks if I change the search proto contract?")
+    def test_chat_graph_impact_intent(self, classify):
+        intent = classify("what breaks if I change the search proto contract?")
         assert intent == "graph_impact", f"Expected intent=graph_impact; got {intent!r}"
 
-    def test_chat_debug_trace_intent(self, http, astro):
-        _, intent, *_ = _chat(
-            http, astro,
+    def test_chat_debug_trace_intent(self, classify):
+        intent = classify(
             "goroutine 1 [running]:\nruntime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:24 +0x65\n"
             "main.main()\n\t/home/user/astro/cmd/main.go:42 +0x3b2"
         )
@@ -438,16 +439,17 @@ class TestAstroChatIntents:
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
-    def test_chat_answer_quality_global(self, http, astro):
-        answer, *_ = _chat(http, astro, "Give me a comprehensive global overview of this entire system")
-        score = judge_answer(answer, "Does this provide a broad, multi-domain system overview with concrete details?")
+    def test_chat_answer_quality_global(self, chat_cache, judge_once, astro):
+        # chat_cache deduplicates synthesis — shares result with test_chat_global_intent.
+        answer, *_ = chat_cache(astro, "Give me a comprehensive global overview of this entire system")
+        score = judge_once(answer, "Does this provide a broad, multi-domain system overview with concrete details?")
         assert score >= _MIN_SCORE, f"Global overview quality {score}/5 too low:\n{answer[:400]}"
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
-    def test_chat_answer_quality_feature(self, http, astro):
-        answer, *_ = _chat(http, astro, "How does the search feature work end to end?")
-        score = judge_answer(answer, "Does this trace a specific feature end-to-end with entry points or call chain?")
+    def test_chat_answer_quality_feature(self, chat_cache, judge_once, astro):
+        answer, *_ = chat_cache(astro, "How does the search feature work end to end?")
+        score = judge_once(answer, "Does this trace a specific feature end-to-end with entry points or call chain?")
         # astro-project has 4+ distributed search implementations; judge scores
         # a valid multi-path description as 2 rather than 3 — accept ≥2
         assert score >= 2, f"Feature trace quality {score}/5 too low:\n{answer[:400]}"
