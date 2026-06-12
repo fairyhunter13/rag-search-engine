@@ -180,7 +180,14 @@ class TestWiki:
 class TestPatternsCache:
     """LLM-classified patterns must be cached and non-trivial."""
 
+    @pytest.mark.slow
     def test_patterns_cache_populated(self, http, project):
+        """Patterns cache must be populated — if empty, establish it and assert.
+
+        No xfail: an empty cache is a fixable precondition, not an expected failure.
+        POST /api/analyze_patterns runs the local GPU qwen3-enrich:1.7b classifier
+        and persists patterns_cache.json; we then re-read kb_health and require it.
+        """
         r = http.get("/api/kb_health", params={"project": project})
         assert r.status_code == 200
         data = r.json()
@@ -188,19 +195,40 @@ class TestPatternsCache:
         assert patterns_cached is not None, (
             f"patterns_cached not in kb_health response; keys={list(data.keys())}"
         )
-        # Warn but don't fail if cache is empty — first run might not have it
+        analyze_resp = ""
         if not patterns_cached:
-            pytest.xfail("Patterns cache is empty — run POST /api/analyze_patterns")
+            # Establish the precondition with real LLM analysis (local GPU Ollama).
+            ar = http.post("/api/analyze_patterns", params={"project": project})
+            assert ar.status_code == 200, f"analyze_patterns failed: {ar.text[:200]}"
+            analyze_resp = ar.text[:300]
+            r2 = http.get("/api/kb_health", params={"project": project})
+            assert r2.status_code == 200
+            d2 = r2.json()
+            patterns_cached = d2.get("patterns_cached", d2.get("has_patterns_cache"))
+        assert patterns_cached, (
+            f"Patterns cache still empty after POST /api/analyze_patterns; "
+            f"analyze response: {analyze_resp}"
+        )
 
+    @pytest.mark.slow
     def test_patterns_llm_analysis_present(self, http, project):
+        """/api/patterns must carry llm_analysis — trigger analysis if absent, then assert.
+
+        No xfail: a missing analysis is a fixable precondition. We POST
+        /api/analyze_patterns (local GPU qwen3-enrich:1.7b) and require the
+        subsequent /api/patterns response to carry a real llm_analysis payload.
+        """
         r = http.get("/api/patterns", params={"project": project})
         assert r.status_code == 200, f"patterns failed: {r.text[:200]}"
-        data = r.json()
-        llm_analysis = data.get("llm_analysis")
+        llm_analysis = r.json().get("llm_analysis")
         if llm_analysis is None:
-            pytest.xfail("LLM analysis not yet run — POST /api/analyze_patterns needed")
-        assert isinstance(llm_analysis, (dict, str)), (
-            f"llm_analysis has unexpected type: {type(llm_analysis)}"
+            ar = http.post("/api/analyze_patterns", params={"project": project})
+            assert ar.status_code == 200, f"analyze_patterns failed: {ar.text[:200]}"
+            r2 = http.get("/api/patterns", params={"project": project})
+            assert r2.status_code == 200, f"patterns failed: {r2.text[:200]}"
+            llm_analysis = r2.json().get("llm_analysis")
+        assert isinstance(llm_analysis, (dict, str)) and llm_analysis, (
+            f"llm_analysis missing or wrong type after analysis: {type(llm_analysis).__name__}"
         )
 
 
@@ -293,23 +321,42 @@ class TestHierarchyDetection:
     """_project_needs_hierarchy_enrich must detect unenriched communities at ALL levels."""
 
     def test_all_level_detector_fires_for_astro(self, project):
-        """All-level detector must identify redacted-name-3 as needing hierarchy enrichment.
+        """Detector verdict must match the graph's real level-≥2 enrichment state.
 
-        redacted-name-3 has level-3 at 0% enrichment (0/1417 communities).
-        The old level-2-only detector would miss this if L2 had ANY enriched titles.
-        The new detector scans every level ≥2 and must return True.
+        _project_needs_hierarchy_enrich returns True iff some level ≥2 community has
+        node_count ≥ 2 and no title. We recompute that exact predicate directly from
+        the graph and assert the public detector agrees — meaningful in BOTH states
+        (no hidden skip):
+          - a thin federation root (redacted-name-3) has only level-1, so max_level==1
+            and the detector correctly returns False (nothing above L1 to enrich);
+          - a project with unenriched L2/L3 communities makes the detector return True.
+        Either way the assertion is real — no xfail.
         """
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
         from opencode_search.handlers._autopipeline import _project_needs_hierarchy_enrich
+
         result = _project_needs_hierarchy_enrich(project)
-        # If L2 or L3 have ANY unenriched communities the detector must fire.
-        # If the project is 100% enriched at all levels (sweep has completed),
-        # this returns False — which is also correct; xfail to avoid flakiness.
-        if not result:
-            pytest.xfail(
-                "All hierarchy levels appear fully enriched — "
-                "the KB sweep has completed for this project. "
-                "This is the desired end-state, not a test failure."
-            )
+
+        # Independently recompute the ground-truth predicate from the graph.
+        graph_db = get_project_graph_db_path(project)
+        gs = GraphStorage(graph_db)
+        gs.open()
+        try:
+            max_level = gs.get_max_community_level()
+            ground_truth = False
+            for lvl in range(2, max_level + 1):
+                comms = gs.get_communities(level=lvl)
+                if any(not c.title and (c.node_count or 0) >= 2 for c in comms):
+                    ground_truth = True
+                    break
+        finally:
+            gs.close()
+
+        assert result == ground_truth, (
+            f"_project_needs_hierarchy_enrich returned {result} but the graph's actual "
+            f"unenriched-level≥2 state is {ground_truth} (max_level={max_level})"
+        )
 
     def test_detector_scans_max_level_not_just_level2(self, project):
         """_project_needs_hierarchy_enrich must inspect every level up to max_level.
@@ -366,24 +413,55 @@ class TestKbSweep:
         )
 
     @pytest.mark.slow
+    @pytest.mark.flaky(reruns=2, reruns_delay=30)
     def test_sweep_raises_level2_enrichment(self, http, project):
-        """One sweep cycle must increase level-2 enrichment pct for redacted-name-3.
+        """A sweep cycle must advance level-2 enrichment toward convergence.
 
-        This is a convergence smoke test — not a full-completion test.
-        Marked slow because enrichment requires real GPU + Ollama.
+        No xfail — every outcome is asserted explicitly so the test never silently
+        skips. Three real cases:
+          - thin federation root (no level-2 meta-communities) → nothing to enrich,
+            assert the empty state is self-consistent;
+          - level-2 already converged (≥99%) → assert it stays converged after a
+            re-trigger (no regression);
+          - level-2 unconverged → one sweep must make real forward progress.
+        Marked slow because enrichment requires real GPU + Ollama; flaky reruns
+        absorb transient Ollama-queue stalls without masking a genuine plateau.
         """
         import time
 
         r = http.get("/api/kb_health", params={"project": project})
         assert r.status_code == 200
-        before = r.json().get("enrichment_by_level", {}).get("2", {}).get("pct", 0)
+        l2 = r.json().get("enrichment_by_level", {}).get("2", {})
+        before = l2.get("pct", 0)
+        total_l2 = l2.get("total", 0)
 
-        # Trigger one sweep cycle via the dedicated HTTP endpoint
+        # Case 1: no level-2 meta-communities exist (thin/aggregator root). There is
+        # nothing to converge — assert the empty state is consistent and return.
+        if total_l2 == 0:
+            assert before in (0, 0.0) or before >= 99.0, (
+                f"Level-2 reports 0 communities but pct={before} — inconsistent kb_health"
+            )
+            return
+
+        # Trigger one sweep cycle via the dedicated HTTP endpoint.
         r2 = http.post("/api/enrich_hierarchy", json={"project": project})
         assert r2.status_code in (200, 202), f"enrich_hierarchy failed: {r2.text[:200]}"
 
-        # Wait for enrichment to progress (up to 5 minutes)
-        deadline = time.time() + 300
+        # Case 2: already converged — staying converged is the success condition.
+        if before >= 99.0:
+            time.sleep(30)
+            r3 = http.get("/api/kb_health", params={"project": project})
+            after = (
+                r3.json().get("enrichment_by_level", {}).get("2", {}).get("pct", before)
+                if r3.status_code == 200 else before
+            )
+            assert after >= 99.0, (
+                f"Level-2 was converged ({before:.1f}%) but regressed to {after:.1f}%"
+            )
+            return
+
+        # Case 3: unconverged level with real communities — one sweep must progress.
+        deadline = time.time() + 420
         after = before
         while time.time() < deadline:
             time.sleep(30)
@@ -394,16 +472,14 @@ class TestKbSweep:
                     break
 
         assert after >= before, (
-            f"Level-2 enrichment did not increase after sweep trigger: "
-            f"before={before:.1f}% after={after:.1f}%. "
-            "Investigate: is qwen3-enrich:1.7b running? Is VRAM available?"
+            f"Level-2 enrichment regressed after sweep trigger: "
+            f"before={before:.1f}% after={after:.1f}%."
         )
-        if after > before:
-            return  # convergence confirmed
-
-        pytest.xfail(
-            f"Level-2 enrichment did not increase within 5 minutes (stuck at {after:.1f}%). "
-            "This may be a slow GPU or Ollama queue issue rather than a code bug."
+        assert after > before, (
+            f"Level-2 enrichment made no progress within 7 minutes "
+            f"(before={before:.1f}% after={after:.1f}%). "
+            "A sweep on an unconverged level must enrich at least one community — "
+            "investigate: is qwen3-enrich:1.7b running? Is VRAM available?"
         )
 
 
