@@ -411,11 +411,10 @@ class TestAstroChatIntents:
         assert intent in ("architecture", "global"), f"Expected architecture/global intent; got {intent!r}"
 
     def test_chat_global_intent(self, classify):
-        # Routing-only via classify (~32 tokens, no synthesis). Answer length/quality is
-        # checked by test_chat_answer_quality_global which populates the chat_cache first.
-        # Keeping these separate ensures the quality test always synthesises with its own
-        # query ("Give me a comprehensive global overview of this entire system") — the one
-        # that reliably scores ≥ _MIN_SCORE — rather than sharing from this cheaper call.
+        # Routing-only via classify (~32 tokens, no synthesis). Answer quality is checked
+        # separately by test_chat_answer_quality_global and test_quality_global_overview,
+        # which each synthesise their own answer fresh (no shared cache) so every flaky
+        # rerun gets a new answer and each is judged on its own question.
         intent = classify("give me a comprehensive global overview of the entire system")
         assert intent == "global", f"Expected intent=global; got {intent!r}"
 
@@ -440,19 +439,22 @@ class TestAstroChatIntents:
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
-    def test_chat_answer_quality_global(self, chat_cache, judge_once, astro):
-        # chat_cache: this test populates the "global_overview" cache entry first (since
-        # test_chat_global_intent now uses only classify). Downstream tests
-        # (test_quality_global_overview) share this synthesis via the canonical key.
-        answer, *_ = chat_cache(astro, "Give me a comprehensive global overview of this entire system")
-        score = judge_once(answer, "Does this provide a broad, multi-domain system overview with concrete details?")
+    def test_chat_answer_quality_global(self, http, astro):
+        # Fresh synthesis (NOT chat_cache): a judge-score test must be judged on its own
+        # question and must get a fresh answer on each flaky rerun. Session-frozen caching
+        # both contaminated across differently-judged questions and disabled rerun recovery.
+        answer, *_ = _chat(http, astro, "Give me a comprehensive global overview of this entire system")
+        score = judge_answer(answer, "Does this provide a broad, multi-domain system overview with concrete details?")
         assert score >= _MIN_SCORE, f"Global overview quality {score}/5 too low:\n{answer[:400]}"
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
-    def test_chat_answer_quality_feature(self, chat_cache, judge_once, astro):
-        answer, *_ = chat_cache(astro, "How does the search feature work end to end?")
-        score = judge_once(answer, "Does this trace a specific feature end-to-end with entry points or call chain?")
+    def test_chat_answer_quality_feature(self, http, astro):
+        # Fresh synthesis (NOT chat_cache): this judge ("end-to-end trace") differs from
+        # test_quality_search_explanation's judge ("implementation details"); sharing one
+        # cached synthesis across the two caused cross-judge rejection. Synthesise our own.
+        answer, *_ = _chat(http, astro, "How does the search feature work end to end?")
+        score = judge_answer(answer, "Does this trace a specific feature end-to-end with entry points or call chain?")
         # astro-project has 4+ distributed search implementations; judge scores
         # a valid multi-path description as 2 rather than 3 — accept ≥2
         assert score >= 2, f"Feature trace quality {score}/5 too low:\n{answer[:400]}"
