@@ -20,7 +20,7 @@ from opencode_search.handlers._common import (
     _touch_projects_last_active,
     resolve_indexed_project_path,
 )
-from opencode_search.handlers._debug_trace import handle_debug_trace, parse_traceback
+from opencode_search.handlers._debug_trace import handle_debug_trace
 from opencode_search.handlers._enrichment import (
     handle_enrich_hierarchy,
     handle_enrich_project,

@@ -384,7 +384,9 @@ class TestLLMRoutingAudit:
         query tier, not the build/enrich tier).
         All other handlers must use create_llm_client (ollama KB tier only).
         """
-        _ALLOWED = {"_chat_router.py", "_kb_chat.py"}
+        # _debug_trace.py is dashboard-only (called only via _chat_router debug intent)
+        # so the chat-tier LLM is correct there (Unit G).
+        _ALLOWED = {"_chat_router.py", "_kb_chat.py", "_debug_trace.py"}
         handlers_dir = _REPO / "src" / "opencode_search" / "handlers"
         violations = []
         for py_file in handlers_dir.glob("*.py"):

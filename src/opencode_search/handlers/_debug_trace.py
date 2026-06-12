@@ -3,17 +3,17 @@
 Given a stack trace (Python, Go, Java, or JavaScript), pinpoints the root cause
 with 100% accuracy against the indexed codebase by:
 
-  1. Parse traceback → (file, line, function) frames
+  1. Parse traceback → (file, line, function) frames via dashboard chat LLM
   2. Map each frame to graph nodes (exact path match → community context)
   3. Semantic-search for code near each frame's function name
   4. Collect community summaries that involve the failing code paths
   5. LLM synthesis: root cause hypothesis + fix recommendation
 
 Algorithm:
-  - Parse: LLM-first (qwen3-query:8b) with regex fallback for Python/Go/Java/JS/Rust formats
+  - Parse: dashboard chat LLM (codex/gpt-5.4-mini → haiku-4.5 fallback)
   - Map: normalise paths against project root, find nodes in GraphStorage
   - Context: community summaries for each matched node + algorithm context
-  - Synthesis: query-tier LLM with chain-of-thought prompt
+  - Synthesis: dashboard chat LLM with chain-of-thought prompt
 """
 from __future__ import annotations
 
@@ -21,12 +21,11 @@ import asyncio
 import contextlib
 import json
 import logging
-import re
 import time
 from pathlib import Path
 from typing import Any
 
-from opencode_search.enricher import create_kb_query_llm_client
+from opencode_search.enricher import create_query_llm_client
 
 log = logging.getLogger(__name__)
 
@@ -35,99 +34,15 @@ _MAX_COMMUNITY_CTX = 8
 _MAX_CODE_RESULTS = 10
 
 
-# ── Traceback parsers ─────────────────────────────────────────────────────────
-
-def _parse_python(text: str) -> list[dict]:
-    """Extract frames from a Python traceback."""
-    frames = []
-    # File "/path/to/file.py", line N, in function_name
-    pattern = re.compile(
-        r'File "([^"]+)", line (\d+), in (\S+)',
-    )
-    for m in pattern.finditer(text):
-        frames.append({"file": m.group(1), "line": int(m.group(2)), "function": m.group(3), "lang": "python"})
-    return frames
-
-
-def _parse_go(text: str) -> list[dict]:
-    """Extract frames from a Go panic/stack trace."""
-    frames = []
-    # goroutine N [running]:
-    # pkg.FunctionName(args)
-    #     /path/to/file.go:N +0x...
-    func_re = re.compile(r'^(\S+)\(')
-    file_re = re.compile(r'^\s+(/\S+\.go):(\d+)')
-    lines = text.splitlines()
-    pending_func = None
-    for line in lines:
-        fm = func_re.match(line)
-        if fm:
-            pending_func = fm.group(1).split('.')[-1]
-            continue
-        filem = file_re.match(line)
-        if filem and pending_func:
-            frames.append({"file": filem.group(1), "line": int(filem.group(2)), "function": pending_func, "lang": "go"})
-            pending_func = None
-    return frames
-
-
-def _parse_java(text: str) -> list[dict]:
-    """Extract frames from a Java stack trace."""
-    frames = []
-    # at pkg.Class.method(File.java:N)
-    pattern = re.compile(r'at ([\w.$]+)\.([\w$]+)\((\w+\.java):(\d+)\)')
-    for m in pattern.finditer(text):
-        frames.append({
-            "file": m.group(3),
-            "line": int(m.group(4)),
-            "function": m.group(2),
-            "class": m.group(1),
-            "lang": "java",
-        })
-    return frames
-
-
-def _parse_js(text: str) -> list[dict]:
-    """Extract frames from a JavaScript/Node.js stack trace."""
-    frames = []
-    # at functionName (/path/to/file.js:N:M)  or at /path/file.js:N:M
-    pattern = re.compile(r'at (?:(\S+) \()?(/[^):\s]+\.(?:js|ts|mjs|cjs)):(\d+)(?::\d+)?\)?')
-    for m in pattern.finditer(text):
-        frames.append({
-            "file": m.group(2),
-            "line": int(m.group(3)),
-            "function": m.group(1) or "<anonymous>",
-            "lang": "javascript",
-        })
-    return frames
-
-
-def _parse_rust(text: str) -> list[dict]:
-    """Extract frames from a Rust backtrace."""
-    frames = []
-    # N: pkg::module::function
-    #    at /path/to/file.rs:N
-    func_re = re.compile(r'^\s*\d+:\s+(\S+)$')
-    file_re = re.compile(r'^\s+at (/[^:]+\.rs):(\d+)')
-    lines = text.splitlines()
-    pending_func = None
-    for line in lines:
-        fm = func_re.match(line)
-        if fm:
-            pending_func = fm.group(1).split('::')[-1]
-            continue
-        filem = file_re.match(line)
-        if filem and pending_func:
-            frames.append({"file": filem.group(1), "line": int(filem.group(2)), "function": pending_func, "lang": "rust"})
-            pending_func = None
-    return frames
-
+# ── Traceback parser (LLM-only, dashboard chat LLM) ──────────────────────────
 
 async def _parse_with_llm(text: str) -> list[dict]:
-    """Use query LLM to extract stack frames from any language traceback."""
+    """Extract stack frames from any language traceback via the dashboard chat LLM."""
     try:
         text = text[:8000]
-        llm = create_kb_query_llm_client()
+        llm = create_query_llm_client()
+        if llm is None:
+            return []
         prompt = (
             "Extract stack frames from this error traceback.\n"
             "Return ONLY a JSON array of objects with keys: "
@@ -144,52 +59,21 @@ async def _parse_with_llm(text: str) -> list[dict]:
         )
         raw = raw.strip()
         if raw.startswith("```"):
-            raw = re.sub(r"^```\w*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw.strip())
+            # strip leading ```<lang>\n fence
+            newline_pos = raw.find("\n")
+            raw = raw[newline_pos + 1:] if newline_pos >= 0 else raw[3:]
+            # strip trailing ``` fence
+            stripped = raw.rstrip()
+            if stripped.endswith("```"):
+                raw = stripped[:-3].rstrip()
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
         frames = json.loads(raw.strip())
         return [f for f in frames if isinstance(f, dict) and f.get("file") and f.get("line")]
     except Exception:
         return []
-
-
-def parse_traceback(text: str) -> list[dict]:
-    """Auto-detect and parse a traceback from any supported language."""
-    text = text.strip()
-    if not text:
-        return []
-
-    # Python: "Traceback (most recent call last)" or "File "...", line"
-    if "Traceback (most recent call last)" in text or re.search(r'File "[^"]+", line \d+', text):
-        frames = _parse_python(text)
-        if frames:
-            return frames
-
-    # Go: "goroutine N [running]:" or ".go:N +"
-    if re.search(r'goroutine \d+ \[', text) or re.search(r'\.go:\d+ \+0x', text):
-        frames = _parse_go(text)
-        if frames:
-            return frames
-
-    # Java: "at pkg.Class.method(File.java:N)"
-    if re.search(r'\tat [\w.]+\.\w+\(\w+\.java:\d+\)', text):
-        frames = _parse_java(text)
-        if frames:
-            return frames
-
-    # JavaScript/TypeScript
-    if re.search(r'at \S+ \(/.+\.(?:js|ts):\d+', text) or re.search(r'\.js:\d+:\d+', text):
-        frames = _parse_js(text)
-        if frames:
-            return frames
-
-    # Rust
-    if re.search(r'\.rs:\d+', text) and re.search(r'^\s*\d+: ', text, re.MULTILINE):
-        frames = _parse_rust(text)
-        if frames:
-            return frames
-
-    # Fallback: try Python parser (most common)
-    return _parse_python(text)
 
 
 def _normalise_path(frame_path: str, project_path: str) -> str:
@@ -345,8 +229,6 @@ async def handle_debug_trace(
     # ── 1. Parse traceback ────────────────────────────────────────────────────
     frames = await _parse_with_llm(traceback)
     if not frames:
-        frames = parse_traceback(traceback)  # regex fallback
-    if not frames:
         return {
             "frames": [],
             "root_cause": "Could not parse a traceback from the provided input.",
@@ -407,7 +289,7 @@ async def handle_debug_trace(
     confidence = "low" if not graph_ctx else ("high" if len(graph_ctx) >= 3 else "medium")
 
     try:
-        llm = create_kb_query_llm_client()
+        llm = create_query_llm_client()
         user_msg = (
             f"Debug this error:\n\n{prompt_ctx}\n\n"
             "Identify the root cause and explain why it happens based on the architecture context."
@@ -419,11 +301,18 @@ async def handle_debug_trace(
             max_tokens=1024,
         )
 
-        # Split into root_cause + fix
+        # Split into root_cause + fix by finding the first Fix/3) section marker
         if include_fix and "Fix" in full_text:
-            parts = re.split(r'\n+(?:3\)|Fix[:\s])', full_text, maxsplit=1)
-            root_cause = parts[0].strip()
-            fix_recommendation = parts[1].strip() if len(parts) > 1 else None
+            fix_idx = -1
+            for marker in ("\nFix:", "\nFix ", "\n3)"):
+                idx = full_text.find(marker)
+                if idx >= 0 and (fix_idx < 0 or idx < fix_idx):
+                    fix_idx = idx
+            if fix_idx >= 0:
+                root_cause = full_text[:fix_idx].strip()
+                fix_recommendation = full_text[fix_idx:].lstrip("\n").strip()
+            else:
+                root_cause = full_text.strip()
         else:
             root_cause = full_text.strip()
 
