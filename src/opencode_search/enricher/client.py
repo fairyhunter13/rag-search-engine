@@ -201,45 +201,36 @@ class LLMClient:
                 {
                     "role": "user",
                     "content": (
-                        "You are a software architect. Given this code cluster, respond with:\n"
-                        "TITLE: <short descriptive title>\n"
-                        "SUMMARY: <2-3 sentence summary of what this cluster does>\n"
-                        "TYPE: <one of: feature|business_process|business_rule|data_model|api_boundary|infrastructure|utility>\n"
-                        "No other text.\n\n"
-                        "TYPE guide: feature=user-facing capability, business_process=workflow/flow, "
+                        "You are a software architect. Given this code cluster, return ONLY a JSON object with keys:\n"
+                        '  "title": short descriptive title,\n'
+                        '  "summary": 2-3 sentence summary of what this cluster does,\n'
+                        '  "type": one of: feature|business_process|business_rule|data_model|api_boundary|infrastructure|utility\n\n'
+                        "type guide: feature=user-facing capability, business_process=workflow/flow, "
                         "business_rule=constraint/policy/validation, data_model=schema/entity/ORM, "
                         "api_boundary=HTTP/RPC interface, infrastructure=config/deploy/logging, "
                         "utility=helper/test/build\n\n"
+                        "Return ONLY a JSON object, no other text.\n\n"
                         f"Cluster symbols:\n{nodes_text}{code_text}"
                     ),
                 }
             ],
             max_tokens=350,
         )
-        title = summary = semantic_type = ""
         _valid_types = {"feature", "business_process", "business_rule", "data_model", "api_boundary", "infrastructure", "utility"}
-        # Try JSON first (some models return {"TITLE":...,"SUMMARY":...,"TYPE":...})
-        stripped = text.strip()
-        if stripped.startswith("{"):
-            try:
-                parsed = json.loads(stripped)
-                title = parsed.get("TITLE") or parsed.get("title") or ""
-                summary = parsed.get("SUMMARY") or parsed.get("summary") or ""
-                semantic_type = parsed.get("TYPE") or parsed.get("type") or ""
-            except (json.JSONDecodeError, AttributeError):
-                pass
-        if not title:
-            for line in text.splitlines():
-                if line.startswith("TITLE:"):
-                    title = line[6:].strip()
-                elif line.startswith("SUMMARY:"):
-                    summary = line[8:].strip()
-                elif line.startswith("TYPE:"):
-                    semantic_type = line[5:].strip().lower()
-        semantic_type = semantic_type.lower() if semantic_type else ""
-        if semantic_type not in _valid_types:
-            semantic_type = "utility"
-        return title or "Untitled cluster", summary or text, semantic_type
+        try:
+            stripped = text.strip()
+            start = stripped.find("{")
+            if start == -1:
+                raise ValueError("no JSON object in response")
+            parsed = json.loads(stripped[start:])
+            title = parsed.get("title") or parsed.get("TITLE") or ""
+            summary = parsed.get("summary") or parsed.get("SUMMARY") or ""
+            semantic_type = (parsed.get("type") or parsed.get("TYPE") or "").lower()
+            if semantic_type not in _valid_types:
+                semantic_type = "utility"
+            return title or "Untitled cluster", summary or text, semantic_type
+        except Exception:
+            return "Untitled cluster", text, "utility"
 
     def module_wiki_page(
         self,

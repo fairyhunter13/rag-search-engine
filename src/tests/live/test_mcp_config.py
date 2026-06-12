@@ -1429,3 +1429,119 @@ class TestSingleLanguageMap:
                 f"is_document_language({lang!r}) disagrees with LANG_TO_GRAMMAR — "
                 "must be derived from grammar map, not a separate list"
             )
+
+
+@pytest.mark.live
+class TestEnricherJsonOnly:
+    """Unit L guard: community_summary must parse JSON only — no TITLE:/SUMMARY:/TYPE: prefix ladder.
+
+    Before Unit L the method fell back to a line.startswith("TITLE:") prefix ladder when
+    json.loads failed.  After Unit L: strict JSON-only prompt + parse; neutral fallback on
+    any JSON failure (title="Untitled cluster", summary=raw_text, semantic_type="utility").
+    """
+
+    # ------------------------------------------------------------------ helpers
+
+    class _DryOllama:
+        """Minimal stand-in that drives community_summary without an Ollama daemon.
+
+        Only community_summary is exercised; all other methods are unused.
+        The chat() override returns a canned string so we can test the parse
+        and fallback paths without an actual GPU / network call.
+        """
+
+        def __init__(self, canned_response: str) -> None:
+            self._response = canned_response
+
+        def chat(self, messages, **kw) -> str:
+            return self._response
+
+        def community_summary(self, node_summaries, code_samples=None):
+            # Re-use the real implementation by binding it to self.
+            from opencode_search.enricher.client import OllamaClient
+            return OllamaClient.community_summary(self, node_summaries, code_samples)  # type: ignore[arg-type]
+
+    # ------------------------------------------------------------------ grep guard
+
+    def test_no_prefix_ladder_in_client(self):
+        """client.py must have no TITLE:/SUMMARY:/TYPE: startswith prefix ladder (Unit L)."""
+        from pathlib import Path
+        src = Path("src/opencode_search/enricher/client.py").read_text()
+        for forbidden in ('startswith("TITLE:', "startswith('TITLE:", 'startswith("SUMMARY:', 'startswith("TYPE:'):
+            assert forbidden not in src, (
+                f"client.py still contains {forbidden!r} — prefix ladder not removed (Unit L)."
+            )
+
+    # ------------------------------------------------------------------ parse-path tests (no Ollama needed)
+
+    def test_community_summary_parses_valid_json(self):
+        """community_summary extracts title/summary/type from a well-formed JSON response."""
+        dry = self._DryOllama(
+            '{"title": "Auth Flow", "summary": "Handles login.", "type": "feature"}'
+        )
+        title, summary, sem_type = dry.community_summary(["login_handler"])
+        assert title == "Auth Flow"
+        assert summary == "Handles login."
+        assert sem_type == "feature"
+
+    def test_community_summary_neutral_fallback_on_non_json(self):
+        """community_summary returns neutral fallback when LLM returns non-JSON text."""
+        raw = "TITLE: Something\nSUMMARY: Old-style prefix response."
+        dry = self._DryOllama(raw)
+        title, summary, sem_type = dry.community_summary(["some_fn"])
+        assert title == "Untitled cluster", (
+            f"Expected neutral fallback title, got {title!r}"
+        )
+        assert summary == raw, (
+            f"Expected raw LLM text as summary in fallback, got {summary!r}"
+        )
+        assert sem_type == "utility", (
+            f"Expected 'utility' semantic_type in fallback, got {sem_type!r}"
+        )
+
+    def test_community_summary_neutral_fallback_on_empty_json_braces(self):
+        """community_summary returns 'Untitled cluster' when JSON has no title key."""
+        dry = self._DryOllama('{"type": "feature"}')  # missing title and summary
+        title, _summary, sem_type = dry.community_summary(["fn"])
+        assert title == "Untitled cluster"
+        assert sem_type in {"feature", "utility"}
+
+    def test_community_summary_invalid_type_falls_to_utility(self):
+        """semantic_type not in _valid_types is replaced by 'utility'."""
+        dry = self._DryOllama('{"title": "X", "summary": "Y", "type": "not_a_real_type"}')
+        _title, _summary, sem_type = dry.community_summary(["fn"])
+        assert sem_type == "utility"
+
+    # ------------------------------------------------------------------ live call (real GPU Ollama)
+
+    @pytest.mark.slow
+    def test_community_summary_live_returns_valid_structure(self):
+        """community_summary returns a valid (title, summary, semantic_type) tuple via real qwen3-enrich."""
+        import requests
+
+        from opencode_search.enricher.client import OllamaClient
+
+        # Confirm Ollama is reachable — skip if not, fail if daemon says it is but it isn't
+        try:
+            resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+            resp.raise_for_status()
+        except Exception as exc:
+            pytest.skip(f"Ollama not reachable: {exc}")
+
+        client = OllamaClient()
+        symbols = [
+            "handle_login(username, password) → validates credentials, issues JWT",
+            "AuthMiddleware.verify_token(token) → decodes JWT, sets request.user",
+            "logout(request) → invalidates session, clears cookie",
+        ]
+        result = client.community_summary(symbols)
+        assert isinstance(result, tuple) and len(result) == 3, (
+            f"Expected 3-tuple, got {result!r}"
+        )
+        title, summary, sem_type = result
+        _valid_types = {"feature", "business_process", "business_rule", "data_model", "api_boundary", "infrastructure", "utility"}
+        assert isinstance(title, str) and title, f"Empty title: {title!r}"
+        assert isinstance(summary, str) and summary, f"Empty summary: {summary!r}"
+        assert sem_type in _valid_types, (
+            f"semantic_type {sem_type!r} not in valid set {_valid_types}"
+        )
