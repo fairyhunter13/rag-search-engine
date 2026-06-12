@@ -841,6 +841,7 @@ async def handle_chat_auto_stream(
     conversation_history: list[dict] | None = None,
     mode: str = "auto",
     chunk_size: int = 40,
+    use_cache: bool = True,
 ):
     """Async generator — yields NDJSON events with real-time token streaming.
 
@@ -893,7 +894,7 @@ async def handle_chat_auto_stream(
     if intent == "feature":
         async for event in _stream_feature(
             query=query, project_path=project_path,
-            conversation_history=conversation_history, t0=t0,
+            conversation_history=conversation_history, t0=t0, use_cache=use_cache,
         ):
             yield event
         return
@@ -960,6 +961,7 @@ async def _stream_feature(
     conversation_history: list[dict] | None,
     t0: float,
     chunk_size: int = 40,
+    use_cache: bool = True,
 ):
     """Stream the feature-intent chat response with native Ollama token streaming.
 
@@ -979,7 +981,7 @@ async def _stream_feature(
 
     # Step 1: kick off feature trace + context assembly in parallel
     feature_task = asyncio.ensure_future(
-        _run_feature_trace(query, project_path)
+        _run_feature_trace(query, project_path, use_cache=use_cache)
     )
     code_task = asyncio.ensure_future(_fetch_code_context(query, project_path, top_k=15))
     community_task = asyncio.ensure_future(
@@ -1469,11 +1471,11 @@ async def _stream_debug(
     }
 
 
-async def _run_feature_trace(query: str, project_path: str) -> dict[str, Any]:
+async def _run_feature_trace(query: str, project_path: str, use_cache: bool = True) -> dict[str, Any]:
     """Run handle_ask_feature safely, returning {} on any error."""
     try:
         from opencode_search.handlers._feature import handle_ask_feature
-        return await handle_ask_feature(query=query, project_path=project_path, top_k=12)
+        return await handle_ask_feature(query=query, project_path=project_path, top_k=12, use_cache=use_cache)
     except Exception:
         return {}
 

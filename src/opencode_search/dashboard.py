@@ -951,6 +951,7 @@ def _register_chat_routes(mcp: FastMCP) -> None:
         project = body.get("project", "")
         query = body.get("query", "")
         history = body.get("history") or []
+        use_cache = bool(body.get("use_cache", True))
         if not project or not query:
             return JSONResponse({"error": "project and query required"}, status_code=400)
 
@@ -971,6 +972,7 @@ def _register_chat_routes(mcp: FastMCP) -> None:
                     query=query,
                     project_path=project,
                     conversation_history=history,
+                    use_cache=use_cache,
                 ):
                     if reload_pending.is_set():
                         yield f"data: {_RELOAD_NOTICE}\n\n"
