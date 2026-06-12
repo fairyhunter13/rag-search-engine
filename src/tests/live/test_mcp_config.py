@@ -1743,3 +1743,35 @@ class TestDebugTraceLLMNoRegex:
         assert "create_query_llm_client" in src, (
             "_debug_trace.py does not import create_query_llm_client — should use dashboard chat LLM (Unit G)."
         )
+
+
+# ---------------------------------------------------------------------------
+# Unit I: embeddings.py — no regex, GPU device detection via str-ops
+# ---------------------------------------------------------------------------
+
+class TestEmbeddingsNoRegex:
+    """Unit I guard: embeddings.py must not import re."""
+
+    def test_no_import_re_in_embeddings(self):
+        """embeddings.py must not import re (Unit I)."""
+        from pathlib import Path
+        src = Path("src/opencode_search/embeddings.py").read_text()
+        assert "import re" not in src, (
+            "embeddings.py still contains 'import re' — regex not removed (Unit I)."
+        )
+        assert "re.search" not in src, "embeddings.py still uses re.search (Unit I)."
+        assert "re.sub" not in src, "embeddings.py still uses re.sub (Unit I)."
+        assert "re.match" not in src, "embeddings.py still uses re.match (Unit I)."
+
+    def test_gpu_capability_probe_runs_on_rtx5080(self):
+        """_detect_gpu_capabilities() must return a valid result on the RTX 5080 (Unit I)."""
+        from opencode_search.embeddings import _detect_gpu_capabilities
+        caps = _detect_gpu_capabilities()
+        assert isinstance(caps, dict), f"Expected dict, got {type(caps)}"
+        assert caps.get("vendor") == "nvidia", f"Expected nvidia vendor, got {caps.get('vendor')!r}"
+        assert caps.get("has_tensor_cores") is True, (
+            f"RTX 5080 should have tensor cores; caps={caps}"
+        )
+        assert caps.get("supports_fp16") is True, (
+            f"RTX 5080 must support FP16; caps={caps}"
+        )

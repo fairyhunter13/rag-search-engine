@@ -297,18 +297,38 @@ def _detect_gpu_capabilities() -> dict:
                 timeout=5,
             )
             if out.returncode == 0:
-                import re
-
-                match = re.search(
-                    r"(Apple M\d+\s*(?:Pro|Max|Ultra|Nano)?)", out.stdout, re.IGNORECASE
-                )
-                if match:
+                # Scan lines for "Apple M<N>" chip name without regex
+                chip_name = None
+                for _line in out.stdout.splitlines():
+                    _l = _line.strip()
+                    if _l.lower().startswith("apple m"):
+                        chip_name = _l
+                        break
+                if chip_name is None:
+                    # Fallback: find any token that starts with "Apple M"
+                    for _tok in out.stdout.split():
+                        if _tok.lower().startswith("applem"):
+                            chip_name = _tok
+                            break
+                if chip_name:
                     result["vendor"] = "apple"
-                    result["gpu_name"] = match.group(1).strip()
+                    result["gpu_name"] = chip_name
                     result["supports_fp16"] = True  # All Apple Silicon supports FP16 via Metal
-                    m = re.search(r"M(\d+)", result["gpu_name"], re.IGNORECASE)
+                    # Extract M-series generation number: "Apple M3 Pro" → "3"
+                    _gen = 0
+                    _low = chip_name.lower()
+                    _m_idx = _low.find(" m")
+                    if _m_idx >= 0:
+                        _after = _low[_m_idx + 2:]  # text after " m"
+                        _digits = ""
+                        for _ch in _after:
+                            if _ch.isdigit():
+                                _digits += _ch
+                            else:
+                                break
+                        _gen = int(_digits) if _digits else 0
                     # M3+ has hardware ray tracing; treat all M-series as capable
-                    result["has_tensor_cores"] = bool(m and int(m.group(1)) >= 3)
+                    result["has_tensor_cores"] = _gen >= 3
                     log.info(
                         "Apple Silicon detected: %s, fp16=True, tensor_cores=%s",
                         result["gpu_name"],
@@ -331,8 +351,6 @@ def _detect_gpu_capabilities() -> dict:
             if out.returncode == 0:
                 text = out.stdout.lower()
                 if "qualcomm" in text or "adreno" in text:
-                    import re
-
                     result["vendor"] = "qualcomm"
                     for line in out.stdout.strip().split("\n")[1:]:
                         low = line.lower()
@@ -340,9 +358,19 @@ def _detect_gpu_capabilities() -> dict:
                             result["gpu_name"] = line.strip()
                             break
                     name_low = (result["gpu_name"] or "").lower()
-                    # Adreno 690+ supports FP16 tensor ops
-                    m = re.search(r"adreno\s*(\d+)", name_low)
-                    if (m and int(m.group(1)) >= 690) or "adreno 7" in name_low:
+                    # Adreno 690+ supports FP16 tensor ops — extract model number via str-ops
+                    _adreno_num = 0
+                    _a_idx = name_low.find("adreno")
+                    if _a_idx >= 0:
+                        _after = name_low[_a_idx + len("adreno"):].lstrip()
+                        _digits = ""
+                        for _ch in _after:
+                            if _ch.isdigit():
+                                _digits += _ch
+                            else:
+                                break
+                        _adreno_num = int(_digits) if _digits else 0
+                    if _adreno_num >= 690 or "adreno 7" in name_low:
                         result["supports_fp16"] = True
                     log.info("Qualcomm GPU detected: %s", result["gpu_name"])
                     return result
