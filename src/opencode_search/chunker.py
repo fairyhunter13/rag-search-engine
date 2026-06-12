@@ -24,85 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opencode_search import tokenizer as tok
-
-
-def _detect_language(path: Path) -> str:
-    """Detect language from file extension / special names.
-
-    This is intentionally local to the model server path.
-    """
-    ext = path.suffix.lstrip(".").lower()
-    name = path.name.lower()
-
-    match ext:
-        case "rs":
-            return "rust"
-        case "go":
-            return "go"
-        case "ts":
-            return "typescript"
-        case "tsx":
-            return "tsx"
-        case "js" | "mjs" | "cjs":
-            return "javascript"
-        case "jsx":
-            return "jsx"
-        case "vue":
-            return "vue"
-        case "svelte":
-            return "svelte"
-        case "astro":
-            return "astro"
-        case "py" | "pyi" | "pyw":
-            return "python"
-        case "java":
-            return "java"
-        case "kt" | "kts":
-            return "kotlin"
-        case "scala":
-            return "scala"
-        case "c" | "h":
-            return "c"
-        case "cpp" | "cc" | "hpp" | "cxx" | "hxx":
-            return "cpp"
-        case "cs":
-            return "csharp"
-        case "rb":
-            return "ruby"
-        case "php":
-            return "php"
-        case "swift":
-            return "swift"
-        case "md" | "mdx" | "markdown" | "mdown" | "mkd":
-            return "markdown"
-        case "yaml" | "yml":
-            return "yaml"
-        case "json" | "jsonc" | "json5" | "jsonl":
-            return "json"
-        case "toml":
-            return "toml"
-        case "html" | "htm" | "xhtml":
-            return "html"
-        case "xml" | "xsl" | "xslt" | "plist":
-            return "xml"
-        case "tex" | "latex" | "ltx":
-            return "latex"
-        case "rst":
-            return "rst"
-        case "txt":
-            return "text"
-
-    if name == "dockerfile":
-        return "dockerfile"
-    if name in {"makefile", "gnumakefile"}:
-        return "makefile"
-    if name == "cmakelists.txt":
-        return "cmake"
-    if name in {"gemfile", "rakefile"}:
-        return "ruby"
-
-    return "unknown"
-
+from opencode_search.discover import LANG_TO_GRAMMAR, detect_language, is_document_language
 
 log = logging.getLogger(__name__)
 
@@ -145,81 +67,7 @@ def count_tokens(text: str) -> int:
     return tok.count_tokens_for_tier(text)
 
 
-# ---------------------------------------------------------------------------
-# Language → tree-sitter name mapping
-# ---------------------------------------------------------------------------
-_LANG_TO_TREESITTER: dict[str, str] = {
-    "rust": "rust",
-    "go": "go",
-    "typescript": "typescript",
-    "tsx": "tsx",
-    "javascript": "javascript",
-    "jsx": "javascript",
-    "python": "python",
-    "java": "java",
-    "c": "c",
-    "cpp": "cpp",
-    "ruby": "ruby",
-    "php": "php",
-    "swift": "swift",
-    "kotlin": "kotlin",
-    "scala": "scala",
-    "csharp": "csharp",
-    "lua": "lua",
-    "r": "r",
-    "perl": "perl",
-    "elixir": "elixir",
-    "erlang": "erlang",
-    "haskell": "haskell",
-    "elm": "elm",
-    "clojure": "clojure",
-    "clojurescript": "clojure",
-    "lisp": "commonlisp",
-    "scheme": "scheme",
-    "racket": "racket",
-    "ocaml": "ocaml",
-    "fsharp": "fsharp",
-    "nim": "nim",
-    "zig": "zig",
-    "v": "v",
-    "d": "d",
-    "dart": "dart",
-    "julia": "julia",
-    "sql": "sql",
-    "bash": "bash",
-    "zsh": "bash",
-    "fish": "fish",
-    "powershell": "powershell",
-    "protobuf": "proto",
-    "graphql": "graphql",
-    "css": "css",
-    "scss": "scss",
-    "sass": "scss",
-    "vue": "vue",
-    "svelte": "svelte",
-    "astro": "astro",
-    "dockerfile": "dockerfile",
-    "makefile": "make",
-    "cmake": "cmake",
-    "gradle": "groovy",
-    "latex": "latex",
-}
-
-# Languages that are document/data formats (not code, handled separately)
-_DOC_LANGUAGES = frozenset(
-    {
-        "markdown",
-        "json",
-        "yaml",
-        "toml",
-        "html",
-        "xml",
-        "latex",
-        "rst",
-        "text",
-        "unknown",
-    }
-)
+# LANG_TO_GRAMMAR and is_document_language are imported from discover — single source of truth.
 
 # ---------------------------------------------------------------------------
 # Cached chunker singletons (lazy-loaded)
@@ -604,7 +452,7 @@ def _chunk_js_framework(content: str, language: str) -> list[Chunk]:
 
 def _chunk_code(content: str, language: str) -> list[Chunk]:
     """Code: AST-based splitting via tree-sitter (165+ languages)."""
-    ts_lang = _LANG_TO_TREESITTER.get(language)
+    ts_lang = LANG_TO_GRAMMAR.get(language)
     if not ts_lang:
         return _chunk_fallback(content, language)
 
@@ -659,7 +507,7 @@ def chunk_file(content: str, path: Path) -> list[Chunk]:
     if not content or not content.strip():
         return []
 
-    language = _detect_language(path)
+    language = detect_language(path)
     ext = path.suffix.lstrip(".").lower()
 
     # Small files: return as single chunk
@@ -726,7 +574,7 @@ def _route(content: str, ext: str, language: str) -> list[Chunk]:
         return _chunk_js_framework(content, language)
 
     # Code (anything with a tree-sitter mapping)
-    if language not in _DOC_LANGUAGES:
+    if not is_document_language(language):
         return _chunk_code(content, language)
 
     # Prose / text / unknown

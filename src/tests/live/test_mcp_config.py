@@ -1175,3 +1175,92 @@ class TestNoRegexInLLMOutputParsing:
         results = fake.symbol_intent_batch(items)
         assert results[0] == "Does the first thing"
         assert results[1] == "Does the second thing"
+
+
+class TestSingleLanguageMap:
+    """Unit E guard: only ONE extension→language map + ONE doc-language predicate in source.
+
+    Before Unit E three copies existed:
+      - discover.py LANGUAGE_MAP (canonical, kept)
+      - chunker.py _detect_language match-statement (deleted)
+      - chunker.py _LANG_TO_TREESITTER (moved to discover.LANG_TO_GRAMMAR)
+      - chunker.py _DOC_LANGUAGES (deleted, replaced by is_document_language)
+      - search.py _DOCUMENT_LANGUAGES (deleted)
+      - handlers/_graph.py _DOC_LANGS (deleted)
+
+    After: discover.py is the single source; all consumers import from it.
+    """
+
+    def test_chunker_no_duplicate_detect_language(self):
+        """chunker.py must not define its own _detect_language (Unit E: use discover.detect_language)."""
+        import ast
+        from pathlib import Path
+
+        src = Path("src/opencode_search/chunker.py").read_text()
+        tree = ast.parse(src)
+        fn_names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        assert "_detect_language" not in fn_names, (
+            "chunker.py defines _detect_language — duplicate map. "
+            "Import discover.detect_language instead (Unit E)."
+        )
+
+    def test_chunker_no_lang_to_treesitter(self):
+        """chunker.py must not define _LANG_TO_TREESITTER (moved to discover.LANG_TO_GRAMMAR)."""
+        import importlib
+        mod = importlib.import_module("opencode_search.chunker")
+        assert not hasattr(mod, "_LANG_TO_TREESITTER"), (
+            "_LANG_TO_TREESITTER still in chunker — moved to discover.LANG_TO_GRAMMAR (Unit E)."
+        )
+
+    def test_no_duplicate_doc_language_frozensets(self):
+        """_DOCUMENT_LANGUAGES, _DOC_LANGUAGES, _DOC_LANGS frozensets must not exist (merged into discover)."""
+        import importlib
+        for mod_name, attr in [
+            ("opencode_search.search", "_DOCUMENT_LANGUAGES"),
+            ("opencode_search.chunker", "_DOC_LANGUAGES"),
+            ("opencode_search.handlers._graph", "_DOC_LANGS"),
+        ]:
+            mod = importlib.import_module(mod_name)
+            assert not hasattr(mod, attr), (
+                f"{attr} still in {mod_name} — deleted in Unit E. "
+                "Use discover.is_document_language() instead."
+            )
+
+    def test_detect_language_roundtrips(self):
+        """discover.detect_language returns expected lang for common extensions."""
+        from pathlib import Path
+
+        from opencode_search.discover import detect_language
+
+        assert detect_language(Path("main.go")) == "go"
+        assert detect_language(Path("app.py")) == "python"
+        assert detect_language(Path("index.ts")) == "typescript"
+        assert detect_language(Path("README.md")) == "markdown"
+        assert detect_language(Path("config.yaml")) == "yaml"
+        assert detect_language(Path("Dockerfile")) == "dockerfile"
+        assert detect_language(Path("Makefile")) == "makefile"
+
+    def test_is_document_language_from_grammar(self):
+        """is_document_language is derived from LANG_TO_GRAMMAR, not a hand-kept list."""
+        from opencode_search.discover import LANG_TO_GRAMMAR, is_document_language
+
+        # Code languages (have grammar entries) must return False
+        for lang in ("go", "python", "typescript", "javascript", "java", "rust"):
+            assert not is_document_language(lang), (
+                f"is_document_language({lang!r}) returned True — should be False (has code grammar)"
+            )
+        # Document languages (no grammar entry) must return True
+        for lang in ("markdown", "text", "unknown", "yaml", "json", "xml", "rst"):
+            assert is_document_language(lang), (
+                f"is_document_language({lang!r}) returned False — should be True (no code grammar)"
+            )
+        # Verify derivation: is_document_language(x) == (x not in LANG_TO_GRAMMAR)
+        for lang in list(LANG_TO_GRAMMAR.keys())[:10]:
+            assert not is_document_language(lang), (
+                f"is_document_language({lang!r}) disagrees with LANG_TO_GRAMMAR — "
+                "must be derived from grammar map, not a separate list"
+            )
