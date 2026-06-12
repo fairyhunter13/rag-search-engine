@@ -643,20 +643,32 @@ class TestAllIndexedProjectsWatched:
     @pytest.mark.flaky(reruns=2)
     def test_all_indexed_projects_and_members_watched(self):
         """After resume_watchers, every file_count>0 registry entry must have watch=True."""
+        import time
+
         from opencode_search.config import load_registry
 
-        registry = load_registry()
-        unwatched = []
+        def _collect_unwatched() -> list[str]:
+            registry = load_registry()
+            result = []
+            for path_str, entry in registry.items():
+                if not entry.file_count:
+                    continue
+                if "/.venv/" in path_str or path_str.endswith("/.venv") or "/node_modules/" in path_str:
+                    continue
+                if not entry.watch:
+                    result.append(f"{path_str} (file_count={entry.file_count})")
+            return result
 
-        for path_str, entry in registry.items():
-            if not entry.file_count:
-                continue
-            # Dependency directories are never live-watched for code changes.
-            if "/.venv/" in path_str or path_str.endswith("/.venv") or "/node_modules/" in path_str:
-                continue
-            if not entry.watch:
-                unwatched.append(f"{path_str} (file_count={entry.file_count})")
+        # resume_watchers() runs asynchronously at daemon startup; give it up to 20s
+        # to set watch=True for all entries before declaring a failure.
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            unwatched = _collect_unwatched()
+            if not unwatched:
+                return
+            time.sleep(0.5)
 
+        unwatched = _collect_unwatched()
         assert not unwatched, (
             "Gap C — these indexed projects/members are not being live-watched:\n"
             + "\n".join(f"  {u}" for u in unwatched)

@@ -10,9 +10,28 @@ All tests require daemon at :8765. No LLM calls — all fast unless marked slow.
 """
 from __future__ import annotations
 
+import time
+
+import httpx
 import pytest
 
 pytestmark = pytest.mark.live
+
+_DAEMON_URL = "http://localhost:8765"
+
+
+def _wait_daemon_healthy(timeout: float = 25.0) -> None:
+    """Poll /healthz until the daemon is accepting requests or raise after timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(f"{_DAEMON_URL}/healthz", timeout=3.0)
+            if r.status_code == 200:
+                return
+        except Exception:
+            pass
+        time.sleep(0.3)
+    raise ConnectionError(f"Daemon not healthy after {timeout}s — cannot run test")
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +122,10 @@ class TestInvalidParamTypes:
 @pytest.mark.flaky(reruns=2)
 class TestInvalidProjectPaths:
     """Non-existent or empty project params must never return 5xx."""
+
+    def setup_method(self, _):
+        """Ensure the daemon is healthy before each attempt (guards reload races)."""
+        _wait_daemon_healthy()
 
     def test_search_nonexistent_project_no_500(self, http):
         r = http.get("/api/search", params={"q": "test", "project": "/nonexistent/path/xyz"})
@@ -207,6 +230,9 @@ class TestAdminLifecycle:
         assert r_stop.status_code in (200, 201, 400), (
             f"stop_watching unexpected: {r_stop.status_code}: {r_stop.text[:200]}"
         )
+        # Restore watcher — stop_watching sets watch=False in the registry;
+        # tests that run after this (TestAllIndexedProjectsWatched) require watch=True.
+        http.post("/api/start_watching", json={"project": project})
 
     def test_wiki_page_url_encoded_path_traversal_blocked(self, http, project):
         """Wiki page endpoint with path-traversal characters must return 400 or 404, not 200."""
