@@ -10,7 +10,6 @@ _configure_cuda_paths()
 import json
 import logging
 import os
-import re
 import shutil
 import signal
 import socket
@@ -474,8 +473,9 @@ def _global_prompt_with_markers(start: str, end: str) -> str:
 
 def _replace_managed_block(existing: str, start: str, end: str, block: str) -> str:
     if start in existing and end in existing:
-        pattern = re.compile(rf"{re.escape(start)}.*?{re.escape(end)}", flags=re.DOTALL)
-        return pattern.sub(block, existing)
+        s_idx = existing.find(start)
+        e_idx = existing.find(end, s_idx) + len(end)
+        return existing[:s_idx] + block + existing[e_idx:]
     stripped = existing.rstrip()
     if stripped:
         return stripped + "\n\n" + block + "\n"
@@ -501,36 +501,68 @@ def _install_claude_global_prompt(claude_dirs: list[Path], home: Path | None = N
 def _remove_managed_block(existing: str, start: str, end: str) -> str:
     updated = existing
     if start in updated and end in updated:
-        pattern = re.compile(rf"\n?{re.escape(start)}.*?{re.escape(end)}\n?", flags=re.DOTALL)
-        updated = pattern.sub("\n", updated)
-    marker_pattern = re.compile(
-        rf"(?m)^[ \t]*(?:{re.escape(start)}|{re.escape(end)})[ \t]*\n?"
-    )
-    return marker_pattern.sub("", updated)
+        s_idx = updated.find(start)
+        # include optional leading newline
+        if s_idx > 0 and updated[s_idx - 1] == "\n":
+            s_idx -= 1
+        e_idx = updated.find(end, s_idx) + len(end)
+        # include optional trailing newline
+        if e_idx < len(updated) and updated[e_idx] == "\n":
+            e_idx += 1
+        updated = updated[:s_idx] + "\n" + updated[e_idx:]
+    # Remove any stray marker lines (lines that contain only the marker)
+    start_s = start.strip()
+    end_s = end.strip()
+    lines = []
+    for line in updated.splitlines(keepends=True):
+        if line.strip() in (start_s, end_s):
+            continue
+        lines.append(line)
+    return "".join(lines)
 
 
 def _split_toml_root_preamble(existing: str) -> tuple[str, str]:
-    match = re.search(r"(?m)^\s*\[", existing)
-    if match is None:
-        return existing, ""
-    return existing[: match.start()], existing[match.start() :]
+    # Find first line that (stripped) starts with "[" — TOML section header
+    pos = 0
+    for line in existing.splitlines(keepends=True):
+        if line.strip().startswith("["):
+            return existing[:pos], existing[pos:]
+        pos += len(line)
+    return existing, ""
 
 
 def _strip_root_toml_assignment(preamble: str, key: str) -> str:
-    pattern = re.compile(
-        rf"""(?ms)
-        ^[ \t]*{re.escape(key)}[ \t]*=[ \t]*
-        (?:
-            \"\"\".*?\"\"\"
-            |'''.*?'''
-            |"(?:\\.|[^"\\])*"
-            |'(?:\\.|[^'\\])*'
-        )
-        [ \t]*\n?
-        """,
-        flags=re.VERBOSE,
-    )
-    return pattern.sub("", preamble)
+    """Remove a root TOML key = value assignment from preamble (line-by-line).
+
+    Handles single-line double/single-quoted strings and triple-quoted multiline strings.
+    """
+    lines = preamble.splitlines(keepends=True)
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+        if stripped.startswith(key):
+            after_key = stripped[len(key):]
+            if after_key and after_key.lstrip().startswith("="):
+                val = after_key.lstrip()[1:].lstrip()  # everything after "="
+                if val.startswith('"""') or val.startswith("'''"):
+                    quote = val[:3]
+                    if quote in val[3:]:
+                        i += 1  # closing triple quote is on the same line
+                        continue
+                    # Multiline: skip lines until we find the closing triple quote
+                    i += 1
+                    while i < len(lines) and quote not in lines[i]:
+                        i += 1
+                    i += 1  # skip the closing-quote line
+                    continue
+                # Single-line assignment (double/single-quoted or unquoted)
+                i += 1
+                continue
+        result.append(line)
+        i += 1
+    return "".join(result)
 
 
 def _render_root_toml_string_assignment(key: str, value: str) -> str:
@@ -572,14 +604,29 @@ def _update_codex_config_text(existing: str) -> str:
 
 
 def _disable_codex_fast_mode(config_text: str) -> str:
-    if re.search(r"(?m)^fast_mode\s*=\s*false\s*$", config_text):
-        return config_text
-    updated, n = re.subn(r"(?m)^fast_mode\s*=\s*.*$", "fast_mode = false", config_text)
-    if n > 0:
-        return updated
-    updated, n = re.subn(r"(\[features\]\n)", r"\1fast_mode = false\n", config_text, count=1)
-    if n > 0:
-        return updated
+    # Already disabled — check for a line that is exactly "fast_mode = false"
+    for line in config_text.splitlines():
+        if line.strip() == "fast_mode = false":
+            return config_text
+    # Replace any existing fast_mode = ... line
+    new_lines = []
+    replaced = False
+    for line in config_text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if not replaced and stripped.startswith("fast_mode") and "=" in stripped:
+            new_lines.append("fast_mode = false\n")
+            replaced = True
+        else:
+            new_lines.append(line)
+    if replaced:
+        return "".join(new_lines)
+    # Insert after [features] section header
+    features_header = "[features]\n"
+    idx = config_text.find(features_header)
+    if idx >= 0:
+        insert_at = idx + len(features_header)
+        return config_text[:insert_at] + "fast_mode = false\n" + config_text[insert_at:]
+    # Append at end
     return config_text.rstrip() + "\n\n[features]\nfast_mode = false\n"
 
 
@@ -614,8 +661,13 @@ def _install_codex_global_prompt() -> str:
 def _strip_marker_block(text: str, start: str, end: str) -> str:
     if start not in text or end not in text:
         return text
-    pattern = re.compile(rf"\n?{re.escape(start)}.*?{re.escape(end)}\n?", flags=re.DOTALL)
-    return pattern.sub("\n", text).strip()
+    s_idx = text.find(start)
+    if s_idx > 0 and text[s_idx - 1] == "\n":
+        s_idx -= 1
+    e_idx = text.find(end, s_idx) + len(end)
+    if e_idx < len(text) and text[e_idx] == "\n":
+        e_idx += 1
+    return (text[:s_idx] + "\n" + text[e_idx:]).strip()
 
 
 def _yaml_dump_literal(data: dict) -> str:
@@ -643,6 +695,33 @@ def _yaml_dump_literal(data: dict) -> str:
     return yaml.dump(_convert(data), Dumper=_dumper, sort_keys=False, allow_unicode=True)
 
 
+def _strip_agent_yaml_block(raw: str) -> str:
+    """Remove the 'agent:' YAML block (including indented system_prompt content).
+
+    Replaces `\nagent:\n  ...indented...` with `\nagent: {}` so the remainder
+    parses cleanly. Used to recover from a malformed hermes config.
+    """
+    marker = "\nagent:"
+    idx = raw.find(marker)
+    if idx < 0:
+        return raw
+    # Skip the 'agent:' line itself
+    line_end = raw.find("\n", idx + 1)
+    if line_end < 0:
+        return raw[:idx] + "\nagent: {}"
+    pos = line_end + 1
+    # Skip all lines that are blank or indented (belong to the agent: block)
+    while pos < len(raw):
+        rest = raw[pos:]
+        newline_pos = rest.find("\n")
+        line = rest[:newline_pos] if newline_pos >= 0 else rest
+        if not line.strip() or (line and line[0] in (" ", "\t")):
+            pos += len(line) + (1 if newline_pos >= 0 else 0)
+        else:
+            break
+    return raw[:idx] + "\nagent: {}" + raw[pos:]
+
+
 def _install_hermes_global_prompt() -> str:
     config_path = Path.home() / ".hermes" / "config.yaml"
     if not config_path.exists():
@@ -655,9 +734,9 @@ def _install_hermes_global_prompt() -> str:
         # Attempt a lenient re-parse by stripping the system_prompt field first.
         raw = config_path.read_text(encoding="utf-8")
         try:
-            # Remove the broken system_prompt line and everything indented under it
-            import re as _re
-            cleaned = _re.sub(r"\nagent:\s*\n  system_prompt:.*?(?=\n\S|\Z)", "\nagent: {}", raw, flags=_re.DOTALL)
+            # Remove the broken 'agent:' block (system_prompt and indented content).
+            # Scan from "\nagent:" forward; skip lines indented under it.
+            cleaned = _strip_agent_yaml_block(raw)
             data = yaml.safe_load(cleaned) or {}
         except Exception:
             data = {}

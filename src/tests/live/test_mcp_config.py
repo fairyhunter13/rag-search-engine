@@ -1775,3 +1775,101 @@ class TestEmbeddingsNoRegex:
         assert caps.get("supports_fp16") is True, (
             f"RTX 5080 must support FP16; caps={caps}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Unit H: daemon.py — config marker helpers via str-ops, no regex
+# ---------------------------------------------------------------------------
+
+class TestConfigMarkersNoRegex:
+    """Unit H guard: daemon.py config-edit helpers must use str-ops, not regex."""
+
+    def test_no_import_re_in_daemon(self):
+        """daemon.py must not import re (Unit H)."""
+        from pathlib import Path
+        src = Path("src/opencode_search/daemon.py").read_text()
+        # Check no standalone 'import re' line (substring "import re" also matches
+        # "import reload_pending" so check as a whole statement per line)
+        for line in src.splitlines():
+            stripped = line.strip()
+            assert stripped != "import re", (
+                "daemon.py still has 'import re' — regex not removed (Unit H)."
+            )
+            assert not stripped.startswith("import re "), (
+                f"daemon.py still has {stripped!r} — regex not removed (Unit H)."
+            )
+        for forbidden in ("re.compile", "re.search", "re.sub", "re.subn", "re.match",
+                          "re.escape", "_re.sub"):
+            assert forbidden not in src, (
+                f"daemon.py still uses {forbidden!r} (Unit H)."
+            )
+
+    def test_replace_managed_block_round_trips(self):
+        """_replace_managed_block: insert then replace round-trips cleanly (Unit H)."""
+        from opencode_search.daemon import _replace_managed_block
+        start = "[opencode-search-global-instructions:start]"
+        end = "[opencode-search-global-instructions:end]"
+        original = "Before content\n\nAfter content\n"
+        block1 = f"{start}\ncontent v1\n{end}"
+        block2 = f"{start}\ncontent v2\n{end}"
+
+        # Insert into empty-ish document
+        inserted = _replace_managed_block(original, start, end, block1)
+        assert start in inserted
+        assert "content v1" in inserted
+
+        # Replace existing block
+        replaced = _replace_managed_block(inserted, start, end, block2)
+        assert "content v1" not in replaced
+        assert "content v2" in replaced
+        assert "Before content" in replaced
+
+    def test_remove_managed_block_round_trips(self):
+        """_remove_managed_block: removes block cleanly; stray markers also gone (Unit H)."""
+        from opencode_search.daemon import _remove_managed_block, _replace_managed_block
+        start = "[opencode-search-global-instructions:start]"
+        end = "[opencode-search-global-instructions:end]"
+        original = "Before\n\nAfter\n"
+        block = f"{start}\nsome content\n{end}"
+        inserted = _replace_managed_block(original, start, end, block)
+        removed = _remove_managed_block(inserted, start, end)
+        assert start not in removed
+        assert end not in removed
+        assert "some content" not in removed
+
+    def test_disable_codex_fast_mode_idempotent(self):
+        """_disable_codex_fast_mode: sets fast_mode=false, idempotent (Unit H)."""
+        from opencode_search.daemon import _disable_codex_fast_mode
+
+        # Case 1: no fast_mode line at all, no [features] section
+        text1 = "[model]\nname = \"gpt-4\"\n"
+        out1 = _disable_codex_fast_mode(text1)
+        assert "fast_mode = false" in out1
+        # Idempotent
+        assert _disable_codex_fast_mode(out1) == out1
+
+        # Case 2: fast_mode = true already present
+        text2 = "[features]\nfast_mode = true\n"
+        out2 = _disable_codex_fast_mode(text2)
+        assert "fast_mode = false" in out2
+        assert "fast_mode = true" not in out2
+
+        # Case 3: already disabled — no change
+        text3 = "[features]\nfast_mode = false\n"
+        assert _disable_codex_fast_mode(text3) == text3
+
+    def test_strip_agent_yaml_block_removes_broken_block(self):
+        """_strip_agent_yaml_block: removes indented agent block cleanly (Unit H)."""
+        from opencode_search.daemon import _strip_agent_yaml_block
+        raw = (
+            "other_key: value\n"
+            "agent:\n"
+            "  system_prompt: |\n"
+            "    line1\n"
+            "    line2\n"
+            "next_key: another\n"
+        )
+        cleaned = _strip_agent_yaml_block(raw)
+        assert "system_prompt" not in cleaned
+        assert "agent: {}" in cleaned
+        assert "next_key: another" in cleaned
