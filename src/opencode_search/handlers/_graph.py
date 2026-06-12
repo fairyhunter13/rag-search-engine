@@ -30,6 +30,26 @@ _PATTERNS_FILE_TTL = 86400.0  # 24 hours for on-disk cache
 _VERSION_SEPS = (">=", "==", "!=", "~=", "<=", "<", ">")
 
 
+def _parse_with_grammar(path: Path, grammar_name: str):
+    """Parse *path* with the named tree-sitter grammar.
+
+    Returns (root_node, src_bytes) on success, None on any error.
+    The caller owns the walk; node methods use the call-style API:
+    node.kind(), node.child_count(), node.child(i),
+    node.start_byte(), node.end_byte().
+    """
+    try:
+        from tree_sitter_language_pack.api import get_parser as _ts_get_parser
+        text = path.read_text(errors="replace")
+        parser = _ts_get_parser(grammar_name)
+        tree = parser.parse(text)
+        if tree is None:
+            return None
+        return tree.root_node(), text.encode()
+    except Exception:
+        return None
+
+
 def _parse_dep_spec(raw: str) -> tuple[str, str]:
     """Parse a PEP 508-style dependency specifier into (name, version) via str-ops — no regex."""
     spec = raw.split(";")[0].split("#")[0].strip()
@@ -51,45 +71,66 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
 
     def _try_go_mod(p: Path) -> None:
         nonlocal manager
-        try:
-            text = p.read_text(errors="replace")
-            if manager == "unknown":
-                manager = "go_modules"
-            in_require = False
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("require ("):
-                    in_require = True
-                    continue
-                if in_require and stripped == ")":
-                    in_require = False
-                    continue
-                if in_require or stripped.startswith("require "):
-                    cleaned = stripped.removeprefix("require ").strip()
-                    if cleaned.startswith("(") or not cleaned or cleaned.startswith("//"):
-                        continue
-                    # "module_path version [// indirect]" — str.split, no regex
-                    parts = cleaned.split()
-                    if len(parts) >= 2 and parts[1].startswith("v"):
-                        indirect = len(parts) > 2 and "indirect" in " ".join(parts[2:])
-                        packages.append({"name": parts[0], "version": parts[1], "direct": not indirect})
-        except Exception:
-            pass
+        result = _parse_with_grammar(p, "gomod")
+        if result is None:
+            return
+        root, src = result
+        if manager == "unknown":
+            manager = "go_modules"
+
+        def _text(node) -> str:
+            return src[node.start_byte():node.end_byte()].decode("utf-8", errors="replace")
+
+        def _walk(node) -> None:
+            if node.kind() == "require_spec":
+                mod_path = version = None
+                indirect = False
+                for i in range(node.child_count()):
+                    child = node.child(i)
+                    k = child.kind()
+                    if k == "module_path":
+                        mod_path = _text(child)
+                    elif k == "version":
+                        version = _text(child)
+                    elif k == "comment":
+                        indirect = "indirect" in _text(child)
+                if mod_path and version:
+                    packages.append({"name": mod_path, "version": version, "direct": not indirect})
+                return
+            for i in range(node.child_count()):
+                _walk(node.child(i))
+
+        _walk(root)
 
     def _try_requirements(p: Path) -> None:
         nonlocal manager
-        try:
-            if manager == "unknown":
-                manager = "pip"
-            for line in p.read_text(errors="replace").splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or stripped.startswith("-"):
-                    continue
-                name, version = _parse_dep_spec(stripped)
-                if name:
-                    packages.append({"name": name, "version": version, "direct": True})
-        except Exception:
-            pass
+        result = _parse_with_grammar(p, "requirements")
+        if result is None:
+            return
+        root, src = result
+        if manager == "unknown":
+            manager = "pip"
+
+        def _text(node) -> str:
+            return src[node.start_byte():node.end_byte()].decode("utf-8", errors="replace")
+
+        def _walk(node) -> None:
+            if node.kind() == "requirement":
+                pkg_name = version_str = None
+                for i in range(node.child_count()):
+                    child = node.child(i)
+                    k = child.kind()
+                    if k == "package":
+                        pkg_name = _text(child)
+                    elif k == "version_spec":
+                        version_str = _text(child)
+                if pkg_name:
+                    packages.append({"name": pkg_name, "version": version_str or "*", "direct": True})
+                return
+            for i in range(node.child_count()):
+                _walk(node.child(i))
+
+        _walk(root)
 
     def _try_package_json(p: Path) -> None:
         nonlocal manager
@@ -175,26 +216,28 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
 
     def _try_go_work(p: Path) -> None:
         nonlocal manager
-        try:
-            text = p.read_text(errors="replace")
-            manager = "go_workspace"
-            in_use = False
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("use ("):
-                    in_use = True
-                    continue
-                if in_use and stripped == ")":
-                    in_use = False
-                    continue
-                if in_use and stripped and not stripped.startswith("//"):
-                    packages.append({"name": stripped, "version": "workspace", "direct": True})
-                elif stripped.startswith("use ") and not stripped.startswith("use ("):
-                    mod = stripped[4:].strip()
-                    if mod:
-                        packages.append({"name": mod, "version": "workspace", "direct": True})
-        except Exception:
-            pass
+        result = _parse_with_grammar(p, "gowork")
+        if result is None:
+            return
+        root, src = result
+        manager = "go_workspace"
+
+        def _text(node) -> str:
+            return src[node.start_byte():node.end_byte()].decode("utf-8", errors="replace")
+
+        def _walk(node) -> None:
+            if node.kind() == "use_spec":
+                for i in range(node.child_count()):
+                    child = node.child(i)
+                    if child.kind() == "file_path":
+                        mod = _text(child).strip()
+                        if mod:
+                            packages.append({"name": mod, "version": "workspace", "direct": True})
+                return
+            for i in range(node.child_count()):
+                _walk(node.child(i))
+
+        _walk(root)
 
     def _try_gradle(p: Path) -> None:
         nonlocal manager

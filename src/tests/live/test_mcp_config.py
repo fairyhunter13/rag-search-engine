@@ -860,6 +860,71 @@ class TestDependencyParsedByGrammar:
         assert name == "pytest"
         assert ver == "*"
 
+    def test_no_string_op_go_mod_parser(self):
+        """_graph.py must not use startswith('require') string-ops to parse go.mod."""
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_graph.py").read_text()
+        assert 'startswith("require ")' not in src and "startswith('require ')" not in src, (
+            "_graph.py still uses startswith('require ') string-op parsing for go.mod; "
+            "must use tree-sitter gomod grammar instead."
+        )
+        assert 'startswith("require (")' not in src and "startswith('require (')" not in src, (
+            "_graph.py still uses startswith('require (') string-op parsing for go.mod; "
+            "must use tree-sitter gomod grammar instead."
+        )
+
+    def test_no_string_op_go_work_parser(self):
+        """_graph.py must not use startswith('use') string-ops to parse go.work."""
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_graph.py").read_text()
+        assert 'startswith("use (")' not in src and "startswith('use (')" not in src, (
+            "_graph.py still uses startswith('use (') string-op parsing for go.work; "
+            "must use tree-sitter gowork grammar instead."
+        )
+        assert 'startswith("use ")' not in src and "startswith('use ')" not in src, (
+            "_graph.py still uses startswith('use ') string-op parsing for go.work; "
+            "must use tree-sitter gowork grammar instead."
+        )
+
+    def test_parse_with_grammar_go_mod_fixture(self, tmp_path):
+        """_detect_dependencies parses a go.mod fixture via tree-sitter, not str-ops."""
+        from opencode_search.handlers._graph import _detect_dependencies
+
+        go_mod = tmp_path / "go.mod"
+        go_mod.write_text(
+            "module github.com/example/myapp\n\ngo 1.21\n\nrequire (\n"
+            "\tgithub.com/pkg/errors v0.9.1\n"
+            "\tgolang.org/x/text v0.3.7 // indirect\n"
+            ")\n\nrequire github.com/single/dep v1.2.3\n"
+        )
+        result = _detect_dependencies(tmp_path)
+        assert result["manager"] == "go_modules"
+        pkgs = {p["name"]: p for p in result["packages"]}
+        assert "github.com/pkg/errors" in pkgs
+        assert pkgs["github.com/pkg/errors"]["version"] == "v0.9.1"
+        assert pkgs["github.com/pkg/errors"]["direct"] is True
+        assert "golang.org/x/text" in pkgs
+        assert pkgs["golang.org/x/text"]["direct"] is False, "indirect flag must be parsed"
+        assert "github.com/single/dep" in pkgs
+
+    def test_parse_with_grammar_requirements_fixture(self, tmp_path):
+        """_detect_dependencies parses a requirements.txt fixture via tree-sitter grammar."""
+        from opencode_search.handlers._graph import _detect_dependencies
+
+        req = tmp_path / "requirements.txt"
+        req.write_text("requests==2.28.0\nflask>=2.0.0\n# comment\n-r base.txt\npytest\n")
+        result = _detect_dependencies(tmp_path)
+        assert result["manager"] == "pip"
+        pkgs = {p["name"]: p for p in result["packages"]}
+        assert "requests" in pkgs
+        assert pkgs["requests"]["version"] == "==2.28.0"
+        assert "flask" in pkgs
+        assert pkgs["flask"]["version"] == ">=2.0.0"
+        assert "pytest" in pkgs
+        assert pkgs["pytest"]["version"] == "*"
+
 
 class TestServiceMeshParsedFacts:
     """Service-mesh topology derives from parsed .proto graph nodes + external_imports.json.
