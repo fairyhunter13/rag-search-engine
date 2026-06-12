@@ -1133,6 +1133,46 @@ class TestDedupEntropyNoDenylist:
         assert result.get("dry_run") is True
 
 
+class TestFederationGoWorkGrammar:
+    """Unit K guard: _federation.py must parse go.work via tree-sitter, not string-ops."""
+
+    def test_no_startswith_use_in_federation(self):
+        """_federation.py must not use startswith('use') to parse go.work."""
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_federation.py").read_text()
+        assert 'startswith("use (")' not in src and "startswith('use (')" not in src, (
+            "_federation.py still uses startswith('use (') string-op; "
+            "must use tree-sitter gowork grammar."
+        )
+        assert 'startswith("use ")' not in src and "startswith('use ')" not in src, (
+            "_federation.py still uses startswith('use ') string-op; "
+            "must use tree-sitter gowork grammar."
+        )
+
+    def test_go_work_fixture_single_and_block(self, tmp_path):
+        """_discover_go_work_members parses both block and single-line 'use' directives."""
+        from opencode_search.handlers._federation import _discover_go_work_members
+
+        # Create sub-directories that go.work references
+        svc_a = tmp_path / "service-a"
+        svc_a.mkdir()
+        svc_b = tmp_path / "service-b"
+        svc_b.mkdir()
+        standalone = tmp_path / "standalone"
+        standalone.mkdir()
+
+        go_work = tmp_path / "go.work"
+        go_work.write_text(
+            "go 1.21\n\nuse (\n\t./service-a\n\t./service-b\n)\n\nuse ./standalone\n"
+        )
+        members = _discover_go_work_members(tmp_path)
+        member_names = {Path(m).name for m in members}
+        assert "service-a" in member_names, f"service-a not found in {member_names}"
+        assert "service-b" in member_names, f"service-b not found in {member_names}"
+        assert "standalone" in member_names, f"standalone not found in {member_names}"
+
+
 class TestRepoWideNoRegex:
     """Repo-wide guard: non-test opencode_search source must not use `re` for meaning inference.
 

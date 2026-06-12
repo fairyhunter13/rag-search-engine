@@ -56,29 +56,40 @@ def _discover_symlink_members(root: Path) -> list[str]:
 
 
 def _discover_go_work_members(root: Path) -> list[str]:
-    """Parse go.work 'use' directives and return resolved member paths."""
+    """Parse go.work 'use' directives via tree-sitter gowork grammar and return resolved member paths."""
     go_work = root / "go.work"
     if not go_work.exists():
         return []
-    members = []
+    members: list[str] = []
     try:
-        content = go_work.read_text(encoding="utf-8", errors="replace")
-        in_use_block = False
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("use ("):
-                in_use_block = True
-                continue
-            if in_use_block and stripped == ")":
-                in_use_block = False
-                continue
-            if in_use_block or stripped.startswith("use "):
-                # handle both "use /path" and lines inside "use ( ... )"
-                p = stripped.removeprefix("use").strip().strip("\"'")
-                if p and not p.startswith("//"):
-                    candidate = (root / p).resolve() if not Path(p).is_absolute() else Path(p).resolve()
-                    if candidate.is_dir() and str(candidate) != str(root):
-                        members.append(str(candidate))
+        from opencode_search.handlers._graph import _parse_with_grammar
+        result = _parse_with_grammar(go_work, "gowork")
+        if result is None:
+            return []
+        root_node, src = result
+
+        def _text(node) -> str:
+            return src[node.start_byte():node.end_byte()].decode("utf-8", errors="replace")
+
+        def _walk(node) -> None:
+            if node.kind() == "use_spec":
+                for i in range(node.child_count()):
+                    child = node.child(i)
+                    if child.kind() == "file_path":
+                        p = _text(child).strip().strip("\"'")
+                        if p and not p.startswith("//"):
+                            candidate = (
+                                (root / p).resolve()
+                                if not Path(p).is_absolute()
+                                else Path(p).resolve()
+                            )
+                            if candidate.is_dir() and str(candidate) != str(root):
+                                members.append(str(candidate))
+                return
+            for i in range(node.child_count()):
+                _walk(node.child(i))
+
+        _walk(root_node)
     except OSError:
         pass
     return members
