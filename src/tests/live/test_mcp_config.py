@@ -441,6 +441,54 @@ class TestBridgeTimeout:
         asyncio.run(_run())
 
 
+class TestFailureNotify:
+    """T1.4: the failure-notify oneshot must only fire on true death, not transient restarts."""
+
+    def test_notify_service_silent_on_recovery(self):
+        """ExecStart shell script exits 0 when daemon is active|activating|reloading."""
+        from opencode_search.daemon import _render_systemd_notify_failure_service
+        content = _render_systemd_notify_failure_service()
+        # The 'case' block must exit 0 (stay silent) if the daemon is back alive
+        assert "active|activating|reloading) exit 0" in content, (
+            "Notify script does not exit 0 on 'active|activating|reloading'. "
+            "It would fire during normal auto-restart (T1.4 regression)."
+        )
+
+    def test_notify_service_has_restart_delay(self):
+        """ExecStart waits at least 5s so systemd RestartSec=5 can complete."""
+        from opencode_search.daemon import _render_systemd_notify_failure_service
+        content = _render_systemd_notify_failure_service()
+        import re
+        # Must have 'sleep N' where N >= 5
+        match = re.search(r"sleep\s+(\d+)", content)
+        assert match, "Notify script is missing a 'sleep N' before the state check"
+        delay = int(match.group(1))
+        assert delay >= 5, (
+            f"Notify script sleeps only {delay}s — must be ≥5 to let RestartSec=5 kick in "
+            "before checking whether the daemon recovered (T1.4 regression)."
+        )
+
+    def test_notify_service_installed_matches_rendered(self):
+        """Installed notify service file content matches what _render_systemd_notify_failure_service returns."""
+        from opencode_search.daemon import (
+            _SYSTEMD_NOTIFY_SERVICE_PATH,
+            _render_systemd_notify_failure_service,
+        )
+        if not _SYSTEMD_NOTIFY_SERVICE_PATH.exists():
+            return  # service not installed yet — skip silently
+        installed = _SYSTEMD_NOTIFY_SERVICE_PATH.read_text()
+        rendered = _render_systemd_notify_failure_service()
+        # Key guards must be present in both the installed and rendered versions
+        for phrase in ("active|activating|reloading) exit 0", "sleep"):
+            assert phrase in installed, (
+                f"Installed notify service at {_SYSTEMD_NOTIFY_SERVICE_PATH} is missing "
+                f"'{phrase}'. Run `opencode-search daemon install` to update."
+            )
+            assert phrase in rendered, (
+                f"Rendered notify service is missing '{phrase}' — code regression."
+            )
+
+
 class TestThermalGuard:
     """T1.3: _wait_for_gpu_cool must return within max_wait_s even if GPU stays hot."""
 
