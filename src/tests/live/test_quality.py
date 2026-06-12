@@ -17,9 +17,11 @@ _MIN_SCORE = 3
 
 
 def _ask_chat(http, project: str, query: str) -> str:
+    # use_cache=False: judge-score tests must get fresh synthesis on every run so
+    # retries are not frozen on a previously-cached (possibly low-score) answer.
     r = http.post(
         "/api/chat_stream",
-        json={"project": project, "query": query},
+        json={"project": project, "query": query, "use_cache": False},
         headers={"Accept": "text/event-stream"},
     )
     assert r.status_code == 200, f"chat_stream failed: {r.status_code}"
