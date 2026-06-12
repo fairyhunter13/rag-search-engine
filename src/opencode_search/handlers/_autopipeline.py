@@ -465,6 +465,12 @@ async def _run_incremental_enrichment(project_path: str, modified_files: list[st
         )
         invalidate_service_mesh_cache(pp)
         log.info("incremental_enrich[%s]: service_mesh cache invalidated", root.name)
+        try:
+            from opencode_search.handlers._answer_cache import invalidate_answers
+            invalidate_answers(pp)
+            log.debug("incremental_enrich[%s]: answer cache invalidated", root.name)
+        except Exception as _ac_exc:
+            log.debug("incremental_enrich[%s]: answer cache invalidation failed: %s", root.name, _ac_exc)
 
         if _should_schedule_kb_refresh(pp):
             _KB_REFRESH_IN_FLIGHT.add(pp)

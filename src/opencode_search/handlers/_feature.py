@@ -31,6 +31,7 @@ async def handle_ask_feature(
     query: str,
     project_path: str,
     top_k: int = 15,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """Trace a feature end-to-end with algorithm and design rationale.
 
@@ -44,7 +45,22 @@ async def handle_ask_feature(
 
     This is the "PC assembly" view: not just what the code does but why it
     was designed that way.
+
+    use_cache=False: skip read and write; always synthesize fresh (required for
+    judge-score quality tests so cache reuse never freezes reruns).
     """
+    if use_cache:
+        try:
+            from opencode_search.handlers._answer_cache import load_answer, nearest_answer
+            hit = load_answer(project_path, "feature", query)
+            if hit is not None:
+                return {**hit, "cached": True}
+            near = nearest_answer(project_path, "feature", query)
+            if near is not None:
+                return {**near, "cached": "nearest"}
+        except Exception:
+            pass
+
     from opencode_search.config import get_project_graph_db_path
     from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.graph.storage import GraphStorage
@@ -289,7 +305,7 @@ async def handle_ask_feature(
             )
         answer_parts = [answer]
 
-    return {
+    result = {
         "status": "ok",
         "query": query,
         "answer": "\n\n".join(answer_parts),
@@ -301,3 +317,13 @@ async def handle_ask_feature(
         "key_design_decisions": synthesis.get("key_design_decisions", []),
         "communities": community_contexts,
     }
+    if use_cache:
+        try:
+            from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL
+            from opencode_search.embeddings import embed_query as _embed_query
+            from opencode_search.handlers._answer_cache import save_answer
+            emb = _embed_query(query, model=DEFAULT_EMBED_MODEL, dimensions=DEFAULT_DIMS)
+            save_answer(project_path, "feature", query, result, embedding=emb)
+        except Exception:
+            pass
+    return result

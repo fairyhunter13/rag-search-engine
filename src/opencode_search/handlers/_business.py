@@ -158,6 +158,7 @@ async def handle_ask_business(
     project_path: str,
     top_k: int = 10,
     include_federation: bool = False,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """Answer business-domain questions using only business-typed communities.
 
@@ -166,7 +167,21 @@ async def handle_ask_business(
     - 'What business rules govern checkout?'
     - 'Which features use the loyalty system?'
     - 'What workflows are involved in order fulfillment?'
+
+    use_cache=False: skip read and write; always synthesize fresh.
     """
+    if use_cache:
+        try:
+            from opencode_search.handlers._answer_cache import load_answer, nearest_answer
+            hit = load_answer(project_path, "business", query)
+            if hit is not None:
+                return {**hit, "cached": True}
+            near = nearest_answer(project_path, "business", query)
+            if near is not None:
+                return {**near, "cached": "nearest"}
+        except Exception:
+            pass
+
     from opencode_search.config import load_registry
 
     registry = load_registry()
@@ -239,9 +254,19 @@ async def handle_ask_business(
         log.debug("business ask LLM failed: %s", exc)
         answer = f"Found {len(top)} relevant business communities. LLM synthesis unavailable: {exc}"
 
-    return {
+    result = {
         "query": query,
         "answer": answer,
         "communities": top,
         "total_business_communities": len(all_matches),
     }
+    if use_cache:
+        try:
+            from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL
+            from opencode_search.embeddings import embed_query as _embed_query
+            from opencode_search.handlers._answer_cache import save_answer
+            emb = _embed_query(query, model=DEFAULT_EMBED_MODEL, dimensions=DEFAULT_DIMS)
+            save_answer(project_path, "business", query, result, embedding=emb)
+        except Exception:
+            pass
+    return result

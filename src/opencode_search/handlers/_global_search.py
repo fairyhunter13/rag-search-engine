@@ -39,6 +39,7 @@ async def handle_global_synthesis(
     top_n: int = _MAX_COMMUNITIES,
     include_federation: bool = False,
     level: int = 1,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
     """Answer a broad question by map-reducing over all community summaries.
 
@@ -52,7 +53,22 @@ async def handle_global_synthesis(
         top_n: Max communities to consider (default 200).
         include_federation: Include federated sub-repos.
         level: Community hierarchy level to query (1=micro, 2+=macro).
+        use_cache: Serve from precomputed cache on hit; write to cache on miss.
+            Set False for judge-score quality tests to ensure fresh synthesis.
     """
+    if use_cache:
+        try:
+            from opencode_search.handlers._answer_cache import load_answer, nearest_answer
+            cache_scope = f"global-L{level}"
+            hit = load_answer(project_path, cache_scope, query)
+            if hit is not None:
+                return {**hit, "cached": True}
+            near = nearest_answer(project_path, cache_scope, query)
+            if near is not None:
+                return {**near, "cached": "nearest"}
+        except Exception:
+            pass
+
     from opencode_search.config import load_registry
     from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.handlers._graph import _open_graph
@@ -167,7 +183,7 @@ async def handle_global_synthesis(
         elapsed, len(batches), len(valid_partials),
     )
 
-    return {
+    result = {
         "answer": final_answer,
         "sources": sources,
         "community_count": len(selected),
@@ -176,3 +192,14 @@ async def handle_global_synthesis(
         "query": query,
         "scope": "global",
     }
+    if use_cache:
+        try:
+            from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL
+            from opencode_search.embeddings import embed_query as _embed_query
+            from opencode_search.handlers._answer_cache import save_answer
+            cache_scope = f"global-L{level}"
+            emb = _embed_query(query, model=DEFAULT_EMBED_MODEL, dimensions=DEFAULT_DIMS)
+            save_answer(project_path, cache_scope, query, result, embedding=emb)
+        except Exception:
+            pass
+    return result
