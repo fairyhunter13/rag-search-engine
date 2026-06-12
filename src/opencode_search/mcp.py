@@ -163,6 +163,7 @@ async def resume_stalled_pipelines(startup_delay: float = 10.0) -> None:
     from opencode_search.config import load_registry
     from opencode_search.handlers._autopipeline import (
         _project_is_fresh,
+        _project_kb_incomplete,
         auto_pipeline_enabled,
         schedule_auto_pipeline,
     )
@@ -181,7 +182,10 @@ async def resume_stalled_pipelines(startup_delay: float = 10.0) -> None:
         if not entry.file_count:
             continue
         try:
-            if _project_is_fresh(path_str):
+            # _project_is_fresh: never enriched (0-community fresh project)
+            # _project_kb_incomplete: enriched but KB is present-but-incomplete
+            #   (edges>0/0-communities, enrichment plateau, or wiki pages missing)
+            if _project_is_fresh(path_str) or _project_kb_incomplete(path_str):
                 schedule_auto_pipeline(path_str)
                 log.info("resume_stalled_pipelines: scheduled pipeline for %s", path_str)
                 scheduled += 1

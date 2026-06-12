@@ -261,7 +261,8 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
 
     needs_h = _project_needs_hierarchy(pp)
     needs_h_enrich = _project_needs_hierarchy_enrich(pp)
-    if not force and not _project_is_fresh(pp) and not needs_h and not needs_h_enrich:
+    kb_incomplete = _project_kb_incomplete(pp)
+    if not force and not _project_is_fresh(pp) and not needs_h and not needs_h_enrich and not kb_incomplete:
         log.info("auto_pipeline[%s]: already enriched — skipping", root.name)
         return {"status": "skipped", "reason": "already_enriched", "project_path": pp}
 

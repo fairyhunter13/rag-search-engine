@@ -1739,11 +1739,29 @@ async def _run_maintenance_sweep() -> None:
                     from opencode_search.handlers._wiki import handle_wiki_lint
                     lint = await handle_wiki_lint(project_path=project_path)
                     wiki_status = lint.get("status", "ok")
+                    _triggered = False
                     if wiki_status in ("broken", "stale", "empty", "missing"):
                         _maintenance_log.info("maintenance: wiki %s for %s — regenerating", wiki_status, project_path)
                         from opencode_search.handlers._autopipeline import schedule_auto_pipeline
                         schedule_auto_pipeline(project_path)
                         wiki_status = f"{wiki_status}→regenerating"
+                        _triggered = True
+                    if not _triggered:
+                        # Also trigger when lint reports "ok" but community wiki pages are
+                        # missing or sparse — lint() can't detect scaffold-only wikis.
+                        try:
+                            from opencode_search.handlers._autopipeline import (
+                                _project_kb_incomplete,
+                                schedule_auto_pipeline,
+                            )
+                            if _project_kb_incomplete(project_path):
+                                _maintenance_log.info(
+                                    "maintenance: KB incomplete for %s — scheduling pipeline", project_path
+                                )
+                                schedule_auto_pipeline(project_path)
+                                wiki_status = f"{wiki_status}→kb_incomplete_regenerating"
+                        except Exception as _kb_exc:
+                            _maintenance_log.debug("maintenance: kb_incomplete check failed for %s: %s", project_path, _kb_exc)
                 except Exception as exc:
                     _maintenance_log.debug("maintenance: wiki lint failed for %s: %s", project_path, exc)
 
