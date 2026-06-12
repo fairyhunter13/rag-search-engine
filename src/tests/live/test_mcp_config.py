@@ -796,6 +796,67 @@ class TestNoKeywordHeuristics:
             "source-file regex scanner is forbidden. Use the parsed graph instead."
         )
 
+    def test_patterns_no_skip_name_parts(self):
+        """_SKIP_NAME_PARTS must not exist in _patterns.py (Unit F: removed keyword denylist)."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._patterns")
+        assert not hasattr(mod, "_SKIP_NAME_PARTS"), (
+            "_SKIP_NAME_PARTS found in _patterns.py — keyword denylist removed in Unit F. "
+            "Use graph-node presence to filter generated/test files."
+        )
+
+    def test_patterns_no_stem_keyword_filter(self):
+        """'test' in stem / 'spec' in stem keyword filter must not exist in _patterns.py (Unit F)."""
+        from pathlib import Path
+        src = Path("src/opencode_search/handlers/_patterns.py").read_text()
+        for forbidden in ('"test" in stem', "'test' in stem", '"spec" in stem', "'spec' in stem"):
+            assert forbidden not in src, (
+                f"_patterns.py still contains {forbidden!r} — stem keyword filter not removed (Unit F)."
+            )
+
+
+@pytest.mark.live
+@pytest.mark.slow
+class TestPatternsSamplerGraphBacked:
+    """Unit F behavior: _sample_source_files uses graph-node presence, not keyword filters."""
+
+    def test_sample_source_files_returns_graph_backed_files(self):
+        """_sample_source_files with project_path returns only files known to graph (Unit F)."""
+        import sqlite3
+        from pathlib import Path
+
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.handlers._patterns import _sample_source_files
+
+        project_path = str(Path.cwd())
+        db_path = get_project_graph_db_path(project_path)
+        if not Path(db_path).exists():
+            pytest.skip("Graph DB not found — project must be indexed first")
+
+        # Get the actual graph files for comparison
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT file FROM nodes WHERE file IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+        graph_files = {row[0] for row in rows}
+
+        if not graph_files:
+            pytest.skip("No files in graph — project must be indexed first")
+
+        root = Path(project_path)
+        samples = _sample_source_files(root, project_path)
+
+        assert samples, "Expected at least one sample file"
+        for rel_path, _content in samples:
+            abs_path = str((root / rel_path).resolve())
+            assert abs_path in graph_files, (
+                f"{rel_path!r} returned by _sample_source_files but NOT in graph DB — "
+                "should only return graph-node-backed files (Unit F)."
+            )
+
 
 class TestDependencyParsedByGrammar:
     """Unit D guard: _graph.py dependency parsers must not use regex."""

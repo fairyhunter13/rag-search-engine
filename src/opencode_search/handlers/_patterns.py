@@ -48,27 +48,48 @@ def _save_patterns_cache(project_path: str, data: dict[str, Any]) -> None:
     cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def _sample_source_files(root: Path) -> list[tuple[str, str]]:
+def _sample_source_files(root: Path, project_path: str | None = None) -> list[tuple[str, str]]:
     """Return up to _MAX_SAMPLE_FILES (relative_path, content_snippet) pairs.
 
     Takes one source file per directory (stratified across the tree) so that
     federation/monorepo setups with many symlinked repos are represented.
-    Prioritises primary language source files, skips generated and test files.
+    Filters by graph-node presence when available: files with extracted symbols
+    are real source by construction, which drops generated/vendored noise without
+    a keyword list. Falls back to accepting all primary-extension files when the
+    graph DB is unavailable.
     """
     import os
 
     _SKIP_DIRS = {"vendor", "node_modules", ".git", ".venv", "venv",
                   "target", "dist", "build", "__pycache__"}
-    _SKIP_NAME_PARTS = {"generated", "pb", "mock", "mocks"}
     _PRIMARY_EXTS = {".go", ".py", ".java", ".kt", ".ts", ".tsx", ".rs", ".rb",
                      ".cs", ".swift", ".cpp", ".c", ".scala"}
 
+    # Build the set of files known to the graph via a lightweight DB query.
+    # Files with graph nodes are real source by construction — no keyword needed.
+    graph_files: set[str] | None = None
+    if project_path:
+        try:
+            from opencode_search.config import get_project_graph_db_path
+            from opencode_search.graph.storage import GraphStorage
+            db_path = get_project_graph_db_path(project_path)
+            if Path(db_path).exists():
+                gs = GraphStorage(db_path)
+                gs.open()
+                try:
+                    rows = gs._db().execute(
+                        "SELECT DISTINCT file FROM nodes WHERE file IS NOT NULL"
+                    ).fetchall()
+                    graph_files = {row[0] for row in rows}
+                finally:
+                    gs.close()
+        except Exception:
+            pass
+
     def _is_ok(path: Path) -> bool:
-        for part in path.parts:
-            if part in _SKIP_NAME_PARTS:
-                return False
-        stem = path.stem.lower()
-        return not ("test" in stem or "_test" in stem or "spec" in stem)
+        if graph_files is not None:
+            return str(path.resolve()) in graph_files
+        return True  # fallback: accept all primary-extension files
 
     # One file per directory walk — pick the first suitable source file in each dir
     selected: list[Path] = []
@@ -253,7 +274,7 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
         }
 
     # ── Step 1: LLM Overview ────────────────────────────────────────────────
-    samples = await asyncio.to_thread(_sample_source_files, root)
+    samples = await asyncio.to_thread(_sample_source_files, root, project_path)
     if not samples:
         return {
             "status": "error",
