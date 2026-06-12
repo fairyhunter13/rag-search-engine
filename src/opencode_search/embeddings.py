@@ -587,6 +587,14 @@ _embedder_lock = threading.Lock()
 _cached_embedder: object | None = None
 _cached_embedder_model: str | None = None
 
+# Process-wide GPU inference serialization lock.
+# The RTX 5080 Laptop SBIOS has no hardware thermal protection; concurrent ONNX
+# sessions calling .embed()/.rerank() simultaneously on the same CUDA context
+# causes native SEGVs (status=11/SEGV) at temperatures ≥80°C.
+# Holding this lock around every actual ONNX inference call serializes GPU access
+# so no two threads ever run CUDA kernels at the same time.
+_GPU_INFER_LOCK = threading.Lock()
+
 # Single-thread executor for the build/indexing path (passage embeds).
 # One persistent thread → one cuBLAS handle per process → no handle storm.
 # The query path keeps its own _GPU_INFER_EXECUTOR in search.py.
@@ -2070,7 +2078,8 @@ def embed_passages(
     # IOBinding path: tensors stay on GPU; single transfer per chunk
     if is_gpu and _io_binding_confirmed:
         t_embed_start = time.perf_counter()
-        mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
+        with _GPU_INFER_LOCK:
+            mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
         t_embed_done = time.perf_counter()
         if ok:
             if mat.ndim == 1:
@@ -2108,7 +2117,8 @@ def embed_passages(
         batch = texts[start : start + _EMBED_SUB_BATCH]
         prefixed = [f"passage: {t}" for t in batch]
         t_embed_start = time.perf_counter()
-        items = embedder.embed(prefixed, batch_size=get_onnx_batch_size())
+        with _GPU_INFER_LOCK:
+            items = embedder.embed(prefixed, batch_size=get_onnx_batch_size())
         if _HAS_NUMPY:
             batch_arr = np.array(list(items), dtype=np.float32)
             all_items.append(batch_arr)
@@ -2189,7 +2199,8 @@ def embed_query(text: str, *, model: str, dimensions: int) -> list[float]:
 
     _interactive_start()
     try:
-        items = list(embedder.embed([f"query: {text}"], batch_size=get_onnx_batch_size()))
+        with _GPU_INFER_LOCK:
+            items = list(embedder.embed([f"query: {text}"], batch_size=get_onnx_batch_size()))
     finally:
         _interactive_done()
     t_end = time.perf_counter()
@@ -2244,7 +2255,8 @@ def embed_passages_f32_bytes(
     # Try IOBinding path if GPU available
     if is_gpu and _io_binding_confirmed:
         t_embed_start = time.perf_counter()
-        mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
+        with _GPU_INFER_LOCK:
+            mat, ok = _try_embed_iobinding(embedder, texts, provider, dimensions, prefix="passage")
         t_embed_done = time.perf_counter()
         if ok:
             if mat.ndim == 1:
@@ -2279,7 +2291,8 @@ def embed_passages_f32_bytes(
         prefixed = [f"passage: {t}" for t in batch]
 
         t_embed_start = time.perf_counter()
-        items = embedder.embed(prefixed, batch_size=get_onnx_batch_size())
+        with _GPU_INFER_LOCK:
+            items = embedder.embed(prefixed, batch_size=get_onnx_batch_size())
         # Convert to numpy immediately (single copy)
         if _HAS_NUMPY:
             batch_arr = np.array(list(items), dtype=np.float32)
@@ -2562,14 +2575,16 @@ def _rerank_inner(
                     tokenizer = inner.tokenizer
             if session is not None and tokenizer is not None:
                 device = _device_for_provider(provider)
-                scores = _rerank_iobinding(session, tokenizer, query, docs, batch_size, device)
+                with _GPU_INFER_LOCK:
+                    scores = _rerank_iobinding(session, tokenizer, query, docs, batch_size, device)
         except Exception as e:
             log.debug("reranker IOBinding path failed, falling back: %s", e)
             scores = None
 
     # R3: Standard batched path (fallback)
     if scores is None:
-        scores = _rerank_batched(reranker, query, docs, batch_size)
+        with _GPU_INFER_LOCK:
+            scores = _rerank_batched(reranker, query, docs, batch_size)
 
     t_end = time.perf_counter()
 

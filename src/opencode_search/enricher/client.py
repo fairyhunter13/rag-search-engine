@@ -50,8 +50,10 @@ _OLLAMA_DEFAULT_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 # to the NVIDIA driver (NV_ERR_INVALID_DATA), leaving the OS with no HW thermal
 # protection fallback. This guard is our software-level circuit breaker.
 # ---------------------------------------------------------------------------
-_GPU_TEMP_THROTTLE: int = int(os.environ.get("OPENCODE_GPU_TEMP_MAX", "85"))
-_GPU_TEMP_RESUME: int = int(os.environ.get("OPENCODE_GPU_TEMP_RESUME", "78"))
+# Safe defaults — RTX 5080 Laptop SBIOS has no hardware thermal protection, so this
+# software guard is the only safeguard against thermal-induced CUDA SEGVs.
+_GPU_TEMP_THROTTLE: int = int(os.environ.get("OPENCODE_GPU_TEMP_MAX", "80"))
+_GPU_TEMP_RESUME: int = int(os.environ.get("OPENCODE_GPU_TEMP_RESUME", "72"))
 
 
 def _read_gpu_temp() -> int | None:
@@ -68,11 +70,12 @@ def _read_gpu_temp() -> int | None:
     return None
 
 
-def _wait_for_gpu_cool() -> None:
+def _wait_for_gpu_cool(max_wait_s: float = 300.0) -> None:
     """Block until GPU temp is below the throttle threshold.
 
     Called before every Ollama inference call. If the GPU temp cannot be read
     (nvidia-smi unavailable), this is a no-op — caller proceeds immediately.
+    max_wait_s caps total wait so no inference path blocks indefinitely.
     """
     import logging
     import time
@@ -81,16 +84,22 @@ def _wait_for_gpu_cool() -> None:
     if temp is None or temp < _GPU_TEMP_THROTTLE:
         return  # Fast path — no throttling needed
     _log.warning(
-        "GPU at %d°C (≥ %d°C limit) — pausing inference until ≤ %d°C",
-        temp, _GPU_TEMP_THROTTLE, _GPU_TEMP_RESUME,
+        "GPU at %d°C (≥ %d°C limit) — pausing inference until ≤ %d°C (max wait %.0fs)",
+        temp, _GPU_TEMP_THROTTLE, _GPU_TEMP_RESUME, max_wait_s,
     )
-    while True:
+    waited = 0.0
+    while waited < max_wait_s:
         time.sleep(15)
+        waited += 15
         temp = _read_gpu_temp()
         if temp is None or temp <= _GPU_TEMP_RESUME:
             _log.info("GPU cooled to %s°C — resuming inference", temp)
             return
         _log.warning("GPU still at %d°C — waiting 15s more", temp)
+    _log.warning(
+        "GPU thermal wait exceeded max_wait_s=%.0fs at %s°C — proceeding anyway",
+        max_wait_s, temp,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -146,8 +146,21 @@ bridge = FastMCP(
 )
 
 
+# Per-tool deadlines — heavy synthesis tools get a slightly longer window,
+# but all are capped below the user's <10s target so a stuck daemon never hangs.
+_TOOL_DEADLINES: dict[str, float] = {
+    "search":   6.0,
+    "graph":    7.0,
+    "overview": 7.0,
+    "ask":      8.0,
+    "index":    8.0,
+}
+_DEFAULT_DEADLINE = 8.0
+
+
 async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     await asyncio.to_thread(ensure_daemon_running)
+    deadline = _TOOL_DEADLINES.get(name, _DEFAULT_DEADLINE)
     last_exc: Exception | None = None
     for attempt in range(3):
         if attempt:
@@ -157,8 +170,20 @@ async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 read_stream, write_stream, _ = streams
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
-                    result = await session.call_tool(name, arguments)
+                    result = await asyncio.wait_for(
+                        session.call_tool(name, arguments),
+                        timeout=deadline,
+                    )
             break  # success — exit retry loop
+        except TimeoutError:
+            return {
+                "status": "timeout",
+                "error": (
+                    f"opencode-search '{name}' did not respond within {deadline:.0f}s "
+                    "(daemon may be busy/starting). Fall back to native Read/Grep/Bash."
+                ),
+                "fallback": True,
+            }
         except urllib.error.URLError as exc:
             last_exc = exc
             continue

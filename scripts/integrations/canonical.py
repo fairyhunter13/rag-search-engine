@@ -114,7 +114,11 @@ RULES:
 - NEVER auto-index. Only call index(enabled=True) when the user explicitly asks to index a project.
 - If the project is not indexed, say so and ask before indexing.
 - Do NOT delegate codebase questions to sub-agents — they don't inherit these instructions.
-- After indexing, the daemon watches files automatically — no need to re-index on every change.\
+- After indexing, the daemon watches files automatically — no need to re-index on every change.
+
+RESILIENCE — IMPORTANT:
+- opencode-search calls have a built-in ~8s deadline. If a call returns {"status":"timeout","fallback":true}, or hangs/errors, IMMEDIATELY fall back to native Read/Grep/Glob/Bash tools. Never wait or retry the MCP call.
+- Do NOT let a slow or stuck opencode-search call block answering the user. Native tools are always the fallback.\
 """
 
 # Full block including sentinels, for each file type.

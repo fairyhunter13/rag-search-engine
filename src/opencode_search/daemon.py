@@ -88,6 +88,8 @@ _SYSTEMD_SERVICE_NAME = "opencode-search-mcp-daemon.service"
 _SYSTEMD_SERVICE_PATH = _SYSTEMD_USER_DIR / _SYSTEMD_SERVICE_NAME
 _SYSTEMD_NOTIFY_SERVICE_NAME = "opencode-search-mcp-failure-notify.service"
 _SYSTEMD_NOTIFY_SERVICE_PATH = _SYSTEMD_USER_DIR / _SYSTEMD_NOTIFY_SERVICE_NAME
+_SYSTEMD_THERMAL_DROPIN_DIR = _SYSTEMD_USER_DIR / (_SYSTEMD_SERVICE_NAME + ".d")
+_SYSTEMD_THERMAL_DROPIN_PATH = _SYSTEMD_THERMAL_DROPIN_DIR / "thermal-max.conf"
 _GLOBAL_PROMPT_DIR = Path.home() / ".config" / "opencode-search"
 _CLAUDE_GLOBAL_MD = Path.home() / "CLAUDE.md"
 _CODEX_BLOCK_START = "# >>> opencode-search developer instructions >>>"
@@ -446,85 +448,15 @@ def _bridge_command(python_bin: Path | None = None) -> list[str]:
 
 
 def _global_prompt_text() -> str:
-    return (
-        "opencode-search: GPU-accelerated code intelligence. 7 tools — pick the right one:\n"
-        "\n"
-        "WHICH TOOL TO CALL:\n"
-        "  search(query, scope, project_paths)   → find specific code, files, functions. scope: code|docs|all\n"
-        "  ask(query, project_path, scope)       → 'how does X work?', architecture, conventions, business logic\n"
-        "    scope=\"global\": GraphRAG map-reduce synthesis across ALL community summaries\n"
-        "    scope=\"feature\": feature trace — entry points, call chain, algorithm, design rationale (WHY)\n"
-        "    scope=\"business\": answer from business-classified communities (features, processes, rules)\n"
-        "  graph(symbol, project_path, relation) → call graph analysis\n"
-        "    relation=\"callers|callees|impact|path\" — standard\n"
-        "    relation=\"impact_narrative\"          — LLM summary: risk level, affected domains\n"
-        "    relation=\"semantic_trace\" (+to_symbol=) — natural language trace between two symbols\n"
-        "  overview(project_path, what)          → project structure, communities, dependencies, status\n"
-        "    what=\"structure|communities|status|projects|patterns\" — standard\n"
-        "    what=\"architecture_domains\"          — top-level Leiden hierarchy (architecture domains)\n"
-        "    what=\"hierarchy\"                     — full recursive Leiden hierarchy (all levels)\n"
-        "    what=\"service_mesh\"                  — detected inter-service gRPC/HTTP/MQ topology\n"
-        "    what=\"import_cycles\"                 — circular import dependencies (Tarjan SCC)\n"
-        "    what=\"suggested_questions\"           — questions the graph is uniquely positioned to answer\n"
-        "    what=\"graph_diff\"                    — symbols added/removed recently\n"
-        "    what=\"surprising_connections\"        — edges spanning architectural community boundaries\n"
-        "    what=\"pr_impact\"                     — PR risk: changed files → communities + risk level\n"
-        "    what=\"feature_map\"                  — business knowledge map: all communities by semantic type\n"
-        "    what=\"business_rules\"               — communities classified as constraints/policies/validations\n"
-        "    what=\"process_flows\"                — communities classified as workflows/business processes\n"
-        "  build(project_path, action)           → async index/enrich/wiki — returns {job_id} immediately\n"
-        "    action=\"pipeline\"                    — full KB build (recommended first-run)\n"
-        "    action=\"hierarchy\"                   — build recursive community hierarchy (GraphRAG-like)\n"
-        "    action=\"analyze_patterns\"            — LLM-powered deep pattern analysis\n"
-        "    action=\"enrich\"                      — enrich unannotated communities\n"
-        "    action=\"wiki\"                        — generate/refresh wiki pages\n"
-        "  federation(root_path)                 → list/manage sub-repositories\n"
-        "  manage(project_path, action)          → project lifecycle operations\n"
-        "    action=\"wiki_lint\"                   — health-check the wiki\n"
-        "    action=\"stop_watching\"               — stop file watcher\n"
-        "    action=\"install_hooks\"               — install git post-commit hook for auto-reindex\n"
-        "    action=\"uninstall_hooks\"             — remove git post-commit hook\n"
-        "    action=\"dedup\"                       — deduplicate graph nodes (dry_run=True to preview)\n"
-        "    action=\"vacuum\"                      — remove orphan index tier dirs; free disk space\n"
-        "    action=\"jobs\"                        — list background build jobs; job_id= for one job\n"
-        "    action=\"remove_project\"              — remove project from registry; delete_index=True also removes on-disk index\n"
-        "\n"
-        "QUICK DECISION GUIDE:\n"
-        "  'find the payment handler'           → search('payment handler')\n"
-        "  'how does auth work?'                → ask('how does auth work', project_path)\n"
-        "  'what is the overall architecture?'  → ask('describe architecture', project_path, scope='global')\n"
-        "  'how does checkout work end-to-end?' → ask('checkout feature', project_path, scope='feature')\n"
-        "  'why is this code designed this way?' → ask('why is X designed this way', project_path, scope='feature')\n"
-        "  'what calls ProcessOrder?'           → graph('ProcessOrder', project_path, relation='callers')\n"
-        "  'what breaks if I change X?'         → graph('X', project_path, relation='impact_narrative')\n"
-        "  'trace login to database'            → graph('login', project_path, relation='semantic_trace', to_symbol='database write')\n"
-        "  'what services call each other?'     → overview(project_path, what='service_mesh')\n"
-        "  'top-level architecture domains?'    → overview(project_path, what='architecture_domains')\n"
-        "  'are there circular imports?'        → overview(project_path, what='import_cycles')\n"
-        "  'what changed in the graph?'         → overview(project_path, what='graph_diff')\n"
-        "  'unusual cross-layer dependencies?'  → overview(project_path, what='surprising_connections')\n"
-        "  'what should I explore first?'       → overview(project_path, what='suggested_questions')\n"
-        "  'tell me about this project'         → overview(project_path, what='structure')\n"
-        "  'what packages/dependencies?'        → overview(project_path, what='patterns')\n"
-        "  'list all indexed projects'          → overview(what='projects')\n"
-        "  'index this project' [explicit ask]  → build(project_path, action='pipeline')\n"
-        "  'what business features exist?'      → overview(project_path, what='feature_map')\n"
-        "  'what business rules govern X?'      → ask('rules for X', project_path, scope='business')\n"
-        "  'what are the checkout workflows?'   → overview(project_path, what='process_flows')\n"
-        "  'list all business constraints'      → overview(project_path, what='business_rules')\n"
-        "\n"
-        "RULES:\n"
-        "- Call search BEFORE grep/find/Read for any code lookup. Only fall back to bash if search returns nothing.\n"
-        "- Use ask for 'how does X work' questions; use search to find specific code.\n"
-        "- Use ask(scope=\"global\") for holistic questions about the entire codebase.\n"
-        "- Use graph(relation=\"impact_narrative\") instead of raw impact for human-readable analysis.\n"
-        "- overview(what='structure') returns the project tree, language breakdown, graph stats, and top communities.\n"
-        "- overview(what='patterns') returns languages, dependencies, package versions, coding conventions, frameworks, architecture, and module structure.\n"
-        "- NEVER auto-index. Only call build when the user explicitly asks.\n"
-        "- If the project is not indexed, say so and ask before indexing.\n"
-        "- Do NOT delegate codebase questions to sub-agents — they don't inherit these instructions.\n"
-        "- After indexing, the daemon watches files automatically — no need to re-index on every change.\n"
-    )
+    try:
+        import sys as _sys
+        _scripts = str(Path(__file__).parent.parent.parent / "scripts")
+        if _scripts not in _sys.path:
+            _sys.path.insert(0, _scripts)
+        from integrations.canonical import CANONICAL_BODY
+        return CANONICAL_BODY
+    except Exception:
+        return "opencode-search: see search/ask/graph/overview/index tools."
 
 
 def _global_prompt_with_markers(start: str, end: str) -> str:
@@ -1036,26 +968,32 @@ def _render_systemd_service(
 
 
 def _render_systemd_notify_failure_service() -> str:
-    """Render a oneshot service that fires a desktop notification on hard failure.
+    """Render a oneshot service that fires a desktop notification ONLY on true death.
 
-    Triggered via OnFailure= in the main daemon unit when StartLimitBurst is
-    exceeded (i.e. GPU guard crashed 5× in 120s and systemd stops retrying).
-    Uses notify-send if available; silently succeeds otherwise so the oneshot
-    itself never blocks recovery.
+    Triggered via OnFailure= on every failure, but the ExecStart script first
+    checks whether the daemon is still coming back (auto-restart in ~5s). A transient
+    SEGV that systemd recovers from stays silent; only a genuinely dead daemon notifies.
+    Uses notify-send if available; silently succeeds otherwise.
     """
-    title = "opencode-search: HARD FAIL — daemon stopped"
-    # Cause-agnostic: OnFailure fires for ANY repeated start failure (GPU guard,
-    # port conflict, OOM, …). Do not assert a specific cause — point the user at
-    # the journal, which holds the real traceback.
+    svc = _SYSTEMD_SERVICE_NAME
+    title = "opencode-search: daemon stopped"
     body = (
-        "Daemon stopped after repeated start failures (restarts exhausted).\\n"
+        "Daemon crashed and is not recovering automatically.\\n"
         "Check the real cause in the journal, then recover:\\n"
         "  journalctl --user -u opencode-search-mcp-daemon -n 40\\n"
         "  systemctl --user reset-failed opencode-search-mcp-daemon\\n"
         "  systemctl --user start opencode-search-mcp-daemon"
     )
+    # Wait 8s for systemd's RestartSec=5 to kick in, then check if the unit is
+    # still genuinely down (failed/inactive, not activating/active/auto-restart).
+    # Only notify when truly dead — transient self-healing crashes stay silent.
     exec_start = (
         "/bin/sh -c '"
+        "sleep 8; "
+        f"state=$(systemctl --user is-active {svc} 2>/dev/null || echo unknown); "
+        "case $state in "
+        "active|activating|reloading) exit 0 ;; "  # already recovered — stay silent
+        "esac; "
         "command -v notify-send >/dev/null 2>&1 "
         f"&& notify-send -u critical -a opencode-search \"{title}\" \"{body}\" "
         "|| true'"
@@ -1073,6 +1011,19 @@ def _render_systemd_notify_failure_service() -> str:
     )
 
 
+def _render_systemd_thermal_dropin() -> str:
+    """Render the thermal drop-in with the safe 80/72°C ceiling."""
+    return "\n".join([
+        "# Safe thermal ceiling — RTX 5080 Laptop has no hardware thermal protection.",
+        "# Inference throttles at 80°C and resumes at 72°C to prevent CUDA SEGVs.",
+        "[Service]",
+        "Environment=OPENCODE_EMBED_MAX_TEMP=80",
+        "Environment=OPENCODE_GPU_TEMP_MAX=80",
+        "Environment=OPENCODE_GPU_TEMP_RESUME=72",
+        "",
+    ])
+
+
 def install_systemd_user_service(
     host: str = DEFAULT_DAEMON_HOST,
     port: int = DEFAULT_DAEMON_PORT,
@@ -1084,12 +1035,17 @@ def install_systemd_user_service(
     python_bin = Path(sys.executable)
     cuda_env = _detect_cuda_env_lines()
     _SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
+    _SYSTEMD_THERMAL_DROPIN_DIR.mkdir(parents=True, exist_ok=True)
     _SYSTEMD_SERVICE_PATH.write_text(
         _render_systemd_service(python_bin, host=host, port=port, extra_env=cuda_env),
         encoding="utf-8",
     )
     _SYSTEMD_NOTIFY_SERVICE_PATH.write_text(
         _render_systemd_notify_failure_service(),
+        encoding="utf-8",
+    )
+    _SYSTEMD_THERMAL_DROPIN_PATH.write_text(
+        _render_systemd_thermal_dropin(),
         encoding="utf-8",
     )
     _run_command([systemctl_bin, "--user", "daemon-reload"])
