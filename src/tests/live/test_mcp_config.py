@@ -407,13 +407,12 @@ class TestBridgeTimeout:
             )
 
     def test_bridge_forward_times_out(self):
-        """A stalled upstream causes _forward_tool to return (not hang) within a generous budget.
+        """A very short deadline causes _forward_tool to return a timeout sentinel, not hang.
 
-        The key T1.5 property is that the bridge returns rather than blocking indefinitely.
-        ensure_daemon_running() overhead is excluded from the per-call deadline, so under heavy
-        load the total elapsed can legitimately exceed the deadline+2 bound — we use a wider
-        wall-clock budget (60s) that guarantees no hang while tolerating a busy daemon.
-        The sentinel check (fallback:True or error dict) is the real correctness assertion.
+        With the hot-path fix (daemon_is_healthy() skips the file-locked ensure_daemon_running
+        on every call), the only time budget consumed is the per-tool deadline itself — no extra
+        flock overhead on the hot path.  We use 0.1s deadline so the connection+initialize phase
+        is itself unlikely to finish, ensuring the TimeoutError path actually fires.
         """
         import asyncio
         import time
@@ -421,29 +420,86 @@ class TestBridgeTimeout:
         from opencode_search.mcp_bridge import _TOOL_DEADLINES, _forward_tool
 
         async def _run():
-            _HARD_WALL_CLOCK = 60.0  # max total time including ensure_daemon_running overhead
-            original_deadline = _TOOL_DEADLINES.get("ask", 8.0)
-            _TOOL_DEADLINES["ask"] = 0.5  # force a very short per-call deadline
+            original_deadline = _TOOL_DEADLINES.get("search", 6.0)
+            # 0.1s is tighter than any connection+initialize round-trip → reliably fires timeout
+            _TOOL_DEADLINES["search"] = 0.1
             t0 = time.monotonic()
             try:
-                result = await _forward_tool("ask", {
-                    "query": "timeout test query that should not matter",
-                    "project_path": "/tmp/nonexistent_project_path_for_timeout_test",
-                    "scope": "feature",
+                result = await _forward_tool("search", {
+                    "query": "bridge timeout sentinel test",
+                    "scope": "code",
                 })
             finally:
-                _TOOL_DEADLINES["ask"] = original_deadline
+                _TOOL_DEADLINES["search"] = original_deadline
 
             elapsed = time.monotonic() - t0
-            # Must return (not hang) — ensure_daemon_running overhead + 0.5s deadline ≤ 60s
-            assert elapsed < _HARD_WALL_CLOCK, (
-                f"_forward_tool took {elapsed:.2f}s — HUNG (expected < {_HARD_WALL_CLOCK}s). "
-                "The bridge timeout guard is not working (T1.5 regression)."
+            # Must return within deadline + 2s overhead (no flock contention on hot path)
+            assert elapsed < 0.1 + 2.0, (
+                f"_forward_tool took {elapsed:.2f}s — HUNG (expected < 2.1s). "
+                "The deadline wrapper is not covering the full attempt body (T1.5 regression)."
             )
-            # Must return a dict (timeout sentinel or error) — never propagates an exception
+            # Must return a timeout sentinel — fallback:true signals the caller to use native tools
             assert isinstance(result, dict), "Expected dict result from _forward_tool"
+            assert result.get("status") == "timeout" or result.get("fallback") is True, (
+                f"Expected timeout sentinel with fallback:true, got: {result}"
+            )
 
         asyncio.run(_run())
+
+    def test_bridge_no_hang_on_locked_daemon_file(self):
+        """Hot path: when daemon is healthy, _forward_tool never acquires daemon.lock.
+
+        Hold daemon.lock exclusively from a background thread while _forward_tool runs.
+        Since the hot path calls daemon_is_healthy() (lock-free) rather than
+        ensure_daemon_running() (flock), the call must complete — not hang — within the deadline.
+        """
+        import asyncio
+        import fcntl
+        import threading
+        import time
+
+        from opencode_search.daemon import _LOCK_PATH
+        from opencode_search.mcp_bridge import _TOOL_DEADLINES, _forward_tool
+
+        lock_held = threading.Event()
+        release_lock = threading.Event()
+
+        def _hold_lock() -> None:
+            with _LOCK_PATH.open("a+", encoding="utf-8") as fh:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                lock_held.set()
+                release_lock.wait(timeout=15.0)
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+        t = threading.Thread(target=_hold_lock, daemon=True)
+        t.start()
+        assert lock_held.wait(timeout=5.0), "Lock holder thread did not start"
+
+        original_deadline = _TOOL_DEADLINES.get("search", 6.0)
+        _TOOL_DEADLINES["search"] = 2.0  # short enough to detect a hang quickly
+
+        async def _run():
+            return await _forward_tool("search", {
+                "query": "lock contention hot path test",
+                "scope": "code",
+            })
+
+        t0 = time.monotonic()
+        try:
+            result = asyncio.run(_run())
+        finally:
+            _TOOL_DEADLINES["search"] = original_deadline
+            release_lock.set()
+            t.join(timeout=5.0)
+
+        elapsed = time.monotonic() - t0
+        # Must return within deadline + 1s — not hang for minutes waiting for the flock
+        assert elapsed < 2.0 + 1.0, (
+            f"_forward_tool took {elapsed:.2f}s while daemon.lock was held — HUNG. "
+            "Hot path must not acquire daemon.lock when daemon is healthy (T1.5 regression)."
+        )
+        # Must return a dict — either a real result (healthy daemon responds) or a timeout sentinel
+        assert isinstance(result, dict), "Expected dict from _forward_tool under lock contention"
 
 
 class TestFailureNotify:
