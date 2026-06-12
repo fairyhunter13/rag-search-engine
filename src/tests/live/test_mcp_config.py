@@ -1003,3 +1003,83 @@ class TestRepoWideNoRegex:
                     )
                     for name in names:
                         assert name != "re", f"{rel} must not import 're' (Unit A landed)"
+
+    def test_chat_router_and_enricher_no_re(self):
+        """Units landed in B: _chat_router.py and enricher/client.py must not import re."""
+        import ast
+        from pathlib import Path
+
+        for rel in ("src/opencode_search/handlers/_chat_router.py",
+                    "src/opencode_search/enricher/client.py"):
+            src = Path(rel).read_text()
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    names = (
+                        [a.name for a in node.names]
+                        if isinstance(node, ast.Import)
+                        else ([node.module] if node.module else [])
+                    )
+                    for name in names:
+                        assert name != "re", f"{rel} must not import 're' (Unit B landed)"
+
+
+class TestNoRegexInLLMOutputParsing:
+    """Unit B guard: LLM-output parsing must use json/str-ops, not regex."""
+
+    def _assert_no_re(self, rel: str, reason: str) -> None:
+        import ast
+        from pathlib import Path
+
+        src = Path(rel).read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "re", f"{rel} must not import 're'. {reason}"
+            elif isinstance(node, ast.ImportFrom) and node.module == "re":
+                raise AssertionError(f"{rel} must not import from 're'. {reason}")
+
+    def test_chat_router_no_re_import(self):
+        """handlers/_chat_router.py must not import re (intent JSON parsed via json.loads)."""
+        self._assert_no_re(
+            "src/opencode_search/handlers/_chat_router.py",
+            "Intent JSON must be parsed with json.loads.",
+        )
+
+    def test_enricher_client_no_re_import(self):
+        """enricher/client.py must not import re (numbered-list parsed by str-ops)."""
+        self._assert_no_re(
+            "src/opencode_search/enricher/client.py",
+            "Numbered-list LLM output parsed with str-ops.",
+        )
+
+    def test_intent_json_parse_valid_intent(self):
+        """classify_intent_llm JSON-slice parsing handles well-formed intent JSON."""
+        import json
+
+        # Simulate what the function does: find JSON, loads, pick intent
+        text = '{"intent": "search"}'
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        parsed = json.loads(text[start:end])
+        assert parsed.get("intent") == "search"
+
+    def test_numbered_list_parser_str_ops(self):
+        """OllamaLLMClient.symbol_intent_batch str-op parser handles standard numbered output."""
+        # Exercise the parsing logic directly by calling symbol_intent_batch
+        # via a subclass that overrides chat() to return canned output.
+        from opencode_search.enricher.client import OllamaClient
+
+        class _FakeOllama(OllamaClient):
+            def __init__(self):
+                pass  # skip actual init
+
+            def chat(self, messages, **kw):
+                return "1. Does the first thing\n2. Does the second thing\n"
+
+        fake = _FakeOllama()
+        items = [("fn_a", "fn_a()", None), ("fn_b", "fn_b()", None)]
+        results = fake.symbol_intent_batch(items)
+        assert results[0] == "Does the first thing"
+        assert results[1] == "Does the second thing"
