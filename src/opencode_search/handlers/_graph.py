@@ -4,7 +4,6 @@ from __future__ import annotations
 import collections
 import json
 import logging
-import re
 import time
 import xml.etree.ElementTree as _ET
 from pathlib import Path
@@ -27,8 +26,24 @@ _PATTERNS_FILE_TTL = 86400.0  # 24 hours for on-disk cache
 # ---------------------------------------------------------------------------
 
 
+_VERSION_SEPS = (">=", "==", "!=", "~=", "<=", "<", ">")
+
+
+def _parse_dep_spec(raw: str) -> tuple[str, str]:
+    """Parse a PEP 508-style dependency specifier into (name, version) via str-ops — no regex."""
+    spec = raw.split(";")[0].split("#")[0].strip()
+    for sep in _VERSION_SEPS:
+        if sep in spec:
+            name, _, rest = spec.partition(sep)
+            return name.strip().split("[")[0], sep + rest.strip().split()[0]
+    return spec.split("[")[0].strip(), "*"
+
+
 def _detect_dependencies(root: Path) -> dict[str, Any]:
-    """Parse dependency manifest files to extract package names and versions."""
+    """Parse dependency manifest files to extract package names and versions.
+
+    All parsers use grammar-based or stdlib format parsers — no regex.
+    """
     packages: list[dict[str, Any]] = []
     files_found: list[str] = []
     manager = "unknown"
@@ -41,22 +56,22 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
                 manager = "go_modules"
             in_require = False
             for line in text.splitlines():
-                line = line.strip()
-                if line.startswith("require ("):
+                stripped = line.strip()
+                if stripped.startswith("require ("):
                     in_require = True
                     continue
-                if in_require and line == ")":
+                if in_require and stripped == ")":
                     in_require = False
                     continue
-                if in_require or line.startswith("require "):
-                    cleaned = line.removeprefix("require ").strip()
-                    if cleaned.startswith("(") or not cleaned:
+                if in_require or stripped.startswith("require "):
+                    cleaned = stripped.removeprefix("require ").strip()
+                    if cleaned.startswith("(") or not cleaned or cleaned.startswith("//"):
                         continue
-                    # github.com/pkg/name v1.2.3 // indirect
-                    m = re.match(r"^(\S+)\s+(v\S+)(.*)$", cleaned)
-                    if m:
-                        indirect = "indirect" in m.group(3)
-                        packages.append({"name": m.group(1), "version": m.group(2), "direct": not indirect})
+                    # "module_path version [// indirect]" — str.split, no regex
+                    parts = cleaned.split()
+                    if len(parts) >= 2 and parts[1].startswith("v"):
+                        indirect = len(parts) > 2 and "indirect" in " ".join(parts[2:])
+                        packages.append({"name": parts[0], "version": parts[1], "direct": not indirect})
         except Exception:
             pass
 
@@ -66,12 +81,12 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
             if manager == "unknown":
                 manager = "pip"
             for line in p.read_text(errors="replace").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or line.startswith("-"):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or stripped.startswith("-"):
                     continue
-                m = re.match(r"^([A-Za-z0-9_\-\.]+)\s*[=><!~]{1,2}=?\s*([^\s;#]+)", line)
-                if m:
-                    packages.append({"name": m.group(1), "version": m.group(2), "direct": True})
+                name, version = _parse_dep_spec(stripped)
+                if name:
+                    packages.append({"name": name, "version": version, "direct": True})
         except Exception:
             pass
 
@@ -91,48 +106,48 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
     def _try_cargo_toml(p: Path) -> None:
         nonlocal manager
         try:
+            import tomllib
             if manager == "unknown":
                 manager = "cargo"
-            text = p.read_text(errors="replace")
-            in_deps = False
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("[dependencies]") or stripped.startswith("[dev-dependencies]"):
-                    in_deps = True
-                    continue
-                if stripped.startswith("[") and in_deps:
-                    in_deps = False
-                if in_deps and "=" in stripped and not stripped.startswith("#"):
-                    name, _, rest = stripped.partition("=")
-                    name = name.strip()
-                    rest = rest.strip().strip('"').strip("'")
-                    # version = { version = "1.0" } or version = "1.0"
-                    vm = re.search(r'"([^"]+)"', rest)
-                    if vm and name:
-                        packages.append({"name": name, "version": vm.group(1), "direct": True})
+            data = tomllib.loads(p.read_bytes().decode("utf-8", errors="replace"))
+            for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for name, spec in (data.get(section) or {}).items():
+                    if isinstance(spec, str):
+                        version = spec
+                    elif isinstance(spec, dict):
+                        version = spec.get("version", "*")
+                    else:
+                        version = "*"
+                    packages.append({"name": name, "version": version or "*", "direct": True})
         except Exception:
             pass
 
     def _try_pyproject(p: Path) -> None:
         nonlocal manager
         try:
-            text = p.read_text(errors="replace")
-            if manager == "unknown":
-                manager = "poetry" if "[tool.poetry]" in text else "pip"
-            # PEP 621: [project] dependencies = [...]
-            in_deps = False
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped in ('[project.dependencies]', 'dependencies = ['):
-                    in_deps = True
-                    continue
-                if in_deps:
-                    if stripped.startswith("[") or stripped == "]":
-                        in_deps = False
+            import tomllib
+            data = tomllib.loads(p.read_bytes().decode("utf-8", errors="replace"))
+            project = data.get("project") or {}
+            poetry = (data.get("tool") or {}).get("poetry") or {}
+            if project:
+                if manager == "unknown":
+                    manager = "pip"
+                for dep in project.get("dependencies") or []:
+                    if isinstance(dep, str):
+                        name, version = _parse_dep_spec(dep)
+                        if name:
+                            packages.append({"name": name, "version": version, "direct": True})
+            if poetry:
+                if manager == "unknown":
+                    manager = "poetry"
+                for name, spec in (poetry.get("dependencies") or {}).items():
+                    if name == "python":
                         continue
-                    m = re.match(r'"?([A-Za-z0-9_\-\.]+)\s*[>=<!~]{0,2}=?\s*([^",\]]*)', stripped.strip('"').strip("'"))
-                    if m and m.group(1):
-                        packages.append({"name": m.group(1), "version": m.group(2).strip() or "*", "direct": True})
+                    version = spec if isinstance(spec, str) else (spec.get("version", "*") if isinstance(spec, dict) else "*")
+                    packages.append({"name": name, "version": version or "*", "direct": True})
+                for name, spec in (poetry.get("dev-dependencies") or {}).items():
+                    version = spec if isinstance(spec, str) else (spec.get("version", "*") if isinstance(spec, dict) else "*")
+                    packages.append({"name": name, "version": version or "*", "direct": False})
         except Exception:
             pass
 
@@ -185,39 +200,35 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
         try:
             if manager == "unknown":
                 manager = "gradle"
-            text = p.read_text(errors="replace")
-            # Spring Boot version from plugin block (handles both quote styles)
-            m = re.search(r"['\"']org\.springframework\.boot['\"].*?version\s+['\"]([^'\"]+)['\"]", text)
-            if not m:
-                m = re.search(r"org\.springframework\.boot['\"]?\s+version\s+['\"]([^'\"]+)['\"]", text)
-            if m:
-                packages.append({"name": "org.springframework.boot", "version": m.group(1), "direct": True})
-            # Standard dependency declarations
-            in_deps = False
-            brace_depth = 0
-            for line in text.splitlines():
-                stripped = line.strip()
-                if re.match(r"dependencies\s*\{", stripped):
-                    in_deps = True
-                    brace_depth = 1
-                    continue
-                if in_deps:
-                    brace_depth += stripped.count("{") - stripped.count("}")
-                    if brace_depth <= 0:
-                        in_deps = False
-                        continue
-                    if stripped.startswith("//"):
-                        continue
-                    dep_m = re.search(
-                        r"['\"]([a-zA-Z0-9][\w.\-]*:[a-zA-Z0-9][\w.\-]*):([^'\"]+)['\"]",
-                        stripped,
-                    )
-                    if dep_m:
-                        packages.append({
-                            "name": dep_m.group(1),
-                            "version": dep_m.group(2).strip(),
-                            "direct": True,
-                        })
+            # Parse with tree-sitter groovy grammar; walk leaf string literals.
+            # Maven coordinates (group:artifact:version) identified by three ':'-separated
+            # parts — structural format check, no keyword/regex matching.
+            from tree_sitter_language_pack.api import get_parser as _ts_get_parser
+            parser = _ts_get_parser("groovy")
+            tree = parser.parse(p.read_bytes())
+
+            def _collect(node) -> None:
+                if not node.children:  # leaf node — check if it looks like a quoted string
+                    raw = node.text.decode("utf-8", errors="replace")
+                    for q in ('"', "'"):
+                        if raw.startswith(q) and raw.endswith(q) and len(raw) >= 5:
+                            inner = raw[1:-1]
+                            if "${" not in inner:  # skip GString interpolation
+                                parts = inner.split(":")
+                                if len(parts) == 3:
+                                    name = f"{parts[0]}:{parts[1]}"
+                                    version = parts[2].strip()
+                                    if name and version and " " not in name:
+                                        packages.append({
+                                            "name": name,
+                                            "version": version,
+                                            "direct": True,
+                                        })
+                            break
+                for child in node.children:
+                    _collect(child)
+
+            _collect(tree.root_node)
         except Exception:
             pass
 

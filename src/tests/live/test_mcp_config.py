@@ -797,6 +797,70 @@ class TestNoKeywordHeuristics:
         )
 
 
+class TestDependencyParsedByGrammar:
+    """Unit D guard: _graph.py dependency parsers must not use regex."""
+
+    def test_graph_no_re_import(self):
+        """handlers/_graph.py must not import re (manifest parsers use tomllib/json/xml/str-ops)."""
+        import ast
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_graph.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "re", (
+                        "_graph.py must not import 're'. "
+                        "Manifest parsers must use tomllib/json/xml/str-ops."
+                    )
+            elif isinstance(node, ast.ImportFrom) and node.module == "re":
+                raise AssertionError(
+                    "_graph.py must not import from 're'. "
+                    "Manifest parsers must use tomllib/json/xml/str-ops."
+                )
+
+    def test_no_spring_boot_hardcode(self):
+        """The spring-boot hardcoded framework name must be deleted from _graph.py."""
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_graph.py").read_text()
+        assert "springframework" not in src, (
+            "spring-boot hardcoded name found in _graph.py — "
+            "framework special-casing must be deleted; no per-framework detection."
+        )
+
+    def test_overview_patterns_returns_packages(self, project):
+        """overview(what='patterns') returns dependency data without crashing."""
+        import asyncio
+
+        from opencode_search.handlers._graph import handle_detect_patterns
+
+        result = asyncio.run(handle_detect_patterns(project))
+        assert "error" not in result, f"handle_detect_patterns errored: {result.get('error')}"
+        # llm_used must never be True on the read path (absent is also fine for cached result)
+        assert result.get("llm_used") is not True, "overview patterns must not call LLM on the read path"
+        # Expect dependencies dict to be present
+        deps = result.get("dependencies", {})
+        assert isinstance(deps, dict), f"dependencies should be a dict, got {type(deps)}"
+
+    def test_parse_dep_spec_helper(self):
+        """_parse_dep_spec parses PEP 508 specifiers without regex."""
+        from opencode_search.handlers._graph import _parse_dep_spec
+
+        name, ver = _parse_dep_spec("requests>=2.28.0")
+        assert name == "requests"
+        assert ver == ">=2.28.0"
+
+        name, ver = _parse_dep_spec("flask==2.0.0 ; python_version >= '3.8'")
+        assert name == "flask"
+        assert ver == "==2.0.0"
+
+        name, ver = _parse_dep_spec("pytest")
+        assert name == "pytest"
+        assert ver == "*"
+
+
 class TestServiceMeshParsedFacts:
     """Service-mesh topology derives from parsed .proto graph nodes + external_imports.json.
 
@@ -1003,6 +1067,20 @@ class TestRepoWideNoRegex:
                     )
                     for name in names:
                         assert name != "re", f"{rel} must not import 're' (Unit A landed)"
+
+    def test_graph_no_re(self):
+        """Unit D: handlers/_graph.py must not import re (manifest parsers use stdlib/tree-sitter)."""
+        import ast
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_graph.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "re", "_graph.py must not import 're' (Unit D landed)"
+            elif isinstance(node, ast.ImportFrom) and node.module == "re":
+                raise AssertionError("_graph.py must not import from 're' (Unit D landed)")
 
     def test_trace_no_re(self):
         """Unit C: handlers/_trace.py must not import re (symbol resolved via graph nodes)."""
