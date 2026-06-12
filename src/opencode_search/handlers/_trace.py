@@ -57,16 +57,34 @@ async def handle_semantic_trace(
     if not to_candidates:
         return {"error": f"No code found matching to_query: {to_query!r}"}
 
-    # Use the top candidate's file path to extract a symbol name
+    # Use the top candidate's file path to resolve a symbol name via the graph DB.
+    # No regex — tree-sitter-parsed qualified_name from the graph; filename stem as fallback.
     def _extract_symbol(candidate: dict) -> str:
         path = candidate.get("path", "")
-        content = candidate.get("content", "")
-        # Try to extract function/class name from content
-        import re
-        m = re.search(r'(?:func|def|class|function)\s+(\w+)', content)
-        if m:
-            return m.group(1)
-        # Fall back to file name without extension
+        if not path:
+            return "unknown"
+        try:
+            import contextlib
+
+            from opencode_search.handlers._graph import _open_graph
+            gs = _open_graph(project_path)
+            if gs is not None:
+                try:
+                    db = gs._db()
+                    row = db.execute(
+                        "SELECT qualified_name FROM nodes WHERE file = ? "
+                        "AND kind IN ('function','class','interface','method') "
+                        "ORDER BY id LIMIT 1",
+                        (path,),
+                    ).fetchone()
+                    if row and row["qualified_name"]:
+                        return row["qualified_name"]
+                finally:
+                    with contextlib.suppress(Exception):
+                        gs.close()
+        except Exception:
+            pass
+        # Fall back to file name without extension (str.rsplit, not regex)
         return path.rsplit("/", 1)[-1].rsplit(".", 1)[0] if path else "unknown"
 
     from_symbol = _extract_symbol(from_candidates[0])

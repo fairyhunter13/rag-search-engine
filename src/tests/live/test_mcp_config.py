@@ -1004,6 +1004,20 @@ class TestRepoWideNoRegex:
                     for name in names:
                         assert name != "re", f"{rel} must not import 're' (Unit A landed)"
 
+    def test_trace_no_re(self):
+        """Unit C: handlers/_trace.py must not import re (symbol resolved via graph nodes)."""
+        import ast
+        from pathlib import Path
+
+        src = Path("src/opencode_search/handlers/_trace.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "re", "_trace.py must not import 're' (Unit C landed)"
+            elif isinstance(node, ast.ImportFrom) and node.module == "re":
+                raise AssertionError("_trace.py must not import from 're' (Unit C landed)")
+
     def test_chat_router_and_enricher_no_re(self):
         """Units landed in B: _chat_router.py and enricher/client.py must not import re."""
         import ast
