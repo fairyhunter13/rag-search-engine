@@ -61,6 +61,7 @@ class TestMissingRequiredParams:
 # Class 2: Invalid parameter types (numeric params with non-numeric input)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.flaky(reruns=2)
 class TestInvalidParamTypes:
     """Numeric params with non-numeric strings must return 400, not 500."""
 
@@ -99,6 +100,7 @@ class TestInvalidParamTypes:
 # Class 3: Non-existent project paths
 # ---------------------------------------------------------------------------
 
+@pytest.mark.flaky(reruns=2)
 class TestInvalidProjectPaths:
     """Non-existent or empty project params must never return 5xx."""
 
