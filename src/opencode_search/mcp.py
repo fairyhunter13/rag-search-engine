@@ -129,7 +129,12 @@ async def _stale_cleanup_loop() -> None:
 
 
 async def resume_watchers() -> None:
-    """Restart any watchers that were persisted with watch=True in the registry.
+    """Start/resume watchers for every indexed (file_count > 0) registry entry.
+
+    Watches every project AND every federation member (members are separate registry
+    entries with their own file_count>0 once indexed — Phase 102 federation-first
+    design). Previously only entries with watch=True were resumed, leaving all 24
+    astro members and payment-gateway un-watched after daemon restart (Gap C).
 
     Must be called from inside the running event loop so watcher coroutines
     bind to the correct loop.
@@ -137,12 +142,25 @@ async def resume_watchers() -> None:
     from opencode_search.config import load_registry
 
     registry = load_registry()
+    started = 0
+    skipped_empty = 0
     for path_str, entry in registry.items():
-        if not entry.watch:
+        if not entry.file_count:
+            skipped_empty += 1
             continue
         result = await handle_ensure_project_watching(path_str, persist=True)
         if result.get("watching"):
             log.info("Resumed watcher for %s", path_str)
+            started += 1
+        elif not result.get("error"):
+            log.debug("Watcher already active for %s", path_str)
+        else:
+            # Fail loud — a silent skip means incremental re-index silently stops working.
+            log.warning(
+                "resume_watchers: failed to start watcher for %s: %s",
+                path_str, result.get("error", "unknown"),
+            )
+    log.info("resume_watchers: started=%d skipped_empty=%d", started, skipped_empty)
 
 
 async def resume_stalled_pipelines(startup_delay: float = 10.0) -> None:
