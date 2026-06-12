@@ -90,6 +90,72 @@ def _project_is_fresh(project_path: str) -> bool:
         return True  # Assume fresh if we can't check
 
 
+def _project_kb_incomplete(project_path: str) -> bool:
+    """Return True if the project has a KB that is present but incomplete.
+
+    A KB is incomplete when any of the following hold:
+    - Graph has edges but zero communities (Leiden never ran / communities wiped — Gap A).
+      Definitions-only graphs (edges==0) are NOT incomplete — they correctly verdict DONE.
+    - Any non-empty community level is < 99% enriched (enrichment plateau).
+    - Wiki content pages (community_*.md) are < 80% of eligible communities with
+      node_count≥2 (Gap B: wiki generation was never triggered or was interrupted).
+
+    Returns False on any error (safe-fail: prefer not to over-trigger recovery loops).
+    """
+    try:
+        from opencode_search.config import get_project_graph_db_path, get_project_wiki_dir
+        from opencode_search.graph.storage import GraphStorage
+
+        graph_db = get_project_graph_db_path(project_path)
+        if not Path(graph_db).exists():
+            return False
+
+        gs = GraphStorage(graph_db)
+        gs.open()
+        try:
+            all_comms = gs.get_communities()
+            n_communities = len(all_comms)
+
+            # Gap A: graph has resolved edges but Leiden never produced communities (or
+            # they were wiped). Use a LIMIT-1 SQL probe — avoids loading all edges just
+            # to check existence; same pattern as has_cross_community_edges().
+            if n_communities == 0:
+                row = gs._db().execute("SELECT 1 FROM edges LIMIT 1").fetchone()
+                # has edges → communities wiped/missing → incomplete
+                # no edges → definitions-only → NOT incomplete (correctly DONE)
+                return row is not None
+
+            # Enrichment plateau: group communities by level; any non-empty level whose
+            # enriched fraction < 99% means the KB build stalled mid-way.
+            by_level: dict[int, list] = {}
+            for c in all_comms:
+                lvl = getattr(c, "level", 1) or 1
+                by_level.setdefault(lvl, []).append(c)
+            for comms in by_level.values():
+                eligible = [c for c in comms if (c.node_count or 0) >= 2]
+                if not eligible:
+                    continue
+                enriched = sum(1 for c in eligible if c.title)
+                if enriched / len(eligible) < 0.99:
+                    return True
+
+            # Gap B: wiki content pages lag eligible communities.
+            # The 0.8 ratio + the 6h maintenance cadence guarantee convergence without
+            # churn: a regenerated wiki hits ~1.0 and stops re-firing next sweep.
+            eligible_total = sum(1 for c in all_comms if (c.node_count or 0) >= 2)
+            if eligible_total > 0:
+                wiki_dir = get_project_wiki_dir(project_path)
+                content_pages = len(list(wiki_dir.glob("community_*.md"))) if wiki_dir.exists() else 0
+                if content_pages < 0.8 * eligible_total:
+                    return True
+
+            return False
+        finally:
+            gs.close()
+    except Exception:
+        return False  # safe-fail: don't over-trigger recovery loops
+
+
 def _project_needs_hierarchy(project_path: str) -> bool:
     """Return True if project has enriched communities but no hierarchy (max_level == 1)
     AND a level-2 is actually buildable (≥1 cross-community edge exists).
