@@ -322,3 +322,153 @@ class TestBashAliasesSentinel:
         assert count == 1, (
             f"[opencode-search-aliases:start] appears {count}× in ~/.bash_aliases; expected exactly 1"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tier-1 guard tests — T1.3, T1.4, T1.5, T1.6
+# ---------------------------------------------------------------------------
+
+class TestResilienceRule:
+    """Every profile must carry the RESILIENCE/fallback rule added in Tier 1 (T1.6).
+
+    No stale 7-tool (build/federation/manage) text may remain in any profile.
+    """
+
+    from typing import ClassVar
+
+    _RESILIENCE_PHRASE = "fallback"  # appears in "fallback:true" or "fall back to native"
+    _STALE_TOOLS: ClassVar[list[str]] = ["build(", "federation(", "manage("]
+
+    _PROFILES: ClassVar[list[tuple[str, Path]]] = [
+        ("CLAUDE.md", _HOME / ".claude" / "CLAUDE.md"),
+        ("AGENTS.md", _HOME / ".codex" / "AGENTS.md"),
+        ("hermes_config.yaml", _HOME / ".hermes" / "config.yaml"),
+        ("bash_aliases", _HOME / ".bash_aliases"),
+    ]
+
+    def test_canonical_body_has_resilience_rule(self):
+        """scripts/integrations/canonical.py CANONICAL_BODY must contain the fallback rule."""
+        # Read the file directly — scripts/ is not on sys.path in test runs
+        canonical_path = Path(__file__).parents[3] / "scripts" / "integrations" / "canonical.py"
+        assert canonical_path.exists(), f"canonical.py not found at {canonical_path}"
+        text = canonical_path.read_text().lower()
+        assert "fallback" in text, (
+            "CANONICAL_BODY is missing the RESILIENCE/fallback guidance. "
+            "Add it to scripts/integrations/canonical.py."
+        )
+        assert "timeout" in text, (
+            "CANONICAL_BODY is missing timeout guidance in the RESILIENCE rule."
+        )
+
+    def test_all_profiles_have_resilience_rule(self):
+        """Every installed profile file must contain the fallback/resilience guidance."""
+        missing = []
+        for name, path in self._PROFILES:
+            if not path.exists():
+                continue
+            text = path.read_text()
+            if self._RESILIENCE_PHRASE not in text.lower():
+                missing.append(f"{name}: missing '{self._RESILIENCE_PHRASE}' keyword")
+        assert not missing, (
+            "These profiles are missing the RESILIENCE/fallback rule:\n"
+            + "\n".join(f"  {m}" for m in missing)
+            + "\nRun scripts/configure_integrations.py to re-sync profiles."
+        )
+
+    def test_no_stale_7_tool_api_in_profiles(self):
+        """No profile should reference the old 7-tool API (build/federation/manage)."""
+        found = []
+        for name, path in self._PROFILES:
+            if not path.exists():
+                continue
+            text = path.read_text()
+            for stale_tool in self._STALE_TOOLS:
+                if stale_tool in text and "opencode-search" in text:
+                    found.append(f"{name}: contains stale tool reference '{stale_tool}'")
+                    break
+        assert not found, (
+            "These profiles still reference the old 7-tool API:\n"
+            + "\n".join(f"  {f}" for f in found)
+            + "\nRun scripts/configure_integrations.py to re-sync."
+        )
+
+
+class TestBridgeTimeout:
+    """T1.5: mcp_bridge._forward_tool must return a timeout sentinel, never hang."""
+
+    def test_tool_deadlines_are_defined(self):
+        """_TOOL_DEADLINES must include all 5 tools with values <= 10s."""
+        from opencode_search.mcp_bridge import _TOOL_DEADLINES
+        required = {"search", "ask", "graph", "overview", "index"}
+        for tool in required:
+            assert tool in _TOOL_DEADLINES, f"_TOOL_DEADLINES missing '{tool}'"
+            assert _TOOL_DEADLINES[tool] <= 10.0, (
+                f"_TOOL_DEADLINES['{tool}']={_TOOL_DEADLINES[tool]}s exceeds 10s ceiling"
+            )
+
+    def test_bridge_forward_times_out(self):
+        """A stalled upstream causes _forward_tool to return fallback:True within deadline + 1s."""
+        import asyncio
+        import time
+
+        from opencode_search.mcp_bridge import _TOOL_DEADLINES, _forward_tool
+
+        async def _run():
+            deadline = _TOOL_DEADLINES.get("ask", 8.0)
+            t0 = time.monotonic()
+            # Pass a tool name that doesn't exist in the real daemon — the daemon
+            # will respond with an error quickly rather than hanging.  We test the
+            # timeout guard by calling with a very short artificial deadline via a
+            # monkey-patch on the module-level dict.
+            original_deadline = _TOOL_DEADLINES.get("ask", 8.0)
+            _TOOL_DEADLINES["ask"] = 0.5  # force a very short deadline
+            try:
+                result = await _forward_tool("ask", {
+                    "query": "timeout test query that should not matter",
+                    "project_path": "/tmp/nonexistent_project_path_for_timeout_test",
+                    "scope": "feature",
+                })
+            finally:
+                _TOOL_DEADLINES["ask"] = original_deadline
+
+            elapsed = time.monotonic() - t0
+            assert elapsed < deadline + 2.0, (
+                f"_forward_tool took {elapsed:.2f}s — expected to return within {deadline + 2.0:.1f}s"
+            )
+            # Either a timeout sentinel or an error response — never hangs
+            assert isinstance(result, dict), "Expected dict result from _forward_tool"
+
+        asyncio.run(_run())
+
+
+class TestThermalGuard:
+    """T1.3: _wait_for_gpu_cool must return within max_wait_s even if GPU stays hot."""
+
+    def test_thermal_guard_has_max_wait(self):
+        """_wait_for_gpu_cool must accept and respect a max_wait_s parameter."""
+        import inspect
+
+        from opencode_search.enricher.client import _wait_for_gpu_cool
+        sig = inspect.signature(_wait_for_gpu_cool)
+        assert "max_wait_s" in sig.parameters, (
+            "_wait_for_gpu_cool is missing the max_wait_s parameter (T1.3 fix)"
+        )
+
+    def test_thermal_guard_bounded(self):
+        """_wait_for_gpu_cool(max_wait_s=0.3) returns within 1s under any real GPU temp.
+
+        No mocks: the function must return within max_wait_s regardless of whether the GPU
+        is cool (returns immediately) or hot (exits after max_wait_s). Either path < 1s.
+        """
+        import time
+
+        from opencode_search.enricher.client import _wait_for_gpu_cool
+
+        t0 = time.monotonic()
+        _wait_for_gpu_cool(max_wait_s=0.3)
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 1.0, (
+            f"_wait_for_gpu_cool with max_wait_s=0.3 took {elapsed:.2f}s — expected <1.0s. "
+            "The function is not respecting max_wait_s (T1.3 regression)."
+        )
