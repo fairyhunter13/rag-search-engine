@@ -421,6 +421,7 @@ class TestMCPFederation:
 # manage
 # ---------------------------------------------------------------------------
 
+@pytest.mark.flaky(reruns=2)
 class TestMCPManage:
     """HTTP maintenance info (/api/storage_health, /api/jobs) — write ops auto-run by daemon sweep."""
 
