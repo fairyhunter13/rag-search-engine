@@ -1249,6 +1249,91 @@ def _kb_sweep_monitor() -> None:
         time.sleep(_KB_SWEEP_INTERVAL_S)
 
 
+_ANSWER_WARM_LAST: dict[str, float] = {}
+_ANSWER_WARM_COOLDOWN_S = 3600.0  # warm at most once per hour per project
+
+
+async def _warm_answer_cache(project_path: str) -> None:
+    """Precompute high-value ask answers for a project and write them to the answer cache.
+
+    Called at the tail of _run_kb_sweep's per-project loop when the project is
+    converged.  Gated on: cooldown (1h), GPU temp, no active clients.  Serialized
+    via the existing _GPU_INFER_LOCK in embed_query so it never races live queries.
+
+    Queries: top-7 suggested_questions (scope=feature) + one global architecture synthesis.
+    Skips entries whose _graph_sig matches the already-stored value (no-op re-warm).
+    """
+    import time as _t
+    last = _ANSWER_WARM_LAST.get(project_path, 0.0)
+    if _t.monotonic() - last < _ANSWER_WARM_COOLDOWN_S:
+        return
+
+    try:
+        from opencode_search.embeddings import _get_gpu_temp_c
+        from opencode_search.indexer import _MAX_GPU_TEMP
+        temp = _get_gpu_temp_c()
+        if temp is not None and temp > _MAX_GPU_TEMP:
+            return
+    except Exception:
+        pass
+
+    with runtime_state.lock:
+        if len(runtime_state.active_clients) > 0:
+            return
+
+    _kb_sweep_log.info("answer_warm: warming answer cache for %s", project_path)
+    try:
+        from opencode_search.config import DEFAULT_DIMS, DEFAULT_EMBED_MODEL
+        from opencode_search.embeddings import embed_query as _embed_query
+        from opencode_search.handlers._answer_cache import load_answer, save_answer
+        from opencode_search.handlers._graph import handle_suggest_questions
+
+        # Graph signature — skip if already fresh
+        from opencode_search.handlers._answer_cache import _graph_sig
+        sig = _graph_sig(project_path)
+
+        # 1. Feature trace for top suggested_questions
+        questions_result = await handle_suggest_questions(project_path=project_path)
+        questions = questions_result.get("questions", [])[:7]
+        for q in questions:
+            text = q.get("question", "")
+            if not text:
+                continue
+            existing = load_answer(project_path, "feature", text)
+            if existing and existing.get("_graph_sig") == sig:
+                continue  # already fresh
+            try:
+                from opencode_search.handlers._feature import handle_ask_feature
+                result = await handle_ask_feature(
+                    query=text, project_path=project_path, top_k=8, use_cache=False
+                )
+                emb = _embed_query(text, model=DEFAULT_EMBED_MODEL, dimensions=DEFAULT_DIMS)
+                save_answer(project_path, "feature", text, result, embedding=emb)
+                _kb_sweep_log.debug("answer_warm: cached feature '%s'", text[:60])
+            except Exception as exc:
+                _kb_sweep_log.debug("answer_warm: feature warm failed for '%s': %s", text[:60], exc)
+
+        # 2. Global architecture synthesis
+        arch_query = "describe the overall system architecture"
+        existing_global = load_answer(project_path, "global-L1", arch_query)
+        if not existing_global or existing_global.get("_graph_sig") != sig:
+            try:
+                from opencode_search.handlers._global_search import handle_global_synthesis
+                result = await handle_global_synthesis(
+                    query=arch_query, project_path=project_path, use_cache=False
+                )
+                emb = _embed_query(arch_query, model=DEFAULT_EMBED_MODEL, dimensions=DEFAULT_DIMS)
+                save_answer(project_path, "global-L1", arch_query, result, embedding=emb)
+                _kb_sweep_log.debug("answer_warm: cached global synthesis for %s", project_path)
+            except Exception as exc:
+                _kb_sweep_log.debug("answer_warm: global synthesis failed for %s: %s", project_path, exc)
+
+        _ANSWER_WARM_LAST[project_path] = _t.monotonic()
+        _kb_sweep_log.info("answer_warm: done for %s (%d questions warmed)", project_path, len(questions))
+    except Exception as exc:
+        _kb_sweep_log.warning("answer_warm: unexpected error for %s: %s", project_path, exc)
+
+
 async def _run_kb_sweep() -> None:
     """Async coroutine: drain every project's KB enrichment to ~100% on all levels.
 
@@ -1448,6 +1533,9 @@ async def _run_kb_sweep() -> None:
                             h_result = await handle_enrich_hierarchy(project_path=project_path)
                             h_enriched = h_result.get("enriched", 0)
                             _kb_sweep_log.info("kb_sweep: L2+ enriched=%d for %s", h_enriched, project_path)
+
+                # 3. Warm answer cache (cooldown-gated, GPU+client-gated)
+                await _warm_answer_cache(project_path)
 
                 swept += 1
             except Exception as exc:
