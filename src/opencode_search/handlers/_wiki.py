@@ -200,6 +200,11 @@ async def handle_wiki_generate(
                 limit=cap, min_node_count=2, order_by_size=True
             )
             for c in communities:
+                # Skip already-generated pages so re-runs only fill in missing ones.
+                # Without this, a 3000-community project regenerates everything on every
+                # auto-pipeline run, making convergence take O(N) time repeatedly.
+                if wiki.wiki_path(f"community_{c.id}").exists():
+                    continue
                 try:
                     await gen.generate_community_page(c.id)
                     pages_created.append(f"community_{c.id}")
