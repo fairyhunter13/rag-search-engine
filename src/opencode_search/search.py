@@ -22,7 +22,6 @@ import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 try:
@@ -257,63 +256,24 @@ async def _search_project(
         await storage.close()
 
 
-def _relative_result_parts(row: dict) -> tuple[str, ...]:
-    """Return lowercase relative path parts for a result row when possible."""
-    path_str = str(row.get("path", "") or "")
-    project_root = str(row.get("_project_path", "") or "")
-    if not path_str:
-        return ()
-
-    try:
-        path = Path(path_str)
-        if project_root:
-            rel = path.relative_to(Path(project_root))
-            return tuple(part.lower() for part in rel.parts)
-        return tuple(part.lower() for part in path.parts)
-    except Exception:
-        return tuple(part.lower() for part in Path(path_str).parts)
-
-
 def _authority_weight(row: dict, *, query: str = "") -> float:
-    """Return an optional path/type-aware weight.
+    """Return a grammar-derived doc-vs-code weight.
 
-    This deliberately avoids any keyword- or filename-token-based heuristics.
+    A language is "document/prose" iff it has no tree-sitter code grammar
+    (is_document_language from discover.py — a parser fact, not a keyword).
+    Document results are downweighted so code files win on hybrid-FTS spikes.
     All weights default to 1.0 (neutral) unless configured via environment.
+    No path-token or filename-token heuristics.
     """
     if not _authority_weights_enabled():
         return 1.0
 
-    parts = _relative_result_parts(row)
-    name = parts[-1] if parts else ""
     language = str(row.get("language", "") or "").lower()
-
     weight = 1.0
-
-    if "src" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_SRC", 2.0)
-    elif language and not is_document_language(language):
-        weight *= _env_weight("OPENCODE_WEIGHT_CODE_NON_DOC", 1.0)
-
-    # Tests often contain dense natural-language docstrings and question-shaped
-    # sentences; aggressively downweight them for question queries so
-    # implementation files win unless the user explicitly searches for tests.
-    if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
-        weight *= _env_weight("OPENCODE_WEIGHT_TESTS", 0.2)
-
-    # Planning docs can be extremely "query-shaped" and outscore code on pure
-    # lexical matching; treat them as low authority for question queries.
-    if "docs" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_DOCS", 0.1)
-
-    if "scripts" in parts:
-        weight *= _env_weight("OPENCODE_WEIGHT_SCRIPTS", 0.1)
 
     if is_document_language(language):
         weight *= _env_weight("OPENCODE_WEIGHT_DOCUMENT_LANGUAGE", 0.1)
 
-    # Allow very low weights so stale/low-authority sources cannot dominate
-    # purely by matching query-shaped prose (especially when hybrid FTS spikes
-    # their raw score).
     return max(0.0001, min(1.5, weight))
 
 

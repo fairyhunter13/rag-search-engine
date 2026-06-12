@@ -1545,3 +1545,99 @@ class TestEnricherJsonOnly:
         assert sem_type in _valid_types, (
             f"semantic_type {sem_type!r} not in valid set {_valid_types}"
         )
+
+
+@pytest.mark.live
+class TestAuthorityWeightDocVsCode:
+    """Unit M guard: _authority_weight must use grammar-derived doc/code split only.
+
+    Before Unit M the function contained path-token branches ("src" in parts,
+    "tests" in parts, "docs" in parts, "scripts" in parts) and filename-token
+    branches (name.startswith("test_"), name.endswith("_test.py")).
+    After Unit M: only is_document_language(language) × OPENCODE_WEIGHT_DOCUMENT_LANGUAGE.
+    """
+
+    def test_no_path_token_branches_in_search(self):
+        """search.py must contain no path-token weight branches (Unit M)."""
+        from pathlib import Path
+        src = Path("src/opencode_search/search.py").read_text()
+        for forbidden in (
+            '"src" in parts',
+            '"tests" in parts',
+            '"docs" in parts',
+            '"scripts" in parts',
+            'startswith("test_")',
+            'endswith("_test.py")',
+            "_relative_result_parts",
+            "OPENCODE_WEIGHT_SRC",
+            "OPENCODE_WEIGHT_TESTS",
+            "OPENCODE_WEIGHT_DOCS",
+            "OPENCODE_WEIGHT_SCRIPTS",
+            "OPENCODE_WEIGHT_CODE_NON_DOC",
+        ):
+            assert forbidden not in src, (
+                f"search.py still contains {forbidden!r} — path/name token branch not removed (Unit M)."
+            )
+
+    def test_document_language_weight_applied(self):
+        """A document-language result is downweighted; a code-language result is not (unit M)."""
+        import importlib
+        import os
+
+        env_patch = {
+            "OPENCODE_ENABLE_AUTHORITY_WEIGHTS": "1",
+            "OPENCODE_WEIGHT_DOCUMENT_LANGUAGE": "0.1",
+        }
+        original = {k: os.environ.get(k) for k in env_patch}
+        try:
+            os.environ.update(env_patch)
+            # Reload so _authority_weights_enabled / _env_weight pick up new env
+            import opencode_search.search as _search_mod
+            importlib.reload(_search_mod)
+            _authority_weight = _search_mod._authority_weight
+
+            doc_row = {"language": "markdown", "path": "/p/README.md", "_project_path": "/p"}
+            code_row = {"language": "python", "path": "/p/src/app.py", "_project_path": "/p"}
+
+            doc_w = _authority_weight(doc_row)
+            code_w = _authority_weight(code_row)
+
+            assert doc_w < code_w, (
+                f"Document language ({doc_w}) should be downweighted vs code ({code_w})"
+            )
+            assert abs(doc_w - 0.1) < 1e-9, f"Expected doc weight 0.1, got {doc_w}"
+            assert abs(code_w - 1.0) < 1e-9, f"Expected code weight 1.0, got {code_w}"
+        finally:
+            for k, v in original.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            # Reload back to original state
+            importlib.reload(_search_mod)
+
+    def test_test_file_not_special_cased_by_name(self):
+        """A test_*.py file with a code language gets code weight, not a test-name penalty (Unit M)."""
+        import importlib
+        import os
+
+        env_patch = {"OPENCODE_ENABLE_AUTHORITY_WEIGHTS": "1", "OPENCODE_WEIGHT_DOCUMENT_LANGUAGE": "0.1"}
+        original = {k: os.environ.get(k) for k in env_patch}
+        try:
+            os.environ.update(env_patch)
+            import opencode_search.search as _search_mod
+            importlib.reload(_search_mod)
+            _authority_weight = _search_mod._authority_weight
+
+            test_row = {"language": "python", "path": "/p/tests/test_auth.py", "_project_path": "/p"}
+            w = _authority_weight(test_row)
+            assert abs(w - 1.0) < 1e-9, (
+                f"test_auth.py should NOT be penalized by filename (Unit M). Got weight {w}"
+            )
+        finally:
+            for k, v in original.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            importlib.reload(_search_mod)
