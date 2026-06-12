@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import importlib.util as _iutil
 import logging
-import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -74,7 +73,7 @@ _GENERIC_NAMES: frozenset[str] = frozenset([
 
 def _norm(text: str) -> str:
     """Normalize a symbol name: lowercase, strip, collapse whitespace."""
-    return re.sub(r"\s+", " ", text.strip().lower())
+    return " ".join(text.strip().lower().split())
 
 
 def _entropy(text: str, min_len: int = 4) -> bool:
@@ -84,7 +83,7 @@ def _entropy(text: str, min_len: int = 4) -> bool:
         return False
     if t in _GENERIC_NAMES:
         return False
-    return not re.match(r"^\d+$", t)
+    return not t.isdigit()
 
 
 def _shingles(text: str, k: int = 3) -> set[str]:

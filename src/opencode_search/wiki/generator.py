@@ -160,5 +160,4 @@ class WikiGenerator:
 
 def _safe_name(name: str) -> str:
     """Convert a name to a safe filesystem/page name."""
-    import re
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", name).strip("_")
+    return "".join(c if (c.isalnum() or c in "_-") else "_" for c in name).strip("_")

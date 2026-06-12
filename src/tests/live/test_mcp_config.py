@@ -874,3 +874,132 @@ class TestServiceMeshParsedFacts:
             assert not hasattr(mod, name), (
                 f"{name} still present in _service_mesh — regex/file-scan artifact must be deleted."
             )
+
+
+class TestNoRegexInStringOps:
+    """Unit A guard: dedup.py and wiki/generator.py must not use `re` for trivial string ops."""
+
+    def test_dedup_no_re_import(self):
+        """graph/dedup.py must not import re (whitespace-collapse and digit-check replaced by str-ops)."""
+        import ast
+        from pathlib import Path
+
+        src = Path("src/opencode_search/graph/dedup.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = (
+                    [a.name for a in node.names]
+                    if isinstance(node, ast.Import)
+                    else ([node.module] if node.module else [])
+                )
+                for name in names:
+                    assert name != "re", (
+                        "dedup.py must not import 're'. "
+                        "Use ' '.join(s.split()) for whitespace, .isdigit() for numeric check."
+                    )
+
+    def test_wiki_generator_no_re_import(self):
+        """wiki/generator.py must not import re (slug generation replaced by char filter)."""
+        import ast
+        from pathlib import Path
+
+        src = Path("src/opencode_search/wiki/generator.py").read_text()
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = (
+                    [a.name for a in node.names]
+                    if isinstance(node, ast.Import)
+                    else ([node.module] if node.module else [])
+                )
+                for name in names:
+                    assert name != "re", (
+                        "wiki/generator.py must not import 're'. "
+                        "Use a char-filter comprehension for slug sanitization."
+                    )
+
+    def test_dedup_norm_collapses_whitespace(self):
+        """_norm() must still collapse internal whitespace after the re→str-op rewrite."""
+        from opencode_search.graph.dedup import _norm
+
+        assert _norm("  hello   world  ") == "hello world"
+        assert _norm("foo  bar\tbaz") == "foo bar baz"
+
+    def test_dedup_entropy_rejects_pure_digits(self):
+        """_entropy() must still return False for pure-digit inputs after dropping re.match."""
+        from opencode_search.graph.dedup import _entropy
+
+        assert _entropy("12345") is False
+        assert _entropy("0") is False
+        assert _entropy("abc123") is True  # mixed — not pure digits
+
+    def test_wiki_safe_name_slugifies(self):
+        """_safe_name() must still convert special chars to underscores after the re→char-filter rewrite."""
+        from opencode_search.wiki.generator import _safe_name
+
+        assert _safe_name("hello world") == "hello_world"
+        assert _safe_name("foo/bar.baz") == "foo_bar_baz"
+        assert _safe_name("valid-name_ok") == "valid-name_ok"
+        assert _safe_name("___leading") == "leading"
+
+
+class TestRepoWideNoRegex:
+    """Repo-wide guard: non-test opencode_search source must not use `re` for meaning inference.
+
+    Allowlist (documented exceptions — must shrink to empty):
+    - index_config.py: compiles USER-SUPPLIED config regex (user feature, not our heuristic).
+
+    This class grows as units A→I land. Each landed unit removes itself from any allowlist.
+    """
+
+    _ALLOWLIST = frozenset({
+        # User-supplied regex compilation — not our heuristic, never removed.
+        "index_config.py",
+    })
+
+    # Symbols deleted in Steps 1-4 that must never re-appear.
+    _BANNED_SYMBOLS = frozenset({
+        "_KNOWN_FRAMEWORKS",
+        "_detect_frameworks_from_dependencies",
+        "_infer_module_structure_from_dirs",
+        "_detect_architecture",
+        "_GRPC_PATTERNS",
+        "_HTTP_PATTERNS",
+        "_MQ_PATTERNS",
+        "_DB_PATTERNS",
+        "_detect_protocols_in_file",
+    })
+
+    def test_banned_symbols_not_importable(self):
+        """Deleted heuristic symbols must not re-appear in any module."""
+        import importlib
+
+        for mod_name in (
+            "opencode_search.handlers._graph",
+            "opencode_search.handlers._service_mesh",
+        ):
+            mod = importlib.import_module(mod_name)
+            for sym in self._BANNED_SYMBOLS:
+                assert not hasattr(mod, sym), (
+                    f"{sym} re-appeared in {mod_name} — deleted heuristic must stay deleted."
+                )
+
+    def test_dedup_and_wiki_no_re(self):
+        """Units landed in A: dedup.py and wiki/generator.py must not import re."""
+        import ast
+        from pathlib import Path
+
+        for rel in ("src/opencode_search/graph/dedup.py",
+                    "src/opencode_search/wiki/generator.py"):
+            src = Path(rel).read_text()
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    names = (
+                        [a.name for a in node.names]
+                        if isinstance(node, ast.Import)
+                        else ([node.module] if node.module else [])
+                    )
+                    for name in names:
+                        assert name != "re", f"{rel} must not import 're' (Unit A landed)"
