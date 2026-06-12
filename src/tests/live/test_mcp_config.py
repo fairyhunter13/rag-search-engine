@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -1250,29 +1251,34 @@ class TestRepoWideNoRegex:
         "index_config.py",
     })
 
-    # Symbols deleted in Steps 1-4 that must never re-appear.
-    _BANNED_SYMBOLS = frozenset({
-        "_KNOWN_FRAMEWORKS",
-        "_detect_frameworks_from_dependencies",
-        "_infer_module_structure_from_dirs",
-        "_detect_architecture",
-        "_GRPC_PATTERNS",
-        "_HTTP_PATTERNS",
-        "_MQ_PATTERNS",
-        "_DB_PATTERNS",
-        "_detect_protocols_in_file",
-    })
+    # Symbols deleted across the full de-heuristic sweep; must never re-appear.
+    _BANNED_SYMBOLS: ClassVar[dict[str, tuple[str, ...]]] = {
+        # Steps 1-4 (original sweep)
+        "_KNOWN_FRAMEWORKS": ("opencode_search.handlers._graph",),
+        "_detect_frameworks_from_dependencies": ("opencode_search.handlers._graph",),
+        "_infer_module_structure_from_dirs": ("opencode_search.handlers._graph",),
+        "_detect_architecture": ("opencode_search.handlers._graph",),
+        "_GRPC_PATTERNS": ("opencode_search.handlers._service_mesh",),
+        "_HTTP_PATTERNS": ("opencode_search.handlers._service_mesh",),
+        "_MQ_PATTERNS": ("opencode_search.handlers._service_mesh",),
+        "_DB_PATTERNS": ("opencode_search.handlers._service_mesh",),
+        "_detect_protocols_in_file": ("opencode_search.handlers._service_mesh",),
+        # Units A-M (maximal sweep)
+        "_GENERIC_NAMES": ("opencode_search.graph.dedup",),
+        "_SKIP_NAME_PARTS": ("opencode_search.handlers._patterns",),
+        "parse_traceback": ("opencode_search.handlers._debug_trace",),
+        "_DOCUMENT_LANGUAGES": ("opencode_search.search",),
+        "_DOC_LANGUAGES": ("opencode_search.chunker",),
+        "_DOC_LANGS": ("opencode_search.handlers._graph",),
+    }
 
     def test_banned_symbols_not_importable(self):
         """Deleted heuristic symbols must not re-appear in any module."""
         import importlib
 
-        for mod_name in (
-            "opencode_search.handlers._graph",
-            "opencode_search.handlers._service_mesh",
-        ):
-            mod = importlib.import_module(mod_name)
-            for sym in self._BANNED_SYMBOLS:
+        for sym, mod_names in self._BANNED_SYMBOLS.items():
+            for mod_name in mod_names:
+                mod = importlib.import_module(mod_name)
                 assert not hasattr(mod, sym), (
                     f"{sym} re-appeared in {mod_name} — deleted heuristic must stay deleted."
                 )
