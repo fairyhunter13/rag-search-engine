@@ -337,15 +337,24 @@ def ensure_daemon_running(
         # daemon. Defer to it rather than spawning a raw `daemon serve` — two
         # supervisors racing for port 8765 is what crash-loops the unit into the
         # false "GPU guard failed 5x" hard-fail notification.
-        if (
-            _systemd_unit_installed()
-            and _systemd_start_daemon()
-            and _wait_for_healthy(host, port, timeout_s)
-        ):
-            return {"status": "started_via_systemd", "url": daemon_url(host, port)}
-        # If systemd is absent or couldn't bring the daemon up (masked unit,
-        # non-systemd env, e.g. CI), fall through to a raw spawn so it still starts.
+        #
+        # IMPORTANT: do NOT gate on _systemd_start_daemon() return value.
+        # When the daemon is mid-restart (activating/deactivating), `systemctl start`
+        # can return non-zero even though systemd WILL restart it via Restart=always.
+        # Treating that non-zero as "systemd unavailable" and falling through to
+        # _spawn_daemon() creates a raw process racing the systemd-managed one for
+        # port 8765 — the dual-ownership bug.  The right behaviour when systemd is
+        # installed: always wait for systemd to bring the daemon up, never raw-spawn.
+        if _systemd_unit_installed():
+            _systemd_start_daemon()  # best-effort; may be a no-op if already restarting
+            if _wait_for_healthy(host, port, timeout_s):
+                return {"status": "started_via_systemd", "url": daemon_url(host, port)}
+            raise RuntimeError(
+                f"systemd unit installed but daemon not healthy within {timeout_s:.0f}s; "
+                f"check: systemctl --user status opencode-search-mcp-daemon"
+            )
 
+        # systemd not installed (CI / non-systemd env) — fall back to raw spawn.
         pid = _spawn_daemon(host, port)
         if not _wait_for_healthy(host, port, timeout_s):
             raise RuntimeError(
