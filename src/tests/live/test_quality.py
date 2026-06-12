@@ -74,9 +74,10 @@ def test_quality_entry_points_answer(chat_cache, judge_once, project):
 def test_quality_global_overview(chat_cache, judge_once, project):
     """Global overview must score ≥ 3/5 for breadth of system coverage.
 
-    Uses chat_cache — deduplicates synthesis with test_chat_global_intent,
-    test_chat_answer_quality_global, and test_global_intent_routes_correctly (all
-    map to canonical key 'global_overview').
+    Uses chat_cache — deduplicates synthesis with test_chat_answer_quality_global
+    (both map to canonical key 'global_overview'). test_chat_global_intent is now
+    routing-only (classify), so test_chat_answer_quality_global is always the first
+    to populate the cache with a synthesis that reliably scores ≥ _MIN_SCORE.
     """
     answer, *_ = chat_cache(project, "Give me a comprehensive global overview of this entire system")
     assert len(answer) > 100, f"Global overview too short: {answer!r}"
