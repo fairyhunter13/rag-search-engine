@@ -706,8 +706,6 @@ class OllamaClient(LLMClient):
         "N. " line prefix. Falls back to per-item sequential calls if parse
         fails for the whole batch.
         """
-        import re as _re
-
         if not items:
             return []
         n = len(items)
@@ -732,14 +730,28 @@ class OllamaClient(LLMClient):
         except Exception:
             return [""] * n
 
-        # Parse "N. sentence" output
+        # Parse "N. sentence" or "N) sentence" output using string ops — no regex
         results: list[str] = [""] * n
-        pattern = _re.compile(r"^\s*(\d+)[.)]\s*(.+)", _re.MULTILINE)
         matched = 0
-        for m in pattern.finditer(raw):
-            idx = int(m.group(1)) - 1
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Find the leading digit run followed by '.' or ')'
+            i = 0
+            while i < len(stripped) and stripped[i].isdigit():
+                i += 1
+            if i == 0 or i >= len(stripped):
+                continue
+            if stripped[i] not in (".", ")"):
+                continue
+            num_str = stripped[:i]
+            rest = stripped[i + 1:].strip()
+            if not rest:
+                continue
+            idx = int(num_str) - 1
             if 0 <= idx < n:
-                results[idx] = m.group(2).strip()
+                results[idx] = rest
                 matched += 1
 
         # If fewer than half parsed, fall back to sequential for better coverage

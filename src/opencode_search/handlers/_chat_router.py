@@ -116,7 +116,7 @@ Respond with ONLY valid JSON: {"intent": "<name>"}"""
 async def classify_intent_llm(query: str) -> str:
     """Classify query intent via LLM — handles any phrasing, no keyword brittle matching."""
     import asyncio
-    import re as _re
+    import json
 
     from opencode_search.enricher import create_query_llm_client
 
@@ -130,9 +130,12 @@ async def classify_intent_llm(query: str) -> str:
         ]
         raw = await asyncio.to_thread(llm.chat, messages, max_tokens=32)
         text = raw if isinstance(raw, str) else (raw.get("content", "") if isinstance(raw, dict) else str(raw))
-        m = _re.search(r'"intent"\s*:\s*"(\w+)"', text)
-        if m:
-            intent = m.group(1)
+        # Parse the JSON the prompt asks for: {"intent": "<name>"}
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            parsed = json.loads(text[start:end])
+            intent = parsed.get("intent", "")
             if intent in _VALID_INTENTS:
                 return intent
         # Strict-only: if JSON parse didn't yield a valid intent, raise so caller emits error
