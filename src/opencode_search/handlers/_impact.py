@@ -33,7 +33,6 @@ async def handle_impact_narrative(
     """
     import asyncio
 
-    from opencode_search.enricher import create_llm_client
     from opencode_search.handlers._graph import _open_graph, handle_detect_impact
 
     # Get raw blast radius
@@ -53,10 +52,8 @@ async def handle_impact_narrative(
             "affected_domains": [],
             "callers": [],
             "symbol": symbol,
+            "llm_used": False,
         }
-
-    # Group by community to identify affected architecture domains
-    caller_names = [c.get("qualified_name") or c.get("name") or "unknown" for c in callers[:50]]
 
     # Find community memberships for impacted symbols
     affected_communities: set[str] = set()
@@ -84,40 +81,22 @@ async def handle_impact_narrative(
     affected_domains = await asyncio.to_thread(_get_domains, project_path)
     affected_communities.update(affected_domains)
 
-    # LLM narrative
-    try:
-        llm = await asyncio.to_thread(create_llm_client)
-        parsed = await asyncio.to_thread(
-            llm.impact_narrative,
-            symbol,
-            caller_names,
-            list(affected_communities),
-            impact_count,
-        )
-        # Parse RISK/SUMMARY/ACTION from the response
-        risk = "medium"
-        summary_lines = []
-        action = ""
-        for line in parsed.splitlines():
-            if line.startswith("RISK:"):
-                risk = line[5:].strip().lower()
-            elif line.startswith("SUMMARY:"):
-                summary_lines.append(line[8:].strip())
-            elif line.startswith("ACTION:"):
-                action = line[7:].strip()
-        summary = " ".join(summary_lines) or parsed
-    except Exception as exc:
-        log.debug("impact_narrative: LLM failed: %s", exc)
-        summary = f"`{symbol}` has {impact_count} callers across {len(affected_communities)} domains."
-        risk = "medium" if impact_count > 10 else "low"
-        action = ""
+    # Deterministic risk classification — no LLM.  LLM narrative moved to background.
+    risk = "high" if impact_count > 20 else ("medium" if impact_count > 5 else "low")
+    domain_list = list(affected_communities)[:10]
+    domain_str = ", ".join(domain_list) if domain_list else "unknown domains"
+    summary = (
+        f"`{symbol}` has {impact_count} callers across {len(affected_communities)} "
+        f"domain(s): {domain_str}."
+    )
 
     return {
         "summary": summary,
-        "action": action,
+        "action": "",
         "risk": risk,
         "impact_count": impact_count,
-        "affected_domains": list(affected_communities)[:10],
+        "affected_domains": domain_list,
         "callers": callers[:20],
         "symbol": symbol,
+        "llm_used": False,
     }

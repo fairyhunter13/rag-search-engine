@@ -70,7 +70,6 @@ async def handle_global_synthesis(
             pass
 
     from opencode_search.config import load_registry
-    from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.handlers._graph import _open_graph
 
     t0 = time.perf_counter()
@@ -134,63 +133,35 @@ async def handle_global_synthesis(
         len(all_communities), len(selected), query[:60],
     )
 
-    # ── Step 2: MAP — batch communities → LLM extracts relevant info ──────────
-    llm = await asyncio.to_thread(create_kb_query_llm_client)
-    batches: list[list[str]] = []
-    for i in range(0, len(selected), _MAP_BATCH_SIZE):
-        batch = selected[i:i + _MAP_BATCH_SIZE]
-        summaries = [
-            f"{c['title']}: {c['summary']}" for c in batch
-        ]
-        batches.append(summaries)
-
-    # Limit concurrent Ollama calls to prevent CPU saturation (GPU handles tokens
-    # but attention/tokenisation still saturates CPU cores with too many parallel requests)
-    _llm_sem = asyncio.Semaphore(4)
-
-    async def _map_batch(summaries: list[str]) -> str:
-        async with _llm_sem:
-            return await asyncio.to_thread(llm.map_query, query, summaries)
-
-    map_tasks = [_map_batch(b) for b in batches]
-    partial_answers = await asyncio.gather(*map_tasks, return_exceptions=True)
-    valid_partials = [
-        p for p in partial_answers
-        if isinstance(p, str) and p.strip()
+    # ── Step 2: Deterministic assembly — no LLM ──────────────────────────────
+    # LLM map-reduce synthesis has moved to the background pipeline warmer.
+    # The read path concatenates pre-enriched community summaries; llm_used is False.
+    sources = [c["id"] for c in selected if c["score"] > 0][:20] or [
+        c["id"] for c in selected[:10]
     ]
-
-    if not valid_partials:
-        return {
-            "answer": "LLM synthesis unavailable or returned no results.",
-            "sources": [c["id"] for c in selected[:10]],
-            "community_count": len(selected),
-            "elapsed_ms": round((time.perf_counter() - t0) * 1000),
-            "query": query,
-        }
-
-    # ── Step 3: REDUCE — synthesize all partial answers into final response ───
-    final_answer = await asyncio.to_thread(llm.reduce_answers, query, valid_partials)
-
-    # Collect source community IDs (those with score > 0 or first batch)
-    sources = [
-        c["id"] for c in selected
-        if c["score"] > 0
-    ][:20] or [c["id"] for c in selected[:10]]
+    summary_lines = [
+        f"[{c['title']}] {c['summary'][:300]}"
+        for c in selected[:20]
+    ]
+    answer = (
+        f"Codebase overview ({len(selected)} communities):\n\n"
+        + "\n\n".join(summary_lines)
+    ) if summary_lines else "No enriched communities found. Run build(action='pipeline') first."
 
     elapsed = round((time.perf_counter() - t0) * 1000)
     log.info(
-        "global_synthesis: completed in %dms, %d map batches, %d partials → final answer",
-        elapsed, len(batches), len(valid_partials),
+        "global_synthesis: %d enriched communities, deterministic assembly in %dms",
+        len(selected), elapsed,
     )
 
     result = {
-        "answer": final_answer,
+        "answer": answer,
         "sources": sources,
         "community_count": len(selected),
-        "map_batches": len(batches),
         "elapsed_ms": elapsed,
         "query": query,
         "scope": "global",
+        "llm_used": False,
     }
     if use_cache:
         try:

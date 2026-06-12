@@ -1,75 +1,30 @@
-"""Service mesh detection — infer inter-service call topology from code patterns.
+"""Service mesh topology — derived from parsed .proto graph nodes + external imports.
 
-For federated/microservices projects, automatically detects which services call which
-other services and via what protocol (gRPC, HTTP, Kafka/AMQP message queues, DB).
+No regex, no source-file scan, no LLM.
 
-Results are cached in-process for 5 minutes and on-disk for 24 hours — the full file
-walk on large repos (redacted-name-3: 20k+ files) is expensive. Pass force=True to
-bypass cache; used by the maintenance warmer to run the LLM description out-of-band.
+gRPC services: members whose graph contains tree-sitter-parsed .proto service nodes
+(language='proto', kind='interface'). Labeled grpc by parsed fact.
 
-On cold reads the LLM description is NOT called — returns description_pending=True
-instead. The maintenance Step-5 warmer calls force=True to fill in description and
-overwrites the cache entry so subsequent reads get the full result.
+Cross-member edges: derived from each member's external_imports.json (real parsed
+imports, captured at index time). Protocol for non-proto edges is unlabeled — the
+protocol prose of an arbitrary import cannot be determined without a banned
+keyword/mapping; ask(scope=...) answers it from L1 summaries on demand.
 
-This capability is unique to opencode-search: GraphRAG has no equivalent.
+Results cached (in-process 5 min, on-disk 24 h). Always returns llm_used: False.
 """
 from __future__ import annotations
 
 import json
 import logging
-import re
-import threading
 import time
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-# ── Pattern matchers ───────────────────────────────────────────────────────────
-
-# gRPC: Go stubs (pb.go), Java stubs, proto service imports
-_GRPC_PATTERNS = [
-    re.compile(r'(?:grpc\.Dial|grpc\.NewClient)\s*\(\s*["\']([^"\']+)["\']', re.I),
-    re.compile(r'NewGrpc(?:Client|Channel)\s*\(\s*["\']([^"\']+)["\']', re.I),
-    re.compile(r'\.(?:NewClient|NewBlockingStub|NewStub)\(', re.I),
-    re.compile(r'pb\.\w+Client\b'),
-    re.compile(r'@GrpcClient\('),
-]
-
-# HTTP: common clients
-_HTTP_PATTERNS = [
-    re.compile(r'(?:http\.Get|http\.Post|http\.NewRequest)\s*\(\s*["\']([^"\']+)["\']', re.I),
-    re.compile(r'(?:axios|fetch|request)\s*\(\s*["\']https?://([^"\']+)["\']', re.I),
-    re.compile(r'(?:RestTemplate|WebClient|HttpClient)\b'),
-    re.compile(r'@FeignClient\s*\(\s*(?:name\s*=\s*)?["\']([^"\']+)["\']', re.I),
-    re.compile(r'httpClient\.(?:Get|Post|Do)\b'),
-]
-
-# Message queues
-_MQ_PATTERNS = [
-    re.compile(r'(?:kafka|sarama)\.(?:NewProducer|NewConsumer|NewSyncProducer)\b', re.I),
-    re.compile(r'(?:rabbitmq|amqp)\.(?:Dial|Connect|NewConnection)\b', re.I),
-    re.compile(r'(?:channel|exchange)\.(?:Publish|Consume|BasicPublish)\b', re.I),
-    re.compile(r'@KafkaListener\b', re.I),
-    re.compile(r'(?:Producer|Consumer)\.(?:send|receive|publish|subscribe)\b', re.I),
-]
-
-# Database
-_DB_PATTERNS = [
-    re.compile(r'(?:sql\.Open|gorm\.Open|db\.Connect|NewDB)\s*\(', re.I),
-    re.compile(r'(?:mongo\.Connect|redis\.NewClient|NewRedisClient)\b', re.I),
-    re.compile(r'DataSource\b|@Entity\b|EntityManager\b', re.I),
-]
-
-_SCAN_EXTENSIONS = {".go", ".java", ".kt", ".ts", ".tsx", ".js", ".py", ".rs"}
-_SKIP_DIRS = {"vendor", ".git", ".venv", "venv", "node_modules", "__pycache__",
-              "target", "dist", "build", "generated", "pb", "proto"}
-_MAX_FILE_BYTES = 100_000
-_MAX_SCAN_FILES = 8_000  # global cap across all shards per service
-
 # ── Two-tier cache ─────────────────────────────────────────────────────────────
 _SERVICE_MESH_CACHE: dict[str, tuple[float, dict]] = {}
-_SERVICE_MESH_TTL = 300.0        # 5 minutes in-process
+_SERVICE_MESH_TTL = 300.0         # 5 minutes in-process
 _SERVICE_MESH_FILE_TTL = 86400.0  # 24 hours on-disk
 
 
@@ -104,158 +59,50 @@ def invalidate_service_mesh_cache(project_path: str) -> None:
         _get_cache_path(root).unlink(missing_ok=True)
 
 
-# ── Protocol detection ─────────────────────────────────────────────────────────
+# ── Graph-based proto service discovery ───────────────────────────────────────
 
-def _detect_protocols_in_file(path: Path) -> set[str]:
-    """Return the set of detected inter-service protocols in a source file."""
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace")[:_MAX_FILE_BYTES]
-    except OSError:
-        return set()
-    detected: set[str] = set()
-    for pat in _GRPC_PATTERNS:
-        if pat.search(content):
-            detected.add("grpc")
-            break
-    for pat in _HTTP_PATTERNS:
-        if pat.search(content):
-            detected.add("http")
-            break
-    for pat in _MQ_PATTERNS:
-        if pat.search(content):
-            detected.add("message_queue")
-            break
-    for pat in _DB_PATTERNS:
-        if pat.search(content):
-            detected.add("database")
-            break
-    return detected
+def _collect_proto_services(path: str) -> tuple[str, list[str], list[str]]:
+    """Return (path, service_names, proto_files) from the graph DB.
 
-
-# ── Parallel bounded scanner ───────────────────────────────────────────────────
-
-def _scan_shard(
-    shard_root: Path,
-    stop_event: threading.Event,
-    file_counter: list,        # [int] shared mutable count
-    counter_lock: threading.Lock,
-    shared_presence: set,      # shared set of detected protocols (short-circuit)
-    presence_lock: threading.Lock,
-) -> tuple[dict[str, int], int, bool]:
-    """Walk one shard subtree sequentially. Returns (counts, scanned, truncated)."""
-    counts: dict[str, int] = {}
-    local_scanned = 0
-    truncated = False
-
-    for dirpath, dirnames, filenames in _os_walk(shard_root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
-        if stop_event.is_set():
-            truncated = True
-            break
-        for fname in filenames:
-            if stop_event.is_set():
-                truncated = True
-                break
-            if Path(fname).suffix not in _SCAN_EXTENSIONS:
-                continue
-            with counter_lock:
-                if file_counter[0] >= _MAX_SCAN_FILES:
-                    stop_event.set()
-                    truncated = True
-                    break
-                file_counter[0] += 1
-            local_scanned += 1
-            protocols = _detect_protocols_in_file(Path(dirpath) / fname)
-            if not protocols:
-                continue
-            for p in protocols:
-                counts[p] = counts.get(p, 0) + 1
-            with presence_lock:
-                shared_presence.update(protocols)
-                if len(shared_presence) >= 4:  # all protocols found — short-circuit
-                    stop_event.set()
-                    break
-
-    return counts, local_scanned, truncated
-
-
-async def _scan_service_protocols_parallel(
-    project_path: str,
-) -> tuple[dict[str, int], int, bool]:
-    """Parallel bounded walk: split by top-level subdir, scan shards concurrently.
-
-    Returns (protocol_counts, total_scanned, truncated).
+    Queries language='proto' AND kind='interface' — exactly what _extract_proto
+    emits for .proto `service` blocks. No file scan, no regex.
     """
-    import asyncio
+    from opencode_search.config import get_project_graph_db_path
+    from opencode_search.graph.storage import GraphStorage
 
-    root = Path(project_path)
-    stop_event = threading.Event()
-    file_counter: list = [0]
-    counter_lock = threading.Lock()
-    shared_presence: set = set()
-    presence_lock = threading.Lock()
-
-    # Scan root-level files inline (fast; usually few config/Makefile-type files)
-    root_counts: dict[str, int] = {}
-    root_scanned = 0
+    db_path = get_project_graph_db_path(path)
+    if not Path(db_path).exists():
+        return path, [], []
+    gs = GraphStorage(db_path)
     try:
-        for fpath in root.iterdir():
-            if fpath.is_file() and fpath.suffix in _SCAN_EXTENSIONS:
-                protos = _detect_protocols_in_file(fpath)
-                for p in protos:
-                    root_counts[p] = root_counts.get(p, 0) + 1
-                root_scanned += 1
-                with counter_lock:
-                    file_counter[0] += 1
-                with presence_lock:
-                    shared_presence.update(protos)
-    except OSError:
-        pass
+        gs.open()
+        db = gs._db()
+        rows = db.execute(
+            "SELECT name, qualified_name, file FROM nodes "
+            "WHERE language='proto' AND kind='interface'"
+        ).fetchall()
+        service_names = [r["name"] for r in rows]
+        proto_files = list({r["file"] for r in rows})
+        return path, service_names, proto_files
+    except Exception:
+        return path, [], []
+    finally:
+        import contextlib
+        with contextlib.suppress(Exception):
+            gs.close()
 
-    # Enumerate immediate subdirs as shards
+
+def _load_external_imports(path: str) -> list[str]:
+    """Return top external import module names from external_imports.json."""
+    from opencode_search.config import get_project_index_dir
     try:
-        subdirs = [
-            d for d in sorted(root.iterdir())
-            if d.is_dir() and d.name not in _SKIP_DIRS and not d.name.startswith(".")
-        ]
-    except OSError:
-        return root_counts, root_scanned, False
-
-    if not subdirs:
-        return root_counts, root_scanned, False
-
-    # Run each shard in a thread — asyncio.gather runs them concurrently
-    results = await asyncio.gather(
-        *[
-            asyncio.to_thread(
-                _scan_shard, s, stop_event, file_counter, counter_lock,
-                shared_presence, presence_lock,
-            )
-            for s in subdirs
-        ],
-        return_exceptions=True,
-    )
-
-    merged = dict(root_counts)
-    total_scanned = root_scanned
-    was_truncated = False
-    for r in results:
-        if isinstance(r, Exception):
-            log.debug("service_mesh: shard scan error: %s", r)
-            continue
-        shard_counts, scanned, truncated = r
-        total_scanned += scanned
-        was_truncated = was_truncated or truncated
-        for p, c in shard_counts.items():
-            merged[p] = merged.get(p, 0) + c
-
-    return merged, total_scanned, was_truncated
-
-
-def _os_walk(root: Path):
-    import os
-    for dp, dns, fns in os.walk(str(root), followlinks=True):
-        yield Path(dp), dns, fns
+        ext_file = get_project_index_dir(path) / "external_imports.json"
+        if not ext_file.exists():
+            return []
+        data = json.loads(ext_file.read_text(encoding="utf-8"))
+        return [item["module"] for item in data.get("top_imports", [])]
+    except Exception:
+        return []
 
 
 # ── Main handler ───────────────────────────────────────────────────────────────
@@ -265,21 +112,12 @@ async def handle_detect_service_mesh(
     include_federation: bool = True,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Detect inter-service communication patterns across federated repos.
+    """Derive inter-service topology from parsed facts — zero regex, zero LLM.
 
-    Scans source files for gRPC stubs, HTTP client calls, message queue
-    publishers/consumers, and database clients. Returns a service graph:
-    nodes = services (repos), edges = detected communication protocols.
-
-    Results are cached (in-process 5 min, on-disk 24 h). On cold reads the
-    LLM description is skipped (description_pending=True returned instead);
-    the maintenance warmer calls force=True to fill the description and
-    overwrite the cache so subsequent reads get the full result.
-
-    Args:
-        project_path: Root project path (must be in registry).
-        include_federation: Whether to scan federation member repos.
-        force: Bypass cache + run LLM description (maintenance warmer path only).
+    Services with .proto `service` nodes in the graph → labeled grpc by parsed fact.
+    Cross-member edges from each member's external_imports.json (real parsed imports).
+    Non-proto cross-member edges listed unlabeled (protocol prose deferred to ask).
+    Always returns llm_used: False. Completes well under 10s.
     """
     import asyncio
 
@@ -290,11 +128,9 @@ async def handle_detect_service_mesh(
 
     # ── Cache check ────────────────────────────────────────────────────────────
     if not force:
-        # 1. In-process cache (sub-second)
         cached_entry = _SERVICE_MESH_CACHE.get(cache_key)
         if cached_entry and (time.monotonic() - cached_entry[0]) < _SERVICE_MESH_TTL:
             return {**cached_entry[1], "cached": True}
-        # 2. On-disk cache (24 h TTL — survives daemon restarts)
         try:
             disk_data = load_service_mesh_cache(cache_key)
             if disk_data:
@@ -305,7 +141,7 @@ async def handle_detect_service_mesh(
         except Exception:
             pass
 
-    # ── Scan ───────────────────────────────────────────────────────────────────
+    # ── Registry lookup ────────────────────────────────────────────────────────
     registry = load_registry()
     if project_path not in registry:
         return {"error": f"Project {project_path!r} not in registry"}
@@ -316,86 +152,72 @@ async def handle_detect_service_mesh(
         if entry.federation:
             paths_to_scan.extend(m for m in entry.federation if m in registry)
 
-    log.info("service_mesh: scanning %d services (force=%s)", len(paths_to_scan), force)
+    # ── Collect proto service nodes + external imports in parallel ─────────────
+    proto_results, import_results = await asyncio.gather(
+        asyncio.gather(*[asyncio.to_thread(_collect_proto_services, p) for p in paths_to_scan]),
+        asyncio.gather(*[asyncio.to_thread(_load_external_imports, p) for p in paths_to_scan]),
+    )
 
-    # Each service is scanned with its own parallel shard walk
-    service_results: dict[str, tuple[dict[str, int], int, bool]] = {}
+    # path → (service_names, proto_files)
+    proto_by_path = {p: (snames, pfiles) for p, snames, pfiles in proto_results}
+    # path → [import_module, ...]
+    imports_by_path = dict(zip(paths_to_scan, import_results, strict=True))
 
-    async def _scan_one(path: str) -> tuple[str, dict[str, int], int, bool]:
-        counts, scanned, truncated = await _scan_service_protocols_parallel(path)
-        return path, counts, scanned, truncated
+    # Set of paths that are gRPC services (have proto service nodes)
+    grpc_paths: set[str] = {p for p, (snames, _) in proto_by_path.items() if snames}
 
-    scan_tasks = [_scan_one(p) for p in paths_to_scan]
-    total_scanned = 0
-    any_truncated = False
-    for coro in asyncio.as_completed(scan_tasks):
-        path, protocols, scanned, truncated = await coro
-        service_results[path] = (protocols, scanned, truncated)
-        total_scanned += scanned
-        any_truncated = any_truncated or truncated
-
-    if any_truncated:
-        log.info(
-            "service_mesh: scan truncated at %d files (cap=%d per service)",
-            total_scanned, _MAX_SCAN_FILES,
-        )
-
-    # ── Build nodes ────────────────────────────────────────────────────────────
+    # ── Build service nodes ────────────────────────────────────────────────────
     services = []
-    for path, (protocols, _scanned, _truncated) in service_results.items():
-        name = Path(path).name
+    path_to_name = {p: Path(p).name for p in paths_to_scan}
+
+    for path in paths_to_scan:
+        snames, pfiles = proto_by_path.get(path, ([], []))
         services.append({
-            "name": name,
+            "name": path_to_name[path],
             "path": path,
-            "protocols": list(protocols.keys()),
-            "protocol_counts": protocols,
-            "is_caller": any(v > 0 for v in protocols.values()),
+            "proto_services": snames,
+            "proto_files": pfiles,
+            # grpc by parsed fact if the graph has .proto service nodes; else None
+            "protocol": "grpc" if path in grpc_paths else None,
         })
 
-    # ── Build edges ────────────────────────────────────────────────────────────
-    grpc_callers = [s["name"] for s in services if "grpc" in s["protocols"]]
-    http_callers = [s["name"] for s in services if "http" in s["protocols"]]
-    mq_services = [s["name"] for s in services if "message_queue" in s["protocols"]]
-    db_services = [s["name"] for s in services if "database" in s["protocols"]]
-
+    # ── Build edges from external imports ─────────────────────────────────────
+    # If member A's external imports reference member B's package/name, emit an edge.
+    # Protocol: grpc if the callee has proto service nodes, else unlabeled (None).
     edges = []
-    root_name = Path(project_path).name
-    for caller in grpc_callers:
-        if caller != root_name:
-            edges.append({"from": caller, "to": root_name, "protocol": "grpc"})
-    for caller in http_callers:
-        if caller != root_name:
-            edges.append({"from": caller, "to": root_name, "protocol": "http"})
-    for svc in mq_services:
-        edges.append({"from": svc, "to": "message_bus", "protocol": "message_queue"})
-    for svc in db_services:
-        edges.append({"from": svc, "to": "database", "protocol": "database"})
+    for caller_path in paths_to_scan:
+        caller_name = path_to_name[caller_path]
+        my_imports = imports_by_path.get(caller_path, [])
+        if not my_imports:
+            continue
+        for callee_path in paths_to_scan:
+            if callee_path == caller_path:
+                continue
+            callee_name = path_to_name[callee_path]
+            # Structural match: does any import path contain the callee's directory name?
+            callee_key = callee_name.lower().replace("-", "_")
+            for imp in my_imports:
+                imp_norm = imp.lower().replace("-", "_")
+                if callee_key in imp_norm:
+                    protocol = "grpc" if callee_path in grpc_paths else None
+                    edges.append({
+                        "from": caller_name,
+                        "to": callee_name,
+                        "protocol": protocol,
+                        "source": "external_imports",
+                    })
+                    break
 
-    # ── LLM description (warmer path only — never on the read path) ────────────
-    description = ""
-    if force and edges:
-        try:
-            from opencode_search.enricher import create_llm_client
-            llm = await asyncio.to_thread(create_llm_client)
-            if llm:
-                description = await asyncio.to_thread(llm.service_mesh_description, edges)
-        except Exception as exc:
-            log.debug("service_mesh: LLM description failed: %s", exc)
-
-    # ── Build and cache result ─────────────────────────────────────────────────
+    # ── Build result ───────────────────────────────────────────────────────────
     result: dict[str, Any] = {
         "services": services,
         "edges": edges,
         "service_count": len(services),
         "edge_count": len(edges),
-        "description": description,
-        "protocols_detected": list({p for s in services for p in s["protocols"]}),
-        "scanned_files": total_scanned,
-        "truncated": any_truncated,
+        "grpc_services": [path_to_name[p] for p in sorted(grpc_paths)],
         "_cached_at": time.time(),
+        "llm_used": False,
     }
-    if not force:
-        result["description_pending"] = True
 
     _SERVICE_MESH_CACHE[cache_key] = (time.monotonic(), result)
     try:

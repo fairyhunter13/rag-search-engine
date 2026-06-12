@@ -62,7 +62,6 @@ async def handle_ask_feature(
             pass
 
     from opencode_search.config import get_project_graph_db_path
-    from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.graph.storage import GraphStorage
     from opencode_search.handlers._kb_chat import _fetch_community_context
     from opencode_search.handlers._query import handle_search_code
@@ -191,131 +190,48 @@ async def handle_ask_feature(
             for idx, c in enumerate(fallback_comms[:_MAX_COMMUNITY_CONTEXT])
         ]
 
-    # ── Step 5: LLM synthesis ─────────────────────────────────────────────────
-    llm = await asyncio.to_thread(create_kb_query_llm_client)
-    if llm is None or not llm.is_available():
-        msg = (
-            "Feature trace unavailable: local KB query LLM client could not be "
-            "initialized. Ensure Ollama is running on GPU and qwen3-query:8b "
-            "is installed. Raw call chain (if any) is included below."
-        )
-        return {
-            "status": "ok",
-            "query": query,
-            "answer": msg,
-            "entry_points": entry_candidates[:_MAX_ENTRY_POINTS],
-            "call_chain": call_chain_raw,
-            "algorithm": None,
-            "design_rationale": None,
-            "involved_services": [],
-            "key_design_decisions": [],
-            "communities": community_contexts,
-            "note": "LLM not available — raw call chain only",
-        }
-
-    # Build prompt context
-    entry_lines = "\n".join(
-        f"  - {e['symbol']} ({e['kind'] or 'function'}) in {Path(e['file']).name}"
-        + (f"\n    {e['snippet'][:120]}" if e["snippet"] else "")
+    # ── Step 5: Deterministic assembly — no LLM ──────────────────────────────
+    # LLM synthesis has moved to the background pipeline warmer (_warm_answer_cache).
+    # The read path returns structured index data only; llm_used is always False here.
+    entry_text = "\n".join(
+        f"- {e['symbol']} ({e['kind'] or 'fn'}) in {Path(e['file']).name}"
         for e in entry_candidates[:_MAX_ENTRY_POINTS]
     )
-    chain_lines = "\n".join(
-        f"  {'  ' * min(c['depth'], 3)}{c['symbol']} ({c['kind'] or 'fn'})"
-        + (f" [depth={c['depth']}]" if c["depth"] > 0 else " [ENTRY]")
+    chain_text = "\n".join(
+        f"{'  ' * min(c['depth'], 3)}{c['symbol']} ({c['kind'] or 'fn'})"
+        + (" [entry]" if c.get("is_entry") else f" [depth {c['depth']}]")
         for c in call_chain_raw[:20]
     )
-    community_lines = "\n".join(
-        f"  [{c['title']}]: {c['summary'][:200]}"
+    comm_text = "\n".join(
+        f"[{c['title']}] {c['summary'][:250]}"
         for c in community_contexts
-    ) or "  (no community summaries available — run build(action='pipeline') first)"
+    )
 
-    synthesis: dict[str, Any] = {}
-    try:
-        import json
-        raw_text = await asyncio.to_thread(
-            llm.feature_trace,
-            query,
-            entry_lines or "(none found)",
-            chain_lines or "(no call graph — run build(action=pipeline) first)",
-            community_lines,
-        )
-        # Strip any accidental markdown fences
-        raw_text = raw_text.strip()
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        synthesis = json.loads(raw_text)
-    except Exception as exc:
-        log.debug("feature_trace LLM synthesis failed: %s", exc)
-        synthesis = {"error": str(exc)}
+    answer_parts = []
+    if entry_text:
+        answer_parts.append("Entry points:\n" + entry_text)
+    if chain_text:
+        answer_parts.append("Call chain:\n" + chain_text)
+    if comm_text:
+        answer_parts.append("Community context:\n" + comm_text)
 
-    # Derive involved services: prefer LLM synthesis result; if missing, ask LLM
-    # to infer from the call chain rather than using keyword-based path matching.
-    involved_services: list[str] = synthesis.get("involved_services") or []
-    if not involved_services and call_chain_raw:
-        try:
-            chain_files = list(dict.fromkeys(
-                c["file"] for c in call_chain_raw if c.get("file")
-            ))[:12]
-            svc_prompt = (
-                "From the following file paths in a call chain, list the distinct "
-                "service or subsystem names (usually top-level directory names). "
-                "Return a JSON array of strings, e.g. [\"auth\", \"payment\"]. "
-                "Return [] if the paths are all in one service.\n\n"
-                "Files:\n" + "\n".join(chain_files)
-            )
-            svc_raw = await asyncio.to_thread(
-                llm.chat,
-                [{"role": "user", "content": svc_prompt}],
-                max_tokens=64,
-            )
-            import re as _re
-            m = _re.search(r"\[.*?\]", (svc_raw or ""), _re.DOTALL)
-            if m:
-                involved_services = json.loads(m.group(0))
-        except Exception:
-            pass
-
-    algorithm = synthesis.get("algorithm")
-    design_rationale = synthesis.get("design_rationale")
-    # Always surface a human-readable `answer` field. Callers (UI + tests) read
-    # this first; keeping it populated even on partial/empty synthesis means
-    # /api/ask?scope=feature never returns a body without an answer.
-    answer_parts: list[str] = []
-    if algorithm:
-        answer_parts.append(str(algorithm).strip())
-    if design_rationale:
-        answer_parts.append("Why: " + str(design_rationale).strip())
-    if not answer_parts:
-        if entry_candidates or community_contexts:
-            answer = (
-                f"Feature trace for {query!r}: code search returned "
-                f"{len(entry_candidates)} entry point candidate(s) and "
-                f"{len(community_contexts)} relevant community summaries, "
-                "but the local LLM did not produce a synthesis. See "
-                "entry_points/communities for the raw context."
-            )
-        else:
-            answer = (
-                f"No code or community context found for {query!r} in this "
-                "project. Make sure it is indexed (build action='pipeline') "
-                "and enriched. Try rephrasing the query with a more specific "
-                "function or feature name."
-            )
-        answer_parts = [answer]
+    answer = "\n\n".join(answer_parts) if answer_parts else (
+        f"No code or community context found for {query!r} in this project. "
+        "Make sure it is indexed and enriched."
+    )
 
     result = {
         "status": "ok",
         "query": query,
-        "answer": "\n\n".join(answer_parts),
+        "answer": answer,
         "entry_points": entry_candidates[:_MAX_ENTRY_POINTS],
         "call_chain": call_chain_raw,
-        "algorithm": algorithm,
-        "design_rationale": design_rationale,
-        "involved_services": involved_services,
-        "key_design_decisions": synthesis.get("key_design_decisions", []),
+        "algorithm": None,
+        "design_rationale": None,
+        "involved_services": [],
+        "key_design_decisions": [],
         "communities": community_contexts,
+        "llm_used": False,
     }
     if use_cache:
         try:

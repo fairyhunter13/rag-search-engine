@@ -152,7 +152,16 @@ def _gather_exact_facts(root: Path, project_path: str) -> dict[str, Any]:
         direct = [p for p in deps.get("packages", []) if p.get("direct")][:20]
         facts["pinned_dependencies"] = {p["name"]: p["version"] for p in direct if p.get("version")}
         facts["manifest_files"] = deps.get("manifest_files", [])[:10]
-        facts["module_structure_type"] = _detect_module_structure(root).get("type", "unknown")
+        # Raw directory facts (no heuristic type label — LLM infers structure from these)
+        mod_struct = _detect_module_structure(root)
+        facts["top_packages"] = mod_struct.get("top_packages", [])
+    except Exception:
+        pass
+
+    # Real parsed imports (tree-sitter facts, mapping-free)
+    try:
+        from opencode_search.handlers._graph import _load_external_imports
+        facts["imports_in_use"] = [item["module"] for item in _load_external_imports(project_path)]
     except Exception:
         pass
 

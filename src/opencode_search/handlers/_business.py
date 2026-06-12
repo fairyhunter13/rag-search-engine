@@ -231,34 +231,21 @@ async def handle_ask_business(
             "communities": [],
         }
 
-    # LLM synthesis over the top business communities
-    context = "\n\n".join(
-        f"[{c['semantic_type'].upper()}] {c['title']}\n{c['summary']}"
-        for c in top
+    # Deterministic assembly — no LLM.  LLM synthesis moved to background pipeline.
+    answer = (
+        f"Found {len(top)} relevant business communities for {query!r}:\n\n"
+        + "\n\n".join(
+            f"[{c['semantic_type'].upper()}] {c['title']}\n{c['summary'][:400]}"
+            for c in top
+        )
     )
-    try:
-        from opencode_search.enricher import create_kb_query_llm_client
-        llm = create_kb_query_llm_client()
-        prompt = (
-            f"You are a business analyst. Based on these classified code communities, "
-            f"answer this question:\n\n{query}\n\n"
-            f"Business context from the codebase:\n{context[:3000]}\n\n"
-            f"Answer concisely and specifically, referencing the relevant features/processes/rules."
-        )
-        answer = await asyncio.to_thread(
-            llm.chat,
-            [{"role": "user", "content": prompt}],
-            max_tokens=500,
-        )
-    except Exception as exc:
-        log.debug("business ask LLM failed: %s", exc)
-        answer = f"Found {len(top)} relevant business communities. LLM synthesis unavailable: {exc}"
 
     result = {
         "query": query,
         "answer": answer,
         "communities": top,
         "total_business_communities": len(all_matches),
+        "llm_used": False,
     }
     if use_cache:
         try:

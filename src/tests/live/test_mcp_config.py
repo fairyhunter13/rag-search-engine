@@ -550,6 +550,133 @@ class TestFailureNotify:
             )
 
 
+class TestReadPathNoLLM:
+    """Zero-LLM read path invariant: every MCP read handler must return llm_used=False.
+
+    These tests call the handler functions directly (not via bridge) on a real indexed
+    project with an intentionally cold answer cache (use_cache=False).  No mocks.
+    """
+
+    def test_ask_feature_no_llm(self, project):
+        """ask(scope=feature) must return llm_used=False within 10s on cache miss."""
+        import asyncio
+        import time
+
+        from opencode_search.handlers._feature import handle_ask_feature
+
+        t0 = time.monotonic()
+        result = asyncio.run(handle_ask_feature("search handler", project, use_cache=False))
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"ask(scope=feature) set llm_used={result.get('llm_used')!r} — "
+            "LLM must not run on the read path"
+        )
+        assert elapsed < 10.0, (
+            f"ask(scope=feature) took {elapsed:.2f}s — exceeds 10s hard deadline"
+        )
+
+    def test_ask_global_no_llm(self, project):
+        """ask(scope=global) must return llm_used=False within 10s on cache miss."""
+        import asyncio
+        import time
+
+        from opencode_search.handlers._global_search import handle_global_synthesis
+
+        t0 = time.monotonic()
+        result = asyncio.run(handle_global_synthesis("architecture overview", project, use_cache=False))
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"ask(scope=global) set llm_used={result.get('llm_used')!r} — LLM must not run on read path"
+        )
+        assert elapsed < 10.0, (
+            f"ask(scope=global) took {elapsed:.2f}s — exceeds 10s hard deadline"
+        )
+
+    def test_ask_business_no_llm(self, project):
+        """ask(scope=business) must return llm_used=False within 10s on cache miss."""
+        import asyncio
+        import time
+
+        from opencode_search.handlers._business import handle_ask_business
+
+        t0 = time.monotonic()
+        result = asyncio.run(handle_ask_business("core features", project, use_cache=False))
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"ask(scope=business) set llm_used={result.get('llm_used')!r} — LLM must not run on read path"
+        )
+        assert elapsed < 10.0, (
+            f"ask(scope=business) took {elapsed:.2f}s — exceeds 10s hard deadline"
+        )
+
+    def test_graph_impact_narrative_no_llm(self, project):
+        """graph(relation=impact_narrative) must return llm_used=False within 10s."""
+        import asyncio
+        import time
+
+        from opencode_search.handlers._impact import handle_impact_narrative
+
+        t0 = time.monotonic()
+        result = asyncio.run(handle_impact_narrative("handle_search_code", project))
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"impact_narrative set llm_used={result.get('llm_used')!r} — LLM must not run on read path"
+        )
+        assert elapsed < 10.0, (
+            f"impact_narrative took {elapsed:.2f}s — exceeds 10s hard deadline"
+        )
+
+    def test_graph_semantic_trace_no_llm(self, project):
+        """graph(relation=semantic_trace) must return llm_used=False within 10s."""
+        import asyncio
+        import time
+
+        from opencode_search.handlers._trace import handle_semantic_trace
+
+        t0 = time.monotonic()
+        result = asyncio.run(handle_semantic_trace("HTTP request handler", "database write", project))
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"semantic_trace set llm_used={result.get('llm_used')!r} — LLM must not run on read path"
+        )
+        assert elapsed < 10.0, (
+            f"semantic_trace took {elapsed:.2f}s — exceeds 10s hard deadline"
+        )
+
+    def test_overview_service_mesh_no_llm(self, project):
+        """overview(what=service_mesh) must return llm_used=False within 10s.
+
+        Scans root project only (include_federation=False) to avoid scanning 29+ federation
+        members which would take >10s on redacted-name-3. Root scan with ~1705 files is fast.
+        """
+        import asyncio
+        import time
+
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+
+        t0 = time.monotonic()
+        result = asyncio.run(handle_detect_service_mesh(project, include_federation=False, force=True))
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"service_mesh set llm_used={result.get('llm_used')!r} — LLM must not run on read path"
+        )
+        assert elapsed < 10.0, (
+            f"service_mesh took {elapsed:.2f}s — exceeds 10s hard deadline"
+        )
+
+
 class TestThermalGuard:
     """T1.3: _wait_for_gpu_cool must return within max_wait_s even if GPU stays hot."""
 
@@ -581,3 +708,169 @@ class TestThermalGuard:
             f"_wait_for_gpu_cool with max_wait_s=0.3 took {elapsed:.2f}s — expected <1.0s. "
             "The function is not respecting max_wait_s (T1.3 regression)."
         )
+
+
+class TestNoKeywordHeuristics:
+    """Enforce the comprehensive heuristic-removal mandate.
+
+    Static keyword lists, static name→category maps, and dynamic regex content
+    scanning are forbidden in both _graph.py and _service_mesh.py. Detection must
+    come from tree-sitter parsed facts or background-LLM labels served from cache.
+    """
+
+    def test_graph_no_known_frameworks_map(self):
+        """_KNOWN_FRAMEWORKS must not exist in _graph.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._graph")
+        assert not hasattr(mod, "_KNOWN_FRAMEWORKS"), (
+            "_KNOWN_FRAMEWORKS found in _graph.py — static keyword map is forbidden. "
+            "Use LLM-grounded labels from patterns_cache.json instead."
+        )
+
+    def test_graph_no_framework_keyword_detector(self):
+        """_detect_frameworks_from_dependencies must not exist in _graph.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._graph")
+        assert not hasattr(mod, "_detect_frameworks_from_dependencies"), (
+            "_detect_frameworks_from_dependencies found in _graph.py — "
+            "keyword-based detector is forbidden."
+        )
+
+    def test_graph_no_dir_heuristic_detector(self):
+        """_infer_module_structure_from_dirs must not exist in _graph.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._graph")
+        assert not hasattr(mod, "_infer_module_structure_from_dirs"), (
+            "_infer_module_structure_from_dirs found in _graph.py — "
+            "static directory-name heuristic is forbidden."
+        )
+
+    def test_graph_no_architecture_heuristic(self):
+        """_detect_architecture must not exist in _graph.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._graph")
+        assert not hasattr(mod, "_detect_architecture"), (
+            "_detect_architecture found in _graph.py — "
+            "static framework-set→architecture mapping is forbidden."
+        )
+
+    def test_service_mesh_no_grpc_regex(self):
+        """_GRPC_PATTERNS must not exist in _service_mesh.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._service_mesh")
+        assert not hasattr(mod, "_GRPC_PATTERNS"), (
+            "_GRPC_PATTERNS found in _service_mesh.py — regex pattern list is forbidden. "
+            "Service-mesh topology must derive from parsed .proto graph nodes."
+        )
+
+    def test_service_mesh_no_http_regex(self):
+        """_HTTP_PATTERNS must not exist in _service_mesh.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._service_mesh")
+        assert not hasattr(mod, "_HTTP_PATTERNS"), (
+            "_HTTP_PATTERNS found in _service_mesh.py — regex pattern list is forbidden."
+        )
+
+    def test_service_mesh_no_mq_regex(self):
+        """_MQ_PATTERNS must not exist in _service_mesh.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._service_mesh")
+        assert not hasattr(mod, "_MQ_PATTERNS"), (
+            "_MQ_PATTERNS found in _service_mesh.py — regex pattern list is forbidden."
+        )
+
+    def test_service_mesh_no_db_regex(self):
+        """_DB_PATTERNS must not exist in _service_mesh.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._service_mesh")
+        assert not hasattr(mod, "_DB_PATTERNS"), (
+            "_DB_PATTERNS found in _service_mesh.py — regex pattern list is forbidden."
+        )
+
+    def test_service_mesh_no_file_scanner(self):
+        """_detect_protocols_in_file must not exist in _service_mesh.py."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._service_mesh")
+        assert not hasattr(mod, "_detect_protocols_in_file"), (
+            "_detect_protocols_in_file found in _service_mesh.py — "
+            "source-file regex scanner is forbidden. Use the parsed graph instead."
+        )
+
+
+class TestServiceMeshParsedFacts:
+    """Service-mesh topology derives from parsed .proto graph nodes + external_imports.json.
+
+    Validates that: no LLM is used, the call completes ≤10s, proto services are labeled
+    grpc by parsed fact, and non-proto edges carry no protocol label (unlabeled).
+    """
+
+    def test_service_mesh_no_llm_force_refresh(self, project):
+        """handle_detect_service_mesh returns llm_used=False on a forced cache refresh."""
+        import asyncio
+        import time
+
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+
+        t0 = time.monotonic()
+        result = asyncio.run(
+            handle_detect_service_mesh(project, include_federation=False, force=True)
+        )
+        elapsed = time.monotonic() - t0
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("llm_used") is False, (
+            f"service_mesh returned llm_used={result.get('llm_used')!r} — "
+            "topology must be derived from parsed facts, no LLM."
+        )
+        assert elapsed < 10.0, (
+            f"service_mesh took {elapsed:.2f}s on force refresh — exceeds 10s deadline. "
+            "The regex file-scan was not fully removed."
+        )
+
+    def test_service_mesh_returns_services_list(self, project):
+        """handle_detect_service_mesh returns a 'services' list with name and path fields."""
+        import asyncio
+
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+
+        result = asyncio.run(
+            handle_detect_service_mesh(project, include_federation=False, force=True)
+        )
+        assert "services" in result, f"Missing 'services' key: {list(result.keys())}"
+        assert "edges" in result, f"Missing 'edges' key: {list(result.keys())}"
+        services = result["services"]
+        assert isinstance(services, list), "'services' must be a list"
+        for svc in services:
+            assert "name" in svc, f"service entry missing 'name': {svc}"
+            assert "path" in svc, f"service entry missing 'path': {svc}"
+
+    def test_service_mesh_non_proto_edges_unlabeled(self, project):
+        """Edges from external_imports (non-proto) must have protocol=None (unlabeled)."""
+        import asyncio
+
+        from opencode_search.handlers._service_mesh import handle_detect_service_mesh
+
+        result = asyncio.run(
+            handle_detect_service_mesh(project, include_federation=False, force=True)
+        )
+        for edge in result.get("edges", []):
+            if edge.get("source") == "external_imports":
+                # Protocol is only set if the callee has proto service nodes (grpc by fact)
+                # Non-proto inter-member edges must be unlabeled (None), not a guessed label
+                protocol = edge.get("protocol")
+                assert protocol in (None, "grpc"), (
+                    f"Edge {edge.get('from')}→{edge.get('to')} has protocol={protocol!r}. "
+                    "Non-proto edges must be unlabeled (None); only proto-derived edges may "
+                    "carry 'grpc' (labeled by parsed fact, not regex)."
+                )
+
+    def test_service_mesh_no_file_scan_artifacts(self):
+        """The scan machinery (regex patterns + file walker) must not be importable."""
+        import importlib
+        mod = importlib.import_module("opencode_search.handlers._service_mesh")
+        for name in ("_GRPC_PATTERNS", "_HTTP_PATTERNS", "_MQ_PATTERNS", "_DB_PATTERNS",
+                     "_detect_protocols_in_file", "_scan_shard",
+                     "_scan_service_protocols_parallel", "_os_walk"):
+            assert not hasattr(mod, name), (
+                f"{name} still present in _service_mesh — regex/file-scan artifact must be deleted."
+            )

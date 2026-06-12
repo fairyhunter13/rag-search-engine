@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import collections
-import contextlib
 import json
 import logging
 import re
@@ -26,36 +25,6 @@ _PATTERNS_FILE_TTL = 86400.0  # 24 hours for on-disk cache
 # ---------------------------------------------------------------------------
 # Pattern-detection helpers (called from handle_project_structure)
 # ---------------------------------------------------------------------------
-
-def _extract_json(text: str) -> Any:
-    """Extract the first JSON object or array from an LLM response (handles think tags, fences)."""
-    text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
-    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
-    if m:
-        with contextlib.suppress(Exception):
-            return json.loads(m.group(1))
-    for pat in (r'(\{[\s\S]+\})', r'(\[[\s\S]+\])'):
-        m = re.search(pat, text)
-        if m:
-            with contextlib.suppress(Exception):
-                return json.loads(m.group(1))
-    with contextlib.suppress(Exception):
-        return json.loads(text)
-    return None
-
-
-def _llm_classify(prompt: str, fallback: Any) -> Any:
-    """Call local enrichment LLM for classification. Returns fallback on any error."""
-    try:
-        from opencode_search.enricher.client import create_llm_client
-        client = create_llm_client()
-        raw = client.chat([{"role": "user", "content": prompt}], max_tokens=512, temperature=0.1)
-        result = _extract_json(raw)
-        if result is not None:
-            return result
-    except Exception:
-        pass
-    return fallback
 
 
 def _detect_dependencies(root: Path) -> dict[str, Any]:
@@ -349,156 +318,12 @@ def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, A
         return []
 
 
-def _detect_conventions(root: Path, primary_language: str | None = None) -> dict[str, Any]:
-    """Detect code style conventions by sampling source files and classifying via LLM."""
-    try:
-        from opencode_search.discover import SOURCE_EXTENSIONS, iter_files
-
-        _LANG_EXTS: dict[str, tuple[str, ...]] = {
-            "go":         (".go",),
-            "python":     (".py",),
-            "java":       (".java",),
-            "kotlin":     (".kt", ".kts"),
-            "typescript": (".ts", ".tsx"),
-            "javascript": (".js", ".jsx", ".mjs"),
-            "rust":       (".rs",),
-        }
-        _ALL_PREFERRED = {ext for exts in _LANG_EXTS.values() for ext in exts}
-
-        primary_exts: set[str] = set()
-        if primary_language and primary_language in _LANG_EXTS:
-            primary_exts = set(_LANG_EXTS[primary_language])
-
-        primary_files: list[Path] = []
-        other_files: list[Path] = []
-        for path in iter_files(root, follow_symlinks=True):
-            ext = path.suffix.lower()
-            if ext not in SOURCE_EXTENSIONS:
-                continue
-            if ext in primary_exts and len(primary_files) < 40:
-                primary_files.append(path)
-            elif ext in _ALL_PREFERRED and len(other_files) < 20:
-                other_files.append(path)
-            if len(primary_files) >= 40 and len(other_files) >= 20:
-                break
-
-        sample_files = primary_files if len(primary_files) >= 5 else primary_files + other_files
-        # Go workspace: source files are in referenced modules, not in the workspace root
-        if not sample_files and (root / "go.work").exists():
-            gowork = (root / "go.work").read_text(errors="replace")
-            for line in gowork.splitlines():
-                line = line.strip()
-                if line and not line.startswith("go ") and not line.startswith("use") and not line.startswith(")") and not line.startswith("("):
-                    # Resolve both absolute and relative paths
-                    raw = Path(line)
-                    mod_path = raw if raw.is_absolute() else (root / raw).resolve()
-                    if mod_path.is_dir():
-                        for p in mod_path.rglob("*.go"):
-                            if "vendor" in p.parts or "_test" in p.name:
-                                continue
-                            if len(primary_files) >= 10:
-                                break
-                            primary_files.append(p)
-                        if len(primary_files) >= 10:
-                            break
-            sample_files = primary_files
-        if not sample_files:
-            if primary_language:
-                return {"language": primary_language, "error_handling": "unknown",
-                        "test_style": "unknown", "logging_lib": "unknown",
-                        "naming": "unknown", "common_struct_tags": []}
-            return {}
-
-        combined = ""
-        for p in sample_files[:10]:
-            with contextlib.suppress(Exception):
-                combined += p.read_text(errors="replace")[:600]
-
-        if not combined.strip():
-            return {}
-
-        lang = primary_language or "unknown"
-        safe_fallback = {
-            "language": lang,
-            "error_handling": "unknown",
-            "test_style": "unknown",
-            "logging_lib": "unknown",
-            "naming": "unknown",
-            "common_struct_tags": [],
-        }
-
-        prompt = (
-            "Analyze this sample source code and identify the coding conventions used.\n"
-            f"The primary language is: {lang}\n"
-            f"Code sample:\n{combined[:3000]}\n\n"
-            'Respond ONLY with a JSON object (fill in actual values, not placeholders):\n'
-            '{"language":"java","error_handling":"try_catch","test_style":"junit",'
-            '"logging_lib":"log4j","naming":"camelCase","common_struct_tags":["@Entity","@Service"]}\n'
-            "Possible error_handling values: if_err_nil | try_except | try_catch | result_type | unknown\n"
-            "Possible test_style values: table_driven | testify | pytest | junit | jest | unknown\n"
-            "Possible naming values: camelCase | snake_case | PascalCase | unknown"
-        )
-        result = _llm_classify(prompt, safe_fallback)
-        if isinstance(result, dict) and result.get("language") and "<" not in str(result.get("language", "")):
-            # Ensure language field is set even if LLM omitted it
-            if not result.get("language"):
-                result["language"] = lang
-            return result
-        return safe_fallback
-    except Exception:
-        return {}
-
-
-def _detect_frameworks_from_dependencies(deps: dict[str, Any]) -> list[str]:
-    """Identify key frameworks from dependency manifest packages using LLM."""
-    packages = deps.get("packages", [])
-    if not packages:
-        return []
-    names = [p.get("name", "").lower() for p in packages if p.get("name")][:80]
-    if not names:
-        return []
-    prompt = (
-        "Given these software package names from a project's dependency manifest, "
-        "identify the key frameworks and major libraries in use.\n"
-        f"Packages: {json.dumps(names[:60])}\n"
-        "Respond ONLY with a JSON array of framework/library names (strings). "
-        "Max 10. If none recognized, return []."
-    )
-    result = _llm_classify(prompt, [])
-    if isinstance(result, list):
-        return [str(f) for f in result if f][:10]
-    return []
-
-
-def _infer_module_structure_from_dirs(
-    top_dirs: list[str], second_level: dict[str, list[str]], root: Path | None = None
-) -> str:
-    """LLM-based module structure detection from directory names."""
-    if root and (root / "go.work").exists():
-        return "go_workspace"
-    if not top_dirs:
-        return "unknown"
-    prompt = (
-        "Given these top-level directory names of a software project, "
-        "respond with a single snake_case pattern name.\n"
-        f"Top-level dirs: {json.dumps(top_dirs[:30])}\n"
-        "Examples: go_standard, layered_mvc, clean_architecture, feature_sliced, "
-        "monorepo, src_layout, routes_based. No explanation."
-    )
-    try:
-        from opencode_search.enricher.client import create_llm_client
-        client = create_llm_client()
-        raw = client.chat([{"role": "user", "content": prompt}], max_tokens=30, temperature=0.1)
-        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip().strip('"\'').strip()
-        if raw and "<" not in raw and len(raw) < 60:
-            return raw
-    except Exception:
-        pass
-    return "unknown"
-
-
 def _detect_module_structure(root: Path) -> dict[str, Any]:
-    """Detect the module/package organization pattern from directory layout."""
+    """Return raw directory facts for the module structure — no heuristic type label.
+
+    top_packages and detected_dirs are real parsed facts from the filesystem.
+    The LLM patterns_cache.json provides the architecture/module_style label.
+    """
     _SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build"}
     try:
         top_dirs = sorted(
@@ -506,43 +331,25 @@ def _detect_module_structure(root: Path) -> dict[str, Any]:
             if d.is_dir() and not d.name.startswith(".") and d.name not in _SKIP
         )
     except Exception:
-        return {"type": "unknown", "top_packages": [], "detected_dirs": []}
+        return {"top_packages": [], "detected_dirs": []}
 
     if not top_dirs:
-        return {"type": "unknown", "top_packages": [], "detected_dirs": []}
+        return {"top_packages": [], "detected_dirs": []}
 
-    second_level: dict[str, list[str]] = {}
-    for d in top_dirs[:12]:
-        with contextlib.suppress(Exception):
-            subdirs = sorted(sd.name for sd in (root / d).iterdir() if sd.is_dir() and not sd.name.startswith("."))
-            if subdirs:
-                second_level[d] = subdirs[:8]
-
-    struct_type = _infer_module_structure_from_dirs(top_dirs, second_level, root=root)
-    return {"type": struct_type, "top_packages": top_dirs[:8], "detected_dirs": top_dirs[:20]}
+    return {"top_packages": top_dirs[:8], "detected_dirs": top_dirs[:20]}
 
 
-def _detect_architecture(frameworks: list[str], module_structure: dict[str, Any]) -> str:
-    """Synthesize a high-level architecture label from frameworks and structure using LLM."""
-    struct_type = module_structure.get("type", "unknown")
-    top_packages = module_structure.get("top_packages", [])
-    prompt = (
-        "Synthesize one concise snake_case architecture label for this project.\n"
-        f"Key frameworks: {json.dumps(frameworks)}\n"
-        f"Module pattern: {struct_type}\n"
-        f"Key packages: {json.dumps(top_packages[:10])}\n"
-        "Respond with a single snake_case label only. No explanation."
-    )
+def _load_external_imports(project_path: str) -> list[dict[str, Any]]:
+    """Return top external imports from external_imports.json (real parsed imports, no mapping)."""
     try:
-        from opencode_search.enricher.client import create_llm_client
-        client = create_llm_client()
-        raw = client.chat([{"role": "user", "content": prompt}], max_tokens=30, temperature=0.1)
-        raw = re.sub(r"<think>[\s\S]*?</think>", "", raw).strip().strip('"\'').strip()
-        if raw and "<" not in raw and len(raw) < 60:
-            return raw
+        from opencode_search.config import get_project_index_dir
+        ext_file = get_project_index_dir(project_path) / "external_imports.json"
+        if not ext_file.exists():
+            return []
+        data = json.loads(ext_file.read_text(encoding="utf-8"))
+        return data.get("top_imports", [])
     except Exception:
-        pass
-    return struct_type if struct_type != "unknown" else "unknown"
+        return []
 
 
 async def handle_detect_patterns(project_path: str, force: bool = False) -> dict[str, Any]:
@@ -588,21 +395,18 @@ async def handle_detect_patterns(project_path: str, force: bool = False) -> dict
             pass
 
     def _run() -> dict[str, Any]:
+        # Facts: entirely deterministic, no LLM, no keyword maps
         languages = _count_languages_accurate(root, project_path)
-        # Pass primary language hint so convention sampler biases toward dominant language
-        primary_lang = languages[0]["name"] if languages else None
         dependencies = _detect_dependencies(root)
-        conventions = _detect_conventions(root, primary_language=primary_lang)
-        key_frameworks = _detect_frameworks_from_dependencies(dependencies)
         module_structure = _detect_module_structure(root)
-        architecture = _detect_architecture(key_frameworks, module_structure)
+        imports_in_use = _load_external_imports(project_path)
 
         package_versions: dict[str, str] = {}
         for pkg in dependencies.get("packages", []):
-            name = pkg.get("name", "")
+            pkg_name = pkg.get("name", "")
             ver = pkg.get("version", "")
-            if name and ver and name not in package_versions:
-                package_versions[name] = ver
+            if pkg_name and ver and pkg_name not in package_versions:
+                package_versions[pkg_name] = ver
 
         pinned = sum(
             1 for v in package_versions.values()
@@ -619,27 +423,39 @@ async def handle_detect_patterns(project_path: str, force: bool = False) -> dict
                 "floating": len(package_versions) - pinned,
                 "total": len(package_versions),
             },
-            "conventions": conventions,
-            "key_frameworks": key_frameworks,
             "module_structure": module_structure,
-            "architecture": architecture,
+            "imports_in_use": imports_in_use,
+            # Labels from LLM patterns_cache — filled in below, cold cache → None
+            "conventions": None,
+            "key_frameworks": [],
+            "architecture": None,
+            "llm_used": False,
         }
 
     result = await asyncio.to_thread(_run)
 
-    # Merge cached LLM analysis if available (non-blocking — never slows the fast path)
+    # Merge cached LLM labels (non-blocking — never slows the fast path)
+    # Cold cache → labels remain None/[]/None with degraded:true
+    degraded = True
     try:
         from opencode_search.handlers._patterns import load_patterns_cache
         llm_cached = load_patterns_cache(project_path)
-        if llm_cached:
-            result["llm_analysis"] = llm_cached.get("llm_analysis")
+        if llm_cached and llm_cached.get("llm_analysis"):
+            llm = llm_cached["llm_analysis"]
+            result["conventions"] = llm.get("conventions")
+            result["key_frameworks"] = llm.get("key_frameworks") or []
+            result["architecture"] = llm.get("architecture")
+            result["llm_analysis"] = llm
             result["llm_cached_at"] = llm_cached.get("cached_at")
+            degraded = False
         else:
             result["llm_analysis"] = None
             result["llm_cached_at"] = None
     except Exception:
         result["llm_analysis"] = None
         result["llm_cached_at"] = None
+
+    result["degraded"] = degraded
 
     _PATTERNS_CACHE[cache_key] = (time.monotonic(), result)
     # Persist to disk so next daemon restart skips the expensive file walk

@@ -31,9 +31,6 @@ async def handle_semantic_trace(
            OrderService.ProcessOrder, validates payment via PaymentGateway.Charge,
            and finally writes to the database via Repository.Save."
     """
-    import asyncio
-
-    from opencode_search.enricher import create_kb_query_llm_client
     from opencode_search.handlers._graph import handle_trace_path
     from opencode_search.handlers._query import handle_search_code
 
@@ -85,31 +82,18 @@ async def handle_semantic_trace(
     path_nodes = path_data.get("path", [])
     found = path_data.get("found", False)
 
-    # Generate narrative
-    narrative = ""
-    try:
-        llm = await asyncio.to_thread(create_kb_query_llm_client)
-        if found and path_nodes:
-            narrative = await asyncio.to_thread(
-                llm.trace_narrative,
-                from_query,
-                to_query,
-                path_nodes,
-            )
-        else:
-            narrative = (
-                f"No direct call path found from '{from_symbol}' to '{to_symbol}'. "
-                f"They may communicate indirectly or through different mechanisms. "
-                f"Best candidates: from={from_symbol} ({from_candidates[0].get('path','')}), "
-                f"to={to_symbol} ({to_candidates[0].get('path','')})."
-            )
-    except Exception as exc:
-        log.debug("semantic_trace: LLM narrative failed: %s", exc)
-        if found and path_nodes:
-            steps = " → ".join(n.get("qualified_name") or n.get("name") or "?" for n in path_nodes[:8])
-            narrative = f"Call chain ({len(path_nodes)} hops): {steps}"
-        else:
-            narrative = f"Path from '{from_symbol}' to '{to_symbol}' not found in call graph."
+    # Deterministic narrative — no LLM.  LLM trace synthesis moved to background.
+    if found and path_nodes:
+        steps = " → ".join(
+            n.get("qualified_name") or n.get("name") or "?" for n in path_nodes[:10]
+        )
+        narrative = f"Call chain ({len(path_nodes)} hops): {steps}"
+    else:
+        narrative = (
+            f"No direct call path found from '{from_symbol}' to '{to_symbol}'. "
+            f"Best candidates: from={from_symbol} ({from_candidates[0].get('path', '') if from_candidates else ''}), "
+            f"to={to_symbol} ({to_candidates[0].get('path', '') if to_candidates else ''})."
+        )
 
     return {
         "narrative": narrative,
@@ -122,4 +106,5 @@ async def handle_semantic_trace(
         "to_query": to_query,
         "from_candidate_path": from_candidates[0].get("path", "") if from_candidates else "",
         "to_candidate_path": to_candidates[0].get("path", "") if to_candidates else "",
+        "llm_used": False,
     }
