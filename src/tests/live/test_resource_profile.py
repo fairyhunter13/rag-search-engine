@@ -1,7 +1,10 @@
 """Resource profile assertions: GPU resident, no orphan browsers, LLM throughput floor.
 
-These tests verify that the test-run resource optimisations are in effect (Part D of
-Phase 69) and that the production daemon uses the GPU, not the CPU.
+These tests verify that the test-run resource optimisations are in effect and that
+the production daemon uses the GPU, not the CPU.
+
+U3: single resident model is qwen3-enrich:1.7b on :11434 (qwen3-query:8b retired).
+U6: test_no_8b_model_resident guards that 8b is NOT kept resident.
 """
 from __future__ import annotations
 
@@ -18,16 +21,17 @@ _OLLAMA_GEN_URL = "http://localhost:11434/api/generate"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _warmup_qwen3_query():
-    """Ensure qwen3-query:8b is loaded and GPU-resident before residency tests run.
+def _warmup_enrich_model():
+    """Ensure qwen3-enrich:1.7b is loaded and GPU-resident before residency tests run.
 
+    U3: qwen3-enrich:1.7b is the single resident model (8b retired).
     Uses keep_alive=-1 to pin the model, then polls /api/ps until size_vram > 0
     to avoid a race where VRAM allocation is still in progress when the test checks.
     """
     try:
         httpx.post(
             _OLLAMA_GEN_URL,
-            json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
+            json={"model": "qwen3-enrich:1.7b", "prompt": "ok", "stream": False,
                   "options": {"num_predict": 1}, "keep_alive": -1},
             timeout=90.0,
         )
@@ -35,30 +39,29 @@ def _warmup_qwen3_query():
         return  # Ollama unreachable — test will fail with a clear error
 
     # Poll until the model reports VRAM > 0 (GPU allocation may lag the generate call).
-    # 30 polls (60s) to handle OLLAMA_NUM_PARALLEL=1 queue depth.
     for _ in range(30):
         try:
             r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
             models = r.json().get("models", [])
             for m in models:
-                if "qwen3-query" in m.get("name", "").lower() and m.get("size_vram", 0) > 0:
+                if "qwen3-enrich" in m.get("name", "").lower() and m.get("size_vram", 0) > 0:
                     return  # GPU-resident, proceed
         except Exception:
             pass
         time.sleep(2)
 
 
-def test_ollama_qwen3_query_is_gpu_resident():
-    """qwen3-query:8b must be loaded with VRAM > 0 (GPU, not CPU-only).
+def test_ollama_enrich_model_is_gpu_resident():
+    """qwen3-enrich:1.7b must be loaded with VRAM > 0 (GPU, not CPU-only).
 
+    U3: the single resident model is qwen3-enrich:1.7b on :11434.
     Re-triggers a load immediately before checking so the test is self-contained
     and not susceptible to model eviction during the test run.
     """
-    # Load fresh — model may have been evicted during the suite run
     try:
         httpx.post(
             _OLLAMA_GEN_URL,
-            json={"model": "qwen3-query:8b", "prompt": "ok", "stream": False,
+            json={"model": "qwen3-enrich:1.7b", "prompt": "ok", "stream": False,
                   "options": {"num_predict": 1}, "keep_alive": -1},
             timeout=90.0,
         )
@@ -66,14 +69,14 @@ def test_ollama_qwen3_query_is_gpu_resident():
         pytest.fail(f"Ollama not reachable at {_OLLAMA_GEN_URL}: {exc}")
 
     # Poll until GPU-resident (VRAM allocation may lag the generate response).
-    # Use 30 polls (60s) — with OLLAMA_NUM_PARALLEL=1, model load may queue.
     last_vram = -1
     for _ in range(30):
         try:
             r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
             models = r.json().get("models", [])
             for m in models:
-                if "qwen3-query" in m.get("name", "").lower() or "qwen3-query" in m.get("model", "").lower():
+                name = m.get("name", "") or m.get("model", "")
+                if "qwen3-enrich" in name.lower():
                     last_vram = m.get("size_vram", 0)
                     if last_vram > 0:
                         return  # GPU-resident — pass
@@ -83,23 +86,65 @@ def test_ollama_qwen3_query_is_gpu_resident():
 
     if last_vram == -1:
         pytest.fail(
-            "qwen3-query:8b never appeared in /api/ps after 60s — "
+            "qwen3-enrich:1.7b never appeared in /api/ps after 60s — "
             "model may not have loaded (check Ollama logs)"
         )
     else:
         pytest.fail(
-            f"qwen3-query:8b has size_vram={last_vram} after 60s — "
+            f"qwen3-enrich:1.7b has size_vram={last_vram} after 60s — "
             "running on CPU, not GPU (CPU fallback is forbidden)"
         )
 
 
-def test_ollama_query_llm_throughput_floor():
-    """A short prompt must complete under a generous ceiling (GPU is ~10× faster than CPU)."""
+def test_no_8b_model_resident():
+    """U6 guard: daemon and test fixtures must NOT reload qwen3-query:8b after it's unloaded.
+
+    qwen3-query:8b was retired in U3 (single resident model is now qwen3-enrich:1.7b).
+    This test explicitly unloads the 8b model (keep_alive=0), then waits a few seconds,
+    and verifies the daemon (sweeps paused by _quiesce_sweeps fixture) does NOT reload it.
+    This proves no live code path automatically re-pins the retired 8b model.
+    """
+    # Step 1: explicitly unload qwen3-query:8b (keep_alive=0 instructs Ollama to unload immediately)
+    import contextlib
+    with contextlib.suppress(Exception):
+        httpx.post(
+            _OLLAMA_GEN_URL,
+            json={"model": "qwen3-query:8b", "prompt": "", "keep_alive": 0},
+            timeout=10.0,
+        )
+
+    # Step 2: wait a few seconds to give any background reload a chance to fire
+    time.sleep(5)
+
+    # Step 3: verify qwen3-query:8b is NOT resident (VRAM == 0 or absent from /api/ps)
+    try:
+        r = httpx.get(_OLLAMA_PS_URL, timeout=5.0)
+        models = r.json().get("models", [])
+    except Exception as exc:
+        pytest.fail(f"Ollama /api/ps unreachable: {exc}")
+
+    for m in models:
+        name = m.get("name", "") or m.get("model", "")
+        if "qwen3-query" in name.lower() and m.get("size_vram", 0) > 0:
+            pytest.fail(
+                f"qwen3-query:8b reloaded itself (size_vram={m.get('size_vram')}) after being "
+                "explicitly unloaded — something in the daemon or a fixture is re-pinning the "
+                "retired 8b model. Only qwen3-enrich:1.7b should be loaded (U3 single-model)."
+            )
+
+
+def test_ollama_enrich_model_throughput_floor():
+    """A short prompt on qwen3-enrich:1.7b must complete under a generous ceiling.
+
+    U3: throughput test now uses the single resident model (qwen3-enrich:1.7b).
+    GPU is ~10× faster than CPU — the ceiling is generous enough to pass even
+    under concurrent GPU load (thermal throttle, parallel enrich batches).
+    """
     try:
         start = time.monotonic()
         r = httpx.post(
             _OLLAMA_GEN_URL,
-            json={"model": "qwen3-query:8b", "prompt": "Say only: ok", "stream": False,
+            json={"model": "qwen3-enrich:1.7b", "prompt": "Say only: ok", "stream": False,
                   "options": {"num_predict": 4}},
             timeout=60.0,
         )
@@ -117,7 +162,7 @@ def test_ollama_query_llm_throughput_floor():
             f"(CPU fallback would be 5000ms+/token; GPU under concurrent load may reach ~3000ms/token)"
         )
     else:
-        assert elapsed < 30.0, f"Query LLM took {elapsed:.1f}s — unexpectedly slow (CPU fallback?)"
+        assert elapsed < 30.0, f"Enrich LLM took {elapsed:.1f}s — unexpectedly slow (CPU fallback?)"
 
 
 def test_args_fixture_decorator_remains_session_scoped():
@@ -143,5 +188,3 @@ def test_args_fixture_decorator_remains_session_scoped():
         "browser_type_launch_args fixture must be scope='session' in conftest.py "
         "(D1 — one Chromium launch per test run)"
     )
-
-
