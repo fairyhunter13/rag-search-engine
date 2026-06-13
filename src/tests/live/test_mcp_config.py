@@ -398,13 +398,13 @@ class TestBridgeTimeout:
     """T1.5: mcp_bridge._forward_tool must return a timeout sentinel, never hang."""
 
     def test_tool_deadlines_are_defined(self):
-        """_TOOL_DEADLINES must include all 5 tools with values <= 10s."""
+        """_TOOL_DEADLINES must include all 5 tools with values <= 5s."""
         from opencode_search.mcp_bridge import _TOOL_DEADLINES
         required = {"search", "ask", "graph", "overview", "index"}
         for tool in required:
             assert tool in _TOOL_DEADLINES, f"_TOOL_DEADLINES missing '{tool}'"
-            assert _TOOL_DEADLINES[tool] <= 10.0, (
-                f"_TOOL_DEADLINES['{tool}']={_TOOL_DEADLINES[tool]}s exceeds 10s ceiling"
+            assert _TOOL_DEADLINES[tool] <= 5.0, (
+                f"_TOOL_DEADLINES['{tool}']={_TOOL_DEADLINES[tool]}s exceeds 5s ceiling"
             )
 
     def test_bridge_forward_times_out(self):

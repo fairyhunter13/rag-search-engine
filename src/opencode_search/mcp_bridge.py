@@ -152,16 +152,15 @@ bridge = FastMCP(
 )
 
 
-# Per-tool deadlines — heavy synthesis tools get a slightly longer window,
-# but all are capped below the user's <10s target so a stuck daemon never hangs.
+# Per-tool deadlines — 5s hard cap so a slow/stuck daemon never blocks the user.
 _TOOL_DEADLINES: dict[str, float] = {
-    "search":   6.0,
-    "graph":    7.0,
-    "overview": 7.0,
-    "ask":      8.0,
-    "index":    8.0,
+    "search":   5.0,
+    "graph":    5.0,
+    "overview": 5.0,
+    "ask":      5.0,
+    "index":    5.0,
 }
-_DEFAULT_DEADLINE = 8.0
+_DEFAULT_DEADLINE = 5.0
 
 
 async def _forward_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:

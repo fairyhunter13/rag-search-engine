@@ -117,7 +117,7 @@ RULES:
 - After indexing, the daemon watches files automatically — no need to re-index on every change.
 
 RESILIENCE — IMPORTANT:
-- opencode-search calls have a built-in ~8s deadline. If a call returns {"status":"timeout","fallback":true}, or hangs/errors, IMMEDIATELY fall back to native Read/Grep/Glob/Bash tools. Never wait or retry the MCP call.
+- opencode-search calls have a built-in ~5s deadline. If a call returns {"status":"timeout","fallback":true}, or hangs/errors, IMMEDIATELY fall back to native Read/Grep/Glob/Bash tools. Never wait or retry the MCP call.
 - Do NOT let a slow or stuck opencode-search call block answering the user. Native tools are always the fallback.\
 """
 
