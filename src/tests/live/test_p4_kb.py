@@ -40,9 +40,9 @@ def test_answer_cache_set_get_invalidate(tmp_path):
 
 
 def test_answer_cache_expired_returns_none(tmp_path):
+
     from opencode_search.kb.answer_cache import get
     from opencode_search.kb.answer_cache import set as cache_set
-    import json, time
     cd = tmp_path / "ac2"
     cd.mkdir()
     cache_set(cd, "k", "v", ttl_s=-1)  # already expired

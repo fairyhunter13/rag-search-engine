@@ -4,6 +4,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re as _re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -26,9 +27,29 @@ def _save(data: dict) -> None:
         os.replace(tmp, REGISTRY_PATH)
 
 
+_TIER_SUFFIX = _re.compile(r"-tier\d+$")
+
+
+def _migrate(data: dict) -> dict:
+    """Normalize legacy registry format: strip tier-suffix paths, ensure required fields."""
+    changed = False
+    migrated: dict = {}
+    for path, meta in data.items():
+        clean = _TIER_SUFFIX.sub("", path)
+        if clean != path:
+            changed = True
+        if "enabled" not in meta:
+            meta = dict(meta, enabled=True, indexed_at=None)
+            changed = True
+        migrated[clean] = meta
+    if changed:
+        _save(migrated)
+    return migrated
+
+
 def list_projects() -> list[ProjectEntry]:
     from dataclasses import fields
-    data = _load()
+    data = _migrate(_load())
     known = {f.name for f in fields(ProjectEntry)} - {"path"}
     return [
         ProjectEntry(path=p, **{k: v for k, v in meta.items() if k in known})

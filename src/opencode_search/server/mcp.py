@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import json
+import time
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:
+    from opencode_search.server._fastmcp_stub import (
+        FastMCPStub as FastMCP,  # type: ignore[assignment]
+    )
 
+from opencode_search.daemon.global_prompt import _PROMPT
 from opencode_search.daemon.runtime_state import note_activity, note_query
 from opencode_search.embed.embedder import Embedder
 
@@ -19,15 +26,7 @@ def _get_embedder() -> Embedder:
     return _embedder
 
 
-mcp = FastMCP(
-    "opencode-search",
-    instructions=(
-        "opencode-search: GPU code intelligence. "
-        "Tools: search (find code), ask (explain code), "
-        "graph (call relations), overview (project structure), "
-        "index (register project)."
-    ),
-)
+mcp = FastMCP("opencode-search", instructions=_PROMPT)
 
 
 @mcp.tool()
@@ -46,6 +45,8 @@ async def search(
     paths = project_paths or [p.path for p in list_projects() if p.enabled]
     embedder = _get_embedder()
     results: list[dict] = []
+    t0 = time.monotonic()
+    searched: list[str] = []
     for path in paths:
         vdb = project_vector_db(path)
         if not vdb.exists():
@@ -53,10 +54,16 @@ async def search(
         vs = VectorStore(vdb)
         try:
             results.extend(_search(query, embedder, vs, scope=scope, top_k=10))
+            searched.append(path)
         finally:
             vs.close()
     results.sort(key=lambda r: r.get("score", 0), reverse=True)
-    return json.dumps({"results": results[:10], "count": len(results)})
+    return json.dumps({
+        "results": results[:10],
+        "total": len(results),
+        "elapsed_ms": round((time.monotonic() - t0) * 1000),
+        "projects_searched": searched,
+    })
 
 
 @mcp.tool()
@@ -118,8 +125,14 @@ async def graph(
             return json.dumps({"matches": gh.impact(symbol, gs)})
         if relation == "impact_narrative":
             return gh.impact_narrative(symbol, gs)
+        if relation == "path":
+            if not to_symbol:
+                return json.dumps({"error": "relation='path' requires to_symbol"})
+            return json.dumps({"path": gh.path_between(symbol, to_symbol, gs)})
         if relation == "semantic_trace":
-            return f"Semantic trace '{symbol}' to '{to_symbol}' not yet implemented."
+            if not to_symbol:
+                return json.dumps({"error": "relation='semantic_trace' requires to_symbol"})
+            return gh.semantic_trace(symbol, to_symbol, gs)
         return json.dumps({"matches": gh.definition(symbol, gs)})
     finally:
         gs.close()
@@ -142,6 +155,14 @@ async def index(project_path: str, enabled: bool = True) -> str:
 
     if not enabled:
         ok = remove_project(project_path)
-        return json.dumps({"removed": ok, "path": project_path})
+        import shutil
+
+        from opencode_search.core.config import index_dir
+        shutil.rmtree(index_dir(project_path), ignore_errors=True)
+        return json.dumps({"status": "removed" if ok else "not_found", "path": project_path})
+    from opencode_search.core.registry import get_project
+    existing = get_project(project_path)
+    status = "already_registered" if existing and existing.enabled else "flagged"
     upsert_project(ProjectEntry(path=project_path, enabled=True))
-    return json.dumps({"registered": True, "path": project_path})
+    return json.dumps({"status": status, "path": project_path,
+                       "note": "daemon will auto-index, build KB, and watch"})

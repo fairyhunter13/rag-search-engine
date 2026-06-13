@@ -86,7 +86,6 @@ async def _api_import_cycles(request: Request) -> JSONResponse:
 
 async def _api_graph_diff(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
-    since_hours = float(request.query_params.get("since_hours", "24"))
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
     gs = _open_graph(project)

@@ -1,7 +1,12 @@
-"""Thin 5-view dashboard HTML (pulse/chat/admin/wiki/graph)."""
+"""5-view dashboard HTML (pulse/chat/admin/wiki/graph) — served from static file."""
+from pathlib import Path
+
+_STATIC = Path(__file__).parent / "static" / "dashboard.html"
 
 
 def html() -> str:
+    if _STATIC.exists():
+        return _STATIC.read_text()
     return """\
 <!DOCTYPE html>
 <html lang="en">

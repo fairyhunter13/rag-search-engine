@@ -1,3 +1,5 @@
+import contextlib
+
 import pytest
 import requests
 
@@ -12,15 +14,11 @@ def pytest_configure(config):
 @pytest.fixture(scope="session", autouse=True)
 def pause_sweeps():
     """Pause background sweeps for the whole session to avoid GPU contention."""
-    try:
+    with contextlib.suppress(Exception):
         requests.post(f"{_DAEMON}/api/sweeps/pause", timeout=5)
-    except Exception:
-        pass
     yield
-    try:
+    with contextlib.suppress(Exception):
         requests.post(f"{_DAEMON}/api/sweeps/resume", timeout=5)
-    except Exception:
-        pass
 
 
 @pytest.fixture(scope="session")
