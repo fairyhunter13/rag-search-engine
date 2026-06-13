@@ -1184,9 +1184,11 @@ def _register_ops_routes(mcp: FastMCP) -> None:
         from opencode_search.daemon import _META_PATH
         from opencode_search.daemon_runtime import runtime_state
         from opencode_search.embeddings import get_cublas_metrics
+        from opencode_search.enricher.client import get_llm_inference_count
         from opencode_search.metrics import get_metrics, get_stream_metrics
         data = get_metrics()
         data["chat_stream"] = get_stream_metrics()
+        data["llm_inference_call_count"] = get_llm_inference_count()
         snap = runtime_state.snapshot()
         data["connected_clients"] = snap.get("active_clients", 0)
         data["client_ids"] = snap.get("client_ids", [])

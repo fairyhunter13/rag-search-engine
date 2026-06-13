@@ -45,6 +45,24 @@ _OLLAMA_DEFAULT_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 _OLLAMA_DEFAULT_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 
 # ---------------------------------------------------------------------------
+# Passive inference counter — observes LLM KB-build calls, never raises.
+# Used by tests to prove the MCP read path is zero-LLM: read this counter
+# before + after an MCP action and assert the delta is zero.
+# Exposed via /api/metrics as "llm_inference_call_count".
+# ---------------------------------------------------------------------------
+_LLM_INFERENCE_CALL_COUNT: list[int] = [0]  # list for in-place mutation without global
+
+
+def get_llm_inference_count() -> int:
+    """Return the cumulative count of LLM KB-build calls in this daemon process."""
+    return _LLM_INFERENCE_CALL_COUNT[0]
+
+
+def _count_llm_inference() -> None:
+    """Increment the passive inference counter. Called at LLM KB-build entry points."""
+    _LLM_INFERENCE_CALL_COUNT[0] += 1
+
+# ---------------------------------------------------------------------------
 # GPU thermal guard — blocks inference when the GPU is too hot.
 # Necessary because the RTX 5080 Laptop SBIOS cannot report temperature limits
 # to the NVIDIA driver (NV_ERR_INVALID_DATA), leaving the OS with no HW thermal
@@ -188,6 +206,7 @@ class LLMClient:
         Returns (title, summary, semantic_type). semantic_type is one of:
         feature|business_process|business_rule|data_model|api_boundary|infrastructure|utility
         """
+        _count_llm_inference()
         nodes_text = "\n".join(f"- {s}" for s in node_summaries[:30])
         code_text = ""
         if code_samples:
@@ -265,6 +284,7 @@ class LLMClient:
         overview: architecture, tech stack, observed patterns, primary language.
         Returns a JSON string (parsed by caller).
         """
+        _count_llm_inference()
         files_text = "\n\n".join(
             f"--- {rel} ---\n{content[:1500]}" for rel, content in file_samples[:8]
         )
@@ -300,6 +320,7 @@ class LLMClient:
         graph stats, manifest versions, language counts) and produces a rich
         structured analysis. Returns a JSON string.
         """
+        _count_llm_inference()
         import json as _json
         facts_text = _json.dumps(exact_facts, indent=2)[:3000]
         return self.chat(
