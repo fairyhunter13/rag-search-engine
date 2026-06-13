@@ -1,4 +1,4 @@
-"""Wiki MCP handlers: generate, ingest, search, and lint wiki pages."""
+"""Wiki MCP handlers: ingest, search, and lint wiki pages."""
 from __future__ import annotations
 
 import asyncio
@@ -12,34 +12,20 @@ from opencode_search.config import (
     DEFAULT_DIMS,
     DEFAULT_EMBED_MODEL,
     get_project_db_path,
-    get_project_graph_db_path,
     get_project_raw_dir,
     get_project_wiki_dir,
     load_registry,
 )
 
 if TYPE_CHECKING:
-    from opencode_search.enricher.client import LLMClient
-    from opencode_search.graph.storage import GraphStorage
     from opencode_search.wiki.storage import WikiStorage
 
 log = logging.getLogger(__name__)
 
 
-def _get_llm() -> LLMClient | None:
+def _get_llm():
     from opencode_search.enricher.client import create_llm_client
     return create_llm_client()
-
-
-def _open_graph(project_path: str) -> GraphStorage | None:
-    from opencode_search.graph.storage import GraphStorage
-
-    db_path = get_project_graph_db_path(project_path)
-    if not Path(db_path).exists():
-        return None
-    gs = GraphStorage(db_path)
-    gs.open()
-    return gs
 
 
 def _make_wiki(project_path: str) -> WikiStorage:
@@ -55,12 +41,12 @@ def _chunk_id(path: str, position: int) -> int:
     return int(hashlib.sha256(raw.encode()).hexdigest()[:16], 16) % (2**62)
 
 
-async def _embed_wiki_pages(project_path: str, page_paths: list[Path]) -> int:
-    """Embed wiki page files into the project's LanceDB vector index.
+def _safe_name(name: str) -> str:
+    return "".join(c if (c.isalnum() or c in "_-") else "_" for c in name).strip("_")
 
-    Makes pages searchable via wiki_query and search_code immediately after
-    generation or ingestion — without waiting for the file watcher.
-    """
+
+async def _embed_wiki_pages(project_path: str, page_paths: list[Path]) -> int:
+    """Embed wiki page files into the project's LanceDB vector index."""
     from opencode_search.chunker import chunk_file
     from opencode_search.embeddings import embed_passages
     from opencode_search.storage import ChunkData, Storage
@@ -123,123 +109,6 @@ async def _embed_wiki_pages(project_path: str, page_paths: list[Path]) -> int:
     return len(all_chunks)
 
 
-async def handle_wiki_reindex(project_path: str) -> dict[str, Any]:
-    """Embed all existing wiki pages into the vector index.
-
-    Use this to make wiki pages searchable after they were generated without
-    the embedding step (e.g. pages created before this feature was added).
-    Safe to call multiple times — uses merge_insert (upsert) semantics.
-    """
-    wiki_dir = get_project_wiki_dir(project_path)
-    if not wiki_dir.exists():
-        return {"status": "ok", "project_path": project_path, "pages_found": 0, "embedded_chunks": 0}
-
-    page_paths = sorted(wiki_dir.glob("*.md"))
-    embedded = await _embed_wiki_pages(project_path, page_paths)
-    log.info("wiki_reindex[%s]: embedded %d chunks from %d pages", project_path, embedded, len(page_paths))
-    return {
-        "status": "ok",
-        "project_path": project_path,
-        "pages_found": len(page_paths),
-        "embedded_chunks": embedded,
-    }
-
-
-async def handle_wiki_generate(
-    project_path: str,
-    max_communities: int = 200,
-    include_federation: bool = False,
-    embed: bool = True,
-) -> dict[str, Any]:
-    """Auto-generate wiki pages from code graph.
-
-    Args:
-        max_communities: Cap on the number of community pages to generate.
-            Communities are selected largest-first (most architectural coverage).
-            Singleton communities are excluded. Default 200. Use a smaller value
-            (e.g. 10) for a quick smoke-test on large projects.
-        embed: If True (default), embed generated pages into LanceDB immediately.
-            Pass False when the caller will handle embedding separately (e.g. the
-            document_federation script, which embeds under _EMBED_SEM in stage2).
-    """
-    import os as _os
-    llm = _get_llm()
-    if llm is None:
-        return {
-            "error": "Wiki generation requires OPENCODE_LLM_PROVIDER=ollama|anthropic|openai",
-            "project_path": project_path,
-        }
-
-    if not llm.is_available():
-        return {"error": "LLM provider not reachable", "project_path": project_path}
-
-    cap = int(_os.environ.get("OPENCODE_WIKI_MAX_COMMUNITIES", str(max_communities)))
-
-    # Build effective project list (root + indexed federation members if requested)
-    from opencode_search.config import load_registry
-    registry = load_registry()
-    paths_to_generate = [project_path]
-    if include_federation:
-        from opencode_search.handlers._federation import _expand_with_federation
-        paths_to_generate = _expand_with_federation([project_path], registry)
-
-    from opencode_search.wiki.generator import WikiGenerator
-    all_pages_created: list[str] = []
-    results_per_path: list[dict] = []
-
-    for path in paths_to_generate:
-        gs = _open_graph(path)
-        if gs is None:
-            results_per_path.append({"path": path, "error": "graph not built"})
-            continue
-        wiki = _make_wiki(path)
-        gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
-        pages_created: list[str] = []
-        try:
-            communities = gs.get_communities(
-                limit=cap, min_node_count=2, order_by_size=True
-            )
-            for c in communities:
-                # Skip already-generated pages so re-runs only fill in missing ones.
-                # Without this, a 3000-community project regenerates everything on every
-                # auto-pipeline run, making convergence take O(N) time repeatedly.
-                if wiki.wiki_path(f"community_{c.id}").exists():
-                    continue
-                try:
-                    await gen.generate_community_page(c.id)
-                    pages_created.append(f"community_{c.id}")
-                except Exception as exc:
-                    log.debug("wiki gen failed for community %d in %s: %s", c.id, path, exc)
-            await gen.generate_index()
-        finally:
-            gs.close()
-        all_pages_created.extend(pages_created)
-
-        # Embed generated pages into LanceDB so wiki_query finds them immediately.
-        # Skip when embed=False — caller will embed under a GPU semaphore instead.
-        wiki_dir = get_project_wiki_dir(path)
-        page_file_paths = [wiki_dir / f"{name}.md" for name in pages_created]
-        embedded = 0
-        if embed:
-            try:
-                embedded = await _embed_wiki_pages(path, page_file_paths)
-                log.info("wiki_generate[%s]: embedded %d wiki chunks", path, embedded)
-            except Exception as exc:
-                log.warning("wiki_generate[%s]: embedding failed: %s", path, exc)
-
-        results_per_path.append({"path": path, "pages_created": len(pages_created), "embedded_chunks": embedded})
-
-    result: dict = {
-        "status": "ok",
-        "project_path": project_path,
-        "pages_created": all_pages_created,
-        "total": len(all_pages_created),
-    }
-    if include_federation and len(paths_to_generate) > 1:
-        result["federation_results"] = results_per_path
-    return result
-
-
 async def handle_wiki_ingest(source_path: str, project_path: str) -> dict[str, Any]:
     """Ingest a raw document into the wiki."""
     llm = _get_llm()
@@ -256,39 +125,32 @@ async def handle_wiki_ingest(source_path: str, project_path: str) -> dict[str, A
     if not src.exists():
         return {"error": f"Source not found: {source_path}", "source_path": source_path}
 
-    gs = _open_graph(project_path)
     wiki = _make_wiki(project_path)
+    wiki.register_raw_source(source_path)
+    content = src.read_text(encoding="utf-8", errors="replace")
 
-    from opencode_search.wiki.generator import WikiGenerator
-    if gs is None:
-        # Still ingest even without graph
-        from opencode_search.graph.storage import GraphStorage
-        db_path = get_project_graph_db_path(project_path)
-        gs = GraphStorage(db_path)
-        gs.open()
+    wiki_content = await asyncio.to_thread(llm.raw_doc_to_wiki, content, src.name)
+    page_name = _safe_name(src.stem)
+    wiki.write_wiki_page(page_name, wiki_content)
+    wiki.append_log(f"Ingested raw source: {src.name} → {page_name}.md")
 
-    gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
+    # Regenerate index
+    pages = wiki.list_wiki_pages()
+    lines = ["# Wiki Index\n"]
+    for name in sorted(pages):
+        lines.append(f"- [{name}]({name}.md)")
+    wiki.write_index("\n".join(lines))
 
-    pages: list[str] = []
-    try:
-        pages = await gen.ingest_raw_source(source_path, project_path)
-    except FileNotFoundError as exc:
-        return {"error": str(exc), "source_path": source_path}
-    finally:
-        gs.close()
-
-    # Embed the ingested pages into LanceDB so wiki_query finds them immediately
     wiki_dir = get_project_wiki_dir(project_path)
-    page_file_paths = [wiki_dir / f"{name}.md" for name in pages]
     try:
-        await _embed_wiki_pages(project_path, page_file_paths)
+        await _embed_wiki_pages(project_path, [wiki_dir / f"{page_name}.md"])
     except Exception as exc:
         log.debug("wiki_ingest: embedding failed for %s: %s", source_path, exc)
 
     return {
         "status": "ok",
         "source_path": source_path,
-        "pages_created": pages,
+        "pages_created": [page_name],
     }
 
 
@@ -297,11 +159,7 @@ async def handle_wiki_query(
     project_path: str,
     top_k: int = 5,
 ) -> dict[str, Any]:
-    """Search wiki pages using a language-filtered vector search.
-
-    Searches only within wiki-language chunks so results are never buried
-    by the much larger code chunk population.
-    """
+    """Search wiki pages using a language-filtered vector search."""
     from opencode_search.config import (
         DEFAULT_DIMS,
         DEFAULT_EMBED_MODEL,
@@ -320,8 +178,6 @@ async def handle_wiki_query(
     db_path = get_project_db_path(project_path)
 
     try:
-        # Route through the query executor (same thread as search.py:_GPU_INFER_EXECUTOR)
-        # so wiki queries never block on the shared passage/build path.
         from opencode_search.search import _GPU_INFER_EXECUTOR
         loop = asyncio.get_event_loop()
         query_vec = await loop.run_in_executor(
@@ -355,26 +211,34 @@ async def handle_wiki_query(
 
 
 async def handle_wiki_lint(project_path: str) -> dict[str, Any]:
-    """Health check the wiki."""
+    """Health check the wiki: orphaned pages, empty pages."""
     wiki = _make_wiki(project_path)
+    pages = wiki.list_wiki_pages()
+    issues: list[str] = []
 
-    from opencode_search.wiki.generator import WikiGenerator
-    gs = _open_graph(project_path)
-    if gs is None:
-        # Lint wiki without graph context
-        from opencode_search.graph.storage import GraphStorage
-        db_path = get_project_graph_db_path(project_path)
-        gs = GraphStorage(db_path)
-        gs.open()
+    index_content = ""
+    index_path = wiki.index_path()
+    if index_path.exists():
+        index_content = index_path.read_text(encoding="utf-8")
 
-    llm = _get_llm()
-    if llm is None:
-        # Create a dummy LLM for lint (no LLM calls needed)
-        from unittest.mock import MagicMock
-        llm = MagicMock()
+    orphans = []
+    empty_pages = []
+    for name in pages:
+        if name not in index_content and name != "index":
+            orphans.append(name)
+        content = wiki.read_wiki_page(name) or ""
+        if not content.strip():
+            empty_pages.append(name)
 
-    gen = WikiGenerator(llm=llm, wiki=wiki, graph=gs)
-    try:
-        return await gen.lint()
-    finally:
-        gs.close()
+    if orphans:
+        issues.append(f"Orphaned pages: {orphans}")
+    if empty_pages:
+        issues.append(f"Empty pages: {empty_pages}")
+
+    return {
+        "healthy": len(issues) == 0,
+        "total_pages": len(pages),
+        "orphans": orphans,
+        "empty_pages": empty_pages,
+        "issues": issues,
+    }

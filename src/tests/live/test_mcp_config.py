@@ -1090,12 +1090,12 @@ class TestNoRegexInStringOps:
                         "Use ' '.join(s.split()) for whitespace, .isdigit() for numeric check."
                     )
 
-    def test_wiki_generator_no_re_import(self):
-        """wiki/generator.py must not import re (slug generation replaced by char filter)."""
+    def test_wiki_handler_no_re_import(self):
+        """handlers/_wiki.py must not import re (slug generation uses char-filter comprehension)."""
         import ast
         from pathlib import Path
 
-        src = Path("src/opencode_search/wiki/generator.py").read_text()
+        src = Path("src/opencode_search/handlers/_wiki.py").read_text()
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -1106,7 +1106,7 @@ class TestNoRegexInStringOps:
                 )
                 for name in names:
                     assert name != "re", (
-                        "wiki/generator.py must not import 're'. "
+                        "handlers/_wiki.py must not import 're'. "
                         "Use a char-filter comprehension for slug sanitization."
                     )
 
@@ -1129,7 +1129,7 @@ class TestNoRegexInStringOps:
 
     def test_wiki_safe_name_slugifies(self):
         """_safe_name() must still convert special chars to underscores after the re→char-filter rewrite."""
-        from opencode_search.wiki.generator import _safe_name
+        from opencode_search.handlers._wiki import _safe_name
 
         assert _safe_name("hello world") == "hello_world"
         assert _safe_name("foo/bar.baz") == "foo_bar_baz"
@@ -1284,12 +1284,12 @@ class TestRepoWideNoRegex:
                 )
 
     def test_dedup_and_wiki_no_re(self):
-        """Units landed in A: dedup.py and wiki/generator.py must not import re."""
+        """Units landed in A: dedup.py and handlers/_wiki.py must not import re."""
         import ast
         from pathlib import Path
 
         for rel in ("src/opencode_search/graph/dedup.py",
-                    "src/opencode_search/wiki/generator.py"):
+                    "src/opencode_search/handlers/_wiki.py"):
             src = Path(rel).read_text()
             tree = ast.parse(src)
             for node in ast.walk(tree):
