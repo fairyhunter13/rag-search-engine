@@ -144,18 +144,38 @@ def browser_type_launch_args(browser_type_launch_args):
 
 @pytest.fixture(scope="session", autouse=True)
 def _pin_ollama_model_resident():
-    """Keep qwen3-query:8b loaded for the whole test session (no per-test warm-up).
-    Reverts to 10m keep-alive at teardown to match the production systemd setting."""
+    """Keep qwen3-enrich:1.7b resident for the whole test session (no per-test warm-up).
+
+    U3: qwen3-query:8b was retired; the single resident model is now qwen3-enrich:1.7b
+    on :11434.  Pinning prevents eviction between slow test classes.
+    Reverts to 10m keep-alive at teardown to match the production systemd setting.
+    """
     with contextlib.suppress(Exception):
         httpx.post("http://localhost:11434/api/generate",
-                   json={"model": "qwen3-query:8b", "prompt": "Hello", "stream": False,
+                   json={"model": "qwen3-enrich:1.7b", "prompt": "Hello", "stream": False,
                          "options": {"num_predict": 1}, "keep_alive": -1},
                    timeout=30.0)
     yield
     with contextlib.suppress(Exception):
         httpx.post("http://localhost:11434/api/generate",
-                   json={"model": "qwen3-query:8b", "prompt": "", "keep_alive": "10m"},
+                   json={"model": "qwen3-enrich:1.7b", "prompt": "", "keep_alive": "10m"},
                    timeout=5.0)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _quiesce_sweeps():
+    """Pause all daemon background sweeps for the test session duration.
+
+    Calls POST /api/sweeps/pause at session start, resumes at teardown.
+    This is a REAL daemon control (no mocks) — the sweep threads check
+    _SWEEPS_PAUSED and sleep-loop while paused. Prevents kb_sweep, maintenance,
+    and auto_index from racing live tests and consuming GPU during assertions.
+    """
+    with contextlib.suppress(Exception):
+        httpx.post(f"{DAEMON_URL}/api/sweeps/pause", timeout=5.0)
+    yield
+    with contextlib.suppress(Exception):
+        httpx.post(f"{DAEMON_URL}/api/sweeps/resume", timeout=5.0)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -197,14 +217,12 @@ def judge_answer(answer: str, question: str) -> int:
 # synthesis. Phrasing-robustness is verified cheaply via /api/classify (intent
 # only), NOT by re-synthesizing the same answer. Keys are lowercased + stripped.
 _CANONICAL_QUERIES: dict[str, str] = {
-    # Architecture / global overview — map semantically-equivalent phrasings to one synthesis
+    # Architecture overview — one representative per intent
     "what is the overall architecture of this codebase?": "arch_overview",
     "what is the overall system architecture?": "arch_overview",
-    "what are the main entry points of this system?": "arch_overview",
+    # Global overview — two representatives (project-agnostic and acme-specific)
     "give me a comprehensive global overview of this entire system": "global_overview",
-    "give me a comprehensive global overview of the entire system": "global_overview",
     "give me a comprehensive global overview of the entire astro platform": "global_overview",
-    "give me a global overview of the entire system and all its components": "global_overview",
     "what does this project do?": "global_overview",
     # Feature traces
     "how does search work end to end?": "feature_search",

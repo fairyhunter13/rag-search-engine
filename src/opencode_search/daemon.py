@@ -1312,6 +1312,10 @@ _KB_SWEEP_ENABLED: bool = os.environ.get("OPENCODE_KB_SWEEP_ENABLED", "1").strip
 }
 _kb_sweep_log = logging.getLogger(__name__ + ".kb_sweep")
 
+# Quiesce flag: set True by /api/sweeps/pause to pause all background sweep threads.
+# Used by the test suite to prevent sweep racing during live tests.
+_SWEEPS_PAUSED: bool = False
+
 
 def _kb_sweep_monitor() -> None:
     """Daemon thread: periodically sweep all registered projects for incomplete KB.
@@ -1327,6 +1331,9 @@ def _kb_sweep_monitor() -> None:
     _DAEMON_LOOP_READY.wait(timeout=300)
     time.sleep(min(_KB_SWEEP_INTERVAL_S, 120))
     while True:
+        if _SWEEPS_PAUSED:
+            time.sleep(5)
+            continue
         try:
             loop = _DAEMON_LOOP
             if loop is None:
@@ -1674,6 +1681,9 @@ def _auto_index_monitor() -> None:
     # Short initial wait so startup watchers/pipeline resumes go first
     time.sleep(min(_AUTO_INDEX_INTERVAL_S, 30))
     while True:
+        if _SWEEPS_PAUSED:
+            time.sleep(5)
+            continue
         try:
             loop = _DAEMON_LOOP
             if loop is None:
@@ -1778,6 +1788,9 @@ def _maintenance_monitor() -> None:
     # Start after one full interval so the first runs aren't during startup
     time.sleep(min(_MAINTENANCE_INTERVAL_S, 60))
     while True:
+        if _SWEEPS_PAUSED:
+            time.sleep(5)
+            continue
         try:
             loop = _DAEMON_LOOP
             if loop is None:

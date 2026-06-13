@@ -1170,6 +1170,22 @@ def _register_kb_routes(mcp: FastMCP) -> None:
         return JSONResponse({"status": "reloading", "pid": pid,
                              "note": "daemon restarting in ~3s"})
 
+    @mcp.custom_route("/api/sweeps/pause", methods=["POST"], include_in_schema=False)
+    async def api_pause_sweeps(_request: Request) -> JSONResponse:
+        """Quiesce all background sweep threads (kb_sweep/maintenance/auto_index).
+        Used by the test suite to prevent sweep racing during live tests.
+        """
+        import opencode_search.daemon as _daemon
+        _daemon._SWEEPS_PAUSED = True
+        return JSONResponse({"status": "paused"})
+
+    @mcp.custom_route("/api/sweeps/resume", methods=["POST"], include_in_schema=False)
+    async def api_resume_sweeps(_request: Request) -> JSONResponse:
+        """Resume background sweep threads after a /api/sweeps/pause call."""
+        import opencode_search.daemon as _daemon
+        _daemon._SWEEPS_PAUSED = False
+        return JSONResponse({"status": "resumed"})
+
 
 # ---------------------------------------------------------------------------
 # Sub-registrar: ops (metrics, pipeline, SSE, alerts, jobs)
