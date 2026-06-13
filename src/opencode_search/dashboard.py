@@ -9,7 +9,7 @@ Routes are split into per-domain sub-registrars for maintainability:
   _register_wiki_routes     — /api/wiki, /api/wiki/page, /api/wiki_lint, /api/suggested_questions
   _register_search_routes   — /api/ask, /api/feature, /api/search, /api/patterns, business
   _register_graph_routes    — /api/graph, /api/graph_export, service_mesh, trace, impact, PR
-  _register_chat_routes     — /api/chat, /api/chat_stream, /api/debug
+  _register_chat_routes     — /api/chat, /api/chat_stream
   _register_kb_routes       — /api/kb_health, /api/storage_health, /api/git_hooks, /api/reload
   _register_ops_routes      — metrics, pipeline, SSE, alerts, jobs
 
@@ -951,29 +951,6 @@ def _register_chat_routes(mcp: FastMCP) -> None:
             },
         )
 
-    @mcp.custom_route("/api/debug", methods=["POST"], include_in_schema=False)
-    async def api_debug_trace(request: Request) -> JSONResponse:
-        """Root-cause trace from a stack trace.
-
-        Body JSON: {"project": str, "traceback": str, "error_message": str, "include_fix": bool}
-        """
-        from opencode_search.handlers._debug_trace import handle_debug_trace
-        body: dict = {}
-        with contextlib.suppress(Exception):
-            body = await request.json()
-        project = body.get("project", "")
-        traceback_text = body.get("traceback", "")
-        error_message = body.get("error_message", "")
-        include_fix = bool(body.get("include_fix", True))
-        if not project or not traceback_text:
-            return JSONResponse({"error": "project and traceback required"}, status_code=400)
-        result = await handle_debug_trace(
-            traceback=traceback_text,
-            project_path=project,
-            error_message=error_message,
-            include_fix=include_fix,
-        )
-        return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------

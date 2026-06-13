@@ -95,33 +95,12 @@ def test_chat_architecture_intent(classify):
     )
 
 
-def test_chat_debug_trace_intent(classify):
-    """A Python traceback must route to debug_trace intent."""
-    traceback = (
-        "Traceback (most recent call last):\n"
-        "  File 'main.py', line 42, in run\n"
-        "    result = process(data)\n"
-        "KeyError: 'content'"
-    )
-    intent = classify(traceback)
-    assert intent == "debug_trace", (
-        f"Python traceback must route to debug_trace; got: {intent!r}"
-    )
-
-
 def test_chat_sources_are_real_paths(http, project):
     """Sources in the done event must look like real file paths, not fabricated ones."""
     _answer, _intent, sources, _elapsed = _chat(http, project, "Find the main server handler")
     if sources:
         fabricated = [s for s in sources if any(k in s for k in ("/fake/", "/example/", "/placeholder/"))]
         assert not fabricated, f"Fabricated paths in sources: {fabricated}"
-
-
-@pytest.mark.slow
-def test_chat_debug_intent(classify):
-    """A specific bug/crash question must route to debug intent."""
-    intent = classify("the indexer is crashing with 'NoneType has no attribute embed' when processing a file — what is wrong?")
-    assert intent == "debug", f"Expected intent=debug for specific crash question; got: {intent!r}"
 
 
 @pytest.mark.slow

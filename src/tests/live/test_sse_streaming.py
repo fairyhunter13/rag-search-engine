@@ -136,7 +136,7 @@ class TestSSEStreamingErrorRegression:
     """Regression guards: no token-disguised error text; error events always have intent + done."""
 
     _VALID_INTENTS = frozenset({
-        "debug_trace", "debug", "search", "graph_callers", "graph_callees",
+        "search", "graph_callers", "graph_callees",
         "graph_impact", "architecture", "global", "feature",
     })
 
@@ -178,7 +178,7 @@ class TestSSEStreamingErrorRegression:
         ("explain all business features and their overall system design globally",
          "global"),
         ("I have a nil pointer panic: goroutine crashed at main.go:42. What is the root cause?",
-         "debug"),
+         "feature"),
         ("how does the cart checkout feature work end to end from entry point to database?",
          "feature"),
     ])
@@ -310,34 +310,6 @@ class TestStreamSuccessCoverage:
         after = self._get_success_count(http)
         assert after > before, (
             f"stream_success_count must increment for search intent; before={before} after={after}"
-        )
-
-    @pytest.mark.slow
-    def test_debug_trace_intent_increments_stream_success(self, http, quality_project):
-        """debug_trace intent must call record_stream_success() — regression guard for Phase 89 fix."""
-        before = self._get_success_count(http)
-        tb = (
-            "Traceback (most recent call last):\n"
-            '  File "src/opencode_search/handlers/_kb_chat.py", line 50, in handle_kb_chat\n'
-            "    result = await llm.chat(messages=messages)\n"
-            "AttributeError: 'NoneType' object has no attribute 'chat'"
-        )
-        r = http.post(
-            "/api/chat_stream",
-            json={"project": quality_project, "query": tb},
-            headers={"Accept": "text/event-stream"},
-            timeout=120,
-        )
-        assert r.status_code == 200
-        events = _parse_sse_events(r.text)
-        done = next((e for e in events if e.get("type") == "done"), None)
-        assert done is not None, "debug_trace intent must produce a done event"
-        assert done.get("intent") == "debug_trace", (
-            f"Expected debug_trace intent; got {done.get('intent')!r}"
-        )
-        after = self._get_success_count(http)
-        assert after > before, (
-            f"stream_success_count must increment for debug_trace intent; before={before} after={after}"
         )
 
     @pytest.mark.slow

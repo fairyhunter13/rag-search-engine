@@ -19,7 +19,6 @@ overview: structure | communities | status | projects | patterns |
           feature_map | business_rules | process_flows
 
 Plus structural proofs:
-  - _debug_trace is absent from the MCP tool surface
   - llm_inference_call_count is exposed in /api/metrics
 """
 from __future__ import annotations
@@ -260,18 +259,7 @@ class TestOverviewZeroLLM:
 
 @pytest.mark.live
 class TestMCPSurfaceStructural:
-    """Structural invariants: debug_trace absent from MCP; counter exposed in metrics."""
-
-    def test_debug_trace_not_in_mcp_surface(self) -> None:
-        """_debug_trace must not be reachable from any MCP tool (dashboard-chat only)."""
-        import inspect
-
-        import opencode_search.mcp as mcp_module
-        src = inspect.getsource(mcp_module)
-        assert "_debug_trace" not in src and "handle_debug" not in src, (
-            "_debug_trace / handle_debug must not appear in mcp.py — "
-            "it uses LLM and is dashboard-chat only"
-        )
+    """Structural invariants: llm_inference_call_count exposed in metrics."""
 
     def test_llm_inference_counter_in_metrics(self, http) -> None:
         """Live: /api/metrics must expose llm_inference_call_count."""

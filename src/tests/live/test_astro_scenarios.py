@@ -68,25 +68,6 @@ class TestAstroUserQuestions:
         )
         assert score >= 2, f"Function tracing quality {score}/5:\n{answer[:400]}"
 
-    @pytest.mark.flaky(reruns=2, reruns_delay=10)
-    def test_debug_trace_bug_investigation(self, http, astro):
-        """'How can we debug and trace if a bug happens and find which line of code to fix?'"""
-        answer, intent, *_ = _chat(
-            http, astro,
-            "How can we debug and trace if a bug happens and investigate and find out "
-            "which line of code we need to fix?",
-        )
-        assert len(answer) > 80, f"Answer too short: {answer!r}"
-        assert intent in ("debug", "debug_trace", "feature", "global"), (
-            f"Expected debug intent; got {intent!r}"
-        )
-        score = judge_answer(
-            answer,
-            "Does this describe how to debug or trace code in this codebase, "
-            "with actionable steps or tool recommendations?",
-        )
-        assert score >= 2, f"Debug guidance quality {score}/5:\n{answer[:400]}"
-
 
 # ---------------------------------------------------------------------------
 # Class 2: architecture questions
@@ -329,26 +310,6 @@ class TestAstroDebugging:
     pytestmark = pytest.mark.slow
 
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
-    def test_goroutine_panic_debug(self, classify):
-        """Raw Go stack trace must route to debug_trace intent.
-
-        Routing only — the comment on this test says 'not answer quality — the KB may
-        lack the exact file context'.  We verify the routing decision is correct via
-        classify (~32 tokens, no synthesis), which is sufficient here.
-        """
-        intent = classify(
-            "goroutine 47 [running]:\n"
-            "runtime/debug.Stack()\n"
-            "\t/usr/local/go/src/runtime/debug/stack.go:24 +0x65\n"
-            "github.com/example-org/astro-campaign-be/service.(*CampaignService).GetCampaignByID(...)\n"
-            "\t/home/runner/work/astro-campaign-be/service/campaign.go:187 +0x3b2\n"
-            "panic: runtime error: invalid memory address or nil pointer dereference"
-        )
-        assert intent in ("debug_trace", "debug"), (
-            f"Expected debug_trace for stack trace; got {intent!r}"
-        )
-
-    @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_503_error_investigation(self, http, astro):
         """Investigate 503 from Kong on cart checkout."""
         answer, intent, *_ = _chat(
@@ -356,7 +317,7 @@ class TestAstroDebugging:
             "I'm getting 503 Service Unavailable errors from Kong when calling the cart checkout "
             "endpoint. How do I debug this? Which components should I investigate first?",
         )
-        assert intent in ("debug", "debug_trace", "global", "feature"), (
+        assert intent in ("global", "feature", "search"), (
             f"Unexpected intent: {intent!r}"
         )
         assert len(answer) > 60, f"503 debug answer too short: {answer!r}"
@@ -374,7 +335,7 @@ class TestAstroDebugging:
             "I got a nil pointer dereference panic in astro-cart-be/service/cart.go. "
             "What does this file do and how should I investigate which variable is nil?",
         )
-        assert intent in ("debug_trace", "debug", "search", "feature"), (
+        assert intent in ("search", "feature", "global"), (
             f"Unexpected intent: {intent!r}"
         )
         assert len(answer) > 60, f"Nil pointer debug answer too short: {answer!r}"
@@ -388,7 +349,7 @@ class TestAstroDebugging:
             "How do I trace which service in the order creation flow is failing "
             "and where to add debug logging?",
         )
-        assert intent in ("debug", "feature", "global"), (
+        assert intent in ("feature", "global"), (
             f"Unexpected intent: {intent!r}"
         )
         assert len(answer) > 60, f"Order debug answer too short: {answer!r}"
