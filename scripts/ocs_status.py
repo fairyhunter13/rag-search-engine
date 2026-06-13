@@ -616,7 +616,6 @@ _DASHBOARD_COMPLETENESS = {
     "SSE live updates (/api/events/stream)": True,
     "Alert rules panel (/api/alerts)": True,
     "Metrics persistence (SQLite, /api/metrics/history)": True,
-    "PR Impact tab (/api/pr_impact)": True,
     "Vacuum / storage cleanup (/api/vacuum)": True,
     "Mermaid graph export (/api/graph_export?format=mermaid)": True,
     "Query builder / saved queries": True,

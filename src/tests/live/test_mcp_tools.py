@@ -250,12 +250,6 @@ class TestMCPOverview:
         data = r.json()
         assert isinstance(data, dict), "surprising_connections must return a dict"
 
-    def test_overview_pr_impact(self, http, project):
-        r = http.get("/api/overview", params={"project": project, "what": "pr_impact"})
-        assert r.status_code == 200, f"pr_impact failed: {r.text[:200]}"
-        data = r.json()
-        assert isinstance(data, dict), "pr_impact must return a dict"
-
     def test_overview_feature_map(self, http, project):
         r = http.get("/api/overview", params={"project": project, "what": "feature_map"})
         assert r.status_code == 200, f"feature_map failed: {r.text[:200]}"
@@ -723,13 +717,6 @@ class TestMCPExtended:
         assert r.status_code == 200, f"feature_map failed: {r.text[:200]}"
         data = r.json()
         assert isinstance(data, dict), "feature_map must return a dict"
-
-    def test_pr_impact_returns_impact(self, http, project):
-        """GET /api/pr_impact must return impact analysis for recent changes."""
-        r = http.get("/api/pr_impact", params={"project": project})
-        assert r.status_code == 200, f"pr_impact failed: {r.text[:200]}"
-        data = r.json()
-        assert isinstance(data, dict), "pr_impact must return a dict"
 
     def test_graph_diff_dedicated_route(self, http, project):
         """GET /api/graph_diff (dedicated route) must return added/removed symbols."""

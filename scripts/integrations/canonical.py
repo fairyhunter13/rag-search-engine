@@ -69,7 +69,6 @@ WHICH TOOL TO CALL:
     what="suggested_questions"           — questions the graph is uniquely positioned to answer
     what="graph_diff"                    — symbols added/removed recently
     what="surprising_connections"        — edges spanning architectural community boundaries
-    what="pr_impact"                     — PR risk: changed files → communities + risk level
     what="feature_map"                  — business knowledge map: all communities by semantic type
     what="business_rules"               — communities classified as constraints/policies/validations
     what="process_flows"                — communities classified as workflows/business processes
