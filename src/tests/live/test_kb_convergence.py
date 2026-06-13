@@ -846,3 +846,129 @@ class TestParallelSummarizeSoak:
             "Daemon /healthz failed after parallel hierarchy enrichment — "
             "possible SEGV or OOM; check: journalctl -u opencode-search -n 100"
         )
+
+
+# ---------------------------------------------------------------------------
+# U4 — FOREIGN KEY fix: VACUUM must not prune the hierarchy
+# ---------------------------------------------------------------------------
+
+class TestHierarchyFKFix:
+    """U4: build_hierarchy is idempotent and FK-safe; vacuum preserves the hierarchy."""
+
+    def test_parents_written_before_children_fk(self):
+        """build_hierarchy must write parent communities BEFORE updating children's FK.
+
+        With PRAGMA foreign_keys=ON, updating parent_community_id on a child before
+        inserting the parent community raises FOREIGN KEY constraint failed.
+        The fix: upsert new_communities (parents) first, then updated_children.
+        """
+        import inspect
+
+        from opencode_search.graph.community import CommunityDetector
+        src = inspect.getsource(CommunityDetector.build_hierarchy)
+        # Locate both upsert calls and verify the parents call comes before children call.
+        parents_pos = src.find("upsert_communities_batch(list(new_communities.values()))")
+        children_pos = src.find("upsert_communities_batch(updated_children)")
+        assert parents_pos != -1, "upsert for new_communities not found in build_hierarchy"
+        assert children_pos != -1, "upsert for updated_children not found in build_hierarchy"
+        assert parents_pos < children_pos, (
+            "Parent communities must be written BEFORE children's parent_community_id is set "
+            "(FK constraint: parent must exist before child references it). "
+            f"parents_pos={parents_pos}, children_pos={children_pos}"
+        )
+
+    def test_clear_hierarchy_called_before_loop(self):
+        """build_hierarchy must call clear_hierarchy() for idempotency."""
+        import inspect
+
+        from opencode_search.graph.community import CommunityDetector
+        src = inspect.getsource(CommunityDetector.build_hierarchy)
+        assert "clear_hierarchy()" in src, (
+            "build_hierarchy must call storage.clear_hierarchy() before the level loop "
+            "to delete stale L2+ communities and NULL L1 parent_community_id — "
+            "makes re-runs safe and prevents FK violations on restart."
+        )
+        # clear_hierarchy call must come before the for-loop that writes communities
+        clear_pos = src.find("clear_hierarchy()")
+        loop_pos = src.find("for current_level in range(")
+        assert clear_pos < loop_pos, (
+            "clear_hierarchy() must be called before the hierarchy-building loop"
+        )
+
+    def test_clear_hierarchy_nulls_l1_before_delete(self):
+        """GraphStorage.clear_hierarchy must NULL L1 FK before deleting L2+ rows."""
+        import inspect
+
+        from opencode_search.graph.storage import GraphStorage
+        src = inspect.getsource(GraphStorage.clear_hierarchy)
+        null_pos = src.find("parent_community_id=NULL")
+        delete_pos = src.find("DELETE FROM communities WHERE level >= 2")
+        assert null_pos != -1, "clear_hierarchy must NULL parent_community_id on level=1"
+        assert delete_pos != -1, "clear_hierarchy must DELETE communities WHERE level >= 2"
+        assert null_pos < delete_pos, (
+            "clear_hierarchy must NULL L1 FK pointers BEFORE deleting L2+ parent rows "
+            "(otherwise the FK constraint fires on the DELETE)"
+        )
+
+    @pytest.mark.slow
+    def test_hierarchy_survives_vacuum(self, http, quality_project):
+        """Build hierarchy → run vacuum → architecture_domains non-empty; no FK errors.
+
+        This is the end-to-end proof that vacuum no longer wipes the hierarchy:
+        the GraphStorage.vacuum() query preserves any community that appears as a
+        parent_community_id, so L2+ communities survive the orphan-prune pass.
+        """
+        # Step 1: trigger a hierarchy rebuild via the pipeline endpoint
+        r = http.post("/api/enrich_hierarchy", json={"project": quality_project}, timeout=300)
+        assert r.status_code in (200, 202), (
+            f"enrich_hierarchy failed: {r.status_code} {r.text[:200]}"
+        )
+
+        # Step 2: check that the hierarchy has L2+ communities before vacuum
+        from opencode_search.config import get_project_graph_db_path
+        from opencode_search.graph.storage import GraphStorage
+        db_path = get_project_graph_db_path(quality_project)
+        gs_before = GraphStorage(db_path)
+        gs_before.open()
+        try:
+            l2_before = gs_before.get_communities(level=2)
+        finally:
+            gs_before.close()
+        assert len(l2_before) > 0, (
+            f"No L2 communities before vacuum — hierarchy was not built for {quality_project}. "
+            "Run a full pipeline first."
+        )
+
+        # Step 3: run graph vacuum directly
+        gs_vac = GraphStorage(db_path)
+        gs_vac.open()
+        try:
+            result = gs_vac.vacuum()
+        finally:
+            gs_vac.close()
+        assert result.get("status") == "ok", f"vacuum() failed: {result}"
+
+        # Step 4: hierarchy must still be intact after vacuum
+        gs_after = GraphStorage(db_path)
+        gs_after.open()
+        try:
+            l2_after = gs_after.get_communities(level=2)
+        finally:
+            gs_after.close()
+        assert len(l2_after) > 0, (
+            f"L2 communities wiped by vacuum ({len(l2_before)} before → 0 after). "
+            "GraphStorage.vacuum() must preserve communities referenced as parent_community_id."
+        )
+        assert len(l2_after) == len(l2_before), (
+            f"Vacuum changed L2 community count: {len(l2_before)} → {len(l2_after)}"
+        )
+
+        # Step 5: architecture_domains via MCP must return non-empty results
+        r2 = http.get("/api/overview", params={"project": quality_project, "what": "architecture_domains"})
+        assert r2.status_code == 200, f"overview(architecture_domains) failed: {r2.status_code}"
+        data = r2.json()
+        domains = data.get("domains") or data.get("communities") or data.get("result") or []
+        assert domains, (
+            "overview(architecture_domains) returned empty after vacuum — "
+            "hierarchy was silently wiped. Check GraphStorage.vacuum() L2+ preservation."
+        )

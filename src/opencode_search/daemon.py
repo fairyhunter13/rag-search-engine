@@ -1518,11 +1518,12 @@ async def _run_kb_sweep() -> None:
                         _kb_sweep_log.info("kb_sweep: GPU %d°C — pausing sweep", temp)
                         return
 
-                    # ── Step 0: Rebuild Leiden hierarchy if wiped ────────────────────
-                    # The maintenance sweep's graph vacuum prunes "orphan" L2+
-                    # communities (they are not referenced by nodes.community_id).
-                    # If the hierarchy was wiped (max_level==1), rebuild it here
-                    # so subsequent L2+ enrichment has something to work with.
+                    # ── Step 0: Rebuild Leiden hierarchy if absent ───────────────────
+                    # The hierarchy may be absent if it was never built or if a full
+                    # re-index reset the communities table. The maintenance vacuum
+                    # preserves L2+ communities (they appear as parent_community_id
+                    # on their children) so it no longer wipes the hierarchy.
+                    # Rebuild here if max_level==1 so L2+ enrichment has a target.
                     if needs_hierarchy_build:
                         await yield_while_busy()
                         temp = _get_gpu_temp_c()

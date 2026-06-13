@@ -730,6 +730,18 @@ class GraphStorage:
     def edge_count(self) -> int:
         return self._db().execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
+    def clear_hierarchy(self) -> None:
+        """Delete all L2+ communities and clear L1 parent_community_id for idempotent hierarchy rebuilds.
+
+        Called at the start of build_hierarchy so re-runs start from a clean slate.
+        Must NULL out FK pointers on children before deleting parent communities to
+        avoid FOREIGN KEY constraint failed under PRAGMA foreign_keys=ON.
+        """
+        db = self._db()
+        with db:
+            db.execute("UPDATE communities SET parent_community_id=NULL WHERE level=1")
+            db.execute("DELETE FROM communities WHERE level >= 2")
+
     def vacuum(self) -> dict:
         """Run SQLite VACUUM + WAL checkpoint + prune singleton/orphan communities.
 

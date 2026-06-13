@@ -171,6 +171,11 @@ class CommunityDetector:
                 max_communities, len(level1_all),
             )
 
+        # Wipe any stale L2+ communities so this call is idempotent (re-runnable).
+        # clear_hierarchy() NULLs L1 parent_community_id before deleting parents to
+        # satisfy PRAGMA foreign_keys=ON — avoids FOREIGN KEY constraint failed.
+        storage.clear_hierarchy()
+
         # current_level_membership: {community_id (at current_level) → parent_id (level+1)}
         # Start with level-1 community IDs as "nodes" in the meta-graph
         current_communities = {c.id: c for c in level1}
@@ -269,11 +274,12 @@ class CommunityDetector:
                         level=current_level,
                         parent_community_id=parent_id,
                     ))
+            # Parents must be written BEFORE children set parent_community_id.
+            # With PRAGMA foreign_keys=ON the UPDATE on children would raise
+            # FOREIGN KEY constraint failed if the parent row doesn't exist yet.
+            storage.upsert_communities_batch(list(new_communities.values()))
             if updated_children:
                 storage.upsert_communities_batch(updated_children)
-
-            # Write new level communities
-            storage.upsert_communities_batch(list(new_communities.values()))
             levels_built += 1
 
             log.info(
