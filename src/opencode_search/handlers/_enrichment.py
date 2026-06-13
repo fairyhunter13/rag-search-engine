@@ -297,7 +297,12 @@ async def handle_enrich_symbols_background(project_path: str) -> dict[str, Any]:
         gs.close()
 
 
-_LLM_CONCURRENCY: int = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", "2"))
+# Tie to OLLAMA_NUM_PARALLEL so the async gather fills all Ollama parallel slots.
+# OPENCODE_LLM_CONCURRENCY overrides explicitly; otherwise inherits from Ollama config.
+_LLM_CONCURRENCY: int = int(os.environ.get(
+    "OPENCODE_LLM_CONCURRENCY",
+    os.environ.get("OLLAMA_NUM_PARALLEL", "3"),
+))
 _SYMBOL_INTENT_BATCH_SIZE: int = int(os.environ.get("OPENCODE_SYMBOL_BATCH_SIZE", "20"))
 
 # Per-project progress for long-running background enrichment — polled via /api/jobs
@@ -502,14 +507,13 @@ async def handle_enrich_hierarchy(
                 if c.parent_community_id is not None and c.title and c.summary:
                     children_by_parent[c.parent_community_id].append(c)
 
-            # Hierarchy enrichment is text-only (summaries → title), no code I/O,
-            # so we can safely use higher concurrency than level-1 enrichment.
+            # Hierarchy enrichment is text-only (summaries → title), no code I/O.
             # Process in batches of _HIER_BATCH_SIZE so progress is saved
             # incrementally — avoids losing all work if the process is killed.
-            # Cap at OLLAMA_NUM_PARALLEL (1) + 1 queue slot = 2 max.
-            # Old value (_LLM_CONCURRENCY * 2 = 4) caused sustained 100% GPU
-            # load across the full enrichment run, contributing to thermal crashes.
-            _hier_concurrency = min(_LLM_CONCURRENCY, 2)
+            # Use _LLM_CONCURRENCY (= OLLAMA_NUM_PARALLEL) so the gather fills
+            # all N Ollama parallel slots. Thermal guard (yield_while_busy) is
+            # still authoritative — it throttles at 80°C regardless of this value.
+            _hier_concurrency = _LLM_CONCURRENCY
             _hier_batch_size = 50
             _sem = asyncio.Semaphore(_hier_concurrency)
 
