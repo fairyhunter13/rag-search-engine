@@ -5,6 +5,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
+from opencode_search.daemon.runtime_state import note_activity, note_query
 from opencode_search.embed.embedder import Embedder
 
 _embedder: Embedder | None = None
@@ -36,6 +37,7 @@ async def search(
     project_paths: list[str] | None = None,
 ) -> str:
     """Search for code semantically. scope: code|docs|all."""
+    note_query(query)
     from opencode_search.core.config import project_vector_db
     from opencode_search.core.registry import list_projects
     from opencode_search.index.store import VectorStore
@@ -64,6 +66,7 @@ async def ask(
     scope: str = "all",
 ) -> str:
     """Answer a question about the codebase. scope: all|architecture|global|feature|wiki|business."""
+    note_query(query)
     from opencode_search.core.config import project_graph_db, project_vector_db
     from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
@@ -97,6 +100,7 @@ async def graph(
     to_symbol: str = "",
 ) -> str:
     """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|semantic_trace."""
+    note_activity()
     from opencode_search.core.config import project_graph_db
     from opencode_search.graph.store import GraphStore
     from opencode_search.query import graph_handler as gh
@@ -124,6 +128,7 @@ async def graph(
 @mcp.tool()
 async def overview(project_path: str = "", what: str = "structure") -> str:
     """Overview of a project. what: structure|communities|status|projects|patterns."""
+    note_activity()
     from opencode_search.server._overview import handle_overview
     return handle_overview(project_path, what)
 
@@ -131,6 +136,7 @@ async def overview(project_path: str = "", what: str = "structure") -> str:
 @mcp.tool()
 async def index(project_path: str, enabled: bool = True) -> str:
     """Register (enabled=True) or remove (enabled=False) a project."""
+    note_activity()
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import remove_project, upsert_project
 

@@ -1,9 +1,26 @@
 import pytest
+import requests
+
+_DAEMON = "http://127.0.0.1:8765"
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "live: requires CUDA GPU + daemon at :8765 + Ollama")
     config.addinivalue_line("markers", "slow: LLM-heavy (>30s)")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def pause_sweeps():
+    """Pause background sweeps for the whole session to avoid GPU contention."""
+    try:
+        requests.post(f"{_DAEMON}/api/sweeps/pause", timeout=5)
+    except Exception:
+        pass
+    yield
+    try:
+        requests.post(f"{_DAEMON}/api/sweeps/resume", timeout=5)
+    except Exception:
+        pass
 
 
 @pytest.fixture(scope="session")

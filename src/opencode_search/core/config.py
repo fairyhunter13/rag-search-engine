@@ -51,6 +51,8 @@ DEFAULT_SOURCE_FILE_SIZE_KB = int(os.environ.get("OPENCODE_DEFAULT_SOURCE_FILE_S
 DEFAULT_TEXT_FILE_SIZE_KB = int(os.environ.get("OPENCODE_DEFAULT_TEXT_FILE_SIZE_KB", "1024"))
 DEFAULT_UNKNOWN_FILE_SIZE_KB = int(os.environ.get("OPENCODE_DEFAULT_UNKNOWN_FILE_SIZE_KB", "512"))
 EMBED_PASSAGES_MAX_TEXTS = int(os.environ.get("OPENCODE_EMBED_PASSAGES_MAX_TEXTS", "256"))
+MAX_INLINE_BYTES = int(os.environ.get("OPENCODE_MAX_INLINE_BYTES", str(8 * 1024 * 1024)))
+MAX_BYTES = int(os.environ.get("OPENCODE_MAX_BYTES", str(24 * 1024 * 1024)))
 
 SCHEMA_VERSION = os.environ.get("OPENCODE_SCHEMA_VERSION", "2")
 
@@ -58,6 +60,8 @@ IGNORED_DIRS: frozenset[str] = frozenset({
     ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".ruff_cache",
     "node_modules", ".venv", "venv", ".env", "dist", "build", "target",
     ".tox", ".pytest_cache", "coverage", ".coverage",
+    ".next", ".nuxt", "vendor", "bower_components", ".idea", ".vscode",
+    ".nyc_output", ".cache", "tmp", "temp", "logs",
 })
 
 
@@ -68,6 +72,10 @@ class ProjectEntry:
     indexed_at: str | None = None
     file_count: int = 0
     chunk_count: int = 0
+    dims: int = 768
+    last_active: str | None = None
+    watch: bool = False
+    federation: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
 
 
