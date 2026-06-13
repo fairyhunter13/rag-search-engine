@@ -249,7 +249,7 @@ def _register_root_routes(mcp: FastMCP) -> None:
 
     @mcp.custom_route("/static/{path:path}", methods=["GET"], include_in_schema=False)
     async def static_files(request: Request) -> FileResponse:
-        """Serve static assets (chart.min.js, etc.)."""
+        """Serve static assets."""
         filename = request.path_params.get("path", "")
         file_path = _STATIC_DIR / filename
         if file_path.exists() and file_path.is_file():

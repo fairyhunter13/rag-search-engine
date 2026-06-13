@@ -614,7 +614,6 @@ _DASHBOARD_COMPLETENESS = {
     "Quality gate panels": True,
     "Service mesh topology (canvas force graph)": True,
     "Federation topology map": True,
-    "Time-series charts (Chart.js)": True,
     "SSE live updates (/api/events/stream)": True,
     "Alert rules panel (/api/alerts)": True,
     "Metrics persistence (SQLite, /api/metrics/history)": True,
