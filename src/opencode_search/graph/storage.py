@@ -789,7 +789,7 @@ class GraphStorage:
             db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             db.execute("VACUUM")
             db.commit()
-        except Exception as exc:
+        except sqlite3.Error as exc:
             return {"status": "error", "error": str(exc)}
         try:
             after = _os.path.getsize(self._db_path)

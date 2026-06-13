@@ -142,7 +142,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
                 packages.append({"name": dep, "version": ver, "direct": True})
             for dep, ver in (data.get("devDependencies") or {}).items():
                 packages.append({"name": dep, "version": ver, "direct": False})
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             pass
 
     def _try_cargo_toml(p: Path) -> None:
@@ -161,7 +161,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
                     else:
                         version = "*"
                     packages.append({"name": name, "version": version or "*", "direct": True})
-        except Exception:
+        except (ValueError, OSError):
             pass
 
     def _try_pyproject(p: Path) -> None:
@@ -190,7 +190,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
                 for name, spec in (poetry.get("dev-dependencies") or {}).items():
                     version = spec if isinstance(spec, str) else (spec.get("version", "*") if isinstance(spec, dict) else "*")
                     packages.append({"name": name, "version": version or "*", "direct": False})
-        except Exception:
+        except (ValueError, OSError):
             pass
 
     def _try_pom_xml(p: Path) -> None:
@@ -211,7 +211,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
                     name = f"{gid.text}:{aid.text}"
                     version = ver.text if ver is not None else "*"
                     packages.append({"name": name, "version": version, "direct": True})
-        except Exception:
+        except (_ET.ParseError, OSError):
             pass
 
     def _try_go_work(p: Path) -> None:
@@ -369,7 +369,7 @@ def _count_languages_accurate(root: Path, project_path: str) -> list[dict[str, A
         for lang, count in counter.most_common(10):
             result.append({"name": lang, "files": count, "percentage": round(count / source_total * 100, 1)})
         return result
-    except Exception:
+    except OSError:
         return []
 
 
@@ -385,7 +385,7 @@ def _detect_module_structure(root: Path) -> dict[str, Any]:
             d.name for d in root.iterdir()
             if d.is_dir() and not d.name.startswith(".") and d.name not in _SKIP
         )
-    except Exception:
+    except OSError:
         return {"top_packages": [], "detected_dirs": []}
 
     if not top_dirs:
@@ -403,7 +403,7 @@ def _load_external_imports(project_path: str) -> list[dict[str, Any]]:
             return []
         data = json.loads(ext_file.read_text(encoding="utf-8"))
         return data.get("top_imports", [])
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return []
 
 
@@ -446,7 +446,7 @@ async def handle_detect_patterns(project_path: str, force: bool = False) -> dict
                 if time.time() - cached_at < _PATTERNS_FILE_TTL:
                     _PATTERNS_CACHE[cache_key] = (time.monotonic(), disk_data)
                     return disk_data
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             pass
 
     def _run() -> dict[str, Any]:
@@ -548,7 +548,7 @@ async def handle_detect_patterns(project_path: str, force: bool = False) -> dict
         disk_cache = get_project_index_dir(str(root)) / "patterns_detect_cache.json"
         disk_cache.parent.mkdir(parents=True, exist_ok=True)
         disk_cache.write_text(_json.dumps(disk_data), encoding="utf-8")
-    except Exception:
+    except OSError:
         pass
 
     return result
@@ -1056,7 +1056,7 @@ async def handle_project_structure(
                 file_count += 1
                 if file_count > 100_000:
                     break
-    except Exception:
+    except OSError:
         pass
 
     top_langs = [
