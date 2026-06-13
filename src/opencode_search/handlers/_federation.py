@@ -192,13 +192,15 @@ async def handle_discover_federation(project_path: str) -> dict[str, Any]:
     pnpm = _discover_pnpm_members(root)
     pkg_json = _discover_package_json_members(root)
 
-    # Merge deduplicated
+    # Merge deduplicated; exclude contaminated paths
+    from opencode_search.discover import is_registry_excluded
     seen: set[str] = set()
     all_members: list[str] = []
     for m in symlinks + go_work + pnpm + pkg_json:
         if m not in seen:
             seen.add(m)
-            all_members.append(m)
+            if not is_registry_excluded(m):
+                all_members.append(m)
 
     return {
         "project_path": str(root),

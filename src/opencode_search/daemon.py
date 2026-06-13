@@ -1698,8 +1698,22 @@ async def _run_auto_index_sweep() -> None:
         root_paths = list(registry.keys())
         all_paths = _expand_with_federation(root_paths, registry)
 
+        from opencode_search.discover import is_registry_excluded
+
         queued = 0
         for project_path in all_paths:
+            # Skip contaminated paths — never auto-index .venv/site-packages/node_modules//tmp
+            if is_registry_excluded(project_path):
+                _auto_index_log.warning(
+                    "auto_index: skipping contaminated path %s — will remove from registry",
+                    project_path,
+                )
+                try:
+                    from opencode_search.handlers._vacuum import handle_remove_project
+                    await handle_remove_project(project_path=project_path)
+                except Exception:
+                    pass
+                continue
             entry = registry.get(project_path)
             # Check if already indexed: has file_count > 0 means it has been indexed before
             already_indexed = entry is not None and getattr(entry, "file_count", 0) > 0

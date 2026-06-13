@@ -276,11 +276,20 @@ async def handle_index_project(
     Returns immediately with ``status="indexing"``; the actual work runs in
     the background.  Poll ``project_status`` to check for completion.
     """
+    from opencode_search.discover import is_registry_excluded
+
     project_path = Path(path).expanduser().resolve()
     if not project_path.is_dir():
         return {"error": f"Directory not found: {project_path}"}
 
     path_str = str(project_path)
+    if is_registry_excluded(path_str):
+        return {
+            "error": f"Rejected: {path_str!r} is a contaminated path "
+                     f"(.venv / site-packages / node_modules / /tmp) and "
+                     f"must not be registered as a project root.",
+            "status": "rejected",
+        }
 
     async with _indexing_lock:
         if path_str in _indexing_status and _indexing_status[path_str].get("running"):

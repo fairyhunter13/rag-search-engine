@@ -37,6 +37,40 @@ IGNORED_DIRS: frozenset[str] = frozenset(
     ]
 )
 
+
+# Segments that disqualify a path from ever being a project-root in the registry.
+# Any resolved path whose components contain one of these — or that lives under /tmp —
+# is contaminated and must never be registered or auto-indexed.
+_REGISTRY_EXCLUDE_SEGMENTS: frozenset[str] = frozenset([
+    ".venv", "venv", "env", ".env",
+    "site-packages",
+    "node_modules",
+    "__pycache__",
+    ".git",
+])
+
+
+def is_registry_excluded(path: str) -> bool:
+    """Return True if *path* should never be registered as a project root.
+
+    Rejects:
+    - Any path under ``/tmp`` (test fixtures, temp dirs)
+    - Any path whose components include a contaminated segment
+      (.venv, site-packages, node_modules, …)
+    """
+    from pathlib import Path as _Path
+    try:
+        resolved = str(_Path(path).expanduser().resolve())
+    except Exception:
+        resolved = path
+    # Reject anything under /tmp
+    if resolved.startswith("/tmp/") or resolved == "/tmp":
+        return True
+    # Reject paths containing contaminated directory components
+    parts = _Path(resolved).parts
+    return any(p in _REGISTRY_EXCLUDE_SEGMENTS for p in parts)
+
+
 IGNORED_EXTENSIONS: frozenset[str] = frozenset(
     [
         ".o", ".a", ".so", ".dylib", ".dll", ".exe", ".bin", ".obj",
