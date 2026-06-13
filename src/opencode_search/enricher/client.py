@@ -309,6 +309,7 @@ class LLMClient:
                         "Respond with a JSON object (no markdown fences):\n"
                         '{\n'
                         '  "architecture_description": "paragraph describing architecture",\n'
+                        '  "architecture_style": "microservices|monolith|clean_architecture|monorepo|...",\n'
                         '  "primary_language": "go|python|java|...",\n'
                         '  "coding_patterns": ["pattern1", "pattern2"],\n'
                         '  "naming_conventions": "description of naming style",\n'
