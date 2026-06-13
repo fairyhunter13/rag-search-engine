@@ -24,6 +24,7 @@ class Embedder:
         self._model = TextEmbedding(
             model_name=self._model_name,
             providers=["CUDAExecutionProvider"],
+            max_length=512,
         )
 
     def warmup(self) -> None:
