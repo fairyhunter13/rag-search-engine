@@ -80,6 +80,22 @@ async def _api_index(request: Request) -> JSONResponse:
     return JSONResponse({"registered": True, "path": path})
 
 
+def _register_all(app) -> None:
+    from opencode_search.server import (
+        routes_admin,
+        routes_chat,
+        routes_graph,
+        routes_ops,
+        routes_pipeline,
+        routes_project,
+        routes_search,
+        routes_semantic,
+    )
+    for mod in (routes_admin, routes_project, routes_search, routes_graph,
+                routes_semantic, routes_ops, routes_pipeline, routes_chat):
+        mod.register(app)
+
+
 def create_app():
     """Build Starlette app: FastMCP streamable-HTTP + dashboard API routes."""
     from opencode_search.server.mcp import mcp
@@ -91,6 +107,7 @@ def create_app():
     app.add_route("/api/ask", _api_ask, methods=["POST"])
     app.add_route("/api/overview", _api_overview, methods=["POST"])
     app.add_route("/api/index", _api_index, methods=["POST"])
+    _register_all(app)
     return app
 
 
@@ -98,7 +115,7 @@ def build_test_app():
     """Plain Starlette app for testing — no FastMCP transport (session manager is single-use)."""
     from starlette.applications import Starlette
     from starlette.routing import Route
-    return Starlette(routes=[
+    app = Starlette(routes=[
         Route("/healthz", _healthz, methods=["GET"]),
         Route("/dashboard", _dashboard, methods=["GET"]),
         Route("/api/projects", _api_projects, methods=["GET"]),
@@ -107,3 +124,5 @@ def build_test_app():
         Route("/api/overview", _api_overview, methods=["POST"]),
         Route("/api/index", _api_index, methods=["POST"]),
     ])
+    _register_all(app)
+    return app

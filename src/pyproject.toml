@@ -84,6 +84,7 @@ dev = [
 
 [project.scripts]
 opencode-search = "opencode_search.cli:app"
+ocs-index = "opencode_search.cli:ocs_index_main"
 
 [build-system]
 requires = ["hatchling"]

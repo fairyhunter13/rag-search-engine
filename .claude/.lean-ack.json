@@ -1,0 +1,1 @@
+{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/opencode_search/core/gpu.py", "reason": "P7: add is_cuda_available() helper used by CLI health command", "expectedAddedLines": 5}

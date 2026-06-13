@@ -18,6 +18,14 @@ def assert_cuda_available() -> None:
         )
 
 
+def is_cuda_available() -> bool:
+    try:
+        import onnxruntime as ort
+        return "CUDAExecutionProvider" in ort.get_available_providers()
+    except Exception:
+        return False
+
+
 def vram_free_mb() -> float:
     try:
         import pynvml
