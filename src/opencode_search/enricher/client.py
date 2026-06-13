@@ -251,32 +251,6 @@ class LLMClient:
         except Exception:
             return "Untitled cluster", text, "utility"
 
-    def module_wiki_page(
-        self,
-        module_path: str,
-        symbols: list[str],
-        imports: list[str],
-    ) -> str:
-        """Generate markdown wiki page for a module."""
-        symbols_text = "\n".join(f"- {s}" for s in symbols[:20])
-        imports_text = "\n".join(f"- {i}" for i in imports[:10])
-        return self.chat(
-            [
-                {
-                    "role": "user",
-                    "content": (
-                        "You are a technical writer. Generate a concise markdown wiki page "
-                        "for the given module. Include: purpose, key symbols, and dependencies. "
-                        "Use markdown headers. Be factual, not verbose.\n\n"
-                        f"Module: {module_path}\n\n"
-                        f"Symbols:\n{symbols_text}\n\n"
-                        f"Dependencies:\n{imports_text}"
-                    ),
-                }
-            ],
-            max_tokens=512,
-        )
-
     def project_overview(self, file_samples: list[tuple[str, str]]) -> str:
         """Step 1 of LLM-first pattern detection: high-level project overview.
 
