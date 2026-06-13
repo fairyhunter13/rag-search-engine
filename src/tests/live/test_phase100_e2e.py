@@ -19,16 +19,23 @@ All tests:
 """
 from __future__ import annotations
 
+import contextlib
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 
 pytestmark = pytest.mark.live
 
 _ACME_SRC = Path("/home/user/git/github.com/fairyhunter13/redacted-name-3")
 _DAEMON_URL = "http://localhost:8765"
+
+# Safe clone base outside /tmp — U2 registry guard excludes /tmp paths, so the
+# auto-index sweep would immediately remove a /tmp clone from the registry.
+_CLONE_BASE = Path.home() / ".local" / "share" / "opencode-test"
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +83,12 @@ def _project_entry(http_client, path: str) -> dict | None:
 
 
 def _make_shallow_clone(src: Path, dest: Path) -> None:
-    """Clone src into dest using git, keeping only 1 commit for speed."""
-    dest.mkdir(parents=True, exist_ok=True)
+    """Clone src into dest using git, keeping only 1 commit for speed.
+
+    dest must not exist (or be empty) — git clone creates it. The fixture
+    is responsible for removing any stale clone before calling this.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "clone", "--depth=1", str(src), str(dest)],
         check=True,
@@ -95,13 +106,27 @@ class TestAutoIndexOnFlag:
     manual triggers. F2: disable removes all data."""
 
     @pytest.fixture(scope="class")
-    def tmp_clone(self, tmp_path_factory):
-        """Shallow git clone of redacted-name-3 in a temp dir."""
-        dest = tmp_path_factory.mktemp("acme-clone")
+    def tmp_clone(self):
+        """Shallow git clone of redacted-name-3 in a safe non-/tmp directory.
+
+        Uses ~/.local/share/opencode-test/acme-e2e-clone instead of tmp_path
+        so the U2 registry contamination guard (which excludes /tmp paths) does
+        not cause the auto-index sweep to immediately remove the clone from the
+        registry before the poll can observe it.
+        """
+        dest = _CLONE_BASE / "acme-e2e-clone"
+        shutil.rmtree(dest, ignore_errors=True)  # clean any stale clone
+        _CLONE_BASE.mkdir(parents=True, exist_ok=True)
         _make_shallow_clone(_ACME_SRC, dest)
         yield dest
-        # cleanup: ensure it's removed from registry before tmp_path is deleted
-        # (deregistered in test_f2_disable below; this is just safety)
+        # Teardown: remove from registry and delete the clone directory.
+        with contextlib.suppress(Exception):
+            httpx.post(
+                f"{_DAEMON_URL}/api/remove_project",
+                json={"project": str(dest), "delete_index": True},
+                timeout=10.0,
+            )
+        shutil.rmtree(dest, ignore_errors=True)
 
     def test_f1_flag_registers_project(self, http, tmp_clone):
         """POST /api/projects/register (or MCP index tool) flags the project in the
