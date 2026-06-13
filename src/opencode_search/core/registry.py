@@ -17,8 +17,13 @@ def _save(data: dict) -> None:
 
 
 def list_projects() -> list[ProjectEntry]:
+    from dataclasses import fields
     data = _load()
-    return [ProjectEntry(path=p, **meta) for p, meta in data.items()]
+    known = {f.name for f in fields(ProjectEntry)} - {"path"}
+    return [
+        ProjectEntry(path=p, **{k: v for k, v in meta.items() if k in known})
+        for p, meta in data.items()
+    ]
 
 
 def get_project(path: str) -> ProjectEntry | None:
