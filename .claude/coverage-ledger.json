@@ -1,0 +1,28 @@
+{
+  "_snapshot": "G0 — whole-tree lean reduction baseline (2026-06-14)",
+  "mcp_tools": ["search", "ask", "graph", "overview", "index"],
+  "mcp_tool_count": 5,
+  "chat_intents": ["search", "graph_callers", "graph_callees", "graph_impact", "architecture", "global", "feature"],
+  "dashboard_api_path_count": 56,
+  "dashboard_api_paths": [
+    "api/alerts", "api/analyze_patterns", "api/ask", "api/ask_business",
+    "api/auto_pipeline_status", "api/build_hierarchy", "api/business_rules",
+    "api/callflow_html", "api/chat", "api/chat_stream", "api/classify",
+    "api/communities", "api/enrich_hierarchy", "api/enrich_project",
+    "api/enrich_symbols", "api/events/stream", "api/feature", "api/feature_map",
+    "api/federation", "api/git_hooks", "api/graph", "api/graph_diff",
+    "api/graph_export", "api/impact_narrative", "api/import_cycles", "api/index",
+    "api/integrations_status", "api/jobs", "api/jobs/{job.id}", "api/jobs/{job_id}",
+    "api/jobs/{job_id}/cancel", "api/kb_health", "api/metrics", "api/metrics/history",
+    "api/overview", "api/patterns", "api/process_flows", "api/projects",
+    "api/projects/register", "api/reload", "api/remove_project", "api/search",
+    "api/semantic_trace", "api/service_mesh", "api/start_watching", "api/stop_watching",
+    "api/storage_health", "api/suggested_questions", "api/surprising_connections",
+    "api/sweeps/pause", "api/sweeps/resume", "api/symbol_intent", "api/system_status",
+    "api/wiki", "api/wiki/page", "api/wiki_lint"
+  ],
+  "test_count_v5_nonbrowser": 686,
+  "test_count_total_collected": 824,
+  "test_command_v4": ".venv/bin/pytest src/tests/live/ -m 'live and not slow' -q",
+  "test_command_v5": ".venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q"
+}

@@ -62,6 +62,16 @@
             "if": "Bash(rm *)"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/lean-gate.sh",
+            "timeout": 8
+          }
+        ]
       }
     ],
 
@@ -86,6 +96,17 @@
             "command": "jq -r '.tool_input.command // \"\"' | grep -qE '^git (commit|push)' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Git operation completed. Remember zero-unpushed policy: push after every commit.\"}}' || true",
             "timeout": 5,
             "if": "Bash(git commit *)|Bash(git push *)"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/lean-ledger.sh",
+            "timeout": 5,
+            "async": true
           }
         ]
       }
