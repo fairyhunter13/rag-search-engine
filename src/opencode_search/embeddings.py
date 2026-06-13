@@ -275,7 +275,7 @@ def _detect_gpu_capabilities() -> dict:
                     try:
                         with open(card + "/device/label") as f:
                             result["gpu_name"] = f.read().strip()
-                    except Exception:
+                    except OSError:
                         result["gpu_name"] = "Intel GPU"
                     name_low = result["gpu_name"].lower()
                     if "arc" in name_low or "xe" in name_low:
@@ -283,7 +283,7 @@ def _detect_gpu_capabilities() -> dict:
                     result["supports_fp16"] = True
                     log.info("Intel GPU detected via /sys/class/drm: %s", result["gpu_name"])
                     return result
-        except Exception:
+        except OSError:
             pass
 
     # --- Apple Silicon (macOS) ---
@@ -431,7 +431,7 @@ def _detect_gpu_capabilities() -> dict:
                         vid,
                     )
                     return result
-        except Exception:
+        except OSError:
             pass
 
     return result
