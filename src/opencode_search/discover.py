@@ -41,13 +41,12 @@ IGNORED_DIRS: frozenset[str] = frozenset(
 # Segments that disqualify a path from ever being a project-root in the registry.
 # Any resolved path whose components contain one of these — or that lives under /tmp —
 # is contaminated and must never be registered or auto-indexed.
-_REGISTRY_EXCLUDE_SEGMENTS: frozenset[str] = frozenset([
-    ".venv", "venv", "env", ".env",
-    "site-packages",
-    "node_modules",
-    "__pycache__",
-    ".git",
-])
+#
+# Derived from IGNORED_DIRS (single source of truth) plus site-packages, which is
+# the only contaminated segment not already present in IGNORED_DIRS.
+# Adding a segment to IGNORED_DIRS automatically propagates it here.
+_REGISTRY_EXTRA_EXCLUDE_SEGMENTS: frozenset[str] = frozenset({"site-packages"})
+_REGISTRY_EXCLUDE_SEGMENTS: frozenset[str] = IGNORED_DIRS | _REGISTRY_EXTRA_EXCLUDE_SEGMENTS
 
 
 def is_registry_excluded(path: str) -> bool:

@@ -64,6 +64,38 @@ class TestIsRegistryExcluded:
         # 'environment-config' contains 'env' but as a segment it's not '.env' or 'env'
         assert not self._excl("/home/user/git/environment-config")
 
+    # --- widened protection from IGNORED_DIRS derivation (U2b) ---
+
+    def test_go_pkg_mod_excluded(self) -> None:
+        # 'pkg' is in IGNORED_DIRS; ~/go/pkg/mod must not become a registry root
+        assert self._excl("/home/user/go/pkg/mod/github.com/some/library@v1.2.3")
+
+    def test_vendor_excluded(self) -> None:
+        # 'vendor' is in IGNORED_DIRS
+        assert self._excl("/home/user/git/myproject/vendor")
+
+    def test_derives_from_ignored_dirs(self) -> None:
+        """U2b single-source contract: IGNORED_DIRS must be a subset of _REGISTRY_EXCLUDE_SEGMENTS
+        and site-packages must be the only registry-specific addition."""
+        from opencode_search.discover import (
+            _REGISTRY_EXCLUDE_SEGMENTS,
+            _REGISTRY_EXTRA_EXCLUDE_SEGMENTS,
+            IGNORED_DIRS,
+        )
+        # Every segment in IGNORED_DIRS must be present in _REGISTRY_EXCLUDE_SEGMENTS
+        missing = IGNORED_DIRS - _REGISTRY_EXCLUDE_SEGMENTS
+        assert missing == frozenset(), (
+            f"These IGNORED_DIRS segments are not in _REGISTRY_EXCLUDE_SEGMENTS: {missing}\n"
+            f"IGNORED_DIRS must be a subset of _REGISTRY_EXCLUDE_SEGMENTS (U2b invariant)."
+        )
+        # site-packages is the only registry-specific extra beyond IGNORED_DIRS
+        assert "site-packages" in _REGISTRY_EXCLUDE_SEGMENTS, (
+            "site-packages must be in _REGISTRY_EXCLUDE_SEGMENTS"
+        )
+        assert "site-packages" in _REGISTRY_EXTRA_EXCLUDE_SEGMENTS, (
+            "site-packages must be the sole extra segment in _REGISTRY_EXTRA_EXCLUDE_SEGMENTS"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Live: registry must be contamination-free
