@@ -1045,7 +1045,6 @@ async def handle_project_structure(
     tree_lines = [f"{root.name}/", *_tree(root, max_depth)]
     tree_str = "\n".join(tree_lines[:200])  # cap output size
 
-    # Language breakdown from file walk
     lang_counts: Counter = Counter()
     file_count = 0
     try:
@@ -1066,7 +1065,6 @@ async def handle_project_structure(
         if ext
     ]
 
-    # Graph stats + top communities
     graph_stats: dict[str, Any] = {}
     top_communities: list[dict[str, Any]] = []
 
@@ -1428,7 +1426,6 @@ def _build_mermaid(root: Any, nodes: dict, edges: list[tuple[str, str]], directi
     lines.append(f'    {rid}[["**{root.name}**"]]')
     lines.append(f"    style {rid} fill:#4a90d9,color:#fff,stroke:#2c5f8a")
 
-    # Other nodes
     for nid, node in nodes.items():
         if nid == root.id:
             continue
@@ -1436,7 +1433,6 @@ def _build_mermaid(root: Any, nodes: dict, edges: list[tuple[str, str]], directi
         label = _mermaid_label(node)
         lines.append(f"    {mid}[{label!r}]")
 
-    # Edges
     seen_edges: set[tuple[str, str]] = set()
     for from_id, to_id in edges:
         pair = (_mermaid_id(from_id), _mermaid_id(to_id))

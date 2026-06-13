@@ -257,7 +257,6 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
                 "project_path": str(root),
             }
 
-    # Create LLM client
     try:
         from opencode_search.enricher.client import create_llm_client
         llm = create_llm_client()
@@ -307,7 +306,6 @@ async def handle_analyze_patterns_llm(project_path: str, force: bool = False) ->
     if "confidence" not in llm_result:
         llm_result["confidence"] = overview_result.get("confidence", "medium")
 
-    # Cache
     from datetime import datetime
     cached_at = datetime.now(UTC).isoformat()
     cache_data = {
