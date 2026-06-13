@@ -41,6 +41,12 @@ _KB_REFRESH_COOLDOWN_S: float = float(os.environ.get("OPENCODE_KB_REFRESH_COOLDO
 _KB_REFRESH_LAST: dict[str, float] = {}   # project_path → monotonic time of last KB refresh
 _KB_REFRESH_IN_FLIGHT: set[str] = set()   # projects whose KB refresh task is currently running
 
+# Global pipeline gate: at most one handle_auto_pipeline body runs at a time,
+# preventing thundering-herd GPU saturation when the maintenance sweep fires
+# for many projects in succession.
+_PIPELINE_GATE: asyncio.Semaphore = asyncio.Semaphore(1)
+_PIPELINE_IN_FLIGHT: set[str] = set()  # project paths whose full pipeline is queued or running
+
 
 def _should_schedule_kb_refresh(project_path: str) -> bool:
     """Return True if the cooldown has passed and no refresh is already running."""
@@ -259,8 +265,21 @@ async def handle_auto_pipeline(project_path: str, force: bool = False) -> dict[s
     kb_incomplete = _project_kb_incomplete(pp)
     if not force and not _project_is_fresh(pp) and not needs_h and not kb_incomplete:
         log.info("auto_pipeline[%s]: already enriched — skipping", root.name)
+        _PIPELINE_IN_FLIGHT.discard(pp)  # clean up; may have been set by schedule_auto_pipeline
         return {"status": "skipped", "reason": "already_enriched", "project_path": pp}
 
+    # Mark in-flight before acquiring the gate so duplicate schedule calls are dropped.
+    _PIPELINE_IN_FLIGHT.add(pp)
+    await _PIPELINE_GATE.acquire()
+    try:
+        return await _handle_pipeline_body(pp, root)
+    finally:
+        _PIPELINE_GATE.release()
+        _PIPELINE_IN_FLIGHT.discard(pp)
+
+
+async def _handle_pipeline_body(pp: str, root: Path) -> dict[str, Any]:
+    """Execute KB pipeline steps. Always called while _PIPELINE_GATE is held."""
     log.info("auto_pipeline[%s]: starting full KB build", root.name)
     steps: list[dict[str, Any]] = []
     _record_event(pp, "running")
@@ -515,22 +534,37 @@ def schedule_auto_pipeline(project_path: str) -> None:
     Called from _run_index_project (in _index.py) after embedding and graph
     build complete — fires automatically from the indexer, not from any MCP
     request handler.  Returns immediately; the pipeline runs in the background.
+
+    Deduplicates: if the project is already queued or running (_PIPELINE_IN_FLIGHT),
+    this is a no-op.  _PIPELINE_GATE ensures at most one pipeline runs at a time
+    across all projects, coalescing the maintenance-sweep herd into a serialised queue.
     """
     if not auto_pipeline_enabled():
         log.debug("auto_pipeline disabled via OPENCODE_AUTO_PIPELINE=0")
         return
+    pp = str(Path(project_path).expanduser().resolve())
+    if pp in _PIPELINE_IN_FLIGHT:
+        log.debug(
+            "auto_pipeline[%s]: already queued/running — skipping duplicate",
+            Path(pp).name,
+        )
+        _record_event(pp, "skipped_duplicate")
+        return
     try:
         loop = asyncio.get_running_loop()
+        _PIPELINE_IN_FLIGHT.add(pp)  # claim before task starts to close the scheduling race
         task = loop.create_task(
             handle_auto_pipeline(project_path),
             name=f"auto_pipeline:{Path(project_path).name}",
         )
         _BG_TASKS.add(task)
         task.add_done_callback(_BG_TASKS.discard)
-        _record_event(project_path, "scheduled")
+        _record_event(pp, "scheduled")
         log.info("auto_pipeline[%s]: scheduled as background task", Path(project_path).name)
     except RuntimeError:
         # No running event loop — skip (e.g. called from sync context or tests)
+        _PIPELINE_IN_FLIGHT.discard(pp)
         log.debug("auto_pipeline: no running event loop, skipped scheduling")
     except Exception as exc:
+        _PIPELINE_IN_FLIGHT.discard(pp)
         log.warning("auto_pipeline: failed to schedule task: %s", exc)

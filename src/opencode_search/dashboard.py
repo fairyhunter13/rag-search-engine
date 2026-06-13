@@ -1202,12 +1202,14 @@ def _register_ops_routes(mcp: FastMCP) -> None:
     @mcp.custom_route("/api/auto_pipeline_status", methods=["GET"], include_in_schema=False)
     async def api_auto_pipeline_status(_request: Request) -> JSONResponse:
         from opencode_search.handlers._autopipeline import (
+            _PIPELINE_IN_FLIGHT,
             auto_pipeline_enabled,
             get_pipeline_events,
         )
         return JSONResponse({
             "enabled": auto_pipeline_enabled(),
             "events": get_pipeline_events()[-20:],  # last 20 events
+            "in_flight": sorted(_PIPELINE_IN_FLIGHT),  # projects currently queued/running
         })
 
     @mcp.custom_route("/api/federation", methods=["GET"], include_in_schema=False)
