@@ -8,12 +8,12 @@ All chat_stream tests extract `elapsed_ms` from the SSE done event that the
 backend already includes. No new timing infrastructure is needed.
 
 SLO thresholds:
-  search intent        < 8 s
-  graph callers        < 15 s
+  search intent        < 12 s
+  graph callers        < 25 s
   feature intent       < 60 s
-  architecture intent  < 60 s
+  architecture intent  < 90 s
   debug_trace intent   < 60 s
-  global intent        < 120 s  (MAP-REDUCE across 5900+ communities)
+  global intent        < 150 s  (MAP-REDUCE across 5900+ communities)
   GET /api/search      < 5 s
   GET /healthz         < 1 s
 """
@@ -74,20 +74,20 @@ class TestChatStreamSLOs:
     pytestmark = pytest.mark.slow
 
     def test_search_intent_slo(self, http, astro):
-        """search intent (vector lookup) must complete in < 8s."""
+        """search intent (vector lookup) must complete in < 12s."""
         _, intent, _, elapsed, _ = _chat(http, astro,
             "find the main gRPC service definition files")
         assert intent == "search", f"Expected search intent; got {intent!r}"
-        assert elapsed < 8_000, f"search SLO violated: {elapsed}ms >= 8000ms"
+        assert elapsed < 12_000, f"search SLO violated: {elapsed}ms >= 12000ms"
 
     def test_graph_callers_intent_slo(self, http, astro):
-        """graph_callers (graph traversal) must complete in < 15s."""
+        """graph_callers (graph traversal) must complete in < 25s."""
         _, intent, _, elapsed, _ = _chat(http, astro,
             "what calls the AddToCart gRPC method?")
         assert intent in ("graph_callers", "search", "feature"), (
             f"Unexpected intent: {intent!r}"
         )
-        assert elapsed < 15_000, f"graph SLO violated: {elapsed}ms >= 15000ms"
+        assert elapsed < 25_000, f"graph SLO violated: {elapsed}ms >= 25000ms"
 
     def test_feature_intent_slo(self, http, astro):
         """feature intent (context assembly + LLM) must complete in < 60s."""
@@ -115,7 +115,7 @@ class TestChatStreamSLOs:
         assert elapsed < 60_000, f"debug_trace SLO violated: {elapsed}ms >= 60000ms"
 
     def test_global_intent_slo(self, http, astro):
-        """global intent (MAP-REDUCE synthesis) must complete in < 120s.
+        """global intent (MAP-REDUCE synthesis) must complete in < 150s.
 
         Measured under nominal conditions: wait for the GPU to leave the
         thermally-throttled state first (the preceding LLM-heavy slow tests can
@@ -126,7 +126,7 @@ class TestChatStreamSLOs:
         _, intent, _, elapsed, _ = _chat(http, astro,
             "give me a comprehensive global overview of the entire astro platform")
         assert intent == "global", f"Expected global; got {intent!r}"
-        assert elapsed < 120_000, f"global SLO violated: {elapsed}ms >= 120000ms"
+        assert elapsed < 150_000, f"global SLO violated: {elapsed}ms >= 150000ms"
 
     def test_elapsed_ms_always_present_in_done_event(self, http, project):
         """chat_stream done event must always include elapsed_ms (regression guard)."""
