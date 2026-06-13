@@ -341,7 +341,6 @@ _OPTIONAL_ROUTES = [
     "/api/alerts",
     "/api/system_status",
     "/api/vacuum?project=/tmp/__none__",
-    "/api/tree_html?project=/tmp/__none__",
     "/api/jobs",
 ]
 
@@ -618,7 +617,6 @@ _DASHBOARD_COMPLETENESS = {
     "Alert rules panel (/api/alerts)": True,
     "Metrics persistence (SQLite, /api/metrics/history)": True,
     "PR Impact tab (/api/pr_impact)": True,
-    "File Tree viewer (/api/tree_html)": True,
     "Vacuum / storage cleanup (/api/vacuum)": True,
     "Mermaid graph export (/api/graph_export?format=mermaid)": True,
     "Query builder / saved queries": True,

@@ -67,7 +67,6 @@ from opencode_search.handlers._query import (
     handle_search_code,
 )
 from opencode_search.handlers._service_mesh import handle_detect_service_mesh
-from opencode_search.handlers._tree_html import handle_tree_html
 from opencode_search.handlers._vacuum import handle_vacuum
 from opencode_search.handlers._watch import (
     handle_ensure_project_watching,
@@ -128,7 +127,6 @@ __all__ = [
     "handle_stop_watching",
     "handle_suggest_questions",
     "handle_trace_path",
-    "handle_tree_html",
     "handle_vacuum",
     "handle_wiki_ingest",
     "handle_wiki_lint",

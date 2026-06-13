@@ -703,23 +703,6 @@ class TestMCPExtended:
         assert "violations" in data, f"alerts missing violations: {list(data.keys())}"
         assert isinstance(data["rules"], list), "rules must be a list"
 
-    def test_tree_html_returns_html(self, http, project):
-        """GET /api/tree_html?format=html must return an HTML string."""
-        r = http.get("/api/tree_html", params={"project": project, "format": "html", "max_files": "500"})
-        assert r.status_code == 200, f"tree_html failed: {r.text[:200]}"
-        assert "text/html" in r.headers.get("content-type", "") or "<" in r.text, (
-            "tree_html must return HTML"
-        )
-
-    def test_tree_html_json_returns_dict(self, http, project):
-        """GET /api/tree_html?format=json must return a tree dict."""
-        r = http.get("/api/tree_html", params={"project": project, "format": "json", "max_files": "500"})
-        assert r.status_code == 200, f"tree_html JSON failed: {r.text[:200]}"
-        data = r.json()
-        assert isinstance(data, dict), "tree_html JSON must return a dict"
-        has_tree = "tree" in data or "files" in data or "root" in data or "error" in data
-        assert has_tree, f"tree_html JSON missing tree/files/root: {list(data.keys())}"
-
     def test_service_mesh_dedicated_route(self, http, project):
         """GET /api/service_mesh (dedicated route, not overview?what=service_mesh)."""
         r = http.get("/api/service_mesh", params={"project": project})
