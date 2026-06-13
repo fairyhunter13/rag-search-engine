@@ -497,9 +497,34 @@ async def handle_detect_patterns(project_path: str, force: bool = False) -> dict
         llm_cached = load_patterns_cache(project_path)
         if llm_cached and llm_cached.get("llm_analysis"):
             llm = llm_cached["llm_analysis"]
-            result["conventions"] = llm.get("conventions")
-            result["key_frameworks"] = llm.get("key_frameworks") or []
-            result["architecture"] = llm.get("architecture")
+            llm_ov = llm_cached.get("llm_overview") or {}
+            # Build conventions dict from synthesis keys (naming_conventions + primary_language)
+            result["conventions"] = {
+                "language": llm.get("primary_language", ""),
+                "naming": llm.get("naming_conventions", ""),
+                "patterns": llm.get("coding_patterns") or [],
+            }
+            # tech_stack from overview is the closest to key_frameworks
+            result["key_frameworks"] = (
+                llm_ov.get("tech_stack")
+                or llm.get("key_frameworks")
+                or llm.get("key_abstractions")
+                or []
+            )
+            result["architecture"] = (
+                llm.get("architecture_description")
+                or llm.get("architecture")
+                or ""
+            )
+            # Augment module_structure with LLM-classified architecture_style
+            ms = dict(result.get("module_structure") or {})
+            ms["type"] = (
+                llm_ov.get("architecture_style")
+                or llm.get("architecture_style")
+                or llm.get("architecture_description")
+                or ""
+            )
+            result["module_structure"] = ms
             result["llm_analysis"] = llm
             result["llm_cached_at"] = llm_cached.get("cached_at")
             degraded = False
