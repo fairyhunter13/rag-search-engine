@@ -42,6 +42,10 @@ QUERY_MODEL = "qwen3-query:8b"
 SYSTEMD_SERVICE_PATH = Path("/etc/systemd/system/ollama-models.service")
 OLLAMA_READ_SERVICE_PATH = Path("/etc/systemd/system/ollama-read.service")
 
+# VRAM budget for N=3 parallel slots on the 1.7b enrich model:
+#   model weights ~2 GB + 3 KV slots ~0.6 GB + ONNX arena ~3 GB + other ~1 GB ≈ 6.6 GB < 16 GB
+_ENRICH_NUM_PARALLEL = 3
+
 QUERY_MODELFILE_CONTENT = """\
 FROM qwen3:8b
 PARAMETER num_ctx 8192
@@ -91,7 +95,7 @@ Type=simple
 User={user}
 Environment="OLLAMA_HOST=127.0.0.1:11435"
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
-Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_NUM_PARALLEL=3"
 Environment="OLLAMA_KEEP_ALIVE=-1"
 Environment="OLLAMA_MODELS={ollama_models_dir}"
 ExecStart=/usr/local/bin/ollama serve
@@ -208,35 +212,44 @@ def main() -> int:
             else:
                 print(f"  [DRY RUN] Would run: ollama create {name} -f {modelfile}")
 
-    # ── Ensure OLLAMA_MAX_LOADED_MODELS=1 on :11434 (enrich-only) ─────────────
-    # Now that qwen3-query:8b lives exclusively on :11435, :11434 only needs to
-    # hold qwen3-enrich:1.7b. MAX_LOADED_MODELS=1 prevents inadvertent loading of
-    # the query model on the enrich server and frees ~0.4 GB headroom.
+    # ── Ensure OLLAMA_NUM_PARALLEL=N and OLLAMA_MAX_LOADED_MODELS=1 on :11434 ──
+    # With a single resident 1.7b model (U3), :11434 can safely serve N=_ENRICH_NUM_PARALLEL
+    # concurrent generation streams within the VRAM budget. This gives the KB pipeline
+    # a throughput boost without contention from a second model (8b retired in U3).
     memory_dropin = Path("/etc/systemd/system/ollama.service.d/memory-limits.conf")
     print(f"\n  Ollama :11434 drop-in: {memory_dropin}")
     if dry:
-        print("  [DRY RUN] Would set OLLAMA_MAX_LOADED_MODELS=1 in memory-limits.conf (enrich-only)")
+        print(f"  [DRY RUN] Would set OLLAMA_NUM_PARALLEL={_ENRICH_NUM_PARALLEL} and "
+              "OLLAMA_MAX_LOADED_MODELS=1 in memory-limits.conf")
     elif memory_dropin.exists():
+        import subprocess as _sp
         text = memory_dropin.read_text()
-        if "OLLAMA_MAX_LOADED_MODELS=2" in text:
+        updated = text
+        changed = False
+        if "OLLAMA_MAX_LOADED_MODELS=2" in updated:
+            updated = updated.replace(
+                'Environment="OLLAMA_MAX_LOADED_MODELS=2"',
+                'Environment="OLLAMA_MAX_LOADED_MODELS=1"',
+            )
+            changed = True
+        if 'Environment="OLLAMA_NUM_PARALLEL=1"' in updated:
+            updated = updated.replace(
+                'Environment="OLLAMA_NUM_PARALLEL=1"',
+                f'Environment="OLLAMA_NUM_PARALLEL={_ENRICH_NUM_PARALLEL}"',
+            )
+            changed = True
+        if changed:
             try:
-                updated = text.replace(
-                    'Environment="OLLAMA_MAX_LOADED_MODELS=2"',
-                    'Environment="OLLAMA_MAX_LOADED_MODELS=1"',
-                )
-                import subprocess as _sp
                 _sp.run(["sudo", "tee", str(memory_dropin)], input=updated.encode(), check=True, capture_output=True)
                 _sp.run(["sudo", "systemctl", "daemon-reload"], check=True)
                 _sp.run(["sudo", "systemctl", "restart", "ollama"], check=True)
-                print("  ✓ Updated to OLLAMA_MAX_LOADED_MODELS=1 (enrich-only) and restarted ollama")
+                print(f"  ✓ Updated drop-in (NUM_PARALLEL={_ENRICH_NUM_PARALLEL}, MAX_LOADED=1) and restarted ollama")
             except Exception as exc:
                 print(f"  WARN: Could not update drop-in automatically: {exc}")
-                print("  Run manually: sudo sed -i 's/MAX_LOADED_MODELS=2/MAX_LOADED_MODELS=1/' "
+                print(f"  Run manually: sudo sed -i 's/NUM_PARALLEL=1/NUM_PARALLEL={_ENRICH_NUM_PARALLEL}/' "
                       f"{memory_dropin} && sudo systemctl daemon-reload && sudo systemctl restart ollama")
-        elif "OLLAMA_MAX_LOADED_MODELS=1" in text:
-            print("  ✓ Already set to OLLAMA_MAX_LOADED_MODELS=1 (enrich-only)")
         else:
-            print("  INFO: OLLAMA_MAX_LOADED_MODELS not found in drop-in — verify manually")
+            print(f"  ✓ Drop-in already up to date (NUM_PARALLEL={_ENRICH_NUM_PARALLEL})")
     else:
         print("  INFO: Drop-in not found — ollama will load models on demand")
 

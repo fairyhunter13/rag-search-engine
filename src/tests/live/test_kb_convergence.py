@@ -15,6 +15,7 @@ No mocks. No skips. GPU-only inference (no CPU fallback).
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -748,4 +749,100 @@ class TestVerdictWipedCommunityNotDone:
             f"kb-status reported DONE for {_PAYMENT_GW!r} which has edges>0 but 0 communities — "
             "Gap A: incomplete KB must not be masked as DONE.\n"
             f"Output: {output[:500]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# U3b: bounded parallel summarize on the single 1.7b model.
+# ---------------------------------------------------------------------------
+
+class TestParallelSummarizeSoak:
+    """U3b: OLLAMA_NUM_PARALLEL raised + _LLM_CONCURRENCY tied to it.
+
+    Guards that the throughput config is consistent: Ollama accepts N parallel
+    streams and the app sends exactly N concurrent gather tasks — no more idle
+    GPU slots, no more wasted queue slots.
+    """
+
+    def test_ollama_num_parallel_raised(self):
+        """OLLAMA_NUM_PARALLEL must be >= 2 in ollama.service for throughput gain."""
+        result = subprocess.run(
+            ["systemctl", "show", "ollama.service", "-p", "Environment"],
+            capture_output=True, text=True, check=False,
+        )
+        env_line = result.stdout.strip()
+        matches = re.findall(r'OLLAMA_NUM_PARALLEL=(\d+)', env_line)
+        assert matches, (
+            "OLLAMA_NUM_PARALLEL not found in ollama.service environment. "
+            "Set OLLAMA_NUM_PARALLEL=3 in "
+            "/etc/systemd/system/ollama.service.d/memory-limits.conf "
+            "then: sudo systemctl daemon-reload && sudo systemctl restart ollama"
+        )
+        num_parallel = int(matches[-1])
+        assert num_parallel >= 2, (
+            f"OLLAMA_NUM_PARALLEL={num_parallel} — must be >= 2 for throughput gain (U3b target: 3). "
+            "Update memory-limits.conf and restart ollama."
+        )
+
+    def test_llm_concurrency_default_is_n(self):
+        """_LLM_CONCURRENCY default must be >= 2 (reads OLLAMA_NUM_PARALLEL fallback)."""
+        from opencode_search.handlers._enrichment import _LLM_CONCURRENCY
+        assert _LLM_CONCURRENCY >= 2, (
+            f"_LLM_CONCURRENCY={_LLM_CONCURRENCY} — must be >= 2 after U3b wires it to "
+            "OLLAMA_NUM_PARALLEL. Default should be 3 when no env vars are set."
+        )
+
+    def test_llm_concurrency_reads_ollama_num_parallel(self):
+        """_LLM_CONCURRENCY source must reference OLLAMA_NUM_PARALLEL env var."""
+        import inspect
+
+        from opencode_search.handlers import _enrichment
+        src = inspect.getsource(_enrichment)
+        assert "OLLAMA_NUM_PARALLEL" in src, (
+            "_LLM_CONCURRENCY does not reference OLLAMA_NUM_PARALLEL env var — "
+            "app-side concurrency is not tied to Ollama's parallel slot count"
+        )
+
+    def test_hier_concurrency_not_capped_at_2(self):
+        """_hier_concurrency must equal _LLM_CONCURRENCY (no hardcoded cap at 2)."""
+        import inspect
+
+        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+        src = inspect.getsource(handle_enrich_hierarchy)
+        assert "min(_LLM_CONCURRENCY, 2)" not in src, (
+            "_hier_concurrency is still capped at min(_LLM_CONCURRENCY, 2) — "
+            "remove the cap so gather fills all OLLAMA_NUM_PARALLEL slots (U3b)"
+        )
+
+    def test_thermal_guard_between_hierarchy_batches(self):
+        """yield_while_busy must still be called between hierarchy enrichment batches."""
+        import inspect
+
+        from opencode_search.handlers._enrichment import handle_enrich_hierarchy
+        src = inspect.getsource(handle_enrich_hierarchy)
+        assert "yield_while_busy" in src, (
+            "yield_while_busy not found in handle_enrich_hierarchy — "
+            "thermal guard was removed; restore it between batches"
+        )
+
+    @pytest.mark.slow
+    def test_soak_healthz_stable_after_parallel_enrich(self, http, quality_project):
+        """Hierarchy enrichment with N>1 parallel must not crash the daemon.
+
+        Runs a real enrich_hierarchy pass and verifies the daemon stays healthy
+        throughout (SEGV/restart would cause /healthz to fail mid-run).
+        GPU VRAM must not OOM (16 GB budget, ~6.6 GB expected with N=3).
+        """
+        r = http.post(
+            "/api/enrich_hierarchy",
+            json={"project": quality_project},
+            timeout=300,
+        )
+        assert r.status_code in (200, 202), (
+            f"enrich_hierarchy returned {r.status_code}: {r.text[:200]}"
+        )
+        hr = http.get("/healthz", timeout=10)
+        assert hr.status_code == 200 and hr.json().get("ok"), (
+            "Daemon /healthz failed after parallel hierarchy enrichment — "
+            "possible SEGV or OOM; check: journalctl -u opencode-search -n 100"
         )
