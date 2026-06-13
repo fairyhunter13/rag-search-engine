@@ -1,10 +1,15 @@
 """Project registry — read/write ~/.local/share/opencode-search/projects.json."""
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 from dataclasses import asdict
+from pathlib import Path
 
 from opencode_search.core.config import REGISTRY_PATH, ProjectEntry
+
+_LOCK_PATH = Path(str(REGISTRY_PATH) + ".lock")
 
 
 def _load() -> dict:
@@ -13,7 +18,12 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REGISTRY_PATH.write_text(json.dumps(data, indent=2))
+    _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_LOCK_PATH, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        tmp = Path(str(REGISTRY_PATH) + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        os.replace(tmp, REGISTRY_PATH)
 
 
 def list_projects() -> list[ProjectEntry]:

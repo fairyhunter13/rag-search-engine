@@ -7,10 +7,9 @@ from pathlib import Path
 
 from opencode_search.core.config import IGNORED_DIRS
 
-_EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({
-    "site-packages", ".next", ".nuxt", "vendor", "bower_components",
-    ".idea", ".vscode", ".nyc_output", "tmp", "temp", "logs",
-})
+_EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
+# Public alias used by registry path filtering.
+_REGISTRY_EXCLUDE_SEGMENTS = _EXCLUDE
 
 _EXT_LANG: dict[str, str] = {
     ".py": "python", ".js": "javascript", ".ts": "typescript",

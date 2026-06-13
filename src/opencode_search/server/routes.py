@@ -1,8 +1,13 @@
 """HTTP route handlers + create_app() for the dashboard API."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
+from starlette.staticfiles import StaticFiles
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 async def _healthz(request: Request) -> JSONResponse:
@@ -108,13 +113,14 @@ def create_app():
     app.add_route("/api/overview", _api_overview, methods=["POST"])
     app.add_route("/api/index", _api_index, methods=["POST"])
     _register_all(app)
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     return app
 
 
 def build_test_app():
     """Plain Starlette app for testing — no FastMCP transport (session manager is single-use)."""
     from starlette.applications import Starlette
-    from starlette.routing import Route
+    from starlette.routing import Mount, Route
     app = Starlette(routes=[
         Route("/healthz", _healthz, methods=["GET"]),
         Route("/dashboard", _dashboard, methods=["GET"]),
@@ -123,6 +129,7 @@ def build_test_app():
         Route("/api/ask", _api_ask, methods=["POST"]),
         Route("/api/overview", _api_overview, methods=["POST"]),
         Route("/api/index", _api_index, methods=["POST"]),
+        Mount("/static", StaticFiles(directory=_STATIC_DIR), name="static"),
     ])
     _register_all(app)
     return app

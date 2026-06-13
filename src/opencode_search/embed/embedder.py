@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 import numpy as np
 
@@ -9,6 +10,9 @@ from opencode_search.core.config import EMBED_DEVICE, EMBED_MODEL, ONNX_ARENA_MB
 from opencode_search.core.gpu import assert_cuda_available, gpu_temp_c
 
 os.environ.setdefault("ORT_MAX_MEM_LIMIT_MB", str(ONNX_ARENA_MB))
+
+# Prevents concurrent GPU inference races (embed + rerank on same device).
+_GPU_INFER_LOCK = threading.Lock()
 
 
 class Embedder:
