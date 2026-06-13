@@ -75,6 +75,48 @@ def impact(symbol: str, store: GraphStore, *, max_depth: int = 5) -> list[dict]:
     return [{"name": r[0], "file": r[1], "start_line": r[2]} for r in rows]
 
 
+def path_between(src: str, tgt: str, store: GraphStore, *, max_depth: int = 5) -> list[dict]:
+    """BFS shortest call-path from src to tgt (callee direction)."""
+    ss, ts = _lookup_sid(store, src), _lookup_sid(store, tgt)
+    if not ss or not ts:
+        return []
+    prev: dict[str, str | None] = {ss: None}
+    depth: dict[str, int] = {ss: 0}
+    queue = [ss]
+    while queue:
+        sid = queue.pop(0)
+        if depth[sid] >= max_depth:
+            continue
+        for (nxt,) in store._con.execute("SELECT callee_sid FROM edges WHERE caller_sid=?", (sid,)).fetchall():
+            if nxt in prev:
+                continue
+            prev[nxt] = sid
+            depth[nxt] = depth[sid] + 1
+            if nxt == ts:
+                cur: str | None = ts
+                path: list[str] = []
+                while cur:
+                    path.append(cur)
+                    cur = prev[cur]
+                sids = list(reversed(path))
+                by_sid = {r[0]: r for r in store._con.execute(
+                    f"SELECT sid,name,file FROM symbols WHERE sid IN ({','.join('?'*len(sids))})", sids
+                ).fetchall()}
+                return [{"name": by_sid[s][1], "file": by_sid[s][2]} for s in sids if s in by_sid]
+            queue.append(nxt)
+    return []
+
+
+def semantic_trace(src: str, tgt: str, store: GraphStore) -> str:
+    """LLM narrative trace from src symbol to tgt symbol via the call path."""
+    from opencode_search.graph.llm import chat
+    path = path_between(src, tgt, store)
+    if not path:
+        return f"No call path found from '{src}' to '{tgt}' within depth 5."
+    steps = " → ".join(p["name"] for p in path)
+    return chat(f"Explain how '{src}' leads to '{tgt}'. Call path: {steps}. Describe each step's purpose.")
+
+
 def impact_narrative(symbol: str, store: GraphStore) -> str:
     """LLM blast-radius summary for a symbol."""
     from opencode_search.graph.llm import chat

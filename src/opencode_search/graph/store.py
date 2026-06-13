@@ -49,6 +49,10 @@ class GraphStore:
     def __init__(self, db_path: Path) -> None:
         self._con = _open(db_path)
 
+    @property
+    def conn(self) -> sqlite3.Connection:
+        return self._con
+
     def upsert_symbol(self, sid: str, name: str, qualified_name: str, kind: str,
                       file: str, start_line: int, end_line: int, language: str,
                       signature: str = "", docstring: str = "") -> None:

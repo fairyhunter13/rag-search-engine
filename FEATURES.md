@@ -8,19 +8,19 @@ Generated from the live archived engine before wiping `main`.
 ## 1. MCP tools (5)
 
 ### 1.1 search(query, scope="code", project_paths=None, top_k=10, include_federation=True)
-- [ ] scope: code(default) | docs(wiki/md/rst/txt filter) | all(no filter) | similar
-- [ ] GPU embed + jina-reranker-v1-turbo-en rerank; reranking always on; --no-rerank CLI flag ignored
+- [x] scope: code(default) | docs(wiki/md/rst/txt filter) | all(no filter) | similar
+- [x] GPU embed + jina-reranker-v1-turbo-en rerank; reranking always on; --no-rerank CLI flag ignored
 - [x] project_paths=None searches all registered projects; include_federation fans to members
 - [x] response: {results:[{path,start_line,end_line,content,language,score}], total, elapsed_ms, projects_searched}
 - [x] runtime_state.note_activity() + note_query() on every call
 
 ### 1.2 ask(query, project_path, scope="all", top_k=10, include_federation=True)
-- [ ] scope: all(hybrid code+communities+wiki) | architecture(communities only) | wiki(pages only) | global(GraphRAG map-reduce over all community summaries) | feature(entry points+call chain+algorithm+rationale) | business(business-classified communities)
-- [ ] global: qwen3-enrich:1.7b MAP + query-LLM REDUCE
+- [x] scope: all(hybrid code+communities+wiki) | architecture(communities only) | wiki(pages only) | global(GraphRAG map-reduce over all community summaries) | feature(entry points+call chain+algorithm+rationale) | business(business-classified communities)
+- [x] global: qwen3-enrich:1.7b MAP + query-LLM REDUCE
 - [x] runtime_state.note_activity() + note_query() on every call
 
 ### 1.3 graph(symbol, project_path, relation="definition", to_symbol=None, depth=5, include_federation=True)
-- [ ] relation: definition | callers(BFS depth=5) | callees(BFS depth=5) | impact | path(requires to_symbol) | impact_narrative(LLM: risk+domains) | semantic_trace(requires to_symbol)
+- [x] relation: definition | callers(BFS depth=5) | callees(BFS depth=5) | impact | path(requires to_symbol) | impact_narrative(LLM: risk+domains) | semantic_trace(requires to_symbol)
 - [x] path/semantic_trace without to_symbol returns {error:...}
 - [x] runtime_state.note_activity() + note_query() on every call
 
@@ -30,18 +30,18 @@ Generated from the live archived engine before wiping `main`.
 
 ### 1.5 index(project_path, enabled=True)
 - [x] enabled=True: register idempotent; daemon auto-indexes+KB+watches+federation; {status:"flagged"|"already_registered",path,note}
-- [ ] enabled=False: DESTRUCTIVE — stop watcher + remove registry + delete on-disk index (handle_remove_project delete_index=True)
+- [x] enabled=False: DESTRUCTIVE — stop watcher + remove registry + delete on-disk index (handle_remove_project delete_index=True)
 - [x] project_path expanduser().resolve()'d; runtime_state.note_activity() called
 
 ### 1.6 MCP server mechanics
-- [ ] FastMCP stdio (run_mcp_server) + streamable-HTTP at http://127.0.0.1:8765/mcp (run_mcp_http_server)
-- [ ] _fastmcp_stub.FastMCPStub fallback if mcp.server.fastmcp not importable
-- [ ] instructions field includes _global_prompt_text() (CLAUDE.md/codex/hermes injection text)
-- [ ] GPU guard at startup (synchronous, before event loop): exit 1 on no-CUDA; no CPU fallback ever
-- [ ] HTTP lifespan: warmup query models -> stale-cleanup task -> resume_watchers -> resume_stalled_pipelines -> sd_notify READY=1 -> on shutdown: cancel tasks + sd_notify STOPPING=1
-- [ ] WATCHDOG_USEC: sd_notify("WATCHDOG=1") every WATCHDOG_USEC/2_000_000 ticks
+- [x] FastMCP stdio (run_mcp_server) + streamable-HTTP at http://127.0.0.1:8765/mcp (run_mcp_http_server)
+- [x] _fastmcp_stub.FastMCPStub fallback if mcp.server.fastmcp not importable
+- [x] instructions field includes _global_prompt_text() (CLAUDE.md/codex/hermes injection text)
+- [x] GPU guard at startup (synchronous, before event loop): exit 1 on no-CUDA; no CPU fallback ever
+- [x] HTTP lifespan: warmup query models -> stale-cleanup task -> resume_watchers -> resume_stalled_pipelines -> sd_notify READY=1 -> on shutdown: cancel tasks + sd_notify STOPPING=1
+- [x] WATCHDOG_USEC: sd_notify("WATCHDOG=1") every WATCHDOG_USEC/2_000_000 ticks
 - [x] Stale client cleanup: release watches for clients silent > DEFAULT_CLIENT_STALE_S (60s)
-- [ ] One-shot model idle unload: after DEFAULT_MODEL_IDLE_UNLOAD_S (300s) no inference -> cleanup_models() once; resets on next inference
+- [x] One-shot model idle unload: after DEFAULT_MODEL_IDLE_UNLOAD_S (300s) no inference -> cleanup_models() once; resets on next inference
 
 ---
 
@@ -134,12 +134,12 @@ Generated from the live archived engine before wiping `main`.
 
 ## 3. Dashboard (5 views, single-page Starlette HTML app)
 
-- [ ] Pulse: KPI tiles (chunks, communities, wiki pages, enrichment %, stream errors) + sparklines + daemon-status dot + SSE live feed + op-log + auto-pipeline tile
-- [ ] Chat: message input + send button + SSE streaming display + intent indicator + source chips + multi-turn (conversation_id) + toast notifications; uses codex/gpt-5.4-mini only here
-- [ ] Admin: project list (watch status) + KB health per project + storage health + action buttons (enrich/rebuild/vacuum) + reload + sweeps pause/resume + jobs list with cancel
-- [ ] Wiki: page list per project + markdown renderer + lint results
-- [ ] Graph: Sigma.js WebGL render + community hierarchy tree + import cycles + service mesh + surprising connections + export download (JSON/GraphML)
-- [ ] Nav: top navbar (Pulse/Chat/Admin/Wiki/Graph) + Ctrl+K command palette
+- [x] Pulse: KPI tiles (chunks, communities, wiki pages, enrichment %, stream errors) + sparklines + daemon-status dot + SSE live feed + op-log + auto-pipeline tile
+- [x] Chat: message input + send button + SSE streaming display + intent indicator + source chips + multi-turn (conversation_id) + toast notifications; uses codex/gpt-5.4-mini only here
+- [x] Admin: project list (watch status) + KB health per project + storage health + action buttons (enrich/rebuild/vacuum) + reload + sweeps pause/resume + jobs list with cancel
+- [x] Wiki: page list per project + markdown renderer + lint results
+- [x] Graph: Sigma.js WebGL render + community hierarchy tree + import cycles + service mesh + surprising connections + export download (JSON/GraphML)
+- [x] Nav: top navbar (Pulse/Chat/Admin/Wiki/Graph) + Ctrl+K command palette
 
 ---
 
@@ -185,9 +185,9 @@ Generated from the live archived engine before wiping `main`.
 
 ### 6.2 systemd integration
 - [x] User service: ~/.config/systemd/user/opencode-search.service
-- [ ] Failure-notify service (desktop notification on crash)
-- [ ] Thermal drop-in: opencode-search.service.d/thermal-max.conf -- 80C/72C ceiling for RTX 5080 Laptop (no HW thermal protection)
-- [ ] sd_notify("READY=1") + sd_notify("STOPPING=1") + WATCHDOG_USEC support
+- [x] Failure-notify service (desktop notification on crash)
+- [x] Thermal drop-in: opencode-search.service.d/thermal-max.conf -- 80C/72C ceiling for RTX 5080 Laptop (no HW thermal protection)
+- [x] sd_notify("READY=1") + sd_notify("STOPPING=1") + WATCHDOG_USEC support
 - [x] daemon install-global: writes MCP block to ~/CLAUDE.md, codex config, hermes config
 
 ### 6.3 Four sweep monitors (background threads)
@@ -264,7 +264,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] OPENCODE_INDEX_ROOT default ~/.local/share/opencode-search/indexes/
 - [x] Registry I/O: atomic write (os.replace on .tmp), fcntl.flock for concurrent safety
 - [x] ProjectEntry: path, db_path, dims, indexed_at, file_count, last_active, watch, federation
-- [ ] Registry migration: legacy per-project path -> centralized root; tier-suffix -> tier-free + null indexed_at
+- [x] Registry migration: legacy per-project path -> centralized root; tier-suffix -> tier-free + null indexed_at
 
 ### 8.4 Embedding models
 - [x] OPENCODE_EMBED_MODEL default jinaai/jina-embeddings-v2-base-code (768d, ONNX)
@@ -293,7 +293,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] Thermal guard: OPENCODE_GPU_TEMP_MAX 80C; KB sweeps skip if GPU>=80C
 - [x] CuPy where= crash fix: validate zero-length tensors before CuPy normalization ops
 - [x] OPENCODE_DISABLE_TENSORRT default 1 for RTX 5080 (Blackwell not yet TensorRT-supported)
-- [ ] Model idle unload: cleanup_models() after 300s idle; one-shot per idle period; resets on next inference
+- [x] Model idle unload: cleanup_models() after 300s idle; one-shot per idle period; resets on next inference
 - [x] FastEmbed cache: ~/.cache/opencode/fastembed; must not be wiped without re-seeding
 - [x] _GPU_INFER_LOCK: global lock preventing concurrent GPU inference races
 

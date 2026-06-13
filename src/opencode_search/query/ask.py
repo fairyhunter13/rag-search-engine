@@ -7,12 +7,21 @@ from opencode_search.graph.store import GraphStore
 _MAX_CTX = 3000
 
 
-def _community_context(store: GraphStore, limit: int = 20) -> str:
-    rows = store._con.execute(
-        "SELECT title, summary FROM communities "
-        "WHERE summary IS NOT NULL AND summary != '' ORDER BY level, id LIMIT ?",
-        (limit,),
-    ).fetchall()
+def _community_context(store: GraphStore, limit: int = 20, semantic_types: tuple[str, ...] = ()) -> str:
+    if semantic_types:
+        placeholders = ",".join("?" * len(semantic_types))
+        rows = store._con.execute(
+            f"SELECT title, summary FROM communities "
+            f"WHERE summary IS NOT NULL AND summary != '' "
+            f"AND semantic_type IN ({placeholders}) ORDER BY level, id LIMIT ?",
+            (*semantic_types, limit),
+        ).fetchall()
+    else:
+        rows = store._con.execute(
+            "SELECT title, summary FROM communities "
+            "WHERE summary IS NOT NULL AND summary != '' ORDER BY level, id LIMIT ?",
+            (limit,),
+        ).fetchall()
     return "\n\n".join(f"## {r[0]}\n{r[1]}" for r in rows if r[1])
 
 
@@ -34,7 +43,15 @@ def ask(
         for r in chunks
     )[:_MAX_CTX]
 
-    if scope in ("global", "architecture", "all"):
+    if scope == "global":
+        # MAP: select communities relevant to query via keyword match; REDUCE: single LLM call
+        all_communities = _community_context(store, limit=50)
+        keywords = set(query.lower().split())
+        sections = all_communities.split("\n\n")
+        mapped = [s for s in sections if any(kw in s.lower() for kw in keywords)] or sections[:10]
+        community_ctx = "\n\n".join(mapped)[:_MAX_CTX]
+        context = f"## Architecture (MAP+REDUCE)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
+    elif scope in ("architecture", "all"):
         community_ctx = _community_context(store)[:_MAX_CTX]
         context = f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
     elif scope == "wiki":
@@ -45,6 +62,10 @@ def ask(
             f"## Code (feature trace)\n{chunk_ctx}\n\n"
             f"## Community context\n{_community_context(store, limit=5)[:_MAX_CTX]}"
         )
+    elif scope == "business":
+        biz_ctx = _community_context(store, limit=20,
+                                     semantic_types=("rule", "constraint", "feature", "workflow", "process"))[:_MAX_CTX]
+        context = f"## Business context\n{biz_ctx}\n\n## Code\n{chunk_ctx}"
     else:
         context = chunk_ctx
 

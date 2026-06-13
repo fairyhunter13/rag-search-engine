@@ -6,7 +6,13 @@ import threading
 
 import numpy as np
 
-from opencode_search.core.config import EMBED_DEVICE, EMBED_MODEL, ONNX_ARENA_MB, THERMAL_MAX_C
+from opencode_search.core.config import (
+    EMBED_DEVICE,
+    EMBED_MODEL,
+    ONNX_ARENA_MB,
+    RERANK_MODEL,
+    THERMAL_MAX_C,
+)
 from opencode_search.core.gpu import assert_cuda_available, gpu_temp_c
 
 os.environ.setdefault("ORT_MAX_MEM_LIMIT_MB", str(ONNX_ARENA_MB))
@@ -54,6 +60,34 @@ class Embedder:
             self._init()
         meta = self._model._get_model_description(self._model_name)
         return int(meta.get("dim", 768))
+
+
+class Reranker:
+    """Cross-encoder reranker (jina-reranker-v1-turbo-en) on GPU."""
+
+    def __init__(self, model: str = RERANK_MODEL) -> None:
+        assert_cuda_available()
+        self._model_name = model
+        self._model = None
+
+    def _init(self) -> None:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+        self._model = TextCrossEncoder(
+            model_name=self._model_name,
+            providers=["CUDAExecutionProvider"],
+        )
+
+    def rerank(self, query: str, passages: list[str]) -> list[float]:
+        if not passages:
+            return []
+        if self._model is None:
+            try:
+                self._init()
+            except Exception:
+                return [1.0] * len(passages)
+        with _GPU_INFER_LOCK:
+            scores = list(self._model.rerank(query, passages))
+        return [float(s) for s in scores]
 
 
 _default: Embedder | None = None
