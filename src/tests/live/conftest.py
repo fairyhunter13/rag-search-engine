@@ -100,8 +100,8 @@ def project(http):
 def quality_project(http):
     """Return opencode-search-engine path for engine-specific quality tests.
 
-    Tests that reference engine-internal symbols (handle_chat_auto,
-    handle_debug_trace) must use this fixture instead of the generic `project`.
+    Tests that reference engine-internal symbols (handle_chat_auto) must use
+    this fixture instead of the generic `project`.
     """
     r = http.get("/api/projects")
     projects = r.json().get("projects", [])

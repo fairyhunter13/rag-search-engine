@@ -12,7 +12,6 @@ SLO thresholds:
   graph callers        < 25 s
   feature intent       < 60 s
   architecture intent  < 90 s
-  debug_trace intent   < 60 s
   global intent        < 150 s  (MAP-REDUCE across 5900+ communities)
   GET /api/search      < 5 s
   GET /healthz         < 1 s
@@ -104,15 +103,6 @@ class TestChatStreamSLOs:
             f"Expected architecture; got {intent!r}"
         )
         assert elapsed < 90_000, f"architecture SLO violated: {elapsed}ms >= 90000ms"
-
-    def test_debug_trace_intent_slo(self, http, astro):
-        """debug_trace intent must complete in < 60s."""
-        _, intent, _, elapsed, _ = _chat(http, astro,
-            "goroutine 10 [running]:\npanic: nil pointer dereference")
-        assert intent in ("debug_trace", "debug"), (
-            f"Expected debug_trace; got {intent!r}"
-        )
-        assert elapsed < 60_000, f"debug_trace SLO violated: {elapsed}ms >= 60000ms"
 
     def test_global_intent_slo(self, http, astro):
         """global intent (MAP-REDUCE synthesis) must complete in < 150s.

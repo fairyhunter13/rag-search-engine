@@ -60,7 +60,6 @@ _ROUTES: list[tuple[str, str, dict | None]] = [
     # chat routes
     ("/api/chat", "POST", {"message": "hello", "project": "/tmp/does-not-exist"}),
     ("/api/chat_stream", "POST", {"message": "hello", "project": "/tmp/does-not-exist"}),
-    ("/api/debug", "POST", {"message": "hello", "project": "/tmp/does-not-exist"}),
     # kb routes
     ("/api/kb_health", "GET", None),
     ("/api/storage_health", "GET", None),

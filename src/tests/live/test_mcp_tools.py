@@ -640,28 +640,6 @@ class TestMCPAdmin:
             f"/api/chat must return a dict with answer/text/result/response; got keys: {list(data.keys())}"
         )
 
-    @pytest.mark.slow
-    def test_debug_endpoint_returns_trace(self, http, project):
-        """POST /api/debug with a traceback must return a debug analysis result."""
-        traceback_text = (
-            "Traceback (most recent call last):\n"
-            "  File 'handler.py', line 12, in process\n"
-            "    result = db.query(sql)\n"
-            "AttributeError: 'NoneType' object has no attribute 'query'"
-        )
-        r = http.post("/api/debug", json={
-            "project": project,
-            "traceback": traceback_text,
-            "include_fix": False,
-        })
-        assert r.status_code == 200, f"/api/debug failed: {r.text[:300]}"
-        data = r.json()
-        assert isinstance(data, dict), f"/api/debug must return a dict; got {type(data)}"
-        has_analysis = any(k in data for k in ("analysis", "answer", "summary", "root_cause", "files"))
-        assert has_analysis, (
-            f"/api/debug must return analysis/answer/summary/root_cause/files; got keys: {list(data.keys())}"
-        )
-
 
 # ---------------------------------------------------------------------------
 # extended coverage — dedicated routes not covered via overview/graph params

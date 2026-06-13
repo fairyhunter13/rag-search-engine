@@ -430,13 +430,6 @@ class TestAstroChatIntents:
         intent = classify("what breaks if I change the search proto contract?")
         assert intent == "graph_impact", f"Expected intent=graph_impact; got {intent!r}"
 
-    def test_chat_debug_trace_intent(self, classify):
-        intent = classify(
-            "goroutine 1 [running]:\nruntime/debug.Stack()\n\t/usr/local/go/src/runtime/debug/stack.go:24 +0x65\n"
-            "main.main()\n\t/home/user/astro/cmd/main.go:42 +0x3b2"
-        )
-        assert intent == "debug_trace", f"Expected intent=debug_trace for stack trace; got {intent!r}"
-
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=2, reruns_delay=10)
     def test_chat_answer_quality_global(self, http, astro):

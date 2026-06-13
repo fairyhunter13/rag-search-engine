@@ -1266,7 +1266,6 @@ class TestRepoWideNoRegex:
         # Units A-M (maximal sweep)
         "_GENERIC_NAMES": ("opencode_search.graph.dedup",),
         "_SKIP_NAME_PARTS": ("opencode_search.handlers._patterns",),
-        "parse_traceback": ("opencode_search.handlers._debug_trace",),
         "_DOCUMENT_LANGUAGES": ("opencode_search.search",),
         "_DOC_LANGUAGES": ("opencode_search.chunker",),
         "_DOC_LANGS": ("opencode_search.handlers._graph",),
@@ -1710,45 +1709,6 @@ class TestAuthorityWeightDocVsCode:
                 else:
                     os.environ[k] = v
             importlib.reload(_search_mod)
-
-
-# ---------------------------------------------------------------------------
-# Unit G: _debug_trace.py — no regex, no parse_traceback, uses chat LLM
-# ---------------------------------------------------------------------------
-
-class TestDebugTraceLLMNoRegex:
-    """Unit G guard: _debug_trace.py must have no import re and no parse_traceback."""
-
-    def test_no_import_re_in_debug_trace(self):
-        """_debug_trace.py must not import re (Unit G)."""
-        from pathlib import Path
-        src = Path("src/opencode_search/handlers/_debug_trace.py").read_text()
-        assert "import re" not in src, (
-            "_debug_trace.py still contains 'import re' — regex not removed (Unit G)."
-        )
-        assert "re.split" not in src, "_debug_trace.py still uses re.split (Unit G)."
-        assert "re.sub" not in src, "_debug_trace.py still uses re.sub (Unit G)."
-        assert "re.match" not in src, "_debug_trace.py still uses re.match (Unit G)."
-        assert "re.search" not in src, "_debug_trace.py still uses re.search (Unit G)."
-        assert "re.compile" not in src, "_debug_trace.py still uses re.compile (Unit G)."
-
-    def test_no_parse_traceback_in_debug_trace(self):
-        """parse_traceback regex dispatcher must be gone (Unit G)."""
-        from pathlib import Path
-        src = Path("src/opencode_search/handlers/_debug_trace.py").read_text()
-        for forbidden in ("def parse_traceback", "parse_traceback(", "_parse_python", "_parse_go",
-                          "_parse_java", "_parse_js", "_parse_rust", "create_kb_query_llm_client"):
-            assert forbidden not in src, (
-                f"_debug_trace.py still contains {forbidden!r} — not removed (Unit G)."
-            )
-
-    def test_debug_trace_uses_query_llm_client(self):
-        """_debug_trace.py must import create_query_llm_client (dashboard chat LLM, Unit G)."""
-        from pathlib import Path
-        src = Path("src/opencode_search/handlers/_debug_trace.py").read_text()
-        assert "create_query_llm_client" in src, (
-            "_debug_trace.py does not import create_query_llm_client — should use dashboard chat LLM (Unit G)."
-        )
 
 
 # ---------------------------------------------------------------------------

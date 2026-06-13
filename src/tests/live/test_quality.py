@@ -123,25 +123,6 @@ def test_quality_feature_trace(http, project):
     assert score >= 2, f"Feature trace quality {score}/5 too low:\n{answer[:400]}"
 
 
-def test_quality_debug_trace(http, quality_project):
-    """Debug trace with a real engine file must score ≥ 2/5 for root-cause analysis.
-
-    Uses quality_project (opencode-search-engine) so the traceback path exists in the
-    indexed graph, giving the LLM real context about handle_kb_chat.
-    Uses ≥2 (not ≥3) because the synthetic traceback may have limited graph context.
-    """
-    tb = (
-        "Traceback (most recent call last):\n"
-        '  File "src/opencode_search/handlers/_kb_chat.py", line 50, in handle_kb_chat\n'
-        "    result = await llm.chat(messages=messages)\n"
-        "AttributeError: 'NoneType' object has no attribute 'chat'"
-    )
-    answer = _ask_chat(http, quality_project, tb)
-    assert len(answer) > 30, f"Debug trace answer too short: {answer!r}"
-    score = judge_answer(answer, "Does this provide any root cause analysis or fix suggestion for the AttributeError?")
-    assert score >= 2, f"Debug trace quality {score}/5 too low:\n{answer[:400]}"
-
-
 def test_quality_graph_impact(http, quality_project):
     """Graph impact with a real engine function must score ≥ 2/5 for dependency analysis.
 

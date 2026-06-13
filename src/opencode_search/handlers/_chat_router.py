@@ -5,8 +5,6 @@ dump of structured data. The caller always gets a conversational answer with cod
 references embedded naturally in the text.
 
 Intent classification uses the LLM (no keyword heuristics) so any phrasing is handled:
-  debug_trace   — query IS a stack trace / error log
-  debug         — question about a bug, failure, or "why does X not work"
   search        — find/locate/show specific code or files
   graph_callers — "what calls X", "callers of X"
   graph_callees — "what does X call", "downstream of X"
@@ -61,7 +59,7 @@ async def _bridge_stream(llm: Any, messages: list[dict[str, Any]], max_tokens: i
 # No keyword heuristics — the LLM classifies any phrasing correctly.
 
 _VALID_INTENTS = frozenset([
-    "debug_trace", "debug", "search",
+    "search",
     "graph_callers", "graph_callees", "graph_impact",
     "architecture", "global", "feature",
 ])
@@ -76,12 +74,8 @@ CRITICAL DISTINCTIONS:
   REQUIRES a concrete named target (e.g. "AuthService.Login", "payment gRPC contract", "the embedding model").
   "graph_impact" is NOT for vague "how are things connected" or "how do function calls relate" questions — those are "feature".
 - "graph_callers" means: what upstream code calls/triggers/initiates X.
-- "debug" means: a SPECIFIC bug, crash, or error (e.g. "my code fails with X", "this function throws Y").
-  "debug" is NOT for GENERAL questions about how to debug, trace, or investigate bugs — those are "feature" or "architecture".
 
 Intents:
-  debug_trace   — the query IS a stack trace / traceback / error log with file paths and line numbers
-  debug         — SPECIFIC bug/crash/error: "X fails", "why does Y throw Z", "not working" (NO stack trace) — requires a specific error scenario, not general debugging methodology
   search        — find/show/locate specific source code, files, or function implementations ONLY
   graph_callers — what calls X, what triggers X, what initiates X, what invokes X, what fires X, what starts X, which services call X, what causes X to run
   graph_callees — what does X call, callees of X, downstream of X
@@ -138,10 +132,9 @@ async def classify_intent_llm(query: str) -> str:
             intent = parsed.get("intent", "")
             if intent in _VALID_INTENTS:
                 return intent
-        # Strict-only: if JSON parse didn't yield a valid intent, raise so caller emits error
-        raise ValueError(f"LLM returned unparseable intent: {text[:120]!r}")
-    except ValueError:
-        raise
+        # Unknown intent from LLM — fall back to feature (covers debug/how-does-X-work questions)
+        log.debug("LLM returned unknown intent %r — falling back to feature", text[:80])
+        return "feature"
     except Exception as e:
         log.debug("LLM intent classification failed: %s", e)
 
@@ -337,198 +330,6 @@ def _prose_feature(result: dict, query: str) -> str:
     return "\n\n".join(parts) if parts else f"Feature trace for **{query}** found no structured data."
 
 
-def _prose_debug(result: dict) -> str:
-    """Turn debug trace result into readable root cause report."""
-    root = result.get("root_cause", "")
-    fix = result.get("fix_recommendation", "")
-    conf = result.get("confidence", "")
-    files = result.get("hotspot_files", [])
-    communities = result.get("communities_involved", [])
-
-    parts = []
-    if conf:
-        label = {"high": "🔴 High confidence", "medium": "🟡 Medium confidence", "low": "⚪ Low confidence"}.get(conf, conf)
-        parts.append(f"**{label} root cause analysis:**\n")
-
-    if root:
-        parts.append(root)
-
-    if files:
-        parts.append("\n**Likely bug location(s):**")
-        for f in files[:4]:
-            parts.append(f"- `{f}`")
-
-    if fix:
-        parts.append(f"\n**Recommended fix:**\n{fix}")
-
-    if communities:
-        parts.append("\n**Architecture areas involved:** " + ", ".join(communities[:4]))
-
-    return "\n".join(parts) if parts else "Could not determine root cause from available context."
-
-
-# ── NL debug (no stack trace) ─────────────────────────────────────────────────
-
-async def _handle_nl_debug(query: str, project_path: str) -> dict[str, Any]:
-    """Debug investigation from natural language — no stack trace required.
-
-    Identifies: business process (community), algorithm step, file:line range, root cause.
-    Based on Agentless fault localization: file-level → function-level → line-level narrowing.
-    """
-    import asyncio
-
-    from opencode_search.enricher import create_query_llm_client
-    from opencode_search.handlers._feature import handle_ask_feature
-    from opencode_search.handlers._kb_chat import _fetch_community_context
-    from opencode_search.handlers._query import handle_search_code
-
-    t0 = time.perf_counter()
-
-    # Parallel: feature trace + code search + community context
-    feature_task = handle_ask_feature(query=query, project_path=project_path, top_k=12)
-    code_task = handle_search_code(query=query, project_paths=[project_path], top_k=8)
-    community_task = _fetch_community_context(query, project_path, top_k=8, include_federation=False)
-
-    feature_result, code_result, (_, comm_list, _) = await asyncio.gather(
-        feature_task, code_task, community_task, return_exceptions=False
-    )
-
-    # Core feature data
-    algo = feature_result.get("algorithm", "") if isinstance(feature_result, dict) else ""
-    eps = feature_result.get("entry_points", []) if isinstance(feature_result, dict) else []
-    rationale = feature_result.get("design_rationale", "") if isinstance(feature_result, dict) else ""
-    call_chain = feature_result.get("call_chain", []) if isinstance(feature_result, dict) else []
-    code_results = code_result.get("results", []) if isinstance(code_result, dict) else []
-
-    # Look up line ranges for entry points (Agentless-style function-level localization)
-    async def _lookup_lines(symbol: str) -> tuple[int, int]:
-        try:
-            from opencode_search.handlers._graph import handle_get_symbol
-            r = await handle_get_symbol(symbol=symbol, project_path=project_path)
-            return r.get("start_line", 0), r.get("end_line", 0)
-        except Exception:
-            return 0, 0
-
-    ep_lines_tasks = [_lookup_lines(ep.get("symbol", "")) for ep in eps[:4]]
-    ep_lines_results = await asyncio.gather(*ep_lines_tasks, return_exceptions=True)
-
-    # Build rich context: business process + algorithm + lines
-    ctx_lines: list[str] = []
-
-    # Business process context (community semantic_type labels)
-    if comm_list:
-        ctx_lines.append("[BUSINESS PROCESS CONTEXT]")
-        for c in comm_list[:5]:
-            st = c.get("semantic_type", "utility")
-            ctx_lines.append(f'  Community: "{c["title"]}" (semantic_type: {st})')
-            ctx_lines.append(f'  Summary: {c["summary"][:200]}')
-
-    # Algorithm steps
-    if algo:
-        ctx_lines.append("\n[ALGORITHM STEPS]")
-        ctx_lines.append(algo[:600])
-
-    if rationale:
-        ctx_lines.append("\n[DESIGN RATIONALE]")
-        ctx_lines.append(rationale[:400])
-
-    # Entry points with line ranges
-    if eps:
-        ctx_lines.append("\n[ENTRY POINTS WITH LINE RANGES]")
-        for i, ep in enumerate(eps[:4]):
-            sym = ep.get("symbol", "unknown")
-            f = ep.get("file", "")
-            lines_res = ep_lines_results[i] if i < len(ep_lines_results) else (0, 0)
-            if isinstance(lines_res, tuple) and lines_res[0]:
-                ctx_lines.append(f"  {sym}() → {f} lines {lines_res[0]}–{lines_res[1]}")
-            else:
-                ctx_lines.append(f"  {sym}() → {f}")
-
-    # Call chain
-    if call_chain:
-        ctx_lines.append("\n[CALL CHAIN]")
-        for step in call_chain[:6]:
-            name = step.get("name") or step.get("qualified_name", "")
-            f = step.get("file", "")
-            d = step.get("depth", "")
-            ctx_lines.append(f"  depth={d}: {name} ({f})")
-
-    # Code samples
-    ctx_lines.append("\n[CODE SAMPLES]")
-    for r in code_results[:5]:
-        snippet = (r.get("content") or "")[:300].replace("\n", " ")
-        ctx_lines.append(f"  {r.get('path', '')}: {snippet}")
-
-    context = "\n".join(ctx_lines)
-
-    # LLM with explicit 4-part structure request
-    system = (
-        "You are a senior software engineer performing root cause analysis. "
-        "Using the provided context, identify and state FOUR things with these exact headings:\n\n"
-        "**BUSINESS PROCESS:** Name the community/domain where the bug originates "
-        "(use the community names provided)\n"
-        "**ALGORITHM STEP:** Which step of the algorithm/workflow where the bug manifests "
-        "(number it, e.g. 'Step 3: message appending')\n"
-        "**FILE & LINE RANGE:** Exact function name and file:line range "
-        "(use the provided line data)\n"
-        "**ROOT CAUSE:** Why this specific location causes the observed symptom — "
-        "include race conditions, edge cases, or logic errors\n\n"
-        "Be specific. Reference exact files and functions. "
-        "If line data is not provided, estimate based on the call chain."
-    )
-
-    root_cause = "(Analysis unavailable)"
-    hotspot_files = [ep.get("file", "") for ep in eps[:4] if ep.get("file")]
-    business_process = comm_list[0]["title"] if comm_list else ""
-    algorithm_step = ""
-    line_range = ""
-
-    # Build line_range from best entry point
-    if eps and ep_lines_results:
-        best_ep = eps[0]
-        best_lines = ep_lines_results[0] if ep_lines_results else (0, 0)
-        if isinstance(best_lines, tuple) and best_lines[0]:
-            line_range = f"{best_ep.get('file', '')}:{best_lines[0]}–{best_lines[1]}"
-        else:
-            line_range = best_ep.get("file", "")
-
-    try:
-        llm = await asyncio.to_thread(create_query_llm_client)
-        if llm:
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": f"Analyse for root cause:\n\n{context}\n\nQuestion: {query}"},
-            ]
-            root_cause = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
-    except Exception as e:
-        log.warning("NL debug LLM failed: %s", e)
-        if algo:
-            root_cause = (
-                f"**BUSINESS PROCESS:** {business_process or 'Unknown'}\n"
-                f"**ALGORITHM STEP:** Review the algorithm for edge cases\n"
-                f"**FILE & LINE RANGE:** {line_range or 'See entry points above'}\n"
-                f"**ROOT CAUSE:** Based on feature trace: {algo[:300]}"
-            )
-
-    # Extract algorithm_step from algo if LLM didn't provide it
-    if algo and not algorithm_step:
-        first_line = algo.split("\n")[0] if "\n" in algo else algo[:100]
-        algorithm_step = first_line
-
-    return {
-        "frames": [],
-        "root_cause": root_cause,
-        "fix_recommendation": None,
-        "hotspot_files": hotspot_files,
-        "communities_involved": [c["title"] for c in comm_list[:4]],
-        "business_process": business_process,
-        "algorithm_step": algorithm_step,
-        "line_range": line_range,
-        "confidence": "medium" if eps else "low",
-        "elapsed_ms": round((time.perf_counter() - t0) * 1000),
-    }
-
-
 # ── Architecture handler (PathRAG-inspired layered synthesis) ─────────────────
 
 _ARCH_SYSTEM_PROMPT = (
@@ -702,23 +503,8 @@ async def handle_chat_auto(
     answer = ""
     model_name = ""
 
-    # ── debug_trace: has a stack trace ────────────────────────────────────────
-    if intent == "debug_trace":
-        from opencode_search.handlers._debug_trace import handle_debug_trace
-        result = await handle_debug_trace(
-            traceback=query, project_path=project_path, include_fix=True
-        )
-        answer = _prose_debug(result)
-        sources = result.get("hotspot_files", [])
-
-    # ── debug: natural language bug investigation ─────────────────────────────
-    elif intent == "debug":
-        result = await _handle_nl_debug(query, project_path)
-        answer = _prose_debug(result)
-        sources = result.get("hotspot_files", [])
-
     # ── graph_callers / graph_callees / graph_impact ──────────────────────────
-    elif intent in ("graph_callers", "graph_callees", "graph_impact"):
+    if intent in ("graph_callers", "graph_callees", "graph_impact"):
         symbol = await _extract_symbol_llm(query)
         if intent == "graph_callers":
             from opencode_search.handlers._graph import handle_get_callers
@@ -916,15 +702,6 @@ async def handle_chat_auto_stream(
         async for event in _stream_global(
             query=query, project_path=project_path,
             conversation_history=conversation_history, t0=t0,
-        ):
-            yield event
-        return
-
-    # ── debug / debug_trace: streaming root-cause analysis ───────────────────
-    if intent in ("debug", "debug_trace"):
-        async for event in _stream_debug(
-            query=query, project_path=project_path,
-            is_trace=(intent == "debug_trace"), t0=t0,
         ):
             yield event
         return
@@ -1291,180 +1068,6 @@ async def _stream_global(
     }
 
 
-async def _stream_debug(
-    query: str,
-    project_path: str,
-    is_trace: bool,
-    t0: float,
-    chunk_size: int = 40,
-):
-    """Stream debug and debug_trace intent responses.
-
-    debug_trace: run handle_debug_trace in background, heartbeat while waiting,
-                 then stream the formatted prose result.
-    debug: assemble context in parallel (heartbeat if slow), then stream LLM synthesis.
-    """
-    import asyncio
-    import time as _time
-
-    from opencode_search.enricher import create_query_llm_client
-
-    if is_trace:
-        # ── debug_trace: parse stack trace + localize ──────────────────────────
-        from opencode_search.handlers._debug_trace import handle_debug_trace
-        task = asyncio.ensure_future(
-            handle_debug_trace(traceback=query, project_path=project_path, include_fix=True)
-        )
-        while not task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
-            except TimeoutError:
-                yield {"type": "thinking"}
-        try:
-            result = await task
-        except Exception as exc:
-            result = {"root_cause": f"Debug trace failed: {exc}", "hotspot_files": []}
-        answer = _prose_debug(result)
-        record_stream_success()
-        for i in range(0, max(len(answer), 1), chunk_size):
-            chunk = answer[i:i + chunk_size]
-            if chunk:
-                yield {"type": "token", "text": chunk}
-            await asyncio.sleep(0)
-        yield {
-            "type": "done",
-            "intent": "debug_trace",
-            "sources": result.get("hotspot_files", [])[:10],
-            "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
-            "model": "debug_trace",
-        }
-        return
-
-    # ── debug: NL root-cause investigation with LLM streaming ─────────────────
-    from opencode_search.handlers._kb_chat import _fetch_community_context
-    from opencode_search.handlers._query import handle_search_code
-
-    async def _bounded_feature_trace() -> dict:
-        try:
-            return await asyncio.wait_for(_run_feature_trace(query, project_path), timeout=40.0)
-        except TimeoutError:
-            return {}
-
-    # Parallel context assembly — feature trace bounded at 40s to keep total latency reasonable
-    feature_task = asyncio.ensure_future(_bounded_feature_trace())
-    code_task = asyncio.ensure_future(
-        handle_search_code(query=query, project_paths=[project_path], top_k=8)
-    )
-    community_task = asyncio.ensure_future(
-        _fetch_community_context(query, project_path, top_k=8, include_federation=False)
-    )
-    pending = {feature_task, code_task, community_task}
-    while pending:
-        _, pending = await asyncio.wait(pending, timeout=10.0)
-        if pending:
-            yield {"type": "thinking"}
-
-    feature_result = feature_task.result() if not feature_task.exception() else {}
-    code_result = code_task.result() if not code_task.exception() else {}
-    _, comm_list, _ = community_task.result() if not community_task.exception() else ("", [], 0)
-
-    algo = feature_result.get("algorithm", "") if isinstance(feature_result, dict) else ""
-    eps = feature_result.get("entry_points", []) if isinstance(feature_result, dict) else []
-    rationale = feature_result.get("design_rationale", "") if isinstance(feature_result, dict) else ""
-    call_chain = feature_result.get("call_chain", []) if isinstance(feature_result, dict) else []
-    code_results = code_result.get("results", []) if isinstance(code_result, dict) else []
-
-    ctx_lines: list[str] = []
-    if comm_list:
-        ctx_lines.append("[BUSINESS PROCESS CONTEXT]")
-        for c in comm_list[:5]:
-            st = c.get("semantic_type", "utility")
-            ctx_lines.append(f'  Community: "{c["title"]}" (semantic_type: {st})')
-            ctx_lines.append(f'  Summary: {c["summary"][:200]}')
-    if algo:
-        ctx_lines.append("\n[ALGORITHM STEPS]")
-        ctx_lines.append(algo[:600])
-    if rationale:
-        ctx_lines.append("\n[DESIGN RATIONALE]")
-        ctx_lines.append(rationale[:400])
-    if eps:
-        ctx_lines.append("\n[ENTRY POINTS]")
-        for ep in eps[:4]:
-            ctx_lines.append(f"  {ep.get('symbol', '')} → {ep.get('file', '')}")
-    if call_chain:
-        ctx_lines.append("\n[CALL CHAIN]")
-        for step in call_chain[:6]:
-            name = step.get("name") or step.get("qualified_name", "")
-            f = step.get("file", "")
-            d = step.get("depth", "")
-            ctx_lines.append(f"  depth={d}: {name} ({f})")
-    ctx_lines.append("\n[CODE SAMPLES]")
-    for r in code_results[:5]:
-        snippet = (r.get("content") or "")[:300].replace("\n", " ")
-        ctx_lines.append(f"  {r.get('path', '')}: {snippet}")
-
-    context = "\n".join(ctx_lines)
-    debug_system = (
-        "You are a senior software engineer performing root cause analysis. "
-        "Using the provided context, identify and state FOUR things with these exact headings:\n\n"
-        "**BUSINESS PROCESS:** Name the community/domain where the bug originates\n"
-        "**ALGORITHM STEP:** Which step of the algorithm/workflow where the bug manifests\n"
-        "**FILE & LINE RANGE:** Exact function name and file location\n"
-        "**ROOT CAUSE:** Why this specific location causes the observed symptom — "
-        "include race conditions, edge cases, or logic errors\n\n"
-        "Be specific. Reference exact files and functions."
-    )
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": debug_system},
-        {"role": "user", "content": f"Analyse for root cause:\n\n{context}\n\nQuestion: {query}"},
-    ]
-
-    llm = await asyncio.to_thread(create_query_llm_client)
-    model_name = getattr(llm, "model", type(llm).__name__) if llm else "none"
-
-    if llm is None:
-        record_stream_error("debug")
-        yield {
-            "type": "error", "code": "llm_unavailable",
-            "message": "LLM unavailable. Check OPENCODE_QUERY_LLM_PROVIDER.",
-            "intent": "debug",
-        }
-        yield {
-            "type": "done", "intent": "debug", "sources": [],
-            "elapsed_ms": round((_time.perf_counter() - t0) * 1000), "model": "none",
-        }
-        return
-    elif hasattr(llm, "stream_chat"):
-        try:
-            async for token in _bridge_stream(llm, messages, max_tokens=1024):
-                yield {"type": "token", "text": token}
-            record_stream_success()
-        except Exception as _se:
-            log.warning("_stream_debug: stream_chat failed: %s", _se)
-            record_stream_error("debug")
-            yield {"type": "error", "code": "stream_failed", "message": str(_se), "intent": "debug"}
-    else:
-        try:
-            answer = await asyncio.to_thread(llm.chat, messages, max_tokens=1024)
-            record_stream_success()
-            for i in range(0, max(len(answer), 1), chunk_size):
-                chunk = answer[i:i + chunk_size]
-                if chunk:
-                    yield {"type": "token", "text": chunk}
-                await asyncio.sleep(0)
-        except Exception as _ce:
-            log.warning("_stream_debug: chat failed: %s", _ce)
-            record_stream_error("debug")
-            yield {"type": "error", "code": "chat_failed", "message": str(_ce), "intent": "debug"}
-
-    hotspot_files = [ep.get("file", "") for ep in eps[:4] if ep.get("file")]
-    yield {
-        "type": "done",
-        "intent": "debug",
-        "sources": hotspot_files[:10],
-        "elapsed_ms": round((_time.perf_counter() - t0) * 1000),
-        "model": model_name,
-    }
 
 
 async def _run_feature_trace(query: str, project_path: str, use_cache: bool = True) -> dict[str, Any]:

@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.live, pytest.mark.slow]
 DAEMON_URL = "http://localhost:8765"
 DASHBOARD_URL = f"{DAEMON_URL}/dashboard"
 _TIMEOUT_PAGE = 15_000    # ms — page load
-_TIMEOUT_CHAT = 300_000  # ms — wait for AI response (global/debug can take 150s+)
+_TIMEOUT_CHAT = 300_000  # ms — wait for AI response (global can take 150s+)
 # Heavy intents (global overview, graph traversals) hit full retrieved-context LLM paths
 _TIMEOUT_CHAT_LONG = 480_000  # ms — long-tail budget for the 4 heaviest intent tests
 
@@ -375,20 +375,6 @@ class TestChatIntents:
             timeout_ms=_TIMEOUT_CHAT_LONG,
         )
         assert len(text) > 10, f"Graph callees response too short: {text!r}"
-
-    def test_intent_debug_trace(self, page, live_project):
-        traceback = (
-            "Traceback (most recent call last):\n"
-            "  File 'server.py', line 42, in handle_request\n"
-            "    result = process(data)\n"
-            "KeyError: 'content'"
-        )
-        text = self._chat_and_get_text(page, live_project, traceback)
-        assert len(text) > 20, f"Debug trace response too short: {text!r}"
-
-    def test_intent_debug(self, page, live_project):
-        text = self._chat_and_get_text(page, live_project, "How do I debug a connection pool exhaustion issue?")
-        assert len(text) > 20, f"Debug response too short: {text!r}"
 
 
 # ---------------------------------------------------------------------------
