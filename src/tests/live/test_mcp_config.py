@@ -1879,3 +1879,79 @@ class TestConfigMarkersNoRegex:
         assert "system_prompt" not in cleaned
         assert "agent: {}" in cleaned
         assert "next_key: another" in cleaned
+
+
+@pytest.mark.live
+class TestPipelineConcurrencyGuard:
+    """U1: verify the thundering-herd fix — _PIPELINE_GATE serialises pipelines,
+    _PIPELINE_IN_FLIGHT deduplicates same-project calls.  No mocks: structural
+    proof via source inspection + live HTTP endpoint check."""
+
+    def test_pipeline_gate_exists_as_semaphore(self) -> None:
+        """_PIPELINE_GATE must be an asyncio.Semaphore(1) at module level."""
+        import asyncio
+
+        from opencode_search.handlers._autopipeline import _PIPELINE_GATE
+        assert isinstance(_PIPELINE_GATE, asyncio.Semaphore), (
+            "_PIPELINE_GATE must be asyncio.Semaphore"
+        )
+        # A fresh Semaphore(1) has internal counter == 1 (not yet acquired)
+        # OR it has been acquired and released. Check it is bounded (value ≤ 1).
+        # asyncio.Semaphore exposes ._value in CPython; use it for the bound assert.
+        assert getattr(_PIPELINE_GATE, "_value", 1) <= 1, (
+            "_PIPELINE_GATE must be Semaphore(1), not a higher-bound semaphore"
+        )
+
+    def test_pipeline_in_flight_is_set(self) -> None:
+        """_PIPELINE_IN_FLIGHT must be a set (dedup container)."""
+        from opencode_search.handlers._autopipeline import _PIPELINE_IN_FLIGHT
+        assert isinstance(_PIPELINE_IN_FLIGHT, set), (
+            "_PIPELINE_IN_FLIGHT must be a set"
+        )
+
+    def test_schedule_auto_pipeline_deduplicates(self) -> None:
+        """schedule_auto_pipeline source must check _PIPELINE_IN_FLIGHT before scheduling."""
+        import inspect
+
+        from opencode_search.handlers._autopipeline import schedule_auto_pipeline
+        src = inspect.getsource(schedule_auto_pipeline)
+        assert "_PIPELINE_IN_FLIGHT" in src, (
+            "schedule_auto_pipeline must check _PIPELINE_IN_FLIGHT to deduplicate calls"
+        )
+        assert "skipped_duplicate" in src or "already queued" in src.lower(), (
+            "schedule_auto_pipeline must log/record a duplicate-skip when project is in-flight"
+        )
+
+    def test_handle_auto_pipeline_acquires_gate(self) -> None:
+        """handle_auto_pipeline must acquire _PIPELINE_GATE to serialise execution."""
+        import inspect
+
+        from opencode_search.handlers._autopipeline import handle_auto_pipeline
+        src = inspect.getsource(handle_auto_pipeline)
+        assert "_PIPELINE_GATE" in src, (
+            "handle_auto_pipeline must reference _PIPELINE_GATE"
+        )
+        assert "acquire" in src or "async with _PIPELINE_GATE" in src, (
+            "handle_auto_pipeline must acquire _PIPELINE_GATE (serialiser)"
+        )
+
+    def test_pipeline_status_exposes_in_flight(self, http) -> None:
+        """Live: /api/auto_pipeline_status must expose the in_flight list."""
+        resp = http.get("http://localhost:8765/api/auto_pipeline_status", timeout=5)
+        assert resp.status_code == 200, f"pipeline status failed: {resp.text}"
+        data = resp.json()
+        assert "in_flight" in data, (
+            f"/api/auto_pipeline_status must include 'in_flight' field; got: {list(data.keys())}"
+        )
+        assert isinstance(data["in_flight"], list), (
+            f"'in_flight' must be a list; got: {type(data['in_flight'])}"
+        )
+        # in_flight paths should all be strings (no duplicates by construction)
+        for path in data["in_flight"]:
+            assert isinstance(path, str), f"in_flight entries must be strings; got {path!r}"
+
+    def test_daemon_stays_healthy_after_guard_code_loaded(self, http) -> None:
+        """Live: daemon healthz ok after code with the gate is deployed."""
+        resp = http.get("http://localhost:8765/healthz", timeout=5)
+        assert resp.status_code == 200
+        assert resp.json().get("ok") is True
