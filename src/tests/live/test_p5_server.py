@@ -37,9 +37,9 @@ def test_mcp_index_register_remove(tmp_path):
     from opencode_search.server.mcp import index as index_tool
     p = str(tmp_path)
     reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
-    assert reg["registered"] is True
+    assert reg["status"] in ("flagged", "already_registered")
     rem = json.loads(asyncio.run(index_tool(p, enabled=False)))
-    assert rem["removed"] is True
+    assert rem["status"] in ("removed", "not_found")
 
 
 def test_healthz():

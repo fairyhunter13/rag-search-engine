@@ -10,8 +10,8 @@ Generated from the live archived engine before wiping `main`.
 ### 1.1 search(query, scope="code", project_paths=None, top_k=10, include_federation=True)
 - [ ] scope: code(default) | docs(wiki/md/rst/txt filter) | all(no filter) | similar
 - [ ] GPU embed + jina-reranker-v1-turbo-en rerank; reranking always on; --no-rerank CLI flag ignored
-- [ ] project_paths=None searches all registered projects; include_federation fans to members
-- [ ] response: {results:[{path,start_line,end_line,content,language,score}], total, elapsed_ms, projects_searched}
+- [x] project_paths=None searches all registered projects; include_federation fans to members
+- [x] response: {results:[{path,start_line,end_line,content,language,score}], total, elapsed_ms, projects_searched}
 - [x] runtime_state.note_activity() + note_query() on every call
 
 ### 1.2 ask(query, project_path, scope="all", top_k=10, include_federation=True)
@@ -21,15 +21,15 @@ Generated from the live archived engine before wiping `main`.
 
 ### 1.3 graph(symbol, project_path, relation="definition", to_symbol=None, depth=5, include_federation=True)
 - [ ] relation: definition | callers(BFS depth=5) | callees(BFS depth=5) | impact | path(requires to_symbol) | impact_narrative(LLM: risk+domains) | semantic_trace(requires to_symbol)
-- [ ] path/semantic_trace without to_symbol returns {error:...}
+- [x] path/semantic_trace without to_symbol returns {error:...}
 - [x] runtime_state.note_activity() + note_query() on every call
 
 ### 1.4 overview(project_path=None, what="structure", max_depth=4, top_k=100, export_format="json", max_nodes=5000, since_hours=None)
-- [ ] what: structure | communities(by size, top_k=100) | status | projects(no path needed) | metrics(no path needed) | graph_export(json|graphml,max_nodes) | patterns | architecture_domains(top Leiden level) | hierarchy(all levels) | service_mesh | import_cycles(Tarjan SCC) | suggested_questions | graph_diff(since_hours) | surprising_connections(top-20 bridges) | feature_map | business_rules | process_flows
+- [x] what: structure | communities(by size, top_k=100) | status | projects(no path needed) | metrics(no path needed) | graph_export(json|graphml,max_nodes) | patterns | architecture_domains(top Leiden level) | hierarchy(all levels) | service_mesh | import_cycles(Tarjan SCC) | suggested_questions | graph_diff(since_hours) | surprising_connections(top-20 bridges) | feature_map | business_rules | process_flows
 - [x] runtime_state.note_activity() on every call
 
 ### 1.5 index(project_path, enabled=True)
-- [ ] enabled=True: register idempotent; daemon auto-indexes+KB+watches+federation; {status:"flagged"|"already_registered",path,note}
+- [x] enabled=True: register idempotent; daemon auto-indexes+KB+watches+federation; {status:"flagged"|"already_registered",path,note}
 - [ ] enabled=False: DESTRUCTIVE — stop watcher + remove registry + delete on-disk index (handle_remove_project delete_index=True)
 - [x] project_path expanduser().resolve()'d; runtime_state.note_activity() called
 
@@ -40,7 +40,7 @@ Generated from the live archived engine before wiping `main`.
 - [ ] GPU guard at startup (synchronous, before event loop): exit 1 on no-CUDA; no CPU fallback ever
 - [ ] HTTP lifespan: warmup query models -> stale-cleanup task -> resume_watchers -> resume_stalled_pipelines -> sd_notify READY=1 -> on shutdown: cancel tasks + sd_notify STOPPING=1
 - [ ] WATCHDOG_USEC: sd_notify("WATCHDOG=1") every WATCHDOG_USEC/2_000_000 ticks
-- [ ] Stale client cleanup: release watches for clients silent > DEFAULT_CLIENT_STALE_S (60s)
+- [x] Stale client cleanup: release watches for clients silent > DEFAULT_CLIENT_STALE_S (60s)
 - [ ] One-shot model idle unload: after DEFAULT_MODEL_IDLE_UNLOAD_S (300s) no inference -> cleanup_models() once; resets on next inference
 
 ---

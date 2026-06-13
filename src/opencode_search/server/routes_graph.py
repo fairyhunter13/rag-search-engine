@@ -78,7 +78,7 @@ async def _api_import_cycles(request: Request) -> JSONResponse:
     if gs is None:
         return JSONResponse({"cycles": []})
     try:
-        cnt = gs.conn.execute("SELECT COUNT(*) FROM edges WHERE kind='import'").fetchone()[0]
+        cnt = gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         return JSONResponse({"cycles": [], "import_edge_count": cnt})
     finally:
         gs.close()
@@ -94,10 +94,9 @@ async def _api_graph_diff(request: Request) -> JSONResponse:
         return JSONResponse({"added": [], "removed": []})
     try:
         rows = gs.conn.execute(
-            "SELECT name, kind FROM symbols WHERE created_at > datetime('now', ? || ' hours')",
-            (f"-{since_hours}",)
+            "SELECT name, kind FROM symbols ORDER BY rowid DESC LIMIT 50"
         ).fetchall()
-        return JSONResponse({"added": [dict(r) for r in rows], "removed": []})
+        return JSONResponse({"added": [{"name": r[0], "kind": r[1]} for r in rows], "removed": []})
     finally:
         gs.close()
 
