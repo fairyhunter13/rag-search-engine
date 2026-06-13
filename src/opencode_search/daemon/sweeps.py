@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import shutil
 
+_PAUSED: bool = False
+
 log = logging.getLogger(__name__)
 
 
