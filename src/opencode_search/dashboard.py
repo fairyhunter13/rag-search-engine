@@ -105,7 +105,7 @@ def record_search_event(query: str, scope: str, result_count: int,
             conn.execute("DELETE FROM search_events WHERE ts < ?", (cutoff,))
             conn.commit()
             conn.close()
-    except Exception:
+    except (sqlite3.Error, OSError):
         pass
 
 
@@ -122,7 +122,7 @@ def record_indexing_event(project: str, action: str, duration_s: float, files_pr
             conn.execute("DELETE FROM indexing_events WHERE ts < ?", (cutoff,))
             conn.commit()
             conn.close()
-    except Exception:
+    except (sqlite3.Error, OSError):
         pass
 
 
@@ -137,7 +137,7 @@ def _load_alerts() -> list[dict]:
                 if rule["id"] not in saved_ids:
                     merged.append(rule)
             return merged
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         pass
     return _DEFAULT_ALERTS[:]
 
@@ -1019,19 +1019,14 @@ def _register_kb_routes(mcp: FastMCP) -> None:
             wiki_dir = get_project_wiki_dir(project)
             md_files = list(wiki_dir.glob("*.md")) if wiki_dir.exists() else []
             result["wiki_page_count"] = len(md_files)
-        except Exception:
+        except OSError:
             result["wiki_page_count"] = None
 
         # Patterns cache
-        try:
-            cached = load_patterns_cache(project)
-            result["patterns_cached"] = cached is not None
-            result["patterns_cached_at"] = cached.get("cached_at") if cached else None
-            result["patterns_steps"] = cached.get("steps", []) if cached else []
-        except Exception:
-            result["patterns_cached"] = False
-            result["patterns_cached_at"] = None
-            result["patterns_steps"] = []
+        cached = load_patterns_cache(project)
+        result["patterns_cached"] = cached is not None
+        result["patterns_cached_at"] = cached.get("cached_at") if cached else None
+        result["patterns_steps"] = cached.get("steps", []) if cached else []
 
         # Last pipeline event
         events = get_pipeline_events()
@@ -1121,7 +1116,7 @@ def _register_ops_routes(mcp: FastMCP) -> None:
             info = _json.loads(_META_PATH.read_text(encoding="utf-8"))
             started_at = info.get("started_at")
             data["uptime_s"] = round(time.time() - started_at, 1) if started_at else None
-        except Exception:
+        except (OSError, json.JSONDecodeError, ValueError):
             data["uptime_s"] = None
         data["cublas_breaker"] = get_cublas_metrics()
         return JSONResponse(data)
@@ -1193,7 +1188,7 @@ def _register_ops_routes(mcp: FastMCP) -> None:
                     (cutoff,),
                 ).fetchall()
                 conn.close()
-        except Exception:
+        except (sqlite3.Error, OSError):
             rows = []
 
         # Bucket into time windows
@@ -1382,7 +1377,7 @@ def _register_ops_routes(mcp: FastMCP) -> None:
                 if age < 120:
                     try:
                         return JSONResponse(json.loads(cp.read_text()))
-                    except Exception:
+                    except (OSError, json.JSONDecodeError):
                         pass
 
         # Build a quick status report synchronously (no tests)
@@ -1410,7 +1405,7 @@ def _register_ops_routes(mcp: FastMCP) -> None:
             if proc.returncode in (0, 1) and stdout.strip():
                 try:
                     return JSONResponse(json.loads(stdout))
-                except Exception:
+                except json.JSONDecodeError:
                     pass
             # Serve the cache if it was just written
             if alt_cache.exists():
