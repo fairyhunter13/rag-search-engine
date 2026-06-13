@@ -710,46 +710,62 @@ class TestAllIndexedProjectsWatched:
 
 
 class TestVerdictWipedCommunityNotDone:
-    """F4: kb-status must NOT report DONE when edges>0 but communities==0."""
+    """F4: _project_kb_incomplete must return True when edges>0 but communities==0 (Gap A)."""
 
     def test_verdict_edges_but_zero_communities_not_done(self):
-        """A project with graph edges but 0 communities must verdict PENDING, not DONE."""
-        import subprocess
+        """A project with graph edges but 0 communities must be flagged as incomplete (Gap A).
+
+        Uses a controlled temporary SQLite database so the test is environment-independent
+        (no longer relies on payment-gateway being in a specific Gap A state).
+        """
         from pathlib import Path
 
         from opencode_search.config import get_project_graph_db_path
-        from opencode_search.graph.storage import GraphStorage
+        from opencode_search.graph.storage import GraphStorage, NodeData
+        from opencode_search.handlers._autopipeline import _project_kb_incomplete
 
-        db = get_project_graph_db_path(_PAYMENT_GW)
-        if not Path(db).exists():
-            pytest.skip("payment-gateway not indexed")
+        # Use a path outside /tmp (U2 registry exclude guard) and outside IGNORED_DIRS.
+        test_project = Path.home() / ".local" / "share" / "opencode-test" / "gap_a_scenario"
+        test_project.mkdir(parents=True, exist_ok=True)
 
-        gs = GraphStorage(db)
+        db_path = get_project_graph_db_path(str(test_project))
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # Remove any leftover DB from a prior run so we start clean.
+        if Path(db_path).exists():
+            Path(db_path).unlink()
+
+        gs = GraphStorage(db_path)
         gs.open()
         try:
+            # Insert two nodes + a CALLS edge → edges>0, communities==0 (Gap A state).
+            gs.upsert_nodes([
+                NodeData(id="n1", name="func_a", qualified_name="mod.func_a",
+                         kind="function", file="mod.py"),
+                NodeData(id="n2", name="func_b", qualified_name="mod.func_b",
+                         kind="function", file="mod.py"),
+            ])
+            gs._db().execute(
+                "INSERT OR IGNORE INTO edges (from_id, to_id, kind) VALUES ('n1', 'n2', 'CALLS')"
+            )
+            gs._db().commit()
+            # Sanity: edges>0, communities==0
             edge_row = gs._db().execute("SELECT 1 FROM edges LIMIT 1").fetchone()
             n_comms = len(gs.get_communities())
         finally:
             gs.close()
 
-        if edge_row is None:
-            pytest.skip("payment-gateway has 0 edges — not Gap A scenario")
+        assert edge_row is not None, "test setup failed: no edge in DB"
+        assert n_comms == 0, "test setup failed: communities should be empty"
 
-        if n_comms > 0:
-            pytest.skip("payment-gateway already has communities — Gap A resolved; verdict may be DONE/PENDING depending on wiki")
-
-        # edges>0, communities==0 — cli kb-status must NOT report DONE for this project.
-        result = subprocess.run(
-            [".venv/bin/python", "-m", "opencode_search.cli", "kb-status", _PAYMENT_GW],
-            capture_output=True, text=True,
-            cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
-        )
-        output = result.stdout + result.stderr
-        assert "DONE" not in output, (
-            f"kb-status reported DONE for {_PAYMENT_GW!r} which has edges>0 but 0 communities — "
-            "Gap A: incomplete KB must not be masked as DONE.\n"
-            f"Output: {output[:500]}"
-        )
+        try:
+            result = _project_kb_incomplete(str(test_project))
+            assert result is True, (
+                "_project_kb_incomplete must return True when edges>0 and communities==0 "
+                "(Gap A: communities wiped/missing → incomplete)."
+            )
+        finally:
+            Path(db_path).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
