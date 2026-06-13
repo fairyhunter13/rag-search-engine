@@ -1341,27 +1341,7 @@ def create_llm_client() -> LLMClient | None:
 
 
 def create_kb_query_llm_client() -> LLMClient | None:
-    """Create the GPU-local LLM client for interactive KB queries (ask/search/graph handlers).
-
-    Pinned to the single resident model qwen3-enrich:1.7b on :11434.
-    Two-tier architecture: BUILD/KB-QUERY → qwen3-enrich:1.7b, CHAT (dashboard) → codex→haiku.
-
-    Falls back to create_llm_client() if the model is unavailable (still GPU, never cloud).
-    """
-    import logging as _logging
-    _log = _logging.getLogger(__name__)
-
-    model = os.environ.get("OPENCODE_KB_QUERY_LLM_MODEL", "qwen3-enrich:1.7b")
-    timeout = int(os.environ.get("OPENCODE_KB_QUERY_LLM_TIMEOUT", "180"))
-    num_ctx = int(os.environ.get("OPENCODE_KB_QUERY_LLM_NUM_CTX", "8192"))
-    base_url = os.environ.get("OPENCODE_KB_QUERY_LLM_BASE_URL",
-                              os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"))
-
-    client: LLMClient = OllamaClient(base_url=base_url, model=model, timeout=timeout, num_ctx=num_ctx)
-    if client.is_available():
-        return client
-
-    _log.warning("KB query model %r unavailable — falling back to enrich client", model)
+    """KB-query tier alias — same qwen3-enrich:1.7b policy as create_llm_client (two-tier: 1.7b vs codex chat)."""
     return create_llm_client()
 
 

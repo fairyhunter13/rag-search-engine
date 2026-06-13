@@ -616,16 +616,13 @@ class TestSinglePrimitivePipeline:
         )
 
     def test_kb_query_client_uses_1_7b_default(self) -> None:
-        """create_kb_query_llm_client must default to qwen3-enrich:1.7b, not qwen3-query:8b."""
-        import inspect
-
-        from opencode_search.enricher.client import create_kb_query_llm_client
-        src = inspect.getsource(create_kb_query_llm_client)
-        assert "qwen3-enrich:1.7b" in src, (
-            "create_kb_query_llm_client does not default to qwen3-enrich:1.7b"
+        """KB-query and build tiers both default to qwen3-enrich:1.7b (U3: single resident model)."""
+        from opencode_search.config import DEFAULT_LLM_MODEL
+        assert "qwen3-enrich" in DEFAULT_LLM_MODEL, (
+            f"DEFAULT_LLM_MODEL is {DEFAULT_LLM_MODEL!r} — expected qwen3-enrich:1.7b after U3"
         )
-        assert "qwen3-query:8b" not in src, (
-            "create_kb_query_llm_client still references qwen3-query:8b"
+        assert "8b" not in DEFAULT_LLM_MODEL, (
+            f"DEFAULT_LLM_MODEL references 8b model ({DEFAULT_LLM_MODEL!r}) — must be qwen3-enrich:1.7b after U3"
         )
 
     def test_no_create_map_llm_client_in_codebase(self) -> None:
