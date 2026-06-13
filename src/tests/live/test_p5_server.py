@@ -49,7 +49,7 @@ def test_healthz():
     with TestClient(create_app()) as c:
         r = c.get("/healthz")
         assert r.status_code == 200
-        assert r.json()["status"] == "ok"
+        assert r.json()["ok"] is True
 
 
 def test_dashboard_five_views():

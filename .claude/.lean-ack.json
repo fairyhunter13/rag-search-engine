@@ -1,1 +1,1 @@
-{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/opencode_search/server/routes.py", "reason": "P7 golden diff: healthz must return ok/service/transport/uptime_s/load_avg/cpu_count to match golden", "expectedAddedLines": 10}
+{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/tests/live/test_p5_server.py", "reason": "P7: test_healthz checks ok not status (healthz now returns ok=True not status=ok)", "expectedAddedLines": 0}
