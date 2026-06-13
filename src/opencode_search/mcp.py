@@ -396,7 +396,7 @@ async def overview(
         "structure", "communities", "status", "projects", "metrics", "graph_export",
         "patterns", "architecture_domains", "hierarchy", "service_mesh",
         "import_cycles", "suggested_questions", "graph_diff", "surprising_connections",
-        "pr_impact", "feature_map", "business_rules", "process_flows",
+        "feature_map", "business_rules", "process_flows",
     ] = "structure",
     max_depth: int = 4,
     top_k: int = 100,
@@ -418,7 +418,6 @@ async def overview(
           | "suggested_questions" (questions the graph is uniquely positioned to answer)
           | "graph_diff" (what changed in the graph recently)
           | "surprising_connections" (edges spanning architectural community boundaries)
-          | "pr_impact" (changed files → communities touched + risk level; auto-detects git diff)
           | "feature_map" (all communities grouped by business semantic type: feature|process|rule|...)
           | "business_rules" (communities classified as constraints/policies/validations)
           | "process_flows" (communities classified as workflows/business processes)
@@ -430,7 +429,7 @@ async def overview(
     valid = {"structure", "communities", "status", "projects", "metrics", "graph_export",
              "patterns", "architecture_domains", "hierarchy", "service_mesh",
              "import_cycles", "suggested_questions", "graph_diff", "surprising_connections",
-             "pr_impact", "feature_map", "business_rules", "process_flows"}
+             "feature_map", "business_rules", "process_flows"}
     if what not in valid:
         return {"error": f"Invalid what={what!r}", "valid_values": sorted(valid)}
 
@@ -555,11 +554,6 @@ async def overview(
             return {"error": "project_path required for what='graph_diff'"}
         from opencode_search.handlers._graph import handle_graph_diff
         return await handle_graph_diff(project_path=project_path, since_hours=since_hours)
-    elif what == "pr_impact":
-        if not project_path:
-            return {"error": "project_path required for what='pr_impact'"}
-        from opencode_search.handlers._pr_impact import handle_pr_impact
-        return await handle_pr_impact(project_path=project_path)
     elif what == "feature_map":
         if not project_path:
             return {"error": "project_path required for what='feature_map'"}

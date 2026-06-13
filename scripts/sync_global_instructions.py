@@ -35,7 +35,6 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "suggested_questions" — questions the graph is uniquely positioned to answer
   - what: "graph_diff" — symbols added/removed recently
   - what: "surprising_connections" — edges spanning architectural community boundaries
-  - what: "pr_impact" — PR risk: changed files → communities touched + risk level
 - `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
   - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
   - action: "enrich_hierarchy" — re-run LLM enrichment for level-2+ communities (fixes unenriched hierarchies)

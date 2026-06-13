@@ -16,7 +16,7 @@ graph   : definition | callers | callees | impact | impact_narrative |
 overview: structure | communities | status | projects | patterns |
           service_mesh | architecture_domains | hierarchy | import_cycles |
           graph_diff | surprising_connections | suggested_questions |
-          pr_impact | feature_map | business_rules | process_flows
+          feature_map | business_rules | process_flows
 
 Plus structural proofs:
   - _debug_trace is absent from the MCP tool surface
@@ -243,9 +243,6 @@ class TestOverviewZeroLLM:
 
     def test_overview_suggested_questions(self, http, proj) -> None:
         self._ov(http, proj, "suggested_questions")
-
-    def test_overview_pr_impact(self, http, proj) -> None:
-        self._ov(http, proj, "pr_impact")
 
     def test_overview_feature_map(self, http, proj) -> None:
         self._ov(http, proj, "feature_map")

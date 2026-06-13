@@ -60,7 +60,6 @@ from opencode_search.handlers._index import (
 from opencode_search.handlers._kb_chat import handle_kb_chat
 from opencode_search.handlers._patterns import handle_analyze_patterns_llm
 from opencode_search.handlers._pipeline import handle_pipeline
-from opencode_search.handlers._pr_impact import handle_pr_impact
 from opencode_search.handlers._query import (
     handle_list_indexed_projects,
     handle_project_status,
@@ -118,7 +117,6 @@ __all__ = [
     "handle_list_federation",
     "handle_list_indexed_projects",
     "handle_pipeline",
-    "handle_pr_impact",
     "handle_project_status",
     "handle_project_structure",
     "handle_release_project_watch",

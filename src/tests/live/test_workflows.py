@@ -63,21 +63,6 @@ class TestInvestigationWorkflows:
         assert len(r2.json().get("results", [])) > 0
 
     @pytest.mark.slow
-    def test_pr_impact_risk_level_valid(self, http, astro):
-        """POST pr_impact with explicit changed files returns a valid risk_level."""
-        r = http.post("/api/pr_impact", json={
-            "project": astro,
-            "files": ["service/cart.go", "proto/cart.proto"],
-        })
-        assert r.status_code == 200, f"pr_impact failed: {r.text[:200]}"
-        data = r.json()
-        assert "risk_level" in data, f"risk_level missing from pr_impact response: {data}"
-        assert data["risk_level"] in ("low", "medium", "high", "none"), (
-            f"Unexpected risk_level: {data['risk_level']!r}"
-        )
-        assert "communities_touched" in data
-
-    @pytest.mark.slow
     def test_complete_investigator_workflow(self, http, astro):
         """3-step investigation: ask feature → search entry point → graph impact."""
         r1 = http.get("/api/ask", params={
@@ -104,40 +89,3 @@ class TestInvestigationWorkflows:
         data = r3.json()
         assert "error" not in data or len(str(data)) > 20
 
-
-# ---------------------------------------------------------------------------
-# Class 2: PR Impact Workflow
-# ---------------------------------------------------------------------------
-
-class TestPRImpactWorkflow:
-    """Verify pr_impact endpoint correctness across GET and POST surfaces."""
-
-    def test_pr_impact_get_returns_valid_response(self, http, astro):
-        """GET pr_impact (no files) auto-detects via git diff and returns valid keys."""
-        r = http.get("/api/pr_impact", params={"project": astro})
-        assert r.status_code == 200, f"pr_impact GET failed: {r.text[:200]}"
-        data = r.json()
-        assert "risk_level" in data or "communities_touched" in data, (
-            f"pr_impact GET missing expected keys: {data}"
-        )
-
-    def test_pr_impact_multi_file_returns_valid_structure(self, http, astro):
-        """POST pr_impact with multiple files returns a valid response structure."""
-        r = http.post("/api/pr_impact", json={
-            "project": astro,
-            "files": [
-                "proto/cart.proto",
-                "proto/campaign.proto",
-                "proto/order.proto",
-                "proto/loyalty.proto",
-                "proto/promo.proto",
-            ],
-        })
-        assert r.status_code == 200
-        data = r.json()
-        assert "risk_level" in data, f"risk_level missing from pr_impact response: {data}"
-        assert data["risk_level"] in ("none", "low", "medium", "high"), (
-            f"Unexpected risk_level value: {data.get('risk_level')!r}"
-        )
-        assert "communities_touched" in data
-        assert "changed_files" in data

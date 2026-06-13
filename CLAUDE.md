@@ -104,7 +104,7 @@ Rules (no exceptions):
 <!-- >>> opencode-search global instructions >>> -->
 MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.
 
-5-tool intent API (v3 — June 2026 Phase 100):
+7-tool intent API (v2 — June 2026):
 - `search(query, scope, project_paths)` — find SPECIFIC code/files/functions. scope: "code" (default)|"docs"|"all"
 - `ask(query, project_path, scope)` — 'how does X work?', architecture, design. scope: "all" (default)|"architecture"|"wiki"|"global"|"feature"
   - scope="global": GraphRAG map-reduce synthesis across ALL community summaries
@@ -122,12 +122,18 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "suggested_questions" — questions the graph is uniquely positioned to answer
   - what: "graph_diff" — symbols added/removed recently
   - what: "surprising_connections" — edges spanning architectural community boundaries
-  - what: "pr_impact" — PR risk: changed files → communities touched + risk level
-- `index(project_path, enabled)` — THE ONLY WRITE TOOL: flag project for indexing
-  - enabled=True → register project; daemon auto-indexes, builds KB, watches, indexes federation members
-  - enabled=False → DESTRUCTIVE: stop watching + remove from registry + delete all on-disk index data
-
-The daemon handles ALL indexing, KB building, watching, federation, and maintenance automatically.
+- `build(project_path, action)` — index, pipeline (full KB build), enrich, wiki, ingest docs
+  - action: "pipeline" (recommended first-run) | "hierarchy" (GraphRAG-like community hierarchy) | "analyze_patterns" (LLM deep analysis)
+  - action: "enrich_hierarchy" — re-run LLM enrichment for level-2+ communities (fixes unenriched hierarchies)
+- `federation(root_path, action)` — discover/list/add/remove/index federation sub-repos
+- `manage(project_path, action)` — project lifecycle operations
+  - action: "wiki_lint" | "stop_watching"
+  - action: "install_hooks" — install git post-commit hook for auto-reindex
+  - action: "uninstall_hooks" — remove git post-commit hook
+  - action: "dedup" — deduplicate graph nodes (add dry_run=True to preview)
+  - action: "vacuum" — remove orphan index tier dirs; free disk space
+  - action: "reload" — gracefully restart the daemon; systemd auto-restarts it within ~1s
+  - action: "remove_project" — remove project from registry (delete_index=True also removes on-disk index)
 
 QUICK DECISION GUIDE:
   'find the payment handler'           → search('payment handler')
@@ -145,7 +151,7 @@ QUICK DECISION GUIDE:
   'tell me about this project'         → overview(project_path, what='structure')
   'what packages/dependencies?'        → overview(project_path, what='patterns')
   'list all indexed projects'          → overview(what='projects')
-  'index this project' [explicit ask]  → index(project_path, enabled=True)
+  'index this project' [explicit ask]  → build(project_path, action='pipeline')
   'how does checkout feature work?'    → ask('how does checkout work', project_path, scope='feature')
   'why is auth designed this way?'     → ask('why auth uses JWT', project_path, scope='feature')
 
@@ -156,7 +162,7 @@ Rules (no exceptions):
 - Use graph(relation="impact_narrative") for human-readable blast radius analysis.
 - In your final answer, reference specific file paths and identifiers found in search results.
 - Do NOT delegate codebase questions to sub-agents via the Agent tool.
-- NEVER auto-index. Only call `index(enabled=True)` when the user explicitly asks.
+- NEVER auto-index. Only call `build` when the user explicitly asks.
 - If not indexed, say so and ask before indexing.
 - After indexing, the daemon watches files automatically.
 <!-- <<< opencode-search global instructions <<< -->

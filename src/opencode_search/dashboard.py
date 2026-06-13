@@ -844,30 +844,6 @@ def _register_graph_routes(mcp: FastMCP) -> None:
             return JSONResponse({"error": "project param required"}, status_code=400)
         return JSONResponse(await asyncio.to_thread(_run_surprising_sync, project, top_n))
 
-    @mcp.custom_route("/api/pr_impact", methods=["GET", "POST"], include_in_schema=False)
-    async def api_pr_impact(request: Request) -> JSONResponse:
-        """PR impact: changed files → communities touched + risk level.
-
-        GET  ?project=...&base_branch=main
-        POST {project, files: [...], base_branch: "main"}
-        """
-        from opencode_search.handlers._pr_impact import handle_pr_impact
-        if request.method == "POST":
-            body: dict = {}
-            with contextlib.suppress(Exception):
-                body = await request.json()
-            project = body.get("project") or request.query_params.get("project", "")
-            files = body.get("files") or None
-            base_branch = body.get("base_branch", "main")
-        else:
-            project = request.query_params.get("project", "")
-            files = None
-            base_branch = request.query_params.get("base_branch", "main")
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_pr_impact(project_path=project, files=files, base_branch=base_branch)
-        return JSONResponse(result)
-
 
 
 # ---------------------------------------------------------------------------
