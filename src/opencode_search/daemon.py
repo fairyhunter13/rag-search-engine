@@ -184,7 +184,7 @@ def _broadcast_reload_notice() -> None:
     try:
         from opencode_search.daemon_runtime import reload_pending
         reload_pending.set()
-    except Exception:
+    except ImportError:
         pass
 
 
@@ -738,7 +738,7 @@ def _install_hermes_global_prompt() -> str:
             # Scan from "\nagent:" forward; skip lines indented under it.
             cleaned = _strip_agent_yaml_block(raw)
             data = yaml.safe_load(cleaned) or {}
-        except Exception:
+        except yaml.YAMLError:
             data = {}
 
     agent = data.setdefault("agent", {})
@@ -1364,14 +1364,11 @@ async def _warm_answer_cache(project_path: str) -> None:
     if _t.monotonic() - last < _ANSWER_WARM_COOLDOWN_S:
         return
 
-    try:
-        from opencode_search.embeddings import _get_gpu_temp_c
-        from opencode_search.indexer import _MAX_GPU_TEMP
-        temp = _get_gpu_temp_c()
-        if temp is not None and temp > _MAX_GPU_TEMP:
-            return
-    except Exception:
-        pass
+    from opencode_search.embeddings import _get_gpu_temp_c
+    from opencode_search.indexer import _MAX_GPU_TEMP
+    temp = _get_gpu_temp_c()
+    if temp is not None and temp > _MAX_GPU_TEMP:
+        return
 
     with runtime_state.lock:
         if len(runtime_state.active_clients) > 0:
@@ -1455,15 +1452,12 @@ async def _run_kb_sweep() -> None:
         return
 
     # Gate: skip while GPU is hot to avoid thermal throttling
-    try:
-        from opencode_search.embeddings import _get_gpu_temp_c
-        from opencode_search.indexer import _MAX_GPU_TEMP
-        temp = _get_gpu_temp_c()
-        if temp is not None and temp > _MAX_GPU_TEMP:
-            _kb_sweep_log.info("kb_sweep: GPU %d°C > threshold %d°C — skipping sweep", temp, _MAX_GPU_TEMP)
-            return
-    except Exception:
-        pass  # if temp check fails, proceed cautiously
+    from opencode_search.embeddings import _get_gpu_temp_c
+    from opencode_search.indexer import _MAX_GPU_TEMP
+    temp = _get_gpu_temp_c()
+    if temp is not None and temp > _MAX_GPU_TEMP:
+        _kb_sweep_log.info("kb_sweep: GPU %d°C > threshold %d°C — skipping sweep", temp, _MAX_GPU_TEMP)
+        return
 
     # Gate: skip while clients are actively querying (don't compete with live requests)
     with runtime_state.lock:
