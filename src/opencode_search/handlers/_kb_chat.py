@@ -329,15 +329,9 @@ async def _map_reduce_answer(
     # tokenization/attention overheads when many parallel requests compete.
     _sem = asyncio.Semaphore(2)
 
-    # Model-tier MAP: summarize-the-summaries on the lightweight enrich model (1.7b)
-    # — ~4x faster/cooler than the 8B model; REDUCE below stays on `llm` for final
-    # quality. Falls back to `llm` if the enrich model is unavailable.
-    from opencode_search.enricher.client import create_map_llm_client
-    map_llm = (await asyncio.to_thread(create_map_llm_client)) or llm
-
     async def _map_one(summaries: list[str]) -> str:
         async with _sem:
-            return await asyncio.to_thread(map_llm.map_query, query, summaries)
+            return await asyncio.to_thread(llm.map_query, query, summaries)
 
     partial_answers = await asyncio.gather(*[_map_one(b) for b in batches], return_exceptions=True)
     valid = [p for p in partial_answers if isinstance(p, str) and p.strip()]

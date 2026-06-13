@@ -90,25 +90,38 @@ def test_index_without_raw_schedules_kb_pipeline(tmp_path):
     OPENCODE_AUTO_PIPELINE=1 is the default; the daemon's systemd unit hard-sets it.
 
     The test indexes a real minimal Python project into an isolated registry,
-    then polls /api/auto_pipeline_status to confirm the project's pipeline
-    was scheduled. Uses the real indexer path (no --raw), real GPU embeddings,
-    and a real-but-isolated registry so the production registry is untouched.
+    then checks the project's pipeline was scheduled. Uses the real indexer path
+    (no --raw), real GPU embeddings, and a real-but-isolated registry so the
+    production registry is untouched.
+
+    Note: project must NOT be under /tmp — the U2 registry contamination guard
+    rejects /tmp paths. Uses ~/.cache/opencode-test/ for the project instead;
+    the isolated registry file stays in tmp_path.
     """
-    # Create a minimal real Python project to index
-    proj = tmp_path / "auto_kb_test_project"
-    proj.mkdir()
-    (proj / "main.py").write_text(
-        "def greet(name: str) -> str:\n    return f'Hello, {name}'\n\ndef main():\n    print(greet('world'))\n"
-    )
-    (proj / "utils.py").write_text(
-        "def add(a: int, b: int) -> int:\n    return a + b\n"
-    )
+    import shutil
+    from pathlib import Path
 
-    isolated_registry = tmp_path / "registry.json"
+    # Project must live outside /tmp AND outside .cache — U2 guard rejects
+    # /tmp paths and any path component in IGNORED_DIRS (which includes .cache).
+    test_base = Path.home() / ".local" / "share" / "opencode-test"
+    test_base.mkdir(parents=True, exist_ok=True)
+    proj = test_base / "auto_kb_test_project"
+    proj.mkdir(exist_ok=True)
+    proj_resolved = str(proj.resolve())
+    try:
+        (proj / "main.py").write_text(
+            "def greet(name: str) -> str:\n    return f'Hello, {name}'\n\ndef main():\n    print(greet('world'))\n"
+        )
+        (proj / "utils.py").write_text(
+            "def add(a: int, b: int) -> int:\n    return a + b\n"
+        )
 
-    # Index the project using the real CLI (no --raw) with an isolated registry.
-    # This drives the real _index_and_build_pipeline path and fires schedule_auto_pipeline.
-    script = f"""
+        isolated_registry = tmp_path / "registry.json"
+
+        # Index the project using the real CLI (no --raw) with an isolated registry.
+        # _index_and_build_pipeline calls _index_and_wait → handle_index_project,
+        # which calls schedule_auto_pipeline after embedding+graph complete.
+        script = f"""
 import asyncio, json, os, sys
 sys.path.insert(0, "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src")
 
@@ -120,7 +133,7 @@ from opencode_search.handlers._autopipeline import get_pipeline_events
 
 async def run():
     await _index_and_build_pipeline(
-        path={str(proj)!r},
+        path={proj_resolved!r},
         watch=False,
         force=True,
         follow_symlinks=False,
@@ -129,30 +142,32 @@ async def run():
 asyncio.run(run())
 
 events = get_pipeline_events()
-scheduled = [e for e in events if e.get("project_path") == {str(proj)!r}
+scheduled = [e for e in events if e.get("project_path") == {proj_resolved!r}
              and e.get("status") in ("scheduled", "running", "ok")]
 print(json.dumps({{"scheduled": len(scheduled) > 0, "events": events[-5:]}}))
 """
-    result = subprocess.run(
-        [_VENV_PYTHON, "-c", script],
-        capture_output=True, text=True, timeout=120,
-        cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
-    )
-    assert result.returncode == 0, (
-        f"Index script failed (rc={result.returncode}):\n"
-        f"stdout: {result.stdout[:400]}\nstderr: {result.stderr[-400:]}"
-    )
+        result = subprocess.run(
+            [_VENV_PYTHON, "-c", script],
+            capture_output=True, text=True, timeout=120,
+            cwd="/home/user/git/github.com/fairyhunter13/opencode-search-engine",
+        )
+        assert result.returncode == 0, (
+            f"Index script failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout[:400]}\nstderr: {result.stderr[-400:]}"
+        )
 
-    import json as _json
-    try:
-        out = _json.loads(result.stdout.strip())
-    except Exception:
-        out = {}
+        import json as _json
+        try:
+            out = _json.loads(result.stdout.strip())
+        except Exception:
+            out = {}
 
-    assert out.get("scheduled"), (
-        "Index without --raw did NOT schedule the KB pipeline by default.\n"
-        f"auto_pipeline events: {out.get('events', [])}\n"
-        f"stdout: {result.stdout[:300]}\nstderr: {result.stderr[-300:]}\n"
-        "Root cause: OPENCODE_AUTO_PIPELINE is not defaulting to 1, or "
-        "schedule_auto_pipeline() is not being called from _index_and_build_pipeline."
-    )
+        assert out.get("scheduled"), (
+            "Index without --raw did NOT schedule the KB pipeline by default.\n"
+            f"auto_pipeline events: {out.get('events', [])}\n"
+            f"stdout: {result.stdout[:300]}\nstderr: {result.stderr[-300:]}\n"
+            "Root cause: OPENCODE_AUTO_PIPELINE is not defaulting to 1, or "
+            "schedule_auto_pipeline() is not being called from handle_index_project."
+        )
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)

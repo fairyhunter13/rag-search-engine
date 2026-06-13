@@ -1191,16 +1191,9 @@ async def _stream_global(
 
     sem = asyncio.Semaphore(2)
 
-    # Model-tier MAP: run the MAP phase on the lightweight enrich model (1.7b) —
-    # ~4x faster and cooler than the 8B query model, and well-suited since MAP is a
-    # summarize-the-summaries task. REDUCE below stays on the 8B `llm` for final
-    # quality. Falls back to `llm` if the enrich model is unavailable.
-    from opencode_search.enricher.client import create_map_llm_client
-    map_llm = (await asyncio.to_thread(create_map_llm_client)) or llm
-
     async def _map_one(summaries: list[str]) -> str:
         async with sem:
-            return await asyncio.to_thread(map_llm.map_query, query, summaries)
+            return await asyncio.to_thread(llm.map_query, query, summaries)
 
     map_tasks = [asyncio.ensure_future(_map_one(b)) for b in batches]
     partial: list[str] = []

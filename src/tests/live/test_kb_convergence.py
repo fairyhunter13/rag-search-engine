@@ -578,80 +578,95 @@ class TestProjectKbIncompletePredicate:
             )
 
 
-class TestAllEnrichedMembersHaveWikiPages:
-    """Gap B: every federation member with communities>0 must have community wiki pages.
+class TestSinglePrimitivePipeline:
+    """U3: pipeline uses single 1.7b model; wiki page generation dropped; Gap B removed."""
 
-    The guarantee is two-part: either the 80% wiki coverage goal is already met, OR
-    _project_kb_incomplete returns True (meaning the maintenance loop will fix it via
-    schedule_auto_pipeline). A project that fails the coverage threshold AND has
-    _project_kb_incomplete=False is a genuine bug: the daemon has no path to fix it.
-    """
+    def test_no_gap_b_in_kb_incomplete(self) -> None:
+        """_project_kb_incomplete must not check wiki page count (Gap B removed)."""
+        import inspect
+
+        from opencode_search.handlers._autopipeline import _project_kb_incomplete
+        src = inspect.getsource(_project_kb_incomplete)
+        assert "community_*.md" not in src, (
+            "_project_kb_incomplete still checks community_*.md (Gap B not removed)"
+        )
+        assert "content_pages" not in src, (
+            "_project_kb_incomplete still references content_pages (Gap B not removed)"
+        )
+
+    def test_no_wiki_generation_in_pipeline(self) -> None:
+        """handle_pipeline must not import or call handle_wiki_generate."""
+        import inspect
+
+        from opencode_search.handlers._pipeline import handle_pipeline
+        src = inspect.getsource(handle_pipeline)
+        assert "handle_wiki_generate" not in src, (
+            "handle_pipeline still calls handle_wiki_generate (wiki gen not removed)"
+        )
+
+    def test_no_patterns_llm_in_autopipeline(self) -> None:
+        """handle_auto_pipeline body must not call handle_analyze_patterns_llm."""
+        import inspect
+
+        from opencode_search.handlers._autopipeline import _handle_pipeline_body
+        src = inspect.getsource(_handle_pipeline_body)
+        assert "handle_analyze_patterns_llm" not in src, (
+            "_handle_pipeline_body still calls handle_analyze_patterns_llm (Step 2 not removed)"
+        )
+
+    def test_kb_query_client_uses_1_7b_default(self) -> None:
+        """create_kb_query_llm_client must default to qwen3-enrich:1.7b, not qwen3-query:8b."""
+        import inspect
+
+        from opencode_search.enricher.client import create_kb_query_llm_client
+        src = inspect.getsource(create_kb_query_llm_client)
+        assert "qwen3-enrich:1.7b" in src, (
+            "create_kb_query_llm_client does not default to qwen3-enrich:1.7b"
+        )
+        assert "qwen3-query:8b" not in src, (
+            "create_kb_query_llm_client still references qwen3-query:8b"
+        )
+
+    def test_no_create_map_llm_client_in_codebase(self) -> None:
+        """create_map_llm_client must be removed — no callers should import it."""
+
+        from opencode_search.enricher import client as client_mod
+        assert not hasattr(client_mod, "create_map_llm_client"), (
+            "create_map_llm_client still exists in enricher/client.py"
+        )
+
+    def test_pipeline_has_embed_summaries_step(self) -> None:
+        """handle_pipeline must include embed_summaries step (wiki gen replaced by embed)."""
+        import inspect
+
+        from opencode_search.handlers._pipeline import _embed_community_summaries, handle_pipeline
+        src = inspect.getsource(handle_pipeline)
+        assert "embed_summaries" in src, (
+            "handle_pipeline does not reference embed_summaries step"
+        )
+        assert "_embed_community_summaries" in src, (
+            "handle_pipeline does not call _embed_community_summaries"
+        )
+        # Verify helper exists and is a coroutine function
+        import asyncio
+        assert asyncio.iscoroutinefunction(_embed_community_summaries), (
+            "_embed_community_summaries is not an async function"
+        )
 
     @pytest.mark.slow
-    def test_all_enriched_members_have_wiki_pages(self):
-        """Each project with sparse wikis must have _project_kb_incomplete=True so the daemon converges it."""
-        from pathlib import Path
-
-        from opencode_search.config import (
-            get_project_graph_db_path,
-            get_project_wiki_dir,
-            load_registry,
+    def test_global_ask_zero_llm(self, http, quality_project) -> None:
+        """ask(scope=global) must return llm_used:false and complete within 10s."""
+        import time
+        params = {"q": "describe the overall architecture", "project": quality_project, "scope": "global"}
+        t0 = time.monotonic()
+        r = http.get("/api/ask", params=params, timeout=15)
+        elapsed = time.monotonic() - t0
+        assert r.status_code == 200, f"ask(global) failed: {r.text[:200]}"
+        data = r.json()
+        assert not data.get("llm_used", False), (
+            "ask(scope=global) set llm_used=True — read path must be zero-LLM"
         )
-        from opencode_search.graph.storage import GraphStorage
-        from opencode_search.handlers._autopipeline import _project_kb_incomplete
-
-        registry = load_registry()
-        failures = []
-
-        for path_str, entry in registry.items():
-            if not entry.file_count:
-                continue
-            # Dependency directories (venvs, node_modules) accumulate communities
-            # from third-party code — they are never wiki targets.
-            if "/.venv/" in path_str or path_str.endswith("/.venv") or "/node_modules/" in path_str:
-                continue
-            db = get_project_graph_db_path(path_str)
-            if not Path(db).exists():
-                continue
-
-            gs = GraphStorage(db)
-            gs.open()
-            try:
-                all_comms = gs.get_communities()
-            finally:
-                gs.close()
-
-            if not all_comms:
-                continue  # No communities — not a Gap B target.
-
-            eligible = [c for c in all_comms if (c.node_count or 0) >= 2 and c.title]
-            if not eligible:
-                continue  # No enriched eligible communities.
-
-            wiki_dir = get_project_wiki_dir(path_str)
-            content_pages = len(list(wiki_dir.glob("community_*.md"))) if wiki_dir.exists() else 0
-            threshold = 0.8 * len(eligible)
-
-            if content_pages >= threshold:
-                continue  # Coverage goal already met.
-
-            # Sparse wiki: acceptable only if the daemon is configured to fix it.
-            # _project_kb_incomplete returning True means the maintenance loop will call
-            # schedule_auto_pipeline which runs wiki generation.
-            if _project_kb_incomplete(path_str):
-                continue  # Mechanism in place — convergence in progress.
-
-            # Sparse wiki AND no auto-fix: the daemon has no path to converge this project.
-            failures.append(
-                f"{path_str}: {content_pages} wiki pages < {threshold:.0f} "
-                f"(0.8 × {len(eligible)} eligible) and _project_kb_incomplete=False"
-            )
-
-        assert not failures, (
-            "Gap B — these projects have sparse wikis but _project_kb_incomplete=False "
-            "(the daemon will never schedule autopipeline to fix them):\n"
-            + "\n".join(f"  {f}" for f in failures)
-        )
+        assert elapsed <= 10.0, f"ask(scope=global) took {elapsed:.1f}s > 10s SLO"
 
 
 class TestAllIndexedProjectsWatched:

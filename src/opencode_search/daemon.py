@@ -1031,8 +1031,9 @@ def _render_systemd_service(
             "Environment=PYTHONUNBUFFERED=1",
             "Environment=OPENCODE_MCP_IDLE_SHUTDOWN_S=0",
             "Environment=OPENCODE_AUTO_PIPELINE=1",
-            "Environment=OPENCODE_QUERY_LLM_PROVIDER=ollama",
-            "Environment=OPENCODE_QUERY_LLM_MODEL=qwen3-query:8b",
+            # Dashboard chat stays codex/gpt-5.4-mini (default in config.py).
+            # OLLAMA_MAX_LOADED_MODELS=1 ensures only qwen3-enrich:1.7b ever loads locally.
+            "Environment=OLLAMA_MAX_LOADED_MODELS=1",
             # Persistent ONNX model cache — survives reboots (/tmp is tmpfs and is cleared on boot)
             f"Environment=FASTEMBED_CACHE_PATH={Path.home()}/.cache/opencode/fastembed",
             *env_lines,

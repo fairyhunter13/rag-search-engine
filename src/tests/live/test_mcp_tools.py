@@ -350,23 +350,25 @@ class TestMCPBuild:
         assert result.get("max_level", 0) >= 1, f"max_level too low: {result}"
 
     def test_overview_patterns_detects_frameworks(self, http, quality_project):
-        """LLM-based framework detection must return at least one framework."""
+        """Structural pattern detection must return at least one detected language (U3: no LLM analysis)."""
         r = http.get("/api/overview", params={"project": quality_project, "what": "patterns"})
         assert r.status_code == 200
         data = r.json()
-        frameworks = data.get("key_frameworks") or (data.get("result") or {}).get("key_frameworks", [])
-        assert isinstance(frameworks, list) and len(frameworks) > 0, \
-            f"No frameworks detected via LLM: {list(data.keys())}"
+        # U3: standalone LLM pattern analysis dropped; structural facts always present.
+        languages = data.get("languages") or (data.get("result") or {}).get("languages", [])
+        assert isinstance(languages, list) and len(languages) > 0, \
+            f"No languages detected via structural analysis: {list(data.keys())}"
 
     def test_overview_patterns_has_module_structure(self, http, quality_project):
-        """LLM-based module structure detection must return a non-empty type."""
+        """Structural pattern detection must return detected top-level packages (U3: no LLM analysis)."""
         r = http.get("/api/overview", params={"project": quality_project, "what": "patterns"})
         assert r.status_code == 200
         data = r.json()
         ms = data.get("module_structure") or (data.get("result") or {}).get("module_structure", {})
-        structure_type = ms.get("type", "") if isinstance(ms, dict) else str(ms)
-        assert structure_type and structure_type != "unknown", \
-            f"Module structure type empty or unknown: {ms}"
+        # U3: LLM-generated 'type' field is no longer set; structural 'top_packages' is always present.
+        top_packages = ms.get("top_packages", []) if isinstance(ms, dict) else []
+        assert isinstance(top_packages, list) and len(top_packages) > 0, \
+            f"No top-level packages in structural module_structure: {ms}"
 
 
 # ---------------------------------------------------------------------------

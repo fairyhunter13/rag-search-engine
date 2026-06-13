@@ -86,8 +86,7 @@ def _project_is_fresh(project_path: str) -> bool:
             finally:
                 gs.close()
 
-        from opencode_search.handlers._patterns import load_patterns_cache
-        return load_patterns_cache(project_path) is None
+        return enriched == 0
     except Exception:
         return True  # Assume fresh if we can't check
 
@@ -99,8 +98,9 @@ def _project_kb_incomplete(project_path: str) -> bool:
     - Graph has edges but zero communities (Leiden never ran / communities wiped — Gap A).
       Definitions-only graphs (edges==0) are NOT incomplete — they correctly verdict DONE.
     - Any non-empty community level is < 99% enriched (enrichment plateau).
-    - Wiki content pages (community_*.md) are < 80% of eligible communities with
-      node_count≥2 (Gap B: wiki generation was never triggered or was interrupted).
+
+    Note: Gap B (wiki page coverage) was removed in U3 — wiki generation is dropped;
+    community summaries are now embedded directly into the doc index as smry_*.md files.
 
     Returns False on any error (safe-fail: prefer not to over-trigger recovery loops).
     """
@@ -139,16 +139,6 @@ def _project_kb_incomplete(project_path: str) -> bool:
                     continue
                 enriched = sum(1 for c in eligible if c.title)
                 if enriched / len(eligible) < 0.99:
-                    return True
-
-            # Gap B: wiki page coverage — if fewer than 80% of eligible communities have
-            # a wiki page the maintenance loop should re-trigger the pipeline.
-            from opencode_search.config import get_project_wiki_dir
-            eligible_total = sum(1 for c in all_comms if (c.node_count or 0) >= 2)
-            if eligible_total > 0:
-                wiki_dir = Path(get_project_wiki_dir(project_path))
-                content_pages = len(list(wiki_dir.glob("community_*.md"))) if wiki_dir.exists() else 0
-                if content_pages < 0.8 * eligible_total:
                     return True
 
             return False
@@ -339,7 +329,6 @@ async def _handle_pipeline_body(pp: str, root: Path) -> dict[str, Any]:
         pipeline_result = await handle_pipeline(
             project_path=pp,
             enrich_max_communities=10_000,
-            wiki_max_communities=10_000,
             ingest_docs=True,
         )
         steps.append({"step": "pipeline", "status": pipeline_result.get("status", "ok")})
@@ -348,20 +337,9 @@ async def _handle_pipeline_body(pp: str, root: Path) -> dict[str, Any]:
         log.warning("auto_pipeline[%s]: pipeline failed: %s", root.name, exc)
         steps.append({"step": "pipeline", "status": "error", "error": str(exc)})
 
-    # ── Step 2: LLM Pattern Analysis (3-step: overview → exact → synthesis) ─
-    try:
-        from opencode_search.handlers._patterns import handle_analyze_patterns_llm
-        pattern_result = await handle_analyze_patterns_llm(project_path=pp)
-        steps.append({"step": "analyze_patterns", "status": pattern_result.get("status", "ok")})
-        log.info("auto_pipeline[%s]: pattern analysis complete", root.name)
-    except Exception as exc:
-        log.info("auto_pipeline[%s]: pattern analysis skipped/failed: %s", root.name, exc)
-        steps.append({"step": "analyze_patterns", "status": "skipped", "reason": str(exc)})
-
     # ── Step 3: Build structural community hierarchy (Leiden only) ───────────
     # Builds the multi-level Leiden tree when max_level==1 and cross-community
-    # edges exist. L2+ LLM enrichment (title/summary) is handled lazily by the
-    # background kb_sweep — not on the hot first-index path (essentials-only).
+    # edges exist. L2+ LLM enrichment is done inline by handle_pipeline Step 7.
     try:
         if _project_needs_hierarchy(pp):
             from opencode_search.config import get_project_graph_db_path
@@ -441,14 +419,6 @@ async def _run_incremental_enrichment(project_path: str, modified_files: list[st
             )
     except Exception as exc:
         log.debug("incremental_enrich[%s]: enrichment failed: %s", root.name, exc)
-
-    # Always refresh patterns cache after any file change
-    try:
-        from opencode_search.handlers._patterns import handle_analyze_patterns_llm
-        await handle_analyze_patterns_llm(project_path=pp, force=True)
-        log.info("incremental_enrich[%s]: patterns cache refreshed", root.name)
-    except Exception as exc:
-        log.debug("incremental_enrich[%s]: patterns refresh failed: %s", root.name, exc)
 
     # ── KB-level refresh (debounced by _KB_REFRESH_COOLDOWN_S) ──────────────
     # service_mesh cache: invalidate immediately so the next read recomputes the

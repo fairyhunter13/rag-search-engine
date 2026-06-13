@@ -374,7 +374,7 @@ class TestHierarchyDetection:
         )
 
     def test_auto_pipeline_cap_raised(self):
-        """handle_auto_pipeline must use a high cap (≥1000) not the old 200 limit.
+        """_handle_pipeline_body must use a high cap (≥1000) not the old 200 limit.
 
         The 200-community cap caused L1 enrichment to be incomplete on the first
         run for large projects, relying on incremental backfill instead.
@@ -382,9 +382,9 @@ class TestHierarchyDetection:
         import inspect
 
         from opencode_search.handlers import _autopipeline
-        src = inspect.getsource(_autopipeline.handle_auto_pipeline)
+        src = inspect.getsource(_autopipeline._handle_pipeline_body)
         assert "10_000" in src or "enrich_max_communities=10000" in src, (
-            "handle_auto_pipeline must pass enrich_max_communities=10_000 (not 200) "
+            "_handle_pipeline_body must pass enrich_max_communities=10_000 (not 200) "
             "so the first KB build enriches all level-1 communities"
         )
 
@@ -488,10 +488,10 @@ class TestKbSweep:
 # ---------------------------------------------------------------------------
 
 class TestKbQueryRouting:
-    """Interactive ask handlers must use qwen3-query:8b (not qwen3-enrich:1.7b / not codex)."""
+    """Interactive ask handlers must use qwen3-enrich:1.7b (GPU-local, never cloud). U3: single model."""
 
     def test_kb_query_client_is_ollama_gpu(self):
-        """create_kb_query_llm_client() must return an OllamaClient targeting qwen3-query:8b."""
+        """create_kb_query_llm_client() must return an OllamaClient targeting qwen3-enrich:1.7b (U3)."""
         from opencode_search.enricher import create_kb_query_llm_client
         from opencode_search.enricher.client import OllamaClient
         client = create_kb_query_llm_client()
@@ -500,15 +500,14 @@ class TestKbQueryRouting:
             f"Expected OllamaClient for GPU-local KB queries, got {type(client).__name__}. "
             "KB queries must never use cloud (codex/anthropic) — GPU-only enforcement."
         )
-        assert "qwen3-query" in client.model, (
-            f"KB query model is '{client.model}' — expected qwen3-query:8b. "
-            "Interactive ask must not share the qwen3-enrich:1.7b build model."
+        assert "qwen3-enrich" in client.model, (
+            f"KB query model is '{client.model}' — expected qwen3-enrich:1.7b (U3 single-model). "
+            "create_kb_query_llm_client must default to qwen3-enrich:1.7b after U3."
         )
 
-    def test_kb_query_client_differs_from_enrich_client(self):
-        """KB query client must use a different model than the enrich/build client."""
+    def test_kb_query_client_is_ollama_gpu_not_cloud(self):
+        """KB query client must never route to cloud — GPU-only (qwen3-enrich:1.7b is the resident model)."""
         import os
-        # Temporarily ensure no env override hides the default
         env_override = os.environ.get("OPENCODE_KB_QUERY_LLM_MODEL")
         try:
             if env_override:
@@ -518,10 +517,14 @@ class TestKbQueryRouting:
             enrich_client = create_llm_client()
             query_client = create_kb_query_llm_client()
             assert enrich_client is not None and query_client is not None
+            # U3: both build and KB-query use qwen3-enrich:1.7b — same resident model, different phases.
+            # Critical invariant: neither must be cloud (codex/anthropic).
             if isinstance(enrich_client, OllamaClient) and isinstance(query_client, OllamaClient):
-                assert enrich_client.model != query_client.model, (
-                    f"Enrich model == KB query model ({enrich_client.model!r}). "
-                    "These must be distinct so interactive ask doesn't queue behind the build."
+                assert "qwen3-enrich" in query_client.model, (
+                    f"KB query client uses {query_client.model!r} — expected qwen3-enrich:1.7b (U3)."
+                )
+                assert "qwen3-enrich" in enrich_client.model, (
+                    f"Enrich client uses {enrich_client.model!r} — expected qwen3-enrich:1.7b (U3)."
                 )
         finally:
             if env_override:

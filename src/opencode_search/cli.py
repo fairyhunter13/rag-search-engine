@@ -92,12 +92,11 @@ async def _index_and_wait(path, watch, force, follow_symlinks):
 
 
 async def _index_and_build_pipeline(path, watch, force, follow_symlinks) -> dict:
-    """Index then run the full KB pipeline (enrich → hierarchy → wiki).
+    """Index then run the full KB pipeline (enrich → embed-summaries → hierarchy).
 
     This is the default for `index` and `init` unless --raw is passed.
     After the raw vector index completes the handle_pipeline step runs
-    entity enrichment (Ollama qwen3-enrich) + community hierarchy + wiki
-    pages so the project is immediately queryable end-to-end.
+    entity enrichment (Ollama qwen3-enrich) + community hierarchy + embedded summaries so the project is immediately queryable end-to-end.
     """
     from pathlib import Path as _Path
 
@@ -111,7 +110,7 @@ async def _index_and_build_pipeline(path, watch, force, follow_symlinks) -> dict
 
     project_path = index_result.get("path", str(_Path(path).resolve()))
     typer.echo(
-        f"\n  Running full KB pipeline (enrich → hierarchy → wiki)…\n"
+        f"\n  Running full KB pipeline (enrich → embed-summaries → hierarchy)…\n"
         f"  Project: {project_path}\n"
         f"  This runs on the RTX 5080 via Ollama — may take several minutes for large repos.\n",
         err=True,
@@ -160,13 +159,13 @@ def init(
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
     follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
-    raw: bool = typer.Option(False, "--raw", help="Raw vector index only — skip KB pipeline (enrich/hierarchy/wiki)."),
+    raw: bool = typer.Option(False, "--raw", help="Raw vector index only — skip KB pipeline (enrich/embed-summaries/hierarchy)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Initialize semantic indexing for a project, defaulting to the current directory.
 
     By default runs the full KB pipeline after indexing (entity enrichment,
-    community hierarchy, wiki pages) so the project is immediately queryable.
+    community hierarchy, embedded summaries) so the project is immediately queryable.
     Pass --raw to skip the pipeline and do vector indexing only.
     """
     coro = (
@@ -187,13 +186,13 @@ def index(
     watch: bool = typer.Option(False, "--watch", "-w", help="Start live watcher after indexing."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-index all files ignoring hash cache."),
     follow_symlinks: bool = typer.Option(True, "--follow-symlinks/--no-follow-symlinks", help="Follow symlinked directories (default: enabled for monorepo support)."),
-    raw: bool = typer.Option(False, "--raw", help="Raw vector index only — skip KB pipeline (enrich/hierarchy/wiki)."),
+    raw: bool = typer.Option(False, "--raw", help="Raw vector index only — skip KB pipeline (enrich/embed-summaries/hierarchy)."),
     json_output: bool = typer.Option(False, "--json", help="Output result as JSON."),
 ) -> None:
     """Index a project directory for semantic code search.
 
     By default runs the full KB pipeline after indexing (entity enrichment,
-    community hierarchy, wiki pages) so the project is immediately queryable
+    community hierarchy, embedded summaries) so the project is immediately queryable
     via `ocs ask`, `ocs search`, etc. Pass --raw to skip the pipeline and do
     vector indexing only.
     """

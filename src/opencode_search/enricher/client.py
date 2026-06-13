@@ -1368,52 +1368,25 @@ def create_llm_client() -> LLMClient | None:
 def create_kb_query_llm_client() -> LLMClient | None:
     """Create the GPU-local LLM client for interactive KB queries (ask/search/graph handlers).
 
-    Pinned to ollama qwen3-query:8b — never codex/cloud, never the enrich model.
-    This is the third tier: ENRICH (build) → qwen3-enrich:1.7b, KB-QUERY (MCP ask) →
-    qwen3-query:8b, CHAT (dashboard) → codex→haiku.
+    Pinned to the single resident model qwen3-enrich:1.7b on :11434.
+    Two-tier architecture: BUILD/KB-QUERY → qwen3-enrich:1.7b, CHAT (dashboard) → codex→haiku.
 
-    If qwen3-query:8b is unavailable, falls back to create_llm_client() with a warning —
-    degraded-but-GPU; never silently routes to cloud or CPU.
+    Falls back to create_llm_client() if the model is unavailable (still GPU, never cloud).
     """
     import logging as _logging
     _log = _logging.getLogger(__name__)
 
-    model = os.environ.get("OPENCODE_KB_QUERY_LLM_MODEL", "qwen3-query:8b")
+    model = os.environ.get("OPENCODE_KB_QUERY_LLM_MODEL", "qwen3-enrich:1.7b")
     timeout = int(os.environ.get("OPENCODE_KB_QUERY_LLM_TIMEOUT", "180"))
-    num_ctx = 8192
+    num_ctx = int(os.environ.get("OPENCODE_KB_QUERY_LLM_NUM_CTX", "8192"))
+    base_url = os.environ.get("OPENCODE_KB_QUERY_LLM_BASE_URL",
+                              os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"))
 
-    # 1. Try dedicated read instance (:11435)
-    primary: LLMClient = OllamaClient(
-        base_url=os.environ.get("OPENCODE_KB_QUERY_LLM_BASE_URL", "http://localhost:11435"),
-        model=model,
-        timeout=timeout,
-        num_ctx=num_ctx,
-    )
-    if primary.is_available():
-        return primary
+    client: LLMClient = OllamaClient(base_url=base_url, model=model, timeout=timeout, num_ctx=num_ctx)
+    if client.is_available():
+        return client
 
-    # 2. Fall back to the enrich instance (:11434) with the same query model.
-    #    Keeps the correct model (qwen3-query:8b) even without the dedicated server.
-    enrich_base = os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434")
-    _log.warning(
-        "KB query model %r unavailable on :11435 — trying :11434 "
-        "(interactive ask may be slow while a build is running)",
-        model,
-    )
-    shared: LLMClient = OllamaClient(
-        base_url=enrich_base,
-        model=model,
-        timeout=timeout,
-        num_ctx=num_ctx,
-    )
-    if shared.is_available():
-        return shared
-
-    # 3. Last resort: enrich client with enrich model (degraded quality, still GPU)
-    _log.warning(
-        "KB query model %r unavailable on :11434 — falling back to enrich model (last resort)",
-        model,
-    )
+    _log.warning("KB query model %r unavailable — falling back to enrich client", model)
     return create_llm_client()
 
 
@@ -1470,24 +1443,3 @@ def create_query_llm_client() -> LLMClient | None:
     return client
 
 
-def create_map_llm_client() -> LLMClient | None:
-    """Create the GPU-local LLM client for the MAP phase of global map-reduce synthesis.
-
-    Pinned to the lightweight enrich model (qwen3-enrich:1.7b) on Ollama. MAP is a
-    "summarize these community summaries with respect to the query" task — exactly
-    what the enrich model already does during KB builds — so it runs ~4x faster and
-    cooler than the 8B query model, while the quality-critical REDUCE stays on
-    qwen3-query:8b. GPU-only, never cloud, never CPU.
-
-    Returns None if the model is unreachable, so callers fall back to their main
-    (8B) client and behave exactly as before the split.
-    """
-    model = os.environ.get("OPENCODE_MAP_LLM_MODEL", "qwen3-enrich:1.7b")
-    timeout = int(os.environ.get("OPENCODE_MAP_LLM_TIMEOUT", "120"))
-    base_url = os.environ.get(
-        "OPENCODE_MAP_LLM_BASE_URL",
-        os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434"),
-    )
-    num_ctx = int(os.environ.get("OPENCODE_MAP_LLM_NUM_CTX", "8192"))
-    client: LLMClient = OllamaClient(base_url=base_url, model=model, timeout=timeout, num_ctx=num_ctx)
-    return client if client.is_available() else None

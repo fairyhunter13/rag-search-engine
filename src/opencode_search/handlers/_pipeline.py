@@ -1,4 +1,4 @@
-"""Full knowledge-base pipeline: discover → enrich → wiki → ingest docs."""
+"""Full knowledge-base pipeline: discover → enrich → embed-summaries → ingest docs → hierarchy."""
 from __future__ import annotations
 
 import asyncio
@@ -56,10 +56,48 @@ def _find_doc_files(root: Path) -> list[Path]:
     return found
 
 
+async def _embed_community_summaries(project_path: str) -> dict[str, Any]:
+    """Embed enriched community summaries into the doc index.
+
+    Writes each enriched community's title+summary as smry_{id}.md in the
+    wiki dir, then embeds via the same chunker path used for real docs.
+    Replaces wiki page generation — pure embed step, no LLM call.
+    """
+    from opencode_search.config import get_project_graph_db_path, get_project_wiki_dir
+    from opencode_search.graph.storage import GraphStorage
+    from opencode_search.handlers._wiki import _embed_wiki_pages
+
+    graph_db = get_project_graph_db_path(project_path)
+    if not Path(graph_db).exists():
+        return {"status": "skipped", "reason": "no graph DB"}
+
+    gs = GraphStorage(graph_db)
+    gs.open()
+    try:
+        comms = gs.get_communities()
+        enriched = [c for c in comms if c.title and c.summary]
+    finally:
+        gs.close()
+
+    if not enriched:
+        return {"status": "skipped", "reason": "no enriched communities"}
+
+    wiki_dir = Path(get_project_wiki_dir(project_path))
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    pages: list[Path] = []
+    for c in enriched:
+        page = wiki_dir / f"smry_{c.id}.md"
+        page.write_text(f"# {c.title}\n\n{c.summary or ''}", encoding="utf-8")
+        pages.append(page)
+
+    embedded = await _embed_wiki_pages(project_path, pages)
+    return {"status": "ok", "summaries": len(pages), "chunks": embedded}
+
+
 async def handle_pipeline(
     project_path: str,
     enrich_max_communities: int = 100,
-    wiki_max_communities: int = 100,
     index_members: bool = False,
     ingest_docs: bool = True,
     watch: bool = False,
@@ -67,23 +105,23 @@ async def handle_pipeline(
     """Run the full knowledge-base pipeline for a project.
 
     Executes the following steps in order, skipping steps that are not
-    applicable (e.g. enrich/wiki are skipped if LLM is unavailable):
+    applicable (e.g. enrich is skipped if LLM is unavailable):
 
     1. **discover** — auto-discover federation members from symlinks/workspace files
        and register them in the project registry.
     2. **index_members** — (optional, default off) index each federation member
-       as a separate project. Skip if the root was indexed with follow_symlinks=True
-       and already covers all member content.
+       as a separate project.
     3. **enrich** — LLM-generate titles and summaries for the top N communities
        (largest-first). Includes federation members with separate graphs.
-    4. **wiki** — generate markdown wiki pages for the top N communities.
-       Includes federation members.
-    5. **ingest_docs** — scan the project root for markdown/rst documentation files
+    3b. **embed_summaries** — embed enriched community summaries into the doc
+       index (replaces wiki page generation; no LLM, pure embed).
+    4. **ingest_docs** — scan the project root for markdown/rst documentation files
        and ingest them into the wiki knowledge base.
+    5. **hierarchy** — build the recursive Leiden community hierarchy.
+    6. **enrich_hierarchy** — LLM-enrich level-2+ hierarchy macro-communities.
 
     Args:
         enrich_max_communities: Communities to enrich per project (default 100).
-        wiki_max_communities: Communities to wiki per project (default 100).
         index_members: If True, index each federation member separately.
             Default False — safe when root was indexed with follow_symlinks=True.
         ingest_docs: If True, automatically ingest documentation files found
@@ -153,28 +191,19 @@ async def handle_pipeline(
             root, enrich_result.get("enriched_communities", 0),
         )
 
-    # ── Step 4: Generate wiki ────────────────────────────────────────────────
-    from opencode_search.handlers._wiki import handle_wiki_generate
-
-    if llm is None or not llm.is_available():
-        steps.append({
-            "step": "wiki",
-            "status": "skipped",
-            "reason": "LLM not available",
-        })
-    else:
-        wiki_result = await handle_wiki_generate(
-            project_path=root,
-            max_communities=wiki_max_communities,
-            include_federation=True,
-        )
-        steps.append({"step": "wiki", **wiki_result})
+    # ── Step 3b: Embed community summaries (replaces wiki page generation) ───
+    try:
+        embed_result = await _embed_community_summaries(root)
+        steps.append({"step": "embed_summaries", **embed_result})
         log.info(
-            "pipeline[%s]: created %d wiki pages",
-            root, wiki_result.get("total", 0),
+            "pipeline[%s]: embedded %d community summaries (%d chunks)",
+            root, embed_result.get("summaries", 0), embed_result.get("chunks", 0),
         )
+    except Exception as exc:
+        log.debug("pipeline[%s]: summary embed failed: %s", root, exc)
+        steps.append({"step": "embed_summaries", "status": "skipped", "reason": str(exc)})
 
-    # ── Step 5: Ingest documentation files ──────────────────────────────────
+    # ── Step 4: Ingest documentation files ──────────────────────────────────
     if ingest_docs and llm is not None and llm.is_available():
         from opencode_search.handlers._wiki import handle_wiki_ingest
 
