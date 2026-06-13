@@ -1,6 +1,8 @@
 """HTTP route handlers + create_app() for the dashboard API."""
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 from starlette.requests import Request
@@ -8,10 +10,20 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.staticfiles import StaticFiles
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_START = time.monotonic()
 
 
 async def _healthz(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    import psutil
+    la = psutil.getloadavg()
+    return JSONResponse({
+        "ok": True, "service": "opencode-search", "transport": "streamable-http",
+        "uptime_s": round(time.monotonic() - _START, 1),
+        "load_avg": {"1m": la[0], "5m": la[1], "15m": la[2]},
+        "cpu_count": os.cpu_count() or 1,
+        "active_clients": 0, "client_ids": [], "active_projects": [],
+        "closing_clients": [], "idle_seconds": 0.0,
+    })
 
 
 async def _dashboard(request: Request) -> HTMLResponse:
