@@ -18,6 +18,8 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any
 
+from opencode_search.discover import IGNORED_DIRS
+
 log = logging.getLogger(__name__)
 
 _CACHE_FILENAME = "patterns_cache.json"
@@ -60,8 +62,7 @@ def _sample_source_files(root: Path, project_path: str | None = None) -> list[tu
     """
     import os
 
-    _SKIP_DIRS = {"vendor", "node_modules", ".git", ".venv", "venv",
-                  "target", "dist", "build", "__pycache__"}
+    _SKIP_DIRS = IGNORED_DIRS
     _PRIMARY_EXTS = {".go", ".py", ".java", ".kt", ".ts", ".tsx", ".rs", ".rb",
                      ".cs", ".swift", ".cpp", ".c", ".scala"}
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from opencode_search.config import get_project_graph_db_path
-from opencode_search.discover import is_document_language
+from opencode_search.discover import IGNORED_DIRS, is_document_language
 
 if TYPE_CHECKING:
     from opencode_search.graph.storage import GraphStorage
@@ -292,7 +292,7 @@ def _detect_dependencies(root: Path) -> dict[str, Any]:
     # Build search dirs: root + 1st-level dirs + symlinked repos inside container dirs.
     # Symlinked entries (federation members) are added first so they aren't squeezed
     # out by non-repo subdirs when the cap is reached.
-    _SKIP_SCAN = {".git", ".venv", "venv", "node_modules", "__pycache__", "target", "dist", "build"}
+    _SKIP_SCAN = IGNORED_DIRS
     search_dirs: list[Path] = [root]
     first_level: list[Path] = []
     try:
@@ -379,7 +379,7 @@ def _detect_module_structure(root: Path) -> dict[str, Any]:
     top_packages and detected_dirs are real parsed facts from the filesystem.
     The LLM patterns_cache.json provides the architecture/module_style label.
     """
-    _SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "target", "dist", "build"}
+    _SKIP = IGNORED_DIRS
     try:
         top_dirs = sorted(
             d.name for d in root.iterdir()
@@ -1022,11 +1022,7 @@ async def handle_project_structure(
     if not root.is_dir():
         return {"error": f"Not a directory: {project_path}"}
 
-    _SKIP_DIRS = {
-        ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
-        ".pytest_cache", "dist", "build", "target", ".idea", ".vscode",
-        "vendor", ".tox", "coverage", ".coverage", "htmlcoverage",
-    }
+    _SKIP_DIRS = IGNORED_DIRS | {"htmlcoverage"}
 
     # Build directory tree
     def _tree(path: Path, depth: int, prefix: str = "") -> list[str]:

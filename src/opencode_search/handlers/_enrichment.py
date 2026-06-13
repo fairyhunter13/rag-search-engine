@@ -475,7 +475,6 @@ async def handle_enrich_hierarchy(
     from their children's summaries (bottom-up, like GraphRAG's rollup).
     Call after build(action="hierarchy") to get enriched architecture domains.
     """
-    from opencode_search.enricher import create_llm_client
     from opencode_search.graph.storage import CommunityData
     from opencode_search.handlers._graph import _open_graph
 
@@ -488,7 +487,7 @@ async def handle_enrich_hierarchy(
         if top_level <= 1:
             return {"status": "ok", "message": "No hierarchy built yet. Run build(action='hierarchy') first.", "enriched": 0}
 
-        llm = await asyncio.to_thread(create_llm_client)
+        llm = await asyncio.to_thread(_get_llm)
         total_enriched = 0
         effective_max = max_level or top_level
 
