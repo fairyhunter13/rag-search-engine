@@ -284,7 +284,7 @@ class TestStreamSuccessCoverage:
     """Regression guard: stream_success_count must increment for every streaming intent path.
 
     Prevents regression of the Phase 88/89 bug where record_stream_success() was missing
-    from the search, graph-fallback, and debug_trace paths.
+    from the search and graph-fallback paths.
     """
 
     def _get_success_count(self, http) -> int:
