@@ -868,26 +868,6 @@ def _register_graph_routes(mcp: FastMCP) -> None:
         result = await handle_pr_impact(project_path=project, files=files, base_branch=base_branch)
         return JSONResponse(result)
 
-    @mcp.custom_route("/api/tree_html", methods=["GET"], include_in_schema=False)
-    async def api_tree_html(request: Request):
-        """Interactive file tree HTML. ?project=...&format=html|json&max_files=2000"""
-        from starlette.responses import Response as _Resp
-
-        from opencode_search.handlers._tree_html import handle_tree_html
-        project = request.query_params.get("project", "")
-        fmt = request.query_params.get("format", "html")
-        try:
-            max_files = int(request.query_params.get("max_files", "2000"))
-        except (ValueError, TypeError):
-            return JSONResponse({"error": "max_files must be an integer"}, status_code=400)
-        if not project:
-            return JSONResponse({"error": "project param required"}, status_code=400)
-        result = await handle_tree_html(project_path=project, fmt=fmt, max_files=max_files)
-        if "error" in result:
-            return JSONResponse(result, status_code=400)
-        if fmt == "html" and "html" in result:
-            return _Resp(content=result["html"], media_type="text/html")
-        return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------
