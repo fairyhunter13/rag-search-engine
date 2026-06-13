@@ -58,8 +58,12 @@ def list_projects() -> list[ProjectEntry]:
 
 
 def get_project(path: str) -> ProjectEntry | None:
+    from dataclasses import fields
     meta = _load().get(path)
-    return ProjectEntry(path=path, **meta) if meta else None
+    if not meta:
+        return None
+    known = {f.name for f in fields(ProjectEntry)} - {"path"}
+    return ProjectEntry(path=path, **{k: v for k, v in meta.items() if k in known})
 
 
 def upsert_project(entry: ProjectEntry) -> None:
