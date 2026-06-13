@@ -677,7 +677,7 @@ class TestCodexConfinement:
             os.environ["OPENCODE_QUERY_LLM_PROVIDER"] = "codex"
             from opencode_search.enricher.client import CodexClient, create_kb_query_llm_client
             client = create_kb_query_llm_client()
-            # May return None if :11435 and :11434 are both unavailable, but not a codex client
+            # May return None if :11434 is unavailable, but must never be a codex client
             assert not isinstance(client, CodexClient), (
                 "create_kb_query_llm_client() returned a CodexClient even though "
                 "OPENCODE_QUERY_LLM_PROVIDER=codex. KB queries must use ollama only."
@@ -687,32 +687,6 @@ class TestCodexConfinement:
                 os.environ.pop("OPENCODE_QUERY_LLM_PROVIDER", None)
             else:
                 os.environ["OPENCODE_QUERY_LLM_PROVIDER"] = old_query
-
-    def test_kb_query_base_url_targets_11435(self):
-        """create_kb_query_llm_client() must attempt :11435 first by default."""
-        import os
-        # Unset override to test the hardcoded default
-        old = os.environ.pop("OPENCODE_KB_QUERY_LLM_BASE_URL", None)
-        try:
-            from opencode_search.enricher.client import OllamaClient, create_kb_query_llm_client
-            # Verify the hardcoded default URL (what the factory attempts first).
-            # We check the constant here because the runtime client may have fallen
-            # back to :11434 when the dedicated instance is not yet running.
-            default_url = os.environ.get("OPENCODE_KB_QUERY_LLM_BASE_URL", "http://localhost:11435")
-            assert "11435" in default_url, (
-                f"Default OPENCODE_KB_QUERY_LLM_BASE_URL is {default_url!r}, not :11435. "
-                "The dedicated read Ollama instance must be the primary target."
-            )
-            # Independently verify the returned client is always GPU-local (never cloud)
-            client = create_kb_query_llm_client()
-            if client is not None:
-                assert isinstance(client, OllamaClient), (
-                    f"Expected OllamaClient but got {type(client).__name__}. "
-                    "KB query must never use cloud/codex regardless of fallback path."
-                )
-        finally:
-            if old is not None:
-                os.environ["OPENCODE_KB_QUERY_LLM_BASE_URL"] = old
 
     def test_kb_chat_uses_query_tier_not_enrich_tier(self):
         """handle_kb_chat is the dashboard chat handler — it must use create_query_llm_client
@@ -736,36 +710,13 @@ class TestCodexConfinement:
 
 
 # ---------------------------------------------------------------------------
-# Dedicated read Ollama instance (:11435)
-# ---------------------------------------------------------------------------
-
-class TestDedicatedReadInstance:
-    """KB query tier uses :11435 (read-dedicated Ollama), isolated from :11434 (enrich)."""
+class TestKbQueryClientAvailable:
+    """create_kb_query_llm_client() must always return a live GPU-local client."""
 
     @pytest.mark.slow
-    def test_read_instance_available(self):
-        """create_kb_query_llm_client() must return an available GPU-local client.
-
-        Resilience contract: it prefers the dedicated read instance (:11435), but
-        when that is down it must fall back to the shared :11434 instance with the
-        SAME query model — never None, never cloud, never CPU. We verify the client
-        is available regardless of whether :11435 happens to be running (no skip).
-        """
-        import socket
-        try:
-            s = socket.create_connection(("127.0.0.1", 11435), timeout=2)
-            s.close()
-            read_instance_up = True
-        except OSError:
-            read_instance_up = False
-
+    def test_client_available(self):
+        """create_kb_query_llm_client() must return a non-None available OllamaClient."""
         from opencode_search.enricher.client import create_kb_query_llm_client
         client = create_kb_query_llm_client()
-        assert client is not None, (
-            "create_kb_query_llm_client() returned None — no GPU-local query client "
-            f"available (:11435 up={read_instance_up}; the :11434 fallback also failed)."
-        )
-        assert client.is_available(), (
-            "create_kb_query_llm_client().is_available() is False "
-            f"(:11435 up={read_instance_up}). The :11434 fallback must keep it available."
-        )
+        assert client is not None, "create_kb_query_llm_client() returned None — :11434 must be up"
+        assert client.is_available(), "create_kb_query_llm_client().is_available() is False"
