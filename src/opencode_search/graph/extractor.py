@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from datetime import UTC
 from typing import Any
 
+from opencode_search.discover import LANG_TO_GRAMMAR as _LANG_TO_GRAMMAR
+from opencode_search.discover import LANGUAGE_MAP as _DISC_LANG_MAP
+
 log = logging.getLogger(__name__)
 
 # Languages with deep extraction (specific or generic AST traversal via tree-sitter)
@@ -34,72 +37,17 @@ _DEEP_LANGS: set[str] = {
     "sql", "groovy", "perl", "ocaml",
 }
 
-# Map file extensions → language name used by tree_sitter_language_pack
+# tsx files use the TypeScript grammar; csharp uses the c_sharp tree-sitter spelling
+_GRAMMAR_OVERRIDES: dict[str, str] = {
+    "tsx": "typescript",
+    "csharp": "c_sharp",
+}
+
+# Derived from discover.LANGUAGE_MAP + LANG_TO_GRAMMAR — single source of truth for ext → grammar
 _EXT_TO_LANG: dict[str, str] = {
-    # Python
-    ".py": "python",
-    # TypeScript / JavaScript
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    # Go
-    ".go": "go",
-    # JVM
-    ".java": "java",
-    ".kt": "kotlin",
-    ".kts": "kotlin",
-    ".scala": "scala",
-    ".groovy": "groovy",
-    # Rust
-    ".rs": "rust",
-    # C family
-    ".c": "c",
-    ".h": "c",
-    ".cpp": "cpp",
-    ".cc": "cpp",
-    ".cxx": "cpp",
-    ".hpp": "cpp",
-    ".hxx": "cpp",
-    # C#
-    ".cs": "c_sharp",
-    # Proto
-    ".proto": "proto",
-    # Ruby
-    ".rb": "ruby",
-    ".rake": "ruby",
-    # PHP
-    ".php": "php",
-    # Swift
-    ".swift": "swift",
-    # Dart
-    ".dart": "dart",
-    # Lua
-    ".lua": "lua",
-    # Shell
-    ".sh": "bash",
-    ".bash": "bash",
-    # R
-    ".r": "r",
-    ".R": "r",
-    # Zig
-    ".zig": "zig",
-    # Elixir
-    ".ex": "elixir",
-    ".exs": "elixir",
-    # Haskell
-    ".hs": "haskell",
-    ".lhs": "haskell",
-    # SQL
-    ".sql": "sql",
-    # Perl
-    ".pl": "perl",
-    ".pm": "perl",
-    # OCaml
-    ".ml": "ocaml",
-    ".mli": "ocaml",
+    ext: _GRAMMAR_OVERRIDES.get(grammar, grammar)
+    for ext, lang in _DISC_LANG_MAP.items()
+    if (grammar := _LANG_TO_GRAMMAR.get(lang)) is not None
 }
 
 
