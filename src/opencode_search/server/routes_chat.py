@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from opencode_search.core.config import (
     QUERY_LLM_FALLBACK_MODEL,
@@ -25,9 +25,9 @@ def _build_context(project_path: str) -> str:
     gs = GraphStore(gdb)
     try:
         rows = gs.conn.execute(
-            "SELECT summary FROM communities ORDER BY size DESC LIMIT 3"
+            "SELECT summary FROM communities ORDER BY node_count DESC LIMIT 3"
         ).fetchall()
-        return "\n".join(r["summary"] for r in rows if r["summary"])
+        return "\n".join(r[0] for r in rows if r[0])
     finally:
         gs.close()
 
@@ -95,7 +95,7 @@ async def _api_chat_stream(request: Request) -> Response:
             yield f"data: {json.dumps({'error': str(exc)})}\n\n".encode()
         yield b'data: {"done":true}\n\n'
 
-    return Response(_gen(), media_type="text/event-stream")
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 def register(app) -> None:

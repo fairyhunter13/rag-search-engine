@@ -6,7 +6,7 @@ import os
 import time
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 _start_time = time.monotonic()
 _alerts: list[dict] = []
@@ -104,7 +104,7 @@ async def _api_events_stream(request: Request) -> Response:
         for _ in range(6):
             await asyncio.sleep(10)
             yield b'data: {"type":"keepalive"}\n\n'
-    return Response(_gen(), media_type="text/event-stream")
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 def register(app) -> None:
