@@ -24,9 +24,8 @@ dependencies = [
     # Parsing
     "pyyaml>=6.0.0",
 
-    # Vector database
-    "lancedb>=0.20.0",
-    "pyarrow>=17.0.0",
+    # Vector database (sqlite-vec: flat ANN, perfect recall, unified store)
+    "sqlite-vec>=0.1.0",
 
     # File watching
     "watchdog>=3.0.0",
@@ -110,10 +109,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"opencode_search/embeddings.py" = ["E402", "F401", "I001"]  # ONNX monkey-patching: unusual import order intentional
-"opencode_search/storage.py" = ["E402", "F401", "I001"]     # lancedb dynamic API: unusual import order intentional
-"opencode_search/daemon.py" = ["E402", "I001"]              # CUDA path setup must run before any CUDA imports
-"opencode_search/handlers/__init__.py" = ["F401"]            # re-export module: all imports are intentionally public
+"opencode_search/embed/embedder.py" = ["E402"]  # ONNX arena env must be set before fastembed import
 
 [tool.mypy]
 python_version = "3.11"
@@ -122,29 +118,23 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_return_any = false
 
-# Enforce stricter checking on business-logic modules that are fully typed.
-# Excluded: embeddings.py (ONNX monkey-patching), storage.py (lancedb dynamic API).
 [[tool.mypy.overrides]]
 module = [
-    "opencode_search.handlers.*",
-    "opencode_search.watcher",
-    "opencode_search.config",
-    "opencode_search.mcp",
-    "opencode_search.mcp_bridge",
-    "opencode_search.daemon",
-    "opencode_search.daemon_runtime",
-    "opencode_search.metrics",
-    "opencode_search.index_config",
+    "opencode_search.core.*",
+    "opencode_search.index.*",
+    "opencode_search.graph.*",
+    "opencode_search.kb.*",
+    "opencode_search.query.*",
+    "opencode_search.server.*",
+    "opencode_search.daemon.*",
+    "opencode_search.cli",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = [
-    "opencode_search.embeddings",
-    "opencode_search.storage",
-]
+module = ["opencode_search.embed.*"]
 ignore_errors = true
 
 [tool.pytest.ini_options]
