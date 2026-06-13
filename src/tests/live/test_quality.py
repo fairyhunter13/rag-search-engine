@@ -72,8 +72,7 @@ def test_quality_entry_points_answer(http, quality_project):
     root: a fresh synthesis there legitimately surfaces test tooling and the judge scores
     it 1/5. opencode-search-engine has concrete, documented root-level entry points
     (mcp.py MCP server, daemon.py, cli.py, handlers/) where the question is well-posed —
-    matching how test_quality_debug_trace / test_quality_graph_impact already use
-    quality_project for engine-symbol questions.
+    matching how test_quality_graph_impact already uses quality_project for engine-symbol questions.
 
     Fresh synthesis (NOT chat_cache): a judge-score test must be judged on a synthesis of
     its own question and must get a fresh answer on each flaky rerun.
@@ -126,8 +125,7 @@ def test_quality_feature_trace(http, project):
 def test_quality_graph_impact(http, quality_project):
     """Graph impact with a real engine function must score ≥ 2/5 for dependency analysis.
 
-    Uses handle_search_code (22 callers in graph) — handle_debug_trace has 0 callers because
-    it's imported lazily inside an if-block in _chat_router.py, which static extraction misses.
+    Uses handle_search_code (22 callers in graph) — well-connected enough for a real impact result.
     """
     answer = _ask_chat(http, quality_project, "What would break if I changed the handle_search_code function?")
     assert len(answer) > 30, f"Graph impact answer too short: {answer!r}"
