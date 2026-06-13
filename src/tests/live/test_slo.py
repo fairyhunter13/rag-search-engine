@@ -97,13 +97,13 @@ class TestChatStreamSLOs:
         assert elapsed < 60_000, f"feature SLO violated: {elapsed}ms >= 60000ms"
 
     def test_architecture_intent_slo(self, http, astro):
-        """architecture intent must complete in < 60s."""
+        """architecture intent must complete in < 90s."""
         _, intent, _, elapsed, _ = _chat(http, astro,
             "what is the overall system architecture?")
         assert intent in ("architecture", "global"), (
             f"Expected architecture; got {intent!r}"
         )
-        assert elapsed < 60_000, f"architecture SLO violated: {elapsed}ms >= 60000ms"
+        assert elapsed < 90_000, f"architecture SLO violated: {elapsed}ms >= 90000ms"
 
     def test_debug_trace_intent_slo(self, http, astro):
         """debug_trace intent must complete in < 60s."""

@@ -983,7 +983,7 @@ class TestHierarchyFKFix:
         r2 = http.get("/api/overview", params={"project": quality_project, "what": "architecture_domains"})
         assert r2.status_code == 200, f"overview(architecture_domains) failed: {r2.status_code}"
         data = r2.json()
-        domains = data.get("domains") or data.get("communities") or data.get("result") or []
+        domains = data.get("architecture_domains") or data.get("domains") or data.get("communities") or data.get("result") or []
         assert domains, (
             "overview(architecture_domains) returned empty after vacuum — "
             "hierarchy was silently wiped. Check GraphStorage.vacuum() L2+ preservation."

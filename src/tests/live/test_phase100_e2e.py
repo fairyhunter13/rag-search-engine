@@ -62,8 +62,11 @@ def _poll_until(fn, timeout_s: int = 300, interval_s: float = 3.0):
 
 
 def _project_entry(http_client, path: str) -> dict | None:
-    """Fetch the registry entry for a project path; return None if absent."""
-    r = http_client.get("/api/projects")
+    """Fetch the registry entry for a project path; return None if absent or unreachable."""
+    try:
+        r = http_client.get("/api/projects")
+    except Exception:
+        return None  # daemon temporarily down (e.g. restarting) — caller retries
     if r.status_code != 200:
         return None
     for p in r.json().get("projects", []):
@@ -126,7 +129,16 @@ class TestAutoIndexOnFlag:
             e = _project_entry(http, clone_path)
             return e is not None and (e.get("file_count", 0) > 0 or e.get("indexed_at") is not None)
 
-        entry = _poll_until(_indexed, timeout_s=300, interval_s=5)
+        # _quiesce_sweeps pauses background monitors for the test session; temporarily
+        # resume them so _auto_index_monitor can fire and index the registered project.
+        import contextlib
+        with contextlib.suppress(Exception):
+            http.post("/api/sweeps/resume", timeout=5.0)
+        try:
+            entry = _poll_until(_indexed, timeout_s=300, interval_s=5)
+        finally:
+            with contextlib.suppress(Exception):
+                http.post("/api/sweeps/pause", timeout=5.0)
         assert entry, (
             f"Daemon did NOT auto-index the registered project within 300s.\n"
             f"Current entry: {_project_entry(http, clone_path)}\n"

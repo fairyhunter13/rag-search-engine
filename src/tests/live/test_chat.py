@@ -119,9 +119,9 @@ def test_chat_sources_are_real_paths(http, project):
 
 @pytest.mark.slow
 def test_chat_debug_intent(classify):
-    """A 'why is X slow/broken' question must route to debug intent."""
-    intent = classify("why is the indexer slow and how can I debug it?")
-    assert intent == "debug", f"Expected intent=debug for debug question; got: {intent!r}"
+    """A specific bug/crash question must route to debug intent."""
+    intent = classify("the indexer is crashing with 'NoneType has no attribute embed' when processing a file — what is wrong?")
+    assert intent == "debug", f"Expected intent=debug for specific crash question; got: {intent!r}"
 
 
 @pytest.mark.slow

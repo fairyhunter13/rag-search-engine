@@ -714,20 +714,24 @@ class TestCodexConfinement:
             if old is not None:
                 os.environ["OPENCODE_KB_QUERY_LLM_BASE_URL"] = old
 
-    def test_kb_chat_uses_read_tier_not_codex(self):
-        """handle_kb_chat must import create_kb_query_llm_client, never create_query_llm_client."""
+    def test_kb_chat_uses_query_tier_not_enrich_tier(self):
+        """handle_kb_chat is the dashboard chat handler — it must use create_query_llm_client
+        (codex → haiku) not the raw enrich/build-tier create_llm_client (qwen3-enrich:1.7b).
+
+        U3 retired qwen3-query:8b; handle_kb_chat is a user-facing dashboard feature so it
+        uses the codex query tier, exactly as the user rule requires.
+        """
         from pathlib import Path
-        # __file__ = src/tests/live/test_kb.py
-        # parents[2] = src/   parents[3] = project root
         kb_chat_path = Path(__file__).parents[2] / "opencode_search" / "handlers" / "_kb_chat.py"
         source = kb_chat_path.read_text()
-        assert "create_kb_query_llm_client" in source, (
-            "_kb_chat.py must use create_kb_query_llm_client (ollama read tier), "
-            "not create_query_llm_client (codex/dashboard tier)."
+        assert "create_query_llm_client" in source, (
+            "_kb_chat.py must use create_query_llm_client (codex → haiku dashboard tier). "
+            "U3: qwen3-query:8b retired; dashboard chat handler must use codex/haiku, not the "
+            "GPU-local enrich model."
         )
-        assert "create_query_llm_client" not in source, (
-            "_kb_chat.py must not import create_query_llm_client — "
-            "codex is only allowed for dashboard streaming responses."
+        assert "create_llm_client()" not in source.replace("create_query_llm_client", ""), (
+            "_kb_chat.py must not call raw create_llm_client() (enrich/build tier). "
+            "Use create_query_llm_client() for dashboard chat."
         )
 
 
