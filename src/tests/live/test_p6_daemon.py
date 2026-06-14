@@ -562,3 +562,37 @@ def test_p21_community_labels_set_without_llm(tmp_path):
             )
     finally:
         gs.close()
+
+
+@pytest.mark.slow
+def test_p21_burst_enriches_all_communities(tmp_path):
+    """P21.3: _enrich_project enriches ALL title IS NULL communities (no LIMIT 20 cap)."""
+    from opencode_search.core.config import ProjectEntry, project_graph_db
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _enrich_project
+    from opencode_search.graph.store import GraphStore
+
+    proj = str(tmp_path)
+    upsert_project(ProjectEntry(path=proj, enabled=True))
+    try:
+        gs = GraphStore(project_graph_db(proj))
+        for i in range(25):
+            sid = f"sym_{i}"
+            gs.upsert_symbol(sid, f"func_{i}", f"func_{i}", "function", "f.py", i + 1, i + 2, "python")
+            gs.upsert_community(i, level=1, title=None, summary="", member_count=1)
+            gs._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (i, sid))
+        gs.commit()
+        gs.close()
+
+        _enrich_project(proj)
+
+        gs2 = GraphStore(project_graph_db(proj))
+        null_count = gs2._con.execute(
+            "SELECT COUNT(*) FROM communities WHERE title IS NULL"
+        ).fetchone()[0]
+        gs2.close()
+        assert null_count == 0, (
+            f"P21.3: {null_count}/25 communities still title IS NULL after burst (LIMIT 20 cap?)"
+        )
+    finally:
+        remove_project(proj)
