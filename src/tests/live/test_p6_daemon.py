@@ -156,3 +156,38 @@ def test_pipeline_all_stages_real_astro():
         assert c.execute("SELECT COUNT(*) FROM communities WHERE level > 1").fetchone()[0] > 0, "stage 6 hierarchy: no L2"
     wiki = project_wiki_dir(astro)
     assert list(wiki.glob("*.md")), f"stage 7 wiki: no pages in {wiki}"
+
+
+def test_maintenance_vacuums_orphan():
+    """P10.7: maintenance() removes orphan index dirs not in the registry."""
+    from opencode_search.core.config import INDEX_ROOT
+    from opencode_search.daemon.sweeps import maintenance
+
+    orphan = INDEX_ROOT / "p107-test-orphan"
+    orphan.mkdir(parents=True, exist_ok=True)
+    maintenance()
+    assert not orphan.exists(), "maintenance() left orphan dir"
+
+
+def test_federation_index_members_registers(tmp_path):
+    """P10.7: index_members() registers symlinked sub-repos into the registry."""
+    from opencode_search.core.registry import get_project, remove_project
+    from opencode_search.daemon.federation import index_members
+
+    member = tmp_path / "member-repo"
+    member.mkdir()
+    (member / "main.py").write_text("x = 1\n")
+    (tmp_path / "link").symlink_to(member)
+    n = index_members(str(tmp_path))
+    assert n == 1 and get_project(str(member)) is not None
+    remove_project(str(member))
+
+
+def test_api_reload_returns_reloading():
+    """P10.7: POST /api/reload responds immediately with status:reloading."""
+    from starlette.testclient import TestClient
+
+    from opencode_search.server.routes import build_test_app as create_app
+    with TestClient(create_app()) as c:
+        r = c.post("/api/reload")
+    assert r.status_code == 200 and r.json().get("status") == "reloading"
