@@ -199,3 +199,35 @@ def _enrich_project(project_path: str) -> None:
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
+
+
+def burst_enrich_federation(root_path: str) -> dict:
+    """Burst-enrich root + all discovered federation members. Return aggregate totals."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.daemon.federation import discover_members
+    from opencode_search.graph.store import GraphStore
+
+    paths = [root_path, *discover_members(root_path)]
+    results: list[dict] = []
+    for path in paths:
+        gdb = project_graph_db(path)
+        if not gdb.exists():
+            log.info("burst_enrich_federation: skip %s (no graph DB)", path)
+            continue
+        _enrich_project(path)
+        gs = GraphStore(gdb)
+        try:
+            total = gs._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
+            pending = gs._con.execute(
+                "SELECT COUNT(*) FROM communities WHERE title IS NULL"
+            ).fetchone()[0]
+        finally:
+            gs.close()
+        results.append({"path": path, "total": total, "pending": pending})
+        log.info("burst_enrich_federation %s: total=%d pending=%d", path, total, pending)
+
+    total_communities = sum(r["total"] for r in results)
+    total_pending = sum(r["pending"] for r in results)
+    log.info("burst_enrich_federation %s: Σ=%d pending=%d", root_path, total_communities, total_pending)
+    return {"root": root_path, "members": results,
+            "total_communities": total_communities, "total_pending": total_pending}
