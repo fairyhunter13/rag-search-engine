@@ -1,7 +1,6 @@
 """GPU-only code embedding via FastEmbed-GPU + ONNX Runtime CUDA EP."""
 from __future__ import annotations
 
-import os
 import threading
 
 import numpy as np
@@ -15,10 +14,14 @@ from opencode_search.core.config import (
 )
 from opencode_search.core.gpu import assert_cuda_available, gpu_temp_c
 
-os.environ.setdefault("ORT_MAX_MEM_LIMIT_MB", str(ONNX_ARENA_MB))
-
 # Prevents concurrent GPU inference races (embed + rerank on same device).
 _GPU_INFER_LOCK = threading.Lock()
+
+# CUDA EP provider options: cap BFC arena to ONNX_ARENA_MB (env-controlled, default 4 GB).
+_CUDA_PROVIDER_OPTIONS = {
+    "cuda_mem_limit": ONNX_ARENA_MB * 1024 * 1024,
+    "arena_extend_strategy": "kSameAsRequested",
+}
 
 
 class Embedder:
@@ -33,7 +36,7 @@ class Embedder:
         from fastembed import TextEmbedding
         self._model = TextEmbedding(
             model_name=self._model_name,
-            providers=["CUDAExecutionProvider"],
+            providers=[("CUDAExecutionProvider", _CUDA_PROVIDER_OPTIONS)],
             max_length=512,
         )
 
