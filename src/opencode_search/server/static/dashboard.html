@@ -468,10 +468,8 @@ let _msgSeq=0;
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-// mdSafe: render markdown to safe HTML for AI messages (no external deps)
 function mdSafe(s){
   if(!s)return '';
-  // 1. Escape HTML first (XSS safety)
   let h=esc(String(s));
   // 2. Fenced code blocks  ```lang\ncode\n```
   h=h.replace(/```(?:[^\n]*)?\n([\s\S]*?)```/g,(_,c)=>'<pre><code>'+c+'</code></pre>');
