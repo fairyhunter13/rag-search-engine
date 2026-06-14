@@ -177,7 +177,10 @@ def _index_files(project_path: str, files: list) -> None:
 
 
 def _enrich_project(project_path: str) -> None:
-    from opencode_search.core.config import project_graph_db, project_wiki_dir
+    import time
+
+    from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
+    from opencode_search.core.gpu import gpu_temp_c
     from opencode_search.graph.enrich import enrich_community
     from opencode_search.graph.store import GraphStore
     from opencode_search.kb.hierarchy import build_hierarchy
@@ -186,9 +189,11 @@ def _enrich_project(project_path: str) -> None:
     gs = GraphStore(project_graph_db(project_path))
     try:
         for (cid,) in gs._con.execute(
-            "SELECT id FROM communities WHERE title IS NULL LIMIT 20"
+            "SELECT id FROM communities WHERE title IS NULL"
         ).fetchall():
             enrich_community(gs, cid)
+            if gpu_temp_c() > THERMAL_MAX_C:
+                time.sleep(5)
         gs.commit()
         build_hierarchy(gs)
         build_wiki(gs, project_wiki_dir(project_path))
