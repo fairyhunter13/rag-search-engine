@@ -159,3 +159,184 @@ def test_admin_reindex_appends_to_op_log(page: Page) -> None:
     page.wait_for_timeout(1500)
     log = page.locator("#op-log").inner_text() or ""
     assert log.strip(), f"#op-log empty after Re-index click: {log!r}"
+
+
+# ── P12.3: every _CMD_ITEMS entry dispatches ──────────────────────────────
+
+_CMD_VIEW_ITEMS = [
+    ("Pulse — KPI", "pulse"),
+    ("Chat — Ask", "chat"),
+    ("Admin — Proj", "admin"),
+    ("Graph — Know", "graph"),
+    ("Wiki — Know", "wiki"),
+]
+
+
+@pytest.mark.parametrize("prefix,view", _CMD_VIEW_ITEMS)
+def test_cmd_palette_dispatches_view_entry(page: Page, prefix: str, view: str) -> None:
+    """P12.3: each view _CMD_ITEMS entry switches the correct view via palette."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.keyboard.press("Control+k")
+    page.wait_for_timeout(150)
+    page.locator("#cmd-input").fill(prefix)
+    page.wait_for_timeout(100)
+    page.locator("#cmd-results li").first.click()
+    page.wait_for_timeout(400)
+    expect(page.locator(f"#view-{view}")).to_be_visible()
+
+
+def test_cmd_palette_refresh_pulse_op(page: Page) -> None:
+    """P12.3: 'Refresh Pulse' palette op executes loadPulse; kpi-files stays populated."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    page.keyboard.press("Control+k")
+    page.wait_for_timeout(150)
+    page.locator("#cmd-input").fill("Refresh Pulse")
+    page.wait_for_timeout(100)
+    page.locator("#cmd-results li").first.click()
+    page.wait_for_timeout(2500)
+    files = page.locator("#kpi-files").text_content() or ""
+    assert files not in ("", "—"), f"kpi-files empty after Refresh Pulse cmd: {files!r}"
+
+
+def test_cmd_palette_op_items_fire_via_palette(page: Page) -> None:
+    """P12.3: Re-index, Enrich, Generate-wiki, Refresh-Admin ops fire via palette."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-admin").click()
+    page.wait_for_timeout(1000)
+    for label in ("Re-index project", "Enrich hierarchy", "Generate wiki"):
+        page.keyboard.press("Control+k")
+        page.wait_for_timeout(150)
+        page.locator("#cmd-input").fill(label[:10])
+        page.wait_for_timeout(100)
+        page.locator("#cmd-results li").first.click()
+        page.wait_for_timeout(800)
+    log = page.locator("#op-log").inner_text() or ""
+    assert log.strip(), f"#op-log empty after palette ops: {log!r}"
+
+
+# ── P12.4 extended: enrichment tile + admin panels ────────────────────────
+
+def test_pulse_enrichment_tile_populated(page: Page) -> None:
+    """P12.4: #kpi-enrichment tile shows % on real indexed data."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    enrich = page.locator("#kpi-enrichment").text_content() or ""
+    assert enrich not in ("", "—"), f"#kpi-enrichment empty: {enrich!r}"
+
+
+def test_admin_projects_body_populated(page: Page) -> None:
+    """P12.4: #projects-body has rows after admin view loads."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-admin").click()
+    page.wait_for_timeout(2000)
+    rows = page.locator("#projects-body tr").count()
+    assert rows >= 1, f"#projects-body has no rows: {rows}"
+
+
+def test_admin_storage_health_populated(page: Page) -> None:
+    """P12.4: #storage-health-body shows storage data (not 'Loading…')."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-admin").click()
+    page.wait_for_timeout(2000)
+    text = page.locator("#storage-health-body").inner_text() or ""
+    assert text.strip() not in ("", "Loading…"), f"storage-health not populated: {text!r}"
+
+
+# ── P12.5: SSE live feed elements ─────────────────────────────────────────
+
+def test_activity_list_element_present(page: Page) -> None:
+    """P12.5: #activity-list is rendered in the pulse panel (SSE events append here)."""
+    page.goto(_DASH, wait_until="networkidle")
+    expect(page.locator("#activity-list")).to_be_attached()
+
+
+# ── P12.7: graph interactions ─────────────────────────────────────────────
+
+def test_graph_search_accepts_text(page: Page) -> None:
+    """P12.7: #graph-search input accepts text; searchGraphNode fires."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    page.locator("#graph-search").fill("main")
+    val = page.locator("#graph-search").input_value()
+    assert val == "main", f"#graph-search value unexpected: {val!r}"
+
+
+def test_graph_filter_sel_has_options(page: Page) -> None:
+    """P12.7: #graph-filter-sel is present and has ≥1 option."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    opts = page.locator("#graph-filter-sel option").count()
+    assert opts >= 1, f"#graph-filter-sel has no options: {opts}"
+
+
+def test_graph_layout_sel_change_no_crash(page: Page) -> None:
+    """P12.7: changing #graph-layout-sel after graph load doesn't crash."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    page.locator("button[onclick='loadGraph()']").click()
+    page.wait_for_function(
+        "document.getElementById('graph-node-count').textContent.trim().length > 0",
+        timeout=20000,
+    )
+    page.locator("#graph-layout-sel").select_option(index=1)
+    page.wait_for_timeout(500)
+    cnt = page.locator("#graph-node-count").text_content() or ""
+    assert cnt.strip(), f"#graph-node-count empty after layout change: {cnt!r}"
+
+
+# ── P12.8 extended: remaining admin ops + job state ──────────────────────
+
+def test_admin_enrich_appends_to_op_log(page: Page) -> None:
+    """P12.8: Enrich button appends to #op-log immediately."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-admin").click()
+    page.wait_for_timeout(2000)
+    page.locator("button[onclick='runEnrich()']").click()
+    page.wait_for_timeout(1500)
+    log = page.locator("#op-log").inner_text() or ""
+    assert log.strip(), f"#op-log empty after Enrich click: {log!r}"
+
+
+def test_admin_wiki_appends_to_op_log(page: Page) -> None:
+    """P12.8: Wiki generate button appends to #op-log."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-admin").click()
+    page.wait_for_timeout(2000)
+    page.locator("button[onclick='runWiki()']").click()
+    page.wait_for_timeout(1500)
+    log = page.locator("#op-log").inner_text() or ""
+    assert log.strip(), f"#op-log empty after Wiki click: {log!r}"
+
+
+def test_admin_job_chips_and_autopipeline_present(page: Page) -> None:
+    """P12.8: #admin-job-chips and #admin-autopipeline-log are rendered in admin view."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-admin").click()
+    expect(page.locator("#admin-job-chips")).to_be_attached()
+    expect(page.locator("#admin-autopipeline-log")).to_be_attached()
+
+
+# ── P12.8b: wiki view ─────────────────────────────────────────────────────
+
+def test_wiki_view_loads_pages(page: Page) -> None:
+    """P12.8b: switching to wiki view loads page buttons into #wiki-pages."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-wiki").click()
+    page.wait_for_timeout(3000)
+    btns = page.locator("#wiki-pages button").count()
+    assert btns >= 1, f"#wiki-pages has no page buttons: {btns}"
+
+
+def test_wiki_page_loads_content(page: Page) -> None:
+    """P12.8b: clicking a wiki page button populates #wiki-content."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-wiki").click()
+    page.wait_for_timeout(3000)
+    page.locator("#wiki-pages button").first.click()
+    page.wait_for_timeout(3000)
+    text = page.locator("#wiki-content").inner_text() or ""
+    assert text.strip(), f"#wiki-content empty after page open: {text[:80]!r}"

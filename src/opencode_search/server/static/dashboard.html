@@ -638,7 +638,7 @@ async function loadPulse(){
     // Communities + Enrichment tiles
     const kbD=kb.status==='fulfilled'?kb.value:{};
     const comms=kbD.total_communities;
-    const enrichPct=kbD.enrichment_pct;
+    const enrichPct=kbD.enriched_pct;
     setTile('communities',comms,comms!=null?'graph':'—',comms>0?'ok':'warn',
       enrichPct!=null?`${enrichPct}% enriched`:'enrichment unknown');
     const ep=enrichPct!=null?enrichPct:0;
