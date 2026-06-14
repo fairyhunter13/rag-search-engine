@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PostToolUse audit — appends one JSONL line per Edit/Write to lean-ledger.jsonl,
-# capturing the ack reason so every accepted change leaves a why-trail. Never blocks.
+# logging {tool,file,netLines} so every accepted change leaves a trail. Never blocks.
 set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEDGER="${REPO_ROOT}/.claude/lean-ledger.jsonl"
