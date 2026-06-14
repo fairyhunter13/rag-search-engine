@@ -89,6 +89,50 @@ def test_indexer_counts(embedder):
         store.close()
 
 
+# ── P10.1: search scopes on REAL indexed repos ────────────────────────────────
+
+def _get_project(tag: str) -> str | None:
+    from opencode_search.core.registry import list_projects
+    return next((p.path for p in list_projects() if tag in p.path and p.enabled), None)
+
+
+def test_search_code_scope_real_astro(embedder):
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.index.discover import _CODE_LANGS
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.search import search
+    astro = _get_project("redacted-name-3")
+    assert astro and "promo" not in astro, "redacted-name-3 must be registered (run P8)"
+    vs = VectorStore(project_vector_db(astro))
+    results = search("component rendering", embedder, vs, scope="code", top_k=5)
+    vs.close()
+    assert results and all(r.get("language") in _CODE_LANGS for r in results)
+
+
+def test_search_code_scope_real_be(embedder):
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.search import search
+    be = _get_project("acme-promo-be")
+    assert be, "acme-promo-be must be registered (run P8)"
+    vs = VectorStore(project_vector_db(be))
+    results = search("request handler routing", embedder, vs, scope="code", top_k=5)
+    vs.close()
+    assert results and any(r.get("language") == "go" for r in results)
+
+
+def test_search_all_scope_returns_results(embedder):
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.search import search
+    astro = _get_project("redacted-name-3")
+    assert astro and "promo" not in astro, "redacted-name-3 must be registered (run P8)"
+    vs = VectorStore(project_vector_db(astro))
+    results = search("configuration", embedder, vs, scope="all", top_k=10)
+    vs.close()
+    assert results, "scope=all returned no results on real indexed redacted-name-3"
+
+
 def test_search_top_result_relevant(embedder):
     from opencode_search.index.indexer import index_project
     from opencode_search.index.store import VectorStore
