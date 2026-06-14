@@ -39,6 +39,11 @@ def test_mcp_handlers_have_no_llm_generation():
     assert "from opencode_search.query.ask import ask as _ask" not in text, (
         "server/mcp.py imports ask as _ask — MCP handler must use compose_answer() instead"
     )
+    # Positive: MCP ask must call compose_answer (LLM-free context assembly, not synthesis)
+    assert "compose_answer" in text, (
+        "server/mcp.py must call compose_answer() — the LLM-free context composer; "
+        "do not replace with the synthesizing ask() regardless of import alias"
+    )
 
 
 def test_ask_mcp_returns_structured_context():
