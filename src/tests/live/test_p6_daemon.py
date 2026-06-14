@@ -115,6 +115,7 @@ def test_ensure_running_false_for_wrong_port():
 
 
 def test_cli_has_expected_commands():
+    """P10.8: all 13 top-level commands + 7 daemon subcommands present."""
     from typer.testing import CliRunner
 
     from opencode_search.cli import app
@@ -122,8 +123,39 @@ def test_cli_has_expected_commands():
     runner = CliRunner()
     r = runner.invoke(app, ["--help"])
     assert r.exit_code == 0
-    for cmd in ("index", "search", "list", "status", "daemon"):
-        assert cmd in r.output, f"CLI missing '{cmd}' command"
+    for cmd in (
+        "init", "index", "search", "watch", "stop-watching", "mcp",
+        "clean-orphans", "storage", "dashboard", "list",
+        "health", "kb-status", "status", "daemon",
+    ):
+        assert cmd in r.output, f"CLI missing top-level command '{cmd}'"
+
+    r2 = runner.invoke(app, ["daemon", "--help"])
+    assert r2.exit_code == 0
+    for cmd in ("serve", "status", "ensure", "stop",
+                "install-global", "install-systemd", "bridge-stdio"):
+        assert cmd in r2.output, f"CLI daemon missing subcommand '{cmd}'"
+
+
+def test_cli_safe_invocations():
+    """P10.8: safe read-only CLI invocations return exit 0 with real output."""
+    from typer.testing import CliRunner
+
+    from opencode_search.cli import app
+
+    runner = CliRunner()
+    # list — prints registered projects (at least opencode-search-engine)
+    r = runner.invoke(app, ["list"])
+    assert r.exit_code == 0 and r.output.strip(), "cli list returned empty"
+    # status — daemon status (may say running or not, must not crash)
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0, f"cli status crashed: {r.output}"
+    # clean-orphans --help — does not touch disk
+    r = runner.invoke(app, ["clean-orphans", "--help"])
+    assert r.exit_code == 0 and "dry-run" in r.output.lower()
+    # health — GPU available; daemon is live so GPU is in use
+    r = runner.invoke(app, ["health"])
+    assert r.exit_code == 0, f"cli health: GPU unavailable? output={r.output!r}"
 
 
 def test_pipeline_all_stages_real_astro():
@@ -209,3 +241,26 @@ def test_api_reload_returns_reloading():
             break
         except Exception:
             continue
+
+
+def test_no_heuristic_regression():
+    """P10.9: grep-guard — _FW dict, keyword MAP, and CamelCase heuristic must
+    not be reintroduced in production src/opencode_search/ code.
+
+    These were removed in P9.1-P9.4; this test makes the removal permanent.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).parents[3] / "opencode_search"
+    patterns = [
+        (r"\b_FW\s*=\s*\{", "kb/patterns.py _FW static dict"),
+        (r"keywords\s*=\s*set\(query\.lower\(\)\.split\(\)\)", "ask.py keyword MAP"),
+        (r"re\.match\(r..\[A-Z\]", "CamelCase heuristic in _extract_symbol"),
+    ]
+    for py in src.rglob("*.py"):
+        text = py.read_text()
+        for pat, label in patterns:
+            assert not re.search(pat, text), (
+                f"Heuristic '{label}' reintroduced in {py.relative_to(src.parent)}"
+            )
