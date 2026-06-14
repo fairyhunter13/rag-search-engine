@@ -35,6 +35,20 @@ _DEFAULT_KINDS: dict[str, str] = {
     "method_declaration": "method",
 }
 
+# (call-node-type, name-field) per language for call-edge extraction
+_CALL_NODE: dict[str, tuple[str, str]] = {
+    "python": ("call", "function"),
+    "javascript": ("call_expression", "function"),
+    "typescript": ("call_expression", "function"),
+    "go": ("call_expression", "function"),
+    "java": ("method_invocation", "name"),
+    "kotlin": ("call_expression", "function"),
+    "ruby": ("call", "method"),
+}
+
+# member/attribute node kinds — we extract just the right-hand identifier
+_MEMBER_KINDS = {"member_expression", "attribute", "selector_expression", "field_access"}
+
 
 @dataclass(slots=True)
 class Symbol:
@@ -73,6 +87,44 @@ def _walk(node, code_bytes: bytes, file: str, lang: str,
     for i in range(node.named_child_count()):
         result.extend(_walk(node.named_child(i), code_bytes, file, lang, kinds, parent))
     return result
+
+
+def _collect_call_names(node, code_bytes: bytes, call_type: str,
+                        name_field: str, out: list[str]) -> None:
+    if node.kind() == call_type:
+        name_node = node.child_by_field_name(name_field)
+        if name_node:
+            if name_node.kind() in _MEMBER_KINDS:
+                # a.b() or pkg.Func() — take the rightmost identifier
+                name_node = (name_node.child_by_field_name("field")
+                             or name_node.child_by_field_name("property")
+                             or name_node.child_by_field_name("name")
+                             or name_node)
+            br = name_node.byte_range()
+            name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+            if name and name.isidentifier():
+                out.append(name)
+    for i in range(node.named_child_count()):
+        _collect_call_names(node.named_child(i), code_bytes, call_type, name_field, out)
+
+
+def extract_calls(content: str, language: str) -> list[str]:
+    """Return called function/method names found in content (tree-sitter parse)."""
+    ts_lang = _TS_LANG.get(language)
+    call_spec = _CALL_NODE.get(language)
+    if ts_lang is None or call_spec is None:
+        return []
+    try:
+        from tree_sitter_language_pack import api as ts_api
+        tree = ts_api.get_parser(ts_lang).parse(content)
+        root = tree.root_node()
+    except Exception:
+        return []
+    call_type, name_field = call_spec
+    code_bytes = content.encode("utf-8", errors="replace")
+    out: list[str] = []
+    _collect_call_names(root, code_bytes, call_type, name_field, out)
+    return out
 
 
 def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:

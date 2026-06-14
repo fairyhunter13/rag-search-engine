@@ -34,6 +34,23 @@ async def _api_search_get(request: Request) -> JSONResponse:
     return JSONResponse({"results": results[:top_k], "total": len(results)})
 
 
+def _chunks_for(project: str, query: str, top_k: int = FINAL_TOP_K) -> list[dict]:
+    """Return vector-search chunks for query; empty list if project not indexed."""
+    from opencode_search.embed.embedder import Embedder
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.search import search
+    vdb = project_vector_db(project) if project else None
+    if not vdb or not vdb.exists():
+        return []
+    embedder = Embedder()
+    embedder.warmup()
+    vs = VectorStore(vdb)
+    try:
+        return search(query, embedder, vs, top_k=top_k)
+    finally:
+        vs.close()
+
+
 async def _api_ask_get(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     query = request.query_params.get("query", "")
@@ -45,9 +62,10 @@ async def _api_ask_get(request: Request) -> JSONResponse:
     gdb = project_graph_db(project) if project else None
     if not gdb or not gdb.exists():
         return JSONResponse({"answer": "Project not indexed.", "scope": scope})
+    chunks = _chunks_for(project, query)
     gs = GraphStore(gdb)
     try:
-        return JSONResponse({"answer": ask(query, gs, scope=scope), "scope": scope})
+        return JSONResponse({"answer": ask(query, chunks, gs, scope=scope), "scope": scope})
     finally:
         gs.close()
 
@@ -62,9 +80,10 @@ async def _api_feature(request: Request) -> JSONResponse:
     gdb = project_graph_db(project) if project else None
     if not gdb or not gdb.exists():
         return JSONResponse({"answer": "Project not indexed."})
+    chunks = _chunks_for(project, query)
     gs = GraphStore(gdb)
     try:
-        return JSONResponse({"answer": ask(query, gs, scope="feature")})
+        return JSONResponse({"answer": ask(query, chunks, gs, scope="feature")})
     finally:
         gs.close()
 

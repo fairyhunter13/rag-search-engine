@@ -44,7 +44,7 @@ async def _api_search(request: Request) -> JSONResponse:
     q = body.get("q") or body.get("query", "")
     if not q:
         return JSONResponse({"error": "q required"}, status_code=400)
-    project = body.get("project", "")
+    project = body.get("project") or body.get("project_path", "")
     scope = body.get("scope", "code")
     from opencode_search.core.config import project_vector_db
     from opencode_search.core.registry import list_projects
@@ -72,7 +72,7 @@ async def _api_ask(request: Request) -> JSONResponse:
     if not q:
         return JSONResponse({"error": "query required"}, status_code=400)
     from opencode_search.server import mcp as mcp_mod
-    answer = await mcp_mod.ask(q, body.get("project", ""), body.get("scope", "all"))
+    answer = await mcp_mod.ask(q, body.get("project") or body.get("project_path", ""), body.get("scope", "all"))
     return JSONResponse({"answer": answer})
 
 
@@ -80,7 +80,8 @@ async def _api_overview(request: Request) -> JSONResponse:
     import json
     body = await request.json()
     from opencode_search.server._overview import handle_overview
-    return JSONResponse(json.loads(handle_overview(body.get("project", ""), body.get("what", "structure"))))
+    proj = body.get("project") or body.get("project_path", "")
+    return JSONResponse(json.loads(handle_overview(proj, body.get("what", "structure"))))
 
 
 async def _api_index(request: Request) -> JSONResponse:

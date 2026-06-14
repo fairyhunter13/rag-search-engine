@@ -28,11 +28,11 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
         file_idx = {f: i for i, f in enumerate(files)}
         mapping: dict[str, int] = {s["sid"]: file_idx[s["file"]] for s in symbols}
     else:
+        # ModularityVertexPartition does not accept resolution_parameter (CPM does).
         part = leidenalg.find_partition(
             g.as_undirected(),
             leidenalg.ModularityVertexPartition,
             n_iterations=3,
-            resolution_parameter=resolution,
         )
         mapping = {symbols[i]["sid"]: part.membership[i] for i in range(len(symbols))}
 
