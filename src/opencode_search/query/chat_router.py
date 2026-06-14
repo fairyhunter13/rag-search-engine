@@ -45,13 +45,31 @@ def classify_intent(query: str) -> str:
     return "search"
 
 
-def _extract_symbol(query: str) -> str:
-    """Heuristic: first CamelCase/snake_case word that looks like an identifier."""
-    for word in query.split():
-        w = word.strip("'\"?,.")
-        if w and (w[0].isupper() or "_" in w):
-            return w
-    return query.split()[0] if query.split() else query
+def _extract_symbol(query: str, store: GraphStore | None = None) -> str:
+    """LLM-extract the target symbol; fuzzy-resolve against graph store if given."""
+    try:
+        raw = _llm_chat(
+            f"Query: {query}\n"
+            "What specific function, class, or symbol name is the user asking about? "
+            "Reply with ONLY the identifier name, nothing else.",
+        ).strip()
+        symbol = raw if (raw and len(raw) < 80 and " " not in raw) else (raw.split() or [""])[0]
+    except Exception:
+        symbol = ""
+    if not symbol:
+        symbol = query.split()[0] if query.split() else query
+    if store is not None:
+        exact = store._con.execute(
+            "SELECT name FROM symbols WHERE name=? OR qualified_name=? LIMIT 1",
+            (symbol, symbol),
+        ).fetchone()
+        if not exact:
+            fuzzy = store._con.execute(
+                "SELECT name FROM symbols WHERE name LIKE ? LIMIT 1", (f"%{symbol}%",),
+            ).fetchone()
+            if fuzzy:
+                symbol = fuzzy[0]
+    return symbol
 
 
 def route(
@@ -75,7 +93,7 @@ def route(
         return intent, "\n\n".join(lines)
 
     if intent.startswith("graph_"):
-        symbol = _extract_symbol(query)
+        symbol = _extract_symbol(query, gstore)
         if intent == "graph_callers":
             found = graph_handler.callers(symbol, gstore)
             return intent, "\n".join(r["name"] for r in found) or f"No callers of '{symbol}'."

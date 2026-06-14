@@ -116,6 +116,26 @@ def test_ask_all_scope_returns_answer(mini_stores, embedder):
 # ── query/chat_router (slow) ─────────────────────────────────────────────────
 
 @pytest.mark.slow
+def test_extract_symbol_uses_llm_not_heuristic(mini_stores):
+    """P9.3: _extract_symbol resolves lowercase symbol via LLM + store, not CamelCase heuristic.
+
+    Old heuristic: 'what calls the authenticate function' → 'what' (no uppercase / underscore).
+    New LLM path: extracts 'authenticate' → exact match in graph store.
+    """
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.query.chat_router import _extract_symbol
+
+    gs = GraphStore(mini_stores["gdb"])
+    query = "what calls the authenticate function"
+    symbol = _extract_symbol(query, gs)
+    gs.close()
+    assert symbol == "authenticate", (
+        f"LLM should extract 'authenticate'; got '{symbol}'. "
+        "The old heuristic would have returned 'what'."
+    )
+
+
+@pytest.mark.slow
 def test_classify_intent_returns_valid_intent():
     from opencode_search.query.chat_router import classify_intent
     intent = classify_intent("find the function that handles authentication")
