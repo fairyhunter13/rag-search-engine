@@ -4,12 +4,7 @@ from __future__ import annotations
 import json
 import time
 
-try:
-    from mcp.server.fastmcp import FastMCP
-except ImportError:
-    from opencode_search.server._fastmcp_stub import (
-        FastMCPStub as FastMCP,  # type: ignore[assignment]
-    )
+from mcp.server.fastmcp import FastMCP
 
 from opencode_search.daemon.global_prompt import _PROMPT
 from opencode_search.daemon.runtime_state import note_activity, note_query
