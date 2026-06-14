@@ -78,7 +78,7 @@ class GraphStore:
     def assign_community(self, sid: str, community_id: int) -> None:
         self._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (community_id, sid))
 
-    def upsert_community(self, cid: int, level: int, title: str, summary: str,
+    def upsert_community(self, cid: int, level: int, title: str | None, summary: str,
                          member_count: int, semantic_type: str = "") -> None:
         self._con.execute(
             """INSERT INTO communities (id,level,title,summary,member_count,semantic_type)
