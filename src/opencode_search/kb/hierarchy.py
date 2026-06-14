@@ -45,7 +45,7 @@ def build_hierarchy(store: GraphStore, *, resolution: float = 1.0) -> int:
 
     part = leidenalg.find_partition(
         g, leidenalg.ModularityVertexPartition,
-        weights=weights, n_iterations=3, resolution_parameter=resolution,
+        weights=weights, n_iterations=3,
     )
     l2_mapping = {l1_ids[i]: part.membership[i] for i in range(len(l1_ids))}
     counts = Counter(l2_mapping.values())

@@ -124,3 +124,35 @@ def test_cli_has_expected_commands():
     assert r.exit_code == 0
     for cmd in ("index", "search", "list", "status", "daemon"):
         assert cmd in r.output, f"CLI missing '{cmd}' command"
+
+
+def test_pipeline_all_stages_real_astro():
+    """P10.6: per-stage output traces on the real indexed redacted-name-3.
+
+    Validates: chunk+embed → tree-sitter symbols → call edges → Leiden
+    communities → LLM-enriched symbols+communities → L2 hierarchy → wiki pages.
+    """
+    import sqlite3
+
+    from opencode_search.core.config import project_graph_db, project_vector_db, project_wiki_dir
+    from opencode_search.core.registry import list_projects
+    from opencode_search.index.store import VectorStore
+
+    astro = next(
+        (p.path for p in list_projects()
+         if "redacted-name-3" in p.path and "promo" not in p.path and p.enabled), None,
+    )
+    assert astro, "redacted-name-3 not registered (run P8)"
+    vs = VectorStore(project_vector_db(astro))
+    n = vs.count()
+    vs.close()
+    assert n > 0, "stage 1 chunk+embed: 0 chunks in vectors.db"
+    with sqlite3.connect(str(project_graph_db(astro))) as c:
+        assert c.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "stage 2 tree-sitter: 0 symbols"
+        assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] > 0, "stage 2b call-edges: 0 edges"
+        assert c.execute("SELECT COUNT(*) FROM communities").fetchone()[0] > 0, "stage 3 leiden: 0 communities"
+        assert c.execute("SELECT COUNT(*) FROM symbols WHERE intent IS NOT NULL").fetchone()[0] > 0, "stage 4 enrich-sym: no intents"
+        assert c.execute("SELECT COUNT(*) FROM communities WHERE title IS NOT NULL").fetchone()[0] > 0, "stage 5 enrich-comm: no titles"
+        assert c.execute("SELECT COUNT(*) FROM communities WHERE level > 1").fetchone()[0] > 0, "stage 6 hierarchy: no L2"
+    wiki = project_wiki_dir(astro)
+    assert list(wiki.glob("*.md")), f"stage 7 wiki: no pages in {wiki}"
