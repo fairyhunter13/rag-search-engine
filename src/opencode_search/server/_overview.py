@@ -75,7 +75,9 @@ def handle_overview(project_path: str, what: str) -> str:
                     return json.dumps({"questions": ["What does this project do?", "How is authentication implemented?", "What are the main modules?"]})
                 if what == "service_mesh":
                     return json.dumps({"services": [], "project": project_path})
-                return json.dumps({"path": project_path, "symbols": gs.symbol_count(), "communities": gs.community_count()})
+                fc = c.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0]
+                return json.dumps({"path": project_path, "symbols": gs.symbol_count(),
+                                   "communities": gs.community_count(), "file_count": fc})
             finally:
                 gs.close()
     return json.dumps({"what": what, "status": "no project available"})

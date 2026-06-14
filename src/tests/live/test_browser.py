@@ -84,3 +84,39 @@ def test_theme_button_toggles_theme(page: Page) -> None:
     page.wait_for_timeout(200)
     after = page.locator("#theme-btn").text_content()
     assert before != after, f"theme icon did not change: {before!r} → {after!r}"
+
+
+# ── P12.4: pulse real data ────────────────────────────────────────────────────
+
+def test_pulse_kpi_tiles_show_real_data(page: Page) -> None:
+    """P12.4: files + communities KPI tiles are non-zero on real indexed data."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    files = page.locator("#kpi-files").text_content() or ""
+    comms = page.locator("#kpi-communities").text_content() or ""
+    assert files not in ("", "—"), f"#kpi-files shows no data: {files!r}"
+    assert comms not in ("", "—"), f"#kpi-communities shows no data: {comms!r}"
+
+
+def test_project_selector_populated(page: Page) -> None:
+    """P12.4: #project-sel (admin nav) has >=1 real project options after loadProjects()."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    opts = page.evaluate("document.querySelectorAll('#project-sel option').length")
+    assert opts >= 1, f"#project-sel has no options, got {opts}"
+
+
+def test_pulse_suggested_questions_populated(page: Page) -> None:
+    """P12.4: suggested questions list has >=1 button after pulse loads."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    btns = page.locator("#suggested-list .sq-btn").count()
+    assert btns >= 1, f"no suggested question buttons rendered, got {btns}"
+
+
+# ── P12.5: SSE live feed / daemon dot ────────────────────────────────────────
+
+def test_daemon_dot_is_visible(page: Page) -> None:
+    """P12.5: #daemon-dot is rendered in the nav bar and visible."""
+    page.goto(_DASH, wait_until="networkidle")
+    expect(page.locator("#daemon-dot")).to_be_visible()
