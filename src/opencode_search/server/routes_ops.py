@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+_INTEGRATIONS_SCRIPT = Path(__file__).parents[3] / "scripts" / "configure_integrations.py"
 _start_time = time.monotonic()
 _alerts: list[dict] = []
 _metrics: dict = {
@@ -35,12 +40,18 @@ async def _api_system_status(request: Request) -> JSONResponse:
 
 
 async def _api_integrations_status(request: Request) -> JSONResponse:
-    claude_md = os.path.expanduser("~/CLAUDE.md")
-    has_block = False
-    if os.path.exists(claude_md):
-        with open(claude_md) as f:
-            has_block = "[opencode-search-global-instructions" in f.read()
-    return JSONResponse({"claude_md": has_block, "codex": False, "hermes": False})
+    if not _INTEGRATIONS_SCRIPT.exists():
+        return JSONResponse({"error": "configure_integrations.py not found"}, status_code=500)
+    result = subprocess.run(
+        [sys.executable, str(_INTEGRATIONS_SCRIPT), "--check", "--json"],
+        capture_output=True, text=True, timeout=15,
+    )
+    try:
+        items = json.loads(result.stdout)
+    except Exception:
+        return JSONResponse({"error": result.stderr[:200]}, status_code=500)
+    ok = all(i.get("status") in ("already_ok", "configured", "skipped") for i in items)
+    return JSONResponse({"clients": items, "ok": ok, "total": len(items)})
 
 
 async def _api_alerts_get(request: Request) -> JSONResponse:
