@@ -45,6 +45,42 @@ def _community_context(store: GraphStore, limit: int = 20, semantic_types: tuple
     return "\n\n".join(f"## {r[0]}\n{r[1]}" for r in rows if r[1])
 
 
+def _assemble_context(query: str, chunks: list[dict], store: GraphStore, scope: str) -> str:
+    """Assemble pre-built context string from DB artifacts — no LLM call."""
+    chunk_ctx = "\n\n".join(
+        f"[{r.get('path', '')}:{r.get('start_line', '')}]\n{r.get('content', '')}"
+        for r in chunks
+    )[:_MAX_CTX]
+    if scope == "global":
+        community_ctx = _top_communities_semantic(query, store)[:_MAX_CTX]
+        return f"## Architecture (community map)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
+    if scope in ("architecture", "all"):
+        community_ctx = _community_context(store)[:_MAX_CTX]
+        return f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
+    if scope == "wiki":
+        community_ctx = _community_context(store, limit=10)[:_MAX_CTX]
+        return f"## Wiki\n{community_ctx}\n\n## Code\n{chunk_ctx}"
+    if scope == "feature":
+        return (
+            f"## Code (feature trace)\n{chunk_ctx}\n\n"
+            f"## Community context\n{_community_context(store, limit=5)[:_MAX_CTX]}"
+        )
+    if scope == "business":
+        biz_ctx = _community_context(store, limit=20,
+                                     semantic_types=("rule", "constraint", "feature", "workflow", "process"))[:_MAX_CTX]
+        return f"## Business context\n{biz_ctx}\n\n## Code\n{chunk_ctx}"
+    return chunk_ctx
+
+
+def compose_answer(query: str, chunks: list[dict], store: GraphStore, *, scope: str = "all") -> str:
+    """Return pre-built context assembled from DB artifacts — NO LLM generation.
+
+    Used by the MCP ask handler (read-only path).  The daemon sweep may call
+    ask() (below) which adds LLM synthesis on top.
+    """
+    return _assemble_context(query, chunks, store, scope)
+
+
 def ask(
     query: str,
     chunks: list[dict],
@@ -52,38 +88,13 @@ def ask(
     *,
     scope: str = "all",
 ) -> str:
-    """Synthesize an answer using chunk excerpts and community summaries.
+    """Synthesize an answer using chunk excerpts and community summaries (LLM generation).
 
     chunks: results from query.search.search()
     store: open GraphStore for community context
     scope: all | architecture | global | feature | wiki | business
     """
-    chunk_ctx = "\n\n".join(
-        f"[{r.get('path', '')}:{r.get('start_line', '')}]\n{r.get('content', '')}"
-        for r in chunks
-    )[:_MAX_CTX]
-
-    if scope == "global":
-        community_ctx = _top_communities_semantic(query, store)[:_MAX_CTX]
-        context = f"## Architecture (MAP+REDUCE)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
-    elif scope in ("architecture", "all"):
-        community_ctx = _community_context(store)[:_MAX_CTX]
-        context = f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
-    elif scope == "wiki":
-        community_ctx = _community_context(store, limit=10)[:_MAX_CTX]
-        context = f"## Wiki\n{community_ctx}\n\n## Code\n{chunk_ctx}"
-    elif scope == "feature":
-        context = (
-            f"## Code (feature trace)\n{chunk_ctx}\n\n"
-            f"## Community context\n{_community_context(store, limit=5)[:_MAX_CTX]}"
-        )
-    elif scope == "business":
-        biz_ctx = _community_context(store, limit=20,
-                                     semantic_types=("rule", "constraint", "feature", "workflow", "process"))[:_MAX_CTX]
-        context = f"## Business context\n{biz_ctx}\n\n## Code\n{chunk_ctx}"
-    else:
-        context = chunk_ctx
-
+    context = _assemble_context(query, chunks, store, scope)
     return chat(
         f"You are a code intelligence assistant. Answer concisely.\n\n"
         f"Question: {query}\n\nContext:\n{context}\n\nAnswer:"

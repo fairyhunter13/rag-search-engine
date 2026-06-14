@@ -74,11 +74,13 @@ async def ask(
 ) -> str:
     """Answer a question about the codebase. scope: all|architecture|global|feature|wiki|business."""
     note_query(query)
-    from opencode_search.core.config import project_graph_db, project_vector_db
+    from opencode_search.core.config import index_dir, project_graph_db, project_vector_db
     from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
     from opencode_search.index.store import VectorStore
-    from opencode_search.query.ask import ask as _ask
+    from opencode_search.kb.answer_cache import get as _cache_get
+    from opencode_search.kb.answer_cache import set as _cache_set
+    from opencode_search.query.ask import compose_answer
     from opencode_search.query.search import search as _search
 
     if not project_path:
@@ -86,6 +88,12 @@ async def ask(
         if not projects:
             return "No indexed projects found."
         project_path = projects[0].path
+
+    cache_dir = index_dir(project_path) / "ask_cache"
+    cached = _cache_get(cache_dir, f"{scope}:{query}")
+    if cached:
+        return cached
+
     vdb, gdb = project_vector_db(project_path), project_graph_db(project_path)
     if not vdb.exists():
         return f"Project not indexed: {project_path}"
@@ -93,7 +101,9 @@ async def ask(
     vs, gs = VectorStore(vdb), GraphStore(gdb)
     try:
         chunks = _search(query, embedder, vs, scope="all", top_k=8)
-        return _ask(query, chunks, gs, scope=scope)
+        answer = compose_answer(query, chunks, gs, scope=scope)
+        _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
+        return answer
     finally:
         vs.close()
         gs.close()
@@ -124,7 +134,16 @@ async def graph(
         if relation == "impact":
             return json.dumps({"matches": gh.impact(symbol, gs)})
         if relation == "impact_narrative":
-            return gh.impact_narrative(symbol, gs)
+            affected = gh.impact(symbol, gs)
+            if not affected:
+                return json.dumps({"symbol": symbol, "risk": "low", "affected_count": 0,
+                                   "summary": f"No callers found for '{symbol}' — low blast radius."})
+            names = [r["name"] for r in affected[:20]]
+            risk = "high" if len(affected) > 10 else "medium" if len(affected) > 3 else "low"
+            return json.dumps({"symbol": symbol, "risk": risk, "affected_count": len(affected),
+                               "affected": names,
+                               "summary": f"Changing '{symbol}' affects {len(affected)} symbol(s): "
+                                          f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."})
         if relation == "path":
             if not to_symbol:
                 return json.dumps({"error": "relation='path' requires to_symbol"})
@@ -132,7 +151,13 @@ async def graph(
         if relation == "semantic_trace":
             if not to_symbol:
                 return json.dumps({"error": "relation='semantic_trace' requires to_symbol"})
-            return gh.semantic_trace(symbol, to_symbol, gs)
+            path = gh.path_between(symbol, to_symbol, gs)
+            if not path:
+                return json.dumps({"from": symbol, "to": to_symbol, "path": [],
+                                   "summary": f"No call path found from '{symbol}' to '{to_symbol}'."})
+            steps = " → ".join(p["name"] for p in path)
+            return json.dumps({"from": symbol, "to": to_symbol, "path": path,
+                               "summary": f"{symbol} → {to_symbol} via {len(path)} step(s): {steps}"})
         return json.dumps({"matches": gh.definition(symbol, gs)})
     finally:
         gs.close()

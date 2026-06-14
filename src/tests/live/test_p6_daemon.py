@@ -252,7 +252,8 @@ def test_no_heuristic_regression():
     import re
     from pathlib import Path
 
-    src = Path(__file__).parents[3] / "opencode_search"
+    src = Path(__file__).parents[2] / "opencode_search"
+    assert src.is_dir(), f"source dir not found at {src} — path calculation wrong"
     patterns = [
         (r"\b_FW\s*=\s*\{", "kb/patterns.py _FW static dict"),
         (r"keywords\s*=\s*set\(query\.lower\(\)\.split\(\)\)", "ask.py keyword MAP"),
