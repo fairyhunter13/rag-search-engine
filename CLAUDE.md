@@ -19,7 +19,7 @@ opencode-search is the tool under test. Every call to `overview` and `search` va
 
 ```bash
 # Fast smoke check — skips LLM quality tests + browser tests (~5 min)
-.venv/bin/pytest src/tests/live/ -m "live and not slow" -q
+.venv/bin/pytest src/tests/live/ -m "live and not slow" --ignore=src/tests/live/test_browser.py -q
 
 # Full live suite — all intents, quality scoring, watcher (~40 min, no browser)
 .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q
