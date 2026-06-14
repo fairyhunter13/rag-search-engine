@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from opencode_search.core.config import IGNORED_DIRS
+from opencode_search.core.index_config import ProjectConfig, is_excluded, load_project_config
 
 _EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
 # Public alias used by registry path filtering.
@@ -58,14 +59,19 @@ def is_forbidden_root(path: Path) -> bool:
     )
 
 
-def iter_files(root: Path, *, federation_mode: bool = False) -> Iterator[Path]:
+def iter_files(
+    root: Path, *, federation_mode: bool = False, cfg: ProjectConfig | None = None,
+) -> Iterator[Path]:
     """Yield indexable files under root, skipping ignored dirs and big files."""
     root = root.resolve()
+    if cfg is None:
+        cfg = load_project_config(root)
+    exc_dirs = _EXCLUDE if cfg.use_default_ignores else frozenset[str]()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         dp = Path(dirpath)
         dirnames[:] = [
             d for d in dirnames
-            if d not in _EXCLUDE and not d.endswith(".egg-info")
+            if d not in exc_dirs and not d.endswith(".egg-info")
         ]
         if federation_mode:
             dirnames[:] = [
@@ -76,6 +82,8 @@ def iter_files(root: Path, *, federation_mode: bool = False) -> Iterator[Path]:
         for fname in filenames:
             p = dp / fname
             if federation_mode and p.is_symlink() and not p.resolve().is_relative_to(root):
+                continue
+            if cfg.exclude and is_excluded(p, cfg.exclude, root):
                 continue
             lang = detect_language(p)
             try:
