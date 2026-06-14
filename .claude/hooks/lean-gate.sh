@@ -21,8 +21,31 @@ allow() {
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || echo "")
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('file_path','') or ti.get('path',''))" 2>/dev/null || echo "")
-NEW_STRING=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('new_string','') or ti.get('content',''))" 2>/dev/null || echo "")
-OLD_STRING=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('old_string',''))" 2>/dev/null || echo "")
+# For Edit/NotebookEdit: direct fields; for MultiEdit: sum across edits[]; for Write: content only
+NEW_STRING=$(echo "$INPUT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+ti = d.get('tool_input', {})
+tn = d.get('tool_name', '')
+if tn == 'MultiEdit':
+    parts = [e.get('new_string','') for e in ti.get('edits', [])]
+    print('\n'.join(parts))
+elif tn == 'NotebookEdit':
+    print(ti.get('new_source', ''))
+else:
+    print(ti.get('new_string','') or ti.get('content',''))
+" 2>/dev/null || echo "")
+OLD_STRING=$(echo "$INPUT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+ti = d.get('tool_input', {})
+tn = d.get('tool_name', '')
+if tn == 'MultiEdit':
+    parts = [e.get('old_string','') for e in ti.get('edits', [])]
+    print('\n'.join(parts))
+else:
+    print(ti.get('old_string',''))
+" 2>/dev/null || echo "")
 
 # Bootstrap: never gate Claude's own meta-files (hooks, skills, settings, plans, memory).
 # Workflow state must stay editable so flipping a checklist box stays allowed.
@@ -40,9 +63,10 @@ done
 # Diff budget. Claude passes ABSOLUTE file_path, so resolve existence directly —
 # joining REPO_ROOT to an absolute path would always miss and mislabel edits as new files.
 if [[ "$FILE_PATH" == /* ]]; then ABS_PATH="$FILE_PATH"; else ABS_PATH="${REPO_ROOT}/${FILE_PATH}"; fi
+# Write-over-existing gets the same 40-net budget as Edit (not the 150 new-file budget).
+# Only a Write to a genuinely non-existent file is treated as new.
 IS_NEW_FILE=0
 [[ ! -f "$ABS_PATH" ]] && IS_NEW_FILE=1
-[[ "$TOOL_NAME" == "Write" ]] && IS_NEW_FILE=1
 
 ADDED_LINES=$(echo "$NEW_STRING" | wc -l)
 REMOVED_LINES=$(echo "$OLD_STRING" | wc -l)

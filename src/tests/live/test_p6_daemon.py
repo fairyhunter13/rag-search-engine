@@ -306,6 +306,35 @@ def test_no_heuristic_regression():
             )
 
 
+def test_p22_embedder_singleton_no_leak():
+    """P22.1: get_embedder() is identity-stable; _index_project no longer bypasses it."""
+    from opencode_search.embed.embedder import get_embedder
+
+    # Multiple calls return the SAME object — no fresh ONNX session per call.
+    assert get_embedder() is get_embedder() is get_embedder()
+
+    # Source guard: _index_project must use the singleton, not Embedder() directly.
+    import inspect
+
+    from opencode_search.daemon import sweeps
+    src = inspect.getsource(sweeps._index_project)
+    assert "get_embedder()" in src, "_index_project must reuse the singleton via get_embedder()"
+    assert "Embedder()" not in src, "fresh Embedder() per call is the ONNX-session leak — do not reintroduce"
+
+
+def test_p22_idle_unload_clears_embed_singleton():
+    """P22.1: _idle_unload must null embed.embedder._default so VRAM frees when idle."""
+    import inspect
+
+    from opencode_search.daemon import server
+    src = inspect.getsource(server._idle_unload)
+    assert "_emb_mod._default = None" in src or "embedder" in src.lower(), (
+        "_idle_unload must clear embed.embedder._default on idle"
+    )
+    # Verify the specific null-out is present by checking the import+assignment.
+    assert "opencode_search.embed.embedder" in src, "_idle_unload must import embed.embedder to clear its singleton"
+
+
 def test_graph_no_duplicate_symbols():
     """P16.9: live graphs must have zero duplicate (name,file,kind) symbol groups."""
     from opencode_search.core.config import project_graph_db

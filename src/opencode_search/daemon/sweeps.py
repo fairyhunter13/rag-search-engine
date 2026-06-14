@@ -78,7 +78,7 @@ def _index_project(project_path: str) -> None:
     from pathlib import Path
 
     from opencode_search.core.config import project_graph_db, project_vector_db
-    from opencode_search.embed.embedder import Embedder
+    from opencode_search.embed.embedder import get_embedder
     from opencode_search.graph.community import detect_communities
     from opencode_search.graph.extractor import extract_calls, extract_symbols, symbol_id
     from opencode_search.graph.store import GraphStore
@@ -87,8 +87,7 @@ def _index_project(project_path: str) -> None:
     from opencode_search.index.store import VectorStore
 
     root = Path(project_path)
-    embedder = Embedder()
-    embedder.warmup()
+    embedder = get_embedder()
 
     # 1. Chunk + embed → vectors.db
     vs = VectorStore(project_vector_db(project_path))

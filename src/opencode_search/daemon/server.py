@@ -23,6 +23,8 @@ def _idle_unload() -> None:
             mcp_mod._embedder = None
             import opencode_search.query.search as search_mod
             search_mod._reranker = None
+            import opencode_search.embed.embedder as _emb_mod
+            _emb_mod._default = None
             _idle_unload_done = True
             log.info("model idle unload after %.0fs idle", idle)
         except Exception as exc:
