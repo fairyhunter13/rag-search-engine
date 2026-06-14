@@ -55,8 +55,9 @@ If `OLLAMA_NUM_GPU_LAYERS` is 0 or the model falls back to CPU, the process must
 
 ## Project quick reference
 
-- Entry points: `src/opencode_search/mcp.py` (MCP server), `src/opencode_search/handlers/` (tool handlers), `src/opencode_search/daemon.py` (singleton daemon + installer), `src/opencode_search/cli.py` (CLI)
+- Entry points: `src/opencode_search/server/mcp.py` (MCP server + routes), `src/opencode_search/daemon/` (daemon package), `src/opencode_search/cli.py` (CLI), `src/opencode_search/__main__.py` (bridge-stdio shim)
+- Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/opencode_search/`
 - Registry: `~/.local/share/opencode-search/projects.json`
-- Tests: `src/tests/` — `unit/`, `integration/`, `e2e/` subdirs
+- Tests: `src/tests/live/` (live suite — requires daemon at :8765, Ollama, GPU)
 - LLM provider: ollama + qwen3-enrich:1.7b (GPU-local, RTX 5080; systemd service; see `scripts/modelfiles/qwen3-enrich.modelfile`)
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
