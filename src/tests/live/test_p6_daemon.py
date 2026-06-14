@@ -401,6 +401,26 @@ def test_p20_auto_index_discovers_federation_members(tmp_path):
         vdb.unlink(missing_ok=True)
 
 
+@pytest.mark.slow
+def test_p20_indexed_at_stamped(tmp_path):
+    """P20.2: _index_project() stamps indexed_at + file_count on the registry entry."""
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.registry import get_project, remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _index_project
+
+    (tmp_path / "a.py").write_text("def hello(): return 1\n")
+    proj_path = str(tmp_path)
+    upsert_project(ProjectEntry(path=proj_path, enabled=True))
+    try:
+        _index_project(proj_path)
+        entry = get_project(proj_path)
+        assert entry is not None
+        assert entry.indexed_at is not None, "indexed_at must be stamped after _index_project"
+        assert entry.file_count > 0, f"file_count must be >0, got {entry.file_count}"
+    finally:
+        remove_project(proj_path)
+
+
 def test_p22_daemon_rss_bounded():
     """P22.4: daemon RSS < 4 GB and NRestarts < 10 after watcher churn + leak fixes."""
     import json

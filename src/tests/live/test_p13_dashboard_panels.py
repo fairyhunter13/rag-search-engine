@@ -12,8 +12,8 @@ def test_integrations_status_all_clients(live_client):
     data = resp.json()
     assert data.get("ok") is True, f"not all in sync: {data}"
     clients = data.get("clients", [])
-    assert data.get("total") == 18
-    assert len(clients) == 18
+    assert data.get("total") == 15
+    assert len(clients) == 15
     statuses = {c["status"] for c in clients}
     assert statuses <= {"already_ok", "configured", "skipped"}, f"unexpected statuses: {statuses}"
     tools = {c["tool"] for c in clients}

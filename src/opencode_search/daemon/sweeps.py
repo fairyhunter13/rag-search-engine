@@ -99,7 +99,7 @@ def _index_project(project_path: str) -> None:
     # 1. Chunk + embed → vectors.db
     vs = VectorStore(project_vector_db(project_path))
     try:
-        index_project(root, embedder, vs)
+        file_count, chunk_count = index_project(root, embedder, vs)
     finally:
         vs.close()
 
@@ -148,6 +148,16 @@ def _index_project(project_path: str) -> None:
         detect_communities(gs)
     finally:
         gs.close()
+
+    from datetime import UTC, datetime
+
+    from opencode_search.core.registry import get_project, upsert_project
+    entry = get_project(project_path)
+    if entry is not None:
+        entry.indexed_at = datetime.now(UTC).isoformat()
+        entry.file_count = file_count
+        entry.chunk_count = chunk_count
+        upsert_project(entry)
 
 
 def _index_files(project_path: str, files: list) -> None:
