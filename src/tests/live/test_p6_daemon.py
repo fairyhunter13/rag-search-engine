@@ -374,6 +374,33 @@ def test_p22_is_ignored_path():
     assert not is_ignored_path(Path("/repo/tests/test_core.py"))
 
 
+def test_p20_auto_index_discovers_federation_members(tmp_path):
+    """P20.1: auto_index() calls index_members() and registers symlinked sub-repos."""
+    from opencode_search.core.config import ProjectEntry, project_vector_db
+    from opencode_search.core.registry import get_project, remove_project, upsert_project
+    from opencode_search.daemon.sweeps import auto_index
+
+    member = tmp_path / "member-repo"
+    member.mkdir()
+    (member / "main.py").write_text("x = 1\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "link").symlink_to(member)
+
+    root_path = str(root)
+    vdb = project_vector_db(root_path)
+    vdb.parent.mkdir(parents=True, exist_ok=True)
+    vdb.touch()
+    upsert_project(ProjectEntry(path=root_path, enabled=True))
+    try:
+        auto_index()
+        assert get_project(str(member)) is not None, "federation member must be registered by auto_index"
+    finally:
+        remove_project(root_path)
+        remove_project(str(member))
+        vdb.unlink(missing_ok=True)
+
+
 def test_p22_daemon_rss_bounded():
     """P22.4: daemon RSS < 4 GB and NRestarts < 10 after watcher churn + leak fixes."""
     import json

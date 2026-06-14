@@ -29,9 +29,16 @@ def auto_index() -> None:
     if _PAUSED:
         return
     from opencode_search.core.registry import list_projects
+    from opencode_search.daemon.federation import index_members
 
     for entry in list_projects():
-        if not entry.enabled or not _needs_index(entry.path):
+        if not entry.enabled:
+            continue
+        try:
+            index_members(entry.path)
+        except Exception as exc:
+            log.warning("federation discovery %s: %s", entry.path, exc)
+        if not _needs_index(entry.path):
             continue
         try:
             _index_project(entry.path)
