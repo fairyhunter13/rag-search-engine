@@ -5,15 +5,26 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from opencode_search.graph.llm import chat
 from opencode_search.index.discover import detect_language, iter_files
 
-_FW: dict[str, str] = {
-    "django": "Django", "flask": "Flask", "fastapi": "FastAPI",
-    "react": "React", "vue": "Vue", "astro": "Astro",
-    "express": "Express", "next": "Next.js", "nextjs": "Next.js",
-    "gin": "Gin", "echo": "Echo", "spring": "Spring",
-    "rails": "Rails", "sinatra": "Sinatra",
-}
+
+def _llm_frameworks(deps: list[str]) -> list[str]:
+    """Name frameworks implied by the dependency list via LLM (no static map)."""
+    if not deps:
+        return []
+    try:
+        raw = chat(
+            f"Dependencies: {', '.join(deps[:30])}\n"
+            "List only the major frameworks these packages represent. One per line. No explanation.",
+        )
+        return sorted({
+            ln.strip().lstrip("-* •0123456789.").strip()
+            for ln in raw.replace(",", "\n").splitlines()
+            if ln.strip().lstrip("-* •0123456789.").strip()
+        })
+    except Exception:
+        return []
 
 
 def _parse_deps(path: Path) -> list[str]:
@@ -51,8 +62,7 @@ def detect_patterns(project_root: Path) -> dict:
         if p.name in ("pyproject.toml", "package.json", "go.mod", "Cargo.toml", "requirements.txt"):
             deps.extend(_parse_deps(p))
 
-    frameworks = sorted({_FW[d.split("[")[0].strip().lower()]
-                         for d in deps if d.split("[")[0].strip().lower() in _FW})
+    frameworks = _llm_frameworks(deps)
     return {
         "languages": dict(lang_counts.most_common(10)),
         "frameworks": frameworks,
