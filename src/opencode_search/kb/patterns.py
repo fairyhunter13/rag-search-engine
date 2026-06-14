@@ -9,11 +9,11 @@ from opencode_search.index.discover import detect_language, iter_files
 
 _KNOWN: dict[str, str] = {
     "fastapi": "FastAPI", "flask": "Flask", "django": "Django", "starlette": "Starlette",
-    "react": "React", "vue": "Vue", "angular": "Angular", "svelte": "Svelte",
-    "next": "Next.js", "nuxt": "Nuxt", "express": "Express",
+    "react": "React", "vue": "Vue", "angular": "Angular", "svelte": "Svelte", "sveltejs": "Svelte",
+    "next": "Next.js", "nuxt": "Nuxt", "express": "Express", "astro": "Astro",
     "torch": "PyTorch", "tensorflow": "TensorFlow", "keras": "Keras",
     "sqlalchemy": "SQLAlchemy", "prisma": "Prisma", "mongoose": "Mongoose",
-    "pytest": "pytest", "jest": "Jest", "spring": "Spring Boot",
+    "pytest": "pytest", "jest": "Jest", "playwright": "Playwright", "spring": "Spring Boot",
     "gin": "Gin", "echo": "Echo", "axum": "Axum",
 }
 
@@ -22,7 +22,11 @@ def _llm_frameworks(deps: list[str]) -> list[str]:
     """Map well-known dependency names to framework labels (no LLM)."""
     out = set()
     for d in deps:
-        key = d.lower().split("/")[-1].split("-")[0].split("_")[0]
+        dl = d.lower()
+        if dl.startswith("@"):
+            key = dl[1:].split("/")[0].split("-")[0]  # @scope/pkg → scope
+        else:
+            key = dl.split("/")[-1].split("-")[0].split("_")[0]
         if key in _KNOWN:
             out.add(_KNOWN[key])
     return sorted(out)
