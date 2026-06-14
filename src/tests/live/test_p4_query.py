@@ -62,6 +62,37 @@ def test_graph_impact_returns_list(mini_stores):
     assert isinstance(result, list)
 
 
+def test_graph_callees_real_be():
+    """P10.3: callees() on real BE graph with 63k edges returns ≥1 result."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.query.graph_handler import callees
+    be = next((p.path for p in list_projects() if "acme-promo-be" in p.path and p.enabled), None)
+    assert be, "acme-promo-be must be registered (run P8)"
+    gs = GraphStore(project_graph_db(be))
+    result = callees("NewService", gs)
+    gs.close()
+    assert isinstance(result, list) and len(result) >= 1
+
+
+@pytest.mark.slow
+def test_graph_narrative_and_trace_real_be():
+    """P10.3: impact_narrative + semantic_trace on real BE graph (LLM calls)."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.query.graph_handler import impact_narrative, semantic_trace
+    be = next((p.path for p in list_projects() if "acme-promo-be" in p.path and p.enabled), None)
+    assert be, "acme-promo-be must be registered (run P8)"
+    gs = GraphStore(project_graph_db(be))
+    narrative = impact_narrative("Run", gs)
+    trace = semantic_trace("NewService", "Run", gs)
+    gs.close()
+    assert isinstance(narrative, str) and len(narrative) > 20
+    assert isinstance(trace, str) and len(trace) > 10
+
+
 # ── query/ask (slow) ─────────────────────────────────────────────────────────
 
 @pytest.mark.slow
