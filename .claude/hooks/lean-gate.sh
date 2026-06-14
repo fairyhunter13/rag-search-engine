@@ -24,6 +24,11 @@ FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin);
 NEW_STRING=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('new_string','') or ti.get('content',''))" 2>/dev/null || echo "")
 OLD_STRING=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('old_string',''))" 2>/dev/null || echo "")
 
+# Block retired ack sentinel — gate reads diff budget from stdin; no ack file needed.
+if echo "$FILE_PATH" | grep -q '\.lean-ack\.json'; then
+  deny "lean-ack.json is retired — the gate reads tool_input directly. No ack file needed."
+fi
+
 # Bootstrap: never gate Claude's own meta-files (hooks, skills, settings, plans, memory).
 # Workflow state must stay editable so flipping a checklist box stays allowed.
 if echo "$FILE_PATH" | grep -q '\.claude/'; then
