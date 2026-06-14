@@ -98,17 +98,6 @@
             "if": "Bash(git commit *)|Bash(git push *)"
           }
         ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/lean-ledger.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
       }
     ],
 
