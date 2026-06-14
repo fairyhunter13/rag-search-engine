@@ -137,6 +137,28 @@ def test_detect_patterns_llm_frameworks():
     assert len(result["frameworks"]) >= 1
 
 
+def test_index_tool_e2e(tmp_path):
+    """P10.4b: enabled=True creates registry entry; enabled=False removes it + index dir."""
+    from pathlib import Path
+
+    from opencode_search.core.config import index_dir
+    from opencode_search.core.registry import list_projects
+    from opencode_search.server.mcp import index as index_tool
+
+    p = str(tmp_path)
+    reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
+    assert reg["status"] in ("flagged", "already_registered")
+    assert any(proj.path == p for proj in list_projects()), "Project not in registry after register"
+    reg2 = json.loads(asyncio.run(index_tool(p, enabled=True)))
+    assert reg2["status"] == "already_registered"
+    idx = index_dir(p)
+    idx.mkdir(parents=True, exist_ok=True)
+    rem = json.loads(asyncio.run(index_tool(p, enabled=False)))
+    assert rem["status"] in ("removed", "not_found")
+    assert not any(proj.path == p for proj in list_projects()), "Project still in registry after remove"
+    assert not Path(idx).exists(), "Index dir not deleted after remove"
+
+
 def test_overview_all_whats_real_astro():
     """P10.4: every what= value returns parseable non-empty data on real redacted-name-3."""
     from opencode_search.core.registry import list_projects
