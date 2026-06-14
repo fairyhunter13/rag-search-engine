@@ -135,3 +135,26 @@ def test_detect_patterns_llm_frameworks():
     assert isinstance(result["frameworks"], list)
     # redacted-name-3 has astro + react deps → LLM should name ≥1 framework
     assert len(result["frameworks"]) >= 1
+
+
+def test_overview_all_whats_real_astro():
+    """P10.4: every what= value returns parseable non-empty data on real redacted-name-3."""
+    from opencode_search.core.registry import list_projects
+    from opencode_search.server.mcp import overview as overview_tool
+
+    astro = next(
+        (p.path for p in list_projects()
+         if "redacted-name-3" in p.path and "promo" not in p.path and p.enabled),
+        None,
+    )
+    assert astro, "redacted-name-3 must be registered (run P8)"
+    whats = [
+        "structure", "communities", "status", "hierarchy",
+        "architecture_domains", "import_cycles", "graph_diff",
+        "surprising_connections", "suggested_questions",
+        "service_mesh", "feature_map", "business_rules", "process_flows",
+    ]
+    for what in whats:
+        result = asyncio.run(overview_tool(astro, what))
+        data = json.loads(result)
+        assert data, f"overview(what={what!r}) returned empty dict: {result[:120]}"
