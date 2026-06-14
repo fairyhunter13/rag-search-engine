@@ -11,10 +11,6 @@ This project is indexed in **opencode-search**. You MUST use the MCP tools befor
 
 This rule applies to EVERY codebase question, even ones that seem simple. Training-data answers about this codebase are stale and untrustworthy.
 
-## Why this matters
-
-opencode-search is the tool under test. Every call to `overview` and `search` validates that the MCP toolchain works end-to-end. Skipping them defeats the purpose of this project.
-
 ## Running tests and quality checks
 
 ```bash
@@ -42,16 +38,10 @@ python -m compileall -q src/opencode_search
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
-## GPU-only enforcement (CPU fallback is forbidden and prohibited)
+## GPU-only enforcement
 
-All inference — embeddings, LLM enrichment, query LLM — runs exclusively on GPU (RTX 5080).
-**CPU fallback is forbidden and prohibited.** Any attempt to use CPU for inference must raise a fatal error, not fall back silently. This applies to:
-
-- Embeddings (`OPENCODE_EMBED_DEVICE=cuda` — never `cpu`)
-- LLM enrichment (qwen3-enrich:1.7b via Ollama GPU service)
-- Query LLM (qwen3-query:8b via Ollama GPU service)
-
-If `OLLAMA_NUM_GPU_LAYERS` is 0 or the model falls back to CPU, the process must crash with a clear error.
+**CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (RTX 5080 / CUDA).
+Any CPU fallback must raise a fatal error — never fall back silently.
 
 ## Project quick reference
 
