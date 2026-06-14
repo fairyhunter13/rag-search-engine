@@ -59,6 +59,12 @@ def is_forbidden_root(path: Path) -> bool:
     )
 
 
+def is_ignored_path(p: Path, root: Path | None = None) -> bool:
+    """True if any segment of p (relative to root if given) is in the canonical ignore set."""
+    check = p.relative_to(root) if root else p
+    return any(part in _EXCLUDE for part in check.parts)
+
+
 def iter_files(
     root: Path, *, federation_mode: bool = False, cfg: ProjectConfig | None = None,
 ) -> Iterator[Path]:

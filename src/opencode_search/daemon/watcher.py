@@ -8,6 +8,8 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+_DEBOUNCE_S: float = 2.0  # min seconds between reindex triggers per project (burst suppression)
+
 
 class Watcher:
     """Polls registered project directories every POLL_INTERVAL seconds."""
@@ -52,16 +54,27 @@ class Watcher:
 
     def _try_inotify(self) -> bool:
         try:
+            import time as _time
+
             from watchdog.events import FileSystemEventHandler
             from watchdog.observers import Observer as _Observer
+
+            from opencode_search.index.discover import is_ignored_path
             watcher = self
+            _last_fire: dict[str, float] = {}
             class _H(FileSystemEventHandler):
                 def on_any_event(self, event) -> None:
                     if event.is_directory:
                         return
                     src = str(getattr(event, "src_path", ""))
+                    now = _time.monotonic()
                     for proj in list(watcher._paths):
                         if src.startswith(proj):
+                            if is_ignored_path(Path(src), Path(proj)):
+                                break
+                            if now - _last_fire.get(proj, 0.0) < _DEBOUNCE_S:
+                                break
+                            _last_fire[proj] = now
                             try:
                                 watcher._on_change(proj, [Path(src)])
                             except Exception as exc:

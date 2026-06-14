@@ -6,14 +6,14 @@ import pytest
 
 @pytest.mark.live
 def test_integrations_status_all_clients(live_client):
-    """integrations_status returns all 15 managed targets, all in sync."""
+    """integrations_status returns all managed targets, all in sync."""
     resp = live_client.get("/api/integrations_status")
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("ok") is True, f"not all in sync: {data}"
     clients = data.get("clients", [])
-    assert data.get("total") == 15
-    assert len(clients) == 15
+    assert data.get("total") == 18
+    assert len(clients) == 18
     statuses = {c["status"] for c in clients}
     assert statuses <= {"already_ok", "configured", "skipped"}, f"unexpected statuses: {statuses}"
     tools = {c["tool"] for c in clients}

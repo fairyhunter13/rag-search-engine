@@ -335,6 +335,45 @@ def test_p22_idle_unload_clears_embed_singleton():
     assert "opencode_search.embed.embedder" in src, "_idle_unload must import embed.embedder to clear its singleton"
 
 
+def test_p22_watcher_ignores_cache_dirs(tmp_path):
+    """P22.2: inotify must NOT fire on writes under IGNORED_DIRS (__pycache__, .ruff_cache, etc.)."""
+    import time
+
+    from opencode_search.daemon.watcher import Watcher
+
+    proj = str(tmp_path)
+    (tmp_path / "init.py").write_text("x = 1\n")
+    fired: list[str] = []
+    w = Watcher(on_change=lambda p, fs: fired.append(p))
+    w.watch(proj)
+    w.start()
+    time.sleep(0.15)
+    cache = tmp_path / ".ruff_cache"
+    cache.mkdir()
+    (cache / "cached.json").write_text("{}")
+    time.sleep(0.5)
+    assert not fired, f"watcher fired on .ruff_cache write: {fired}"
+    (tmp_path / "real.py").write_text("y = 2\n")
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not fired:
+        time.sleep(0.05)
+    w.stop()
+    assert fired, "watcher must fire when a real .py file is written"
+
+
+def test_p22_is_ignored_path():
+    """P22.2: is_ignored_path() filters __pycache__, .ruff_cache, .git, etc."""
+    from pathlib import Path
+
+    from opencode_search.index.discover import is_ignored_path
+
+    assert is_ignored_path(Path("/repo/__pycache__/mod.cpython-312.pyc"))
+    assert is_ignored_path(Path("/repo/.ruff_cache/v1/something"))
+    assert is_ignored_path(Path("/repo/.git/HEAD"))
+    assert not is_ignored_path(Path("/repo/src/main.py"))
+    assert not is_ignored_path(Path("/repo/tests/test_core.py"))
+
+
 def test_graph_no_duplicate_symbols():
     """P16.9: live graphs must have zero duplicate (name,file,kind) symbol groups."""
     from opencode_search.core.config import project_graph_db
