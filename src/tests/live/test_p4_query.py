@@ -65,6 +65,40 @@ def test_graph_impact_returns_list(mini_stores):
 # ── query/ask (slow) ─────────────────────────────────────────────────────────
 
 @pytest.mark.slow
+def test_ask_global_scope_semantic_map():
+    """P9.1: scope=global selects communities via GPU cosine — no keyword heuristic."""
+    from opencode_search.core.config import project_graph_db, project_vector_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.embed.embedder import get_embedder
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.ask import ask
+    from opencode_search.query.search import search
+
+    astro = next(
+        (p.path for p in list_projects()
+         if "redacted-name-3" in p.path and "promo" not in p.path and p.enabled),
+        None,
+    )
+    assert astro is not None, "redacted-name-3 must be registered (run P8)"
+    gdb, vdb = project_graph_db(astro), project_vector_db(astro)
+    assert gdb.exists() and vdb.exists(), "redacted-name-3 not fully indexed"
+
+    gs = GraphStore(gdb)
+    enriched = gs._con.execute(
+        "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
+    ).fetchone()[0]
+    assert enriched > 0, "redacted-name-3 needs enriched communities (run kb_sweep)"
+
+    vs = VectorStore(vdb)
+    chunks = search("project structure", get_embedder(), vs, scope="all", top_k=5)
+    answer = ask("What is the overall architecture of this project?", chunks, gs, scope="global")
+    vs.close()
+    gs.close()
+    assert isinstance(answer, str) and len(answer) > 20
+
+
+@pytest.mark.slow
 def test_ask_all_scope_returns_answer(mini_stores, embedder):
     from opencode_search.graph.store import GraphStore
     from opencode_search.index.store import VectorStore

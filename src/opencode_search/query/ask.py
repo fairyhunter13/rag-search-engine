@@ -7,6 +7,26 @@ from opencode_search.graph.store import GraphStore
 _MAX_CTX = 3000
 
 
+def _top_communities_semantic(query: str, store: GraphStore, top_k: int = 10) -> str:
+    """Select top-k communities by cosine similarity to the query (GPU embed)."""
+    import numpy as np
+
+    from opencode_search.embed.embedder import get_embedder
+
+    rows = store._con.execute(
+        "SELECT title, summary FROM communities "
+        "WHERE summary IS NOT NULL AND summary != '' ORDER BY level, id LIMIT 50",
+    ).fetchall()
+    if not rows:
+        return ""
+    embedder = get_embedder()
+    q_vec = embedder.embed([query])[0].astype(np.float32)
+    s_vecs = embedder.embed([r[1] for r in rows]).astype(np.float32)
+    scores = s_vecs @ q_vec
+    top = np.argsort(scores)[::-1][:top_k]
+    return "\n\n".join(f"## {rows[i][0]}\n{rows[i][1]}" for i in top if rows[i][1])
+
+
 def _community_context(store: GraphStore, limit: int = 20, semantic_types: tuple[str, ...] = ()) -> str:
     if semantic_types:
         placeholders = ",".join("?" * len(semantic_types))
@@ -44,12 +64,7 @@ def ask(
     )[:_MAX_CTX]
 
     if scope == "global":
-        # MAP: select communities relevant to query via keyword match; REDUCE: single LLM call
-        all_communities = _community_context(store, limit=50)
-        keywords = set(query.lower().split())
-        sections = all_communities.split("\n\n")
-        mapped = [s for s in sections if any(kw in s.lower() for kw in keywords)] or sections[:10]
-        community_ctx = "\n\n".join(mapped)[:_MAX_CTX]
+        community_ctx = _top_communities_semantic(query, store)[:_MAX_CTX]
         context = f"## Architecture (MAP+REDUCE)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
     elif scope in ("architecture", "all"):
         community_ctx = _community_context(store)[:_MAX_CTX]
