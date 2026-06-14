@@ -99,7 +99,8 @@ def test_stdio_and_http_return_same_tool_set():
             "protocolVersion": "2024-11-05", "capabilities": {},
             "clientInfo": {"name": "test", "version": "0.1"},
         }}) + "\n"
-        proc.stdin.write(msg.encode()); proc.stdin.flush()
+        proc.stdin.write(msg.encode())
+        proc.stdin.flush()
         proc.stdout.readline()  # initialize response
         proc.stdin.write((json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}) + "\n").encode())
         proc.stdin.flush()
@@ -107,7 +108,8 @@ def test_stdio_and_http_return_same_tool_set():
         proc.stdin.flush()
         stdio_names = {t["name"] for t in json.loads(proc.stdout.readline())["result"]["tools"]}
     finally:
-        proc.stdin.close(); proc.wait(timeout=3)
+        proc.stdin.close()
+        proc.wait(timeout=3)
 
     # HTTP
     h, _ = _http_session()
