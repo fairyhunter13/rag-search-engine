@@ -14,7 +14,6 @@ INDEX_ROOT = Path(os.environ.get("OPENCODE_INDEX_ROOT", str(_OCS_ROOT / "indexes
 EMBED_MODEL = os.environ.get("OPENCODE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
 RERANK_MODEL = os.environ.get("OPENCODE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en")
 EMBED_DEVICE = os.environ.get("OPENCODE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
-ONNX_ARENA_MB = int(os.environ.get("OPENCODE_ONNX_ARENA_MB", "4096"))
 THERMAL_MAX_C = int(os.environ.get("OPENCODE_GPU_TEMP_MAX", "80"))
 DISABLE_TENSORRT = int(os.environ.get("OPENCODE_DISABLE_TENSORRT", "1"))
 
