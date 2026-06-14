@@ -596,3 +596,41 @@ def test_p21_burst_enriches_all_communities(tmp_path):
         )
     finally:
         remove_project(proj)
+
+
+@pytest.mark.slow
+def test_p21_burst_enrich_federation(tmp_path):
+    """P21.4: burst_enrich_federation enriches root + member, reports aggregate totals."""
+    from opencode_search.core.config import ProjectEntry, project_graph_db
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon.sweeps import burst_enrich_federation
+    from opencode_search.graph.store import GraphStore
+
+    member = tmp_path / "member"
+    member.mkdir()
+    (member / "m.py").write_text("def greet(): return 'hi'\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "link").symlink_to(member)
+
+    root_path, member_path = str(root), str(member)
+    upsert_project(ProjectEntry(path=root_path, enabled=True))
+    upsert_project(ProjectEntry(path=member_path, enabled=True))
+    try:
+        gs = GraphStore(project_graph_db(member_path))
+        gs.upsert_symbol("m0", "greet_func", "greet_func", "function", "m.py", 1, 2, "python")
+        gs.upsert_community(0, level=1, title=None, summary="", member_count=1)
+        gs._con.execute("UPDATE symbols SET community_id=0 WHERE sid='m0'")
+        gs.commit()
+        gs.close()
+
+        result = burst_enrich_federation(root_path)
+
+        assert result["total_communities"] >= 1, f"expected ≥1 total communities: {result}"
+        assert result["total_pending"] == 0, f"expected 0 pending after burst: {result}"
+        mr = next((r for r in result["members"] if r["path"] == member_path), None)
+        assert mr is not None, f"member not in results: {result}"
+        assert mr["pending"] == 0, f"member still has pending communities: {mr}"
+    finally:
+        remove_project(root_path)
+        remove_project(member_path)
