@@ -374,6 +374,34 @@ def test_p22_is_ignored_path():
     assert not is_ignored_path(Path("/repo/tests/test_core.py"))
 
 
+@pytest.mark.slow
+def test_p22_incremental_reindex_idempotent(tmp_path):
+    """P22.3: incremental reindex is idempotent — chunk count stable, no UNIQUE constraint error."""
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.daemon.sweeps import _index_files, _index_project
+    from opencode_search.index.store import VectorStore
+
+    (tmp_path / "a.py").write_text("def foo(): pass\n")
+    _index_project(str(tmp_path))
+    vs = VectorStore(project_vector_db(str(tmp_path)))
+    count_0 = vs.count()
+    vs.close()
+    assert count_0 > 0, "initial index must produce chunks"
+
+    (tmp_path / "a.py").write_text("def foo(): return 42\n")
+    _index_files(str(tmp_path), [tmp_path / "a.py"])
+    vs = VectorStore(project_vector_db(str(tmp_path)))
+    count_1 = vs.count()
+    vs.close()
+    assert count_1 == count_0, f"chunk count drifted after incremental reindex: {count_0} → {count_1}"
+
+    _index_files(str(tmp_path), [tmp_path / "a.py"])
+    vs = VectorStore(project_vector_db(str(tmp_path)))
+    count_2 = vs.count()
+    vs.close()
+    assert count_2 == count_1, f"idempotency: re-run changed count: {count_1} → {count_2}"
+
+
 def test_graph_no_duplicate_symbols():
     """P16.9: live graphs must have zero duplicate (name,file,kind) symbol groups."""
     from opencode_search.core.config import project_graph_db

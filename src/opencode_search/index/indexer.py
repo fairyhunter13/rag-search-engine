@@ -60,3 +60,42 @@ def index_project(
         )
     store.flush()
     return file_count, len(chunks)
+
+
+def index_files(
+    files: list[Path],
+    embedder,
+    store: VectorStore,
+) -> tuple[int, int]:
+    """Incremental re-index: delete stale chunks for changed paths, embed fresh ones."""
+    for fpath in files:
+        store.delete_by_path(str(fpath))
+    chunks: list[Chunk] = []
+    for fpath in files:
+        try:
+            content = fpath.read_text(errors="replace")
+        except OSError:
+            continue
+        lang = detect_language(fpath)
+        chunks.extend(chunk_file(fpath, content, lang))
+    if not chunks:
+        store.flush()
+        return len(files), 0
+    batch = embed_batch_size()
+    texts = [c.content for c in chunks]
+    vectors: list[np.ndarray] = []
+    for i in range(0, len(texts), batch):
+        vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
+        vectors.extend(vecs)
+    for pos, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
+        store.insert(
+            chunk_id=_chunk_id(chunk.path, pos),
+            path=chunk.path,
+            start=chunk.start_line,
+            end=chunk.end_line,
+            language=chunk.language,
+            content=chunk.content,
+            vector=vec,
+        )
+    store.flush()
+    return len(files), len(chunks)
