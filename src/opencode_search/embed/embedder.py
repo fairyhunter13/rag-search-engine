@@ -5,23 +5,15 @@ import threading
 
 import numpy as np
 
-from opencode_search.core.config import (
-    EMBED_DEVICE,
-    EMBED_MODEL,
-    ONNX_ARENA_MB,
-    RERANK_MODEL,
-    THERMAL_MAX_C,
-)
+from opencode_search.core.config import EMBED_DEVICE, EMBED_MODEL, RERANK_MODEL, THERMAL_MAX_C
 from opencode_search.core.gpu import assert_cuda_available, gpu_temp_c
 
 # Prevents concurrent GPU inference races (embed + rerank on same device).
 _GPU_INFER_LOCK = threading.Lock()
 
-# CUDA EP provider options: cap BFC arena to ONNX_ARENA_MB (env-controlled, default 4 GB).
-_CUDA_PROVIDER_OPTIONS = {
-    "cuda_mem_limit": ONNX_ARENA_MB * 1024 * 1024,
-    "arena_extend_strategy": "kSameAsRequested",
-}
+# kSameAsRequested stops ORT BFC pre-allocation (the source of 25GB OOM on 16GB GPU).
+# cuda_mem_limit was removed in ORT 1.26; arena strategy alone is sufficient.
+_CUDA_PROVIDER_OPTIONS = {"arena_extend_strategy": "kSameAsRequested"}
 
 
 class Embedder:

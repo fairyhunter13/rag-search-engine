@@ -1,1 +1,1 @@
-{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/opencode_search/daemon/sweeps.py", "reason": "P8 fix: auto_index must re-index if vectors.db exists but has 0 chunks (empty file from failed prior attempt)", "expectedAddedLines": 6}
+{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/opencode_search/core/config.py", "reason": "P8 lean: remove ONNX_ARENA_MB now unused (embedder switched to arena_extend_strategy)", "expectedAddedLines": -1}
