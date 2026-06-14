@@ -170,6 +170,21 @@ _EXPECTED_MCP_ENTRY = {
     "env": CANONICAL_MCP_ENV,
 }
 
+_HOOKS_DIR = Path(__file__).parent.parent / ".claude" / "hooks"
+_CANONICAL_HOOKS = {
+    "PostToolUse": [{"matcher": "mcp__opencode-search__.*", "hooks": [
+        {"type": "command", "command": str(_HOOKS_DIR / "search-first-post.sh"), "timeout": 5}
+    ]}],
+    "PreToolUse": [{"matcher": "Grep|Bash", "hooks": [
+        {"type": "command", "command": str(_HOOKS_DIR / "search-first-pre.sh"), "timeout": 5}
+    ]}],
+}
+_HOOK_TARGETS: list[Path] = [
+    Path.home() / ".claude" / "settings.json",
+    Path.home() / ".claude-account1" / "settings.json",
+    Path.home() / ".claude-account2" / "settings.json",
+]
+
 
 def _verify_settings_json(settings_path: Path) -> ConfigResult:
     label = f"claude({settings_path.parent.name})/settings.json"
@@ -565,6 +580,58 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
 
 
 # ---------------------------------------------------------------------------
+# Search-first hook install: add/verify hook entries in claude settings.json
+# ---------------------------------------------------------------------------
+
+def _hooks_installed(data: dict) -> bool:
+    """Return True iff both canonical hook entries are present in data['hooks']."""
+    hooks = data.get("hooks", {})
+    for event, entries in _CANONICAL_HOOKS.items():
+        existing = {e.get("matcher") for e in hooks.get(event, [])}
+        for entry in entries:
+            if entry["matcher"] not in existing:
+                return False
+    return True
+
+
+def _verify_settings_hooks(settings_path: Path) -> ConfigResult:
+    label = f"claude({settings_path.parent.name})/hooks"
+    if not settings_path.exists():
+        return ConfigResult(tool=label, status="missing",
+                            message=f"settings.json not found: {settings_path}", path=str(settings_path))
+    data = json.loads(settings_path.read_text())
+    if _hooks_installed(data):
+        return ConfigResult(tool=label, status="already_ok",
+                            message=f"search-first hooks in sync: {settings_path}", path=str(settings_path))
+    return ConfigResult(tool=label, status="missing",
+                        message=f"search-first hooks missing: {settings_path}", path=str(settings_path))
+
+
+def _repair_settings_hooks(settings_path: Path, dry_run: bool = False) -> ConfigResult:
+    label = f"claude({settings_path.parent.name})/hooks"
+    old_text = settings_path.read_text() if settings_path.exists() else "{}"
+    data = json.loads(old_text)
+    if _hooks_installed(data):
+        return ConfigResult(tool=label, status="already_ok",
+                            message=f"Already in sync: {settings_path}", path=str(settings_path))
+    hooks = data.setdefault("hooks", {})
+    for event, entries in _CANONICAL_HOOKS.items():
+        existing = hooks.setdefault(event, [])
+        existing_matchers = {e.get("matcher") for e in existing}
+        for entry in entries:
+            if entry["matcher"] not in existing_matchers:
+                existing.append(entry)
+    new_text = json.dumps(data, indent=2) + "\n"
+    if dry_run:
+        return ConfigResult(tool=label, status="configured",
+                            message=f"[DRY-RUN] Would install hooks: {settings_path}",
+                            path=str(settings_path), diff=_diff(old_text, new_text, str(settings_path)))
+    settings_path.write_text(new_text)
+    return ConfigResult(tool=label, status="configured",
+                        message=f"Installed search-first hooks: {settings_path}", path=str(settings_path))
+
+
+# ---------------------------------------------------------------------------
 # Run functions
 # ---------------------------------------------------------------------------
 
@@ -612,6 +679,8 @@ def verify_all() -> list[ConfigResult]:
         elif kind == "opencode":
             results.append(_verify_opencode_jsonc(path, label))
     results.append(verify_bash_aliases())
+    for p in _HOOK_TARGETS:
+        results.append(_verify_settings_hooks(p))
     return results
 
 
@@ -634,6 +703,8 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
         elif kind == "opencode":
             results.append(_repair_opencode_jsonc(path, label, dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
+    for p in _HOOK_TARGETS:
+        results.append(_repair_settings_hooks(p, dry_run=dry_run))
     return results
 
 
