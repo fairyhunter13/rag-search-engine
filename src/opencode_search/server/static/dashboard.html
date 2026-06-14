@@ -620,7 +620,7 @@ async function loadPulse(){
   if(!_proj)return;
   try{
     const [ovr,kb,met,sug]=await Promise.allSettled([
-      fetchWithTimeout(`/api/overview?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
+      fetchWithTimeout('/api/overview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:_proj,what:'structure'})}).then(r=>r.json()),
       fetchWithTimeout(`/api/kb_health?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
       fetchWithTimeout('/api/metrics').then(r=>r.json()),
       fetchWithTimeout(`/api/suggested_questions?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
