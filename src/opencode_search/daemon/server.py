@@ -1,7 +1,6 @@
 """Daemon server: HTTP at :8765, scheduler, watcher, sweeps."""
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
@@ -41,10 +40,6 @@ def _sd_notify(msg: str) -> None:
 
 _SWEEP_INTERVAL = 1200.0  # 20 min
 _WATCH_INTERVAL = 5.0
-
-# Live asyncio loop published here so background threads can post coroutines.
-_DAEMON_LOOP: asyncio.AbstractEventLoop | None = None
-_DAEMON_LOOP_READY = threading.Event()
 
 
 def serve(host: str | None = None, port: int | None = None) -> None:

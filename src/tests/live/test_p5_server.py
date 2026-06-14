@@ -197,3 +197,41 @@ def test_service_mesh_be_nonempty():
     assert svcs, "BE project must have at least one gRPC service entry"
     names = {n for s in svcs for n in s.get("services", [])}
     assert "GwpService" in names, f"GwpService not in {sorted(names)[:10]}"
+
+
+def test_auto_pipeline_status_real(live_client, tmp_path):
+    """P19.6: /api/auto_pipeline_status returns real enabled/pending — not canned data.
+
+    Register an un-indexed tmp project → it must appear in pending.
+    Pause sweeps → enabled must flip to False.
+    """
+    import urllib.request
+
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.registry import remove_project, upsert_project
+
+    proj_path = str(tmp_path)
+    upsert_project(ProjectEntry(path=proj_path, enabled=True))
+    try:
+        r = live_client.get("/api/auto_pipeline_status")
+        assert r.status_code == 200, f"unexpected status {r.status_code}"
+        d = r.json()
+        assert "enabled" in d and "pending" in d, f"missing keys: {d}"
+        assert d["enabled"] is True, f"expected enabled=True (sweeps running), got {d}"
+        assert proj_path in d["pending"], (
+            f"un-indexed {proj_path} must appear in pending; got {d['pending'][:3]}"
+        )
+
+        urllib.request.urlopen(
+            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/pause", data=b"", method="POST"),
+            timeout=3,
+        )
+        r2 = live_client.get("/api/auto_pipeline_status")
+        d2 = r2.json()
+        assert d2["enabled"] is False, f"expected enabled=False after pause, got {d2}"
+    finally:
+        urllib.request.urlopen(
+            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/resume", data=b"", method="POST"),
+            timeout=3,
+        )
+        remove_project(proj_path)

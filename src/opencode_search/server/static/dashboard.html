@@ -373,7 +373,6 @@ a{color:inherit;text-decoration:none}
           <div class="panel-hdr">Operations</div>
           <div class="ops-grid">
             <button class="op-btn" onclick="runReindex()">⚡ Re-index</button>
-            <button class="op-btn" onclick="runEnrich()">✨ Enrich</button>
             <button class="op-btn" onclick="runWiki()">📚 Wiki</button>
             <button class="op-btn" onclick="loadAdmin()">🔄 Refresh</button>
           </div>
@@ -1059,17 +1058,6 @@ async function runReindex(){
   }catch(e){opLog('Error: '+e.message,'err');}
 }
 
-async function runEnrich(){
-  if(!_proj){toast('Select a project first','err');return;}
-  opLog('Enriching hierarchy…');
-  try{
-    const r=await fetchWithTimeout(`/api/enrich_hierarchy?project=${encodeURIComponent(_proj)}`,{method:'POST'});
-    const d=await r.json();
-    opLog(d.message||'Job submitted','ok');
-    toast('Enrich job started','info');
-  }catch(e){opLog('Error: '+e.message,'err');}
-}
-
 async function runWiki(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Generating wiki…');
@@ -1243,7 +1231,6 @@ const _CMD_ITEMS=[
   {label:'Graph — Knowledge graph',action:()=>switchView('graph'),cat:'view'},
   {label:'Wiki — Knowledge base pages',action:()=>switchView('wiki'),cat:'view'},
   {label:'Re-index project',action:runReindex,cat:'op'},
-  {label:'Enrich hierarchy',action:runEnrich,cat:'op'},
   {label:'Generate wiki',action:runWiki,cat:'op'},
   {label:'Refresh Admin',action:loadAdmin,cat:'op'},
   {label:'Refresh Pulse',action:loadPulse,cat:'op'},

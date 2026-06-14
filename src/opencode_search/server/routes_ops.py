@@ -25,10 +25,6 @@ async def _api_metrics(request: Request) -> JSONResponse:
     return JSONResponse(_metrics)
 
 
-async def _api_metrics_history(request: Request) -> JSONResponse:
-    return JSONResponse({"history": [], "hours": request.query_params.get("hours", "1")})
-
-
 async def _api_system_status(request: Request) -> JSONResponse:
     from opencode_search.core.gpu import gpu_temp_c, vram_free_mb
     try:
@@ -120,7 +116,6 @@ async def _api_events_stream(request: Request) -> Response:
 
 def register(app) -> None:
     app.add_route("/api/metrics", _api_metrics, methods=["GET"])
-    app.add_route("/api/metrics/history", _api_metrics_history, methods=["GET"])
     app.add_route("/api/system_status", _api_system_status, methods=["GET"])
     app.add_route("/api/integrations_status", _api_integrations_status, methods=["GET"])
     app.add_route("/api/alerts", _api_alerts_get, methods=["GET"])
