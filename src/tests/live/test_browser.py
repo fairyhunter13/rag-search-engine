@@ -340,3 +340,50 @@ def test_wiki_page_loads_content(page: Page) -> None:
     page.wait_for_timeout(3000)
     text = page.locator("#wiki-content").inner_text() or ""
     assert text.strip(), f"#wiki-content empty after page open: {text[:80]!r}"
+
+
+def test_wiki_lint_elements_attached(page: Page) -> None:
+    """P12.8b: #wiki-lint-panel and #wiki-lint-count are in the wiki DOM."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-wiki").click()
+    expect(page.locator("#wiki-lint-panel")).to_be_attached()
+    expect(page.locator("#wiki-lint-count")).to_be_attached()
+
+
+def test_graph_detail_present_after_load(page: Page) -> None:
+    """P12.7: #graph-detail is present and non-empty after graph view loads."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    detail = page.locator("#graph-detail")
+    expect(detail).to_be_attached()
+    text = detail.inner_text() or ""
+    assert text.strip(), f"#graph-detail empty: {text!r}"
+
+
+# ── P12.10: completeness guard ────────────────────────────────────────────
+
+def test_p12_completeness_guard() -> None:
+    """P12.10: every key interactive element id from dashboard.html appears in >=1 test."""
+    import re
+    from pathlib import Path
+
+    dash = (Path(__file__).parents[3] / "src/opencode_search/server/static/dashboard.html").read_text()
+    tests = Path(__file__).read_text()
+    # ids with onclick= in the same element tag
+    tagged = set(re.findall(r'id="([^"]+)"[^>]*?onclick=', dash))
+    tagged |= set(re.findall(r'onclick=[^>]*id="([^"]+)"', dash))
+    # all other key ids that must be exercised end-to-end
+    key_ids = {
+        "cmd-overlay", "cmd-input", "cmd-results", "chat-in", "send-btn",
+        "chat-history", "graph-search", "graph-filter-sel", "graph-layout-sel",
+        "graph-node-count", "graph-detail", "wiki-pages", "wiki-content",
+        "wiki-lint-panel", "wiki-lint-count", "op-log", "admin-job-chips",
+        "admin-autopipeline-log", "projects-body", "project-sel",
+        "storage-health-body", "activity-list", "suggested-list", "daemon-dot",
+        "kpi-files", "kpi-communities", "kpi-enrichment", "theme-btn",
+    }
+    # vbtn-* ids are covered by the f-string f"#vbtn-{view}" parametrize pattern
+    pattern_covered = {f"vbtn-{v}" for v in ("pulse", "chat", "admin", "graph", "wiki")}
+    all_ids = tagged | key_ids
+    missing = sorted(i for i in all_ids if f"#{i}" not in tests and i not in pattern_covered)
+    assert not missing, f"IDs not covered by any test selector: {missing}"
