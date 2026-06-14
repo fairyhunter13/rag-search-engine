@@ -74,7 +74,7 @@ def _index_project(project_path: str) -> None:
     from opencode_search.core.config import project_graph_db, project_vector_db
     from opencode_search.embed.embedder import Embedder
     from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
+    from opencode_search.graph.extractor import extract_calls, extract_symbols, symbol_id
     from opencode_search.graph.store import GraphStore
     from opencode_search.index.discover import detect_language, iter_files
     from opencode_search.index.indexer import index_project
@@ -107,6 +107,29 @@ def _index_project(project_path: str) -> None:
                     sym.file, sym.start_line, sym.end_line, sym.language,
                     sym.signature, sym.docstring,
                 )
+        gs.commit()
+        # 2b. Call-edge extraction — second pass: names now known, resolve callees
+        file_to_sids: dict[str, list[str]] = {}
+        name_to_entries: dict[str, list[tuple[str, str]]] = {}
+        for (sid, name, fstr) in gs._con.execute("SELECT sid, name, file FROM symbols"):
+            file_to_sids.setdefault(fstr, []).append(sid)
+            name_to_entries.setdefault(name, []).append((sid, fstr))
+        for fpath in iter_files(root, federation_mode=True):
+            call_names = extract_calls(
+                fpath.read_text(errors="replace") if fpath.exists() else "",
+                detect_language(fpath),
+            )
+            if not call_names:
+                continue
+            fstr = str(fpath)
+            caller_sids = file_to_sids.get(fstr, [])
+            if not caller_sids:
+                continue
+            caller_sid = caller_sids[0]  # one representative caller per file
+            for name in set(call_names):
+                for (callee_sid, callee_file) in name_to_entries.get(name, []):
+                    if callee_file != fstr:
+                        gs.upsert_edge(caller_sid, callee_sid)
         gs.commit()
         # 3. Leiden community detection
         detect_communities(gs)

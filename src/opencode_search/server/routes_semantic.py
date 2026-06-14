@@ -4,7 +4,7 @@ from __future__ import annotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from opencode_search.core.config import project_graph_db
+from opencode_search.core.config import project_graph_db, project_vector_db
 
 
 def _open_graph(project: str):
@@ -73,9 +73,22 @@ async def _api_ask_business(request: Request) -> JSONResponse:
     gdb = project_graph_db(project) if project else None
     if not gdb or not gdb.exists():
         return JSONResponse({"answer": "Project not indexed."})
+    chunks: list[dict] = []
+    vdb = project_vector_db(project)
+    if vdb.exists():
+        from opencode_search.embed.embedder import Embedder
+        from opencode_search.index.store import VectorStore
+        from opencode_search.query.search import search as _search
+        emb = Embedder()
+        emb.warmup()
+        vs = VectorStore(vdb)
+        try:
+            chunks = _search(query, emb, vs)
+        finally:
+            vs.close()
     gs = GraphStore(gdb)
     try:
-        return JSONResponse({"answer": ask(query, gs, scope="all")})
+        return JSONResponse({"answer": ask(query, chunks, gs, scope="all")})
     finally:
         gs.close()
 
