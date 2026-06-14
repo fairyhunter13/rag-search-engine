@@ -2,15 +2,8 @@
 from __future__ import annotations
 
 from opencode_search.embed.embedder import Embedder, Reranker
+from opencode_search.index.discover import _CODE_LANGS, _TEXT_LANGS
 from opencode_search.index.store import VectorStore
-
-_SCOPE_LANGS: dict[str, set[str]] = {
-    "docs": {"markdown", "rst", "text", "html"},
-    "code": {
-        "python", "javascript", "typescript", "go", "rust", "java",
-        "kotlin", "ruby", "php", "csharp", "swift", "bash", "sql", "cpp", "c",
-    },
-}
 
 _reranker: Reranker | None = None
 
@@ -36,7 +29,7 @@ def search(
     q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
     results = store.search(q_vec, top_k=top_k * 3)
     if scope != "all":
-        allowed = _SCOPE_LANGS.get(scope, set())
+        allowed = _CODE_LANGS if scope == "code" else (_TEXT_LANGS if scope == "docs" else frozenset())
         results = [r for r in results if r.get("language") in allowed]
     results = results[:top_k * 2]
     passages = [r.get("content", "") for r in results]
