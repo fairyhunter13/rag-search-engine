@@ -94,7 +94,7 @@ def _index_project(project_path: str) -> None:
     # 2. Tree-sitter extract → graph.db
     gs = GraphStore(project_graph_db(project_path))
     try:
-        for fpath in iter_files(root):
+        for fpath in iter_files(root, federation_mode=True):
             try:
                 content = fpath.read_text(errors="replace")
             except OSError:
