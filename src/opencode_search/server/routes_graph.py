@@ -88,22 +88,6 @@ async def _api_import_cycles(request: Request) -> JSONResponse:
         gs.close()
 
 
-async def _api_graph_diff(request: Request) -> JSONResponse:
-    project = request.query_params.get("project", "")
-    if not project:
-        return JSONResponse({"error": "project required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"added": [], "removed": []})
-    try:
-        rows = gs.conn.execute(
-            "SELECT name, kind FROM symbols ORDER BY rowid DESC LIMIT 50"
-        ).fetchall()
-        return JSONResponse({"added": [{"name": r[0], "kind": r[1]} for r in rows], "removed": []})
-    finally:
-        gs.close()
-
-
 async def _api_surprising_connections(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
@@ -133,7 +117,8 @@ async def _api_service_mesh(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
-    return JSONResponse({"services": [], "project": project})
+    from opencode_search.server._overview import _detect_services
+    return JSONResponse({"services": _detect_services(project)})
 
 
 async def _api_semantic_trace(request: Request) -> JSONResponse:
@@ -156,7 +141,6 @@ def register(app) -> None:
     app.add_route("/api/impact_narrative", _api_impact_narrative, methods=["GET"])
     app.add_route("/api/graph_export", _api_graph_export, methods=["GET"])
     app.add_route("/api/import_cycles", _api_import_cycles, methods=["GET"])
-    app.add_route("/api/graph_diff", _api_graph_diff, methods=["GET"])
     app.add_route("/api/surprising_connections", _api_surprising_connections, methods=["GET"])
     app.add_route("/api/service_mesh", _api_service_mesh, methods=["GET"])
     app.add_route("/api/semantic_trace", _api_semantic_trace, methods=["GET"])

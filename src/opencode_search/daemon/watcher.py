@@ -19,23 +19,64 @@ class Watcher:
         self._paths: dict[str, dict[Path, float]] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._observer: object | None = None
+        self._handler: object | None = None
 
     def watch(self, project_path: str) -> None:
         if project_path not in self._paths:
             self._paths[project_path] = self._snapshot(project_path)
+        if self._observer is not None:
+            import contextlib
+            with contextlib.suppress(Exception):
+                self._observer.schedule(self._handler, project_path, recursive=True)  # type: ignore[attr-defined]
 
     def unwatch(self, project_path: str) -> None:
         self._paths.pop(project_path, None)
 
     def start(self) -> None:
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="ocs-watcher")
-        self._thread.start()
+        if not self._try_inotify():
+            self._thread = threading.Thread(target=self._loop, daemon=True, name="ocs-watcher")
+            self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=timeout)
+        if self._observer is not None:
+            try:
+                self._observer.stop()  # type: ignore[attr-defined]
+                self._observer.join(timeout=timeout)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    def _try_inotify(self) -> bool:
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer as _Observer
+            watcher = self
+            class _H(FileSystemEventHandler):
+                def on_any_event(self, event) -> None:
+                    if event.is_directory:
+                        return
+                    src = str(getattr(event, "src_path", ""))
+                    for proj in list(watcher._paths):
+                        if src.startswith(proj):
+                            try:
+                                watcher._on_change(proj, [Path(src)])
+                            except Exception as exc:
+                                log.warning("inotify %s: %s", proj, exc)
+                            break
+            obs = _Observer()
+            h = _H()
+            for path in self._paths:
+                obs.schedule(h, path, recursive=True)
+            obs.start()
+            self._observer, self._handler = obs, h
+            return True
+        except Exception as exc:
+            log.info("inotify unavailable (%s), using poll", exc)
+            return False
 
     def _snapshot(self, project_path: str) -> dict[Path, float]:
         import contextlib

@@ -58,7 +58,6 @@ MANDATORY: Use the opencode-search MCP server as the primary code lookup tool wh
   - what: "service_mesh" — detected inter-service gRPC/HTTP/MQ topology
   - what: "import_cycles" — circular import dependencies
   - what: "suggested_questions" — questions the graph is uniquely positioned to answer
-  - what: "graph_diff" — symbols added/removed recently
   - what: "surprising_connections" — edges spanning architectural community boundaries
 - `index(project_path, enabled)` — THE ONLY WRITE TOOL: flag project for indexing
   - enabled=True → register project; daemon auto-indexes, builds KB, watches, indexes federation members
@@ -74,7 +73,6 @@ QUICK DECISION GUIDE:
   'what services call each other?'     → overview(project_path, what='service_mesh')
   'top-level architecture domains?'    → overview(project_path, what='architecture_domains')
   'are there circular imports?'        → overview(project_path, what='import_cycles')
-  'what changed in the graph?'         → overview(project_path, what='graph_diff')
   'unusual cross-layer dependencies?'  → overview(project_path, what='surprising_connections')
   'what should I explore first?'       → overview(project_path, what='suggested_questions')
   'tell me about this project'         → overview(project_path, what='structure')
