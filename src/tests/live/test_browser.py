@@ -120,3 +120,42 @@ def test_daemon_dot_is_visible(page: Page) -> None:
     """P12.5: #daemon-dot is rendered in the nav bar and visible."""
     page.goto(_DASH, wait_until="networkidle")
     expect(page.locator("#daemon-dot")).to_be_visible()
+
+
+# ── P12.6-P12.8: chat streaming, graph render, admin ─────────────────────────
+
+def test_chat_streaming_produces_response(page: Page) -> None:
+    """P12.6: chat message streams non-empty response into #chat-history via SSE."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-chat").click()
+    page.locator("#chat-in").fill("What does this project do?")
+    page.locator("#send-btn").click()
+    page.wait_for_function(
+        "document.getElementById('chat-history').innerText.trim().length > 10",
+        timeout=30000,
+    )
+    text = page.locator("#chat-history").inner_text()
+    assert len(text.strip()) > 10, f"chat-history empty: {text!r}"
+
+
+def test_graph_renders_on_reload(page: Page) -> None:
+    """P12.7: loadGraph() renders sigma.js nodes; #graph-node-count is non-empty."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    page.locator("button[onclick='loadGraph()']").click()
+    page.wait_for_function(
+        "document.getElementById('graph-node-count').textContent.trim().length > 0",
+        timeout=20000,
+    )
+    cnt = page.locator("#graph-node-count").text_content() or ""
+    assert cnt.strip(), f"#graph-node-count empty after reload: {cnt!r}"
+
+
+def test_admin_reindex_appends_to_op_log(page: Page) -> None:
+    """P12.8: Re-index op button calls opLog() immediately; #op-log shows the message."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-admin").click()
+    page.locator("button[onclick='runReindex()']").click()
+    page.wait_for_timeout(1500)
+    log = page.locator("#op-log").inner_text() or ""
+    assert log.strip(), f"#op-log empty after Re-index click: {log!r}"
