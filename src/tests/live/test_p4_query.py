@@ -213,3 +213,37 @@ def test_route_search_returns_result(mini_stores, embedder):
     gs.close()
     assert intent in _ALL_INTENTS
     assert isinstance(answer, str) and len(answer) > 5
+
+
+@pytest.mark.slow
+def test_all_seven_intents_reachable():
+    """P10.5: ≥4 distinct intents returned across 7 strongly-typed queries."""
+    from opencode_search.query.chat_router import classify_intent
+    queries = [
+        "find the payment handler function",
+        "who calls the Run method",
+        "what does ProcessOrder call internally",
+        "what breaks if I change the Run function",
+        "describe the overall system architecture",
+        "give a comprehensive project-wide synthesis",
+        "trace the user login feature end to end",
+    ]
+    seen = {classify_intent(q) for q in queries}
+    assert seen <= _ALL_INTENTS, f"Unknown intents: {seen - _ALL_INTENTS}"
+    assert len(seen) >= 4, f"Expected ≥4 distinct intents from 7 probes; got {seen}"
+
+
+@pytest.mark.slow
+def test_chat_stream_sse_sends_done():
+    """P10.5: /api/chat_stream SSE sends tokens and ends with done:true."""
+    from starlette.testclient import TestClient
+
+    from opencode_search.server.routes import build_test_app as create_app
+    with TestClient(create_app()) as c:
+        r = c.post("/api/chat_stream",
+                   json={"message": "What is this project?", "project_path": ""})
+    assert r.status_code == 200
+    assert "text/event-stream" in r.headers.get("content-type", "")
+    body = r.text
+    assert '"done":true' in body or '"done": true' in body, \
+        f"SSE never sent done event; body[:300]={body[:300]!r}"
