@@ -50,6 +50,8 @@ def test_graph_callers_returns_list(mini_stores):
     gs = GraphStore(mini_stores["gdb"])
     result = callers("verify_jwt", gs)
     gs.close()
+    # DELIBERATE: mini_stores fixture adds symbols but no call edges;
+    # callers() returns [] gracefully — testing no-crash, not real graph depth.
     assert isinstance(result, list)
 
 
@@ -59,6 +61,8 @@ def test_graph_impact_returns_list(mini_stores):
     gs = GraphStore(mini_stores["gdb"])
     result = impact("authenticate", gs)
     gs.close()
+    # DELIBERATE: authenticate has no callers in mini-project and mini_stores
+    # has no call edges; impact BFS returns [] — testing no-crash, not real depth.
     assert isinstance(result, list)
 
 

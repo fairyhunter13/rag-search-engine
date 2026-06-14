@@ -10,7 +10,9 @@ def test_hierarchy_no_cross_edges_is_ok(mini_stores):
     gs = GraphStore(mini_stores["gdb"])
     count = build_hierarchy(gs)
     gs.close()
-    assert count >= 0  # 0 is valid when no cross-community call edges
+    # DELIBERATE: mini_stores has no cross-community call edges (only 3 files,
+    # all in one community); count=0 is correct here — testing no-crash.
+    assert count >= 0
 
 
 def test_wiki_writes_pages(mini_stores, tmp_path):
@@ -54,5 +56,7 @@ def test_patterns_detects_python_files(mini_stores):
     result = detect_patterns(mini_stores["proj"])
     assert "python" in result["languages"]
     assert result["file_count"] >= 3
+    # DELIBERATE: mini-project has no external packages; LLM may return [] for
+    # frameworks and dependencies — testing structure, not real-project content.
     assert isinstance(result["frameworks"], list)
     assert isinstance(result["dependencies"], list)

@@ -24,12 +24,12 @@ def test_mcp_graph_nonexistent_returns_error():
 
 
 def test_mcp_overview_projects_returns_list():
-    """overview(what='projects') returns a list of registered projects."""
+    """P15.4: overview(what='projects') returns ≥1 real registered project."""
     from opencode_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool("", "projects"))
     data = json.loads(result)
     assert "projects" in data
-    assert isinstance(data["projects"], list)
+    assert len(data["projects"]) >= 1, "daemon should have ≥1 registered project"
 
 
 def test_mcp_index_register_remove(tmp_path):
