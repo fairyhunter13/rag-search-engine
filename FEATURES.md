@@ -25,7 +25,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] runtime_state.note_activity() + note_query() on every call
 
 ### 1.4 overview(project_path=None, what="structure", max_depth=4, top_k=100, export_format="json", max_nodes=5000, since_hours=None)
-- [x] what: structure | communities(by size, top_k=100) | status | projects(no path needed) | metrics(no path needed) | graph_export(json|graphml,max_nodes) | patterns | architecture_domains(top Leiden level) | hierarchy(all levels) | service_mesh | import_cycles(Tarjan SCC) | suggested_questions | graph_diff(since_hours) | surprising_connections(top-20 bridges) | feature_map | business_rules | process_flows
+- [x] what: structure | communities(by size, top_k=100) | status | projects(no path needed) | metrics(no path needed) | graph_export(json|graphml,max_nodes) | patterns | architecture_domains(top Leiden level) | hierarchy(all levels) | service_mesh | import_cycles(Tarjan SCC) | suggested_questions | surprising_connections(top-20 bridges) | feature_map | business_rules | process_flows
 - [x] runtime_state.note_activity() on every call
 
 ### 1.5 index(project_path, enabled=True)
@@ -95,7 +95,6 @@ Generated from the live archived engine before wiping `main`.
 - [x] GET /api/impact_narrative ?project=&symbol=&depth=
 - [x] GET /api/semantic_trace ?project=&from=&to=
 - [x] GET /api/import_cycles ?project=
-- [x] GET /api/graph_diff ?project=&since_hours=
 - [x] GET /api/callflow_html ?project=&symbol=
 - [x] GET /api/surprising_connections ?project=
 

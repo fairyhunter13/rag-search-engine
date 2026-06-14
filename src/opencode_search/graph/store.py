@@ -69,6 +69,15 @@ class GraphStore:
             (sid, name, qualified_name, kind, file, start_line, end_line, language, signature, docstring),
         )
 
+    def dedup_symbols(self) -> int:
+        """Delete duplicate (name,file,kind) symbols keeping the lowest-rowid entry."""
+        cur = self._con.execute(
+            "DELETE FROM symbols WHERE rowid NOT IN "
+            "(SELECT MIN(rowid) FROM symbols GROUP BY name,file,kind)"
+        )
+        self._con.commit()
+        return cur.rowcount
+
     def upsert_edge(self, caller_sid: str, callee_sid: str) -> None:
         self._con.execute(
             "INSERT OR IGNORE INTO edges (caller_sid,callee_sid) VALUES (?,?)",

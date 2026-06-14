@@ -174,7 +174,7 @@ def test_overview_all_whats_real_astro():
     assert astro, "astro-project must be registered (run P8)"
     whats = [
         "structure", "communities", "status", "hierarchy",
-        "architecture_domains", "import_cycles", "graph_diff",
+        "architecture_domains", "import_cycles",
         "surprising_connections", "suggested_questions",
         "service_mesh", "feature_map", "business_rules", "process_flows",
     ]
@@ -182,3 +182,18 @@ def test_overview_all_whats_real_astro():
         result = asyncio.run(overview_tool(astro, what))
         data = json.loads(result)
         assert data, f"overview(what={what!r}) returned empty dict: {result[:120]}"
+
+
+def test_service_mesh_be_nonempty():
+    """BE project (astro-promo-be) has gRPC services — service_mesh must detect them."""
+    from opencode_search.core.registry import list_projects
+    be = next(
+        (p.path for p in list_projects() if "astro-promo-be" in p.path and p.enabled),
+        None,
+    )
+    assert be, "astro-promo-be must be registered (run P8)"
+    from opencode_search.server._overview import _detect_services
+    svcs = _detect_services(be)
+    assert svcs, "BE project must have at least one gRPC service entry"
+    names = {n for s in svcs for n in s.get("services", [])}
+    assert "GwpService" in names, f"GwpService not in {sorted(names)[:10]}"

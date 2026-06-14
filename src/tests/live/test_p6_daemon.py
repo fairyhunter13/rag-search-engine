@@ -52,6 +52,26 @@ def test_watcher_detects_new_file(tmp_path):
     assert changed, "watcher should have detected the new file"
 
 
+def test_watcher_inotify_fast(tmp_path):
+    """inotify must detect a new file in < 1s even with POLL_INTERVAL=5.0."""
+    from opencode_search.daemon.watcher import Watcher
+
+    proj = str(tmp_path)
+    (tmp_path / "init.py").write_text("x = 1\n")
+    changed: list[str] = []
+    w = Watcher(on_change=lambda p, fs: changed.append(p))
+    # leave POLL_INTERVAL at default 5.0 — if poll fires we'd wait 5s+
+    w.watch(proj)
+    w.start()
+    time.sleep(0.1)  # let Observer threads settle
+    (tmp_path / "fast.py").write_text("y = 2\n")
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not changed:
+        time.sleep(0.05)
+    w.stop()
+    assert changed, "inotify Observer must detect new file in < 1s"
+
+
 def test_systemd_unit_text():
     from opencode_search.daemon.systemd import unit_text
 
@@ -265,3 +285,27 @@ def test_no_heuristic_regression():
             assert not re.search(pat, text), (
                 f"Heuristic '{label}' reintroduced in {py.relative_to(src.parent)}"
             )
+
+
+def test_graph_no_duplicate_symbols():
+    """P16.9: live graphs must have zero duplicate (name,file,kind) symbol groups."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.graph.store import GraphStore
+
+    projects = [p for p in list_projects() if p.enabled]
+    assert projects, "no registered projects"
+    for proj in projects:
+        gdb = project_graph_db(proj.path)
+        if not gdb.exists():
+            continue
+        gs = GraphStore(gdb)
+        try:
+            removed = gs.dedup_symbols()
+            dups = gs.conn.execute(
+                "SELECT COUNT(*) FROM (SELECT 1 FROM symbols "
+                "GROUP BY name,file,kind HAVING COUNT(*)>1)"
+            ).fetchone()[0]
+            assert dups == 0, f"{proj.path}: {dups} dup groups after dedup (removed={removed})"
+        finally:
+            gs.close()

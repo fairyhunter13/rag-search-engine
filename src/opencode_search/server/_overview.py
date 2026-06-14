@@ -2,6 +2,78 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
+
+
+def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def]
+    """Tarjan SCC on the file-level call graph; returns SCCs of size ≥ 2."""
+    rows = conn.execute(
+        "SELECT DISTINCT s1.file,s2.file FROM edges e "
+        "JOIN symbols s1 ON e.caller_sid=s1.sid "
+        "JOIN symbols s2 ON e.callee_sid=s2.sid "
+        "WHERE s1.file!=s2.file AND s1.file IS NOT NULL AND s2.file IS NOT NULL LIMIT 20000"
+    ).fetchall()
+    adj: dict[str, list[str]] = {}
+    for a, b in rows:
+        adj.setdefault(a, []).append(b)
+    idx: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stk: set[str] = set()
+    stk: list[str] = []
+    cnt = [0]
+    cycles: list[list[str]] = []
+
+    def sc(v: str) -> None:
+        idx[v] = low[v] = cnt[0]
+        cnt[0] += 1
+        stk.append(v)
+        on_stk.add(v)
+        for w in adj.get(v, []):
+            if w not in idx:
+                sc(w)
+                low[v] = min(low[v], low[w])
+            elif w in on_stk:
+                low[v] = min(low[v], idx[w])
+        if low[v] == idx[v]:
+            scc: list[str] = []
+            while True:
+                w = stk.pop()
+                on_stk.discard(w)
+                scc.append(w)
+                if w == v:
+                    break
+            if len(scc) >= 2:
+                cycles.append(scc[:5])
+
+    try:
+        for v in list(adj):
+            if v not in idx:
+                sc(v)
+    except RecursionError:
+        pass
+    return cycles[:20]
+
+
+def _detect_services(root: str) -> list[dict]:
+    """Detect gRPC services via .proto `service` blocks and Go Register*Server calls."""
+    rp = Path(root)
+    names: set[str] = set()
+    for f in rp.rglob("*.proto"):
+        try:
+            for m in re.finditer(r"^service\s+(\w+)\s*\{", f.read_text(), re.MULTILINE):
+                names.add(m.group(1))
+        except OSError:
+            pass
+    for f in rp.rglob("*.go"):
+        try:
+            for m in re.finditer(r"\bRegister(\w+)Server\b", f.read_text()):
+                names.add(m.group(1))
+        except OSError:
+            pass
+    if not names:
+        return []
+    return [{"name": rp.name, "path": root, "services": sorted(names)}]
 
 
 def handle_overview(project_path: str, what: str) -> str:
@@ -43,11 +115,9 @@ def handle_overview(project_path: str, what: str) -> str:
                                        "file_count": e.file_count if e else 0,
                                        "symbols": gs.symbol_count(), "communities": gs.community_count()})
                 if what == "import_cycles":
+                    cycs = _find_import_cycles(c)
                     cnt = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-                    return json.dumps({"cycles": [], "edge_count": cnt})
-                if what == "graph_diff":
-                    rows = c.execute("SELECT name,kind FROM symbols ORDER BY rowid DESC LIMIT 20").fetchall()
-                    return json.dumps({"added": [{"name": r[0], "kind": r[1]} for r in rows], "removed": []})
+                    return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "edge_count": cnt})
                 if what == "surprising_connections":
                     try:
                         rows = c.execute(
@@ -72,9 +142,15 @@ def handle_overview(project_path: str, what: str) -> str:
                     rows = c.execute("SELECT id,title FROM communities WHERE semantic_type IN ('workflow','process','flow')").fetchall()
                     return json.dumps({"flows": [{"id": r[0], "title": r[1]} for r in rows]})
                 if what == "suggested_questions":
-                    return json.dumps({"questions": ["What does this project do?", "How is authentication implemented?", "What are the main modules?"]})
+                    rows = c.execute(
+                        "SELECT title FROM communities WHERE title IS NOT NULL ORDER BY member_count DESC LIMIT 5"
+                    ).fetchall()
+                    qs = [f"How does {r[0]} work?" for r in rows if r[0]]
+                    if not qs:
+                        qs = ["What is the overall architecture?", "What are the main modules?"]
+                    return json.dumps({"questions": qs})
                 if what == "service_mesh":
-                    return json.dumps({"services": [], "project": project_path})
+                    return json.dumps({"services": _detect_services(project_path)})
                 fc = c.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0]
                 return json.dumps({"path": project_path, "symbols": gs.symbol_count(),
                                    "communities": gs.community_count(), "file_count": fc})

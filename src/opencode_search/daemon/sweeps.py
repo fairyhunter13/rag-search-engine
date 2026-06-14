@@ -108,6 +108,7 @@ def _index_project(project_path: str) -> None:
                     sym.signature, sym.docstring,
                 )
         gs.commit()
+        gs.dedup_symbols()
         # 2b. Call-edge extraction — second pass: names now known, resolve callees
         file_to_sids: dict[str, list[str]] = {}
         name_to_entries: dict[str, list[tuple[str, str]]] = {}
