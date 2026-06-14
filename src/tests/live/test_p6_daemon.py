@@ -184,10 +184,28 @@ def test_federation_index_members_registers(tmp_path):
 
 
 def test_api_reload_returns_reloading():
-    """P10.7: POST /api/reload responds immediately with status:reloading."""
-    from starlette.testclient import TestClient
+    """P10.7/P15.2: POST /api/reload on the LIVE daemon — handler sends SIGTERM
+    to os.getpid() so in-process TestClient would kill the test process.
+    Systemd restarts the daemon within ~1s; we wait for readiness before finishing.
+    """
+    import time
+    import urllib.request
 
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.post("/api/reload")
-    assert r.status_code == 200 and r.json().get("status") == "reloading"
+    r = urllib.request.urlopen(
+        urllib.request.Request(
+            "http://127.0.0.1:8765/api/reload",
+            data=b"",
+            method="POST",
+        ),
+        timeout=5,
+    )
+    body = __import__("json").loads(r.read())
+    assert r.status == 200 and body.get("status") == "reloading"
+    # Wait for systemd to restart the daemon (up to 8s)
+    for _ in range(16):
+        time.sleep(0.5)
+        try:
+            urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=2)
+            break
+        except Exception:
+            continue

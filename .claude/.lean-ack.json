@@ -1,1 +1,1 @@
-{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/tests/live/test_p6_daemon.py", "reason": "P10.7: maintenance vacuum + federation index_members + api/reload", "expectedAddedLines": 28}
+{"file": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/src/tests/live/test_p6_daemon.py", "reason": "P8.4+P15.2: /api/reload sends SIGTERM to os.getpid() — kills test process when in-process via TestClient. Convert to live daemon :8765 (systemd restarts it). Add readiness wait after reload.", "expectedAddedLines": 5}

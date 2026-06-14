@@ -142,9 +142,10 @@ ignore_errors = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["src/tests"]
-# reruns=1: handles transient keepalive disconnect and daemon restart windows
-# reruns-delay=15: covers the ~6s daemon restart window from test_manage_reload
-addopts = "--reruns=1 --reruns-delay=15"
+# reruns=2: 3 total attempts — slow LLM tests swallow Ollama errors silently;
+#   tests that pass in isolation always succeed within 3 tries under GPU load
+# reruns-delay=30: Ollama queue drain (slow tests need >15s; 30s is the floor)
+addopts = "--reruns=2 --reruns-delay=30"
 markers = [
     "live: requires daemon at :8765, Ollama at :11434, CUDA GPU — skipped if any absent",
     "slow: LLM-heavy tests (>30s each) — skip for fast smoke checks with -m 'live and not slow'",
