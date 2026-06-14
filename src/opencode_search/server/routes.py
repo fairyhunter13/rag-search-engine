@@ -107,10 +107,9 @@ def _register_all(app) -> None:
         routes_pipeline,
         routes_project,
         routes_search,
-        routes_semantic,
     )
     for mod in (routes_admin, routes_project, routes_search, routes_graph,
-                routes_semantic, routes_ops, routes_pipeline, routes_chat):
+                routes_ops, routes_pipeline, routes_chat):
         mod.register(app)
 
 

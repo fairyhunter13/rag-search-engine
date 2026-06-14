@@ -200,12 +200,12 @@ def test_cmd_palette_refresh_pulse_op(page: Page) -> None:
 
 
 def test_cmd_palette_op_items_fire_via_palette(page: Page) -> None:
-    """P12.3: Re-index, Enrich, Generate-wiki, Refresh-Admin ops fire via palette."""
+    """P12.3: Re-index, Generate-wiki, Refresh-Admin ops fire via palette."""
     page.goto(_DASH, wait_until="networkidle")
     page.wait_for_timeout(2000)
     page.locator("#vbtn-admin").click()
     page.wait_for_timeout(1000)
-    for label in ("Re-index project", "Enrich hierarchy", "Generate wiki"):
+    for label in ("Re-index project", "Generate wiki"):
         page.keyboard.press("Control+k")
         page.wait_for_timeout(150)
         page.locator("#cmd-input").fill(label[:10])
@@ -284,19 +284,6 @@ def test_graph_layout_sel_change_no_crash(page: Page) -> None:
     page.wait_for_timeout(500)
     cnt = page.locator("#graph-node-count").text_content() or ""
     assert cnt.strip(), f"#graph-node-count empty after layout change: {cnt!r}"
-
-
-# ── P12.8 extended: remaining admin ops + job state ──────────────────────
-
-def test_admin_enrich_appends_to_op_log(page: Page) -> None:
-    """P12.8: Enrich button appends to #op-log immediately."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-admin").click()
-    page.wait_for_timeout(2000)
-    page.locator("button[onclick='runEnrich()']").click()
-    page.wait_for_timeout(1500)
-    log = page.locator("#op-log").inner_text() or ""
-    assert log.strip(), f"#op-log empty after Enrich click: {log!r}"
 
 
 def test_admin_wiki_appends_to_op_log(page: Page) -> None:
