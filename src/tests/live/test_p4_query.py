@@ -234,16 +234,27 @@ def test_all_seven_intents_reachable():
 
 
 @pytest.mark.slow
-def test_chat_stream_sse_sends_done():
-    """P10.5: /api/chat_stream SSE sends tokens and ends with done:true."""
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.post("/api/chat_stream",
-                   json={"message": "What is this project?", "project_path": ""})
+def test_chat_stream_sse_sends_done(live_client):
+    """P10.5/P15.2: /api/chat_stream SSE sends tokens and ends with done:true (LIVE daemon)."""
+    import json as _json
+    r = live_client.post(
+        "/api/chat_stream",
+        json={"message": "What is this project?", "project_path": ""},
+        stream=True,
+        timeout=(5, 90),
+    )
     assert r.status_code == 200
     assert "text/event-stream" in r.headers.get("content-type", "")
-    body = r.text
-    assert '"done":true' in body or '"done": true' in body, \
-        f"SSE never sent done event; body[:300]={body[:300]!r}"
+    done_seen = False
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        try:
+            evt = _json.loads(line[6:])
+        except _json.JSONDecodeError:
+            continue
+        if evt.get("done"):
+            done_seen = True
+            break
+    r.close()
+    assert done_seen, "SSE stream never sent done:true event"

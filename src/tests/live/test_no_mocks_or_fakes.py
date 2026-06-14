@@ -41,16 +41,10 @@ _MOCK_RE = re.compile("|".join(_MOCK_PATTERNS))
 # PERMANENT: negative/error injection — build_test_app is justified (no live daemon needed)
 # PENDING P15.2: happy-path tests awaiting conversion to live_client at :8765
 _BUILD_TEST_APP_ALLOWLIST = {
-    # PERMANENT — deliberate 4xx / empty-data injection:
+    # PERMANENT — deliberate 4xx / empty-data injection (no live daemon needed):
     "test_p5_server::test_api_search_missing_query_returns_400",
     "test_p5_server::test_api_search_nonexistent_project_returns_empty",
     "test_p5_server::test_api_index_missing_path_returns_400",
-    # PENDING P15.2 — happy-path, must migrate to live_client:
-    "test_p5_server::test_healthz",
-    "test_p5_server::test_dashboard_five_views",
-    "test_p5_server::test_api_projects_returns_list",
-    "test_p5_server::test_api_overview_projects",
-    "test_p4_query::test_chat_stream_sse_sends_done",
 }
 
 _BUILD_TEST_APP_RE = re.compile(r"\bbuild_test_app\b")

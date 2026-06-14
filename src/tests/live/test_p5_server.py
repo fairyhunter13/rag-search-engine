@@ -42,48 +42,50 @@ def test_mcp_index_register_remove(tmp_path):
     assert rem["status"] in ("removed", "not_found")
 
 
-def test_healthz():
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.get("/healthz")
-        assert r.status_code == 200
-        assert r.json()["ok"] is True
+def test_healthz(live_client):
+    """P15.2: /healthz on the REAL daemon (production create_app)."""
+    r = live_client.get("/healthz")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
 
 
-def test_dashboard_five_views():
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.get("/dashboard")
-        assert r.status_code == 200
-        body = r.text.lower()
-        for view in ("pulse", "chat", "admin", "wiki", "graph"):
-            assert view in body, f"dashboard missing '{view}' view"
+def test_dashboard_five_views(live_client):
+    """P15.2: /dashboard on the REAL daemon — all 5 views present."""
+    r = live_client.get("/dashboard")
+    assert r.status_code == 200
+    body = r.text.lower()
+    for view in ("pulse", "chat", "admin", "wiki", "graph"):
+        assert view in body, f"dashboard missing '{view}' view"
 
 
-def test_api_projects_returns_list():
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.get("/api/projects")
-        assert r.status_code == 200
-        data = r.json()
-        assert "projects" in data
-        assert isinstance(data["projects"], list)
+def test_api_projects_returns_list(live_client):
+    """P15.2/P15.4: /api/projects returns ≥1 real registered project."""
+    r = live_client.get("/api/projects")
+    assert r.status_code == 200
+    data = r.json()
+    assert "projects" in data
+    assert len(data["projects"]) >= 1, "live daemon should have ≥1 registered project"
 
 
-def test_api_overview_projects():
-    from starlette.testclient import TestClient
+def test_api_overview_projects(live_client):
+    """P15.2/P15.4: /api/overview?what=projects returns ≥1 real project."""
+    r = live_client.post("/api/overview", json={"what": "projects"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "projects" in data
+    assert len(data["projects"]) >= 1, "live daemon should have ≥1 registered project"
 
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.post("/api/overview", json={"what": "projects"})
-        assert r.status_code == 200
-        assert "projects" in r.json()
+
+def test_live_daemon_has_mcp_route(live_client):
+    """P15.2 parity: production create_app() mounts /mcp (FastMCP streamable-HTTP).
+    The test-only in-process app lacks this route; driving the live daemon proves
+    tests exercise the real served surface, not a stripped-down variant.
+    """
+    # POST without MCP headers → 406 Not Acceptable (not 404 Not Found)
+    r = live_client.post("/mcp", json={})
+    assert r.status_code != 404, (
+        f"/mcp not found — create_app() must mount FastMCP at /mcp; got {r.status_code}"
+    )
 
 
 def test_api_search_missing_query_returns_400():

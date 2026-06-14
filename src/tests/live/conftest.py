@@ -11,6 +11,31 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: LLM-heavy (>30s)")
 
 
+@pytest.fixture(scope="session")
+def live_client():
+    """Thin HTTP client targeting the live daemon at :8765.
+
+    HARD-FAILS (never skips) if the daemon is not reachable — skipping is
+    forbidden by the P15 real-integration invariant.  Every happy-path HTTP
+    test must drive the production create_app() surface through this fixture.
+    """
+    class _C:
+        BASE = _DAEMON
+        def get(self, path, **kw):
+            return requests.get(self.BASE + path, **kw)
+        def post(self, path, **kw):
+            return requests.post(self.BASE + path, **kw)
+
+    try:
+        requests.get(f"{_DAEMON}/healthz", timeout=3)
+    except Exception as exc:
+        pytest.fail(
+            f"Live daemon not reachable at {_DAEMON} — start it with "
+            f"`opencode-search daemon serve` before running these tests. ({exc})"
+        )
+    return _C()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def pause_sweeps():
     """Pause background sweeps for the whole session to avoid GPU contention."""
