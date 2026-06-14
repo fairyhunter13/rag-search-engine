@@ -493,3 +493,39 @@ def test_graph_no_duplicate_symbols():
             assert dups == 0, f"{proj.path}: {dups} dup groups after dedup (removed={removed})"
         finally:
             gs.close()
+
+
+def test_p21_community_count_stable_on_redetect(tmp_path):
+    """P21.1: running detect_communities twice must not grow community count (no orphan rows)."""
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.extractor import extract_symbols, symbol_id
+    from opencode_search.graph.store import GraphStore
+
+    fpath = tmp_path / "mod.py"
+    fpath.write_text(
+        "def alpha(): pass\n"
+        "def beta(): alpha()\n"
+        "def gamma(): beta()\n"
+    )
+    gs = GraphStore(tmp_path / "g.db")
+    try:
+        content = fpath.read_text()
+        for sym in extract_symbols(fpath, content, "python"):
+            sid = symbol_id(str(fpath), sym.name, sym.start_line)
+            gs.upsert_symbol(
+                sid, sym.name, sym.qualified_name, sym.kind,
+                str(fpath), sym.start_line, sym.end_line, sym.language,
+            )
+        gs.commit()
+
+        detect_communities(gs)
+        count1 = gs.community_count()
+
+        detect_communities(gs)
+        count2 = gs.community_count()
+
+        assert count2 <= count1, (
+            f"community count grew on re-detect: {count1}→{count2} (orphan rows not cleared)"
+        )
+    finally:
+        gs.close()
