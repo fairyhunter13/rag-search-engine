@@ -93,26 +93,8 @@ async def _api_ask_business(request: Request) -> JSONResponse:
         gs.close()
 
 
-async def _api_symbol_intent(request: Request) -> JSONResponse:
-    project = request.query_params.get("project", "")
-    symbol = request.query_params.get("symbol", "")
-    if not project or not symbol:
-        return JSONResponse({"error": "project and symbol required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"error": "not indexed"}, status_code=404)
-    try:
-        row = gs.conn.execute(
-            "SELECT intent FROM symbols WHERE name=? LIMIT 1", (symbol,)
-        ).fetchone()
-        return JSONResponse({"symbol": symbol, "intent": row["intent"] if row else None})
-    finally:
-        gs.close()
-
-
 def register(app) -> None:
     app.add_route("/api/feature_map", _api_feature_map, methods=["GET"])
     app.add_route("/api/business_rules", _api_business_rules, methods=["GET"])
     app.add_route("/api/process_flows", _api_process_flows, methods=["GET"])
     app.add_route("/api/ask_business", _api_ask_business, methods=["GET"])
-    app.add_route("/api/symbol_intent", _api_symbol_intent, methods=["GET"])

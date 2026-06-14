@@ -41,14 +41,6 @@ async def _api_enrich_project(request: Request) -> JSONResponse:
     return JSONResponse({"status": "enqueued", "project": project_path})
 
 
-async def _api_enrich_symbols(request: Request) -> JSONResponse:
-    body = await request.json()
-    project_path = body.get("project_path", "")
-    if not project_path:
-        return JSONResponse({"error": "project_path required"}, status_code=400)
-    return JSONResponse({"status": "enqueued", "project": project_path})
-
-
 async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
     return JSONResponse({"enabled": True, "pending": []})
 
@@ -78,7 +70,6 @@ def register(app) -> None:
     app.add_route("/api/build_hierarchy", _api_build_hierarchy, methods=["POST"])
     app.add_route("/api/enrich_hierarchy", _api_enrich_hierarchy, methods=["POST"])
     app.add_route("/api/enrich_project", _api_enrich_project, methods=["POST"])
-    app.add_route("/api/enrich_symbols", _api_enrich_symbols, methods=["POST"])
     app.add_route("/api/auto_pipeline_status", _api_auto_pipeline_status, methods=["GET"])
     app.add_route("/api/federation", _api_federation, methods=["GET"])
     app.add_route("/api/jobs", _api_jobs, methods=["GET"])

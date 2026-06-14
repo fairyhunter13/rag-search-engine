@@ -116,14 +116,14 @@ async def _api_kb_health(request: Request) -> JSONResponse:
     from opencode_search.graph.store import GraphStore
     gs = GraphStore(gdb)
     try:
-        total = gs.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-        enriched = gs.conn.execute(
-            "SELECT COUNT(*) FROM symbols WHERE intent IS NOT NULL"
-        ).fetchone()[0]
         comms = gs.conn.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
-        pct = (enriched / total * 100) if total else 0
+        enriched = gs.conn.execute(
+            "SELECT COUNT(*) FROM communities WHERE title IS NOT NULL"
+        ).fetchone()[0]
+        pct = (enriched / comms * 100) if comms else 0
         return JSONResponse({"verdict": "DONE" if pct >= 95 else "PENDING",
-                             "enriched_pct": round(pct, 1), "total": total,
+                             "enriched_pct": round(pct, 1),
+                             "enriched_communities": enriched,
                              "total_communities": comms})
     finally:
         gs.close()

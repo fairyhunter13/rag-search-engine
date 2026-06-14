@@ -139,24 +139,19 @@ def _index_project(project_path: str) -> None:
 
 def _enrich_project(project_path: str) -> None:
     from opencode_search.core.config import project_graph_db, project_wiki_dir
-    from opencode_search.graph.enrich import enrich_community, enrich_symbols
+    from opencode_search.graph.enrich import enrich_community
     from opencode_search.graph.store import GraphStore
     from opencode_search.kb.hierarchy import build_hierarchy
     from opencode_search.kb.wiki import build_wiki
 
     gs = GraphStore(project_graph_db(project_path))
     try:
-        # 4. LLM enrich symbols
-        enrich_symbols(gs)
-        # 5. LLM enrich communities
         for (cid,) in gs._con.execute(
             "SELECT id FROM communities WHERE title IS NULL LIMIT 20"
         ).fetchall():
             enrich_community(gs, cid)
         gs.commit()
-        # 6. L2 hierarchy
         build_hierarchy(gs)
-        # 7. Wiki pages
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()

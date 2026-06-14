@@ -293,17 +293,6 @@ a{color:inherit;text-decoration:none}
         <div class="tile-sub" id="ks-enrichment">loading…</div>
         <div class="tile-spark"><svg id="sp-enrichment"></svg></div>
       </div>
-      <div class="tile" id="tile-sym-enrich">
-        <div class="tile-top">
-          <span class="tile-lbl">Symbol Intents</span>
-          <span class="tile-badge" id="tb-sym-enrich"></span>
-        </div>
-        <div class="tile-num" id="kpi-sym-enrich">—</div>
-        <div class="tile-sub" id="ks-sym-enrich">functions enriched</div>
-        <div style="margin-top:6px;height:4px;background:var(--bg-2);border-radius:2px;overflow:hidden">
-          <div id="sym-enrich-bar" style="height:100%;background:var(--green);width:0%;transition:width .5s ease"></div>
-        </div>
-      </div>
       <div class="tile" id="tile-wiki">
         <div class="tile-top">
           <span class="tile-lbl">Wiki Pages</span>
@@ -645,43 +634,6 @@ async function loadPulse(){
       ep>=80?'ok':ep>=40?'warn':'err',
       `${kbD.enriched_communities||0} / ${kbD.total_communities||0} communities`
     );
-
-    // Symbol Enrichment tile — poll active enrich_symbols job for current project
-    try{
-      const symJobR=await fetchWithTimeout(`/api/jobs?project=${encodeURIComponent(_proj)}&action=enrich_symbols`);
-      const symJobD=await symJobR.json();
-      const symJobs=(symJobD.jobs||[]).filter(j=>j.status==='running'||j.status==='queued');
-      if(symJobs.length){
-        const sj=symJobs[0];
-        const prog=sj.progress||sj.result;
-        const enriched=prog&&prog.enriched!=null?prog.enriched:null;
-        const total=prog&&prog.total!=null?prog.total:null;
-        const pct=enriched!=null&&total&&total>0?Math.round(enriched/total*100):null;
-        const barEl=document.getElementById('sym-enrich-bar');
-        if(barEl)barEl.style.width=(pct||0)+'%';
-        setTile('sym-enrich',pct!=null?pct+'%':sj.status,'running','warn',
-          enriched!=null?`${enriched}/${total} symbols`:'enriching…');
-      } else {
-        // Check completed jobs for final counts
-        const doneJobs=(symJobD.jobs||[]).filter(j=>j.status==='ok');
-        if(doneJobs.length){
-          const dj=doneJobs[0];
-          const prog=dj.result;
-          const enriched=prog&&prog.enriched!=null?prog.enriched:null;
-          const total=prog&&prog.total!=null?prog.total:null;
-          const barEl=document.getElementById('sym-enrich-bar');
-          if(barEl)barEl.style.width='100%';
-          setTile('sym-enrich',enriched!=null?enriched:null,'ok','ok',
-            total?`all ${total} symbols`:enriched!=null?`${enriched} enriched`:'complete');
-        } else {
-          const barEl=document.getElementById('sym-enrich-bar');
-          if(barEl)barEl.style.width='0%';
-          setTile('sym-enrich',null,'—','',`no active job`);
-        }
-      }
-    }catch(e){
-      setTile('sym-enrich',null,'—','','unavailable');
-    }
 
     // Wiki tile
     const wikiCt=kbD.wiki_page_count;
