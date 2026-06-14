@@ -11,8 +11,9 @@ from opencode_search.core.gpu import assert_cuda_available, gpu_temp_c
 # Prevents concurrent GPU inference races (embed + rerank on same device).
 _GPU_INFER_LOCK = threading.Lock()
 
-# kSameAsRequested stops ORT BFC pre-allocation (the source of 25GB OOM on 16GB GPU).
-# cuda_mem_limit was removed in ORT 1.26; arena strategy alone is sufficient.
+# kSameAsRequested + enable_mem_pattern=False stop ORT BFC pre-allocating 24GB on a 16GB GPU.
+# cuda_mem_limit was removed in ORT 1.26; arena strategy alone does NOT prevent the allocation —
+# enable_mem_pattern=False on SessionOptions is the required companion fix.
 _CUDA_PROVIDER_OPTIONS = {"arena_extend_strategy": "kSameAsRequested"}
 
 
@@ -26,10 +27,29 @@ class Embedder:
 
     def _init(self) -> None:
         from fastembed import TextEmbedding
+        from fastembed.common.onnx_model import OnnxModel
+
+        # FastEmbed only exposes enable_cpu_mem_arena via extra_session_options.
+        # Patch the class once to also handle enable_mem_pattern, which prevents
+        # ORT BFC arena pre-allocating 24GB (OOM) on the first FusedMatMul call.
+        if "enable_mem_pattern" not in OnnxModel.EXPOSED_SESSION_OPTIONS:
+            OnnxModel.EXPOSED_SESSION_OPTIONS = (*OnnxModel.EXPOSED_SESSION_OPTIONS, "enable_mem_pattern")
+            _orig = OnnxModel.add_extra_session_options.__func__
+
+            @classmethod  # type: ignore[misc]
+            def _patched(cls, so, opts):  # type: ignore[misc]
+                if "enable_mem_pattern" in opts:
+                    so.enable_mem_pattern = opts["enable_mem_pattern"]
+                    opts = {k: v for k, v in opts.items() if k != "enable_mem_pattern"}
+                _orig(cls, so, opts)
+
+            OnnxModel.add_extra_session_options = _patched
+
         self._model = TextEmbedding(
             model_name=self._model_name,
             providers=[("CUDAExecutionProvider", _CUDA_PROVIDER_OPTIONS)],
             max_length=512,
+            extra_session_options={"enable_mem_pattern": False, "enable_cpu_mem_arena": False},
         )
 
     def warmup(self) -> None:
