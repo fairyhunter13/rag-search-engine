@@ -32,6 +32,15 @@ def test_mcp_overview_projects_returns_list():
     assert len(data["projects"]) >= 1, "daemon should have ≥1 registered project"
 
 
+def test_mcp_overview_metrics():
+    """P20.3: overview(what='metrics') returns chat_stream metrics dict."""
+    from opencode_search.server.mcp import overview as overview_tool
+    result = asyncio.run(overview_tool("", "metrics"))
+    data = json.loads(result)
+    assert "chat_stream" in data, f"metrics missing chat_stream key: {result}"
+    assert "stream_error_count" in data["chat_stream"], f"chat_stream missing stream_error_count: {data}"
+
+
 def test_mcp_index_register_remove(tmp_path):
     """index tool registers then removes a project without crashing."""
     from opencode_search.server.mcp import index as index_tool
