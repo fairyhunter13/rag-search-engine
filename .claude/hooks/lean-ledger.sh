@@ -4,7 +4,6 @@
 set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 LEDGER="${REPO_ROOT}/.claude/lean-ledger.jsonl"
-ACK_FILE="${REPO_ROOT}/.claude/.lean-ack.json"
 INPUT=$(cat)
 echo "$INPUT" | python3 -c "
 import sys, json, datetime, os
@@ -13,16 +12,14 @@ try:
 except Exception:
     sys.exit(0)
 ti = d.get('tool_input', {})
-reason = ''
-try:
-    reason = json.load(open('${ACK_FILE}')).get('reason', '')
-except Exception:
-    pass
+new = ti.get('new_string', '') or ti.get('content', '')
+old = ti.get('old_string', '')
+net = len(new.splitlines()) - len(old.splitlines()) if (new or old) else 0
 rec = {
-    'ts': datetime.datetime.now().isoformat(timespec='seconds'),
+    'ts': datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z',
     'tool': d.get('tool_name', ''),
     'file': ti.get('file_path', '') or ti.get('path', ''),
-    'reason': reason,
+    'netLines': net,
 }
 with open('${LEDGER}', 'a') as fh:
     fh.write(json.dumps(rec) + os.linesep)

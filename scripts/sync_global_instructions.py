@@ -249,17 +249,17 @@ def update_daemon_prompt(repo: Path, text: str) -> None:
 
 def main() -> None:
     home = Path.home()
-    repo = Path(__file__).parent.parent
 
     text = CANONICAL
 
     print("Syncing opencode-search global instructions to all clients...")
 
-    # Claude Code global + project CLAUDE.md files
+    # GLOBAL CLAUDE.md files only — NOT the repo's project CLAUDE.md. The project
+    # file carries its own checked-in instructions; injecting the global block there
+    # duplicates content and pollutes the repo (P11.2 follow-up fix).
     for md in [
         home / ".claude" / "CLAUDE.md",
         home / "CLAUDE.md",
-        repo / "CLAUDE.md",
     ]:
         update_md_file(md, text)
 
