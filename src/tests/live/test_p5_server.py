@@ -114,3 +114,24 @@ def test_api_index_missing_path_returns_400():
         r = c.post("/api/index", json={"enabled": True})
         assert r.status_code == 400
         assert "error" in r.json()
+
+
+@pytest.mark.slow
+def test_detect_patterns_llm_frameworks():
+    """P9.2: detect_patterns() derives frameworks via LLM, not _FW static dict."""
+    from pathlib import Path
+
+    from opencode_search.core.registry import list_projects
+    from opencode_search.kb.patterns import detect_patterns
+
+    astro = next(
+        (p.path for p in list_projects()
+         if "astro-project" in p.path and "promo" not in p.path and p.enabled),
+        None,
+    )
+    assert astro is not None, "astro-project must be registered (run P8)"
+    result = detect_patterns(Path(astro))
+    assert "frameworks" in result
+    assert isinstance(result["frameworks"], list)
+    # astro-project has astro + react deps → LLM should name ≥1 framework
+    assert len(result["frameworks"]) >= 1
