@@ -26,31 +26,35 @@ class Embedder:
         self._model = None
 
     def _init(self) -> None:
+        import onnxruntime as ort
         from fastembed import TextEmbedding
-        from fastembed.common.onnx_model import OnnxModel
 
-        # FastEmbed only exposes enable_cpu_mem_arena via extra_session_options.
-        # Patch the class once to also handle enable_mem_pattern, which prevents
-        # ORT BFC arena pre-allocating 24GB (OOM) on the first FusedMatMul call.
-        if "enable_mem_pattern" not in OnnxModel.EXPOSED_SESSION_OPTIONS:
-            OnnxModel.EXPOSED_SESSION_OPTIONS = (*OnnxModel.EXPOSED_SESSION_OPTIONS, "enable_mem_pattern")
-            _orig = OnnxModel.add_extra_session_options.__func__
+        # FastEmbed filters extra_session_options by EXPOSED_SESSION_OPTIONS before
+        # passing to _load_onnx_model — enable_mem_pattern is silently dropped.
+        # Patch ort.SessionOptions.__init__ directly so every session in this process
+        # gets enable_mem_pattern=False, stopping BFC arena from pre-allocating 24GB
+        # (exceeds the 16GB GPU) on the first FusedMatMul call.
+        if not getattr(ort.SessionOptions, "_ocs_no_pattern", False):
+            _orig_so_init = ort.SessionOptions.__init__
 
-            @classmethod  # type: ignore[misc]
-            def _patched(cls, so, opts):  # type: ignore[misc]
-                if "enable_mem_pattern" in opts:
-                    so.enable_mem_pattern = opts["enable_mem_pattern"]
-                    opts = {k: v for k, v in opts.items() if k != "enable_mem_pattern"}
-                _orig(cls, so, opts)
+            def _no_pattern_init(self_so: ort.SessionOptions) -> None:
+                _orig_so_init(self_so)
+                self_so.enable_mem_pattern = False
+                self_so.enable_cpu_mem_arena = False
 
-            OnnxModel.add_extra_session_options = _patched
+            ort.SessionOptions.__init__ = _no_pattern_init  # type: ignore[method-assign]
+            ort.SessionOptions._ocs_no_pattern = True  # type: ignore[attr-defined]
 
         self._model = TextEmbedding(
             model_name=self._model_name,
             providers=[("CUDAExecutionProvider", _CUDA_PROVIDER_OPTIONS)],
             max_length=512,
-            extra_session_options={"enable_mem_pattern": False, "enable_cpu_mem_arena": False},
         )
+        # FastEmbed reads model_max_length=8192 from tokenizer_config.json and
+        # silently ignores the max_length=512 kwarg above.  Force it here so
+        # no batch ever produces sequences longer than 512 tokens — 8192-token
+        # sequences cause FusedMatMul to request 24 GB workspace on a 16 GB GPU.
+        self._model.model.tokenizer.enable_truncation(max_length=512)
 
     def warmup(self) -> None:
         if self._model is None:

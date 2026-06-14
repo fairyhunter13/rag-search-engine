@@ -61,6 +61,10 @@ IGNORED_DIRS: frozenset[str] = frozenset({
     ".tox", ".pytest_cache", "coverage", ".coverage",
     ".next", ".nuxt", "vendor", "bower_components", ".idea", ".vscode",
     ".nyc_output", ".cache", "tmp", "temp", "logs",
+    # Browser/OS data dirs — binary SQLite/cache blobs tokenize to 8192 tokens
+    # and cause FusedMatMul to request 24 GB workspace, OOMing the 16 GB GPU.
+    ".playwright-profile", ".chromium", ".chrome-profile", ".playwright",
+    "playwright-cache", "chrome-profile", "chromium-profile",
 })
 
 
