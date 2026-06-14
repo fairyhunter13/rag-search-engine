@@ -374,6 +374,29 @@ def test_p22_is_ignored_path():
     assert not is_ignored_path(Path("/repo/tests/test_core.py"))
 
 
+def test_p22_daemon_rss_bounded():
+    """P22.4: daemon RSS < 4 GB and NRestarts < 10 after watcher churn + leak fixes."""
+    import json
+    import subprocess
+    import urllib.request
+
+    r = subprocess.run(
+        ["systemctl", "--user", "show", "opencode-search-mcp-daemon.service",
+         "-p", "NRestarts,MemoryCurrent"],
+        capture_output=True, text=True,
+    )
+    props = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if "=" in line)
+    n_restarts = int(props.get("NRestarts", "999"))
+    mem_mb = int(props.get("MemoryCurrent", "0")) // (1024 * 1024)
+
+    assert n_restarts < 10, f"daemon crash-looping: NRestarts={n_restarts} (P22 fixes must hold)"
+    assert mem_mb < 4096, f"daemon RSS {mem_mb} MB > 4 GB (P22 memory fix must hold)"
+
+    resp = urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=5)
+    data = json.loads(resp.read())
+    assert data.get("ok") is True, f"daemon not healthy after P22 fixes: {data}"
+
+
 @pytest.mark.slow
 def test_p22_incremental_reindex_idempotent(tmp_path):
     """P22.3: incremental reindex is idempotent — chunk count stable, no UNIQUE constraint error."""
