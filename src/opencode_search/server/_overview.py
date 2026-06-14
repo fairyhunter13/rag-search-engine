@@ -117,7 +117,8 @@ def handle_overview(project_path: str, what: str) -> str:
                 if what == "import_cycles":
                     cycs = _find_import_cycles(c)
                     cnt = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-                    return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "edge_count": cnt})
+                    return json.dumps({"cycles": cycs, "cycle_count": len(cycs),
+                                       "has_cycles": bool(cycs), "edge_count": cnt})
                 if what == "surprising_connections":
                     try:
                         rows = c.execute(
