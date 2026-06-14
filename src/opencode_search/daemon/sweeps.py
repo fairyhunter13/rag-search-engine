@@ -143,6 +143,22 @@ def _index_project(project_path: str) -> None:
         gs.close()
 
 
+def _index_files(project_path: str, files: list) -> None:
+    """Incremental reindex: re-embed only the changed files (no full-project rescan)."""
+    from pathlib import Path
+
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.embed.embedder import get_embedder
+    from opencode_search.index.indexer import index_files
+    from opencode_search.index.store import VectorStore
+
+    vs = VectorStore(project_vector_db(project_path))
+    try:
+        index_files([Path(str(f)) for f in files], get_embedder(), vs)
+    finally:
+        vs.close()
+
+
 def _enrich_project(project_path: str) -> None:
     from opencode_search.core.config import project_graph_db, project_wiki_dir
     from opencode_search.graph.enrich import enrich_community

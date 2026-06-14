@@ -79,7 +79,13 @@ def _start_background() -> None:
     from opencode_search.core.registry import list_projects
     from opencode_search.daemon.runtime_state import check_idle_shutdown, release_stale_clients
     from opencode_search.daemon.scheduler import Scheduler
-    from opencode_search.daemon.sweeps import _index_project, auto_index, kb_sweep, maintenance
+    from opencode_search.daemon.sweeps import (
+        _index_files,
+        _index_project,
+        auto_index,
+        kb_sweep,
+        maintenance,
+    )
     from opencode_search.daemon.watcher import Watcher
 
     scheduler = Scheduler()
@@ -109,9 +115,12 @@ def _start_background() -> None:
                 finally:
                     gs.close()
 
-    def _on_change(project_path: str, _files: list) -> None:
+    def _on_change(project_path: str, files: list) -> None:
         try:
-            _index_project(project_path)
+            if files:
+                _index_files(project_path, files)
+            else:
+                _index_project(project_path)
         except Exception as exc:
             log.warning("incremental reindex %s: %s", project_path, exc)
 
