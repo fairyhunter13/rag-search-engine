@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse gate — enforces lean-change discipline on every Edit/Write/MultiEdit.
 # Reads Claude tool input from stdin as JSON; emits a PreToolUse permission decision.
-# Fail-closed: any internal parse failure yields an empty field and the budget/ack
+# Fail-closed: any internal parse failure yields an empty field and the budget
 # checks then deny, so a broken edit never slips through.
 set -euo pipefail
 
@@ -26,12 +26,12 @@ NEW_STRING=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin)
 OLD_STRING=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('old_string',''))" 2>/dev/null || echo "")
 
 # Bootstrap: never gate Claude's own meta-files (hooks, skills, settings, plans, memory).
-# Workflow state must stay editable so flipping a checklist box never needs an ack.
+# Workflow state must stay editable so flipping a checklist box stays allowed.
 if echo "$FILE_PATH" | grep -q '\.claude/'; then
   allow "Claude meta-file edit allowed (ungated)."
 fi
 
-# Forbidden paths — protected regardless of ack/budget.
+# Forbidden paths — protected regardless of budget.
 for pat in 'secrets/' '.env' '/.local/share/opencode-search/' '/GoogleDrive/' '/OneDrive/'; do
   if echo "$FILE_PATH" | grep -qF "$pat"; then
     deny "Forbidden path: ${FILE_PATH} matches '${pat}'. This path is protected."
