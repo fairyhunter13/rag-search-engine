@@ -43,5 +43,9 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
     for cid, cnt in counts.items():
         store.upsert_community(cid, level=1, title=None,
                                summary="", member_count=cnt)
+    store._con.execute(
+        "DELETE FROM communities WHERE id NOT IN "
+        "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
+    )
     store.commit()
     return mapping
