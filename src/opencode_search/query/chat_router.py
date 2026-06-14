@@ -55,7 +55,7 @@ def _extract_symbol(query: str, store: GraphStore | None = None) -> str:
         ).strip()
         symbol = raw if (raw and len(raw) < 80 and " " not in raw) else (raw.split() or [""])[0]
     except Exception:
-        symbol = ""
+        raw, symbol = "", ""
     if not symbol:
         symbol = query.split()[0] if query.split() else query
     if store is not None:
@@ -69,6 +69,16 @@ def _extract_symbol(query: str, store: GraphStore | None = None) -> str:
             ).fetchone()
             if fuzzy:
                 symbol = fuzzy[0]
+            else:
+                # LLM may return a sentence; scan every word against the symbols table
+                for word in (raw or query).split():
+                    w = word.strip("'\".,;:()")
+                    row = store._con.execute(
+                        "SELECT name FROM symbols WHERE name=? LIMIT 1", (w,),
+                    ).fetchone()
+                    if row:
+                        symbol = row[0]
+                        break
     return symbol
 
 

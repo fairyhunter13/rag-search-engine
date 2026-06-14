@@ -99,6 +99,34 @@ def test_ask_global_scope_semantic_map():
 
 
 @pytest.mark.slow
+def test_ask_all_scopes_real_astro():
+    """P10.2: ask() returns non-empty for all/architecture/feature/wiki/business scopes."""
+    from opencode_search.core.config import project_graph_db, project_vector_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.embed.embedder import get_embedder
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.ask import ask
+    from opencode_search.query.search import search
+
+    astro = next(
+        (p.path for p in list_projects()
+         if "redacted-name-3" in p.path and "promo" not in p.path and p.enabled),
+        None,
+    )
+    assert astro, "redacted-name-3 must be registered (run P8)"
+    gs = GraphStore(project_graph_db(astro))
+    vs = VectorStore(project_vector_db(astro))
+    chunks = search("project structure", get_embedder(), vs, scope="all", top_k=5)
+    for scope in ("all", "architecture", "feature", "wiki", "business"):
+        answer = ask("How does this project work?", chunks, gs, scope=scope)
+        assert isinstance(answer, str) and len(answer) > 10, \
+            f"scope={scope!r} answer too short: {answer!r}"
+    vs.close()
+    gs.close()
+
+
+@pytest.mark.slow
 def test_ask_all_scope_returns_answer(mini_stores, embedder):
     from opencode_search.graph.store import GraphStore
     from opencode_search.index.store import VectorStore
