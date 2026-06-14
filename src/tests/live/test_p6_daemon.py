@@ -529,3 +529,36 @@ def test_p21_community_count_stable_on_redetect(tmp_path):
         )
     finally:
         gs.close()
+
+
+def test_p21_community_labels_set_without_llm(tmp_path):
+    """P21.2: every community has a non-empty title BEFORE LLM enrichment runs."""
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.extractor import extract_symbols, symbol_id
+    from opencode_search.graph.store import GraphStore
+
+    fpath = tmp_path / "auth.py"
+    fpath.write_text(
+        "def authenticate_user(token): pass\n"
+        "def validate_token(t): return bool(t)\n"
+        "def revoke_token(t): pass\n"
+    )
+    gs = GraphStore(tmp_path / "g.db")
+    try:
+        content = fpath.read_text()
+        for sym in extract_symbols(fpath, content, "python"):
+            sid = symbol_id(str(fpath), sym.name, sym.start_line)
+            gs.upsert_symbol(
+                sid, sym.name, sym.qualified_name, sym.kind,
+                str(fpath), sym.start_line, sym.end_line, sym.language,
+            )
+        gs.commit()
+        detect_communities(gs)
+        rows = gs._con.execute("SELECT id, title FROM communities").fetchall()
+        assert rows, "no communities detected"
+        for cid, title in rows:
+            assert title and title.strip(), (
+                f"P21.2: community {cid} has no title (cheap labeler must set title before LLM)"
+            )
+    finally:
+        gs.close()

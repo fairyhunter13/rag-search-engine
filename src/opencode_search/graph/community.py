@@ -6,6 +6,17 @@ from collections import Counter
 from opencode_search.graph.store import GraphStore
 
 
+def _label_from_names(names: list[str]) -> str:
+    """Cheap structural label: most-frequent snake_case token from member names."""
+    tokens: list[str] = []
+    for n in names:
+        tokens.extend(p for p in n.split("_") if len(p) > 2)
+    if not tokens:
+        return names[0][:30] if names else ""
+    word, _ = Counter(t.lower() for t in tokens).most_common(1)[0]
+    return word.capitalize()
+
+
 def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[str, int]:
     """Run Leiden on call edges; fall back to file-level grouping if no edges.
 
@@ -43,6 +54,17 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
     for cid, cnt in counts.items():
         store.upsert_community(cid, level=1, title=None,
                                summary="", member_count=cnt)
+    sid_to_name = {s["sid"]: s["name"] for s in symbols}
+    cid_to_names: dict[int, list[str]] = {}
+    for sid, cid in mapping.items():
+        cid_to_names.setdefault(cid, []).append(sid_to_name.get(sid, ""))
+    for cid, names in cid_to_names.items():
+        label = _label_from_names(names)
+        if label:
+            store._con.execute(
+                "UPDATE communities SET title=? WHERE id=? AND title IS NULL",
+                (label, cid),
+            )
     store._con.execute(
         "DELETE FROM communities WHERE id NOT IN "
         "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
