@@ -26,6 +26,8 @@ def _needs_index(path: str) -> bool:
 
 def auto_index() -> None:
     """Index any registered project whose vector DB is missing or empty."""
+    if _PAUSED:
+        return
     from opencode_search.core.registry import list_projects
 
     for entry in list_projects():
@@ -39,6 +41,8 @@ def auto_index() -> None:
 
 def kb_sweep() -> None:
     """Enrich symbols + communities for all indexed projects."""
+    if _PAUSED:
+        return
     from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
 
@@ -56,6 +60,8 @@ def kb_sweep() -> None:
 
 def maintenance() -> None:
     """Vacuum orphan index dirs not present in the registry."""
+    if _PAUSED:
+        return
     from opencode_search.core.config import INDEX_ROOT, index_dir
     from opencode_search.core.registry import list_projects
 

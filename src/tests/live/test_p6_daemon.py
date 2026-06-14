@@ -114,6 +114,25 @@ def test_sweeps_auto_index_skips_existing(tmp_path):
         vdb.unlink(missing_ok=True)
 
 
+def test_sweeps_paused_skips_auto_index(tmp_path):
+    """P18.2: a paused auto_index must not create the vector DB."""
+    from opencode_search.core.config import ProjectEntry, project_vector_db
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon import sweeps
+
+    proj_path = str(tmp_path)
+    vdb = project_vector_db(proj_path)
+    upsert_project(ProjectEntry(path=proj_path, enabled=True))
+    # vdb intentionally absent so _needs_index() returns True → would trigger indexing
+    sweeps._PAUSED = True
+    try:
+        sweeps.auto_index()
+        assert not vdb.exists(), "paused auto_index must not create the vector DB"
+    finally:
+        sweeps._PAUSED = False
+        remove_project(proj_path)
+
+
 def test_global_prompt_inject_remove(tmp_path):
     from opencode_search.daemon.global_prompt import inject_claude_md, remove_claude_md
 
