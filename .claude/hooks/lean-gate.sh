@@ -14,8 +14,7 @@ deny() {
 }
 
 allow() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","additionalContext":"%s"}}' \
-    "$(echo "$1" | sed 's/"/\\"/g')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
   exit 0
 }
 
