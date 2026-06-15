@@ -41,10 +41,10 @@ def test_mcp_overview_metrics():
     assert "stream_error_count" in data["chat_stream"], f"chat_stream missing stream_error_count: {data}"
 
 
-def test_mcp_index_register_remove(tmp_path):
+def test_mcp_index_register_remove(safe_tmp_path):
     """index tool registers then removes a project without crashing."""
     from opencode_search.server.mcp import index as index_tool
-    p = str(tmp_path)
+    p = str(safe_tmp_path)
     reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
     assert reg["status"] in ("flagged", "already_registered")
     rem = json.loads(asyncio.run(index_tool(p, enabled=False)))
@@ -148,7 +148,23 @@ def test_detect_patterns_llm_frameworks():
     assert len(result["frameworks"]) >= 1
 
 
-def test_index_tool_e2e(tmp_path):
+def test_index_tool_rejects_forbidden_root(safe_tmp_path):
+    """P24.3: index(/tmp/...) must return status='forbidden' and NOT register the path."""
+    from opencode_search.core.registry import get_project
+    from opencode_search.server.mcp import index as index_tool
+
+    bad = "/tmp/ocs-test-forbidden-registration-check"
+    result = json.loads(asyncio.run(index_tool(bad, enabled=True)))
+    assert result["status"] == "forbidden", f"expected forbidden, got {result}"
+    assert get_project(bad) is None, "forbidden path must NOT be registered"
+
+    normal = str(safe_tmp_path)
+    ok = json.loads(asyncio.run(index_tool(normal, enabled=True)))
+    assert ok["status"] in ("flagged", "already_registered"), f"normal path failed: {ok}"
+    asyncio.run(index_tool(normal, enabled=False))  # cleanup
+
+
+def test_index_tool_e2e(safe_tmp_path):
     """P10.4b: enabled=True creates registry entry; enabled=False removes it + index dir."""
     from pathlib import Path
 
@@ -156,7 +172,7 @@ def test_index_tool_e2e(tmp_path):
     from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import index as index_tool
 
-    p = str(tmp_path)
+    p = str(safe_tmp_path)
     reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
     assert reg["status"] in ("flagged", "already_registered")
     assert any(proj.path == p for proj in list_projects()), "Project not in registry after register"

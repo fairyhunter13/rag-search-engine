@@ -211,6 +211,12 @@ async def index(project_path: str, enabled: bool = True) -> str:
         from opencode_search.core.config import index_dir
         shutil.rmtree(index_dir(project_path), ignore_errors=True)
         return json.dumps({"status": "removed" if ok else "not_found", "path": project_path})
+    from pathlib import Path
+
+    from opencode_search.index.discover import is_forbidden_root
+    if is_forbidden_root(Path(project_path)):
+        return json.dumps({"status": "forbidden", "path": project_path,
+                           "note": "registering /tmp or cache directories is not allowed"})
     from opencode_search.core.registry import get_project
     existing = get_project(project_path)
     status = "already_registered" if existing and existing.enabled else "flagged"

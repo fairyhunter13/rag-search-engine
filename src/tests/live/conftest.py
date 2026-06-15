@@ -61,6 +61,19 @@ def embedder(cuda_ep):
     return e
 
 
+@pytest.fixture()
+def safe_tmp_path():
+    """Temporary directory outside /tmp and ~/.cache — safe for registry registration tests."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
+    safe_base.mkdir(parents=True, exist_ok=True)
+    d = Path(tempfile.mkdtemp(dir=safe_base))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
 @pytest.fixture(scope="session")
 def mini_stores(embedder, tmp_path_factory):
     """Vector + graph store over a 3-file Python mini-project for P4 tests."""
