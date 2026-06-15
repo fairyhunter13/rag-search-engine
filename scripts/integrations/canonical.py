@@ -82,3 +82,30 @@ def agents_md_block() -> str:
 def lean_claude_block() -> str:
     """Return the canonical sentinel-wrapped lean-change mandate for CLAUDE.md files."""
     return f"{SENTINEL_LEAN_START}\n{LEAN_BODY}\n{SENTINEL_LEAN_END}\n"
+
+
+# ---------------------------------------------------------------------------
+# Canonical lean-change SKILL.md (cross-agent: Claude, codex, opencode, hermes)
+# ---------------------------------------------------------------------------
+
+LEAN_SKILL_MD = """\
+---
+name: lean-change
+description: Enforce the smallest possible surgical diff — less is more, each line is a liability. Load on demand for the 6-check checklist.
+---
+
+# Lean-Change
+
+**Creed:** the best change is none. The next best is a deletion. Then the fewest lines that work.
+
+## 6 checks before every edit (all required)
+
+1. **Search first** — call `opencode-search` before adding anything. Reuse existing code.
+2. **Need it?** — satisfy the requirement by reusing, configuring, or deleting before adding code.
+3. **Smallest diff** — minimum change. No speculative abstraction. No unrequested refactor. No "while I'm here." Plainest construct (KISS).
+4. **No new dependency** without a one-line justification tied to the requirement. Prefer stdlib or already-vendored.
+5. **Reduction pass (MANDATORY)** — after drafting, re-read and cut every non-load-bearing line. Aim net-negative. Delete dead code; never comment it out.
+6. **Verify** — `go vet ./... && go test ./...` or `npx tsc --noEmit` green before commit.
+
+The `PreToolUse` hook auto-enforces the diff budget (≤40 net lines on existing files, ≤150 on new) and forbidden paths where installed.
+"""
