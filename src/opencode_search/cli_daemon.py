@@ -63,6 +63,16 @@ def daemon_install_global(transport: str = typer.Option("stdio", "--transport"))
     from opencode_search.daemon.global_prompt import inject_claude_md
     inject_claude_md()
     typer.echo("Injected global prompt into ~/CLAUDE.md.")
+    if transport == "http":
+        import json
+        from pathlib import Path
+        p = Path.home() / ".claude.json"
+        data = json.loads(p.read_text()) if p.exists() else {}
+        data.setdefault("mcpServers", {})["opencode-search"] = {
+            "type": "http", "url": "http://127.0.0.1:8765/mcp",
+        }
+        p.write_text(json.dumps(data, indent=2) + "\n")
+        typer.echo("Registered opencode-search HTTP MCP at http://127.0.0.1:8765/mcp in ~/.claude.json.")
 
 
 @daemon_app.command("install-systemd")
@@ -78,6 +88,15 @@ def daemon_install_systemd() -> None:
 def daemon_bridge_stdio() -> None:
     """Run FastMCP stdio bridge (for Claude Code MCP client integration)."""
     import asyncio
+    import contextlib
+    import os
 
     from opencode_search.server.mcp import mcp
-    asyncio.run(mcp.run_stdio_async())
+
+    idle_s = float(os.environ.get("OPENCODE_BRIDGE_IDLE_S", "600"))
+
+    async def _run() -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(mcp.run_stdio_async(), timeout=idle_s)
+
+    asyncio.run(_run())

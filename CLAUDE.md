@@ -32,6 +32,8 @@ python -m compileall -q src/opencode_search
 - `live` — requires daemon at :8765, Ollama, GPU
 - `slow` — LLM-heavy tests (>30s each); skip with `-m "live and not slow"` for fast feedback
 
+**Memory profile**: the live suite loads a real embedder in-process (~1 GB) — intrinsic to the no-mock invariant. Use the fast smoke command above as the default to keep peak RSS lower. Browser tests run in a separate process; don't run them together with the live suite.
+
 **Daemon reload** (after code changes): `POST /api/reload` or CLI `opencode-search daemon reload` — daemon restarts via systemd in ~1s.
 
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.

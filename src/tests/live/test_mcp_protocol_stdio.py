@@ -59,54 +59,44 @@ class _StdioMCP:
         return r
 
 
-def test_stdio_initialize_returns_5_tool_serverinfo():
+@pytest.fixture(scope="module")
+def stdio_mcp():
+    """One bridge-stdio process shared for the whole module — one model load."""
+    client = _StdioMCP()
+    client._init_result = client.handshake()
+    yield client
+    client.close()
+
+
+def test_stdio_initialize_returns_5_tool_serverinfo(stdio_mcp):
     """P15.3a: bridge-stdio initialize — server name + 5-tool instructions."""
-    mcp = _StdioMCP()
-    try:
-        r = mcp.handshake()
-        assert r["result"]["serverInfo"]["name"] == "opencode-search"
-        assert "5-tool" in r["result"].get("instructions", "")
-    finally:
-        mcp.close()
+    r = stdio_mcp._init_result
+    assert r["result"]["serverInfo"]["name"] == "opencode-search"
+    assert "5-tool" in r["result"].get("instructions", "")
 
 
-def test_stdio_tools_list_returns_exactly_5():
+def test_stdio_tools_list_returns_exactly_5(stdio_mcp):
     """P15.3a: tools/list over stdio returns exactly the 5 expected tools."""
-    mcp = _StdioMCP()
-    try:
-        mcp.handshake()
-        r = mcp.request("tools/list")
-        names = {t["name"] for t in r["result"]["tools"]}
-        assert names == _EXPECTED_TOOLS, f"wrong tool set: {names}"
-    finally:
-        mcp.close()
+    r = stdio_mcp.request("tools/list")
+    names = {t["name"] for t in r["result"]["tools"]}
+    assert names == _EXPECTED_TOOLS, f"wrong tool set: {names}"
 
 
-def test_stdio_overview_projects_returns_real_projects():
+def test_stdio_overview_projects_returns_real_projects(stdio_mcp):
     """P15.3a: tools/call overview(projects) over stdio — >=2 real indexed projects."""
-    mcp = _StdioMCP()
-    try:
-        mcp.handshake()
-        r = mcp.request("tools/call", {"name": "overview", "arguments": {"what": "projects"}})
-        data = json.loads(r["result"]["content"][0]["text"])
-        projects = data.get("projects", [])
-        assert len(projects) >= 2, f"expected >=2 projects, got {len(projects)}"
-        paths = [p["path"] for p in projects]
-        assert any("astro" in p for p in paths), f"redacted-name-3 missing: {paths}"
-    finally:
-        mcp.close()
+    r = stdio_mcp.request("tools/call", {"name": "overview", "arguments": {"what": "projects"}})
+    data = json.loads(r["result"]["content"][0]["text"])
+    projects = data.get("projects", [])
+    assert len(projects) >= 2, f"expected >=2 projects, got {len(projects)}"
+    paths = [p["path"] for p in projects]
+    assert any("astro" in p for p in paths), f"redacted-name-3 missing: {paths}"
 
 
-def test_stdio_search_returns_real_ranked_results():
+def test_stdio_search_returns_real_ranked_results(stdio_mcp):
     """P15.3a: tools/call search over stdio — ranked results from real index."""
-    mcp = _StdioMCP()
-    try:
-        mcp.handshake()
-        r = mcp.request("tools/call", {"name": "search", "arguments": {"query": "community leiden"}})
-        hits = json.loads(r["result"]["content"][0]["text"])
-        assert len(hits.get("results", [])) >= 1, "search returned no results over stdio"
-    finally:
-        mcp.close()
+    r = stdio_mcp.request("tools/call", {"name": "search", "arguments": {"query": "community leiden"}})
+    hits = json.loads(r["result"]["content"][0]["text"])
+    assert len(hits.get("results", [])) >= 1, "search returned no results over stdio"
 
 
 def test_no_direct_tool_calls_in_protocol_tests():
