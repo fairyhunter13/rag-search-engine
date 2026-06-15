@@ -71,7 +71,7 @@ def daemon_install_systemd() -> None:
     from opencode_search.daemon.systemd import install
     path = install()
     typer.echo(f"Installed: {path}")
-    typer.echo("Run: systemctl --user daemon-reload && systemctl --user enable --now opencode-search")
+    typer.echo("Run: systemctl --user daemon-reload && systemctl --user enable --now opencode-search-mcp-daemon")
 
 
 @daemon_app.command("bridge-stdio")
