@@ -91,6 +91,21 @@ def test_systemd_install_writes_file(tmp_path):
     assert "opencode-search" in dest.read_text()
 
 
+def test_systemd_unit_matches_deployed_name():
+    """P29: installer produces the deployed unit name + explicit bind address."""
+    from opencode_search.daemon.systemd import install, unit_text
+    text = unit_text("/usr/bin/opencode-search")
+    assert "--port 8765" in text, "ExecStart must bind to explicit port"
+    assert "--host 127.0.0.1" in text, "ExecStart must bind to explicit host"
+    assert "singleton MCP daemon" in text, "Description must match deployed unit"
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        dest = install(dest=Path(td) / "opencode-search-mcp-daemon.service")
+        assert dest.name == "opencode-search-mcp-daemon.service"
+        assert "--port 8765" in dest.read_text()
+
+
 def test_federation_discover_empty_dir(tmp_path):
     from opencode_search.daemon.federation import discover_members
 
