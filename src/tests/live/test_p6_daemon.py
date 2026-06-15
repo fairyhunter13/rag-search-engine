@@ -266,8 +266,10 @@ def test_federation_index_members_registers(tmp_path):
     member.mkdir()
     (member / "main.py").write_text("x = 1\n")
     (root / "link").symlink_to(member)
+    remove_project(str(member))  # pre-clean: concurrent pytest sessions share tmp_path counters
     n = index_members(str(root))
-    assert n == 1 and get_project(str(member)) is not None
+    assert n == 1, f"expected 1 new registration, got {n}"
+    assert get_project(str(member)) is not None
     remove_project(str(member))
 
 
