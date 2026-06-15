@@ -29,10 +29,13 @@ from integrations.canonical import (
     CANONICAL_MCP_ARGS,
     CANONICAL_MCP_COMMAND,
     CANONICAL_MCP_ENV,
+    LEAN_BODY,
     SENTINEL_AGENTS_END,
     SENTINEL_AGENTS_START,
     SENTINEL_CLAUDE_END,
     SENTINEL_CLAUDE_START,
+    SENTINEL_LEAN_END,
+    SENTINEL_LEAN_START,
 )
 
 _REPO = Path(__file__).parent.parent
@@ -98,21 +101,39 @@ def _verify_claude_md(md_path: Path) -> ConfigResult:
                             message=f"CLAUDE.md not found at {md_path}", path=str(md_path))
     text = md_path.read_text()
     from integrations.canonical import CANONICAL_BODY
-    if _verify_sentinel_block(text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY):
+    ose_ok = _verify_sentinel_block(text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
+    lean_ok = _verify_sentinel_block(text, SENTINEL_LEAN_START, SENTINEL_LEAN_END, LEAN_BODY)
+    if ose_ok and lean_ok:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"System prompt in sync: {md_path}", path=str(md_path))
+    if not ose_ok:
+        return ConfigResult(tool=label, status="missing",
+                            message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
+                        message=f"Lean-change block drifted or missing: {md_path}", path=str(md_path))
+
+
+_LEGACY_LEAN_LINE = (
+    "MANDATORY: always enforce and implement the lean-change skill by default"
+    " — make every change the smallest, simplest, most surgical diff that works;"
+    " each line is a liability."
+)
 
 
 def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
     label = f"claude({md_path.parent.name})/CLAUDE.md"
     from integrations.canonical import CANONICAL_BODY
-    if md_path.exists():
-        old_text = md_path.read_text()
-    else:
-        old_text = ""
+    old_text = md_path.read_text() if md_path.exists() else ""
+    # Repair the OSE sentinel block.
     new_text = _replace_sentinel_block(old_text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
+    # On first migration: strip the bare mandate line (it's now managed by the lean sentinel block).
+    if SENTINEL_LEAN_START not in new_text:
+        new_text = "\n".join(
+            line for line in new_text.splitlines()
+            if line.strip() != _LEGACY_LEAN_LINE
+        ).rstrip() + "\n"
+    # Repair/add the lean sentinel block.
+    new_text = _replace_sentinel_block(new_text, SENTINEL_LEAN_START, SENTINEL_LEAN_END, LEAN_BODY)
     if old_text == new_text:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"Already in sync: {md_path}", path=str(md_path))

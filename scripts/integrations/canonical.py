@@ -34,6 +34,18 @@ SENTINEL_CLAUDE_START = "<!-- >>> opencode-search global instructions >>> -->"
 SENTINEL_CLAUDE_END   = "<!-- <<< opencode-search global instructions <<< -->"
 SENTINEL_AGENTS_START = "[opencode-search-global-instructions:start]"
 SENTINEL_AGENTS_END   = "[opencode-search-global-instructions:end]"
+SENTINEL_LEAN_START   = "<!-- >>> lean-change mandate >>> -->"
+SENTINEL_LEAN_END     = "<!-- <<< lean-change mandate <<< -->"
+
+# ---------------------------------------------------------------------------
+# Canonical lean-change mandate (Claude profiles only — names the Claude skill)
+# ---------------------------------------------------------------------------
+
+LEAN_BODY = (
+    "MANDATORY: always enforce and implement the lean-change skill by default"
+    " — make every change the smallest, simplest, most surgical diff that works;"
+    " each line is a liability."
+)
 
 # ---------------------------------------------------------------------------
 # Canonical system prompt body (shared across all tool types)
@@ -65,3 +77,8 @@ def claude_block() -> str:
 def agents_md_block() -> str:
     """Return the canonical sentinel-wrapped block for AGENTS.md files."""
     return f"{SENTINEL_AGENTS_START}\n{CANONICAL_BODY}\n{SENTINEL_AGENTS_END}\n"
+
+
+def lean_claude_block() -> str:
+    """Return the canonical sentinel-wrapped lean-change mandate for CLAUDE.md files."""
+    return f"{SENTINEL_LEAN_START}\n{LEAN_BODY}\n{SENTINEL_LEAN_END}\n"
