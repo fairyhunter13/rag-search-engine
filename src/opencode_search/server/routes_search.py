@@ -119,7 +119,7 @@ async def _api_suggested_questions(request: Request) -> JSONResponse:
     from opencode_search.graph.store import GraphStore
     gs = GraphStore(gdb)
     try:
-        comms = gs.conn.execute("SELECT title FROM communities ORDER BY node_count DESC LIMIT 5").fetchall()
+        comms = gs.conn.execute("SELECT title FROM communities ORDER BY member_count DESC LIMIT 5").fetchall()
         return JSONResponse({"questions": [f"How does {r['title']} work?" for r in comms]})
     finally:
         gs.close()

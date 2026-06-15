@@ -208,6 +208,51 @@ def test_service_mesh_be_nonempty():
     assert "GwpService" in names, f"GwpService not in {sorted(names)[:10]}"
 
 
+def test_suggested_questions_and_chat_context_no_operationalerror(live_client):
+    """P23.2: ORDER BY member_count (not node_count) — no OperationalError on real graph DBs."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+
+    project = next(
+        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
+        None,
+    )
+    assert project, "At least one project with a graph DB must be registered"
+
+    r = live_client.get(f"/api/suggested_questions?project={project}")
+    assert r.status_code == 200, f"suggested_questions 500 (likely node_count bug): {r.text}"
+    assert "questions" in r.json()
+
+    r2 = live_client.post("/api/chat", json={"message": "hi", "project": project})
+    assert r2.status_code in (200, 400), f"chat unexpected status: {r2.status_code} {r2.text}"
+
+
+def test_mcp_search_subdir_resolves_to_root():
+    """P23.1: search with a non-root project_paths resolves to the enclosing registered root."""
+    from pathlib import Path
+
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.server.mcp import search as search_tool
+
+    indexed = next(
+        (p for p in list_projects() if p.enabled and project_vector_db(p.path).exists()),
+        None,
+    )
+    assert indexed, "At least one indexed project must be registered"
+
+    subdir = str(Path(indexed.path) / "src")
+    result = json.loads(asyncio.run(search_tool("function definition", project_paths=[subdir])))
+    assert result["projects_searched"] == [indexed.path], (
+        f"subdir {subdir!r} must resolve to root {indexed.path!r}; got {result['projects_searched']}"
+    )
+    assert result["total"] > 0, "Expected results from indexed project"
+
+    outside = json.loads(asyncio.run(search_tool("function definition", project_paths=["/nonexistent/path"])))
+    assert outside["total"] == 0
+    assert outside["projects_searched"] == []
+
+
 def test_auto_pipeline_status_real(live_client, tmp_path):
     """P19.6: /api/auto_pipeline_status returns real enabled/pending — not canned data.
 

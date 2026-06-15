@@ -25,7 +25,7 @@ def _build_context(project_path: str) -> str:
     gs = GraphStore(gdb)
     try:
         rows = gs.conn.execute(
-            "SELECT summary FROM communities ORDER BY node_count DESC LIMIT 3"
+            "SELECT summary FROM communities ORDER BY member_count DESC LIMIT 3"
         ).fetchall()
         return "\n".join(r[0] for r in rows if r[0])
     finally:

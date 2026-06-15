@@ -43,6 +43,11 @@ def _open(db_path: Path) -> sqlite3.Connection:
         );
     """)
     con.commit()
+    # Schema migration: older DBs used node_count, new schema uses member_count.
+    _cols = {r[1] for r in con.execute("PRAGMA table_info(communities)")}
+    if "node_count" in _cols and "member_count" not in _cols:
+        con.execute("ALTER TABLE communities RENAME COLUMN node_count TO member_count")
+        con.commit()
     return con
 
 
