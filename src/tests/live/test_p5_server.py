@@ -376,6 +376,34 @@ def test_enrich_project_uses_summary_gate(safe_tmp_path):
     assert post > 0, "enrichment gate must use summary IS NULL, not title IS NULL"
 
 
+def test_build_hierarchy_empty_body_not_500(live_client):
+    """P28.1: POST /api/build_hierarchy with empty body + project in query param must not 500."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    project = next(
+        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
+        None,
+    )
+    assert project, "At least one indexed project required"
+    r = live_client.post(f"/api/build_hierarchy?project={project}", content=b"")
+    assert r.status_code != 500, f"empty body must not 500: {r.status_code} {r.text[:80]}"
+    assert r.status_code in (200, 400)
+
+
+def test_build_hierarchy_action_wiki(live_client):
+    """P28.2: action=wiki calls build_wiki and returns pages_written."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    project = next(
+        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
+        None,
+    )
+    assert project, "At least one indexed project required"
+    r = live_client.post(f"/api/build_hierarchy?project={project}&action=wiki", content=b"")
+    assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
+    assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
+
+
 def test_overview_status_has_kb_state():
     """P25.2: overview(what='status') returns kb_state in 4-value set + numeric enriched_pct."""
     from opencode_search.core.config import project_graph_db
