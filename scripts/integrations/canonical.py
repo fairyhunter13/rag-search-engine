@@ -27,6 +27,14 @@ CANONICAL_MCP_ENV = {
 }
 
 # ---------------------------------------------------------------------------
+# Global lean-gate enforcement (hook path + deny globs for ~/.claude/settings.json)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _Path
+
+LEAN_GATE_HOOK_PATH: str = str(_Path.home() / ".claude" / "hooks" / "lean-gate.sh")
+
+# ---------------------------------------------------------------------------
 # Sentinels per file type
 # ---------------------------------------------------------------------------
 
@@ -114,5 +122,5 @@ description: Enforce the smallest possible surgical diff — less is more, each 
 5. **Reduction pass (MANDATORY)** — after drafting, re-read and cut every non-load-bearing line. Aim net-negative. Delete dead code; never comment it out.
 6. **Verify** — `go vet ./... && go test ./...` or `npx tsc --noEmit` green before commit.
 
-The `PreToolUse` hook auto-enforces the diff budget (≤40 net lines on existing files, ≤150 on new) and forbidden paths where installed.
+The `PreToolUse` hook auto-enforces the diff budget (≤40 net lines on existing files, ≤150 on new).
 """

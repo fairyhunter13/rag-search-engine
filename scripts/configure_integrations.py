@@ -31,6 +31,7 @@ from integrations.canonical import (
     CANONICAL_MCP_COMMAND,
     CANONICAL_MCP_ENV,
     LEAN_BODY,
+    LEAN_GATE_HOOK_PATH,
     LEAN_SKILL_MD,
     SENTINEL_AGENTS_END,
     SENTINEL_AGENTS_START,
@@ -706,6 +707,61 @@ def _repair_lean_skill_symlink(path: Path, label: str, dry_run: bool = False) ->
                         message=f"Created {link_desc}", path=str(path), diff=link_desc)
 
 
+_LEAN_GATE_HOOK = Path(LEAN_GATE_HOOK_PATH)
+_GLOBAL_SETTINGS = Path.home() / ".claude" / "settings.json"
+
+
+def _verify_lean_gate() -> ConfigResult:
+    label = "global/lean-gate"
+    if not _LEAN_GATE_HOOK.exists() or not os.access(_LEAN_GATE_HOOK, os.X_OK):
+        return ConfigResult(tool=label, status="missing",
+                            message="Hook missing or not executable", path=str(_LEAN_GATE_HOOK))
+    try:
+        data = json.loads(_GLOBAL_SETTINGS.read_text())
+    except Exception as exc:
+        return ConfigResult(tool=label, status="error", message=str(exc), path=str(_GLOBAL_SETTINGS))
+    cmd = LEAN_GATE_HOOK_PATH
+    pre = data.get("hooks", {}).get("PreToolUse", [])
+    wired = any(any(h.get("command") == cmd for h in e.get("hooks", [])) for e in pre)
+    if wired:
+        return ConfigResult(tool=label, status="already_ok",
+                            message="lean-gate hook wired", path=str(_LEAN_GATE_HOOK))
+    return ConfigResult(tool=label, status="missing",
+                        message="lean-gate wiring missing", path=str(_GLOBAL_SETTINGS))
+
+
+def _repair_lean_gate(dry_run: bool = False) -> ConfigResult:
+    label = "global/lean-gate"
+    if not _LEAN_GATE_HOOK.exists():
+        return ConfigResult(tool=label, status="error",
+                            message="Hook script missing — recreate ~/.claude/hooks/lean-gate.sh first",
+                            path=str(_LEAN_GATE_HOOK))
+    if not os.access(_LEAN_GATE_HOOK, os.X_OK) and not dry_run:
+        _LEAN_GATE_HOOK.chmod(_LEAN_GATE_HOOK.stat().st_mode | 0o111)
+    try:
+        old_text = _GLOBAL_SETTINGS.read_text() if _GLOBAL_SETTINGS.exists() else "{}"
+        data = json.loads(old_text)
+    except Exception as exc:
+        return ConfigResult(tool=label, status="error", message=str(exc), path=str(_GLOBAL_SETTINGS))
+    cmd = LEAN_GATE_HOOK_PATH
+    pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    if not any(any(h.get("command") == cmd for h in e.get("hooks", [])) for e in pre):
+        pre.append({"matcher": "Edit|Write|MultiEdit|NotebookEdit",
+                    "hooks": [{"type": "command", "command": cmd, "timeout": 8}]})
+    new_text = json.dumps(data, indent=2) + "\n"
+    if old_text.strip() == new_text.strip():
+        return ConfigResult(tool=label, status="already_ok",
+                            message="Already in sync", path=str(_GLOBAL_SETTINGS))
+    diff = _diff(old_text, new_text, str(_GLOBAL_SETTINGS))
+    if dry_run:
+        return ConfigResult(tool=label, status="configured",
+                            message="[DRY-RUN] Would update lean-gate config",
+                            path=str(_GLOBAL_SETTINGS), diff=diff)
+    _GLOBAL_SETTINGS.write_text(new_text)
+    return ConfigResult(tool=label, status="configured",
+                        message="Repaired lean-gate wiring", path=str(_GLOBAL_SETTINGS), diff=diff)
+
+
 def verify_all() -> list[ConfigResult]:
     results: list[ConfigResult] = []
     for kind, path, label in _SYSTEM_PROMPT_TARGETS:
@@ -729,6 +785,7 @@ def verify_all() -> list[ConfigResult]:
             results.append(_verify_lean_skill_file(path, label))
         elif kind == "symlink":
             results.append(_verify_lean_skill_symlink(path, label))
+    results.append(_verify_lean_gate())
     results.append(verify_bash_aliases())
     return results
 
@@ -756,6 +813,7 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
             results.append(_repair_lean_skill_file(path, label, dry_run=dry_run))
         elif kind == "symlink":
             results.append(_repair_lean_skill_symlink(path, label, dry_run=dry_run))
+    results.append(_repair_lean_gate(dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
     return results
 
