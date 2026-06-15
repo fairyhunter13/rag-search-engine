@@ -32,9 +32,6 @@ class Watcher:
             with contextlib.suppress(Exception):
                 self._observer.schedule(self._handler, project_path, recursive=True)  # type: ignore[attr-defined]
 
-    def unwatch(self, project_path: str) -> None:
-        self._paths.pop(project_path, None)
-
     def start(self) -> None:
         self._stop.clear()
         if not self._try_inotify():
