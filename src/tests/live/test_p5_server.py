@@ -385,7 +385,7 @@ def test_build_hierarchy_empty_body_not_500(live_client):
         None,
     )
     assert project, "At least one indexed project required"
-    r = live_client.post(f"/api/build_hierarchy?project={project}", content=b"")
+    r = live_client.post(f"/api/build_hierarchy?project={project}", data=b"")
     assert r.status_code != 500, f"empty body must not 500: {r.status_code} {r.text[:80]}"
     assert r.status_code in (200, 400)
 
@@ -399,7 +399,7 @@ def test_build_hierarchy_action_wiki(live_client):
         None,
     )
     assert project, "At least one indexed project required"
-    r = live_client.post(f"/api/build_hierarchy?project={project}&action=wiki", content=b"")
+    r = live_client.post(f"/api/build_hierarchy?project={project}&action=wiki", data=b"")
     assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
     assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
 
