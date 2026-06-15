@@ -122,16 +122,6 @@ class GraphStore:
         keys = ("sid", "name", "qualified_name", "kind", "file", "start_line", "end_line", "language", "intent")
         return [dict(zip(keys, r, strict=True)) for r in rows]
 
-    def has_cross_community_edges(self) -> bool:
-        row = self._con.execute(
-            """SELECT 1 FROM edges e
-               JOIN symbols s1 ON e.caller_sid=s1.sid
-               JOIN symbols s2 ON e.callee_sid=s2.sid
-               WHERE s1.community_id IS NOT NULL AND s2.community_id IS NOT NULL
-                 AND s1.community_id != s2.community_id LIMIT 1"""
-        ).fetchone()
-        return row is not None
-
     def commit(self) -> None:
         self._con.commit()
 
