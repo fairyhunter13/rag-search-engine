@@ -8,17 +8,29 @@ from opencode_search.core.config import project_graph_db
 
 
 async def _api_build_hierarchy(request: Request) -> JSONResponse:
-    body = await request.json()
-    project_path = body.get("project_path", "")
+    project_path = request.query_params.get("project", "")
+    action = request.query_params.get("action", "hierarchy")
     if not project_path:
-        return JSONResponse({"error": "project_path required"}, status_code=400)
+        try:
+            body = await request.json()
+            project_path = body.get("project_path", "")
+            action = body.get("action", action)
+        except Exception:
+            pass
+    if not project_path:
+        return JSONResponse({"error": "project required"}, status_code=400)
+    from opencode_search.core.config import project_wiki_dir
     from opencode_search.graph.store import GraphStore
     from opencode_search.kb.hierarchy import build_hierarchy
+    from opencode_search.kb.wiki import build_wiki
     gdb = project_graph_db(project_path)
     if not gdb.exists():
         return JSONResponse({"error": "not indexed"}, status_code=404)
     gs = GraphStore(gdb)
     try:
+        if action == "wiki":
+            n = build_wiki(gs, project_wiki_dir(project_path))
+            return JSONResponse({"status": "ok", "pages_written": n})
         n = build_hierarchy(gs)
         return JSONResponse({"status": "ok", "communities_built": n})
     finally:
