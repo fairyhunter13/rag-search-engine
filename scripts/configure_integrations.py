@@ -36,6 +36,8 @@ from integrations.canonical import (
     SENTINEL_AGENTS_START,
     SENTINEL_CLAUDE_END,
     SENTINEL_CLAUDE_START,
+    SENTINEL_LEAN_AGENTS_END,
+    SENTINEL_LEAN_AGENTS_START,
     SENTINEL_LEAN_END,
     SENTINEL_LEAN_START,
 )
@@ -159,17 +161,23 @@ def _verify_agents_md(md_path: Path, label: str) -> ConfigResult:
                             message=f"AGENTS.md not found at {md_path}", path=str(md_path))
     text = md_path.read_text()
     from integrations.canonical import CANONICAL_BODY
-    if _verify_sentinel_block(text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY):
+    ose_ok = _verify_sentinel_block(text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
+    lean_ok = _verify_sentinel_block(text, SENTINEL_LEAN_AGENTS_START, SENTINEL_LEAN_AGENTS_END, LEAN_BODY)
+    if ose_ok and lean_ok:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"System prompt in sync: {md_path}", path=str(md_path))
+    if not ose_ok:
+        return ConfigResult(tool=label, status="missing",
+                            message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
+                        message=f"Lean-change block drifted or missing: {md_path}", path=str(md_path))
 
 
 def _repair_agents_md(md_path: Path, label: str, dry_run: bool = False) -> ConfigResult:
     from integrations.canonical import CANONICAL_BODY
     old_text = md_path.read_text() if md_path.exists() else ""
     new_text = _replace_sentinel_block(old_text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
+    new_text = _replace_sentinel_block(new_text, SENTINEL_LEAN_AGENTS_START, SENTINEL_LEAN_AGENTS_END, LEAN_BODY)
     if old_text == new_text:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"Already in sync: {md_path}", path=str(md_path))
@@ -319,7 +327,12 @@ def _build_hermes_config_text() -> str:
                  .replace("`", "'")
                  .replace("→", "->")
                  .replace("—", "--"))
-    wrapped = f"{SENTINEL_AGENTS_START}\n{safe_body}\n{SENTINEL_AGENTS_END}"
+    safe_lean = (LEAN_BODY
+                 .replace("`", "'")
+                 .replace("→", "->")
+                 .replace("—", "--"))
+    wrapped = (f"{SENTINEL_AGENTS_START}\n{safe_body}\n{SENTINEL_AGENTS_END}"
+               f"\n{SENTINEL_LEAN_AGENTS_START}\n{safe_lean}\n{SENTINEL_LEAN_AGENTS_END}")
     # Indent every line by 4 spaces for YAML block scalar under `system_prompt: |`
     indented = "\n".join("    " + ln for ln in wrapped.splitlines())
     return (
@@ -391,7 +404,9 @@ def _verify_hermes_agent_prompt(config_path: Path) -> ConfigResult:
     # In the YAML literal block scalar, sentinel lines are indented 4 spaces
     indented_start = "    " + SENTINEL_AGENTS_START
     indented_end = "    " + SENTINEL_AGENTS_END
-    if "agent:" not in text or indented_start not in text or indented_end not in text:
+    indented_lean_start = "    " + SENTINEL_LEAN_AGENTS_START
+    if ("agent:" not in text or indented_start not in text
+            or indented_end not in text or indented_lean_start not in text):
         return ConfigResult(tool=label, status="missing",
                             message="hermes agent.system_prompt missing or no sentinel block", path=str(config_path))
     # Compare file content against the canonical full config text
