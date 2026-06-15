@@ -55,6 +55,9 @@ class Embedder:
         # no batch ever produces sequences longer than 512 tokens — 8192-token
         # sequences cause FusedMatMul to request 24 GB workspace on a 16 GB GPU.
         self._model.model.tokenizer.enable_truncation(max_length=512)
+        providers = self._model.model.model.get_providers()
+        if "CUDAExecutionProvider" not in providers:
+            raise RuntimeError(f"Embedder bound to CPU (providers={providers}). CPU inference is forbidden.")
 
     def warmup(self) -> None:
         if self._model is None:
@@ -95,15 +98,15 @@ class Reranker:
             model_name=self._model_name,
             providers=["CUDAExecutionProvider"],
         )
+        providers = self._model.model.model.get_providers()
+        if "CUDAExecutionProvider" not in providers:
+            raise RuntimeError(f"Reranker bound to CPU (providers={providers}). CPU inference is forbidden.")
 
     def rerank(self, query: str, passages: list[str]) -> list[float]:
         if not passages:
             return []
         if self._model is None:
-            try:
-                self._init()
-            except Exception:
-                return [1.0] * len(passages)
+            self._init()
         with _GPU_INFER_LOCK:
             scores = list(self._model.rerank(query, passages))
         return [float(s) for s in scores]

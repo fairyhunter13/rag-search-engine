@@ -13,6 +13,12 @@ def test_no_cpu_fallback(cuda_ep):
     assert "CUDAExecutionProvider" in ort.get_available_providers()
 
 
+def test_embedder_bound_to_cuda(embedder):
+    """P32.3: verify the real ONNX session bound to CUDA EP, not just that it's compiled in."""
+    providers = embedder._model.model.model.get_providers()
+    assert providers[0] == "CUDAExecutionProvider", f"Embedder not on GPU: {providers}"
+
+
 def test_embed_returns_float16(embedder):
     texts = ["def hello():", "class Foo:", "import os"]
     vecs = embedder.embed(texts)
