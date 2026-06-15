@@ -126,17 +126,21 @@ def handle_overview(project_path: str, what: str) -> str:
                     from opencode_search.core.registry import get_project
                     e = get_project(project_path)
                     total = gs.community_count()
-                    summarized = c.execute(
-                        "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
-                    ).fetchone()[0]
-                    pct = round(summarized / total * 100, 1) if total else 0.0
+                    l1_total = c.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
+                    l1_sum = c.execute("SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
+                    l2_total = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
+                    l2_sum = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
+                    l1_pct = round(l1_sum / l1_total * 100, 1) if l1_total else 100.0
+                    l2_pct = round(l2_sum / l2_total * 100, 1) if l2_total else 100.0
+                    pct = round(min(l1_pct, l2_pct), 1)
                     kb_state = ("indexing" if not project_vector_db(project_path).exists() else
                                 "ready" if pct >= 95 else
-                                "enriching" if pct > 0 else "searchable")
+                                "enriching" if l1_pct > 0 else "searchable")
                     return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
                                        "file_count": e.file_count if e else 0,
                                        "symbols": gs.symbol_count(), "communities": total,
-                                       "kb_state": kb_state, "enriched_pct": pct})
+                                       "kb_state": kb_state, "enriched_pct": pct,
+                                       "l1_enriched_pct": l1_pct, "l2_enriched_pct": l2_pct})
                 if what == "import_cycles":
                     cycs = _find_import_cycles(c)
                     cnt = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
