@@ -323,9 +323,9 @@ def test_kb_health_measures_summary_not_title(live_client):
     gdb = project_graph_db(project)
     con = sqlite3.connect(str(gdb))
     try:
-        total = con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
+        total = con.execute("SELECT COUNT(*) FROM communities WHERE level = 1").fetchone()[0]
         summarized = con.execute(
-            "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
+            "SELECT COUNT(*) FROM communities WHERE level = 1 AND summary IS NOT NULL AND summary != ''"
         ).fetchone()[0]
     finally:
         con.close()

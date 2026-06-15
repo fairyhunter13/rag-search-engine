@@ -189,7 +189,7 @@ def _enrich_project(project_path: str) -> None:
     gs = GraphStore(project_graph_db(project_path))
     try:
         for (cid,) in gs._con.execute(
-            "SELECT id FROM communities WHERE summary IS NULL OR summary = ''"
+            "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1"
         ).fetchall():
             enrich_community(gs, cid)
             if gpu_temp_c() > THERMAL_MAX_C:
@@ -219,7 +219,7 @@ def burst_enrich_federation(root_path: str) -> dict:
         try:
             total = gs._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
             pending = gs._con.execute(
-                "SELECT COUNT(*) FROM communities WHERE summary IS NULL OR summary = ''"
+                "SELECT COUNT(*) FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1"
             ).fetchone()[0]
         finally:
             gs.close()

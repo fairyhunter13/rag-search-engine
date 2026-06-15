@@ -51,6 +51,6 @@ def build_hierarchy(store: GraphStore, *, resolution: float = 1.0) -> int:
     counts = Counter(l2_mapping.values())
     for l2_id, cnt in counts.items():
         store.upsert_community(_L2_OFFSET + l2_id, level=2,
-                               title=f"Domain {l2_id}", summary="", member_count=cnt)
+                               title=f"Domain {l2_id}", summary=None, member_count=cnt)
     store.commit()
     return len(counts)
