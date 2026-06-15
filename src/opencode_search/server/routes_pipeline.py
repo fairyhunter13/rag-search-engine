@@ -41,7 +41,7 @@ async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
         if gdb.exists():
             try:
                 with sqlite3.connect(str(gdb)) as con:
-                    n = con.execute("SELECT COUNT(*) FROM communities WHERE title IS NULL").fetchone()[0]
+                    n = con.execute("SELECT COUNT(*) FROM communities WHERE summary IS NULL OR summary = ''").fetchone()[0]
                     if n:
                         pending.append(p.path)
             except Exception:

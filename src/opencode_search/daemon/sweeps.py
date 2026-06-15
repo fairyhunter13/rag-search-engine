@@ -219,7 +219,7 @@ def burst_enrich_federation(root_path: str) -> dict:
         try:
             total = gs._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
             pending = gs._con.execute(
-                "SELECT COUNT(*) FROM communities WHERE title IS NULL"
+                "SELECT COUNT(*) FROM communities WHERE summary IS NULL OR summary = ''"
             ).fetchone()[0]
         finally:
             gs.close()
