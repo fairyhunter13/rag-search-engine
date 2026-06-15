@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ from integrations.canonical import (
     CANONICAL_MCP_COMMAND,
     CANONICAL_MCP_ENV,
     LEAN_BODY,
+    LEAN_SKILL_MD,
     SENTINEL_AGENTS_END,
     SENTINEL_AGENTS_START,
     SENTINEL_CLAUDE_END,
@@ -613,6 +615,81 @@ _MCP_TARGETS: list[tuple[str, Path, str]] = [
      "opencode-personal/opencode.jsonc"),
 ]
 
+# ---------------------------------------------------------------------------
+# Lean-change skill file + symlinks
+# ---------------------------------------------------------------------------
+
+_LEAN_SKILL_MAIN = _H / ".claude" / "skills" / "lean-change" / "SKILL.md"
+
+# opencode-default + opencode-personal: NO entry here — both scan ~/.claude/skills directly,
+# so the real file at _LEAN_SKILL_MAIN is auto-discovered without any symlink.
+_LEAN_SKILL_TARGETS: list[tuple[str, Path, str]] = [
+    ("real",    _LEAN_SKILL_MAIN,
+                "lean-skill(main)/SKILL.md"),
+    ("symlink", _H / ".claude-account1" / "skills" / "lean-change" / "SKILL.md",
+                "lean-skill(account1)/SKILL.md"),
+    ("symlink", _H / ".claude-account2" / "skills" / "lean-change" / "SKILL.md",
+                "lean-skill(account2)/SKILL.md"),
+    ("symlink", _H / ".codex"  / "skills" / "lean-change" / "SKILL.md",
+                "lean-skill(codex)/SKILL.md"),
+    ("symlink", _H / ".hermes" / "skills" / "lean-change" / "SKILL.md",
+                "lean-skill(hermes)/SKILL.md"),
+]
+
+
+def _verify_lean_skill_file(path: Path, label: str) -> ConfigResult:
+    if not path.exists():
+        return ConfigResult(tool=label, status="missing",
+                            message=f"Skill file missing: {path}", path=str(path))
+    if path.read_text().strip() == LEAN_SKILL_MD.strip():
+        return ConfigResult(tool=label, status="already_ok",
+                            message=f"Skill file in sync: {path}", path=str(path))
+    return ConfigResult(tool=label, status="missing",
+                        message=f"Skill file drifted: {path}", path=str(path))
+
+
+def _repair_lean_skill_file(path: Path, label: str, dry_run: bool = False) -> ConfigResult:
+    old_text = path.read_text() if path.exists() else ""
+    if old_text.strip() == LEAN_SKILL_MD.strip():
+        return ConfigResult(tool=label, status="already_ok",
+                            message=f"Already in sync: {path}", path=str(path))
+    diff = _diff(old_text, LEAN_SKILL_MD, str(path))
+    if dry_run:
+        return ConfigResult(tool=label, status="configured",
+                            message=f"[DRY-RUN] Would update {path}", path=str(path), diff=diff)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(LEAN_SKILL_MD)
+    return ConfigResult(tool=label, status="configured",
+                        message=f"Updated skill file: {path}", path=str(path), diff=diff)
+
+
+def _verify_lean_skill_symlink(path: Path, label: str) -> ConfigResult:
+    if not path.is_symlink():
+        msg = (f"Skill is a real file, not a symlink: {path}"
+               if path.exists() else f"Skill symlink missing: {path}")
+        return ConfigResult(tool=label, status="missing", message=msg, path=str(path))
+    if path.resolve() != _LEAN_SKILL_MAIN.resolve():
+        return ConfigResult(tool=label, status="missing",
+                            message=f"Skill symlink wrong target: {path}", path=str(path))
+    return ConfigResult(tool=label, status="already_ok",
+                        message=f"Skill symlink in sync: {path}", path=str(path))
+
+
+def _repair_lean_skill_symlink(path: Path, label: str, dry_run: bool = False) -> ConfigResult:
+    if path.is_symlink() and path.resolve() == _LEAN_SKILL_MAIN.resolve():
+        return ConfigResult(tool=label, status="already_ok",
+                            message=f"Already in sync: {path}", path=str(path))
+    link_desc = f"symlink {path} -> {_LEAN_SKILL_MAIN}"
+    if dry_run:
+        return ConfigResult(tool=label, status="configured",
+                            message=f"[DRY-RUN] Would create {link_desc}", path=str(path), diff=link_desc)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    os.symlink(_LEAN_SKILL_MAIN, path)
+    return ConfigResult(tool=label, status="configured",
+                        message=f"Created {link_desc}", path=str(path), diff=link_desc)
+
 
 def verify_all() -> list[ConfigResult]:
     results: list[ConfigResult] = []
@@ -632,6 +709,11 @@ def verify_all() -> list[ConfigResult]:
             results.append(_verify_hermes_yaml(path))
         elif kind == "opencode":
             results.append(_verify_opencode_jsonc(path, label))
+    for kind, path, label in _LEAN_SKILL_TARGETS:
+        if kind == "real":
+            results.append(_verify_lean_skill_file(path, label))
+        elif kind == "symlink":
+            results.append(_verify_lean_skill_symlink(path, label))
     results.append(verify_bash_aliases())
     return results
 
@@ -654,6 +736,11 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
             results.append(_repair_hermes_yaml(path, dry_run=dry_run))
         elif kind == "opencode":
             results.append(_repair_opencode_jsonc(path, label, dry_run=dry_run))
+    for kind, path, label in _LEAN_SKILL_TARGETS:
+        if kind == "real":
+            results.append(_repair_lean_skill_file(path, label, dry_run=dry_run))
+        elif kind == "symlink":
+            results.append(_repair_lean_skill_symlink(path, label, dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
     return results
 
