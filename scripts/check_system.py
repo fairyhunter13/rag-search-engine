@@ -51,23 +51,19 @@ def _warn(msg: str, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 CORE_MODULES = [
-    "opencode_search.mcp",
-    "opencode_search.mcp_bridge",
-    "opencode_search.embeddings",
-    "opencode_search.config",
+    "opencode_search.server.mcp",
+    "opencode_search.core.config",
+    "opencode_search.core.registry",
+    "opencode_search.core.gpu",
+    "opencode_search.embed",
+    "opencode_search.index.store",
+    "opencode_search.graph.store",
+    "opencode_search.kb.hierarchy",
+    "opencode_search.kb.wiki",
+    "opencode_search.query.search",
     "opencode_search.daemon",
-    "opencode_search.indexer",
-    "opencode_search.search",
-    "opencode_search.storage",
     "opencode_search.cli",
-    "opencode_search.handlers",
-    "opencode_search.enricher.client",
-    "opencode_search.graph",
-    "opencode_search.wiki",
-    "opencode_search.metrics",
-    "opencode_search.watcher",
-    "opencode_search.chunker",
-    "opencode_search.discover",
+    "opencode_search.server._overview",
 ]
 
 
@@ -86,19 +82,19 @@ def check_imports() -> None:
 # ---------------------------------------------------------------------------
 
 EXPECTED_CONFIG: dict[str, str] = {
-    "DEFAULT_EMBED_MODEL": "jinaai/jina-embeddings-v2-base-code",
-    "DEFAULT_RERANK_MODEL": "jinaai/jina-reranker-v1-turbo-en",
-    "DEFAULT_LLM_PROVIDER": "ollama",
-    "DEFAULT_LLM_MODEL": "phi4-mini:3.8b",
+    "EMBED_MODEL": "jinaai/jina-embeddings-v2-base-code",
+    "RERANK_MODEL": "jinaai/jina-reranker-v1-turbo-en",
+    "LLM_PROVIDER": "ollama",
+    "LLM_MODEL": "qwen3-enrich:1.7b",
 }
 
 
 def check_config() -> None:
     print("\n### Config constants")
     try:
-        from opencode_search import config
+        from opencode_search.core import config
     except ImportError as exc:
-        _fail("opencode_search.config importable", str(exc))
+        _fail("opencode_search.core.config importable", str(exc))
         return
 
     for name, default_val in EXPECTED_CONFIG.items():
@@ -120,13 +116,13 @@ def check_config() -> None:
 def check_gpu() -> None:
     print("\n### GPU")
     try:
-        from opencode_search.embeddings import assert_gpu_available
-        assert_gpu_available()
-        _ok("assert_gpu_available() — CUDA provider present")
+        from opencode_search.core.gpu import assert_cuda_available
+        assert_cuda_available()
+        _ok("assert_cuda_available() — CUDA provider present")
     except SystemExit as exc:
-        _fail("assert_gpu_available()", f"SystemExit({exc.code})")
+        _fail("assert_cuda_available()", f"SystemExit({exc.code})")
     except Exception as exc:
-        _fail("assert_gpu_available()", str(exc))
+        _fail("assert_cuda_available()", str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -152,117 +148,30 @@ def check_daemon() -> None:
 # Section: MCP tools registered
 # ---------------------------------------------------------------------------
 
-EXPECTED_MCP_TOOLS = [
-    "search_code",
-    "index_project",
-    "project_status",
-    "list_indexed_projects",
-    "stop_watching",
-    "search_metrics",
-    "get_symbol",
-    "get_callers",
-    "get_callees",
-    "trace_path",
-    "detect_impact",
-    "get_communities",
-    "global_search",
-    "enrich_project",
-    "get_symbol_intent",
-    "wiki_generate",
-    "wiki_ingest",
-    "wiki_query",
-    "wiki_lint",
-    "search_docs",
-]
-
-EXPECTED_BRIDGE_TOOLS = [
-    "search_code",
-    "index_project",
-    "get_symbol",
-    "get_callers",
-    "get_callees",
-    "trace_path",
-    "detect_impact",
-    "get_communities",
-    "global_search",
-    "enrich_project",
-    "get_symbol_intent",
-    "wiki_generate",
-    "wiki_ingest",
-    "wiki_query",
-    "wiki_lint",
-    "search_docs",
-]
-
-
-async def _list_tool_names_async(server_obj: object) -> list[str]:
-    tools = await server_obj.list_tools()  # type: ignore[attr-defined]
-    return [t.name for t in tools]
+EXPECTED_MCP_TOOLS = {"search", "ask", "graph", "overview", "index"}
 
 
 def check_mcp_tools() -> None:
-    print("\n### MCP tools (mcp.py)")
+    print("\n### MCP tools (server/mcp.py)")
     try:
-        import opencode_search.mcp as mcp_mod
-        tool_names = set(asyncio.run(_list_tool_names_async(mcp_mod.mcp)))
-        _ok(f"{len(tool_names)} tools registered in mcp.py")
-        for tool in EXPECTED_MCP_TOOLS:
-            if tool in tool_names:
-                _ok(f"  {tool}")
-            else:
-                _fail(f"  {tool}", "missing from mcp.py")
+        from opencode_search.server.mcp import mcp as _mcp
+        tool_names = set(t.name for t in asyncio.run(_mcp.list_tools()))
+        if tool_names == EXPECTED_MCP_TOOLS:
+            _ok(f"Exactly {len(EXPECTED_MCP_TOOLS)} tools registered: {sorted(EXPECTED_MCP_TOOLS)}")
+        else:
+            for t in sorted(EXPECTED_MCP_TOOLS - tool_names):
+                _fail(f"  tool missing: {t}")
+            for t in sorted(tool_names - EXPECTED_MCP_TOOLS):
+                _warn(f"  unexpected tool: {t}")
     except Exception as exc:
-        _fail("opencode_search.mcp importable and tools listable", str(exc))
-
-
-def check_bridge_tools() -> None:
-    print("\n### MCP bridge tools (mcp_bridge.py)")
-    try:
-        import opencode_search.mcp_bridge as bridge_mod
-        tool_names = set(asyncio.run(_list_tool_names_async(bridge_mod.bridge)))
-        _ok(f"{len(tool_names)} tools registered in mcp_bridge.py")
-        for tool in EXPECTED_BRIDGE_TOOLS:
-            if tool in tool_names:
-                _ok(f"  {tool}")
-            else:
-                _fail(f"  {tool}", "missing from mcp_bridge.py")
-    except Exception as exc:
-        _fail("opencode_search.mcp_bridge importable and tools listable", str(exc))
-
-
-# ---------------------------------------------------------------------------
-# Section: Handler modules
-# ---------------------------------------------------------------------------
-
-HANDLER_MODULES = [
-    "opencode_search.handlers._common",
-    "opencode_search.handlers._index",
-    "opencode_search.handlers._query",
-    "opencode_search.handlers._watch",
-    "opencode_search.handlers._graph",
-    "opencode_search.handlers._enrichment",
-    "opencode_search.handlers._wiki",
-]
-
-
-def check_handler_modules() -> None:
-    print("\n### Handler modules")
-    for mod in HANDLER_MODULES:
-        try:
-            importlib.import_module(mod)
-            _ok(f"import {mod}")
-        except ImportError as exc:
-            _fail(f"import {mod}", str(exc))
+        _fail("server.mcp importable and tools listable", str(exc))
 
 
 # ---------------------------------------------------------------------------
 # Section: CLI commands
 # ---------------------------------------------------------------------------
 
-CLI_COMMANDS = [
-    "opencode-search",
-    "opencode-search-init",
-]
+CLI_COMMANDS = ["opencode-search"]
 
 VENV_BIN = Path(__file__).resolve().parent.parent / ".venv" / "bin"
 
@@ -288,62 +197,21 @@ def check_cli() -> None:
 def check_llm_provider() -> None:
     print("\n### LLM provider")
     try:
-        from opencode_search.config import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL
-        from opencode_search.enricher.client import (
-            ClaudeCodeClient,
-            CodexClient,
-            OllamaClient,
-        )
+        from opencode_search.core.config import LLM_PROVIDER, LLM_MODEL, QUERY_LLM_PROVIDER, QUERY_LLM_MODEL
     except ImportError as exc:
-        _fail("enricher.client importable", str(exc))
+        _fail("core.config importable", str(exc))
         return
-
-    provider = DEFAULT_LLM_PROVIDER.lower()
-    _ok(f"OPENCODE_LLM_PROVIDER = {provider}")
-    _ok(f"OPENCODE_LLM_MODEL    = {DEFAULT_LLM_MODEL}")
-
-    if provider == "none":
-        _warn("LLM enrichment disabled (OPENCODE_LLM_PROVIDER=none)")
-        return
-
-    if provider == "ollama":
+    _ok(f"OPENCODE_LLM_PROVIDER = {LLM_PROVIDER}")
+    _ok(f"OPENCODE_LLM_MODEL    = {LLM_MODEL}")
+    _ok(f"OPENCODE_QUERY_LLM_PROVIDER = {QUERY_LLM_PROVIDER}")
+    _ok(f"OPENCODE_QUERY_LLM_MODEL    = {QUERY_LLM_MODEL}")
+    if LLM_PROVIDER == "ollama":
         base_url = os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434")
-        client = OllamaClient(base_url=base_url, model=DEFAULT_LLM_MODEL)
-        if client.is_available():
-            _ok(f"Ollama reachable at {base_url}")
-        else:
-            _fail(f"Ollama reachable at {base_url}", required=False)
-
-    elif provider == "anthropic":
-        api_key = os.environ.get("OPENCODE_LLM_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
-        if api_key:
-            _ok("ANTHROPIC_API_KEY set")
-        else:
-            _fail("ANTHROPIC_API_KEY set (required for anthropic provider)", required=False)
-
-    elif provider == "openai":
-        api_key = os.environ.get("OPENCODE_LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
-        if api_key:
-            _ok("OPENAI_API_KEY set")
-        else:
-            _fail("OPENAI_API_KEY set (required for openai provider)", required=False)
-
-    elif provider == "claude-code":
-        client = ClaudeCodeClient()
-        if client.is_available():
-            _ok(f"claude CLI found at {shutil.which('claude')}")
-        else:
-            _fail("claude CLI found on PATH", required=False)
-
-    elif provider == "codex":
-        client = CodexClient()
-        if client.is_available():
-            _ok(f"codex CLI found at {shutil.which('codex')}")
-        else:
-            _fail("codex CLI found on PATH", required=False)
-
-    else:
-        _warn(f"Unknown provider {provider!r} — no availability check performed")
+        try:
+            with urllib.request.urlopen(f"{base_url}/api/tags", timeout=3) as _r:
+                _ok(f"Ollama reachable at {base_url}")
+        except Exception as exc:
+            _fail(f"Ollama reachable at {base_url}", str(exc), required=False)
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +266,6 @@ def main() -> int:
     check_gpu()
     check_daemon()
     check_mcp_tools()
-    check_bridge_tools()
-    check_handler_modules()
     check_cli()
     check_llm_provider()
 

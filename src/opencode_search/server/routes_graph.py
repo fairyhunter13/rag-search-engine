@@ -63,12 +63,8 @@ async def _api_graph_export(request: Request) -> JSONResponse:
     if gs is None:
         return JSONResponse({"nodes": [], "edges": []})
     try:
-        try:
-            nodes = gs.conn.execute("SELECT sid AS id, name, kind FROM symbols LIMIT ?", (max_nodes,)).fetchall()
-            edges = gs.conn.execute("SELECT caller_sid AS source_id, callee_sid AS target_id FROM edges LIMIT ?", (max_nodes,)).fetchall()
-        except Exception:
-            nodes = gs.conn.execute("SELECT id, name, kind FROM nodes LIMIT ?", (max_nodes,)).fetchall()
-            edges = gs.conn.execute("SELECT from_id AS source_id, to_id AS target_id, kind FROM edges LIMIT ?", (max_nodes,)).fetchall()
+        nodes = gs.conn.execute("SELECT sid AS id, name, kind FROM symbols LIMIT ?", (max_nodes,)).fetchall()
+        edges = gs.conn.execute("SELECT caller_sid AS source_id, callee_sid AS target_id FROM edges LIMIT ?", (max_nodes,)).fetchall()
         return JSONResponse({"nodes": [dict(n) for n in nodes], "edges": [dict(e) for e in edges]})
     finally:
         gs.close()
@@ -96,18 +92,11 @@ async def _api_surprising_connections(request: Request) -> JSONResponse:
     if gs is None:
         return JSONResponse({"connections": []})
     try:
-        try:
-            rows = gs.conn.execute(
-                "SELECT s.name as src, t.name as tgt FROM edges e "
-                "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
-                "WHERE s.community_id != t.community_id LIMIT 20"
-            ).fetchall()
-        except Exception:
-            rows = gs.conn.execute(
-                "SELECT s.name as src, t.name as tgt FROM edges e "
-                "JOIN nodes s ON e.from_id=s.id JOIN nodes t ON e.to_id=t.id "
-                "WHERE s.community_id != t.community_id LIMIT 20"
-            ).fetchall()
+        rows = gs.conn.execute(
+            "SELECT s.name as src, t.name as tgt FROM edges e "
+            "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
+            "WHERE s.community_id != t.community_id LIMIT 20"
+        ).fetchall()
         return JSONResponse({"connections": [dict(r) for r in rows]})
     finally:
         gs.close()
