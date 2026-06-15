@@ -48,6 +48,21 @@ def _open(db_path: Path) -> sqlite3.Connection:
     if "node_count" in _cols and "member_count" not in _cols:
         con.execute("ALTER TABLE communities RENAME COLUMN node_count TO member_count")
         con.commit()
+    # Schema migration: older DBs used edges(from_id,to_id,kind,...) + a nodes table.
+    # Those rows are fully orphaned (0 endpoints match current symbols.sid) so we drop
+    # and recreate; the current schema is repopulated by the next full re-index.
+    _edge_cols = {r[1] for r in con.execute("PRAGMA table_info(edges)")}
+    if "caller_sid" not in _edge_cols:
+        con.executescript("""
+            DROP TABLE IF EXISTS edges;
+            DROP TABLE IF EXISTS nodes;
+            CREATE TABLE IF NOT EXISTS edges (
+                caller_sid TEXT,
+                callee_sid TEXT,
+                PRIMARY KEY (caller_sid, callee_sid)
+            );
+        """)
+        con.commit()
     return con
 
 
