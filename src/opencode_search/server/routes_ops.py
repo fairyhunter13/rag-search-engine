@@ -105,12 +105,33 @@ async def _api_git_hooks_post(request: Request) -> JSONResponse:
     return JSONResponse({"status": "uninstalled"})
 
 
+_event_subscribers: list[asyncio.Queue] = []
+
+
+def publish_event(evt: dict) -> None:
+    """Publish a job event to all active SSE subscribers (best-effort)."""
+    import contextlib
+    for q in list(_event_subscribers):
+        with contextlib.suppress(asyncio.QueueFull):
+            q.put_nowait(evt)
+
+
 async def _api_events_stream(request: Request) -> Response:
+    q: asyncio.Queue = asyncio.Queue(maxsize=32)
+    _event_subscribers.append(q)
+
     async def _gen():
-        yield b'data: {"type":"connected"}\n\n'
-        for _ in range(6):
-            await asyncio.sleep(10)
-            yield b'data: {"type":"keepalive"}\n\n'
+        try:
+            yield b'data: {"type":"connected"}\n\n'
+            while True:
+                try:
+                    evt = await asyncio.wait_for(q.get(), timeout=10.0)
+                    yield f"data: {json.dumps(evt)}\n\n".encode()
+                except TimeoutError:
+                    yield b'data: {"type":"keepalive"}\n\n'
+        finally:
+            _event_subscribers.remove(q)
+
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 

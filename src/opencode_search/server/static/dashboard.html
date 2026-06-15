@@ -614,7 +614,7 @@ async function loadPulse(){
 
     // Files tile
     const struct=ovr.status==='fulfilled'?ovr.value:{};
-    const fileCount=struct.total_files||struct.file_count||null;
+    const fileCount=struct.total_files||struct.files_with_symbols||null;
     setTile('files',fileCount,
       fileCount!=null?'indexed':'—',
       fileCount!=null?'ok':'warn',
@@ -961,7 +961,7 @@ function _setupAdminSSE(){
     let evt;try{evt=JSON.parse(e.data);}catch{return;}
     if(evt.type==='job')_upsertJobChip(evt);
   };
-  _adminSSE.onerror=()=>{_adminSSE=null;};
+  _adminSSE.onerror=()=>{};
 }
 
 function _upsertJobChip(evt){

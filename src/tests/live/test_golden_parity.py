@@ -10,7 +10,7 @@ pytestmark = pytest.mark.live
 
 # (what, required_top_level_keys, non_empty_if_indexed)
 OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
-    ("structure",            {"path", "symbols", "communities", "file_count"}, True),
+    ("structure",            {"path", "symbols", "communities", "files_with_symbols"}, True),
     ("communities",          {"communities"},                                  True),
     ("status",               {"path", "symbols", "communities"},              True),
     ("hierarchy",            {"hierarchy"},                                     True),

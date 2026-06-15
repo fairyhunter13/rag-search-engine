@@ -1,12 +1,14 @@
 """Chat (non-streaming) and chat_stream (SSE) routes — codex/gpt-5.4-mini ONLY."""
 from __future__ import annotations
 
+import asyncio
 import json
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from opencode_search.core.config import (
+    LLM_MODEL,
     QUERY_LLM_FALLBACK_MODEL,
     QUERY_LLM_MODEL,
     QUERY_LLM_PROVIDER,
@@ -71,10 +73,10 @@ async def _api_chat(request: Request) -> JSONResponse:
 
 async def _api_chat_stream(request: Request) -> Response:
     body = await request.json()
-    message = body.get("message", "")
-    project_path = body.get("project_path", "")
+    message = body.get("message") or body.get("query", "")
+    project_path = body.get("project_path") or body.get("project", "")
     if not message:
-        return Response('data: {"error":"message required"}\n\ndata: {"done":true}\n\n',
+        return Response('data: {"type":"error","message":"message required"}\n\ndata: {"type":"done"}\n\n',
                         media_type="text/event-stream", status_code=400)
     context = _build_context(project_path)
     sys_prompt = "You are a helpful code intelligence assistant."
@@ -90,10 +92,26 @@ async def _api_chat_stream(request: Request) -> Response:
                 else:
                     delta = chunk.delta.text if hasattr(chunk, "delta") else ""
                 if delta:
-                    yield f"data: {json.dumps({'text': delta})}\n\n".encode()
-        except Exception as exc:
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n".encode()
-        yield b'data: {"done":true}\n\n'
+                    yield f"data: {json.dumps({'type': 'token', 'text': delta})}\n\n".encode()
+        except Exception:
+            try:
+                import urllib.request as _ur
+                loop = asyncio.get_running_loop()
+                prompt = msgs[-1]["content"]
+                def _call():
+                    req = _ur.Request(
+                        "http://127.0.0.1:11434/api/generate",
+                        data=json.dumps({"model": LLM_MODEL, "prompt": prompt, "stream": False}).encode(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with _ur.urlopen(req, timeout=60) as r:
+                        return json.loads(r.read()).get("response", "")
+                answer = await loop.run_in_executor(None, _call)
+                if answer:
+                    yield f"data: {json.dumps({'type': 'token', 'text': answer})}\n\n".encode()
+            except Exception as exc2:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc2)})}\n\n".encode()
+        yield b'data: {"type":"done"}\n\n'
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 

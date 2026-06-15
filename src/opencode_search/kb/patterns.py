@@ -56,7 +56,7 @@ def _parse_deps(path: Path) -> list[str]:
 
 
 def detect_patterns(project_root: Path) -> dict:
-    """Return {languages, frameworks, dependencies, file_count} from a project tree."""
+    """Return {languages, frameworks, dependencies, source_file_count} from a project tree."""
     lang_counts: Counter[str] = Counter()
     deps: list[str] = []
 
@@ -72,5 +72,5 @@ def detect_patterns(project_root: Path) -> dict:
         "languages": dict(lang_counts.most_common(10)),
         "frameworks": frameworks,
         "dependencies": sorted(set(deps[:60])),
-        "file_count": sum(lang_counts.values()),
+        "source_file_count": sum(lang_counts.values()),
     }

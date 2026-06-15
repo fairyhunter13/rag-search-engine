@@ -120,3 +120,54 @@ def test_stdio_and_http_return_same_tool_set():
     assert stdio_names == http_names == _EXPECTED_TOOLS, (
         f"transport mismatch — stdio:{stdio_names} http:{http_names}"
     )
+
+
+def test_http_overview_unknown_what_returns_error_and_valid():
+    """G4 e2e: /mcp overview{what:'bogus'} returns error + valid list over real MCP transport."""
+    h, _ = _http_session()
+    r = requests.post(_MCP_URL, json={
+        "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+        "params": {"name": "overview", "arguments": {"what": "bogus_unknown_what"}},
+    }, headers=h, timeout=10)
+    assert r.status_code == 200
+    data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
+    assert "error" in data, f"G4: expected error key, got: {data}"
+    assert "valid" in data, f"G4: expected valid key, got: {data}"
+    assert "structure" in data["valid"], f"G4: 'structure' missing from valid: {data['valid']}"
+
+
+def test_http_graph_no_project_path_resolves():
+    """G5 e2e: /mcp graph{symbol} with no project_path resolves to first project."""
+    h, _ = _http_session()
+    r = requests.post(_MCP_URL, json={
+        "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+        "params": {"name": "graph", "arguments": {"symbol": "authenticate"}},
+    }, headers=h, timeout=15)
+    assert r.status_code == 200
+    data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
+    assert "matches" in data, f"G5: expected matches key (resolved to first project), got: {data}"
+
+
+def test_http_overview_structure_has_files_with_symbols():
+    """G3 e2e: /mcp overview{what:'structure'} exposes files_with_symbols (not file_count)."""
+    h, _ = _http_session()
+    r = requests.post(_MCP_URL, json={
+        "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+        "params": {"name": "overview", "arguments": {"what": "structure"}},
+    }, headers=h, timeout=10)
+    assert r.status_code == 200
+    data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
+    assert "files_with_symbols" in data, f"G3: expected files_with_symbols, got keys: {list(data)}"
+    assert "file_count" not in data, f"G3: old file_count key must be gone, got: {list(data)}"
+
+
+def test_http_overview_status_keeps_file_count():
+    """G3 e2e: /mcp overview{what:'status'} keeps file_count (registry value, canonical)."""
+    h, _ = _http_session()
+    r = requests.post(_MCP_URL, json={
+        "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+        "params": {"name": "overview", "arguments": {"what": "status"}},
+    }, headers=h, timeout=10)
+    assert r.status_code == 200
+    data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
+    assert "file_count" in data, f"G3: status must keep file_count (registry), got: {list(data)}"

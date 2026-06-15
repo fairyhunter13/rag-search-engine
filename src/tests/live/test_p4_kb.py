@@ -55,7 +55,7 @@ def test_patterns_detects_python_files(mini_stores):
     from opencode_search.kb.patterns import detect_patterns
     result = detect_patterns(mini_stores["proj"])
     assert "python" in result["languages"]
-    assert result["file_count"] >= 3
+    assert result["source_file_count"] >= 3
     # DELIBERATE: mini-project has no external packages; LLM may return [] for
     # frameworks and dependencies — testing structure, not real-project content.
     assert isinstance(result["frameworks"], list)
