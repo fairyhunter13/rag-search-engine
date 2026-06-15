@@ -137,3 +137,28 @@ def test_enrich_symbols_assigns_intent():
         assert count > 0
         assert any(r.get("intent") for r in store.list_symbols())
         store.close()
+
+
+# ── R3: cross-project edges-schema guard ─────────────────────────────────────
+
+def test_all_project_graph_dbs_have_canonical_edges_schema():
+    """Every registered project's graph.db must have caller_sid/callee_sid (not legacy from_id/to_id)."""
+    import sqlite3
+
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    for entry in list_projects():
+        if not entry.enabled:
+            continue
+        gdb = project_graph_db(entry.path)
+        if not gdb.exists():
+            continue
+        with sqlite3.connect(str(gdb)) as con:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(edges)")}
+        assert "caller_sid" in cols and "callee_sid" in cols, (
+            f"{entry.path}: edges schema missing caller_sid/callee_sid (found: {cols}). "
+            "Run GraphStore._open() migration or re-index."
+        )
+        assert "from_id" not in cols, (
+            f"{entry.path}: edges still has legacy 'from_id' column — migration did not run."
+        )
