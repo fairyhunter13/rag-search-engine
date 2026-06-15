@@ -143,18 +143,11 @@ def handle_overview(project_path: str, what: str) -> str:
                     return json.dumps({"cycles": cycs, "cycle_count": len(cycs),
                                        "has_cycles": bool(cycs), "edge_count": cnt})
                 if what == "surprising_connections":
-                    try:
-                        rows = c.execute(
-                            "SELECT s.name,t.name FROM edges e "
-                            "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
-                            "WHERE s.community_id != t.community_id LIMIT 20"
-                        ).fetchall()
-                    except Exception:
-                        rows = c.execute(
-                            "SELECT s.name,t.name FROM edges e "
-                            "JOIN nodes s ON e.from_id=s.id JOIN nodes t ON e.to_id=t.id "
-                            "WHERE s.community_id != t.community_id LIMIT 20"
-                        ).fetchall()
+                    rows = c.execute(
+                        "SELECT s.name,t.name FROM edges e "
+                        "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
+                        "WHERE s.community_id != t.community_id LIMIT 20"
+                    ).fetchall()
                     return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows]})
                 if what == "feature_map":
                     rows = c.execute("SELECT id,title,semantic_type FROM communities WHERE semantic_type IS NOT NULL").fetchall()
