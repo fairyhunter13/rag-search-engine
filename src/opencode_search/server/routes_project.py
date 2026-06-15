@@ -118,7 +118,7 @@ async def _api_kb_health(request: Request) -> JSONResponse:
     try:
         comms = gs.conn.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
         enriched = gs.conn.execute(
-            "SELECT COUNT(*) FROM communities WHERE title IS NOT NULL"
+            "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
         ).fetchone()[0]
         pct = (enriched / comms * 100) if comms else 0
         return JSONResponse({"verdict": "DONE" if pct >= 95 else "PENDING",

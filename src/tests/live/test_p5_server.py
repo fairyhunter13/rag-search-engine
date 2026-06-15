@@ -305,3 +305,37 @@ def test_auto_pipeline_status_real(live_client, tmp_path):
             timeout=3,
         )
         remove_project(proj_path)
+
+
+def test_kb_health_measures_summary_not_title(live_client):
+    """P25.1: /api/kb_health counts summary-enriched communities, not just titled ones."""
+    import sqlite3
+
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+
+    project = next(
+        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
+        None,
+    )
+    assert project, "At least one project with a graph DB must be registered"
+
+    gdb = project_graph_db(project)
+    con = sqlite3.connect(str(gdb))
+    try:
+        total = con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
+        summarized = con.execute(
+            "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
+        ).fetchone()[0]
+    finally:
+        con.close()
+
+    assert total > 0, "Project must have communities"
+    r = live_client.get(f"/api/kb_health?project={project}")
+    assert r.status_code == 200, f"kb_health {r.status_code}: {r.text}"
+    d = r.json()
+    expected_pct = round(summarized / total * 100, 1) if total else 0
+    assert abs(d["enriched_pct"] - expected_pct) < 0.1, (
+        f"enriched_pct={d['enriched_pct']} != summary-based {expected_pct} "
+        f"(summarized={summarized} total={total})"
+    )
