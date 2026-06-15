@@ -341,6 +341,41 @@ def test_kb_health_measures_summary_not_title(live_client):
     )
 
 
+@pytest.mark.slow
+def test_enrich_project_uses_summary_gate(safe_tmp_path):
+    """P27: _enrich_project enriches titled-but-unsummarized communities."""
+    import sqlite3  # noqa: I001
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.daemon.sweeps import _enrich_project
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.extractor import extract_symbols, symbol_id
+    from opencode_search.graph.store import GraphStore
+    proj = str(safe_tmp_path)
+    fpath = safe_tmp_path / "auth.py"
+    fpath.write_text("def authenticate(token): pass\ndef validate(t): return bool(t)\n")
+    gs = GraphStore(project_graph_db(proj))
+    try:
+        for sym in extract_symbols(fpath, fpath.read_text(), "python"):
+            gs.upsert_symbol(symbol_id(str(fpath), sym.name, sym.start_line),
+                             sym.name, sym.qualified_name, sym.kind,
+                             str(fpath), sym.start_line, sym.end_line, sym.language)
+        gs.commit()
+        detect_communities(gs)
+        assert gs.community_count() > 0
+        titled = gs._con.execute(
+            "SELECT COUNT(*) FROM communities WHERE title IS NOT NULL AND title != ''"
+        ).fetchone()[0]
+        assert titled > 0, "P21 must set structural labels before enrichment"
+    finally:
+        gs.close()
+    _enrich_project(proj)
+    with sqlite3.connect(str(project_graph_db(proj))) as con:
+        post = con.execute(
+            "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
+        ).fetchone()[0]
+    assert post > 0, "enrichment gate must use summary IS NULL, not title IS NULL"
+
+
 def test_overview_status_has_kb_state():
     """P25.2: overview(what='status') returns kb_state in 4-value set + numeric enriched_pct."""
     from opencode_search.core.config import project_graph_db
