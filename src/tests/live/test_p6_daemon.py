@@ -689,42 +689,50 @@ def test_p34_watcher_updates_vector_index(tmp_path):
     assert found, "watcher must update vector index: zzqx_watcher_probe not found in search after 8s"
 
 
+def test_no_fixed_interval_timers():
+    """Guard: _start_background must NOT register auto_index or kb_sweep timers (event-driven only)."""
+    import inspect
+
+    from opencode_search.daemon import server
+    src = inspect.getsource(server._start_background)
+    for forbidden in ("auto_index", "kb_sweep"):
+        assert f'register("{forbidden}"' not in src and f"register('{forbidden}'" not in src, (
+            f"_start_background must not register a {forbidden!r} timer — use event-driven on_change"
+        )
+
+
+def test_on_change_wires_kb_enrich():
+    """Guard: on_change must call _enrich_project (event-driven KB build after file change)."""
+    import inspect
+
+    from opencode_search.daemon import sweeps
+    src = inspect.getsource(sweeps.on_change)
+    assert "_enrich_project" in src, (
+        "on_change must call _enrich_project — KB enrichment must be event-driven via the watcher"
+    )
+
+
 @pytest.mark.slow
-def test_p34_watcher_skips_kb(tmp_path):
-    """P34.2: on_change calls _index_files only — graph symbols/communities unchanged."""
-    from opencode_search.core.config import project_graph_db, project_vector_db
+def test_on_change_kb_debounce(safe_tmp_path):
+    """Debounce: on_change within _KB_DEBOUNCE_S of a prior enrich skips KB (no duplicate LLM calls)."""
+    import time
+
+    from opencode_search.daemon import sweeps
     from opencode_search.daemon.sweeps import _index_project, on_change
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.index.store import VectorStore
-    proj = str(tmp_path)
-    mod = tmp_path / "mod.py"
-    mod.write_text("def alpha(): pass\ndef beta(): pass\n")
+
+    proj = str(safe_tmp_path)
+    (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
     _index_project(proj)
-    gs = GraphStore(project_graph_db(proj))
-    sym_count = gs.symbol_count()
-    comm_count = gs.community_count()
-    edge_count = gs._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-    gs.close()
-    mod.write_text("def alpha(): pass\ndef beta(): pass\ndef zzqx_new_symbol(): pass\n")
-    on_change(proj, [mod])
-    vs = VectorStore(project_vector_db(proj))
-    assert vs.count() > 0, "vector index must still have chunks after on_change"
-    vs.close()
-    gs2 = GraphStore(project_graph_db(proj))
-    assert gs2.symbol_count() == sym_count, (
-        f"watcher must not update graph: symbol count changed {sym_count}→{gs2.symbol_count()}"
-    )
-    assert gs2.community_count() == comm_count, (
-        f"watcher must not update graph: community count changed {comm_count}→{gs2.community_count()}"
-    )
-    assert gs2._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == edge_count, (
-        "watcher must not update graph: edge count changed"
-    )
-    new_names = {r["name"] for r in gs2.list_symbols()}
-    gs2.close()
-    assert "zzqx_new_symbol" not in new_names, (
-        "watcher must not update graph: zzqx_new_symbol appeared in symbols (only kb_sweep does that)"
-    )
+    # Simulate "just enriched" so debounce window is active → _enrich_project must be skipped
+    sweeps._last_kb_enrich[proj] = time.monotonic()
+    t_before = sweeps._last_kb_enrich[proj]
+    try:
+        on_change(proj, [safe_tmp_path / "a.py"])
+        assert sweeps._last_kb_enrich.get(proj) == t_before, (
+            "on_change within debounce window must not advance _last_kb_enrich"
+        )
+    finally:
+        sweeps._last_kb_enrich.pop(proj, None)
 
 
 def test_p35_enrich_project_prunes_orphan_communities(safe_tmp_path):

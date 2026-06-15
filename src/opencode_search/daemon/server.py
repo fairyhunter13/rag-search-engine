@@ -40,10 +40,6 @@ def _sd_notify(msg: str) -> None:
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s, contextlib.suppress(OSError):
         s.sendto(msg.encode(), sock)
 
-_SWEEP_INTERVAL = 1200.0  # 20 min
-_WATCH_INTERVAL = 5.0
-
-
 def serve(host: str | None = None, port: int | None = None) -> None:
     """Run uvicorn at host:port; also start scheduler and watcher."""
     import uvicorn
@@ -72,7 +68,7 @@ def start_watcher():
     from opencode_search.daemon.watcher import Watcher
 
     watcher = Watcher(on_change=on_change)
-    watcher.POLL_INTERVAL = _WATCH_INTERVAL
+    watcher.POLL_INTERVAL = 5.0
     for entry in list_projects():
         if entry.enabled:
             watcher.watch(entry.path)
@@ -94,17 +90,10 @@ def _start_background() -> None:
     from opencode_search.core.registry import list_projects
     from opencode_search.daemon.runtime_state import check_idle_shutdown, release_stale_clients
     from opencode_search.daemon.scheduler import Scheduler
-    from opencode_search.daemon.sweeps import (
-        _index_project,
-        auto_index,
-        kb_sweep,
-        maintenance,
-    )
+    from opencode_search.daemon.sweeps import _index_project, maintenance
 
     scheduler = Scheduler()
-    scheduler.register("auto_index", auto_index, interval_s=_SWEEP_INTERVAL)
-    scheduler.register("kb_sweep", kb_sweep, interval_s=_SWEEP_INTERVAL)
-    scheduler.register("maintenance", maintenance, interval_s=_SWEEP_INTERVAL * 3)
+    scheduler.register("maintenance", maintenance, interval_s=21600.0)  # 6 h; CPU/disk only
     scheduler.register("idle_shutdown", check_idle_shutdown, interval_s=60.0)
     scheduler.register("stale_clients", release_stale_clients, interval_s=60.0)
     scheduler.register("idle_unload", _idle_unload, interval_s=60.0)

@@ -77,6 +77,27 @@ def test_l2_communities_all_enriched(live_client):
 
 
 # ---------------------------------------------------------------------------
+# S2b: Coarse-resolution regression lock
+# ---------------------------------------------------------------------------
+
+def test_l2_coarse_resolution_lock():
+    """S2b: L2 count must be ≤2×√n_L1 and <60% of L1 (guards against degenerate hierarchy)."""
+    con = _con(_OSE)
+    try:
+        l1 = con.execute(
+            "SELECT COUNT(DISTINCT community_id) FROM symbols WHERE community_id IS NOT NULL"
+        ).fetchone()[0]
+        l2 = con.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
+        if l2 == 0:
+            pytest.skip("no L2 communities yet")
+        target = max(2, round(l1 ** 0.5))
+        assert l2 <= 2 * target, f"L2={l2} > 2×√L1={2*target}: hierarchy is degenerate"
+        assert l2 < l1 * 0.6, f"L2={l2} ≥ 60% of L1={l1}: coarsening is insufficient"
+    finally:
+        con.close()
+
+
+# ---------------------------------------------------------------------------
 # S3: Macro view in global ask (Fix 3)
 # ---------------------------------------------------------------------------
 

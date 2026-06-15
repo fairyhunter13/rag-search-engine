@@ -1,10 +1,12 @@
-"""Background sweep jobs: auto_index, kb_sweep, maintenance."""
+"""Background sweep jobs: maintenance; event-driven on_change KB enrich."""
 from __future__ import annotations
 
 import logging
 import shutil
 
 _PAUSED: bool = False
+_KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change
+_last_kb_enrich: dict[str, float] = {}
 
 log = logging.getLogger(__name__)
 
@@ -214,7 +216,9 @@ def _enrich_project(project_path: str) -> None:
 
 
 def on_change(project_path: str, files: list) -> None:
-    """Watcher callback: incremental reindex changed files (or full reindex if no file list)."""
+    """Watcher callback: incremental reindex; then KB enrich (debounced) if not recently done."""
+    import time
+
     try:
         if files:
             _index_files(project_path, files)
@@ -222,6 +226,15 @@ def on_change(project_path: str, files: list) -> None:
             _index_project(project_path)
     except Exception as exc:
         log.warning("incremental reindex %s: %s", project_path, exc)
+        return
+    now = time.monotonic()
+    if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:
+        return
+    _last_kb_enrich[project_path] = now
+    try:
+        _enrich_project(project_path)
+    except Exception as exc:
+        log.warning("kb enrich on_change %s: %s", project_path, exc)
 
 
 def burst_enrich_federation(root_path: str) -> dict:
