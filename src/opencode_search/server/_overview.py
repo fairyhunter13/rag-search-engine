@@ -112,11 +112,21 @@ def handle_overview(project_path: str, what: str) -> str:
                     rows = c.execute(f"SELECT id,title,level FROM communities {f} ORDER BY level,id LIMIT 200").fetchall()
                     return json.dumps({what: [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
                 if what == "status":
+                    from opencode_search.core.config import project_vector_db
                     from opencode_search.core.registry import get_project
                     e = get_project(project_path)
+                    total = gs.community_count()
+                    summarized = c.execute(
+                        "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
+                    ).fetchone()[0]
+                    pct = round(summarized / total * 100, 1) if total else 0.0
+                    kb_state = ("indexing" if not project_vector_db(project_path).exists() else
+                                "ready" if pct >= 95 else
+                                "enriching" if pct > 0 else "searchable")
                     return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
                                        "file_count": e.file_count if e else 0,
-                                       "symbols": gs.symbol_count(), "communities": gs.community_count()})
+                                       "symbols": gs.symbol_count(), "communities": total,
+                                       "kb_state": kb_state, "enriched_pct": pct})
                 if what == "import_cycles":
                     cycs = _find_import_cycles(c)
                     cnt = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]

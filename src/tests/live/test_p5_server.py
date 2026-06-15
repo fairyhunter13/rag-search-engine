@@ -339,3 +339,24 @@ def test_kb_health_measures_summary_not_title(live_client):
         f"enriched_pct={d['enriched_pct']} != summary-based {expected_pct} "
         f"(summarized={summarized} total={total})"
     )
+
+
+def test_overview_status_has_kb_state():
+    """P25.2: overview(what='status') returns kb_state in 4-value set + numeric enriched_pct."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.server.mcp import overview as overview_tool
+
+    project = next(
+        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
+        None,
+    )
+    assert project, "At least one project with graph DB must be registered"
+    data = json.loads(asyncio.run(overview_tool(project, "status")))
+    assert "kb_state" in data, f"kb_state missing from status: {data}"
+    assert data["kb_state"] in ("indexing", "searchable", "enriching", "ready"), (
+        f"kb_state={data['kb_state']!r} not in expected set"
+    )
+    assert isinstance(data.get("enriched_pct"), (int, float)), (
+        f"enriched_pct must be numeric: {data}"
+    )
