@@ -16,7 +16,7 @@ Generated from the live archived engine before wiping `main`.
 
 ### 1.2 ask(query, project_path, scope="all", top_k=10, include_federation=True)
 - [x] scope: all(hybrid code+communities+wiki) | architecture(communities only) | wiki(pages only) | global(GraphRAG map-reduce over all community summaries) | feature(entry points+call chain+algorithm+rationale) | business(business-classified communities)
-- [x] global: qwen3-enrich:1.7b MAP + query-LLM REDUCE
+- [x] global (MCP ask): assembled context — community map + code chunks, NO LLM synthesis (Phase-100 read-only path via compose_answer); global LLM synthesis (MAP + REDUCE) is the HTTP /api/ask / dashboard path
 - [x] runtime_state.note_activity() + note_query() on every call
 
 ### 1.3 graph(symbol, project_path, relation="definition", to_symbol=None, depth=5, include_federation=True)

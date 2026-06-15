@@ -374,3 +374,56 @@ def test_p12_completeness_guard() -> None:
     all_ids = tagged | key_ids
     missing = sorted(i for i in all_ids if f"#{i}" not in tests and i not in pattern_covered)
     assert not missing, f"IDs not covered by any test selector: {missing}"
+
+
+# ── P35 behavioral e2e: drive interactive elements to real outcomes ───────────
+
+def test_suggested_question_click_routes_to_chat(page: Page) -> None:
+    """P35 DB2: clicking a .sq-btn routes to chat view and produces a streamed answer."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    btns = page.locator(".sq-btn")
+    count = btns.count()
+    assert count >= 1, f"no suggested question buttons rendered: {count}"
+    btns.first.click()
+    expect(page.locator("#view-chat")).to_be_visible()
+    page.wait_for_function(
+        "document.getElementById('chat-history').innerText.trim().length > 10",
+        timeout=30000,
+    )
+    text = page.locator("#chat-history").inner_text()
+    assert len(text.strip()) > 10, f"sq-btn click must populate chat-history: {text!r}"
+
+
+def test_graph_node_click_updates_detail(page: Page) -> None:
+    """P35 DB3: clicking the sigma canvas updates #graph-detail."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    page.locator("button[onclick='loadGraph()']").click()
+    page.wait_for_function(
+        "document.getElementById('graph-node-count').textContent.trim().length > 0",
+        timeout=20000,
+    )
+    canvas = page.locator("#graph-canvas")
+    box = canvas.bounding_box()
+    assert box, "#graph-canvas has no bounding box"
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.wait_for_timeout(800)
+    detail = page.locator("#graph-detail").inner_text()
+    assert detail.strip(), f"#graph-detail empty after canvas click: {detail!r}"
+
+
+def test_project_selector_change_reloads_data(page: Page) -> None:
+    """P35 DB4: changing #project-sel calls switchProject; KPI tiles stay populated."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    opts = page.locator("#project-sel option").count()
+    if opts < 2:
+        import pytest
+        pytest.skip(f"only {opts} project option(s) — need >=2 for switch test")
+    page.locator("#project-sel").select_option(index=1)
+    page.wait_for_timeout(3000)
+    files_after = page.locator("#kpi-files").text_content() or ""
+    assert files_after not in ("", "—"), (
+        f"#kpi-files empty after project switch: {files_after!r}"
+    )

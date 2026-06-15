@@ -188,6 +188,11 @@ def _enrich_project(project_path: str) -> None:
 
     gs = GraphStore(project_graph_db(project_path))
     try:
+        gs._con.execute(
+            "DELETE FROM communities WHERE level=1 AND id NOT IN "
+            "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
+        )
+        gs.commit()
         for (cid,) in gs._con.execute(
             "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1"
         ).fetchall():

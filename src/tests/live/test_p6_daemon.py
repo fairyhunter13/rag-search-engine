@@ -727,6 +727,38 @@ def test_p34_watcher_skips_kb(tmp_path):
     )
 
 
+def test_p35_enrich_project_prunes_orphan_communities(safe_tmp_path):
+    """P35: _enrich_project prunes L1 communities with 0 symbols before enriching."""
+    import sqlite3
+
+    from opencode_search.core.config import ProjectEntry, project_graph_db
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _enrich_project
+    from opencode_search.graph.store import GraphStore
+
+    proj = str(safe_tmp_path)
+    upsert_project(ProjectEntry(path=proj, enabled=True))
+    try:
+        gs = GraphStore(project_graph_db(proj))
+        gs.upsert_symbol("s0", "real_func", "real_func", "function", "f.py", 1, 2, "python")
+        gs.upsert_community(0, level=1, title="Real", summary="Already enriched.", member_count=1)
+        gs._con.execute("UPDATE symbols SET community_id=0 WHERE sid='s0'")
+        gs.upsert_community(99, level=1, title="Orphan", summary="", member_count=0)
+        gs.commit()
+        gs.close()
+
+        _enrich_project(proj)
+
+        with sqlite3.connect(str(project_graph_db(proj))) as con:
+            orphans = con.execute(
+                "SELECT COUNT(*) FROM communities WHERE level=1 AND id NOT IN "
+                "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
+            ).fetchone()[0]
+        assert orphans == 0, f"_enrich_project must prune 0-symbol L1 communities, got {orphans}"
+    finally:
+        remove_project(proj)
+
+
 def test_p34_start_watcher_wires_enabled_projects(tmp_path):
     """P34.3: start_watcher() registers all enabled projects and excludes disabled ones."""
     from opencode_search.core.config import ProjectEntry

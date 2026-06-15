@@ -98,7 +98,7 @@ async def ask(
     project_path: str = "",
     scope: str = "all",
 ) -> str:
-    """Answer a question about the codebase. scope: all|architecture|global|feature|wiki|business."""
+    """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture|global|feature|wiki|business. LLM synthesis is the HTTP /api/ask path."""
     note_query(query)
     from opencode_search.core.config import index_dir, project_graph_db, project_vector_db
     from opencode_search.core.registry import list_projects
