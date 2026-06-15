@@ -138,12 +138,18 @@ async def ask(
 @mcp.tool()
 async def graph(
     symbol: str,
-    project_path: str,
+    project_path: str = "",
     relation: str = "definition",
     to_symbol: str = "",
 ) -> str:
     """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|semantic_trace."""
     note_activity()
+    if not project_path:
+        from opencode_search.core.registry import list_projects
+        projects = [p for p in list_projects() if p.enabled]
+        if not projects:
+            return json.dumps({"error": "No indexed projects found."})
+        project_path = projects[0].path
     from opencode_search.core.config import project_graph_db
     from opencode_search.graph.store import GraphStore
     from opencode_search.query import graph_handler as gh

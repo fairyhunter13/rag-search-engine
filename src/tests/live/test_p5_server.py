@@ -423,3 +423,28 @@ def test_overview_status_has_kb_state():
     assert isinstance(data.get("enriched_pct"), (int, float)), (
         f"enriched_pct must be numeric: {data}"
     )
+
+
+def test_overview_unknown_what_returns_error():
+    """G4: overview(what='bogus') returns {error, valid} instead of silently falling through."""
+    from opencode_search.server.mcp import overview as overview_tool
+    result = asyncio.run(overview_tool("", "bogus_unknown_what"))
+    data = json.loads(result)
+    assert "error" in data, f"expected error key, got: {data}"
+    assert "valid" in data, f"expected valid key, got: {data}"
+    assert "structure" in data["valid"], f"'structure' missing from valid list: {data['valid']}"
+
+
+def test_graph_defaults_project_path_to_first_project():
+    """G5: graph(symbol) with no project_path resolves to first enabled project."""
+    from opencode_search.core.registry import list_projects
+    from opencode_search.server.mcp import graph as graph_tool
+
+    first = next((p.path for p in list_projects() if p.enabled), None)
+    assert first, "At least one enabled project must be registered"
+    result = asyncio.run(graph_tool("authenticate"))
+    data = json.loads(result)
+    assert "error" not in data or "No indexed" not in data.get("error", ""), (
+        f"graph with no project_path should resolve, got: {data}"
+    )
+    assert "matches" in data, f"expected matches key, got: {data}"

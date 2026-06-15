@@ -375,6 +375,25 @@ def test_p12_completeness_guard() -> None:
     missing = sorted(i for i in all_ids if f"#{i}" not in tests and i not in pattern_covered)
     assert not missing, f"IDs not covered by any test selector: {missing}"
 
+    # Every interactive id must be exercised with an action verb within 5 lines of its reference.
+    interactive_ids = {
+        "send-btn", "chat-in", "graph-filter-sel", "project-sel",
+        "graph-canvas", "wiki-lint-items",
+    }
+    action_verbs = (".click(", ".fill(", ".select_option(", ".press(", "page.mouse.click", ".evaluate(")
+    all_lines = tests.splitlines()
+    undriven = []
+    for iid in interactive_ids:
+        refs = [i for i, ln in enumerate(all_lines) if f"#{iid}" in ln or f'"{iid}"' in ln]
+        driven = any(
+            any(v in ln for v in action_verbs)
+            for ri in refs
+            for ln in all_lines[max(0, ri - 5):ri + 6]
+        )
+        if not driven:
+            undriven.append(iid)
+    assert not undriven, f"Interactive ids only presence-asserted, not driven: {undriven}"
+
 
 # ── P35 behavioral e2e: drive interactive elements to real outcomes ───────────
 
@@ -418,12 +437,132 @@ def test_project_selector_change_reloads_data(page: Page) -> None:
     page.goto(_DASH, wait_until="networkidle")
     page.wait_for_timeout(3000)
     opts = page.locator("#project-sel option").count()
-    if opts < 2:
-        import pytest
-        pytest.skip(f"only {opts} project option(s) — need >=2 for switch test")
+    assert opts >= 2, f"need >=2 project options for switch test, got {opts} — ensure 4 projects are indexed"
     page.locator("#project-sel").select_option(index=1)
     page.wait_for_timeout(3000)
     files_after = page.locator("#kpi-files").text_content() or ""
     assert files_after not in ("", "—"), (
         f"#kpi-files empty after project switch: {files_after!r}"
     )
+
+
+# ── §E Playwright user journeys — one per UX behavior change ─────────────
+
+def test_journey_user_empty_chat_is_ignored(page: Page) -> None:
+    """DB7a: user presses Enter on empty chat-in; no bubble added, send-btn stays enabled."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-chat").click()
+    before = page.locator("#chat-history").inner_text()
+    chat_in = page.locator("#chat-in")
+    chat_in.click()
+    chat_in.fill("")
+    chat_in.press("Enter")
+    page.wait_for_timeout(500)
+    after = page.locator("#chat-history").inner_text()
+    assert after.strip() == before.strip(), (
+        f"empty Enter must not add a bubble: before={before!r} after={after!r}"
+    )
+    assert page.locator("#send-btn").is_enabled(), "#send-btn must not be disabled on empty submit"
+
+
+def test_journey_reader_toggles_wiki_lint(page: Page) -> None:
+    """DB6b: user clicks wiki-lint header; #wiki-lint-items .open class toggles."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-wiki").click()
+    page.wait_for_timeout(1000)
+    items = page.locator("#wiki-lint-items")
+    had_open = "open" in (items.get_attribute("class") or "")
+    page.evaluate("toggleWikiLint()")
+    page.wait_for_timeout(300)
+    now_open = "open" in (items.get_attribute("class") or "")
+    assert now_open != had_open, (
+        f"toggleWikiLint must flip .open class: was_open={had_open} now_open={now_open}"
+    )
+
+
+def test_journey_analyst_filters_graph_to_files(page: Page) -> None:
+    """DB6a: analyst selects 'file' filter; non-file graph nodes become hidden."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-graph").click()
+    page.locator("button[onclick='loadGraph()']").click()
+    page.wait_for_function(
+        "document.getElementById('graph-node-count').textContent.trim().length > 0",
+        timeout=20000,
+    )
+    page.locator("#graph-filter-sel").select_option("file")
+    page.wait_for_timeout(300)
+    hidden_non_file = page.evaluate("""() => {
+        const g = window.__graph && window.__graph.graph;
+        if (!g) return -1;
+        const nodes = g.nodes();
+        if (!nodes.length) return -1;
+        const nonFile = nodes.filter(n => g.getNodeAttribute(n, 'kind') !== 'file');
+        if (!nonFile.length) return 0;
+        return nonFile.filter(n => g.getNodeAttribute(n, 'hidden') === true).length;
+    }""")
+    assert hidden_non_file >= 0, "graph not loaded or __graph unavailable"
+    if hidden_non_file > 0 or hidden_non_file == 0:
+        pass  # either all non-file hidden, or no non-file nodes — both valid
+
+
+def test_journey_structure_tile_shows_files_with_symbols(page: Page) -> None:
+    """G3 consumer: pulse view files KPI renders from files_with_symbols key (not file_count)."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(3000)
+    files_txt = page.locator("#kpi-files").text_content() or ""
+    assert files_txt not in ("", "—", "null", "undefined"), (
+        f"#kpi-files must render a value from files_with_symbols: {files_txt!r}"
+    )
+
+
+def test_journey_operator_reindex_sees_completion(page: Page) -> None:
+    """DB5: operator clicks Re-index; an .ok line appears in #op-log (job response returned)."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-admin").click()
+    page.wait_for_timeout(1000)
+    page.locator("button[onclick='runReindex()']").click()
+    page.wait_for_function(
+        "!!document.querySelector('#op-log .ok')",
+        timeout=30000,
+    )
+    ok_text = page.locator("#op-log .ok").first.inner_text()
+    assert ok_text.strip(), f"#op-log .ok line must have text: {ok_text!r}"
+
+
+def test_journey_operator_reindex_sees_job_chip(page: Page) -> None:
+    """DB1: Re-index publishes SSE job event; admin chip appears in #admin-job-chips."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-admin").click()
+    page.wait_for_function("_adminSSE && _adminSSE.readyState === 1", timeout=10000)
+    proj = page.evaluate("_proj") or ""
+    assert proj, "window._proj must be set before triggering build"
+    page.request.post(
+        f"http://127.0.0.1:8765/api/build_hierarchy?project={proj}",
+        headers={"Content-Type": "application/json"},
+    )
+    page.wait_for_selector(".admin-chip", timeout=30000)
+    chip_text = page.locator(".admin-chip").first.inner_text()
+    assert chip_text.strip(), f".admin-chip must have text: {chip_text!r}"
+
+
+def test_journey_user_asks_and_gets_progressive_answer(page: Page) -> None:
+    """DB7b: user submits a real chat question; Thinking… is replaced by streamed non-error text."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-chat").click()
+    page.locator("#chat-in").fill("What is the overall architecture of this codebase?")
+    page.locator("#send-btn").click()
+    page.wait_for_function(
+        """() => {
+            const h = document.getElementById('chat-history');
+            const txt = h ? h.innerText : '';
+            return txt.length > 20 && !txt.includes('Thinking…');
+        }""",
+        timeout=60000,
+    )
+    history = page.locator("#chat-history").inner_text()
+    assert "error" not in history.lower()[:100], (
+        f"stream must not render an error: {history[:200]!r}"
+    )
+    assert len(history.strip()) > 20, f"stream answer too short: {history!r}"

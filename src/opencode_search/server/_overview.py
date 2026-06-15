@@ -76,9 +76,19 @@ def _detect_services(root: str) -> list[dict]:
     return [{"name": rp.name, "path": root, "services": sorted(names)}]
 
 
+_VALID = {
+    "structure", "projects", "metrics", "patterns", "communities",
+    "architecture_domains", "hierarchy", "status", "import_cycles",
+    "surprising_connections", "feature_map", "business_rules",
+    "process_flows", "suggested_questions", "service_mesh",
+}
+
+
 def handle_overview(project_path: str, what: str) -> str:
     from opencode_search.core.registry import list_projects
 
+    if what not in _VALID:
+        return json.dumps({"error": f"unknown what={what!r}", "valid": sorted(_VALID)})
     if what == "projects":
         return json.dumps({"projects": [
             {"path": p.path, "enabled": p.enabled, "indexed_at": p.indexed_at}
@@ -167,7 +177,7 @@ def handle_overview(project_path: str, what: str) -> str:
                     return json.dumps({"services": _detect_services(project_path)})
                 fc = c.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0]
                 return json.dumps({"path": project_path, "symbols": gs.symbol_count(),
-                                   "communities": gs.community_count(), "file_count": fc})
+                                   "communities": gs.community_count(), "files_with_symbols": fc})
             finally:
                 gs.close()
     return json.dumps({"what": what, "status": "no project available"})
