@@ -12,11 +12,40 @@ Format: ["intent for 1", "intent for 2", ...]
 Symbols:
 {symbols}"""
 
+_L2_COMMUNITY_PROMPT = """\
+Summarize this architecture domain in 2 sentences. Cover: purpose, main sub-systems.
+Sub-communities: {children}
+Reply ONLY with JSON: {{"title": "<short domain name>", "summary": "<2 sentences>"}}"""
+
 _COMMUNITY_PROMPT = """\
 Summarize this code community in 2 sentences. Cover: purpose, main patterns.
 Members: {members}
 Reply ONLY with JSON: {{"title": "<short title>", "summary": "<2 sentences>", \
 "semantic_type": "<feature|utility|infrastructure|domain|test>"}}"""
+
+
+def enrich_community_l2(store: GraphStore, community_id: int) -> None:
+    """Assign title+summary to one L2 community from its enriched L1 child summaries."""
+    rows = store._con.execute(
+        "SELECT title, summary FROM communities "
+        "WHERE parent_id=? AND summary IS NOT NULL AND summary!=''",
+        (community_id,),
+    ).fetchall()
+    if not rows:
+        return
+    children = "; ".join(f"{r[0]}: {r[1][:100]}" for r in rows if r[0])
+    try:
+        raw = chat(_L2_COMMUNITY_PROMPT.format(children=children[:2000]))
+        data = json.loads(raw.strip())
+        store.upsert_community(
+            community_id, level=2,
+            title=data.get("title", "")[:200],
+            summary=data.get("summary", "")[:2000],
+            member_count=len(rows),
+        )
+        store.commit()
+    except Exception:
+        pass
 
 
 def enrich_symbols(store: GraphStore, batch_size: int = 20) -> int:

@@ -181,7 +181,7 @@ def _enrich_project(project_path: str) -> None:
 
     from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
     from opencode_search.core.gpu import gpu_temp_c
-    from opencode_search.graph.enrich import enrich_community
+    from opencode_search.graph.enrich import enrich_community, enrich_community_l2
     from opencode_search.graph.store import GraphStore
     from opencode_search.kb.hierarchy import build_hierarchy
     from opencode_search.kb.wiki import build_wiki
@@ -201,6 +201,13 @@ def _enrich_project(project_path: str) -> None:
                 time.sleep(5)
         gs.commit()
         build_hierarchy(gs)
+        for (cid,) in gs._con.execute(
+            "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level >= 2"
+        ).fetchall():
+            enrich_community_l2(gs, cid)
+            if gpu_temp_c() > THERMAL_MAX_C:
+                time.sleep(5)
+        gs.commit()
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()

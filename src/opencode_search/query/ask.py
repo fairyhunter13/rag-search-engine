@@ -27,6 +27,16 @@ def _top_communities_semantic(query: str, store: GraphStore, top_k: int = 10) ->
     return "\n\n".join(f"## {rows[i][0]}\n{rows[i][1]}" for i in top if rows[i][1])
 
 
+def _macro_community_context(store: GraphStore, limit: int = 5) -> str:
+    """Fetch L2+ domain summaries for the macro architecture view."""
+    rows = store._con.execute(
+        "SELECT title, summary FROM communities "
+        "WHERE level>=2 AND summary IS NOT NULL AND summary!='' "
+        "ORDER BY member_count DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return "\n\n".join(f"## Domain: {r[0]}\n{r[1]}" for r in rows if r[1])
+
+
 def _community_context(store: GraphStore, limit: int = 20, semantic_types: tuple[str, ...] = ()) -> str:
     if semantic_types:
         placeholders = ",".join("?" * len(semantic_types))
@@ -52,10 +62,14 @@ def _assemble_context(query: str, chunks: list[dict], store: GraphStore, scope: 
         for r in chunks
     )[:_MAX_CTX]
     if scope == "global":
-        community_ctx = _top_communities_semantic(query, store)[:_MAX_CTX]
+        macro = _macro_community_context(store)
+        semantic = _top_communities_semantic(query, store)[:_MAX_CTX]
+        community_ctx = (f"{macro}\n\n{semantic}" if macro else semantic)[:_MAX_CTX]
         return f"## Architecture (community map)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
     if scope in ("architecture", "all"):
-        community_ctx = _community_context(store)[:_MAX_CTX]
+        macro = _macro_community_context(store)
+        l1_ctx = _community_context(store)[:_MAX_CTX]
+        community_ctx = (f"{macro}\n\n{l1_ctx}" if macro else l1_ctx)[:_MAX_CTX]
         return f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
     if scope == "wiki":
         community_ctx = _community_context(store, limit=10)[:_MAX_CTX]

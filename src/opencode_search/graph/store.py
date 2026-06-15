@@ -63,6 +63,10 @@ def _open(db_path: Path) -> sqlite3.Connection:
             );
         """)
         con.commit()
+    # Schema migration: add parent_id for L1→L2 hierarchy links.
+    if "parent_id" not in _cols:
+        con.execute("ALTER TABLE communities ADD COLUMN parent_id INTEGER")
+        con.commit()
     return con
 
 
@@ -119,6 +123,9 @@ class GraphStore:
                  semantic_type=COALESCE(excluded.semantic_type, semantic_type)""",
             (cid, level, title, summary, member_count, semantic_type),
         )
+
+    def set_community_parent(self, cid: int, parent_id: int) -> None:
+        self._con.execute("UPDATE communities SET parent_id=? WHERE id=?", (parent_id, cid))
 
     def set_intent(self, sid: str, intent: str) -> None:
         self._con.execute("UPDATE symbols SET intent=? WHERE sid=?", (intent, sid))

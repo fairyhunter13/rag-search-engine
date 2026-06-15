@@ -46,6 +46,21 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
             n_iterations=3,
         )
         mapping = {symbols[i]["sid"]: part.membership[i] for i in range(len(symbols))}
+        # Merge singleton communities into file-level groups so isolated/leaf
+        # symbols share a community with their file-mates instead of staying alone.
+        _counts = Counter(mapping.values())
+        _singletons = {cid for cid, cnt in _counts.items() if cnt == 1}
+        if _singletons:
+            _file_base = max(_counts) + 1
+            _sid_file = {s["sid"]: s["file"] for s in symbols}
+            _file_cid: dict[str, int] = {}
+            for _sid in list(mapping):
+                if mapping[_sid] in _singletons:
+                    _f = _sid_file.get(_sid, "")
+                    if _f not in _file_cid:
+                        _file_cid[_f] = _file_base
+                        _file_base += 1
+                    mapping[_sid] = _file_cid[_f]
 
     for sid, cid in mapping.items():
         store.assign_community(sid, cid)
