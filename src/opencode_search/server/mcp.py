@@ -211,12 +211,17 @@ async def index(project_path: str, enabled: bool = True) -> str:
     from opencode_search.core.registry import remove_project, upsert_project
 
     if not enabled:
-        ok = remove_project(project_path)
         import shutil
 
         from opencode_search.core.config import index_dir
-        shutil.rmtree(index_dir(project_path), ignore_errors=True)
-        return json.dumps({"status": "removed" if ok else "not_found", "path": project_path})
+        from opencode_search.daemon.federation import expand_federation
+        removed = []
+        for p in expand_federation(project_path):
+            if remove_project(p):
+                removed.append(p)
+            shutil.rmtree(index_dir(p), ignore_errors=True)
+        return json.dumps({"status": "removed", "path": project_path,
+                           "members_removed": removed[1:] if len(removed) > 1 else []})
     from pathlib import Path
 
     from opencode_search.index.discover import is_forbidden_root
@@ -227,5 +232,9 @@ async def index(project_path: str, enabled: bool = True) -> str:
     existing = get_project(project_path)
     status = "already_registered" if existing and existing.enabled else "flagged"
     upsert_project(ProjectEntry(path=project_path, enabled=True))
+    import threading
+
+    from opencode_search.daemon.sweeps import reconcile_projects
+    threading.Thread(target=reconcile_projects, daemon=True).start()
     return json.dumps({"status": status, "path": project_path,
-                       "note": "daemon will auto-index, build KB, and watch"})
+                       "note": "daemon will index, build KB, and watch"})

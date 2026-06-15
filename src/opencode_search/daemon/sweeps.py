@@ -26,26 +26,36 @@ def _needs_index(path: str) -> bool:
         return True
 
 
-def auto_index() -> None:
-    """Index any registered project whose vector DB is missing or empty."""
+def reconcile_projects() -> None:
+    """One-shot idempotent: discover+register members, index any unindexed/stalled project."""
     if _PAUSED:
         return
+    from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
-    from opencode_search.daemon.federation import index_members
+    from opencode_search.daemon.federation import register_all_members
+    from opencode_search.graph.store import GraphStore
+
+    register_all_members()
 
     for entry in list_projects():
         if not entry.enabled:
             continue
-        try:
-            index_members(entry.path)
-        except Exception as exc:
-            log.warning("federation discovery %s: %s", entry.path, exc)
-        if not _needs_index(entry.path):
+        needs = _needs_index(entry.path)
+        if not needs:
+            gdb = project_graph_db(entry.path)
+            if gdb.exists():
+                gs = GraphStore(gdb)
+                try:
+                    needs = gs.community_count() == 0
+                finally:
+                    gs.close()
+        if not needs:
             continue
         try:
             _index_project(entry.path)
+            _enrich_project(entry.path)
         except Exception as exc:
-            log.warning("auto_index %s: %s", entry.path, exc)
+            log.warning("reconcile %s: %s", entry.path, exc)
 
 
 def kb_sweep() -> None:

@@ -87,10 +87,9 @@ def ensure_running(host: str = "127.0.0.1", port: int = 8765) -> bool:
 
 
 def _start_background() -> None:
-    from opencode_search.core.registry import list_projects
     from opencode_search.daemon.runtime_state import check_idle_shutdown, release_stale_clients
     from opencode_search.daemon.scheduler import Scheduler
-    from opencode_search.daemon.sweeps import _index_project, maintenance
+    from opencode_search.daemon.sweeps import maintenance, reconcile_projects
 
     scheduler = Scheduler()
     scheduler.register("maintenance", maintenance, interval_s=21600.0)  # 6 h; CPU/disk only
@@ -102,19 +101,9 @@ def _start_background() -> None:
         scheduler.register("watchdog", lambda: _sd_notify("WATCHDOG=1"), interval_s=max(1.0, watchdog_us / 2_000_000))
     scheduler.start()
 
-    # Resume stalled pipelines: projects with files but no communities.
-    for entry in list_projects():
-        if entry.enabled and entry.file_count > 0:
-            from opencode_search.core.config import project_graph_db
-            from opencode_search.graph.store import GraphStore
-            gdb = project_graph_db(entry.path)
-            if gdb.exists():
-                gs = GraphStore(gdb)
-                try:
-                    if gs.community_count() == 0:
-                        log.info("resume stalled pipeline: %s", entry.path)
-                        _index_project(entry.path)
-                finally:
-                    gs.close()
+    from opencode_search.daemon.federation import register_all_members
+    register_all_members()  # synchronous: members registered before start_watcher() watches them
 
     start_watcher()
+
+    threading.Thread(target=reconcile_projects, daemon=True, name="reconcile").start()

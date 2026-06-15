@@ -15,7 +15,8 @@ def test_p20_capabilities_e2e(tmp_path):
     """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, ask context."""
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import get_project, remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _index_project, auto_index
+    from opencode_search.daemon.federation import index_members
+    from opencode_search.daemon.sweeps import _index_project
     from opencode_search.server._overview import handle_overview
 
     # Setup: tmp root with a symlinked python sub-repo
@@ -37,8 +38,8 @@ def test_p20_capabilities_e2e(tmp_path):
         assert entry.indexed_at is not None, "B: indexed_at must be stamped after _index_project"
         assert entry.file_count > 0, f"B: file_count must be >0, got {entry.file_count}"
 
-        # A: auto_index discovers and registers the federation member
-        auto_index()
+        # A: index_members discovers and registers the federation member
+        index_members(root_path)
         assert get_project(member_path) is not None, "A: federation member must be registered"
 
         # C: overview(what="metrics") returns chat_stream metrics

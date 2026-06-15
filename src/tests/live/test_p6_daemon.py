@@ -112,10 +112,10 @@ def test_federation_discover_empty_dir(tmp_path):
     assert discover_members(str(tmp_path)) == []
 
 
-def test_sweeps_auto_index_skips_existing(tmp_path):
+def test_sweeps_reconcile_skips_complete_project(tmp_path):
     from opencode_search.core.config import ProjectEntry, project_vector_db
     from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.sweeps import auto_index
+    from opencode_search.daemon.sweeps import reconcile_projects
 
     proj_path = str(tmp_path)
     vdb = project_vector_db(proj_path)
@@ -123,14 +123,14 @@ def test_sweeps_auto_index_skips_existing(tmp_path):
     vdb.touch()
     upsert_project(ProjectEntry(path=proj_path, enabled=True))
     try:
-        auto_index()  # should skip because vdb.exists()
+        reconcile_projects()  # should skip because vdb.exists() (not empty)
     finally:
         remove_project(proj_path)
         vdb.unlink(missing_ok=True)
 
 
-def test_sweeps_paused_skips_auto_index(tmp_path):
-    """P18.2: a paused auto_index must not create the vector DB."""
+def test_sweeps_paused_skips_reconcile(tmp_path):
+    """P18.2: a paused reconcile_projects must not create the vector DB."""
     from opencode_search.core.config import ProjectEntry, project_vector_db
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon import sweeps
@@ -141,8 +141,8 @@ def test_sweeps_paused_skips_auto_index(tmp_path):
     # vdb intentionally absent so _needs_index() returns True → would trigger indexing
     sweeps._PAUSED = True
     try:
-        sweeps.auto_index()
-        assert not vdb.exists(), "paused auto_index must not create the vector DB"
+        sweeps.reconcile_projects()
+        assert not vdb.exists(), "paused reconcile_projects must not create the vector DB"
     finally:
         sweeps._PAUSED = False
         remove_project(proj_path)
@@ -260,11 +260,13 @@ def test_federation_index_members_registers(tmp_path):
     from opencode_search.core.registry import get_project, remove_project
     from opencode_search.daemon.federation import index_members
 
-    member = tmp_path / "member-repo"
+    root = tmp_path / "root"
+    member = tmp_path / "member-repo"  # sibling of root — outside root, so cycle guard passes
+    root.mkdir()
     member.mkdir()
     (member / "main.py").write_text("x = 1\n")
-    (tmp_path / "link").symlink_to(member)
-    n = index_members(str(tmp_path))
+    (root / "link").symlink_to(member)
+    n = index_members(str(root))
     assert n == 1 and get_project(str(member)) is not None
     remove_project(str(member))
 
@@ -389,11 +391,11 @@ def test_p22_is_ignored_path():
     assert not is_ignored_path(Path("/repo/tests/test_core.py"))
 
 
-def test_p20_auto_index_discovers_federation_members(tmp_path):
-    """P20.1: auto_index() calls index_members() and registers symlinked sub-repos."""
-    from opencode_search.core.config import ProjectEntry, project_vector_db
+def test_p20_index_members_discovers_federation_members(tmp_path):
+    """P20.1: index_members() registers symlinked sub-repos."""
+    from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import get_project, remove_project, upsert_project
-    from opencode_search.daemon.sweeps import auto_index
+    from opencode_search.daemon.federation import index_members
 
     member = tmp_path / "member-repo"
     member.mkdir()
@@ -403,17 +405,13 @@ def test_p20_auto_index_discovers_federation_members(tmp_path):
     (root / "link").symlink_to(member)
 
     root_path = str(root)
-    vdb = project_vector_db(root_path)
-    vdb.parent.mkdir(parents=True, exist_ok=True)
-    vdb.touch()
     upsert_project(ProjectEntry(path=root_path, enabled=True))
     try:
-        auto_index()
-        assert get_project(str(member)) is not None, "federation member must be registered by auto_index"
+        index_members(root_path)
+        assert get_project(str(member)) is not None, "federation member must be registered by index_members"
     finally:
         remove_project(root_path)
         remove_project(str(member))
-        vdb.unlink(missing_ok=True)
 
 
 @pytest.mark.slow
