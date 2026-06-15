@@ -202,7 +202,11 @@ def _enrich_project(project_path: str) -> None:
             if gpu_temp_c() > THERMAL_MAX_C:
                 time.sleep(5)
         gs.commit()
-        build_hierarchy(gs)
+        _l2_ok = gs._con.execute(
+            "SELECT COUNT(*) FROM communities WHERE level>=2 AND summary IS NOT NULL AND summary!=''"
+        ).fetchone()[0]
+        if _l2_ok == 0:
+            build_hierarchy(gs)
         for (cid,) in gs._con.execute(
             "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level >= 2"
         ).fetchall():
