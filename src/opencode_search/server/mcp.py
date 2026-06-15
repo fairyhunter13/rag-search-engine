@@ -24,6 +24,37 @@ def _get_embedder() -> Embedder:
 mcp = FastMCP("opencode-search", instructions=_PROMPT)
 
 
+def _resolve_roots(requested: list[str]) -> list[str]:
+    """Map each requested path to its enclosing registered project root (longest match wins)."""
+    from pathlib import Path
+
+    from opencode_search.core.registry import list_projects
+
+    roots = [e.path for e in list_projects() if e.enabled]
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for req in requested:
+        if req in roots:
+            if req not in seen:
+                seen.add(req)
+                resolved.append(req)
+            continue
+        req_p = Path(req)
+        best: str | None = None
+        for root in roots:
+            try:
+                req_p.relative_to(root)
+                if best is None or len(root) > len(best):
+                    best = root
+            except ValueError:
+                pass
+        target = best if best is not None else req
+        if target not in seen:
+            seen.add(target)
+            resolved.append(target)
+    return resolved
+
+
 @mcp.tool()
 async def search(
     query: str,
@@ -37,7 +68,7 @@ async def search(
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search as _search
 
-    paths = project_paths or [p.path for p in list_projects() if p.enabled]
+    paths = _resolve_roots(project_paths) if project_paths else [p.path for p in list_projects() if p.enabled]
     embedder = _get_embedder()
     results: list[dict] = []
     t0 = time.monotonic()
