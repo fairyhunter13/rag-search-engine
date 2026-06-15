@@ -20,7 +20,7 @@ allow() {
 
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || echo "")
-FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('file_path','') or ti.get('path',''))" 2>/dev/null || echo "")
+FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('file_path','') or ti.get('notebook_path','') or ti.get('path',''))" 2>/dev/null || echo "")
 # For Edit/NotebookEdit: direct fields; for MultiEdit: sum across edits[]; for Write: content only
 NEW_STRING=$(echo "$INPUT" | python3 -c "
 import sys, json
