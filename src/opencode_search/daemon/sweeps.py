@@ -189,7 +189,7 @@ def _enrich_project(project_path: str) -> None:
     gs = GraphStore(project_graph_db(project_path))
     try:
         for (cid,) in gs._con.execute(
-            "SELECT id FROM communities WHERE title IS NULL"
+            "SELECT id FROM communities WHERE summary IS NULL OR summary = ''"
         ).fetchall():
             enrich_community(gs, cid)
             if gpu_temp_c() > THERMAL_MAX_C:
