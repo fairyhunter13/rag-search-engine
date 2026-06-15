@@ -32,10 +32,12 @@ CANONICAL_MCP_ENV = {
 
 SENTINEL_CLAUDE_START = "<!-- >>> opencode-search global instructions >>> -->"
 SENTINEL_CLAUDE_END   = "<!-- <<< opencode-search global instructions <<< -->"
-SENTINEL_AGENTS_START = "[opencode-search-global-instructions:start]"
-SENTINEL_AGENTS_END   = "[opencode-search-global-instructions:end]"
-SENTINEL_LEAN_START   = "<!-- >>> lean-change mandate >>> -->"
-SENTINEL_LEAN_END     = "<!-- <<< lean-change mandate <<< -->"
+SENTINEL_AGENTS_START      = "[opencode-search-global-instructions:start]"
+SENTINEL_AGENTS_END        = "[opencode-search-global-instructions:end]"
+SENTINEL_LEAN_START        = "<!-- >>> lean-change mandate >>> -->"
+SENTINEL_LEAN_END          = "<!-- <<< lean-change mandate <<< -->"
+SENTINEL_LEAN_AGENTS_START = "[lean-change-mandate:start]"
+SENTINEL_LEAN_AGENTS_END   = "[lean-change-mandate:end]"
 
 # ---------------------------------------------------------------------------
 # Canonical lean-change mandate (Claude profiles only — names the Claude skill)
@@ -82,6 +84,11 @@ def agents_md_block() -> str:
 def lean_claude_block() -> str:
     """Return the canonical sentinel-wrapped lean-change mandate for CLAUDE.md files."""
     return f"{SENTINEL_LEAN_START}\n{LEAN_BODY}\n{SENTINEL_LEAN_END}\n"
+
+
+def lean_agents_block() -> str:
+    """Return the canonical sentinel-wrapped lean-change mandate for AGENTS.md / hermes."""
+    return f"{SENTINEL_LEAN_AGENTS_START}\n{LEAN_BODY}\n{SENTINEL_LEAN_AGENTS_END}\n"
 
 
 # ---------------------------------------------------------------------------
