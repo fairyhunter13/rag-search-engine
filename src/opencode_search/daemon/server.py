@@ -65,6 +65,21 @@ def serve(host: str | None = None, port: int | None = None) -> None:
         _sd_notify("STOPPING=1")
 
 
+def start_watcher():
+    """Build and start the file watcher for all enabled registered projects."""
+    from opencode_search.core.registry import list_projects
+    from opencode_search.daemon.sweeps import on_change
+    from opencode_search.daemon.watcher import Watcher
+
+    watcher = Watcher(on_change=on_change)
+    watcher.POLL_INTERVAL = _WATCH_INTERVAL
+    for entry in list_projects():
+        if entry.enabled:
+            watcher.watch(entry.path)
+    watcher.start()
+    return watcher
+
+
 def ensure_running(host: str = "127.0.0.1", port: int = 8765) -> bool:
     """True if the daemon HTTP server is already responding."""
     try:
@@ -80,13 +95,11 @@ def _start_background() -> None:
     from opencode_search.daemon.runtime_state import check_idle_shutdown, release_stale_clients
     from opencode_search.daemon.scheduler import Scheduler
     from opencode_search.daemon.sweeps import (
-        _index_files,
         _index_project,
         auto_index,
         kb_sweep,
         maintenance,
     )
-    from opencode_search.daemon.watcher import Watcher
 
     scheduler = Scheduler()
     scheduler.register("auto_index", auto_index, interval_s=_SWEEP_INTERVAL)
@@ -115,18 +128,4 @@ def _start_background() -> None:
                 finally:
                     gs.close()
 
-    def _on_change(project_path: str, files: list) -> None:
-        try:
-            if files:
-                _index_files(project_path, files)
-            else:
-                _index_project(project_path)
-        except Exception as exc:
-            log.warning("incremental reindex %s: %s", project_path, exc)
-
-    watcher = Watcher(on_change=_on_change)
-    watcher.POLL_INTERVAL = _WATCH_INTERVAL
-    for entry in list_projects():
-        if entry.enabled:
-            watcher.watch(entry.path)
-    watcher.start()
+    start_watcher()

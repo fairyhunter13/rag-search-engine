@@ -201,6 +201,17 @@ def _enrich_project(project_path: str) -> None:
         gs.close()
 
 
+def on_change(project_path: str, files: list) -> None:
+    """Watcher callback: incremental reindex changed files (or full reindex if no file list)."""
+    try:
+        if files:
+            _index_files(project_path, files)
+        else:
+            _index_project(project_path)
+    except Exception as exc:
+        log.warning("incremental reindex %s: %s", project_path, exc)
+
+
 def burst_enrich_federation(root_path: str) -> dict:
     """Burst-enrich root + all discovered federation members. Return aggregate totals."""
     from opencode_search.core.config import project_graph_db

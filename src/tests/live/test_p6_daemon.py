@@ -649,3 +649,106 @@ def test_p21_burst_enrich_federation(tmp_path):
     finally:
         remove_project(root_path)
         remove_project(member_path)
+
+
+@pytest.mark.slow
+def test_p34_watcher_updates_vector_index(tmp_path):
+    """P34.1: watcher fires on_change → _index_files; new file found in vector search."""
+    import time
+
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.daemon.sweeps import _index_project, on_change
+    from opencode_search.daemon.watcher import Watcher
+    from opencode_search.embed.embedder import get_embedder
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.search import search
+    proj = str(tmp_path)
+    (tmp_path / "seed.py").write_text("def seed_func(): pass\n")
+    _index_project(proj)
+    w = Watcher(on_change=on_change)
+    w.POLL_INTERVAL = 0.1
+    w.watch(proj)
+    w.start()
+    time.sleep(0.15)
+    (tmp_path / "probe.py").write_text("def zzqx_watcher_probe(): pass\n")
+    embedder = get_embedder()
+    vdb = project_vector_db(proj)
+    found = False
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        vs = VectorStore(vdb)
+        try:
+            results = search("zzqx_watcher_probe", embedder, vs, top_k=5)
+            if any("zzqx_watcher_probe" in r.get("content", "") for r in results):
+                found = True
+                break
+        finally:
+            vs.close()
+    w.stop()
+    assert found, "watcher must update vector index: zzqx_watcher_probe not found in search after 8s"
+
+
+@pytest.mark.slow
+def test_p34_watcher_skips_kb(tmp_path):
+    """P34.2: on_change calls _index_files only — graph symbols/communities unchanged."""
+    from opencode_search.core.config import project_graph_db, project_vector_db
+    from opencode_search.daemon.sweeps import _index_project, on_change
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.index.store import VectorStore
+    proj = str(tmp_path)
+    mod = tmp_path / "mod.py"
+    mod.write_text("def alpha(): pass\ndef beta(): pass\n")
+    _index_project(proj)
+    gs = GraphStore(project_graph_db(proj))
+    sym_count = gs.symbol_count()
+    comm_count = gs.community_count()
+    edge_count = gs._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    gs.close()
+    mod.write_text("def alpha(): pass\ndef beta(): pass\ndef zzqx_new_symbol(): pass\n")
+    on_change(proj, [mod])
+    vs = VectorStore(project_vector_db(proj))
+    assert vs.count() > 0, "vector index must still have chunks after on_change"
+    vs.close()
+    gs2 = GraphStore(project_graph_db(proj))
+    assert gs2.symbol_count() == sym_count, (
+        f"watcher must not update graph: symbol count changed {sym_count}→{gs2.symbol_count()}"
+    )
+    assert gs2.community_count() == comm_count, (
+        f"watcher must not update graph: community count changed {comm_count}→{gs2.community_count()}"
+    )
+    assert gs2._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == edge_count, (
+        "watcher must not update graph: edge count changed"
+    )
+    new_names = {r["name"] for r in gs2.list_symbols()}
+    gs2.close()
+    assert "zzqx_new_symbol" not in new_names, (
+        "watcher must not update graph: zzqx_new_symbol appeared in symbols (only kb_sweep does that)"
+    )
+
+
+def test_p34_start_watcher_wires_enabled_projects(tmp_path):
+    """P34.3: start_watcher() registers all enabled projects and excludes disabled ones."""
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon.server import start_watcher
+    dir_a, dir_b, dir_c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    dir_c.mkdir()
+    path_a, path_b, path_c = str(dir_a), str(dir_b), str(dir_c)
+    upsert_project(ProjectEntry(path=path_a, enabled=True))
+    upsert_project(ProjectEntry(path=path_b, enabled=True))
+    upsert_project(ProjectEntry(path=path_c, enabled=False))
+    try:
+        w = start_watcher()
+        try:
+            assert path_a in w._paths, f"enabled proj_a not watched: {list(w._paths)}"
+            assert path_b in w._paths, f"enabled proj_b not watched: {list(w._paths)}"
+            assert path_c not in w._paths, f"disabled proj_c must not be watched: {list(w._paths)}"
+        finally:
+            w.stop()
+    finally:
+        remove_project(path_a)
+        remove_project(path_b)
+        remove_project(path_c)
