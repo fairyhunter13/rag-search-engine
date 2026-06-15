@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -78,13 +79,27 @@ def test_e2e_ask_global_non_empty(live_client, proj_key):
 # S6: Federation / symlink-repo invariants
 # ---------------------------------------------------------------------------
 
+def _external_symlink_targets(root: Path) -> set[str]:
+    """Resolved targets of symlinked dirs under root pointing outside it (mirrors iter_files federation prune)."""
+    from opencode_search.core.config import IGNORED_DIRS
+    root = root.resolve()
+    out: set[str] = set()
+    for dp, dirs, _ in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+        for d in dirs:
+            p = Path(dp) / d
+            if p.is_symlink() and not p.resolve().is_relative_to(root):
+                out.add(str(p.resolve()))
+    return out
+
+
 def _symlinked_project() -> str | None:
     r = requests.post(f"{_BASE}/api/overview", json={"what": "projects"}, timeout=10)
     if r.status_code != 200:
         return None
     for p in json.loads(r.text).get("projects", []):
         path = Path(p["path"])
-        if path.exists() and any(c.is_symlink() for c in path.iterdir() if c.is_dir()):
+        if path.exists() and _external_symlink_targets(path):
             return p["path"]
     return None
 
@@ -92,8 +107,7 @@ def _symlinked_project() -> str | None:
 def test_federation_indexing_prunes_symlink_targets(live_client):
     """S6a: Indexing a root with symlinked sub-repos must not wildly inflate file_count."""
     root = _symlinked_project()
-    if root is None:
-        pytest.skip("no indexed project with symlinked sub-directories")
+    assert root is not None, "no indexed project with external symlinked sub-dirs (expected astro-project)"
     root_path = Path(root)
     own_files = sum(
         1 for f in root_path.rglob("*")
@@ -111,16 +125,10 @@ def test_federation_indexing_prunes_symlink_targets(live_client):
 def test_federation_kb_reflects_root_only(live_client):
     """S6b: graph.db symbols must not include files from symlinked member paths."""
     root = _symlinked_project()
-    if root is None:
-        pytest.skip("no indexed project with symlinked sub-directories")
+    assert root is not None, "no indexed project with external symlinked sub-dirs (expected astro-project)"
     gdb = _graph_db(root)
-    if not gdb.exists():
-        pytest.skip("graph.db not found for symlinked root")
-    root_path = Path(root)
-    symlinked = {str(c.resolve()) for c in root_path.iterdir()
-                 if c.is_symlink() and c.is_dir()}
-    if not symlinked:
-        pytest.skip("no symlinked sub-dirs in root")
+    assert gdb.exists(), f"graph.db not found for symlinked root {root}"
+    symlinked = _external_symlink_targets(Path(root))
     con = sqlite3.connect(str(gdb))
     try:
         outsiders = [
