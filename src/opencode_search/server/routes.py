@@ -42,7 +42,12 @@ async def _api_projects(request: Request) -> JSONResponse:
 
 async def _api_overview(request: Request) -> JSONResponse:
     import json
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
     from opencode_search.server._overview import handle_overview
     proj = body.get("project") or body.get("project_path", "")
     return JSONResponse(json.loads(handle_overview(proj, body.get("what", "structure"))))

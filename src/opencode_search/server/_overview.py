@@ -146,7 +146,8 @@ def handle_overview(project_path: str, what: str) -> str:
                     l2p = round(l2s / l2t * 100, 1) if l2t else 100.0
                     _pct = round(min(l1p, l2p), 1)
                     ep = get_project(p)
-                    _ks = ("indexing" if not project_vector_db(p).exists() else
+                    _ks = ("indexing" if (ep is None or ep.indexed_at is None
+                                          or not project_vector_db(p).exists()) else
                            "ready" if _pct >= 95 else "enriching" if l1p > 0 else "searchable")
                     s, cm = gs.symbol_count(), gs.community_count()
                     tot_sym += s

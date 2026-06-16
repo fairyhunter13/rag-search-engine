@@ -47,26 +47,14 @@ async def _api_build_hierarchy(request: Request) -> JSONResponse:
 
 
 async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
-    import sqlite3
-
     from opencode_search.core.registry import list_projects
     from opencode_search.daemon import sweeps
     pending = []
     for p in list_projects():
         if not p.enabled:
             continue
-        if sweeps._needs_index(p.path):
+        if sweeps._needs_index(p.path) or sweeps._needs_enrich(p.path):
             pending.append(p.path)
-            continue
-        gdb = project_graph_db(p.path)
-        if gdb.exists():
-            try:
-                with sqlite3.connect(str(gdb)) as con:
-                    n = con.execute("SELECT COUNT(*) FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1").fetchone()[0]
-                    if n:
-                        pending.append(p.path)
-            except Exception:
-                pass
     return JSONResponse({"enabled": not sweeps._PAUSED, "pending": pending})
 
 

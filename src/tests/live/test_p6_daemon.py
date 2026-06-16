@@ -882,3 +882,86 @@ def test_p34_start_watcher_wires_enabled_projects(tmp_path):
         remove_project(path_a)
         remove_project(path_b)
         remove_project(path_c)
+
+
+# ---------------------------------------------------------------------------
+# Fix #3b: on_change backoff + _PAUSED guard
+# ---------------------------------------------------------------------------
+
+def test_on_change_respects_pause(safe_tmp_path):
+    """Fix #3b: on_change is a no-op when _PAUSED is True — no reindex side effect."""
+    import opencode_search.daemon.sweeps as sweeps_mod
+    from opencode_search.daemon.sweeps import on_change
+
+    (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
+    orig = sweeps_mod._PAUSED
+    sweeps_mod._PAUSED = True
+    reindexed: list = []
+    orig_idx = sweeps_mod._index_files
+    sweeps_mod._index_files = lambda *a, **kw: reindexed.append(a)
+    try:
+        on_change(str(safe_tmp_path), [str(safe_tmp_path / "a.py")])
+        assert not reindexed, "_index_files must not be called when _PAUSED"
+    finally:
+        sweeps_mod._PAUSED = orig
+        sweeps_mod._index_files = orig_idx
+
+
+def test_on_change_backoff_after_failure(safe_tmp_path):
+    """Fix #3b: on_change skips reindex when inside the _INDEX_BACKOFF_S window."""
+    import time
+
+    import opencode_search.daemon.sweeps as sweeps_mod
+    from opencode_search.daemon.sweeps import _INDEX_BACKOFF_S, on_change
+
+    (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
+    path = str(safe_tmp_path)
+    sweeps_mod._last_index_fail[path] = time.monotonic()
+    reindexed: list = []
+    orig_idx = sweeps_mod._index_files
+    sweeps_mod._index_files = lambda *a, **kw: reindexed.append(a)
+    try:
+        on_change(path, [str(safe_tmp_path / "a.py")])
+        assert not reindexed, "_index_files must not be called inside backoff window"
+        assert _INDEX_BACKOFF_S == 120.0
+    finally:
+        sweeps_mod._last_index_fail.pop(path, None)
+        sweeps_mod._index_files = orig_idx
+
+
+# ---------------------------------------------------------------------------
+# Fix #4: /api/overview returns 400 on malformed JSON body
+# ---------------------------------------------------------------------------
+
+def test_api_overview_bad_json_returns_400(live_client):
+    """Fix #4: /api/overview must return 400 (not 500) for a malformed JSON body."""
+    r = live_client.post("/api/overview",
+                         data="{bad",
+                         headers={"Content-Type": "application/json"})
+    assert r.status_code == 400, f"/api/overview bad JSON: expected 400, got {r.status_code}"
+
+
+def test_api_overview_non_object_body_returns_400(live_client):
+    """Fix #4: /api/overview must return 400 for a JSON array body."""
+    import json as _json
+    r = live_client.post("/api/overview",
+                         data=_json.dumps([1, 2, 3]),
+                         headers={"Content-Type": "application/json"})
+    assert r.status_code == 400, f"/api/overview array body: expected 400, got {r.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# Daemon health gate
+# ---------------------------------------------------------------------------
+
+def test_daemon_healthz_responsive(live_client):
+    """Daemon event loop must not be wedged: /healthz must respond < 2 s."""
+    import time
+    t0 = time.monotonic()
+    r = live_client.get("/healthz", timeout=2)
+    elapsed = time.monotonic() - t0
+    assert r.status_code == 200, f"/healthz returned {r.status_code}"
+    data = r.json()
+    assert data.get("ok") is True, f"/healthz ok != True: {data}"
+    assert "rss_mb" in data, f"/healthz missing rss_mb: {data}"
+    assert elapsed < 2.0, f"/healthz took {elapsed:.2f}s > 2s — event loop may be wedged"
