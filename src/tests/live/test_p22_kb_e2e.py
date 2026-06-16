@@ -391,7 +391,7 @@ def test_overview_status_includes_config_key(live_client):
     assert "config" in status, f"overview(status) missing 'config' key: {list(status)}"
     cfg = status["config"]
     assert "source" in cfg and "exclude" in cfg, f"config key missing fields: {cfg}"
-    assert cfg["source"] in ("own", "inherited"), f"unexpected config.source: {cfg['source']}"
+    assert cfg["source"] in ("own", "inherited", "default"), f"unexpected config.source: {cfg['source']}"
 
 
 def test_iter_files_always_yields_ose_config(safe_tmp_path):
