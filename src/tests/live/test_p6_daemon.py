@@ -972,7 +972,7 @@ def test_daemon_healthz_responsive(live_client):
 # ---------------------------------------------------------------------------
 
 def test_ort_thread_cap_in_monkeypatch():
-    """ORT monkeypatch caps intra/inter threads to 1 + disables spinning — idle CPU drops to ~0."""
+    """ORT SessionOptions init-hook caps intra/inter threads to 1 + disables spinning — idle CPU drops to ~0."""
     import inspect
 
     from opencode_search.embed import embedder as emb_mod
