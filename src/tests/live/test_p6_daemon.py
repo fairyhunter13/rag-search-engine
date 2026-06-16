@@ -741,6 +741,44 @@ def test_on_change_kb_debounce(safe_tmp_path):
         sweeps._last_kb_enrich.pop(proj, None)
 
 
+def test_watcher_kb_e2e(tmp_path):
+    """T5/HR2+HR3: on_change outside debounce triggers _enrich_project; existing summaries not wiped."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.daemon import sweeps
+    from opencode_search.daemon.sweeps import _index_project, on_change
+    from opencode_search.graph.store import GraphStore
+
+    proj = str(tmp_path)
+    (tmp_path / "seed.py").write_text("def seed_fn(): pass\n")
+    _index_project(proj)
+
+    gdb = project_graph_db(proj)
+    gs = GraphStore(gdb)
+    try:
+        gs._con.execute("UPDATE communities SET summary='before' WHERE level=1 AND summary IS NULL")
+        gs.commit()
+    finally:
+        gs.close()
+
+    sweeps._last_kb_enrich.pop(proj, None)
+    try:
+        (tmp_path / "new.py").write_text("def extra(): pass\n")
+        on_change(proj, [tmp_path / "new.py"])
+        assert proj in sweeps._last_kb_enrich, (
+            "on_change outside debounce must call _enrich_project (HR2 violation)"
+        )
+        gs = GraphStore(gdb)
+        try:
+            wiped = gs._con.execute(
+                "SELECT COUNT(*) FROM communities WHERE level=1 AND (summary IS NULL OR summary='')"
+            ).fetchone()[0]
+        finally:
+            gs.close()
+        assert wiped == 0, f"on_change wiped {wiped} L1 summaries (HR3/F1 violation)"
+    finally:
+        sweeps._last_kb_enrich.pop(proj, None)
+
+
 def test_p35_enrich_project_prunes_orphan_communities(safe_tmp_path):
     """P35: _enrich_project prunes L1 communities with 0 symbols before enriching."""
     import sqlite3

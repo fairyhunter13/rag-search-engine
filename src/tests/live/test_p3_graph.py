@@ -110,6 +110,36 @@ def test_community_detection_assigns_ids():
         store.close()
 
 
+def test_detect_communities_idempotent(tmp_path):
+    """T2/F1/HR3: detect_communities re-run must NOT wipe existing L1 community summaries."""
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.extractor import extract_symbols, symbol_id
+    from opencode_search.graph.store import GraphStore
+
+    fpath = tmp_path / "a.py"
+    fpath.write_text(_PY)
+    gs = GraphStore(tmp_path / "g.db")
+    try:
+        for s in extract_symbols(fpath, _PY, "python"):
+            sid = symbol_id(str(fpath), s.name, s.start_line)
+            gs.upsert_symbol(sid, s.name, s.qualified_name, s.kind,
+                             str(fpath), s.start_line, s.end_line, s.language)
+        gs.commit()
+        detect_communities(gs)
+        gs._con.execute("UPDATE communities SET summary='sentinel' WHERE level=1 AND summary IS NULL")
+        gs.commit()
+        detect_communities(gs)  # re-run — must not wipe 'sentinel'
+        wiped = gs._con.execute(
+            "SELECT COUNT(*) FROM communities WHERE level=1 AND (summary IS NULL OR summary='')"
+        ).fetchone()[0]
+        assert wiped == 0, (
+            f"detect_communities wiped {wiped} L1 summaries on re-run "
+            f"(HR3/F1 violation: summary=None fix not effective)"
+        )
+    finally:
+        gs.close()
+
+
 # ── LLM client ───────────────────────────────────────────────────────────────
 
 @pytest.mark.slow

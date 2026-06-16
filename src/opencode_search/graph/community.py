@@ -68,7 +68,7 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
     counts = Counter(mapping.values())
     for cid, cnt in counts.items():
         store.upsert_community(cid, level=1, title=None,
-                               summary="", member_count=cnt)
+                               summary=None, member_count=cnt)
     sid_to_name = {s["sid"]: s["name"] for s in symbols}
     cid_to_names: dict[int, list[str]] = {}
     for sid, cid in mapping.items():

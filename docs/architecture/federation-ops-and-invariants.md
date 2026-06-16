@@ -53,6 +53,50 @@ LLM vars match daemon defaults; query-LLM is never called by MCP tools.
 
 ## 13. Invariants the engine MUST uphold
 
+## 13a. Hard pipeline requirements — the contract
+
+The diagram and HR table (§13b) are the normative write-path spec. A change
+that violates them is an architecture regression; §14 maps each HR to the live
+test that proves it.
+
+```
+┌──────────── QUERY PATH (synchronous, read) ────────────┐
+│ MCP tools: search·ask·graph·overview·index (HTTP :8765) │
+│ routes → mcp.py / _overview.py / routes_search.py       │
+│ FEDERATION FAN-OUT  federation.py                        │
+│   expand_federation(root) = [root] + symlink members     │
+│   federated_map(fn) → fn on each member's OWN stores     │
+│ union lists · worst-of kb_state · per-member stores      │
+└────────────────────────────────────────────────────────┘
+
+┌──────────── BACKGROUND PATH (async, write) ────────────┐
+│ _start_background: scheduler(6h/idle/watchdog)           │
+│   NO kb_sweep, NO periodic reconcile                     │
+│ reconcile_projects() — once at startup (thread)          │
+│ start_watcher() — inotify, all enabled projects, 2s      │
+│   on_change(project, files)  ← ONLY steady-state trigger │
+│     ├─ _index_files()   → incremental VECTOR re-embed    │
+│     └─ _enrich_project() → KB build, 45s/project debounce│
+│ _index_project = chunk+embed → symbols → edges → L1      │
+│ _enrich_project = enrich L1 → build_hierarchy → L2       │
+│                  → build_wiki   (GPU-only, CPU fatal)    │
+└────────────────────────────────────────────────────────┘
+kb_state: indexing → searchable → enriching → ready
+          (no vec)   (vec,l1=0)  (0<pct<95)  (l1≥95,l2=100)
+```
+
+## 13b. Hard requirements (HR)
+
+| # | Hard requirement |
+|---|---|
+| **HR1** | Watcher is the steady-state indexing trigger; `on_change` incremental-embeds changed files. Full `_index_project` (graph+Leiden) runs only at first index / reconcile. |
+| **HR2** | KB enrichment is triggered by the same watcher event on its own 45s/project debounce. Event-driven only — no `kb_sweep` / periodic reconcile timer. |
+| **HR3** | Re-running `detect_communities` / `_enrich_project` MUST NOT wipe existing summaries. `ready` stays `ready` across re-index (`summary=None` in `upsert_community`, never `""`). |
+| **HR4** | Federation = query-time union; each member has its own stores; no cross-repo edges. Fan-out via `expand_federation`/`federated_map`. (≡ inv#1–#4.) |
+| **HR5** | One absolute path = one index dir. Two distinct clones → two indexes. (≡ inv#2, #8.) |
+| **HR6** | GPU-only; any CPU fallback raises fatally. (≡ inv#5.) |
+| **HR7** | `kb_state` lifecycle: `indexing → searchable → enriching → ready`; `ready` iff `enriched_pct ≥ 95 AND l2_enriched_pct == 100`. Federated entity = worst-of members. |
+
 1. **No inlining** — external symlinked sub-repos are never indexed into the root
    (`federation_mode=True`); indexed only as independent members.
 2. **Members are first-class** — every member is an enabled, separately-searchable project
@@ -81,6 +125,13 @@ Each §13 invariant has a corresponding live test that proves it without mocks:
 | #6 forbidden root | `test_inv6_forbidden_root` | `test_federation_architecture.py` |
 | #8 cascade remove | `test_inv8_cascade_remove` | `test_federation_architecture.py` |
 | /api/federation fix | `test_api_federation_uses_expand_federation` | `test_p22_kb_e2e.py` |
+| HR1 watcher→index | `test_watcher_index_e2e` | `test_p6_daemon.py` |
+| HR2 watcher→KB / event-driven | `test_watcher_kb_e2e` + `:704` guard | `test_p6_daemon.py` |
+| HR3 enrichment idempotence | `test_detect_communities_idempotent` + stability | `test_p3_graph.py` |
+| HR4 federation fan-out | `test_real_federation_fanout` + `test_inv4` | `test_p22_kb_e2e.py` / `test_federation_architecture.py` |
+| HR5 one path → one index | `test_inv2_members_first_class` + `test_inv8` | `test_federation_architecture.py` |
+| HR6 GPU-only | `test_inv5_gpu_only` | `test_federation_architecture.py` |
+| HR7 kb_state → ready | `test_kb_state_ready_all_projects` | `test_p22_kb_e2e.py` |
 
 ## 15. Design rationale
 

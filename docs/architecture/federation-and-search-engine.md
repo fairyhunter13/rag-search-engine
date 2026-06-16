@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-16.
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-16 (§13a–§13b contract + §14 HR matrix added).
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope

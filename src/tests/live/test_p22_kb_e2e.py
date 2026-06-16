@@ -175,3 +175,61 @@ def test_api_federation_uses_expand_federation(safe_tmp_path):
         remove_project(str(member))
         shutil.rmtree(index_dir(str(root)), ignore_errors=True)
         shutil.rmtree(index_dir(str(member)), ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# T1/HR7: all 3 projects must reach kb_state='ready'
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("proj_key", ["ose", "payment", "astro"])
+def test_kb_state_ready_all_projects(live_client, proj_key):
+    """T1/HR7: each registered project must be at kb_state='ready' with l2_enriched_pct==100."""
+    status = _overview("status", _PROJECTS[proj_key])
+    assert status.get("kb_state") == "ready", (
+        f"{proj_key}: expected kb_state='ready', "
+        f"got {status.get('kb_state')!r} (enriched_pct={status.get('enriched_pct')}, "
+        f"l2={status.get('l2_enriched_pct')})"
+    )
+    assert status.get("l2_enriched_pct") == 100.0, (
+        f"{proj_key}: l2_enriched_pct={status.get('l2_enriched_pct')!r} < 100"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T3/HR3: overview(status) must return identical counts between reads (no churn)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("proj_key", ["ose", "payment"])
+def test_kb_state_no_churn(live_client, proj_key):
+    """T3/HR3: symbols/communities/enriched_pct must be stable between back-to-back reads."""
+    import time
+    s1 = _overview("status", _PROJECTS[proj_key])
+    time.sleep(2)
+    s2 = _overview("status", _PROJECTS[proj_key])
+    for field in ("symbols", "communities", "enriched_pct"):
+        assert s1.get(field) == s2.get(field), (
+            f"{proj_key}: {field} changed between reads: "
+            f"{s1.get(field)} → {s2.get(field)} (churn detected, HR3 violation)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T6/HR4: federation fan-out on the REAL redacted-name-3
+# ---------------------------------------------------------------------------
+
+def test_real_federation_fanout(live_client):
+    """T6/HR4: redacted-name-3 members list has ≥1 member with real symbols; search fans out."""
+    status = _overview("status", _PROJECTS["astro"])
+    members = status.get("members", [])
+    assert members, "redacted-name-3 overview(status) returned no members (federation broken)"
+    with_syms = [m for m in members if m.get("symbols", 0) > 0]
+    assert with_syms, (
+        f"no astro members have symbols > 0 (fan-out not working); "
+        f"sample: {[(m['path'].split('/')[-1], m['symbols']) for m in members[:3]]}"
+    )
+    r = requests.post(f"{_BASE}/api/search",
+                      json={"query": "function", "project_paths": [_PROJECTS["astro"]]},
+                      headers=_HDR, timeout=20)
+    assert r.status_code == 200, f"search fan-out from redacted-name-3: HTTP {r.status_code}"
+    results = json.loads(r.text).get("results", [])
+    assert results, "search(project_paths=[redacted-name-3]) returned no results (fan-out broken)"
