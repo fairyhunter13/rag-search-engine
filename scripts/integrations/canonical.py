@@ -15,12 +15,6 @@ from pathlib import Path as _Path
 CANONICAL_MCP_URL = "http://127.0.0.1:8765/mcp"
 
 # ---------------------------------------------------------------------------
-# Global lean-gate enforcement (hook path + deny globs for ~/.claude/settings.json)
-# ---------------------------------------------------------------------------
-
-LEAN_GATE_HOOK_PATH: str = str(_Path.home() / ".claude" / "hooks" / "lean-gate.sh")
-
-# ---------------------------------------------------------------------------
 # Sentinels per file type
 # ---------------------------------------------------------------------------
 
@@ -28,20 +22,6 @@ SENTINEL_CLAUDE_START = "<!-- >>> opencode-search global instructions >>> -->"
 SENTINEL_CLAUDE_END   = "<!-- <<< opencode-search global instructions <<< -->"
 SENTINEL_AGENTS_START      = "[opencode-search-global-instructions:start]"
 SENTINEL_AGENTS_END        = "[opencode-search-global-instructions:end]"
-SENTINEL_LEAN_START        = "<!-- >>> lean-change mandate >>> -->"
-SENTINEL_LEAN_END          = "<!-- <<< lean-change mandate <<< -->"
-SENTINEL_LEAN_AGENTS_START = "[lean-change-mandate:start]"
-SENTINEL_LEAN_AGENTS_END   = "[lean-change-mandate:end]"
-
-# ---------------------------------------------------------------------------
-# Canonical lean-change mandate (Claude profiles only — names the Claude skill)
-# ---------------------------------------------------------------------------
-
-LEAN_BODY = (
-    "MANDATORY: always enforce and implement the lean-change skill by default"
-    " — make every change the smallest, simplest, most surgical diff that works;"
-    " each line is a liability."
-)
 
 # ---------------------------------------------------------------------------
 # Canonical system prompt body (shared across all tool types)
@@ -73,40 +53,3 @@ def claude_block() -> str:
 def agents_md_block() -> str:
     """Return the canonical sentinel-wrapped block for AGENTS.md files."""
     return f"{SENTINEL_AGENTS_START}\n{CANONICAL_BODY}\n{SENTINEL_AGENTS_END}\n"
-
-
-def lean_claude_block() -> str:
-    """Return the canonical sentinel-wrapped lean-change mandate for CLAUDE.md files."""
-    return f"{SENTINEL_LEAN_START}\n{LEAN_BODY}\n{SENTINEL_LEAN_END}\n"
-
-
-def lean_agents_block() -> str:
-    """Return the canonical sentinel-wrapped lean-change mandate for AGENTS.md / hermes."""
-    return f"{SENTINEL_LEAN_AGENTS_START}\n{LEAN_BODY}\n{SENTINEL_LEAN_AGENTS_END}\n"
-
-
-# ---------------------------------------------------------------------------
-# Canonical lean-change SKILL.md (cross-agent: Claude, codex, opencode, hermes)
-# ---------------------------------------------------------------------------
-
-LEAN_SKILL_MD = """\
----
-name: lean-change
-description: Enforce the smallest possible surgical diff — less is more, each line is a liability. Load on demand for the 6-check checklist.
----
-
-# Lean-Change
-
-**Creed:** the best change is none. The next best is a deletion. Then the fewest lines that work.
-
-## 6 checks before every edit (all required)
-
-1. **Search first** — call `opencode-search` before adding anything. Reuse existing code.
-2. **Need it?** — satisfy the requirement by reusing, configuring, or deleting before adding code.
-3. **Smallest diff** — minimum change. No speculative abstraction. No unrequested refactor. No "while I'm here." Plainest construct (KISS).
-4. **No new dependency** without a one-line justification tied to the requirement. Prefer stdlib or already-vendored.
-5. **Reduction pass (MANDATORY)** — after drafting, re-read and cut every non-load-bearing line. Aim net-negative. Delete dead code; never comment it out.
-6. **Verify** — `go vet ./... && go test ./...` or `npx tsc --noEmit` green before commit.
-
-The `PreToolUse` hook auto-enforces the diff budget (≤40 net lines on existing files, ≤150 on new).
-"""

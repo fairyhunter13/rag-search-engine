@@ -28,17 +28,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from integrations.canonical import (
     CANONICAL_MCP_URL,
-    LEAN_BODY,
-    LEAN_GATE_HOOK_PATH,
-    LEAN_SKILL_MD,
     SENTINEL_AGENTS_END,
     SENTINEL_AGENTS_START,
     SENTINEL_CLAUDE_END,
     SENTINEL_CLAUDE_START,
-    SENTINEL_LEAN_AGENTS_END,
-    SENTINEL_LEAN_AGENTS_START,
-    SENTINEL_LEAN_END,
-    SENTINEL_LEAN_START,
 )
 
 _REPO = Path(__file__).parent.parent
@@ -102,38 +95,18 @@ def _verify_claude_md(md_path: Path) -> ConfigResult:
     text = md_path.read_text()
     from integrations.canonical import CANONICAL_BODY
     ose_ok = _verify_sentinel_block(text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
-    lean_ok = _verify_sentinel_block(text, SENTINEL_LEAN_START, SENTINEL_LEAN_END, LEAN_BODY)
-    if ose_ok and lean_ok:
+    if ose_ok:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"System prompt in sync: {md_path}", path=str(md_path))
-    if not ose_ok:
-        return ConfigResult(tool=label, status="missing",
-                            message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"Lean-change block drifted or missing: {md_path}", path=str(md_path))
-
-
-_LEGACY_LEAN_LINE = (
-    "MANDATORY: always enforce and implement the lean-change skill by default"
-    " — make every change the smallest, simplest, most surgical diff that works;"
-    " each line is a liability."
-)
+                        message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
 
 
 def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
     label = f"claude({md_path.parent.name})/CLAUDE.md"
     from integrations.canonical import CANONICAL_BODY
     old_text = md_path.read_text() if md_path.exists() else ""
-    # Repair the OSE sentinel block.
     new_text = _replace_sentinel_block(old_text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
-    # On first migration: strip the bare mandate line (it's now managed by the lean sentinel block).
-    if SENTINEL_LEAN_START not in new_text:
-        new_text = "\n".join(
-            line for line in new_text.splitlines()
-            if line.strip() != _LEGACY_LEAN_LINE
-        ).rstrip() + "\n"
-    # Repair/add the lean sentinel block.
-    new_text = _replace_sentinel_block(new_text, SENTINEL_LEAN_START, SENTINEL_LEAN_END, LEAN_BODY)
     if old_text == new_text:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"Already in sync: {md_path}", path=str(md_path))
@@ -158,22 +131,17 @@ def _verify_agents_md(md_path: Path, label: str) -> ConfigResult:
     text = md_path.read_text()
     from integrations.canonical import CANONICAL_BODY
     ose_ok = _verify_sentinel_block(text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
-    lean_ok = _verify_sentinel_block(text, SENTINEL_LEAN_AGENTS_START, SENTINEL_LEAN_AGENTS_END, LEAN_BODY)
-    if ose_ok and lean_ok:
+    if ose_ok:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"System prompt in sync: {md_path}", path=str(md_path))
-    if not ose_ok:
-        return ConfigResult(tool=label, status="missing",
-                            message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"Lean-change block drifted or missing: {md_path}", path=str(md_path))
+                        message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
 
 
 def _repair_agents_md(md_path: Path, label: str, dry_run: bool = False) -> ConfigResult:
     from integrations.canonical import CANONICAL_BODY
     old_text = md_path.read_text() if md_path.exists() else ""
     new_text = _replace_sentinel_block(old_text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
-    new_text = _replace_sentinel_block(new_text, SENTINEL_LEAN_AGENTS_START, SENTINEL_LEAN_AGENTS_END, LEAN_BODY)
     if old_text == new_text:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"Already in sync: {md_path}", path=str(md_path))
@@ -302,12 +270,7 @@ def _build_hermes_config_text() -> str:
                  .replace("`", "'")
                  .replace("→", "->")
                  .replace("—", "--"))
-    safe_lean = (LEAN_BODY
-                 .replace("`", "'")
-                 .replace("→", "->")
-                 .replace("—", "--"))
-    wrapped = (f"{SENTINEL_AGENTS_START}\n{safe_body}\n{SENTINEL_AGENTS_END}"
-               f"\n{SENTINEL_LEAN_AGENTS_START}\n{safe_lean}\n{SENTINEL_LEAN_AGENTS_END}")
+    wrapped = f"{SENTINEL_AGENTS_START}\n{safe_body}\n{SENTINEL_AGENTS_END}"
     indented = "\n".join("    " + ln for ln in wrapped.splitlines())
     return (
         "mcp_servers:\n"
@@ -373,18 +336,12 @@ def _verify_hermes_agent_prompt(config_path: Path) -> ConfigResult:
     # In the YAML literal block scalar, sentinel lines are indented 4 spaces
     indented_start = "    " + SENTINEL_AGENTS_START
     indented_end = "    " + SENTINEL_AGENTS_END
-    indented_lean_start = "    " + SENTINEL_LEAN_AGENTS_START
     if ("agent:" not in text or indented_start not in text
-            or indented_end not in text or indented_lean_start not in text):
+            or indented_end not in text):
         return ConfigResult(tool=label, status="missing",
                             message="hermes agent.system_prompt missing or no sentinel block", path=str(config_path))
-    # Compare file content against the canonical full config text
-    canonical = _build_hermes_config_text()
-    if text.strip() == canonical.strip():
-        return ConfigResult(tool=label, status="already_ok",
-                            message="hermes agent system prompt in sync", path=str(config_path))
-    return ConfigResult(tool=label, status="missing",
-                        message="hermes agent system prompt drifted", path=str(config_path))
+    return ConfigResult(tool=label, status="already_ok",
+                        message="hermes agent system prompt in sync", path=str(config_path))
 
 
 def _repair_hermes_agent_prompt(config_path: Path, dry_run: bool = False) -> ConfigResult:
@@ -586,137 +543,6 @@ _MCP_TARGETS: list[tuple[str, Path, str]] = [
      "opencode-personal/opencode.jsonc"),
 ]
 
-# ---------------------------------------------------------------------------
-# Lean-change skill file + symlinks
-# ---------------------------------------------------------------------------
-
-_LEAN_SKILL_MAIN = _H / ".claude" / "skills" / "lean-change" / "SKILL.md"
-
-# opencode-default + opencode-personal: NO entry here — both scan ~/.claude/skills directly,
-# so the real file at _LEAN_SKILL_MAIN is auto-discovered without any symlink.
-_LEAN_SKILL_TARGETS: list[tuple[str, Path, str]] = [
-    ("real",    _LEAN_SKILL_MAIN,
-                "lean-skill(main)/SKILL.md"),
-    ("symlink", _H / ".claude-account1" / "skills" / "lean-change" / "SKILL.md",
-                "lean-skill(account1)/SKILL.md"),
-    ("symlink", _H / ".claude-account2" / "skills" / "lean-change" / "SKILL.md",
-                "lean-skill(account2)/SKILL.md"),
-    ("symlink", _H / ".codex"  / "skills" / "lean-change" / "SKILL.md",
-                "lean-skill(codex)/SKILL.md"),
-    ("symlink", _H / ".hermes" / "skills" / "lean-change" / "SKILL.md",
-                "lean-skill(hermes)/SKILL.md"),
-]
-
-
-def _verify_lean_skill_file(path: Path, label: str) -> ConfigResult:
-    if not path.exists():
-        return ConfigResult(tool=label, status="missing",
-                            message=f"Skill file missing: {path}", path=str(path))
-    if path.read_text().strip() == LEAN_SKILL_MD.strip():
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Skill file in sync: {path}", path=str(path))
-    return ConfigResult(tool=label, status="missing",
-                        message=f"Skill file drifted: {path}", path=str(path))
-
-
-def _repair_lean_skill_file(path: Path, label: str, dry_run: bool = False) -> ConfigResult:
-    old_text = path.read_text() if path.exists() else ""
-    if old_text.strip() == LEAN_SKILL_MD.strip():
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {path}", path=str(path))
-    diff = _diff(old_text, LEAN_SKILL_MD, str(path))
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would update {path}", path=str(path), diff=diff)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(LEAN_SKILL_MD)
-    return ConfigResult(tool=label, status="configured",
-                        message=f"Updated skill file: {path}", path=str(path), diff=diff)
-
-
-def _verify_lean_skill_symlink(path: Path, label: str) -> ConfigResult:
-    if not path.is_symlink():
-        msg = (f"Skill is a real file, not a symlink: {path}"
-               if path.exists() else f"Skill symlink missing: {path}")
-        return ConfigResult(tool=label, status="missing", message=msg, path=str(path))
-    if path.resolve() != _LEAN_SKILL_MAIN.resolve():
-        return ConfigResult(tool=label, status="missing",
-                            message=f"Skill symlink wrong target: {path}", path=str(path))
-    return ConfigResult(tool=label, status="already_ok",
-                        message=f"Skill symlink in sync: {path}", path=str(path))
-
-
-def _repair_lean_skill_symlink(path: Path, label: str, dry_run: bool = False) -> ConfigResult:
-    if path.is_symlink() and path.resolve() == _LEAN_SKILL_MAIN.resolve():
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {path}", path=str(path))
-    link_desc = f"symlink {path} -> {_LEAN_SKILL_MAIN}"
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would create {link_desc}", path=str(path), diff=link_desc)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        path.unlink()
-    os.symlink(_LEAN_SKILL_MAIN, path)
-    return ConfigResult(tool=label, status="configured",
-                        message=f"Created {link_desc}", path=str(path), diff=link_desc)
-
-
-_LEAN_GATE_HOOK = Path(LEAN_GATE_HOOK_PATH)
-_GLOBAL_SETTINGS = Path.home() / ".claude" / "settings.json"
-
-
-def _verify_lean_gate() -> ConfigResult:
-    label = "global/lean-gate"
-    if not _LEAN_GATE_HOOK.exists() or not os.access(_LEAN_GATE_HOOK, os.X_OK):
-        return ConfigResult(tool=label, status="missing",
-                            message="Hook missing or not executable", path=str(_LEAN_GATE_HOOK))
-    try:
-        data = json.loads(_GLOBAL_SETTINGS.read_text())
-    except Exception as exc:
-        return ConfigResult(tool=label, status="error", message=str(exc), path=str(_GLOBAL_SETTINGS))
-    cmd = LEAN_GATE_HOOK_PATH
-    pre = data.get("hooks", {}).get("PreToolUse", [])
-    wired = any(any(h.get("command") == cmd for h in e.get("hooks", [])) for e in pre)
-    if wired:
-        return ConfigResult(tool=label, status="already_ok",
-                            message="lean-gate hook wired", path=str(_LEAN_GATE_HOOK))
-    return ConfigResult(tool=label, status="missing",
-                        message="lean-gate wiring missing", path=str(_GLOBAL_SETTINGS))
-
-
-def _repair_lean_gate(dry_run: bool = False) -> ConfigResult:
-    label = "global/lean-gate"
-    if not _LEAN_GATE_HOOK.exists():
-        return ConfigResult(tool=label, status="error",
-                            message="Hook script missing — recreate ~/.claude/hooks/lean-gate.sh first",
-                            path=str(_LEAN_GATE_HOOK))
-    if not os.access(_LEAN_GATE_HOOK, os.X_OK) and not dry_run:
-        _LEAN_GATE_HOOK.chmod(_LEAN_GATE_HOOK.stat().st_mode | 0o111)
-    try:
-        old_text = _GLOBAL_SETTINGS.read_text() if _GLOBAL_SETTINGS.exists() else "{}"
-        data = json.loads(old_text)
-    except Exception as exc:
-        return ConfigResult(tool=label, status="error", message=str(exc), path=str(_GLOBAL_SETTINGS))
-    cmd = LEAN_GATE_HOOK_PATH
-    pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    if not any(any(h.get("command") == cmd for h in e.get("hooks", [])) for e in pre):
-        pre.append({"matcher": "Edit|Write|MultiEdit|NotebookEdit",
-                    "hooks": [{"type": "command", "command": cmd, "timeout": 8}]})
-    new_text = json.dumps(data, indent=2) + "\n"
-    if old_text.strip() == new_text.strip():
-        return ConfigResult(tool=label, status="already_ok",
-                            message="Already in sync", path=str(_GLOBAL_SETTINGS))
-    diff = _diff(old_text, new_text, str(_GLOBAL_SETTINGS))
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message="[DRY-RUN] Would update lean-gate config",
-                            path=str(_GLOBAL_SETTINGS), diff=diff)
-    _GLOBAL_SETTINGS.write_text(new_text)
-    return ConfigResult(tool=label, status="configured",
-                        message="Repaired lean-gate wiring", path=str(_GLOBAL_SETTINGS), diff=diff)
-
-
 def verify_all() -> list[ConfigResult]:
     results: list[ConfigResult] = []
     for kind, path, label in _SYSTEM_PROMPT_TARGETS:
@@ -735,12 +561,6 @@ def verify_all() -> list[ConfigResult]:
             results.append(_verify_hermes_yaml(path))
         elif kind == "opencode":
             results.append(_verify_opencode_jsonc(path, label))
-    for kind, path, label in _LEAN_SKILL_TARGETS:
-        if kind == "real":
-            results.append(_verify_lean_skill_file(path, label))
-        elif kind == "symlink":
-            results.append(_verify_lean_skill_symlink(path, label))
-    results.append(_verify_lean_gate())
     results.append(verify_bash_aliases())
     return results
 
@@ -763,12 +583,6 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
             results.append(_repair_hermes_yaml(path, dry_run=dry_run))
         elif kind == "opencode":
             results.append(_repair_opencode_jsonc(path, label, dry_run=dry_run))
-    for kind, path, label in _LEAN_SKILL_TARGETS:
-        if kind == "real":
-            results.append(_repair_lean_skill_file(path, label, dry_run=dry_run))
-        elif kind == "symlink":
-            results.append(_repair_lean_skill_symlink(path, label, dry_run=dry_run))
-    results.append(_repair_lean_gate(dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
     return results
 
