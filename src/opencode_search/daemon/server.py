@@ -87,14 +87,13 @@ def ensure_running(host: str = "127.0.0.1", port: int = 8765) -> bool:
 
 
 def _start_background() -> None:
-    from opencode_search.daemon.runtime_state import check_idle_shutdown, release_stale_clients
+    from opencode_search.daemon.runtime_state import check_idle_shutdown
     from opencode_search.daemon.scheduler import Scheduler
     from opencode_search.daemon.sweeps import maintenance, reconcile_projects
 
     scheduler = Scheduler()
     scheduler.register("maintenance", maintenance, interval_s=21600.0)  # 6 h; CPU/disk only
     scheduler.register("idle_shutdown", check_idle_shutdown, interval_s=60.0)
-    scheduler.register("stale_clients", release_stale_clients, interval_s=60.0)
     scheduler.register("idle_unload", _idle_unload, interval_s=60.0)
     watchdog_us = int(os.environ.get("WATCHDOG_USEC", "0"))
     if watchdog_us > 0:
