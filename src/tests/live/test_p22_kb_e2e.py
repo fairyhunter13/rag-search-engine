@@ -142,3 +142,36 @@ def test_federation_kb_reflects_root_only(live_client):
         f"graph.db for {root!r} contains {len(outsiders)} symbol files "
         f"from symlinked member paths: {outsiders[:3]}"
     )
+
+
+def test_api_federation_uses_expand_federation(safe_tmp_path):
+    """/api/federation must return the real symlink-based members, not all enabled projects."""
+    import shutil
+
+    from opencode_search.core.config import ProjectEntry, index_dir
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon.federation import index_members
+
+    uid = str(id(safe_tmp_path))[-6:]
+    root = safe_tmp_path / "root"
+    member = safe_tmp_path / f"member-{uid}"
+    root.mkdir()
+    member.mkdir()
+    (member / "x.py").write_text("x = 1\n")
+    (root / "link").symlink_to(member)
+    remove_project(str(root))
+    remove_project(str(member))
+    try:
+        upsert_project(ProjectEntry(path=str(root), enabled=True))
+        index_members(str(root))
+        r = requests.get(f"{_BASE}/api/federation", params={"project": str(root)})
+        assert r.status_code == 200, f"HTTP {r.status_code}: {r.text}"
+        data = r.json()
+        assert data.get("members") == [str(member)], (
+            f"Expected members=[{member}], got {data.get('members')}"
+        )
+    finally:
+        remove_project(str(root))
+        remove_project(str(member))
+        shutil.rmtree(index_dir(str(root)), ignore_errors=True)
+        shutil.rmtree(index_dir(str(member)), ignore_errors=True)

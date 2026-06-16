@@ -74,8 +74,8 @@ async def _api_federation(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
-    from opencode_search.core.registry import list_projects
-    members = [p.path for p in list_projects() if p.path != project and p.enabled]
+    from opencode_search.daemon.federation import expand_federation
+    members = expand_federation(project)[1:]
     return JSONResponse({"root": project, "members": members})
 
 

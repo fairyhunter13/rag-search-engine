@@ -68,7 +68,17 @@ async def search(
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search as _search
 
-    paths = _resolve_roots(project_paths) if project_paths else [p.path for p in list_projects() if p.enabled]
+    if project_paths:
+        from opencode_search.daemon.federation import expand_federation
+        _seen: set[str] = set()
+        paths = []
+        for _root in _resolve_roots(project_paths):
+            for _p in expand_federation(_root):
+                if _p not in _seen:
+                    _seen.add(_p)
+                    paths.append(_p)
+    else:
+        paths = [p.path for p in list_projects() if p.enabled]
     embedder = _get_embedder()
     results: list[dict] = []
     t0 = time.monotonic()
@@ -120,18 +130,28 @@ async def ask(
     if cached:
         return cached
 
-    vdb, gdb = project_vector_db(project_path), project_graph_db(project_path)
-    if not vdb.exists():
+    from opencode_search.daemon.federation import expand_federation
+    all_paths = expand_federation(project_path)
+    if not project_vector_db(project_path).exists():
         return f"Project not indexed: {project_path}"
     embedder = _get_embedder()
-    vs, gs = VectorStore(vdb), GraphStore(gdb)
+    gs = GraphStore(project_graph_db(project_path))
     try:
-        chunks = _search(query, embedder, vs, scope="all", top_k=8)
-        answer = compose_answer(query, chunks, gs, scope=scope)
+        chunks: list[dict] = []
+        for _p in all_paths:
+            _vdb = project_vector_db(_p)
+            if not _vdb.exists():
+                continue
+            _vs = VectorStore(_vdb)
+            try:
+                chunks.extend(_search(query, embedder, _vs, scope="all", top_k=8))
+            finally:
+                _vs.close()
+        chunks.sort(key=lambda r: r.get("score", 0), reverse=True)
+        answer = compose_answer(query, chunks[:8], gs, scope=scope)
         _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
         return answer
     finally:
-        vs.close()
         gs.close()
 
 
