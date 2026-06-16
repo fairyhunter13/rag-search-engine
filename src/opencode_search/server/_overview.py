@@ -107,74 +107,95 @@ def handle_overview(project_path: str, what: str) -> str:
         return json.dumps(detect_patterns(Path(project_path)))
     if project_path:
         from opencode_search.core.config import project_graph_db
+        from opencode_search.daemon.federation import expand_federation
         from opencode_search.graph.store import GraphStore
 
-        gdb = project_graph_db(project_path)
-        if gdb.exists():
-            gs = GraphStore(gdb)
-            try:
-                c = gs.conn
-                if what == "communities":
-                    rows = c.execute("SELECT id,title,level FROM communities ORDER BY level,id LIMIT 50").fetchall()
-                    return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
-                if what in ("architecture_domains", "hierarchy"):
-                    f = "WHERE level>=2" if what == "architecture_domains" else ""
-                    rows = c.execute(f"SELECT id,title,level FROM communities {f} ORDER BY level,id LIMIT 200").fetchall()
-                    return json.dumps({what: [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
-                if what == "status":
-                    from opencode_search.core.config import project_vector_db
-                    from opencode_search.core.registry import get_project
-                    e = get_project(project_path)
-                    total = gs.community_count()
-                    l1_total = c.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
-                    l1_sum = c.execute("SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
-                    l2_total = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
-                    l2_sum = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
-                    l1_pct = round(l1_sum / l1_total * 100, 1) if l1_total else 100.0
-                    l2_pct = round(l2_sum / l2_total * 100, 1) if l2_total else 100.0
-                    pct = round(min(l1_pct, l2_pct), 1)
-                    kb_state = ("indexing" if not project_vector_db(project_path).exists() else
-                                "ready" if pct >= 95 else
-                                "enriching" if l1_pct > 0 else "searchable")
-                    return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
-                                       "file_count": e.file_count if e else 0,
-                                       "symbols": gs.symbol_count(), "communities": total,
-                                       "kb_state": kb_state, "enriched_pct": pct,
-                                       "l1_enriched_pct": l1_pct, "l2_enriched_pct": l2_pct})
-                if what == "import_cycles":
-                    cycs = _find_import_cycles(c)
-                    cnt = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-                    return json.dumps({"cycles": cycs, "cycle_count": len(cycs),
-                                       "has_cycles": bool(cycs), "edge_count": cnt})
-                if what == "surprising_connections":
-                    rows = c.execute(
-                        "SELECT s.name,t.name FROM edges e "
-                        "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
-                        "WHERE s.community_id != t.community_id LIMIT 20"
-                    ).fetchall()
-                    return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows]})
-                if what == "feature_map":
-                    rows = c.execute("SELECT id,title,semantic_type FROM communities WHERE semantic_type IS NOT NULL").fetchall()
-                    return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows]})
-                if what == "business_rules":
-                    rows = c.execute("SELECT id,title FROM communities WHERE semantic_type IN ('rule','constraint','validation')").fetchall()
-                    return json.dumps({"rules": [{"id": r[0], "title": r[1]} for r in rows]})
-                if what == "process_flows":
-                    rows = c.execute("SELECT id,title FROM communities WHERE semantic_type IN ('workflow','process','flow')").fetchall()
-                    return json.dumps({"flows": [{"id": r[0], "title": r[1]} for r in rows]})
-                if what == "suggested_questions":
-                    rows = c.execute(
-                        "SELECT title FROM communities WHERE title IS NOT NULL ORDER BY member_count DESC LIMIT 5"
-                    ).fetchall()
-                    qs = [f"How does {r[0]} work?" for r in rows if r[0]]
-                    if not qs:
-                        qs = ["What is the overall architecture?", "What are the main modules?"]
-                    return json.dumps({"questions": qs})
-                if what == "service_mesh":
-                    return json.dumps({"services": _detect_services(project_path)})
-                fc = c.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0]
-                return json.dumps({"path": project_path, "symbols": gs.symbol_count(),
-                                   "communities": gs.community_count(), "files_with_symbols": fc})
-            finally:
+        if what == "service_mesh":
+            return json.dumps({"services": [s for p in expand_federation(project_path) for s in _detect_services(p)]})
+        _paths = [p for p in expand_federation(project_path) if project_graph_db(p).exists()]
+        if not _paths:
+            return json.dumps({"what": what, "status": "no project available"})
+        _gstores = [GraphStore(project_graph_db(p)) for p in _paths]
+        try:
+            if what == "communities":
+                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities ORDER BY level,id LIMIT 50").fetchall()]
+                return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
+            if what in ("architecture_domains", "hierarchy"):
+                f = "WHERE level>=2" if what == "architecture_domains" else ""
+                rows = [r for gs in _gstores for r in gs.conn.execute(f"SELECT id,title,level FROM communities {f} ORDER BY level,id LIMIT 200").fetchall()]
+                result: dict = {what: [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]}
+                if what == "hierarchy":
+                    result["note"] = "per-member hierarchy; cross-repo hierarchy is not representable"
+                return json.dumps(result)
+            if what == "status":
+                from opencode_search.core.config import project_vector_db
+                from opencode_search.core.registry import get_project
+                e = get_project(project_path)
+                tot_sym, tot_comm, tot_fc = 0, 0, 0
+                members_info: list = []
+                worst_state = "ready"
+                _rank = {"indexing": 0, "searchable": 1, "enriching": 2, "ready": 3}
+                root_pct = (100.0, 100.0, 100.0)
+                for i, (p, gs) in enumerate(zip(_paths, _gstores, strict=False)):
+                    c = gs.conn
+                    l1t = c.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
+                    l1s = c.execute("SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
+                    l2t = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
+                    l2s = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
+                    l1p = round(l1s / l1t * 100, 1) if l1t else 100.0
+                    l2p = round(l2s / l2t * 100, 1) if l2t else 100.0
+                    _pct = round(min(l1p, l2p), 1)
+                    ep = get_project(p)
+                    _ks = ("indexing" if not project_vector_db(p).exists() else
+                           "ready" if _pct >= 95 else "enriching" if l1p > 0 else "searchable")
+                    s, cm = gs.symbol_count(), gs.community_count()
+                    tot_sym += s
+                    tot_comm += cm
+                    tot_fc += ep.file_count if ep else 0
+                    members_info.append({"path": p, "kb_state": _ks, "symbols": s, "communities": cm})
+                    if _rank.get(_ks, 3) < _rank.get(worst_state, 3):
+                        worst_state = _ks
+                    if i == 0:
+                        root_pct = (_pct, l1p, l2p)
+                return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
+                                   "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
+                                   "symbols": tot_sym, "communities": tot_comm,
+                                   "kb_state": worst_state, "enriched_pct": root_pct[0],
+                                   "l1_enriched_pct": root_pct[1], "l2_enriched_pct": root_pct[2],
+                                   "members": members_info})
+            if what == "import_cycles":
+                cycs = [cy for gs in _gstores for cy in _find_import_cycles(gs.conn)][:20]
+                cnt = sum(gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] for gs in _gstores)
+                return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "has_cycles": bool(cycs), "edge_count": cnt})
+            if what == "surprising_connections":
+                rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT s.name,t.name FROM edges e "
+                    "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
+                    "WHERE s.community_id != t.community_id LIMIT 20"
+                ).fetchall()]
+                return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]]})
+            if what == "feature_map":
+                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,semantic_type FROM communities WHERE semantic_type IS NOT NULL").fetchall()]
+                return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows]})
+            if what == "business_rules":
+                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title FROM communities WHERE semantic_type IN ('rule','constraint','validation')").fetchall()]
+                return json.dumps({"rules": [{"id": r[0], "title": r[1]} for r in rows]})
+            if what == "process_flows":
+                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title FROM communities WHERE semantic_type IN ('workflow','process','flow')").fetchall()]
+                return json.dumps({"flows": [{"id": r[0], "title": r[1]} for r in rows]})
+            if what == "suggested_questions":
+                rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT title FROM communities WHERE title IS NOT NULL ORDER BY member_count DESC LIMIT 5"
+                ).fetchall()]
+                qs = list(dict.fromkeys(f"How does {r[0]} work?" for r in rows if r[0]))[:5]
+                if not qs:
+                    qs = ["What is the overall architecture?", "What are the main modules?"]
+                return json.dumps({"questions": qs})
+            # default: structure
+            fc = sum(gs.conn.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0] for gs in _gstores)
+            return json.dumps({"path": project_path, "symbols": sum(gs.symbol_count() for gs in _gstores),
+                               "communities": sum(gs.community_count() for gs in _gstores), "files_with_symbols": fc})
+        finally:
+            for gs in _gstores:
                 gs.close()
     return json.dumps({"what": what, "status": "no project available"})

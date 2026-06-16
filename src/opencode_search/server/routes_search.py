@@ -19,7 +19,11 @@ async def _api_search_get(request: Request) -> JSONResponse:
     from opencode_search.query.search import search
     embedder = Embedder()
     embedder.warmup()
-    paths = [project] if project else [p.path for p in list_projects() if p.enabled]
+    if project:
+        from opencode_search.daemon.federation import expand_federation
+        paths = expand_federation(project)
+    else:
+        paths = [p.path for p in list_projects() if p.enabled]
     results = []
     for path in paths:
         vdb = project_vector_db(path)
@@ -35,20 +39,27 @@ async def _api_search_get(request: Request) -> JSONResponse:
 
 
 def _chunks_for(project: str, query: str, top_k: int = FINAL_TOP_K) -> list[dict]:
-    """Return vector-search chunks for query; empty list if project not indexed."""
+    """Return vector-search chunks for query across federation; empty list if not indexed."""
+    if not project:
+        return []
+    from opencode_search.daemon.federation import expand_federation
     from opencode_search.embed.embedder import Embedder
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search
-    vdb = project_vector_db(project) if project else None
-    if not vdb or not vdb.exists():
-        return []
     embedder = Embedder()
     embedder.warmup()
-    vs = VectorStore(vdb)
-    try:
-        return search(query, embedder, vs, top_k=top_k)
-    finally:
-        vs.close()
+    results: list[dict] = []
+    for p in expand_federation(project):
+        vdb = project_vector_db(p)
+        if not vdb.exists():
+            continue
+        vs = VectorStore(vdb)
+        try:
+            results.extend(search(query, embedder, vs, top_k=top_k))
+        finally:
+            vs.close()
+    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    return results[:top_k]
 
 
 async def _api_ask_get(request: Request) -> JSONResponse:
@@ -57,17 +68,18 @@ async def _api_ask_get(request: Request) -> JSONResponse:
     scope = request.query_params.get("scope", "all")
     if not query:
         return JSONResponse({"error": "query required"}, status_code=400)
+    if not project or not project_graph_db(project).exists():
+        return JSONResponse({"answer": "Project not indexed.", "scope": scope})
+    from opencode_search.daemon.federation import expand_federation
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.ask import ask
-    gdb = project_graph_db(project) if project else None
-    if not gdb or not gdb.exists():
-        return JSONResponse({"answer": "Project not indexed.", "scope": scope})
     chunks = _chunks_for(project, query)
-    gs = GraphStore(gdb)
+    stores = [GraphStore(project_graph_db(p)) for p in expand_federation(project) if project_graph_db(p).exists()]
     try:
-        return JSONResponse({"answer": ask(query, chunks, gs, scope=scope), "scope": scope})
+        return JSONResponse({"answer": ask(query, chunks, stores, scope=scope), "scope": scope})
     finally:
-        gs.close()
+        for s in stores:
+            s.close()
 
 
 async def _api_feature(request: Request) -> JSONResponse:
@@ -75,17 +87,18 @@ async def _api_feature(request: Request) -> JSONResponse:
     query = request.query_params.get("query", "")
     if not query:
         return JSONResponse({"error": "query required"}, status_code=400)
+    if not project or not project_graph_db(project).exists():
+        return JSONResponse({"answer": "Project not indexed."})
+    from opencode_search.daemon.federation import expand_federation
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.ask import ask
-    gdb = project_graph_db(project) if project else None
-    if not gdb or not gdb.exists():
-        return JSONResponse({"answer": "Project not indexed."})
     chunks = _chunks_for(project, query)
-    gs = GraphStore(gdb)
+    stores = [GraphStore(project_graph_db(p)) for p in expand_federation(project) if project_graph_db(p).exists()]
     try:
-        return JSONResponse({"answer": ask(query, chunks, gs, scope="feature")})
+        return JSONResponse({"answer": ask(query, chunks, stores, scope="feature")})
     finally:
-        gs.close()
+        for s in stores:
+            s.close()
 
 
 async def _api_patterns(request: Request) -> JSONResponse:
@@ -113,16 +126,12 @@ async def _api_suggested_questions(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
-    gdb = project_graph_db(project)
-    if not gdb.exists():
-        return JSONResponse({"questions": []})
-    from opencode_search.graph.store import GraphStore
-    gs = GraphStore(gdb)
-    try:
-        comms = gs.conn.execute("SELECT title FROM communities ORDER BY member_count DESC LIMIT 5").fetchall()
-        return JSONResponse({"questions": [f"How does {r['title']} work?" for r in comms]})
-    finally:
-        gs.close()
+    from opencode_search.daemon.federation import federated_map
+    rows = [r for _, rs in federated_map(project, lambda gs: gs.conn.execute(
+        "SELECT title FROM communities ORDER BY member_count DESC LIMIT 5"
+    ).fetchall()) for r in rs]
+    qs = list(dict.fromkeys(f"How does {r[0]} work?" for r in rows if r[0]))[:5]
+    return JSONResponse({"questions": qs})
 
 
 async def _api_classify(request: Request) -> JSONResponse:
