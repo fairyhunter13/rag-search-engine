@@ -255,13 +255,13 @@ def test_maintenance_vacuums_orphan():
     assert not orphan.exists(), "maintenance() left orphan dir"
 
 
-def test_federation_index_members_registers(tmp_path):
+def test_federation_index_members_registers(safe_tmp_path):
     """P10.7: index_members() registers symlinked sub-repos into the registry."""
     from opencode_search.core.registry import get_project, remove_project
     from opencode_search.daemon.federation import index_members
 
-    root = tmp_path / "root"
-    member = tmp_path / "member-repo"  # sibling of root — outside root, so cycle guard passes
+    root = safe_tmp_path / "root"
+    member = safe_tmp_path / "member-repo"  # sibling of root — outside root, so cycle guard passes
     root.mkdir()
     member.mkdir()
     (member / "main.py").write_text("x = 1\n")
@@ -393,16 +393,16 @@ def test_p22_is_ignored_path():
     assert not is_ignored_path(Path("/repo/tests/test_core.py"))
 
 
-def test_p20_index_members_discovers_federation_members(tmp_path):
+def test_p20_index_members_discovers_federation_members(safe_tmp_path):
     """P20.1: index_members() registers symlinked sub-repos."""
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import get_project, remove_project, upsert_project
     from opencode_search.daemon.federation import index_members
 
-    member = tmp_path / "member-repo"
+    member = safe_tmp_path / "member-repo"
     member.mkdir()
     (member / "main.py").write_text("x = 1\n")
-    root = tmp_path / "root"
+    root = safe_tmp_path / "root"
     root.mkdir()
     (root / "link").symlink_to(member)
 
@@ -857,12 +857,12 @@ def test_p35_enrich_project_prunes_orphan_communities(safe_tmp_path):
         remove_project(proj)
 
 
-def test_p34_start_watcher_wires_enabled_projects(tmp_path):
+def test_p34_start_watcher_wires_enabled_projects(safe_tmp_path):
     """P34.3: start_watcher() registers all enabled projects and excludes disabled ones."""
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon.server import start_watcher
-    dir_a, dir_b, dir_c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    dir_a, dir_b, dir_c = safe_tmp_path / "a", safe_tmp_path / "b", safe_tmp_path / "c"
     dir_a.mkdir()
     dir_b.mkdir()
     dir_c.mkdir()
