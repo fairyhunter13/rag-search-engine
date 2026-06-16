@@ -26,6 +26,11 @@ def _idle_unload() -> None:
             import opencode_search.embed.embedder as _emb_mod
             _emb_mod._default = None
             _idle_unload_done = True
+            import ctypes
+            import gc
+            gc.collect()  # force native ONNX session + CPU thread pool to free now
+            with contextlib.suppress(Exception):
+                ctypes.CDLL("libc.so.6").malloc_trim(0)  # return freed arena to OS
             log.info("model idle unload after %.0fs idle", idle)
         except Exception as exc:
             log.warning("idle unload failed: %s", exc)

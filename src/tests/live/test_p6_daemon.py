@@ -965,3 +965,65 @@ def test_daemon_healthz_responsive(live_client):
     assert data.get("ok") is True, f"/healthz ok != True: {data}"
     assert "rss_mb" in data, f"/healthz missing rss_mb: {data}"
     assert elapsed < 2.0, f"/healthz took {elapsed:.2f}s > 2s — event loop may be wedged"
+
+
+# ---------------------------------------------------------------------------
+# Phase C: Idle CPU/RAM minimization — ORT thread caps + gc+malloc_trim unload
+# ---------------------------------------------------------------------------
+
+def test_ort_thread_cap_in_monkeypatch():
+    """ORT monkeypatch caps intra/inter threads to 1 + disables spinning — idle CPU drops to ~0."""
+    import inspect
+
+    from opencode_search.embed import embedder as emb_mod
+    src = inspect.getsource(emb_mod.Embedder._init)
+    assert "intra_op_num_threads = 1" in src, "ORT intra_op_num_threads must be capped at 1"
+    assert "inter_op_num_threads = 1" in src, "ORT inter_op_num_threads must be capped at 1"
+    assert 'allow_spinning", "0"' in src, "ORT spinning must be disabled via session config"
+    assert "ORT_SEQUENTIAL" in src, "ORT execution_mode must be SEQUENTIAL for GPU-only sessions"
+
+
+def test_idle_unload_gc_and_malloc_trim_present():
+    """gc.collect + malloc_trim must be in _idle_unload so RSS returns to OS floor after idle."""
+    import inspect
+
+    from opencode_search.daemon import server
+    src = inspect.getsource(server._idle_unload)
+    assert "gc.collect()" in src, "_idle_unload must call gc.collect() to free ONNX threads"
+    assert "malloc_trim" in src, "_idle_unload must call malloc_trim(0) to return arena to OS"
+
+
+def test_env_thread_caps_set_at_import():
+    """OMP_NUM_THREADS=1 + passive wait policy must be applied by the package __init__."""
+    import os
+
+    import opencode_search  # noqa: F401 — triggers __init__ env setup
+    assert os.environ.get("OMP_NUM_THREADS") == "1", "OMP_NUM_THREADS must be 1 (no oversubscription)"
+    assert os.environ.get("OMP_WAIT_POLICY") == "passive", "OMP_WAIT_POLICY must be passive (sleep not spin)"
+    assert os.environ.get("TOKENIZERS_PARALLELISM") == "false", "TOKENIZERS_PARALLELISM must be false"
+
+
+@pytest.mark.slow
+def test_idle_unload_then_cuda_reload():
+    """Force idle-unload in-process; reload must rebind CUDA EP (GPU-only invariant holds)."""
+    import gc
+
+    import opencode_search.embed.embedder as emb_mod
+    import opencode_search.query.search as search_mod
+
+    emb = emb_mod.get_embedder()
+    emb.warmup()
+    assert emb_mod._default is not None, "embedder must be loaded before unload test"
+
+    # Mirror _idle_unload: null singletons + force GC to release ONNX sessions
+    emb_mod._default = None
+    search_mod._reranker = None
+    gc.collect()
+
+    # Reload — must rebind CUDA EP, not fall back to CPU (GPU-only enforced)
+    reloaded = emb_mod.get_embedder()
+    reloaded.warmup()
+    providers = reloaded._model.model.model.get_providers()
+    assert "CUDAExecutionProvider" in providers, (
+        f"Post-unload reload must bind CUDA EP; got {providers} (CPU fallback is forbidden)"
+    )

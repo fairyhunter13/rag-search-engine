@@ -41,6 +41,12 @@ class Embedder:
                 _orig_so_init(self_so)
                 self_so.enable_mem_pattern = False
                 self_so.enable_cpu_mem_arena = False
+                # GPU-only: 1 CPU thread per session is sufficient; no spinning saves idle CPU.
+                self_so.intra_op_num_threads = 1
+                self_so.inter_op_num_threads = 1
+                self_so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                self_so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+                self_so.add_session_config_entry("session.inter_op.allow_spinning", "0")
 
             ort.SessionOptions.__init__ = _no_pattern_init  # type: ignore[method-assign]
             ort.SessionOptions._ocs_no_pattern = True  # type: ignore[attr-defined]
