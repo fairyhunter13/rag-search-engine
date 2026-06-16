@@ -127,7 +127,7 @@ def test_ask_global_scope_semantic_map():
 
     vs = VectorStore(vdb)
     chunks = search("project structure", get_embedder(), vs, scope="all", top_k=5)
-    answer = ask("What is the overall architecture of this project?", chunks, gs, scope="global")
+    answer = ask("What is the overall architecture of this project?", chunks, [gs], scope="global")
     vs.close()
     gs.close()
     assert isinstance(answer, str) and len(answer) > 20
@@ -154,7 +154,7 @@ def test_ask_all_scopes_real_astro():
     vs = VectorStore(project_vector_db(astro))
     chunks = search("project structure", get_embedder(), vs, scope="all", top_k=5)
     for scope in ("all", "architecture", "feature", "wiki", "business"):
-        answer = ask("How does this project work?", chunks, gs, scope=scope)
+        answer = ask("How does this project work?", chunks, [gs], scope=scope)
         assert isinstance(answer, str) and len(answer) > 10, \
             f"scope={scope!r} answer too short: {answer!r}"
     vs.close()
@@ -170,7 +170,7 @@ def test_ask_all_scope_returns_answer(mini_stores, embedder):
     vs = VectorStore(mini_stores["vdb"])
     gs = GraphStore(mini_stores["gdb"])
     chunks = search("authentication", embedder, vs, scope="all", top_k=5)
-    answer = ask("How does authentication work?", chunks, gs, scope="all")
+    answer = ask("How does authentication work?", chunks, [gs], scope="all")
     vs.close()
     gs.close()
     assert isinstance(answer, str) and len(answer) > 20

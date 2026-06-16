@@ -221,9 +221,9 @@ def _enrich_project(project_path: str) -> None:
             "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level >= 2"
         ).fetchall():
             enrich_community_l2(gs, cid)
+            gs.commit()
             if gpu_temp_c() > THERMAL_MAX_C:
                 time.sleep(5)
-        gs.commit()
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
