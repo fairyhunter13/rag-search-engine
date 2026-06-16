@@ -25,6 +25,8 @@ def live_client():
             return requests.get(self.BASE + path, **kw)
         def post(self, path, **kw):
             return requests.post(self.BASE + path, **kw)
+        def request(self, method, path, **kw):
+            return requests.request(method, self.BASE + path, **kw)
 
     try:
         requests.get(f"{_DAEMON}/healthz", timeout=3)

@@ -443,25 +443,38 @@ def test_p22_daemon_rss_bounded():
     watcher at startup, peak RSS reaches 8-15 GB (ONNX batch buffers, 28 WAL connections).
     The original P32 BFC regression pre-allocated >24 GB instantly — this guard still catches
     that while allowing the current 28-project workload.
+
+    RSS is read from /healthz (rss_mb field) — launcher-independent, works under systemd,
+    nohup, or direct invocation alike.
     """
     import json
-    import subprocess
     import urllib.request
-
-    r = subprocess.run(
-        ["systemctl", "--user", "show", "opencode-search-mcp-daemon.service",
-         "-p", "MemoryCurrent"],
-        capture_output=True, text=True,
-    )
-    props = dict(line.split("=", 1) for line in r.stdout.strip().splitlines() if "=" in line)
-    mem_mb = int(props.get("MemoryCurrent", "0")) // (1024 * 1024)
-    assert mem_mb < 16384, f"daemon RSS {mem_mb} MB > 16 GB (P22 memory fix must hold)"
 
     resp = urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=5)
     data = json.loads(resp.read())
     assert data.get("ok") is True, f"daemon not healthy after P22 fixes: {data}"
     uptime_s = data.get("uptime_s", 0)
     assert uptime_s > 30, f"daemon restarted recently (uptime_s={uptime_s:.1f}), may be crash-looping"
+    rss_mb = data.get("rss_mb", 0)
+    assert rss_mb < 16384, f"daemon RSS {rss_mb} MB > 16 GB (P22 memory fix must hold)"
+
+
+def test_daemon_startup_imports_resolve():
+    """Regression guard: all symbols deferred-imported by _start_background() must resolve.
+
+    compileall and ruff are syntax-only — they miss stale cross-module imports.
+    This test imports exactly the symbols _start_background() uses so the next
+    D-series dead-code sweep can't silently ship a broken daemon again.
+    """
+    from opencode_search.daemon.federation import register_all_members
+    from opencode_search.daemon.runtime_state import check_idle_shutdown
+    from opencode_search.daemon.scheduler import Scheduler
+    from opencode_search.daemon.sweeps import maintenance, reconcile_projects
+    assert callable(check_idle_shutdown)
+    assert callable(maintenance)
+    assert callable(reconcile_projects)
+    assert callable(register_all_members)
+    assert Scheduler is not None
 
 
 @pytest.mark.slow

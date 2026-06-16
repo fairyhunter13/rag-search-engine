@@ -23,6 +23,7 @@ async def _healthz(request: Request) -> JSONResponse:
         "cpu_count": os.cpu_count() or 1,
         "active_clients": 0, "client_ids": [], "active_projects": [],
         "closing_clients": [], "idle_seconds": 0.0,
+        "rss_mb": round(psutil.Process().memory_info().rss / (1024 * 1024)),
     })
 
 
