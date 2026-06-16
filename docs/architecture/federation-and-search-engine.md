@@ -99,10 +99,38 @@ All enrichment is **idempotent and gated on `summary IS NULL`**.
   root is expanded through `expand_federation` (dedup), so a root-scoped query fans out
   across all members. No-path branch already covers members (they are enabled projects).
 - **`ask(query, project_path?, scope)`**: gathers chunks from all `expand_federation` paths
-  (each member's `VectorStore`, top_k per member), merges, re-ranks to global top-k, then
-  `compose_answer` over the **root's** `GraphStore`. No LLM synthesis; persistent cache TTL
-  3600 s. (Per-member graph map merge is a candidate for a later iteration.)
+  (each member's `VectorStore`, top_k per member), merges, then the GPU **cross-encoder
+  re-ranks (Stage 2)** to global top-k by `rerank_score`, then `compose_answer` over the
+  root's `GraphStore`. No LLM synthesis; persistent cache TTL 3600 s.
 - **`graph`**: per-project call-graph queries (definition/callers/callees/impact/…).
 - **`overview`**: 15 `what=` views (structure, communities, status, projects, patterns,
   metrics, architecture_domains, hierarchy, import_cycles, surprising_connections,
   feature_map, business_rules, process_flows, suggested_questions, service_mesh).
+
+## 9a. Reranking (Stage 2)
+
+All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback):
+
+- **AXIS A — code chunks**: vector retrieve (`sqlite-vec`, overfetch `top_k×3`), then
+  cross-encoder rerank (`jinaai/jina-reranker-v1-turbo-en`) → sort by `rerank_score` →
+  top_k. Federation: each member runs the above; union merged + re-sorted by `rerank_score`.
+  Observability: `search()` records `rerank.queries` and `rerank.top1_changed` (the "lift"
+  count where the cross-encoder moved a different chunk to position 1 vs the vector sort).
+  Exposed via `GET /api/metrics` and `overview(what="metrics")`.
+- **AXIS B — community/architecture context** (`scope="global"`, `_top_communities_semantic`):
+  pool ≤50 community summaries per store, then cross-encoder rerank → sort by `rerank_score`
+  → top_k. Replaced former bi-encoder cosine (`s_vecs @ q_vec`) approach.
+- Rerank scores (jina logits) and vector scores are never blended across axes.
+- Reranking runs **only** at query time; the index/KB-build pipeline never reranks.
+
+## 9b. Inference lanes
+
+| Lane | Surface | LLM(s) | Notes |
+|------|---------|---------|-------|
+| **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
+| **B — Dashboard chat** | `POST /api/chat_stream` | codex/gpt-5.4-mini → claude-haiku-4-5 | Primary: codex; fallback on usage-limit, error, OR empty → haiku (fresh request); no ollama |
+| **D — KB enrichment** | Background sweep | ollama qwen3-enrich:1.7b | Write path only; never runs at query time |
+
+The cloud/query generative LLM (codex→haiku) is reached **only** via the dashboard chat box.
+The local generative LLM (ollama) is confined to background KB enrichment. MCP query actions
+and `POST /api/ask` never generate text — the caller's own LLM does synthesis.

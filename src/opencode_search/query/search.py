@@ -6,6 +6,7 @@ from opencode_search.index.discover import _CODE_LANGS, _TEXT_LANGS
 from opencode_search.index.store import VectorStore
 
 _reranker: Reranker | None = None
+_rerank_stats: dict = {"queries": 0, "top1_changed": 0}
 
 
 def _get_reranker() -> Reranker:
@@ -35,5 +36,21 @@ def search(
     scores = _get_reranker().rerank(query, passages)
     for r, s in zip(results, scores, strict=False):
         r["rerank_score"] = s
+    vector_top1 = results[0].get("path") if results else None
     results.sort(key=lambda r: r.get("rerank_score", 0.0), reverse=True)
+    _rerank_stats["queries"] += 1
+    if len(results) >= 2 and results[0].get("path") != vector_top1:
+        _rerank_stats["top1_changed"] += 1
     return results[:top_k]
+
+
+def rerank_stats() -> dict:
+    """Return a copy of the module-level rerank lift counters."""
+    return dict(_rerank_stats)
+
+
+def rerank_passages(query: str, passages: list[str]) -> list[float]:
+    """Cross-encoder relevance scores for passages (GPU). Returns [] for empty input."""
+    if not passages:
+        return []
+    return _get_reranker().rerank(query, passages)

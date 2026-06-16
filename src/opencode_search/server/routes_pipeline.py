@@ -70,63 +70,6 @@ async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
     return JSONResponse({"enabled": not sweeps._PAUSED, "pending": pending})
 
 
-async def _api_federation(request: Request) -> JSONResponse:
-    project = request.query_params.get("project", "")
-    if not project:
-        return JSONResponse({"error": "project required"}, status_code=400)
-    from opencode_search.daemon.federation import expand_federation
-    members = expand_federation(project)[1:]
-    return JSONResponse({"root": project, "members": members})
-
-
-async def _api_enrich_project(request: Request) -> JSONResponse:
-    """Trigger L1+L2 enrichment for an already-indexed project (background thread)."""
-    try:
-        body = await request.json()
-        project_path = body.get("project_path", "")
-    except Exception:
-        return JSONResponse({"error": "json body required"}, status_code=400)
-    if not project_path:
-        return JSONResponse({"error": "project_path required"}, status_code=400)
-    gdb = project_graph_db(project_path)
-    if not gdb.exists():
-        return JSONResponse({"error": "not indexed"}, status_code=404)
-    import threading
-
-    from opencode_search.daemon.sweeps import _enrich_project
-    t = threading.Thread(target=_enrich_project, args=(project_path,), daemon=True)
-    t.start()
-    return JSONResponse({"status": "started", "project": project_path})
-
-
-async def _api_redetect(request: Request) -> JSONResponse:
-    """Re-run community detection + hierarchy on an already-indexed project (no re-embed)."""
-    try:
-        body = await request.json()
-        project_path = body.get("project_path", "")
-    except Exception:
-        return JSONResponse({"error": "json body required"}, status_code=400)
-    if not project_path:
-        return JSONResponse({"error": "project_path required"}, status_code=400)
-    gdb = project_graph_db(project_path)
-    if not gdb.exists():
-        return JSONResponse({"error": "not indexed"}, status_code=404)
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.kb.hierarchy import build_hierarchy
-    gs = GraphStore(gdb)
-    try:
-        mapping = detect_communities(gs)
-        n_l2 = build_hierarchy(gs)
-        return JSONResponse({"status": "ok", "l1_communities": len(set(mapping.values())),
-                             "l2_communities": n_l2})
-    finally:
-        gs.close()
-
-
 def register(app) -> None:
     app.add_route("/api/build_hierarchy", _api_build_hierarchy, methods=["POST"])
     app.add_route("/api/auto_pipeline_status", _api_auto_pipeline_status, methods=["GET"])
-    app.add_route("/api/federation", _api_federation, methods=["GET"])
-    app.add_route("/api/redetect", _api_redetect, methods=["POST"])
-    app.add_route("/api/enrich_project", _api_enrich_project, methods=["POST"])

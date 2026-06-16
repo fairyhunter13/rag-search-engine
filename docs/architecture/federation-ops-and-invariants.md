@@ -96,6 +96,9 @@ kb_state: indexing → searchable → enriching → ready
 | **HR5** | One absolute path = one index dir. Two distinct clones → two indexes. (≡ inv#2, #8.) |
 | **HR6** | GPU-only; any CPU fallback raises fatally. (≡ inv#5.) |
 | **HR7** | `kb_state` lifecycle: `indexing → searchable → enriching → ready`; `ready` iff `enriched_pct ≥ 95 AND l2_enriched_pct == 100`. Federated entity = worst-of members. |
+| **HR8** | Two-stage retrieval at query time: Stage 1 = bi-encoder vector search (`sqlite-vec`); Stage 2 = cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU). Both AXIS A (code chunks) and AXIS B (community summaries) are reranked. Results ordered by `rerank_score`, never the bare vector `score`. Reranking never runs at index/KB-build time. |
+| **HR9** | MCP query actions (`search`/`ask`/`graph`/`overview`) perform ONLY embedding + reranking — no generative LLM (cloud or local). `ask` → `compose_answer` = assembled context; generation is delegated to the calling agent (June 2026 MCP best practice). |
+| **HR10** | Dashboard chat (`POST /api/chat_stream`) uses codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback on usage-limit, error, **or empty** response (fresh request, not a mid-stream switch). No ollama in the chat path. Dashboard-only: not wired to any MCP tool. |
 
 1. **No inlining** — external symlinked sub-repos are never indexed into the root
    (`federation_mode=True`); indexed only as independent members.
@@ -110,7 +113,17 @@ kb_state: indexing → searchable → enriching → ready
    converge on reruns.
 8. **Registry↔storage consistency** — cascade-remove + orphan-vacuum keep `projects.json`
    and `INDEX_ROOT` in agreement.
-9. **MCP tools never call the cloud query LLM** — only the dashboard `/api/ask` may.
+9. **MCP query actions never generate** — the cloud/query generative LLM (codex→haiku) is
+   reached only via the dashboard chat box (`POST /api/chat_stream`); MCP query actions
+   (`search`/`ask`/`graph`/`overview`) and `compose_answer` never generate text; the local
+   generative LLM (ollama) is confined to background KB enrichment. (≡ HR9.)
+10. **Reranking is the relevance authority** — every query result set is ordered by
+    `rerank_score`, never the bare vector `score`; cross-encoder runs at query time only. (≡ HR8.)
+11. **Both retrieval axes are cross-encoder-ranked** — AXIS A (code chunks) and AXIS B
+    (community/architecture context) both pass through `jina-reranker-v1-turbo-en` at
+    query time before the context is assembled. (≡ HR8.)
+12. **Dashboard chat uses the ordered fallback chain** — codex/gpt-5.4-mini → claude-haiku-4-5
+    on usage-limit, error, or empty response; never ollama. (≡ HR10.)
 
 ## 14. Test coverage map
 
@@ -124,7 +137,6 @@ Each §13 invariant has a corresponding live test that proves it without mocks:
 | #4 logical-repo coverage | `test_inv4_root_scoped_search_fanout` | `test_federation_architecture.py` |
 | #6 forbidden root | `test_inv6_forbidden_root` | `test_federation_architecture.py` |
 | #8 cascade remove | `test_inv8_cascade_remove` | `test_federation_architecture.py` |
-| /api/federation fix | `test_api_federation_uses_expand_federation` | `test_p22_kb_e2e.py` |
 | HR1 watcher→index | `test_watcher_index_e2e` | `test_p6_daemon.py` |
 | HR2 watcher→KB / event-driven | `test_watcher_kb_e2e` + `:704` guard | `test_p6_daemon.py` |
 | HR3 enrichment idempotence | `test_detect_communities_idempotent` + stability | `test_p3_graph.py` |
@@ -132,6 +144,9 @@ Each §13 invariant has a corresponding live test that proves it without mocks:
 | HR5 one path → one index | `test_inv2_members_first_class` + `test_inv8` | `test_federation_architecture.py` |
 | HR6 GPU-only | `test_inv5_gpu_only` | `test_federation_architecture.py` |
 | HR7 kb_state → ready | `test_kb_state_ready_all_projects` | `test_p22_kb_e2e.py` |
+| HR8 rerank lift + both axes | `test_rerank_reorders_search_results`, `test_ask_synthesis_uses_rerank_order`, `test_community_context_is_reranked`, `test_rerank_lift_metric` | `test_p5_server.py` |
+| HR9 MCP embed+rerank only | `test_mcp_query_actions_embedding_and_rerank_only` | `test_p5_server.py` |
+| HR10 dashboard chat codex→haiku | `test_dashboard_chat_codex_haiku_only`, `test_chat_stream_sse_sends_done` | `test_p5_server.py` / `test_p4_query.py` |
 
 ## 15. Design rationale
 

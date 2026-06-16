@@ -1,16 +1,12 @@
-"""Ask handler: multi-scope LLM synthesis from vector chunks + community context."""
+"""Ask handler: context assembly from vector chunks + community context (no LLM)."""
 from __future__ import annotations
-
-from opencode_search.graph.llm import chat
 
 _MAX_CTX = 3000
 
 
 def _top_communities_semantic(query: str, stores: list, top_k: int = 10) -> str:
-    """Select top-k communities by cosine similarity across all federated stores (GPU embed)."""
-    import numpy as np
-
-    from opencode_search.embed.embedder import get_embedder
+    """Select top-k communities by cross-encoder reranking across all federated stores (GPU)."""
+    from opencode_search.query.search import rerank_passages
 
     seen: set = set()
     rows: list = []
@@ -24,12 +20,9 @@ def _top_communities_semantic(query: str, stores: list, top_k: int = 10) -> str:
                 rows.append(r)
     if not rows:
         return ""
-    embedder = get_embedder()
-    q_vec = embedder.embed([query])[0].astype(np.float32)
-    s_vecs = embedder.embed([r[1] for r in rows]).astype(np.float32)
-    scores = s_vecs @ q_vec
-    top = np.argsort(scores)[::-1][:top_k]
-    return "\n\n".join(f"## {rows[i][0]}\n{rows[i][1]}" for i in top if rows[i][1])
+    scores = rerank_passages(query, [r[1] for r in rows])
+    ranked = sorted(zip(scores, rows, strict=False), key=lambda x: x[0], reverse=True)
+    return "\n\n".join(f"## {r[0]}\n{r[1]}" for _, r in ranked[:top_k] if r[1])
 
 
 def _macro_community_context(stores: list, limit: int = 5) -> str:
@@ -105,27 +98,6 @@ def compose_answer(query: str, chunks: list[dict], stores: list, *, scope: str =
     """Return pre-built context assembled from DB artifacts — NO LLM generation.
 
     stores: list of open GraphStore objects (root first; federation members included).
-    Used by the MCP ask handler (read-only path).  The daemon sweep may call
-    ask() (below) which adds LLM synthesis on top.
+    Used by the MCP ask handler (read-only path).
     """
     return _assemble_context(query, chunks, stores, scope)
-
-
-def ask(
-    query: str,
-    chunks: list[dict],
-    stores: list,
-    *,
-    scope: str = "all",
-) -> str:
-    """Synthesize an answer using chunk excerpts and community summaries (LLM generation).
-
-    chunks: results from query.search.search()
-    stores: list of open GraphStore objects (root first; federation members included).
-    scope: all | architecture | global | feature | wiki | business
-    """
-    context = _assemble_context(query, chunks, stores, scope)
-    return chat(
-        f"You are a code intelligence assistant. Answer concisely.\n\n"
-        f"Question: {query}\n\nContext:\n{context}\n\nAnswer:"
-    )

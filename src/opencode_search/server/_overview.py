@@ -95,8 +95,8 @@ def handle_overview(project_path: str, what: str) -> str:
             for p in list_projects()
         ]})
     if what == "metrics":
-        from opencode_search.server.routes_ops import _metrics
-        return json.dumps(_metrics)
+        from opencode_search.server.routes_ops import _snapshot
+        return json.dumps(_snapshot())
     if not project_path:
         ps = [p for p in list_projects() if p.enabled]
         project_path = ps[0].path if ps else ""

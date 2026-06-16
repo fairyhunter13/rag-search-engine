@@ -36,16 +36,15 @@ def _graph_db(project: str) -> Path:
 
 
 def _converge_ready(project: str, timeout: int = 240) -> None:
-    """Trigger enrich (+ federation members), poll until kb_state==ready, l2==100. Hard-fails on timeout."""
+    """Run _enrich_project in-process (+ members), poll until kb_state==ready, l2==100."""
     import time
-    hdr = {"Content-Type": "application/json"}
-    requests.post(f"{_BASE}/api/enrich_project", json={"project_path": project}, headers=hdr, timeout=10)
-    # Fan out to federation members not yet ready so worst-of converges
+
+    from opencode_search.daemon.sweeps import _enrich_project
+    _enrich_project(project)
     s = _overview("status", project)
     for m in s.get("members", []):
         if m.get("kb_state") != "ready":
-            requests.post(f"{_BASE}/api/enrich_project", json={"project_path": m["path"]},
-                          headers=hdr, timeout=10)
+            _enrich_project(m["path"])
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         s = _overview("status", project)
@@ -89,14 +88,13 @@ def test_e2e_no_domain_placeholders(live_client, proj_key):
 
 @pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
 def test_e2e_ask_global_non_empty(live_client, proj_key):
-    """S5c: POST /api/ask scope=global returns a non-empty answer."""
+    """S5c: MCP ask scope=global returns a non-empty assembled context."""
+    import asyncio
+
+    from opencode_search.server.mcp import ask as _mcp_ask
     project = _PROJECTS[proj_key]
-    r = requests.post(f"{_BASE}/api/ask",
-                      json={"query": "What is the overall architecture?",
-                            "project_path": project, "scope": "global"},
-                      headers=_HDR, timeout=60)
-    assert r.status_code == 200, f"ask(global, {proj_key}): HTTP {r.status_code}"
-    assert len(r.text.strip()) > 20, f"ask(global, {proj_key}): response too short"
+    ctx = asyncio.run(_mcp_ask("What is the overall architecture?", project, "global"))
+    assert len(ctx.strip()) > 20, f"ask(global, {proj_key}): context too short: {ctx[:80]}"
 
 
 # ---------------------------------------------------------------------------
@@ -168,38 +166,6 @@ def test_federation_kb_reflects_root_only(live_client):
     )
 
 
-def test_api_federation_uses_expand_federation(safe_tmp_path):
-    """/api/federation must return the real symlink-based members, not all enabled projects."""
-    import shutil
-
-    from opencode_search.core.config import ProjectEntry, index_dir
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.federation import index_members
-
-    uid = str(id(safe_tmp_path))[-6:]
-    root = safe_tmp_path / "root"
-    member = safe_tmp_path / f"member-{uid}"
-    root.mkdir()
-    member.mkdir()
-    (member / "x.py").write_text("x = 1\n")
-    (root / "link").symlink_to(member)
-    remove_project(str(root))
-    remove_project(str(member))
-    try:
-        upsert_project(ProjectEntry(path=str(root), enabled=True))
-        index_members(str(root))
-        r = requests.get(f"{_BASE}/api/federation", params={"project": str(root)})
-        assert r.status_code == 200, f"HTTP {r.status_code}: {r.text}"
-        data = r.json()
-        assert data.get("members") == [str(member)], (
-            f"Expected members=[{member}], got {data.get('members')}"
-        )
-    finally:
-        remove_project(str(root))
-        remove_project(str(member))
-        shutil.rmtree(index_dir(str(root)), ignore_errors=True)
-        shutil.rmtree(index_dir(str(member)), ignore_errors=True)
-
 
 # ---------------------------------------------------------------------------
 # T1/HR7: all 3 projects must reach kb_state='ready'
@@ -243,9 +209,9 @@ def test_real_federation_fanout(live_client):
         f"no astro members have symbols > 0 (fan-out not working); "
         f"sample: {[(m['path'].split('/')[-1], m['symbols']) for m in members[:3]]}"
     )
-    r = requests.post(f"{_BASE}/api/search",
-                      json={"query": "function", "project_paths": [_PROJECTS["astro"]]},
-                      headers=_HDR, timeout=20)
-    assert r.status_code == 200, f"search fan-out from redacted-name-3: HTTP {r.status_code}"
-    results = json.loads(r.text).get("results", [])
+    import asyncio
+
+    from opencode_search.server.mcp import search as _mcp_search
+    data = json.loads(asyncio.run(_mcp_search("function", project_paths=[_PROJECTS["astro"]])))
+    results = data.get("results", [])
     assert results, "search(project_paths=[redacted-name-3]) returned no results (fan-out broken)"

@@ -39,67 +39,12 @@ async def _api_projects(request: Request) -> JSONResponse:
     ]})
 
 
-async def _api_search(request: Request) -> JSONResponse:
-    body = await request.json()
-    q = body.get("q") or body.get("query", "")
-    if not q:
-        return JSONResponse({"error": "q required"}, status_code=400)
-    project = body.get("project") or body.get("project_path", "")
-    scope = body.get("scope", "code")
-    from opencode_search.core.config import project_vector_db
-    from opencode_search.core.registry import list_projects
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search as _search
-    from opencode_search.server.mcp import _get_embedder
-    if project:
-        from opencode_search.daemon.federation import expand_federation
-        paths = expand_federation(project)
-    else:
-        paths = [p.path for p in list_projects() if p.enabled]
-    results: list[dict] = []
-    for path in paths:
-        vdb = project_vector_db(path)
-        if not vdb.exists():
-            continue
-        vs = VectorStore(vdb)
-        try:
-            results.extend(_search(q, _get_embedder(), vs, scope=scope, top_k=10))
-        finally:
-            vs.close()
-    results.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
-    return JSONResponse({"results": results[:10], "count": len(results)})
-
-
-async def _api_ask(request: Request) -> JSONResponse:
-    body = await request.json()
-    q = body.get("q") or body.get("query", "")
-    if not q:
-        return JSONResponse({"error": "query required"}, status_code=400)
-    from opencode_search.server import mcp as mcp_mod
-    answer = await mcp_mod.ask(q, body.get("project") or body.get("project_path", ""), body.get("scope", "all"))
-    return JSONResponse({"answer": answer})
-
-
 async def _api_overview(request: Request) -> JSONResponse:
     import json
     body = await request.json()
     from opencode_search.server._overview import handle_overview
     proj = body.get("project") or body.get("project_path", "")
     return JSONResponse(json.loads(handle_overview(proj, body.get("what", "structure"))))
-
-
-async def _api_index(request: Request) -> JSONResponse:
-    body = await request.json()
-    path = body.get("path", "")
-    if not path:
-        return JSONResponse({"error": "path required"}, status_code=400)
-    if not body.get("enabled", True):
-        from opencode_search.core.registry import remove_project
-        return JSONResponse({"removed": remove_project(path)})
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
-    upsert_project(ProjectEntry(path=path, enabled=True))
-    return JSONResponse({"registered": True, "path": path})
 
 
 def _register_all(app) -> None:
@@ -124,10 +69,7 @@ def create_app():
     app.add_route("/healthz", _healthz, methods=["GET"])
     app.add_route("/dashboard", _dashboard, methods=["GET"])
     app.add_route("/api/projects", _api_projects, methods=["GET"])
-    app.add_route("/api/search", _api_search, methods=["POST"])
-    app.add_route("/api/ask", _api_ask, methods=["POST"])
     app.add_route("/api/overview", _api_overview, methods=["POST"])
-    app.add_route("/api/index", _api_index, methods=["POST"])
     _register_all(app)
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     return app
@@ -141,10 +83,7 @@ def build_test_app():
         Route("/healthz", _healthz, methods=["GET"]),
         Route("/dashboard", _dashboard, methods=["GET"]),
         Route("/api/projects", _api_projects, methods=["GET"]),
-        Route("/api/search", _api_search, methods=["POST"]),
-        Route("/api/ask", _api_ask, methods=["POST"]),
         Route("/api/overview", _api_overview, methods=["POST"]),
-        Route("/api/index", _api_index, methods=["POST"]),
         Mount("/static", StaticFiles(directory=_STATIC_DIR), name="static"),
     ])
     _register_all(app)

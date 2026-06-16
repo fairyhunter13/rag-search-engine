@@ -97,35 +97,6 @@ def test_live_daemon_has_mcp_route(live_client):
     )
 
 
-def test_api_search_missing_query_returns_400():
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.post("/api/search", json={"project": "/nonexistent"})
-        assert r.status_code == 400
-        assert "error" in r.json()
-
-
-def test_api_search_nonexistent_project_returns_empty():
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.post("/api/search", json={"q": "authenticate", "project": "/nonexistent/path"})
-        assert r.status_code == 200
-        assert r.json()["count"] == 0
-
-
-def test_api_index_missing_path_returns_400():
-    from starlette.testclient import TestClient
-
-    from opencode_search.server.routes import build_test_app as create_app
-    with TestClient(create_app()) as c:
-        r = c.post("/api/index", json={"enabled": True})
-        assert r.status_code == 400
-        assert "error" in r.json()
-
 
 @pytest.mark.slow
 def test_detect_patterns_llm_frameworks():
@@ -238,9 +209,6 @@ def test_suggested_questions_and_chat_context_no_operationalerror(live_client):
     r = live_client.get(f"/api/suggested_questions?project={project}")
     assert r.status_code == 200, f"suggested_questions 500 (likely node_count bug): {r.text}"
     assert "questions" in r.json()
-
-    r2 = live_client.post("/api/chat", json={"message": "hi", "project": project})
-    assert r2.status_code in (200, 400), f"chat unexpected status: {r2.status_code} {r2.text}"
 
 
 def test_mcp_search_subdir_resolves_to_root():
@@ -453,20 +421,6 @@ def test_graph_defaults_project_path_to_first_project():
 _OSE = "/home/user/git/github.com/fairyhunter13/opencode-search-engine"
 
 
-def test_search_results_ordered_by_rerank_score(live_client):
-    """T-R1/C1: /api/search must order results by rerank_score (not vector score)."""
-    r = live_client.get("/api/search", params={
-        "project": _OSE, "query": "how does reranking work", "top_k": "8"
-    })
-    assert r.status_code == 200
-    results = r.json().get("results", [])
-    assert results, "expected at least one search result"
-    rscores = [x.get("rerank_score") for x in results]
-    assert all(s is not None for s in rscores), f"some results missing rerank_score: {rscores}"
-    assert all(rscores[i] >= rscores[i + 1] for i in range(len(rscores) - 1)), (
-        f"results not ordered by rerank_score desc: {rscores}"
-    )
-
 
 def test_reranking_is_query_time_only():
     """T-R2: index/ and kb/ packages must not reference reranking (architecture invariant)."""
@@ -504,3 +458,158 @@ def test_search_reranks_full_pool(mini_stores, embedder):
     assert all(rscores[i] >= rscores[i + 1] for i in range(len(rscores) - 1)), (
         f"results not ordered by rerank_score: {rscores}"
     )
+
+
+@pytest.mark.slow
+def test_e1_rerank_reorders_search_results():
+    """E1/HR8: MCP search on _OSE — rerank_score sorted desc, lift detected on ≥1 of 4 queries."""
+    from opencode_search.server.mcp import search as _mcp_search
+    queries = [
+        "cross-encoder reranker invocation",
+        "daemon health check endpoint",
+        "sqlite vector store embed",
+        "leiden community detection",
+    ]
+    lift_found = False
+    for q in queries:
+        data = json.loads(asyncio.run(_mcp_search(q, project_paths=[_OSE])))
+        res = data.get("results", [])
+        assert res, f"E1: no results for {q!r}"
+        rs = [r.get("rerank_score") for r in res]
+        assert all(s is not None for s in rs), f"E1: missing rerank_score: {rs}"
+        assert all(rs[i] >= rs[i+1] for i in range(len(rs)-1)), f"E1: unsorted: {rs}"
+        if len(res) > 1:
+            vec_top = max(res, key=lambda r: r.get("score", 0.0))
+            if vec_top.get("path") != res[0].get("path"):
+                lift_found = True
+    assert lift_found, "E1: rerank never changed top-1 vs vector order (pass-through?)"
+    from pathlib import Path
+    src = (Path(__file__).parents[3] / "opencode_search" / "server" / "mcp.py").read_text()
+    assert 'sort(key=lambda r: r.get("score"' not in src, "E1 guard: bare score sort in mcp.py"
+
+
+@pytest.mark.slow
+def test_e2_ask_context_is_rerank_ordered():
+    """E2/HR8: MCP ask returns assembled context with path markers, first chunk = rerank top-1."""
+    from opencode_search.server.mcp import ask as _mcp_ask
+    from opencode_search.server.mcp import search as _mcp_search
+    q = "how does the cross-encoder reranker get invoked"
+    ctx = asyncio.run(_mcp_ask(q, _OSE, "all"))
+    assert ctx and "[" in ctx, f"E2: empty or no path markers: {ctx[:80]}"
+    top = json.loads(asyncio.run(_mcp_search(q, project_paths=[_OSE])))["results"]
+    assert top, "E2: search returned no results"
+    assert top[0].get("path", "") in ctx, (
+        f"E2: rerank top-1 {top[0].get('path')!r} not found in ask context"
+    )
+    assert "I think" not in ctx and "In conclusion" not in ctx, "E2: LLM prose in ctx"
+
+
+@pytest.mark.slow
+def test_e3_community_context_is_reranked():
+    """E3/HR8/D2: compose_answer(scope=global) top community differs between distinct queries."""
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.query.ask import compose_answer
+    gdb = project_graph_db(_OSE)
+    if not gdb.exists():
+        pytest.skip("_OSE graph DB not found")
+    gs = GraphStore(gdb)
+    try:
+        a = compose_answer("how does reranking work", [], [gs], scope="global")
+        b = compose_answer("how does daemon health check work", [], [gs], scope="global")
+    finally:
+        gs.close()
+    assert a, "E3: compose_answer empty for query A"
+    assert b, "E3: compose_answer empty for query B"
+    top_a = next((ln for ln in a.splitlines() if ln.startswith("## ")), "")
+    top_b = next((ln for ln in b.splitlines() if ln.startswith("## ")), "")
+    assert top_a != top_b, f"E3: same top community for both queries (static?): {top_a!r}"
+    from pathlib import Path
+    ask_src = (Path(__file__).parents[3] / "opencode_search" / "query" / "ask.py").read_text()
+    assert "rerank_passages" in ask_src, "E3 guard: ask.py must use rerank_passages"
+    assert "argsort" not in ask_src, "E3 guard: ask.py must not use argsort"
+
+
+@pytest.mark.slow
+def test_e4_rerank_lift_metric(live_client):
+    """E4/D3: /api/metrics exposes rerank block; in-process search increments the counter."""
+    from opencode_search.query.search import rerank_stats
+    from opencode_search.server.mcp import search as _mcp_search
+    # Structure check via live daemon HTTP endpoint
+    daemon_data = live_client.get("/api/metrics").json()
+    assert "rerank" in daemon_data, f"E4: rerank block missing: {daemon_data}"
+    assert isinstance(daemon_data["rerank"].get("queries"), int), "E4: rerank.queries not int"
+    assert isinstance(daemon_data["rerank"].get("top1_changed"), int), "E4: top1_changed not int"
+    # Counter increment check via in-process call (daemon has its own counter per-process)
+    before = rerank_stats()["queries"]
+    N = 3
+    for i in range(N):
+        asyncio.run(_mcp_search(f"reranker invocation {i}", project_paths=[_OSE]))
+    after = rerank_stats()["queries"]
+    assert after >= before + N, f"E4: queries did not rise by {N}: {before} → {after}"
+
+
+def test_e5_mcp_query_path_no_generation():
+    """E5/HR9: MCP query actions contain no generative LLM import (source guard)."""
+    from pathlib import Path
+    base = Path(__file__).parents[3] / "opencode_search"
+    mcp_src = (base / "server" / "mcp.py").read_text()
+    ask_src = (base / "query" / "ask.py").read_text()
+    assert "graph.llm" not in mcp_src, "E5: mcp.py imports graph.llm (HR9 violation)"
+    assert "import chat" not in mcp_src, "E5: mcp.py imports chat"
+    assert "compose_answer" in mcp_src, "E5: mcp.py must call compose_answer"
+    assert "graph.llm" not in ask_src, "E5: ask.py imports graph.llm (HR9 violation)"
+    assert "def ask(" not in ask_src, "E5: ask.py must not have ask() (was LLM-generative)"
+
+
+@pytest.mark.slow
+def test_e6_dashboard_chat_codex_haiku_only(live_client):
+    """E6/HR10: POST /api/chat_stream streams tokens via codex→haiku, no ollama."""
+    r = live_client.post(
+        "/api/chat_stream",
+        json={"query": "What is the reranker used in this engine?"},
+        stream=True, timeout=(5, 90),
+    )
+    assert r.status_code == 200
+    tokens, done_seen = [], False
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        try:
+            evt = json.loads(line[5:].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if evt.get("type") == "token" and evt.get("text"):
+            tokens.append(evt["text"])
+        if evt.get("done"):
+            done_seen = True
+            break
+    r.close()
+    answer = "".join(tokens)
+    assert done_seen, "E6: SSE never sent done:true"
+    assert answer, "E6: no tokens received from /api/chat_stream"
+    kws = ("rerank", "jina", "embed", "daemon", "vector", "community", "gpu", "encoder")
+    assert any(k in answer.lower() for k in kws), f"E6: answer missing engine concept: {answer[:200]}"
+    from pathlib import Path
+    src = (Path(__file__).parents[3] / "opencode_search" / "server" / "routes_chat.py").read_text()
+    assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
+    assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat"
+
+
+def test_e7_trimmed_http_surface(live_client):
+    """E7/D5: deleted endpoints 404/405; KEEP endpoints 200; route inventory guard."""
+    deleted = [
+        ("GET", "/api/search"), ("POST", "/api/ask"), ("POST", "/api/index"),
+        ("POST", "/api/chat"), ("GET", "/api/feature"), ("GET", "/api/service_mesh"),
+        ("GET", "/admin/status"),
+    ]
+    for method, path in deleted:
+        r = live_client.request(method, path)
+        assert r.status_code in (404, 405), (
+            f"E7: {method} {path} → {r.status_code} (expected 404/405 — was deleted)"
+        )
+    for path in ("/healthz", "/api/projects", "/api/metrics"):
+        assert live_client.get(path).status_code == 200, f"E7: {path} not 200 (KEEP broken)"
+    from pathlib import Path
+    chat_router = Path(__file__).parents[3] / "opencode_search" / "query" / "chat_router.py"
+    assert not chat_router.exists(), "E7 guard: chat_router.py must be deleted"

@@ -34,12 +34,11 @@ def _con(project: str):
 
 
 def _converge_ready(project: str, timeout: int = 180) -> None:
-    """Trigger enrichment, poll until kb_state==ready AND l2_enriched_pct==100. Hard-fails on timeout."""
+    """Run _enrich_project in-process, poll until kb_state==ready AND l2_enriched_pct==100."""
     import time
-    r = requests.post(f"{_BASE}/api/enrich_project",
-                      json={"project_path": project},
-                      headers={"Content-Type": "application/json"}, timeout=10)
-    assert r.status_code in (200, 404), f"enrich_project HTTP {r.status_code}"
+
+    from opencode_search.daemon.sweeps import _enrich_project
+    _enrich_project(project)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         s = _overview_status(project)
@@ -155,7 +154,10 @@ def test_l2_coarse_resolution_lock():
 
 @pytest.mark.slow
 def test_global_ask_includes_l2_domain(live_client):
-    """S3: ask(scope=global) must reference ≥1 L2 domain title (Fix 3)."""
+    """S3: MCP ask(scope=global) assembled context must reference ≥1 L2 domain title."""
+    import asyncio
+
+    from opencode_search.server.mcp import ask as _mcp_ask
     con = _con(_OSE)
     try:
         l2_titles = [r[0] for r in con.execute(
@@ -165,16 +167,11 @@ def test_global_ask_includes_l2_domain(live_client):
         con.close()
     if not l2_titles:
         pytest.skip("no enriched L2 communities yet")
-    r = requests.post(f"{_BASE}/api/ask",
-                      json={"query": "What is the overall architecture?",
-                            "project_path": _OSE, "scope": "global"},
-                      timeout=60)
-    assert r.status_code == 200
-    answer = r.text
-    found = any(t.lower() in answer.lower() for t in l2_titles if t)
+    ctx = asyncio.run(_mcp_ask("What is the overall architecture?", _OSE, "global"))
+    found = any(t.lower() in ctx.lower() for t in l2_titles if t)
     assert found, (
-        f"ask(scope=global) did not mention any L2 domain.\n"
-        f"L2 titles: {l2_titles[:5]}\nAnswer[:300]: {answer[:300]}"
+        f"ask(scope=global) context did not mention any L2 domain.\n"
+        f"L2 titles: {l2_titles[:5]}\nContext[:300]: {ctx[:300]}"
     )
 
 

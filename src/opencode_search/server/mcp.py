@@ -147,7 +147,7 @@ async def ask(
                 chunks.extend(_search(query, embedder, _vs, scope="all", top_k=8))
             finally:
                 _vs.close()
-        chunks.sort(key=lambda r: r.get("score", 0), reverse=True)
+        chunks.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
         answer = compose_answer(query, chunks[:8], stores, scope=scope)
         _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
         return answer

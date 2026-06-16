@@ -54,9 +54,10 @@ async function sendChat(){
   if(!q)return;
   const out=document.getElementById('chat-output');
   out.textContent='Thinking...';
-  const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});
-  const d=await r.json();
-  out.textContent=d.answer||JSON.stringify(d);
+  const r=await fetch('/api/chat_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});
+  const rd=r.body.getReader();const dc=new TextDecoder();let buf='';
+  while(true){const{done,value}=await rd.read();if(done)break;buf+=dc.decode(value,{stream:true});
+  for(const l of buf.split('\n')){if(l.startsWith('data:')){try{const d=JSON.parse(l.slice(5));if(d.type==='token')out.textContent+=d.text;}catch{}}}};
 }
 fetch('/api/projects').then(r=>r.json()).then(d=>{
   const el=document.getElementById('projects-list');

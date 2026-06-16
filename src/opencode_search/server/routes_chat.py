@@ -1,11 +1,10 @@
-"""Chat (non-streaming) and chat_stream (SSE) routes — codex/gpt-5.4-mini ONLY."""
+"""chat_stream (SSE) route — codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback."""
 from __future__ import annotations
 
-import asyncio
 import json
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from opencode_search.core.config import (
     QUERY_LLM_FALLBACK_MODEL,
@@ -14,7 +13,6 @@ from opencode_search.core.config import (
     QUERY_LLM_TIMEOUT,
     project_graph_db,
 )
-from opencode_search.graph.llm import chat as _ollama_chat
 
 
 def _build_context(project_path: str) -> str:
@@ -34,41 +32,34 @@ def _build_context(project_path: str) -> str:
         gs.close()
 
 
-def _call_llm(messages: list[dict], stream: bool = False):
+def _chat_tokens(messages: list[dict]):
+    """Yield tokens: codex/gpt-5.4-mini primary → claude-haiku-4-5 on error or empty."""
+    emitted = False
     if QUERY_LLM_PROVIDER == "codex":
         try:
             from openai import OpenAI
-            return OpenAI(timeout=QUERY_LLM_TIMEOUT).chat.completions.create(
-                model=QUERY_LLM_MODEL, messages=messages, stream=stream
-            )
+            for chunk in OpenAI(timeout=QUERY_LLM_TIMEOUT).chat.completions.create(
+                model=QUERY_LLM_MODEL, messages=messages, stream=True
+            ):
+                t = chunk.choices[0].delta.content or ""
+                if t:
+                    emitted = True
+                    yield t
         except Exception:
             pass
+    if emitted:
+        return
     import anthropic
     sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
     user_msgs = [m for m in messages if m["role"] != "system"]
-    return anthropic.Anthropic().messages.create(
+    with anthropic.Anthropic().messages.stream(
         model=QUERY_LLM_FALLBACK_MODEL, max_tokens=2048,
         system=sys_msgs[0] if sys_msgs else "You are a helpful code assistant.",
-        messages=user_msgs, stream=stream,
-    )
-
-
-async def _api_chat(request: Request) -> JSONResponse:
-    body = await request.json()
-    message = body.get("message", "")
-    project_path = body.get("project_path", "")
-    if not message:
-        return JSONResponse({"error": "message required"}, status_code=400)
-    from opencode_search.query.chat_router import route
-    gdb = project_graph_db(project_path) if project_path else None
-    from opencode_search.graph.store import GraphStore
-    gs = GraphStore(gdb) if gdb and gdb.exists() else None
-    try:
-        answer = route(message, gs) if gs else f"No project indexed. Query: {message}"
-    finally:
-        if gs:
-            gs.close()
-    return JSONResponse({"answer": answer, "project": project_path})
+        messages=user_msgs,
+    ) as stream:
+        for t in stream.text_stream:
+            if t:
+                yield t
 
 
 async def _api_chat_stream(request: Request) -> Response:
@@ -86,27 +77,14 @@ async def _api_chat_stream(request: Request) -> Response:
 
     async def _gen():
         try:
-            for chunk in _call_llm(msgs, stream=True):
-                if QUERY_LLM_PROVIDER == "codex":
-                    delta = chunk.choices[0].delta.content or ""
-                else:
-                    delta = chunk.delta.text if hasattr(chunk, "delta") else ""
-                if delta:
-                    yield f"data: {json.dumps({'type': 'token', 'text': delta})}\n\n".encode()
-        except Exception:
-            try:
-                loop = asyncio.get_running_loop()
-                prompt = msgs[-1]["content"]
-                answer = await loop.run_in_executor(None, lambda: _ollama_chat(prompt, timeout=60))
-                if answer:
-                    yield f"data: {json.dumps({'type': 'token', 'text': answer})}\n\n".encode()
-            except Exception as exc2:
-                yield f"data: {json.dumps({'type': 'error', 'message': str(exc2)})}\n\n".encode()
+            for t in _chat_tokens(msgs):
+                yield f"data: {json.dumps({'type': 'token', 'text': t})}\n\n".encode()
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n".encode()
         yield b'data: {"type":"done","done":true}\n\n'
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 def register(app) -> None:
-    app.add_route("/api/chat", _api_chat, methods=["POST"])
     app.add_route("/api/chat_stream", _api_chat_stream, methods=["POST"])
