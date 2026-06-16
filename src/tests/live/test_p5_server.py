@@ -426,7 +426,7 @@ def test_reranking_is_query_time_only():
     """T-R2: index/ and kb/ packages must not reference reranking (architecture invariant)."""
     from pathlib import Path
 
-    base = Path(__file__).parents[3] / "opencode_search"
+    base = Path(__file__).parents[2] / "opencode_search"
     for pkg in [base / "index", base / "kb"]:
         for py in pkg.rglob("*.py"):
             src = py.read_text()
@@ -484,7 +484,7 @@ def test_e1_rerank_reorders_search_results():
                 lift_found = True
     assert lift_found, "E1: rerank never changed top-1 vs vector order (pass-through?)"
     from pathlib import Path
-    src = (Path(__file__).parents[3] / "opencode_search" / "server" / "mcp.py").read_text()
+    src = (Path(__file__).parents[2] / "opencode_search" / "server" / "mcp.py").read_text()
     assert 'sort(key=lambda r: r.get("score"' not in src, "E1 guard: bare score sort in mcp.py"
 
 
@@ -525,7 +525,7 @@ def test_e3_community_context_is_reranked():
     top_b = next((ln for ln in b.splitlines() if ln.startswith("## ")), "")
     assert top_a != top_b, f"E3: same top community for both queries (static?): {top_a!r}"
     from pathlib import Path
-    ask_src = (Path(__file__).parents[3] / "opencode_search" / "query" / "ask.py").read_text()
+    ask_src = (Path(__file__).parents[2] / "opencode_search" / "query" / "ask.py").read_text()
     assert "rerank_passages" in ask_src, "E3 guard: ask.py must use rerank_passages"
     assert "argsort" not in ask_src, "E3 guard: ask.py must not use argsort"
 
@@ -552,7 +552,7 @@ def test_e4_rerank_lift_metric(live_client):
 def test_e5_mcp_query_path_no_generation():
     """E5/HR9: MCP query actions contain no generative LLM import (source guard)."""
     from pathlib import Path
-    base = Path(__file__).parents[3] / "opencode_search"
+    base = Path(__file__).parents[2] / "opencode_search"
     mcp_src = (base / "server" / "mcp.py").read_text()
     ask_src = (base / "query" / "ask.py").read_text()
     assert "graph.llm" not in mcp_src, "E5: mcp.py imports graph.llm (HR9 violation)"
@@ -591,7 +591,7 @@ def test_e6_dashboard_chat_codex_haiku_only(live_client):
     kws = ("rerank", "jina", "embed", "daemon", "vector", "community", "gpu", "encoder")
     assert any(k in answer.lower() for k in kws), f"E6: answer missing engine concept: {answer[:200]}"
     from pathlib import Path
-    src = (Path(__file__).parents[3] / "opencode_search" / "server" / "routes_chat.py").read_text()
+    src = (Path(__file__).parents[2] / "opencode_search" / "server" / "routes_chat.py").read_text()
     assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
     assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat"
 
@@ -611,5 +611,5 @@ def test_e7_trimmed_http_surface(live_client):
     for path in ("/healthz", "/api/projects", "/api/metrics"):
         assert live_client.get(path).status_code == 200, f"E7: {path} not 200 (KEEP broken)"
     from pathlib import Path
-    chat_router = Path(__file__).parents[3] / "opencode_search" / "query" / "chat_router.py"
+    chat_router = Path(__file__).parents[2] / "opencode_search" / "query" / "chat_router.py"
     assert not chat_router.exists(), "E7 guard: chat_router.py must be deleted"
