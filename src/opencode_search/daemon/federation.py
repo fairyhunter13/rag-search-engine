@@ -72,3 +72,25 @@ def expand_federation(path: str) -> list[str]:
     from opencode_search.core.registry import get_project
     entry = get_project(path)
     return [path] + (entry.federation if entry and entry.federation else [])
+
+
+def federated_map(project_path: str, fn):  # type: ignore[no-untyped-def]
+    """Run fn(GraphStore) on each member's graph.db (root first); return [(path, result)].
+
+    Stores are opened and closed per-call; fn must not hold the store reference after return.
+    Members whose graph.db does not yet exist are silently skipped.
+    """
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.graph.store import GraphStore
+
+    out: list = []
+    for p in expand_federation(project_path):
+        gdb = project_graph_db(p)
+        if not gdb.exists():
+            continue
+        gs = GraphStore(gdb)
+        try:
+            out.append((p, fn(gs)))
+        finally:
+            gs.close()
+    return out

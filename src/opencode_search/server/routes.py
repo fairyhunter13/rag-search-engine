@@ -51,7 +51,11 @@ async def _api_search(request: Request) -> JSONResponse:
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search as _search
     from opencode_search.server.mcp import _get_embedder
-    paths = [project] if project else [p.path for p in list_projects() if p.enabled]
+    if project:
+        from opencode_search.daemon.federation import expand_federation
+        paths = expand_federation(project)
+    else:
+        paths = [p.path for p in list_projects() if p.enabled]
     results: list[dict] = []
     for path in paths:
         vdb = project_vector_db(path)

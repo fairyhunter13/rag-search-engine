@@ -135,7 +135,7 @@ async def ask(
     if not project_vector_db(project_path).exists():
         return f"Project not indexed: {project_path}"
     embedder = _get_embedder()
-    gs = GraphStore(project_graph_db(project_path))
+    stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
     try:
         chunks: list[dict] = []
         for _p in all_paths:
@@ -148,11 +148,12 @@ async def ask(
             finally:
                 _vs.close()
         chunks.sort(key=lambda r: r.get("score", 0), reverse=True)
-        answer = compose_answer(query, chunks[:8], gs, scope=scope)
+        answer = compose_answer(query, chunks[:8], stores, scope=scope)
         _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
         return answer
     finally:
-        gs.close()
+        for s in stores:
+            s.close()
 
 
 @mcp.tool()
@@ -171,48 +172,40 @@ async def graph(
             return json.dumps({"error": "No indexed projects found."})
         project_path = projects[0].path
     from opencode_search.core.config import project_graph_db
-    from opencode_search.graph.store import GraphStore
+    from opencode_search.daemon.federation import expand_federation, federated_map
     from opencode_search.query import graph_handler as gh
 
-    gdb = project_graph_db(project_path)
-    if not gdb.exists():
+    if not any(project_graph_db(p).exists() for p in expand_federation(project_path)):
         return json.dumps({"error": f"Not indexed: {project_path}"})
-    gs = GraphStore(gdb)
-    try:
-        if relation == "callers":
-            return json.dumps({"matches": gh.callers(symbol, gs)})
-        if relation == "callees":
-            return json.dumps({"matches": gh.callees(symbol, gs)})
-        if relation == "impact":
-            return json.dumps({"matches": gh.impact(symbol, gs)})
-        if relation == "impact_narrative":
-            affected = gh.impact(symbol, gs)
-            if not affected:
-                return json.dumps({"symbol": symbol, "risk": "low", "affected_count": 0,
-                                   "summary": f"No callers found for '{symbol}' — low blast radius."})
-            names = [r["name"] for r in affected[:20]]
-            risk = "high" if len(affected) > 10 else "medium" if len(affected) > 3 else "low"
-            return json.dumps({"symbol": symbol, "risk": risk, "affected_count": len(affected),
-                               "affected": names,
-                               "summary": f"Changing '{symbol}' affects {len(affected)} symbol(s): "
-                                          f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."})
-        if relation == "path":
-            if not to_symbol:
-                return json.dumps({"error": "relation='path' requires to_symbol"})
-            return json.dumps({"path": gh.path_between(symbol, to_symbol, gs)})
-        if relation == "semantic_trace":
-            if not to_symbol:
-                return json.dumps({"error": "relation='semantic_trace' requires to_symbol"})
-            path = gh.path_between(symbol, to_symbol, gs)
-            if not path:
-                return json.dumps({"from": symbol, "to": to_symbol, "path": [],
-                                   "summary": f"No call path found from '{symbol}' to '{to_symbol}'."})
+
+    _union = {"callers": gh.callers, "callees": gh.callees,
+              "impact": gh.impact, "definition": gh.definition}
+    if relation in _union:
+        _fn = _union[relation]
+        matches = [m for _, ms in federated_map(project_path, lambda gs: _fn(symbol, gs)) for m in ms]
+        return json.dumps({"matches": matches})
+    if relation == "impact_narrative":
+        affected = [m for _, ms in federated_map(project_path, lambda gs: gh.impact(symbol, gs)) for m in ms]
+        if not affected:
+            return json.dumps({"symbol": symbol, "risk": "low", "affected_count": 0,
+                               "summary": f"No callers found for '{symbol}' — low blast radius."})
+        names = [r["name"] for r in affected[:20]]
+        risk = "high" if len(affected) > 10 else "medium" if len(affected) > 3 else "low"
+        return json.dumps({"symbol": symbol, "risk": risk, "affected_count": len(affected), "affected": names,
+                           "summary": f"Changing '{symbol}' affects {len(affected)} symbol(s): "
+                                      f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."})
+    # path / semantic_trace — per-member; cross-repo paths are not representable
+    _note = "call paths are per-member; cross-repo paths are not represented"
+    if not to_symbol:
+        return json.dumps({"error": f"relation='{relation}' requires to_symbol"})
+    for _, path in federated_map(project_path, lambda gs: gh.path_between(symbol, to_symbol, gs)):
+        if path:
             steps = " → ".join(p["name"] for p in path)
-            return json.dumps({"from": symbol, "to": to_symbol, "path": path,
+            return json.dumps({"from": symbol, "to": to_symbol, "path": path, "note": _note,
                                "summary": f"{symbol} → {to_symbol} via {len(path)} step(s): {steps}"})
-        return json.dumps({"matches": gh.definition(symbol, gs)})
-    finally:
-        gs.close()
+    return json.dumps({"from": symbol, "to": to_symbol, "path": [], "note": _note,
+                       "summary": f"No call path found from '{symbol}' to '{to_symbol}'."
+                       if to_symbol else f"relation='{relation}' requires to_symbol"})
 
 
 @mcp.tool()

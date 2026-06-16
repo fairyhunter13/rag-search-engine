@@ -4,16 +4,6 @@ from __future__ import annotations
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from opencode_search.core.config import project_graph_db
-
-
-def _open_graph(project: str):
-    gdb = project_graph_db(project)
-    if not gdb.exists():
-        return None
-    from opencode_search.graph.store import GraphStore
-    return GraphStore(gdb)
-
 
 async def _api_graph(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
@@ -21,9 +11,7 @@ async def _api_graph(request: Request) -> JSONResponse:
     relation = request.query_params.get("relation", "definition")
     if not project or not symbol:
         return JSONResponse({"error": "project and symbol required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"error": "project not indexed"}, status_code=404)
+    from opencode_search.daemon.federation import federated_map
     from opencode_search.query.graph_handler import (
         callees,
         callers,
@@ -31,12 +19,10 @@ async def _api_graph(request: Request) -> JSONResponse:
         impact,
         impact_narrative,
     )
-    fn = {"callers": callers, "callees": callees, "impact": impact,
-          "impact_narrative": impact_narrative}.get(relation, definition)
-    try:
-        return JSONResponse({"results": fn(symbol, gs), "relation": relation})
-    finally:
-        gs.close()
+    _fn = {"callers": callers, "callees": callees, "impact": impact,
+           "impact_narrative": impact_narrative}.get(relation, definition)
+    results = [m for _, ms in federated_map(project, lambda gs: _fn(symbol, gs)) for m in ms]
+    return JSONResponse({"results": results, "relation": relation})
 
 
 async def _api_impact_narrative(request: Request) -> JSONResponse:
@@ -44,14 +30,10 @@ async def _api_impact_narrative(request: Request) -> JSONResponse:
     symbol = request.query_params.get("symbol", "")
     if not project or not symbol:
         return JSONResponse({"error": "project and symbol required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"error": "not indexed"}, status_code=404)
+    from opencode_search.daemon.federation import federated_map
     from opencode_search.query.graph_handler import impact_narrative
-    try:
-        return JSONResponse({"narrative": impact_narrative(symbol, gs)})
-    finally:
-        gs.close()
+    narrative = " ".join(n for _, n in federated_map(project, lambda gs: impact_narrative(symbol, gs)) if n)
+    return JSONResponse({"narrative": narrative or f"No callers found for '{symbol}' — low blast radius."})
 
 
 async def _api_graph_export(request: Request) -> JSONResponse:
@@ -59,55 +41,47 @@ async def _api_graph_export(request: Request) -> JSONResponse:
     max_nodes = int(request.query_params.get("max_nodes", "5000"))
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"nodes": [], "edges": []})
-    try:
-        nodes = gs.conn.execute("SELECT sid AS id, name, kind FROM symbols LIMIT ?", (max_nodes,)).fetchall()
-        edges = gs.conn.execute("SELECT caller_sid AS source_id, callee_sid AS target_id FROM edges LIMIT ?", (max_nodes,)).fetchall()
-        return JSONResponse({"nodes": [dict(n) for n in nodes], "edges": [dict(e) for e in edges]})
-    finally:
-        gs.close()
+    from opencode_search.daemon.federation import federated_map
+    def _export(gs):  # type: ignore[no-untyped-def]
+        n = [dict(r) for r in gs.conn.execute("SELECT sid AS id, name, kind FROM symbols LIMIT ?", (max_nodes,)).fetchall()]
+        e = [dict(r) for r in gs.conn.execute("SELECT caller_sid AS source_id, callee_sid AS target_id FROM edges LIMIT ?", (max_nodes,)).fetchall()]
+        return n, e
+    all_n, all_e = [], []
+    for _, (ns, es) in federated_map(project, _export):
+        all_n.extend(ns)
+        all_e.extend(es)
+    return JSONResponse({"nodes": all_n[:max_nodes], "edges": all_e[:max_nodes]})
 
 
 async def _api_import_cycles(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"cycles": []})
-    try:
-        cnt = gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-        return JSONResponse({"cycles": [], "import_edge_count": cnt})
-    finally:
-        gs.close()
+    from opencode_search.daemon.federation import federated_map
+    cnt = sum(c for _, c in federated_map(project, lambda gs: gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]))
+    return JSONResponse({"cycles": [], "import_edge_count": cnt})
 
 
 async def _api_surprising_connections(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
-    gs = _open_graph(project)
-    if gs is None:
-        return JSONResponse({"connections": []})
-    try:
-        rows = gs.conn.execute(
-            "SELECT s.name as src, t.name as tgt FROM edges e "
-            "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
-            "WHERE s.community_id != t.community_id LIMIT 20"
-        ).fetchall()
-        return JSONResponse({"connections": [dict(r) for r in rows]})
-    finally:
-        gs.close()
+    from opencode_search.daemon.federation import federated_map
+    rows = [r for _, rs in federated_map(project, lambda gs: [dict(r) for r in gs.conn.execute(
+        "SELECT s.name as src, t.name as tgt FROM edges e "
+        "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
+        "WHERE s.community_id != t.community_id LIMIT 20"
+    ).fetchall()]) for r in rs]
+    return JSONResponse({"connections": rows[:20]})
 
 
 async def _api_service_mesh(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
+    from opencode_search.daemon.federation import expand_federation
     from opencode_search.server._overview import _detect_services
-    return JSONResponse({"services": _detect_services(project)})
+    return JSONResponse({"services": [s for p in expand_federation(project) for s in _detect_services(p)]})
 
 
 async def _api_semantic_trace(request: Request) -> JSONResponse:
