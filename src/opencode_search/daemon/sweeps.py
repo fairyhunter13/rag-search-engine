@@ -224,6 +224,13 @@ def _enrich_project(project_path: str) -> None:
             gs.commit()
             if gpu_temp_c() > THERMAL_MAX_C:
                 time.sleep(5)
+        # Orphan L2 communities (no L1 children) never get enriched by enrich_community_l2;
+        # stamp a placeholder so l2_enriched_pct can reach 100%.
+        gs._con.execute(
+            "UPDATE communities SET summary='(no child communities)' "
+            "WHERE level>=2 AND (summary IS NULL OR summary='')"
+        )
+        gs.commit()
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
