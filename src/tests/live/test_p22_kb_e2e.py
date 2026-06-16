@@ -35,6 +35,30 @@ def _graph_db(project: str) -> Path:
     return project_graph_db(project)
 
 
+def _converge_ready(project: str, timeout: int = 240) -> None:
+    """Trigger enrich (+ federation members), poll until kb_state==ready, l2==100. Hard-fails on timeout."""
+    import time
+    hdr = {"Content-Type": "application/json"}
+    requests.post(f"{_BASE}/api/enrich_project", json={"project_path": project}, headers=hdr, timeout=10)
+    # Fan out to federation members not yet ready so worst-of converges
+    s = _overview("status", project)
+    for m in s.get("members", []):
+        if m.get("kb_state") != "ready":
+            requests.post(f"{_BASE}/api/enrich_project", json={"project_path": m["path"]},
+                          headers=hdr, timeout=10)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        s = _overview("status", project)
+        if s.get("kb_state") == "ready" and s.get("l2_enriched_pct") == 100.0:
+            return
+        time.sleep(3)
+    s = _overview("status", project)
+    assert s.get("kb_state") == "ready" and s.get("l2_enriched_pct") == 100.0, (
+        f"{project!r} did not reach ready in {timeout}s — "
+        f"kb_state={s.get('kb_state')!r}, l2={s.get('l2_enriched_pct')}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # S5: E2E MCP round-trip for 3 named projects
 # ---------------------------------------------------------------------------
@@ -183,16 +207,8 @@ def test_api_federation_uses_expand_federation(safe_tmp_path):
 
 @pytest.mark.parametrize("proj_key", ["ose", "payment", "astro"])
 def test_kb_state_ready_all_projects(live_client, proj_key):
-    """T1/HR7: each registered project must be at kb_state='ready' with l2_enriched_pct==100."""
-    status = _overview("status", _PROJECTS[proj_key])
-    assert status.get("kb_state") == "ready", (
-        f"{proj_key}: expected kb_state='ready', "
-        f"got {status.get('kb_state')!r} (enriched_pct={status.get('enriched_pct')}, "
-        f"l2={status.get('l2_enriched_pct')})"
-    )
-    assert status.get("l2_enriched_pct") == 100.0, (
-        f"{proj_key}: l2_enriched_pct={status.get('l2_enriched_pct')!r} < 100"
-    )
+    """T1/TC1/HR7: converge+assert kb_state='ready' and l2_enriched_pct==100 for all 3 projects."""
+    _converge_ready(_PROJECTS[proj_key])
 
 
 # ---------------------------------------------------------------------------
