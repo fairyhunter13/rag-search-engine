@@ -58,25 +58,6 @@ def reconcile_projects() -> None:
             log.warning("reconcile %s: %s", entry.path, exc)
 
 
-def kb_sweep() -> None:
-    """Enrich symbols + communities for all indexed projects."""
-    if _PAUSED:
-        return
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-
-    for entry in list_projects():
-        if not entry.enabled:
-            continue
-        gdb = project_graph_db(entry.path)
-        if not gdb.exists():
-            continue
-        try:
-            _enrich_project(entry.path)
-        except Exception as exc:
-            log.warning("kb_sweep %s: %s", entry.path, exc)
-
-
 def maintenance() -> None:
     """Vacuum orphan index dirs not present in the registry."""
     if _PAUSED:
@@ -227,7 +208,7 @@ def _enrich_project(project_path: str) -> None:
         # Orphan L2 communities (no L1 children) never get enriched by enrich_community_l2;
         # stamp a placeholder so l2_enriched_pct can reach 100%.
         gs._con.execute(
-            "UPDATE communities SET summary='(no child communities)' "
+            "UPDATE communities SET title='(leaf)', summary='(no child communities)' "
             "WHERE level>=2 AND (summary IS NULL OR summary='')"
         )
         gs.commit()

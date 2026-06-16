@@ -123,7 +123,7 @@ def test_ask_global_scope_semantic_map():
     enriched = gs._con.execute(
         "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
     ).fetchone()[0]
-    assert enriched > 0, "redacted-name-3 needs enriched communities (run kb_sweep)"
+    assert enriched > 0, "redacted-name-3 needs enriched communities (trigger /api/enrich_project)"
 
     vs = VectorStore(vdb)
     chunks = search("project structure", get_embedder(), vs, scope="all", top_k=5)
