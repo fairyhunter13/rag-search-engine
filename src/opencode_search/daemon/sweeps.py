@@ -6,16 +6,27 @@ import shutil
 
 _PAUSED: bool = False
 _KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change
+_INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
 _last_kb_enrich: dict[str, float] = {}
+_last_index_fail: dict[str, float] = {}
 
 log = logging.getLogger(__name__)
 
 
 def _needs_index(path: str) -> bool:
-    """True if this project has no vector chunks (missing or empty DB)."""
+    """True if this project's index is absent or never completed.
+
+    Keys on registry indexed_at (set only at the end of a successful _index_project)
+    so a partial/aborted index with stray chunks is still treated as needing re-index.
+    """
     import sqlite3
 
     from opencode_search.core.config import project_vector_db
+    from opencode_search.core.registry import get_project
+
+    e = get_project(path)
+    if e is None or e.indexed_at is None:
+        return True  # never completed; stray partial chunks do not count
     vdb = project_vector_db(path)
     if not vdb.exists():
         return True
@@ -26,8 +37,28 @@ def _needs_index(path: str) -> bool:
         return True
 
 
+def _needs_enrich(path: str) -> bool:
+    """True if any community in this project's graph is missing a summary."""
+    import sqlite3
+
+    from opencode_search.core.config import project_graph_db
+
+    gdb = project_graph_db(path)
+    if not gdb.exists():
+        return False
+    try:
+        with sqlite3.connect(str(gdb)) as con:
+            n = con.execute(
+                "SELECT COUNT(*) FROM communities WHERE summary IS NULL OR summary = ''"
+            ).fetchone()[0]
+            return n > 0
+    except Exception:
+        return False
+
+
 def reconcile_projects() -> None:
-    """One-shot idempotent: discover+register members, index any unindexed/stalled project."""
+    """Idempotent: discover+register members, index any unindexed/stalled project, enrich any
+    project with missing community summaries (any level).  Safe to call repeatedly."""
     if _PAUSED:
         return
     from opencode_search.core.config import project_graph_db
@@ -40,20 +71,21 @@ def reconcile_projects() -> None:
     for entry in list_projects():
         if not entry.enabled:
             continue
-        needs = _needs_index(entry.path)
-        if not needs:
+        needs_idx = _needs_index(entry.path)
+        if not needs_idx:
             gdb = project_graph_db(entry.path)
             if gdb.exists():
                 gs = GraphStore(gdb)
                 try:
-                    needs = gs.community_count() == 0
+                    needs_idx = gs.community_count() == 0
                 finally:
                     gs.close()
-        if not needs:
-            continue
         try:
-            _index_project(entry.path)
-            _enrich_project(entry.path)
+            if needs_idx:
+                _index_project(entry.path)
+                _enrich_project(entry.path)
+            elif _needs_enrich(entry.path):
+                _enrich_project(entry.path)  # enrich-only; skip expensive re-index
         except Exception as exc:
             log.warning("reconcile %s: %s", entry.path, exc)
 
@@ -221,6 +253,11 @@ def on_change(project_path: str, files: list) -> None:
     """Watcher callback: incremental reindex; then KB enrich (debounced) if not recently done."""
     import time
 
+    if _PAUSED:
+        return
+    now = time.monotonic()
+    if now - _last_index_fail.get(project_path, 0.0) < _INDEX_BACKOFF_S:
+        return  # in backoff window after a previous failure; skip this event
     try:
         if files:
             _index_files(project_path, files)
@@ -228,8 +265,8 @@ def on_change(project_path: str, files: list) -> None:
             _index_project(project_path)
     except Exception as exc:
         log.warning("incremental reindex %s: %s", project_path, exc)
+        _last_index_fail[project_path] = now  # back off before retrying
         return
-    now = time.monotonic()
     if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:
         return
     _last_kb_enrich[project_path] = now

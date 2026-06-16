@@ -199,6 +199,35 @@ def test_kb_state_no_churn(live_client, proj_key):
 # T6/HR4: federation fan-out on the REAL astro-project
 # ---------------------------------------------------------------------------
 
+# Fix #1: _needs_enrich detects stalled L2 summaries
+
+def test_needs_enrich_detects_null_summaries(safe_tmp_path):
+    """Fix #1: _needs_enrich returns True when any community has a NULL summary."""
+    import sqlite3
+
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import ProjectEntry, remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _needs_enrich
+
+    upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True))
+    try:
+        gdb = project_graph_db(str(safe_tmp_path))
+        gdb.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(gdb))
+        con.execute("CREATE TABLE communities (id INTEGER PRIMARY KEY, level INTEGER, title TEXT, summary TEXT)")
+        con.execute("INSERT INTO communities VALUES (1, 1, 'A', NULL)")
+        con.commit()
+        con.close()
+        assert _needs_enrich(str(safe_tmp_path)) is True
+        con = sqlite3.connect(str(gdb))
+        con.execute("UPDATE communities SET summary='done'")
+        con.commit()
+        con.close()
+        assert _needs_enrich(str(safe_tmp_path)) is False
+    finally:
+        remove_project(str(safe_tmp_path))
+
+
 def test_real_federation_fanout(live_client):
     """T6/HR4: astro-project members list has ≥1 member with real symbols; search fans out."""
     status = _overview("status", _PROJECTS["astro"])
@@ -215,3 +244,101 @@ def test_real_federation_fanout(live_client):
     data = json.loads(asyncio.run(_mcp_search("function", project_paths=[_PROJECTS["astro"]])))
     results = data.get("results", [])
     assert results, "search(project_paths=[astro-project]) returned no results (fan-out broken)"
+
+
+# Fix #2a: _needs_index keys on indexed_at, not stray chunks
+
+def test_needs_index_keys_on_indexed_at(safe_tmp_path):
+    """Fix #2a: _needs_index returns True for indexed_at=None even with stray chunks present."""
+    import sqlite3
+
+    from opencode_search.core.config import project_vector_db
+    from opencode_search.core.registry import ProjectEntry, remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _needs_index
+
+    upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True, indexed_at=None))
+    try:
+        vdb = project_vector_db(str(safe_tmp_path))
+        vdb.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(vdb))
+        con.execute("CREATE TABLE chunks (rowid INTEGER, path TEXT, content TEXT)")
+        con.execute("INSERT INTO chunks VALUES (1,'a.py','stray')")
+        con.commit()
+        con.close()
+        assert _needs_index(str(safe_tmp_path)) is True, (
+            "_needs_index must be True for indexed_at=None regardless of stray chunks"
+        )
+    finally:
+        remove_project(str(safe_tmp_path))
+
+
+# Fix #2b: overview(status) shows "indexing" for never-indexed member
+
+def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
+    """Fix #2b: overview(status) kb_state must be 'indexing' when indexed_at is None."""
+    from opencode_search.core.config import project_graph_db, project_vector_db
+    from opencode_search.core.registry import ProjectEntry, remove_project, upsert_project
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.server._overview import handle_overview
+
+    upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True, indexed_at=None))
+    try:
+        # Create a vectors.db with stray chunks (reproduces astro-loyalty-be state)
+        vdb = project_vector_db(str(safe_tmp_path))
+        vdb.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(vdb))
+        con.execute("CREATE TABLE chunks (rowid INTEGER, path TEXT, content TEXT)")
+        con.execute("INSERT INTO chunks VALUES (1,'a.py','stray')")
+        con.commit()
+        con.close()
+        # Create a minimal valid graph.db so handle_overview's _paths filter passes
+        gdb = project_graph_db(str(safe_tmp_path))
+        gs = GraphStore(gdb)
+        gs.close()  # creates the schema; graph.db now exists
+        result = json.loads(handle_overview(str(safe_tmp_path), "status"))
+        members_ks = [m.get("kb_state") for m in result.get("members", [])
+                      if m.get("path") == str(safe_tmp_path)]
+        reported = members_ks[0] if members_ks else result.get("kb_state")
+        assert reported == "indexing", (
+            f"never-indexed member must report 'indexing', got {reported!r}"
+        )
+    finally:
+        remove_project(str(safe_tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Logical-entity e2e: all 3 real federations must have all members indexed
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+def test_federation_no_member_stuck_indexing(live_client, proj_key):
+    """Fix #2: after reconcile completes, no federation member may have kb_state='indexing'.
+
+    Marked slow: reconcile must finish indexing all never-indexed members before this passes.
+    Run after `reconcile_projects()` has had time to complete for all members.
+    """
+    from opencode_search.daemon.sweeps import reconcile_projects
+    reconcile_projects()  # ensure local state is converged before asserting
+    status = _overview("status", _PROJECTS[proj_key])
+    stuck = [m for m in status.get("members", []) if m.get("kb_state") == "indexing"]
+    assert not stuck, (
+        f"{proj_key}: {len(stuck)} member(s) still 'indexing' after reconcile — "
+        f"{[m['path'].split('/')[-1] for m in stuck[:3]]}"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+def test_federation_search_ask_as_logical_entity(live_client, proj_key):
+    """Logical-entity e2e: search and ask both return results for real project roots."""
+    import asyncio
+
+    from opencode_search.server.mcp import ask as _mcp_ask
+    from opencode_search.server.mcp import search as _mcp_search
+
+    root = _PROJECTS[proj_key]
+    sr = json.loads(asyncio.run(_mcp_search("function", project_paths=[root])))
+    assert sr.get("results"), f"{proj_key}: search returned no results (fan-out broken)"
+    ak = asyncio.run(_mcp_ask("What is the overall architecture?", root, "global"))
+    assert len(ak.strip()) > 20, f"{proj_key}: ask returned empty/short context"

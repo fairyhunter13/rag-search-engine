@@ -105,4 +105,11 @@ def _start_background() -> None:
 
     start_watcher()
 
-    threading.Thread(target=reconcile_projects, daemon=True, name="reconcile").start()
+    def _reconcile_loop() -> None:
+        import time
+        while True:
+            with contextlib.suppress(Exception):
+                reconcile_projects()
+            time.sleep(1800.0)  # 30 min between self-heal passes
+
+    threading.Thread(target=_reconcile_loop, daemon=True, name="reconcile").start()
