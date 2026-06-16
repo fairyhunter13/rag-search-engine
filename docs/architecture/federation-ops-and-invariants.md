@@ -134,19 +134,21 @@ Each §13 invariant has a corresponding live test that proves it without mocks:
 | #1 no-inlining | `test_inv1_no_inlining` | `test_federation_architecture.py` |
 | #2 members first-class | `test_inv2_members_first_class` | `test_federation_architecture.py` |
 | #3 federation authoritative | `test_inv3_federation_authoritative` | `test_federation_architecture.py` |
-| #4 logical-repo coverage | `test_inv4_root_scoped_search_fanout` | `test_federation_architecture.py` |
-| #6 forbidden root | `test_inv6_forbidden_root` | `test_federation_architecture.py` |
+| #4 logical-repo coverage | `test_inv4_root_scoped_search_fanout` | `test_federation_logical_entity.py` |
+| #6 forbidden root | `test_inv6_forbidden_root` + `test_upsert_project_rejects_forbidden_root` | `test_federation_architecture.py` / `test_p22_kb_e2e.py` |
+| #7 idempotency | `test_index_project_idempotent` | `test_p22_kb_e2e.py` |
 | #8 cascade remove | `test_inv8_cascade_remove` | `test_federation_architecture.py` |
-| HR1 watcher→index | `test_watcher_index_e2e` | `test_p6_daemon.py` |
-| HR2 watcher→KB / event-driven | `test_watcher_kb_e2e` + `:704` guard | `test_p6_daemon.py` |
-| HR3 enrichment idempotence | `test_detect_communities_idempotent` + stability | `test_p3_graph.py` |
-| HR4 federation fan-out | `test_real_federation_fanout` + `test_inv4` | `test_p22_kb_e2e.py` / `test_federation_architecture.py` |
-| HR5 one path → one index | `test_inv2_members_first_class` + `test_inv8` | `test_federation_architecture.py` |
-| HR6 GPU-only | `test_inv5_gpu_only` | `test_federation_architecture.py` |
+| HR1 watcher→index | `test_p34_watcher_updates_vector_index` | `test_p6_daemon.py` |
+| HR2 watcher→KB / event-driven | `test_watcher_kb_e2e` | `test_p6_daemon.py` |
+| HR3 enrichment idempotence | `test_detect_communities_idempotent` | `test_p3_graph.py` |
+| HR4 federation fan-out | `test_real_federation_fanout` + `test_inv4_root_scoped_search_fanout` | `test_p22_kb_e2e.py` / `test_federation_logical_entity.py` |
+| HR5 one path → one index | `test_inv2_members_first_class` + `test_inv8_cascade_remove` | `test_federation_architecture.py` |
+| HR6 GPU-only | `test_no_cpu_fallback`, `test_embedder_bound_to_cuda` | `test_p1_smoke.py` |
 | HR7 kb_state → ready | `test_kb_state_ready_all_projects` | `test_p22_kb_e2e.py` |
-| HR8 rerank lift + both axes | `test_rerank_reorders_search_results`, `test_ask_synthesis_uses_rerank_order`, `test_community_context_is_reranked`, `test_rerank_lift_metric` | `test_p5_server.py` |
-| HR9 MCP embed+rerank only | `test_mcp_query_actions_embedding_and_rerank_only` | `test_p5_server.py` |
-| HR10 dashboard chat codex→haiku | `test_dashboard_chat_codex_haiku_only`, `test_chat_stream_sse_sends_done` | `test_p5_server.py` / `test_p4_query.py` |
+| HR8 rerank lift + both axes | `test_e1_rerank_reorders_search_results`, `test_e2_ask_context_is_rerank_ordered`, `test_e3_community_context_is_reranked`, `test_e4_rerank_lift_metric` | `test_p5_server.py` |
+| HR9 MCP embed+rerank only | `test_e5_mcp_query_path_no_generation` | `test_p5_server.py` |
+| HR10 dashboard chat codex→haiku | `test_e6_dashboard_chat_codex_haiku_only`, `test_chat_stream_sse_sends_done` | `test_p5_server.py` / `test_p4_query.py` |
+| §16 config inheritance | `test_effective_config_inherits_root_excludes`, `test_iter_files_always_yields_ose_config`, `test_overview_status_includes_config_key` | `test_p22_kb_e2e.py` |
 
 ## 15. Design rationale
 
