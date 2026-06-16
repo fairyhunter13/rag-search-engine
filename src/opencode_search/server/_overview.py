@@ -158,12 +158,22 @@ def handle_overview(project_path: str, what: str) -> str:
                         worst_state = _ks
                     if i == 0:
                         root_pct = (_pct, l1p, l2p)
+                from pathlib import Path as _P
+
+                from opencode_search.core.index_config import _CONFIG_NAMES, effective_config
+                _ecfg = effective_config(project_path)
+                _cfg_src = ("own" if any((_P(project_path) / n).is_file() for n in _CONFIG_NAMES)
+                            else "inherited")
                 return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
                                    "kb_state": worst_state, "enriched_pct": root_pct[0],
                                    "l1_enriched_pct": root_pct[1], "l2_enriched_pct": root_pct[2],
-                                   "members": members_info})
+                                   "members": members_info,
+                                   "config": {"exclude": _ecfg.exclude,
+                                              "use_default_ignores": _ecfg.use_default_ignores,
+                                              "max_pending_files": _ecfg.max_pending_files,
+                                              "source": _cfg_src}})
             if what == "import_cycles":
                 cycs = [cy for gs in _gstores for cy in _find_import_cycles(gs.conn)][:20]
                 cnt = sum(gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] for gs in _gstores)
