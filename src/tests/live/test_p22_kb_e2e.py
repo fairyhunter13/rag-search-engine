@@ -36,14 +36,17 @@ def _graph_db(project: str) -> Path:
 
 
 def _converge_ready(project: str, timeout: int = 240) -> None:
-    """Run _enrich_project in-process (+ members), poll until kb_state==ready, l2==100."""
+    """Index (if needed) + enrich all members, poll until kb_state==ready, l2==100."""
     import time
 
-    from opencode_search.daemon.sweeps import _enrich_project
+    from opencode_search.daemon.sweeps import _enrich_project, _index_project
     _enrich_project(project)
     s = _overview("status", project)
     for m in s.get("members", []):
-        if m.get("kb_state") != "ready":
+        ks = m.get("kb_state")
+        if ks == "indexing":
+            _index_project(m["path"])  # never-indexed members need full index first
+        if ks != "ready":
             _enrich_project(m["path"])
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -171,6 +174,7 @@ def test_federation_kb_reflects_root_only(live_client):
 # T1/HR7: all 3 projects must reach kb_state='ready'
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["ose", "payment", "astro"])
 def test_kb_state_ready_all_projects(live_client, proj_key):
     """T1/TC1/HR7: converge+assert kb_state='ready' and l2_enriched_pct==100 for all 3 projects."""
