@@ -6,31 +6,17 @@ configure_integrations.py uses this module to verify and repair drift.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
-_VENV_PYTHON = str(
-    Path(__file__).parent.parent.parent / ".venv" / "bin" / "python"
-)
+from pathlib import Path as _Path
 
 # ---------------------------------------------------------------------------
-# Canonical MCP entry
+# Canonical MCP entry (HTTP transport — daemon at :8765)
 # ---------------------------------------------------------------------------
 
-CANONICAL_MCP_COMMAND = _VENV_PYTHON
-CANONICAL_MCP_ARGS = ["-m", "opencode_search", "daemon", "bridge-stdio"]
-CANONICAL_MCP_ENV = {
-    "OPENCODE_ALLOW_INDEX_OUTSIDE_CWD": "1",
-    "OPENCODE_LLM_PROVIDER": "ollama",
-    "OPENCODE_LLM_MODEL": "qwen3-enrich:1.7b",
-    "OPENCODE_QUERY_LLM_PROVIDER": "ollama",
-    "OPENCODE_QUERY_LLM_MODEL": "qwen3-query:8b",
-}
+CANONICAL_MCP_URL = "http://127.0.0.1:8765/mcp"
 
 # ---------------------------------------------------------------------------
 # Global lean-gate enforcement (hook path + deny globs for ~/.claude/settings.json)
 # ---------------------------------------------------------------------------
-
-from pathlib import Path as _Path
 
 LEAN_GATE_HOOK_PATH: str = str(_Path.home() / ".claude" / "hooks" / "lean-gate.sh")
 

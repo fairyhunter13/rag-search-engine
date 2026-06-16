@@ -53,3 +53,4 @@ Any CPU fallback must raise a fatal error — never fall back silently.
 - Tests: `src/tests/live/` (live suite — requires daemon at :8765, Ollama, GPU)
 - LLM provider: ollama + qwen3-enrich:1.7b (GPU-local, RTX 5080; systemd service; see `scripts/modelfiles/qwen3-enrich.modelfile`)
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
+- Architecture: `docs/architecture/federation-and-search-engine.md` + `docs/architecture/federation-ops-and-invariants.md`

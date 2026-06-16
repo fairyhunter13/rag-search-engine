@@ -27,9 +27,7 @@ from pathlib import Path
 # Add scripts/ to path so we can import from integrations/
 sys.path.insert(0, str(Path(__file__).parent))
 from integrations.canonical import (
-    CANONICAL_MCP_ARGS,
-    CANONICAL_MCP_COMMAND,
-    CANONICAL_MCP_ENV,
+    CANONICAL_MCP_URL,
     LEAN_BODY,
     LEAN_GATE_HOOK_PATH,
     LEAN_SKILL_MD,
@@ -44,9 +42,6 @@ from integrations.canonical import (
 )
 
 _REPO = Path(__file__).parent.parent
-_VENV_PYTHON = _REPO / ".venv" / "bin" / "python"
-_MCP_COMMAND = str(_VENV_PYTHON)
-_MCP_ARGS = ["-m", "opencode_search", "daemon", "bridge-stdio"]
 
 
 @dataclass
@@ -196,11 +191,7 @@ def _repair_agents_md(md_path: Path, label: str, dry_run: bool = False) -> Confi
 # MCP entry repair: claude settings.json (3 profiles)
 # ---------------------------------------------------------------------------
 
-_EXPECTED_MCP_ENTRY = {
-    "command": CANONICAL_MCP_COMMAND,
-    "args": CANONICAL_MCP_ARGS,
-    "env": CANONICAL_MCP_ENV,
-}
+_EXPECTED_MCP_ENTRY = {"type": "http", "url": CANONICAL_MCP_URL}
 
 
 def _verify_settings_json(settings_path: Path) -> ConfigResult:
@@ -217,13 +208,11 @@ def _verify_settings_json(settings_path: Path) -> ConfigResult:
     if not entry:
         return ConfigResult(tool=label, status="missing",
                             message=f"mcpServers.opencode-search missing in {settings_path}", path=str(settings_path))
-    if entry.get("command") == _EXPECTED_MCP_ENTRY["command"] and \
-       entry.get("args") == _EXPECTED_MCP_ENTRY["args"] and \
-       entry.get("env") == _EXPECTED_MCP_ENTRY["env"]:
+    if entry.get("type") == "http" and entry.get("url") == CANONICAL_MCP_URL:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"MCP entry in sync: {settings_path}", path=str(settings_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"MCP entry drifted (env mismatch) in {settings_path}", path=str(settings_path))
+                        message=f"MCP entry drifted (not HTTP) in {settings_path}", path=str(settings_path))
 
 
 def _repair_settings_json(settings_path: Path, dry_run: bool = False) -> ConfigResult:
@@ -262,11 +251,9 @@ def _verify_codex_toml(config_path: Path) -> ConfigResult:
     if "opencode-search" not in text:
         return ConfigResult(tool=label, status="missing",
                             message="opencode-search MCP entry not in codex config.toml", path=str(config_path))
-    # Check env vars are present
-    for key, val in CANONICAL_MCP_ENV.items():
-        if key not in text:
-            return ConfigResult(tool=label, status="missing",
-                                message=f"codex config.toml missing env var {key}", path=str(config_path))
+    if CANONICAL_MCP_URL not in text:
+        return ConfigResult(tool=label, status="missing",
+                            message="codex config.toml missing HTTP URL for opencode-search", path=str(config_path))
     return ConfigResult(tool=label, status="already_ok",
                         message="codex MCP entry in sync", path=str(config_path))
 
@@ -274,23 +261,13 @@ def _verify_codex_toml(config_path: Path) -> ConfigResult:
 def _repair_codex_toml(config_path: Path, dry_run: bool = False) -> ConfigResult:
     label = "codex/config.toml"
     old_text = config_path.read_text() if config_path.exists() else ""
-
-    # Build env block
-    env_lines = "\n".join(f'{k} = "{v}"' for k, v in CANONICAL_MCP_ENV.items())
     mcp_block = (
         "\n[mcp_servers.opencode-search]\n"
-        f'command = "{CANONICAL_MCP_COMMAND}"\n'
-        f"args = {json.dumps(CANONICAL_MCP_ARGS)}\n"
-        "\n[mcp_servers.opencode-search.env]\n"
-        + env_lines + "\n"
+        f'url = "{CANONICAL_MCP_URL}"\n'
     )
-
-    # Check if entry already exists — if so, update the env table in place
     import re
     has_any = bool(re.search(r"\[mcp_servers\.opencode-search[^\]]*\]", old_text))
     if has_any:
-        # Remove ALL opencode-search subsections (parent + .env + any other subtables)
-        # so that re-running the script never accumulates duplicate sections.
         old_text_stripped = re.sub(
             r"\n\[mcp_servers\.opencode-search[^\]]*\].*?(?=\n\[|\Z)",
             "",
@@ -300,7 +277,6 @@ def _repair_codex_toml(config_path: Path, dry_run: bool = False) -> ConfigResult
         new_text = old_text_stripped.rstrip() + mcp_block
     else:
         new_text = old_text.rstrip() + mcp_block
-
     if old_text == new_text:
         return ConfigResult(tool=label, status="already_ok",
                             message="codex config.toml already in sync", path=str(config_path))
@@ -321,8 +297,6 @@ def _repair_codex_toml(config_path: Path, dry_run: bool = False) -> ConfigResult
 def _build_hermes_config_text() -> str:
     """Build the complete canonical hermes config.yaml (MCP entry + agent system prompt)."""
     from integrations.canonical import CANONICAL_BODY
-    env_lines = "\n".join(f"      {k}: {v}" for k, v in CANONICAL_MCP_ENV.items())
-    args_lines = "\n".join(f"      - {a}" for a in CANONICAL_MCP_ARGS)
     # YAML literal block scalars must not contain backticks/arrows/em-dashes
     safe_body = (CANONICAL_BODY
                  .replace("`", "'")
@@ -334,17 +308,12 @@ def _build_hermes_config_text() -> str:
                  .replace("—", "--"))
     wrapped = (f"{SENTINEL_AGENTS_START}\n{safe_body}\n{SENTINEL_AGENTS_END}"
                f"\n{SENTINEL_LEAN_AGENTS_START}\n{safe_lean}\n{SENTINEL_LEAN_AGENTS_END}")
-    # Indent every line by 4 spaces for YAML block scalar under `system_prompt: |`
     indented = "\n".join("    " + ln for ln in wrapped.splitlines())
     return (
         "mcp_servers:\n"
         "  opencode-search:\n"
         "    enabled: true\n"
-        f"    command: {CANONICAL_MCP_COMMAND}\n"
-        "    args:\n"
-        + args_lines + "\n"
-        "    env:\n"
-        + env_lines + "\n"
+        f"    url: {CANONICAL_MCP_URL}\n"
         "agent:\n"
         "  system_prompt: |\n"
         + indented + "\n"
@@ -360,10 +329,9 @@ def _verify_hermes_yaml(config_path: Path) -> ConfigResult:
     if "opencode-search" not in text:
         return ConfigResult(tool=label, status="missing",
                             message="opencode-search MCP not in hermes config.yaml", path=str(config_path))
-    for key in CANONICAL_MCP_ENV:
-        if key not in text:
-            return ConfigResult(tool=label, status="missing",
-                                message=f"hermes config.yaml missing env var {key}", path=str(config_path))
+    if CANONICAL_MCP_URL not in text:
+        return ConfigResult(tool=label, status="missing",
+                            message="hermes config.yaml missing HTTP URL for opencode-search", path=str(config_path))
     return ConfigResult(tool=label, status="already_ok",
                         message="hermes MCP entry in sync", path=str(config_path))
 
@@ -474,13 +442,11 @@ def _verify_opencode_jsonc(config_path: Path, label: str) -> ConfigResult:
     if not entry:
         return ConfigResult(tool=label, status="missing",
                             message=f"mcp.opencode-search missing in {config_path}", path=str(config_path))
-    env = entry.get("env", {})
-    for key, val in CANONICAL_MCP_ENV.items():
-        if env.get(key) != val:
-            return ConfigResult(tool=label, status="missing",
-                                message=f"mcp entry env drifted ({key}) in {config_path}", path=str(config_path))
-    return ConfigResult(tool=label, status="already_ok",
-                        message=f"opencode MCP entry in sync: {config_path}", path=str(config_path))
+    if entry.get("type") == "remote" and entry.get("url") == CANONICAL_MCP_URL:
+        return ConfigResult(tool=label, status="already_ok",
+                            message=f"opencode MCP entry in sync: {config_path}", path=str(config_path))
+    return ConfigResult(tool=label, status="missing",
+                        message=f"mcp entry not HTTP remote in {config_path}", path=str(config_path))
 
 
 def _repair_opencode_jsonc(config_path: Path, label: str, dry_run: bool = False) -> ConfigResult:
@@ -490,20 +456,9 @@ def _repair_opencode_jsonc(config_path: Path, label: str, dry_run: bool = False)
     except Exception as exc:
         return ConfigResult(tool=label, status="error",
                             message=f"Failed to parse {config_path}: {exc}", path=str(config_path))
-
-    # Preserve the type="local" and timeout fields if they exist
-    existing_entry = data.get("mcp", {}).get("opencode-search", {})
-    new_entry: dict = {
-        "type": existing_entry.get("type", "local"),
-        "command": [CANONICAL_MCP_COMMAND] + CANONICAL_MCP_ARGS,
-        "env": CANONICAL_MCP_ENV.copy(),
-    }
-    if "timeout" in existing_entry:
-        new_entry["timeout"] = existing_entry["timeout"]
-
+    new_entry: dict = {"type": "remote", "url": CANONICAL_MCP_URL}
     data.setdefault("mcp", {})["opencode-search"] = new_entry
     new_text = json.dumps(data, indent=2) + "\n"
-
     if old_text.strip() == new_text.strip():
         return ConfigResult(tool=label, status="already_ok",
                             message=f"Already in sync: {config_path}", path=str(config_path))
