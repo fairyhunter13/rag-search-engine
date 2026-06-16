@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from opencode_search.core.config import IGNORED_DIRS
-from opencode_search.core.index_config import ProjectConfig, is_excluded, load_project_config
+from opencode_search.core.index_config import ProjectConfig, effective_config, is_excluded
 
 _EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
 # Public alias used by registry path filtering.
@@ -71,7 +71,7 @@ def iter_files(
     """Yield indexable files under root, skipping ignored dirs and big files."""
     root = root.resolve()
     if cfg is None:
-        cfg = load_project_config(root)
+        cfg = effective_config(root)
     exc_dirs = _EXCLUDE if cfg.use_default_ignores else frozenset[str]()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         dp = Path(dirpath)
@@ -89,13 +89,14 @@ def iter_files(
             p = dp / fname
             if federation_mode and p.is_symlink() and not p.resolve().is_relative_to(root):
                 continue
-            if cfg.exclude and is_excluded(p, cfg.exclude, root):
+            is_ose_cfg = fname in {".opencode-index.yaml", ".opencode-index.yml"}
+            if not is_ose_cfg and cfg.exclude and is_excluded(p, cfg.exclude, root):
                 continue
             lang = detect_language(p)
             try:
                 size = p.stat().st_size
             except OSError:
                 continue
-            if size == 0 or size > _size_limit(lang):
+            if not is_ose_cfg and (size == 0 or size > _size_limit(lang)):
                 continue
             yield p

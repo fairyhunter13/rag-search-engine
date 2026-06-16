@@ -276,6 +276,28 @@ def test_needs_index_keys_on_indexed_at(safe_tmp_path):
         remove_project(str(safe_tmp_path))
 
 
+# Fix #2c: _index_project is idempotent (vec0 UNIQUE regression guard)
+
+@pytest.mark.slow
+def test_index_project_idempotent(safe_tmp_path):
+    """Fix #2c: calling _index_project twice must not raise UNIQUE constraint on vec_chunks."""
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.registry import get_project, remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _index_project
+
+    (safe_tmp_path / "a.py").write_text("def hello(): return 1\n")
+    upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True))
+    try:
+        _index_project(str(safe_tmp_path))  # first run
+        _index_project(str(safe_tmp_path))  # second run — must not raise UNIQUE constraint
+        entry = get_project(str(safe_tmp_path))
+        assert entry is not None and entry.indexed_at is not None, (
+            "indexed_at must be set after idempotent _index_project"
+        )
+    finally:
+        remove_project(str(safe_tmp_path))
+
+
 # Fix #2b: overview(status) shows "indexing" for never-indexed member
 
 def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
@@ -332,6 +354,17 @@ def test_federation_no_member_stuck_indexing(live_client, proj_key):
     )
 
 
+def test_upsert_project_rejects_forbidden_root():
+    """Fix D1: upsert_project must raise ValueError for /tmp and ~/.cache paths."""
+    import pytest
+
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.registry import upsert_project
+
+    with pytest.raises(ValueError, match="forbidden"):
+        upsert_project(ProjectEntry(path="/tmp/should-not-register", enabled=True))
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
 def test_federation_search_ask_as_logical_entity(live_client, proj_key):
@@ -346,3 +379,53 @@ def test_federation_search_ask_as_logical_entity(live_client, proj_key):
     assert sr.get("results"), f"{proj_key}: search returned no results (fan-out broken)"
     ak = asyncio.run(_mcp_ask("What is the overall architecture?", root, "global"))
     assert len(ak.strip()) > 20, f"{proj_key}: ask returned empty/short context"
+
+
+# ---------------------------------------------------------------------------
+# Logical-entity config (E1/E2/E3)
+# ---------------------------------------------------------------------------
+
+def test_overview_status_includes_config_key(live_client):
+    """E3: overview(status) must include a 'config' key with source + exclude."""
+    status = _overview("status", _PROJECTS["ose"])
+    assert "config" in status, f"overview(status) missing 'config' key: {list(status)}"
+    cfg = status["config"]
+    assert "source" in cfg and "exclude" in cfg, f"config key missing fields: {cfg}"
+    assert cfg["source"] in ("own", "inherited"), f"unexpected config.source: {cfg['source']}"
+
+
+def test_iter_files_always_yields_ose_config(safe_tmp_path):
+    """E2: .opencode-index.yaml must be yielded even when excluded by an exclude glob."""
+    from opencode_search.core.index_config import ProjectConfig
+    from opencode_search.index.discover import iter_files
+
+    (safe_tmp_path / ".opencode-index.yaml").write_text("index:\n  exclude: []\n")
+    (safe_tmp_path / "normal.yaml").write_text("key: val\n")
+    cfg = ProjectConfig(exclude=["*.yaml"])
+    found = {p.name for p in iter_files(safe_tmp_path, cfg=cfg)}
+    assert ".opencode-index.yaml" in found, (
+        ".opencode-index.yaml must be yielded even when *.yaml is excluded"
+    )
+    assert "normal.yaml" not in found, "normal.yaml must be excluded by *.yaml glob"
+
+
+def test_effective_config_inherits_root_excludes(safe_tmp_path):
+    """E1: federation member effective_config includes root's exclude globs."""
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.index_config import effective_config
+    from opencode_search.core.registry import remove_project, upsert_project
+
+    root = safe_tmp_path / "root"
+    member = safe_tmp_path / "member"
+    root.mkdir()
+    member.mkdir()
+    (root / ".opencode-index.yaml").write_text("index:\n  exclude:\n    - '*.gen.py'\n")
+    root_path, member_path = str(root), str(member)
+    upsert_project(ProjectEntry(path=root_path, enabled=True, federation=[member_path]))
+    upsert_project(ProjectEntry(path=member_path, enabled=True))
+    try:
+        cfg = effective_config(member_path)
+        assert "*.gen.py" in cfg.exclude, f"member must inherit root's exclude; got {cfg.exclude}"
+    finally:
+        remove_project(root_path)
+        remove_project(member_path)
