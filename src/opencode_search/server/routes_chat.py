@@ -102,7 +102,7 @@ async def _api_chat_stream(request: Request) -> Response:
                     yield f"data: {json.dumps({'type': 'token', 'text': answer})}\n\n".encode()
             except Exception as exc2:
                 yield f"data: {json.dumps({'type': 'error', 'message': str(exc2)})}\n\n".encode()
-        yield b'data: {"type":"done"}\n\n'
+        yield b'data: {"type":"done","done":true}\n\n'
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
