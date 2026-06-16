@@ -67,6 +67,7 @@ def index_project(
         vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
         vectors.extend(vecs)
 
+    store.clear()
     for pos, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
         store.insert(
             chunk_id=_chunk_id(chunk.path, pos),

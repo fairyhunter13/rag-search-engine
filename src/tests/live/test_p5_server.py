@@ -237,7 +237,7 @@ def test_mcp_search_subdir_resolves_to_root():
     assert outside["projects_searched"] == []
 
 
-def test_auto_pipeline_status_real(live_client, tmp_path):
+def test_auto_pipeline_status_real(live_client, safe_tmp_path):
     """P19.6: /api/auto_pipeline_status returns real enabled/pending — not canned data.
 
     Register an un-indexed tmp project → it must appear in pending.
@@ -248,7 +248,7 @@ def test_auto_pipeline_status_real(live_client, tmp_path):
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import remove_project, upsert_project
 
-    proj_path = str(tmp_path)
+    proj_path = str(safe_tmp_path)
     upsert_project(ProjectEntry(path=proj_path, enabled=True))
     try:
         r = live_client.get("/api/auto_pipeline_status")

@@ -112,12 +112,12 @@ def test_federation_discover_empty_dir(tmp_path):
     assert discover_members(str(tmp_path)) == []
 
 
-def test_sweeps_reconcile_skips_complete_project(tmp_path):
+def test_sweeps_reconcile_skips_complete_project(safe_tmp_path):
     from opencode_search.core.config import ProjectEntry, project_vector_db
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon.sweeps import reconcile_projects
 
-    proj_path = str(tmp_path)
+    proj_path = str(safe_tmp_path)
     vdb = project_vector_db(proj_path)
     vdb.parent.mkdir(parents=True, exist_ok=True)
     vdb.touch()
@@ -129,13 +129,13 @@ def test_sweeps_reconcile_skips_complete_project(tmp_path):
         vdb.unlink(missing_ok=True)
 
 
-def test_sweeps_paused_skips_reconcile(tmp_path):
+def test_sweeps_paused_skips_reconcile(safe_tmp_path):
     """P18.2: a paused reconcile_projects must not create the vector DB."""
     from opencode_search.core.config import ProjectEntry, project_vector_db
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon import sweeps
 
-    proj_path = str(tmp_path)
+    proj_path = str(safe_tmp_path)
     vdb = project_vector_db(proj_path)
     upsert_project(ProjectEntry(path=proj_path, enabled=True))
     # vdb intentionally absent so _needs_index() returns True → would trigger indexing
@@ -417,14 +417,14 @@ def test_p20_index_members_discovers_federation_members(tmp_path):
 
 
 @pytest.mark.slow
-def test_p20_indexed_at_stamped(tmp_path):
+def test_p20_indexed_at_stamped(safe_tmp_path):
     """P20.2: _index_project() stamps indexed_at + file_count on the registry entry."""
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import get_project, remove_project, upsert_project
     from opencode_search.daemon.sweeps import _index_project
 
-    (tmp_path / "a.py").write_text("def hello(): return 1\n")
-    proj_path = str(tmp_path)
+    (safe_tmp_path / "a.py").write_text("def hello(): return 1\n")
+    proj_path = str(safe_tmp_path)
     upsert_project(ProjectEntry(path=proj_path, enabled=True))
     try:
         _index_project(proj_path)

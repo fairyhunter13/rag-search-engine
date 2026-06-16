@@ -81,6 +81,11 @@ class VectorStore:
     def count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
+    def clear(self) -> None:
+        """Drop all chunk metadata + vectors (for idempotent full reindex)."""
+        self._con.execute("DELETE FROM vec_chunks")
+        self._con.execute("DELETE FROM chunks")
+
     def delete_by_path(self, path: str) -> None:
         """Remove all chunks (metadata + vectors) for a single file path."""
         ids = [r[0] for r in self._con.execute("SELECT chunk_id FROM chunks WHERE path=?", (path,))]

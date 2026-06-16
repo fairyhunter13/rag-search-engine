@@ -67,6 +67,9 @@ def get_project(path: str) -> ProjectEntry | None:
 
 
 def upsert_project(entry: ProjectEntry) -> None:
+    from opencode_search.index.discover import is_forbidden_root
+    if is_forbidden_root(Path(entry.path)):
+        raise ValueError(f"refusing to register forbidden path: {entry.path}")
     data = _load()
     d = asdict(entry)
     d.pop("path")

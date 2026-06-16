@@ -47,7 +47,15 @@ def _sd_notify(msg: str) -> None:
 
 def serve(host: str | None = None, port: int | None = None) -> None:
     """Run uvicorn at host:port; also start scheduler and watcher."""
+    import sys
+
     import uvicorn
+
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s:%(filename)s:%(lineno)d %(message)s",
+    )
 
     from opencode_search.core.config import DAEMON_HOST, DAEMON_PORT
     from opencode_search.core.gpu import assert_cuda_available

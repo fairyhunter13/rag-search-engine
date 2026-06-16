@@ -66,7 +66,10 @@ def reconcile_projects() -> None:
     from opencode_search.daemon.federation import register_all_members
     from opencode_search.graph.store import GraphStore
 
-    register_all_members()
+    try:
+        register_all_members()
+    except Exception as exc:
+        log.warning("reconcile member-discovery: %s", exc)
 
     for entry in list_projects():
         if not entry.enabled:
