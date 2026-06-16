@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-16 (§13a–§13b contract + §14 HR matrix added).
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-17 (§13a–§13b contract + §14 HR matrix; §16 config inheritance added).
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -134,3 +134,51 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 The cloud/query generative LLM (codex→haiku) is reached **only** via the dashboard chat box.
 The local generative LLM (ollama) is confined to background KB enrichment. MCP query actions
 and `POST /api/ask` never generate text — the caller's own LLM does synthesis.
+
+## 16. Per-project config & federation inheritance
+
+Each project may carry an optional `.opencode-index.yaml` (or `.yml`) at its root.
+`core/index_config.py` governs config loading and resolution.
+
+### 16.1 `ProjectConfig` fields
+
+| Field | Default | Meaning |
+|---|---|---|
+| `index.exclude` | `[]` | Glob patterns; matched against file path relative to root |
+| `index.use_default_ignores` | `true` | Apply `IGNORED_DIRS` (node_modules, .git, …) |
+| `watcher.max_pending_files` | `10 000` | Watcher queue cap before forced flush |
+
+### 16.2 `effective_config(path)` — inheritance model
+
+`iter_files(root)` resolves config via `effective_config(root)` instead of loading
+`.opencode-index.yaml` in isolation. Resolution rules:
+
+1. **Standalone project** (no owning root in registry): `load_project_config(path)` — own file or defaults.
+2. **Federation member** (path appears in some root's `federation` list):
+   - `exclude` = **union** of root's globs + member's globs (order: root first).
+   - `use_default_ignores`, `max_pending_files` = member's value when member has own config file, **else root's**.
+3. Source label exposed in `overview(status).config.source`: `"own"` | `"inherited"` | `"default"`.
+
+### 16.3 OSE config files are always indexed
+
+`.opencode-index.yaml` and `.opencode-index.yml` **bypass** `exclude` patterns and
+file-size limits in `iter_files()`. A user `exclude: ["*.yaml"]` rule never silently
+drops the engine's own config from the index.
+
+### 16.4 Config surfaced in `overview(status)`
+
+`overview(what="status", project_path=…)` includes a `config` key:
+
+```json
+{
+  "config": {
+    "exclude": ["*.gen.py"],
+    "use_default_ignores": true,
+    "max_pending_files": 10000,
+    "source": "inherited"
+  }
+}
+```
+
+`source` values: `"own"` (project has its own `.opencode-index.yaml`),
+`"inherited"` (federation member using root's config), `"default"` (standalone, no config file).

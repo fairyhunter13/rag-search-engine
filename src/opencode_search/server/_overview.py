@@ -162,8 +162,10 @@ def handle_overview(project_path: str, what: str) -> str:
 
                 from opencode_search.core.index_config import _CONFIG_NAMES, effective_config
                 _ecfg = effective_config(project_path)
-                _cfg_src = ("own" if any((_P(project_path) / n).is_file() for n in _CONFIG_NAMES)
-                            else "inherited")
+                _pp = _P(project_path).resolve()
+                _has_own = any((_pp / n).is_file() for n in _CONFIG_NAMES)
+                _is_member = any(str(_pp) in (ep.federation or []) for ep in list_projects())
+                _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
                 return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
