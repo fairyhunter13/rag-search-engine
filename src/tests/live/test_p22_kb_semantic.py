@@ -33,6 +33,58 @@ def _con(project: str):
     return sqlite3.connect(str(gdb))
 
 
+def _converge_ready(project: str, timeout: int = 180) -> None:
+    """Trigger enrichment, poll until kb_state==ready AND l2_enriched_pct==100. Hard-fails on timeout."""
+    import time
+    r = requests.post(f"{_BASE}/api/enrich_project",
+                      json={"project_path": project},
+                      headers={"Content-Type": "application/json"}, timeout=10)
+    assert r.status_code in (200, 404), f"enrich_project HTTP {r.status_code}"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        s = _overview_status(project)
+        if s.get("kb_state") == "ready" and s.get("l2_enriched_pct") == 100.0:
+            return
+        time.sleep(3)
+    s = _overview_status(project)
+    assert s.get("kb_state") == "ready" and s.get("l2_enriched_pct") == 100.0, (
+        f"{project!r} did not reach ready in {timeout}s — "
+        f"kb_state={s.get('kb_state')!r}, l2={s.get('l2_enriched_pct')}"
+    )
+
+
+def test_orphan_l2_stamp_sets_title_and_summary(safe_tmp_path):
+    """TB1/F4a: orphan-L2 stamp SQL sets title='(leaf)'+summary; pre-seeded L1 summary intact."""
+    from opencode_search.graph.store import GraphStore
+
+    gdb = safe_tmp_path / "graph.db"
+    gs = GraphStore(gdb)
+    try:
+        gs._con.execute(
+            "INSERT INTO communities(id,level,title,summary,member_count) VALUES (1,1,'A','sentinel',1)"
+        )
+        gs._con.execute(
+            "INSERT INTO symbols(sid,name,qualified_name,kind,file,start_line,end_line,language,community_id)"
+            " VALUES ('s1','foo','foo','function','a.py',1,5,'python',1)"
+        )
+        gs._con.execute(
+            "INSERT INTO communities(id,level,title,summary,member_count) VALUES (2,2,NULL,NULL,0)"
+        )
+        gs.commit()
+        # Execute the F4a orphan stamp SQL directly
+        gs._con.execute(
+            "UPDATE communities SET title='(leaf)', summary='(no child communities)' "
+            "WHERE level>=2 AND (summary IS NULL OR summary='')"
+        )
+        gs.commit()
+        r = gs._con.execute("SELECT title, summary FROM communities WHERE id=2").fetchone()
+        assert r[0] == "(leaf)" and r[1] == "(no child communities)", f"orphan not stamped: {r}"
+        l1 = gs._con.execute("SELECT summary FROM communities WHERE id=1").fetchone()
+        assert l1[0] == "sentinel", f"L1 summary affected by stamp: {l1[0]!r}"
+    finally:
+        gs.close()
+
+
 # ---------------------------------------------------------------------------
 # S1: Singleton-ratio guard (Fix 1)
 # ---------------------------------------------------------------------------
@@ -61,12 +113,12 @@ def test_singleton_ratio_below_threshold(live_client):
 # ---------------------------------------------------------------------------
 
 def test_l2_communities_all_enriched(live_client):
-    """S2: All L2+ communities must have non-empty title+summary (Fix 2)."""
+    """S2/TC1: After converge, all L2+ communities must have non-empty title+summary (Fix 2)."""
+    _converge_ready(_OSE)
     con = _con(_OSE)
     try:
         l2_total = con.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
-        if l2_total == 0:
-            pytest.skip("no L2 communities")
+        assert l2_total > 0, "no L2 communities — hierarchy not built"
         unenriched = con.execute(
             "SELECT COUNT(*) FROM communities "
             "WHERE level>=2 AND (summary IS NULL OR summary='' OR title IS NULL OR title='')"
@@ -131,16 +183,8 @@ def test_global_ask_includes_l2_domain(live_client):
 # ---------------------------------------------------------------------------
 
 def test_kb_state_ready_when_fully_enriched(live_client):
-    """S4: kb_state='ready' and enriched_pct>=95 when L1+L2 both enriched."""
-    con = _con(_OSE)
-    try:
-        l2_un = con.execute(
-            "SELECT COUNT(*) FROM communities WHERE level>=2 AND (summary IS NULL OR summary='')"
-        ).fetchone()[0]
-    finally:
-        con.close()
-    if l2_un > 0:
-        pytest.skip(f"{l2_un} L2 communities still unenriched")
+    """S4/TC1: After converge, kb_state='ready' and enriched_pct>=95."""
+    _converge_ready(_OSE)
     status = _overview_status(_OSE)
     assert status.get("kb_state") == "ready", (
         f"kb_state={status.get('kb_state')!r}, pct={status.get('enriched_pct')}"

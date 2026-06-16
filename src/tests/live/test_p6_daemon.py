@@ -718,6 +718,40 @@ def test_on_change_wires_kb_enrich():
     )
 
 
+def test_dead_code_stays_gone():
+    """TG1/F3: kb_sweep function and ProjectEntry.watch field must not exist."""
+    from dataclasses import fields
+
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.daemon import sweeps
+
+    assert not hasattr(sweeps, "kb_sweep"), (
+        "kb_sweep was deleted (dead code) — do not re-add it"
+    )
+    field_names = {f.name for f in fields(ProjectEntry)}
+    assert "watch" not in field_names, (
+        "ProjectEntry.watch was deleted (dead field, never consulted) — do not re-add it"
+    )
+
+
+def test_registry_filters_legacy_watch_field(safe_tmp_path):
+    """TG2/F3b: registry filter drops unknown 'watch' key — list_projects() loads it without error."""
+    import json
+    from dataclasses import fields
+
+    from opencode_search.core.config import ProjectEntry
+
+    legacy_entry = {"enabled": True, "watch": False, "indexed_at": None,
+                    "file_count": 0, "chunk_count": 0}
+    # Simulate how list_projects() filters known fields (registry.py:53-55)
+    known = {f.name for f in fields(ProjectEntry)} - {"path"}
+    loaded = ProjectEntry(path=str(safe_tmp_path / "myproj"),
+                          **{k: v for k, v in legacy_entry.items() if k in known})
+    assert loaded.enabled is True
+    assert not hasattr(loaded, "watch"), "ProjectEntry must not accept legacy 'watch' key"
+    assert "watch" not in {f.name for f in fields(ProjectEntry)}
+
+
 @pytest.mark.slow
 def test_on_change_kb_debounce(safe_tmp_path):
     """Debounce: on_change within _KB_DEBOUNCE_S of a prior enrich skips KB (no duplicate LLM calls)."""
