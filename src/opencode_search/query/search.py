@@ -31,7 +31,6 @@ def search(
     if scope != "all":
         allowed = _CODE_LANGS if scope == "code" else (_TEXT_LANGS if scope == "docs" else frozenset())
         results = [r for r in results if r.get("language") in allowed]
-    results = results[:top_k * 2]
     passages = [r.get("content", "") for r in results]
     scores = _get_reranker().rerank(query, passages)
     for r, s in zip(results, scores, strict=False):

@@ -66,7 +66,7 @@ async def _api_search(request: Request) -> JSONResponse:
             results.extend(_search(q, _get_embedder(), vs, scope=scope, top_k=10))
         finally:
             vs.close()
-    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    results.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
     return JSONResponse({"results": results[:10], "count": len(results)})
 
 

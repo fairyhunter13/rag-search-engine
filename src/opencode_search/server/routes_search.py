@@ -34,7 +34,7 @@ async def _api_search_get(request: Request) -> JSONResponse:
             results.extend(search(query, embedder, vs, top_k=top_k))
         finally:
             vs.close()
-    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    results.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
     return JSONResponse({"results": results[:top_k], "total": len(results)})
 
 
@@ -58,7 +58,7 @@ def _chunks_for(project: str, query: str, top_k: int = FINAL_TOP_K) -> list[dict
             results.extend(search(query, embedder, vs, top_k=top_k))
         finally:
             vs.close()
-    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    results.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
     return results[:top_k]
 
 

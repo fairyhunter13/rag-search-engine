@@ -38,11 +38,6 @@ QUERY_LLM_NUM_CTX = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
 QUERY_LLM_TIMEOUT = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))
 
 FINAL_TOP_K = int(os.environ.get("OPENCODE_FINAL_TOP_K", "10"))
-STAGE1_VECTOR_K = int(os.environ.get("OPENCODE_STAGE1_VECTOR_K", "20"))
-STAGE1_RERANK_K = int(os.environ.get("OPENCODE_STAGE1_RERANK_K", "15"))
-GLOBAL_RERANK_MAX = int(os.environ.get("OPENCODE_GLOBAL_RERANK_MAX", "100"))
-FTS_THRESHOLD = float(os.environ.get("OPENCODE_FTS_THRESHOLD", "0.15"))
-IVF_PQ_THRESHOLD = int(os.environ.get("OPENCODE_IVF_PQ_THRESHOLD", "512"))
 
 DEBOUNCE_DELAY_MS = int(os.environ.get("OPENCODE_DEBOUNCE_DELAY_MS", "1000"))
 MIN_FLUSH_INTERVAL_S = int(os.environ.get("OPENCODE_MIN_FLUSH_INTERVAL_S", "5"))

@@ -736,7 +736,6 @@ def test_dead_code_stays_gone():
 
 def test_registry_filters_legacy_watch_field(safe_tmp_path):
     """TG2/F3b: registry filter drops unknown 'watch' key — list_projects() loads it without error."""
-    import json
     from dataclasses import fields
 
     from opencode_search.core.config import ProjectEntry

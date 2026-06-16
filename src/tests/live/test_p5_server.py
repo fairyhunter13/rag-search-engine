@@ -448,3 +448,59 @@ def test_graph_defaults_project_path_to_first_project():
         f"graph with no project_path should resolve, got: {data}"
     )
     assert "matches" in data, f"expected matches key, got: {data}"
+
+
+_OSE = "/home/user/git/github.com/fairyhunter13/opencode-search-engine"
+
+
+def test_search_results_ordered_by_rerank_score(live_client):
+    """T-R1/C1: /api/search must order results by rerank_score (not vector score)."""
+    r = live_client.get("/api/search", params={
+        "project": _OSE, "query": "how does reranking work", "top_k": "8"
+    })
+    assert r.status_code == 200
+    results = r.json().get("results", [])
+    assert results, "expected at least one search result"
+    rscores = [x.get("rerank_score") for x in results]
+    assert all(s is not None for s in rscores), f"some results missing rerank_score: {rscores}"
+    assert all(rscores[i] >= rscores[i + 1] for i in range(len(rscores) - 1)), (
+        f"results not ordered by rerank_score desc: {rscores}"
+    )
+
+
+def test_reranking_is_query_time_only():
+    """T-R2: index/ and kb/ packages must not reference reranking (architecture invariant)."""
+    from pathlib import Path
+
+    base = Path(__file__).parents[3] / "opencode_search"
+    for pkg in [base / "index", base / "kb"]:
+        for py in pkg.rglob("*.py"):
+            src = py.read_text()
+            assert "rerank" not in src.lower(), (
+                f"rerank reference found in {py.relative_to(base.parent)} — "
+                "reranking must be query-time only (query/ package)"
+            )
+
+
+@pytest.mark.slow
+def test_search_reranks_full_pool(mini_stores, embedder):
+    """T-R3/C2: search() reranks the entire scope-filtered pool (no pre-truncation).
+
+    mini_stores has ~6 chunks. With top_k=2: old code would rerank only top_k*2=4;
+    new code reranks all top_k*3=6 (or fewer if scope-filtered).  Results must be
+    non-empty, carry rerank_score, and be monotonic desc by that score.
+    """
+    from opencode_search.index.store import VectorStore
+    from opencode_search.query.search import search
+
+    vs = VectorStore(mini_stores["vdb"])
+    try:
+        results = search("authenticate user token", embedder, vs, scope="code", top_k=2)
+    finally:
+        vs.close()
+    assert results, "expected at least 1 result from mini_stores"
+    rscores = [r.get("rerank_score") for r in results]
+    assert all(s is not None for s in rscores), f"some results missing rerank_score: {rscores}"
+    assert all(rscores[i] >= rscores[i + 1] for i in range(len(rscores) - 1)), (
+        f"results not ordered by rerank_score: {rscores}"
+    )

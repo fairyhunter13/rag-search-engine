@@ -93,7 +93,7 @@ async def search(
             searched.append(path)
         finally:
             vs.close()
-    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    results.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
     return json.dumps({
         "results": results[:10],
         "total": len(results),
