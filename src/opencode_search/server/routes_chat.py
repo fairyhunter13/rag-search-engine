@@ -8,13 +8,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from opencode_search.core.config import (
-    LLM_MODEL,
     QUERY_LLM_FALLBACK_MODEL,
     QUERY_LLM_MODEL,
     QUERY_LLM_PROVIDER,
     QUERY_LLM_TIMEOUT,
     project_graph_db,
 )
+from opencode_search.graph.llm import chat as _ollama_chat
 
 
 def _build_context(project_path: str) -> str:
@@ -95,18 +95,9 @@ async def _api_chat_stream(request: Request) -> Response:
                     yield f"data: {json.dumps({'type': 'token', 'text': delta})}\n\n".encode()
         except Exception:
             try:
-                import urllib.request as _ur
                 loop = asyncio.get_running_loop()
                 prompt = msgs[-1]["content"]
-                def _call():
-                    req = _ur.Request(
-                        "http://127.0.0.1:11434/api/generate",
-                        data=json.dumps({"model": LLM_MODEL, "prompt": prompt, "stream": False}).encode(),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    with _ur.urlopen(req, timeout=60) as r:
-                        return json.loads(r.read()).get("response", "")
-                answer = await loop.run_in_executor(None, _call)
+                answer = await loop.run_in_executor(None, lambda: _ollama_chat(prompt, timeout=60))
                 if answer:
                     yield f"data: {json.dumps({'type': 'token', 'text': answer})}\n\n".encode()
             except Exception as exc2:

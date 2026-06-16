@@ -8,6 +8,24 @@ import pytest
 pytestmark = pytest.mark.live
 
 
+def test_assert_ollama_gpu_raises_when_not_resident():
+    """assert_ollama_gpu must raise for a model that is not loaded (not resident)."""
+    from opencode_search.core.gpu import assert_ollama_gpu
+    with pytest.raises(RuntimeError, match=r"not resident|Cannot reach"):
+        assert_ollama_gpu("nonexistent-model-ocs-x:0")
+
+
+@pytest.mark.slow
+def test_ollama_llm_gpu_resident():
+    """chat() returns a real answer AND residency assertion passes (full GPU offload)."""
+    from opencode_search.core.config import LLM_BASE_URL, LLM_MODEL
+    from opencode_search.core.gpu import assert_ollama_gpu
+    from opencode_search.graph.llm import chat
+    out = chat("Reply with only the word OK.")
+    assert out.strip(), "chat() returned empty string"
+    assert_ollama_gpu(LLM_MODEL, LLM_BASE_URL)
+
+
 def test_no_cpu_fallback(cuda_ep):
     import onnxruntime as ort
     assert "CUDAExecutionProvider" in ort.get_available_providers()

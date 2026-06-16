@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 
 from opencode_search.core.config import LLM_MODEL
+from opencode_search.core.gpu import assert_ollama_gpu
 
 _OLLAMA_URL = os.environ.get("OPENCODE_OLLAMA_URL", "http://127.0.0.1:11434")
 
@@ -26,6 +27,8 @@ def chat(prompt: str, *, model: str = LLM_MODEL, timeout: int = 120) -> str:
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read()).get("response", "")
+            result = json.loads(resp.read()).get("response", "")
+        assert_ollama_gpu(model, _OLLAMA_URL)
+        return result
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Ollama unreachable at {_OLLAMA_URL}: {exc}") from exc
