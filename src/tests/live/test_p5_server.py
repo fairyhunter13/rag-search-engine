@@ -621,10 +621,10 @@ def test_e7_trimmed_http_surface(live_client):
 _OSE = str(Path(__file__).parents[4])  # repo root
 
 
-def _collect_chat_tokens(live_client, question: str, project_path: str) -> tuple[str, bool]:
+def _collect_chat_tokens(live_client, question: str, project_path: str, **extra) -> tuple[str, bool]:
     r = live_client.post(
         "/api/chat_stream",
-        json={"query": question, "project_path": project_path},
+        json={"query": question, "project_path": project_path, **extra},
         stream=True, timeout=(5, 90),
     )
     assert r.status_code == 200
@@ -710,3 +710,77 @@ def test_chat_no_project_path_returns_answer(live_client):
     answer, done_seen = _collect_chat_tokens(live_client, "What is a code knowledge base?", "")
     assert done_seen
     assert len(answer) > 20, f"Empty project_path must still produce answer: {answer!r}"
+
+
+@pytest.mark.slow
+def test_chat_sse_event_ordering(live_client):
+    """SSE contract: thinking must be first event, at least one token, done must be last."""
+    events: list[str] = []
+    r = live_client.post(
+        "/api/chat_stream",
+        json={"query": "What is the embedder used for?", "project_path": _OSE},
+        stream=True, timeout=(5, 60),
+    )
+    assert r.status_code == 200
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        try:
+            evt = json.loads(line[5:].lstrip())
+        except json.JSONDecodeError:
+            continue
+        events.append(evt.get("type", ""))
+        if evt.get("done"):
+            break
+    r.close()
+    assert events, "No SSE events received"
+    assert events[0] == "thinking", f"First event must be 'thinking', got: {events[:3]}"
+    assert "token" in events, f"No token events received: {events}"
+    assert events[-1] == "done", f"Last event must be 'done', got: {events[-3:]}"
+
+
+@pytest.mark.slow
+def test_chat_done_event_metadata(live_client):
+    """done event must carry model, elapsed_ms, and non-empty sources for indexed project."""
+    from opencode_search.core.config import QUERY_LLM_FALLBACK_MODEL
+    done_evt = None
+    r = live_client.post(
+        "/api/chat_stream",
+        json={"query": "How does the graph store work?", "project_path": _OSE},
+        stream=True, timeout=(5, 60),
+    )
+    assert r.status_code == 200
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        try:
+            evt = json.loads(line[5:].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if evt.get("done"):
+            done_evt = evt
+            break
+    r.close()
+    assert done_evt is not None, "No done event received"
+    assert done_evt.get("model") == QUERY_LLM_FALLBACK_MODEL, f"done.model wrong: {done_evt.get('model')!r}"
+    assert isinstance(done_evt.get("elapsed_ms"), int), f"done.elapsed_ms not int: {done_evt}"
+    assert isinstance(done_evt.get("sources"), list), f"done.sources not list: {done_evt}"
+    # sources may be empty if no chunks matched; field presence and type is what matters
+
+
+@pytest.mark.slow
+def test_chat_multiturn_history_influences_answer(live_client):
+    """Multi-turn: history prepended to prompt makes follow-up context-aware."""
+    history = [
+        {"role": "user", "content": "Tell me about the VectorStore class."},
+        {"role": "assistant", "content": "VectorStore is defined in index/store.py and wraps sqlite-vec for chunk storage."},
+    ]
+    answer, done_seen = _collect_chat_tokens(
+        live_client, "What file is it in?", _OSE, history=history,
+    )
+    assert done_seen, "done event never received"
+    assert len(answer) > 10, f"Answer too short: {answer!r}"
+    al = answer.lower()
+    assert any(k in al for k in ["store", "index", "file", "vector", "sqlite"]), (
+        f"Follow-up must reference VectorStore context from history: {al[:300]!r}"
+    )

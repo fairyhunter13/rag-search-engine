@@ -92,13 +92,21 @@ async def _api_chat_stream(request: Request) -> Response:
 
     async def _gen():
         yield b'data: {"type":"thinking"}\n\n'
-        try:
-            context, sources = await asyncio.wait_for(
-                loop.run_in_executor(None, _build_context, project_path, message),
-                timeout=12,
-            )
-        except (TimeoutError, Exception):
-            context, sources = "", []
+        ctx_future = loop.run_in_executor(None, _build_context, project_path, message)
+        deadline = loop.time() + 12.0
+        context, sources = "", []
+        while True:
+            try:
+                context, sources = await asyncio.wait_for(asyncio.shield(ctx_future), timeout=2.0)
+                break
+            except TimeoutError:
+                if loop.time() < deadline:
+                    yield b'data: {"type":"thinking"}\n\n'
+                else:
+                    ctx_future.cancel()
+                    break
+            except Exception:
+                break
 
         sys_prompt = "You are a helpful code intelligence assistant. Answer using only the context provided; do not invoke any external tools."
         if context:
