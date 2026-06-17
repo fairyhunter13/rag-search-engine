@@ -506,7 +506,9 @@ def test_e2_ask_context_is_rerank_ordered():
     assert top[0].get("path", "") in ctx, (
         f"E2: rerank top-1 {top[0].get('path')!r} not found in ask context"
     )
-    assert "I think" not in ctx and "In conclusion" not in ctx, "E2: LLM prose in ctx"
+    # Structural guard: assembled context starts with a section header, not LLM prose.
+    # ("I think"/"In conclusion" can appear in indexed source files, not a reliable indicator.)
+    assert ctx.startswith("## "), "E2: LLM prose in ctx — assembled context must start with ## section marker"
 
 
 @pytest.mark.slow
