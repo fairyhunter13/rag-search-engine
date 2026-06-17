@@ -625,8 +625,6 @@ def test_e7_trimmed_http_surface(live_client):
 
 # ── Chat quality: comprehensive question coverage ─────────────────────────────
 
-_OSE = str(Path(__file__).parents[4])  # repo root
-
 
 def _collect_chat_tokens(live_client, question: str, project_path: str, **extra) -> tuple[str, bool]:
     r = live_client.post(

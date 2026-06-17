@@ -610,14 +610,14 @@ def test_p21_community_labels_set_without_llm(tmp_path):
 
 
 @pytest.mark.slow
-def test_p21_burst_enriches_all_communities(tmp_path):
+def test_p21_burst_enriches_all_communities(safe_tmp_path):
     """P21.3: _enrich_project enriches ALL title IS NULL communities (no LIMIT 20 cap)."""
     from opencode_search.core.config import ProjectEntry, project_graph_db
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon.sweeps import _enrich_project
     from opencode_search.graph.store import GraphStore
 
-    proj = str(tmp_path)
+    proj = str(safe_tmp_path)
     upsert_project(ProjectEntry(path=proj, enabled=True))
     try:
         gs = GraphStore(project_graph_db(proj))
@@ -644,17 +644,17 @@ def test_p21_burst_enriches_all_communities(tmp_path):
 
 
 @pytest.mark.slow
-def test_p21_burst_enrich_federation(tmp_path):
+def test_p21_burst_enrich_federation(safe_tmp_path):
     """P21.4: burst_enrich_federation enriches root + member, reports aggregate totals."""
     from opencode_search.core.config import ProjectEntry, project_graph_db
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon.sweeps import burst_enrich_federation
     from opencode_search.graph.store import GraphStore
 
-    member = tmp_path / "member"
+    member = safe_tmp_path / "member"
     member.mkdir()
     (member / "m.py").write_text("def greet(): return 'hi'\n")
-    root = tmp_path / "root"
+    root = safe_tmp_path / "root"
     root.mkdir()
     (root / "link").symlink_to(member)
 
