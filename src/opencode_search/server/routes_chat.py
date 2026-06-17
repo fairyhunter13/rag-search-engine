@@ -57,14 +57,16 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 
 
 async def _stream_answer(prompt: str, model_used: list[str]):
-    """Yield text chunks: codex (8s) → claude-haiku fallback. Sets model_used[0] before first yield."""
+    """Yield text chunks: codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback."""
     if _CODEX:
         try:
             proc = await asyncio.create_subprocess_exec(
-                _CODEX, "exec", "-m", QUERY_LLM_MODEL, "--ephemeral", prompt,
+                _CODEX, "exec", "-m", QUERY_LLM_MODEL,
+                "--ephemeral", "--skip-git-repo-check", prompt,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
             if stdout.strip():
                 model_used[0] = QUERY_LLM_MODEL
                 yield stdout.decode()
