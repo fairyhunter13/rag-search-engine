@@ -50,7 +50,10 @@ def test_http_mcp_initialize_returns_5_tool_serverinfo():
     assert r.status_code == 200
     data = _sse_json(r)
     assert data["result"]["serverInfo"]["name"] == "opencode-search"
-    assert "5-tool" in data["result"].get("instructions", "")
+    instructions = data["result"].get("instructions", "")
+    assert "5-tool" in instructions
+    for tool in ("search", "ask", "graph", "overview", "index"):
+        assert tool in instructions, f"MCP initialize instructions missing tool '{tool}'"
 
 
 def test_http_mcp_tools_list_returns_exactly_5():

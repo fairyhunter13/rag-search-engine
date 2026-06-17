@@ -598,6 +598,37 @@ def test_e6_dashboard_chat_codex_haiku_only(live_client):
     src = (Path(__file__).parents[2] / "opencode_search" / "server" / "routes_chat.py").read_text()
     assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
     assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat"
+    assert "--skip-git-repo-check" in src, "E6 guard: codex invocation must have --skip-git-repo-check"
+    assert "stdin=asyncio.subprocess.DEVNULL" in src, "E6 guard: codex invocation must suppress stdin"
+    assert "timeout=20" in src, "E6 guard: codex timeout must be >=20s (was 8s before fix)"
+
+
+@pytest.mark.slow
+def test_e6b_chat_primary_model_is_codex(live_client):
+    """E6b/HR10: done.model must equal QUERY_LLM_MODEL (gpt-5.4-mini) — codex is primary, not haiku."""
+    from opencode_search.core.config import QUERY_LLM_MODEL
+    r = live_client.post(
+        "/api/chat_stream",
+        json={"query": "What is the MCP server name in this engine?"},
+        stream=True, timeout=(5, 45),
+    )
+    assert r.status_code == 200
+    done_evt = None
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        try:
+            evt = json.loads(line[5:].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if evt.get("done"):
+            done_evt = evt
+            break
+    r.close()
+    assert done_evt is not None, "E6b: SSE never sent done:true"
+    assert done_evt.get("model") == QUERY_LLM_MODEL, (
+        f"E6b: codex must be primary; got {done_evt.get('model')!r}, want {QUERY_LLM_MODEL!r}"
+    )
 
 
 def test_e7_trimmed_http_surface(live_client):
@@ -616,6 +647,21 @@ def test_e7_trimmed_http_surface(live_client):
         assert live_client.get(path).status_code == 200, f"E7: {path} not 200 (KEEP broken)"
     chat_router = Path(__file__).parents[2] / "opencode_search" / "query" / "chat_router.py"
     assert not chat_router.exists(), "E7 guard: chat_router.py must be deleted"
+
+
+def test_e8_global_prompt_tool_accuracy():
+    """E8: _PROMPT documents all 5 MCP tool names and their key parameters."""
+    from opencode_search.daemon.global_prompt import _PROMPT
+
+    for tool in ("search", "ask", "graph", "overview", "index"):
+        assert tool in _PROMPT, f"E8: _PROMPT missing tool '{tool}'"
+    for param in ("scope", "project_paths"):
+        assert param in _PROMPT, f"E8: _PROMPT missing search param '{param}'"
+    assert "project_path" in _PROMPT, "E8: _PROMPT missing ask/graph/overview param 'project_path'"
+    for param in ("symbol", "relation"):
+        assert param in _PROMPT, f"E8: _PROMPT missing graph param '{param}'"
+    assert "what" in _PROMPT, "E8: _PROMPT missing overview param 'what'"
+    assert "enabled" in _PROMPT, "E8: _PROMPT missing index param 'enabled'"
 
 
 # ── Chat quality: comprehensive question coverage ─────────────────────────────
