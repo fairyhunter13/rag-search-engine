@@ -220,11 +220,13 @@ def test_mcp_search_subdir_resolves_to_root():
     from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import search as search_tool
 
+    # Use a non-federated project so projects_searched is exactly [root] after subdir resolution.
     indexed = next(
-        (p for p in list_projects() if p.enabled and project_vector_db(p.path).exists()),
+        (p for p in list_projects()
+         if p.enabled and project_vector_db(p.path).exists() and not p.federation),
         None,
     )
-    assert indexed, "At least one indexed project must be registered"
+    assert indexed, "At least one non-federated indexed project must be registered"
 
     subdir = str(Path(indexed.path) / "src")
     result = json.loads(asyncio.run(search_tool("function definition", project_paths=[subdir])))
