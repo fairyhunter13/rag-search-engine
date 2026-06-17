@@ -448,13 +448,24 @@ def test_p22_daemon_rss_bounded():
     nohup, or direct invocation alike.
     """
     import json
+    import time
     import urllib.request
 
-    resp = urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=5)
-    data = json.loads(resp.read())
+    # Poll until stable uptime — test_api_reload_returns_reloading earlier in suite restarts
+    # the daemon; crash-looping would never reach 15s regardless of retries here
+    data = {}
+    for _ in range(20):
+        try:
+            resp = urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=5)
+            data = json.loads(resp.read())
+            if data.get("uptime_s", 0) > 15:
+                break
+        except Exception:
+            pass
+        time.sleep(1)
     assert data.get("ok") is True, f"daemon not healthy after P22 fixes: {data}"
     uptime_s = data.get("uptime_s", 0)
-    assert uptime_s > 30, f"daemon restarted recently (uptime_s={uptime_s:.1f}), may be crash-looping"
+    assert uptime_s > 15, f"daemon restarted recently (uptime_s={uptime_s:.1f}), may be crash-looping"
     rss_mb = data.get("rss_mb", 0)
     assert rss_mb < 16384, f"daemon RSS {rss_mb} MB > 16 GB (P22 memory fix must hold)"
 

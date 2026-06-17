@@ -29,11 +29,10 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
     from opencode_search.query.ask import compose_answer
     from opencode_search.query.search import search as _search
 
-    gdb = project_graph_db(project_path)
-    vdb = project_vector_db(project_path)
-    if not gdb.exists() or not vdb.exists():
+    if not project_graph_db(project_path).exists() or not project_vector_db(project_path).exists():
         return "", []
 
+    from opencode_search.daemon.federation import expand_federation
     cache_dir = index_dir(project_path) / "ask_cache"
     cached = _cache_get(cache_dir, f"chat2:{query}")
     if cached:
@@ -41,21 +40,31 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
         return d["a"], d["s"]
 
     embedder = get_embedder()
-    gs = GraphStore(gdb)
-    vs = VectorStore(vdb)
+    all_paths = expand_federation(project_path)
+    stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
     try:
-        chunks = _search(query, embedder, vs, scope="all", top_k=8)
-        answer = compose_answer(query, chunks, [gs], scope="all")
+        chunks: list[dict] = []
+        for p in all_paths:
+            vdb = project_vector_db(p)
+            if not vdb.exists():
+                continue
+            vs = VectorStore(vdb)
+            try:
+                chunks.extend(_search(query, embedder, vs, scope="all", top_k=8))
+            finally:
+                vs.close()
+        chunks.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
+        answer = compose_answer(query, chunks[:8], stores, scope="all")
         sources = list(dict.fromkeys(c["path"] for c in chunks[:4]))
         _cache_set(cache_dir, f"chat2:{query}", json.dumps({"a": answer, "s": sources}), ttl_s=3600)
         return answer, sources
     finally:
-        gs.close()
-        vs.close()
+        for s in stores:
+            s.close()
 
 
-async def _stream_answer(prompt: str):
-    """Yield text chunks: codex (8s) → claude-haiku fallback. Never blocks the event loop."""
+async def _stream_answer(prompt: str, model_used: list[str]):
+    """Yield text chunks: codex (8s) → claude-haiku fallback. Sets model_used[0] before first yield."""
     if _CODEX:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -64,12 +73,14 @@ async def _stream_answer(prompt: str):
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
             if stdout.strip():
+                model_used[0] = QUERY_LLM_MODEL
                 yield stdout.decode()
                 return
         except (TimeoutError, OSError):
             pass
     if not _CLAUDE:
         raise RuntimeError("claude CLI not found — install Claude Code")
+    model_used[0] = QUERY_LLM_FALLBACK_MODEL
     proc = await asyncio.create_subprocess_exec(
         _CLAUDE, "-p", "--model", QUERY_LLM_FALLBACK_MODEL, prompt,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
@@ -119,14 +130,15 @@ async def _api_chat_stream(request: Request) -> Response:
             sys_prompt += f"\n\nRecent conversation:{hist_str}"
         prompt = f"{sys_prompt}\n\n{message}"
 
+        model_used = [QUERY_LLM_FALLBACK_MODEL]
         try:
-            async for chunk in _stream_answer(prompt):
+            async for chunk in _stream_answer(prompt, model_used):
                 yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n".encode()
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n".encode()
         done_evt = {
             "type": "done", "done": True,
-            "model": QUERY_LLM_FALLBACK_MODEL,
+            "model": model_used[0],
             "elapsed_ms": round((loop.time() - t0) * 1000),
             "sources": sources,
         }

@@ -250,27 +250,34 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
     from opencode_search.core.registry import remove_project, upsert_project
 
     proj_path = str(safe_tmp_path)
-    upsert_project(ProjectEntry(path=proj_path, enabled=True))
     try:
-        r = live_client.get("/api/auto_pipeline_status")
-        assert r.status_code == 200, f"unexpected status {r.status_code}"
-        d = r.json()
-        assert "enabled" in d and "pending" in d, f"missing keys: {d}"
-        assert d["enabled"] is True, f"expected enabled=True (sweeps running), got {d}"
-        assert proj_path in d["pending"], (
-            f"un-indexed {proj_path} must appear in pending; got {d['pending'][:3]}"
+        # Resume sweeps explicitly — autouse session fixture pauses them globally,
+        # so we must resume to test the enabled=True state, then re-pause.
+        urllib.request.urlopen(
+            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/resume", data=b"", method="POST"),
+            timeout=3,
         )
+        r0 = live_client.get("/api/auto_pipeline_status")
+        assert r0.status_code == 200, f"unexpected status {r0.status_code}"
+        d0 = r0.json()
+        assert "enabled" in d0 and "pending" in d0, f"missing keys: {d0}"
+        assert d0["enabled"] is True, f"expected enabled=True after explicit resume, got {d0}"
 
+        # Pause sweeps, THEN register — pending check is now race-free
         urllib.request.urlopen(
             urllib.request.Request("http://127.0.0.1:8765/api/sweeps/pause", data=b"", method="POST"),
             timeout=3,
         )
-        r2 = live_client.get("/api/auto_pipeline_status")
-        d2 = r2.json()
-        assert d2["enabled"] is False, f"expected enabled=False after pause, got {d2}"
+        upsert_project(ProjectEntry(path=proj_path, enabled=True))
+        r = live_client.get("/api/auto_pipeline_status")
+        d = r.json()
+        assert d["enabled"] is False, f"expected enabled=False after pause, got {d}"
+        assert proj_path in d["pending"], (
+            f"un-indexed {proj_path} must appear in pending; got {d['pending'][:3]}"
+        )
     finally:
         urllib.request.urlopen(
-            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/resume", data=b"", method="POST"),
+            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/pause", data=b"", method="POST"),
             timeout=3,
         )
         remove_project(proj_path)
@@ -762,7 +769,8 @@ def test_chat_done_event_metadata(live_client):
             break
     r.close()
     assert done_evt is not None, "No done event received"
-    assert done_evt.get("model") == QUERY_LLM_FALLBACK_MODEL, f"done.model wrong: {done_evt.get('model')!r}"
+    from opencode_search.core.config import QUERY_LLM_MODEL
+    assert done_evt.get("model") in (QUERY_LLM_MODEL, QUERY_LLM_FALLBACK_MODEL), f"done.model wrong: {done_evt.get('model')!r}"
     assert isinstance(done_evt.get("elapsed_ms"), int), f"done.elapsed_ms not int: {done_evt}"
     assert isinstance(done_evt.get("sources"), list), f"done.sources not list: {done_evt}"
     # sources may be empty if no chunks matched; field presence and type is what matters
