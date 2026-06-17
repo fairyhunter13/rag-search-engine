@@ -566,3 +566,24 @@ def test_journey_user_asks_and_gets_progressive_answer(page: Page) -> None:
         f"stream must not render an error: {history[:200]!r}"
     )
     assert len(history.strip()) > 20, f"stream answer too short: {history!r}"
+
+
+def test_chat_debug_question_via_browser(page: Page) -> None:
+    """DB8: debug question in chat view produces non-error answer referencing the issue domain."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-chat").click()
+    page.locator("#chat-in").fill("What might cause community enrichment to get stuck?")
+    page.locator("#send-btn").click()
+    page.wait_for_function(
+        """() => {
+            const h = document.getElementById('chat-history');
+            const txt = h ? h.innerText : '';
+            return txt.length > 30 && !txt.includes('Thinking…');
+        }""",
+        timeout=60000,
+    )
+    history = page.locator("#chat-history").inner_text().lower()
+    assert "error" not in history[:100], f"Error in chat response: {history[:200]!r}"
+    assert any(k in history for k in ("community", "enrich", "summary", "null")), (
+        f"Debug answer must mention domain keywords: {history[:300]!r}"
+    )

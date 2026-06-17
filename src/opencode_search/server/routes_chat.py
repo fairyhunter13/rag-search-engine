@@ -15,19 +15,17 @@ from opencode_search.core.config import (
 )
 
 
-def _build_context(project_path: str) -> str:
+def _build_context(project_path: str, query: str) -> str:
     if not project_path:
         return ""
     gdb = project_graph_db(project_path)
     if not gdb.exists():
         return ""
     from opencode_search.graph.store import GraphStore
+    from opencode_search.query.ask import _top_communities_semantic
     gs = GraphStore(gdb)
     try:
-        rows = gs.conn.execute(
-            "SELECT summary FROM communities ORDER BY member_count DESC LIMIT 3"
-        ).fetchall()
-        return "\n".join(r[0] for r in rows if r[0])
+        return _top_communities_semantic(query, [gs], top_k=5)
     finally:
         gs.close()
 
@@ -69,7 +67,7 @@ async def _api_chat_stream(request: Request) -> Response:
     if not message:
         return Response('data: {"type":"error","message":"message required"}\n\ndata: {"type":"done"}\n\n',
                         media_type="text/event-stream", status_code=400)
-    context = _build_context(project_path)
+    context = _build_context(project_path, message)
     sys_prompt = "You are a helpful code intelligence assistant."
     if context:
         sys_prompt += f"\n\nProject context:\n{context}"

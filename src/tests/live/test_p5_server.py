@@ -1,6 +1,7 @@
 """P5 server tests: MCP tools, HTTP routes, dashboard (no mocks)."""
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -613,3 +614,99 @@ def test_e7_trimmed_http_surface(live_client):
     from pathlib import Path
     chat_router = Path(__file__).parents[2] / "opencode_search" / "query" / "chat_router.py"
     assert not chat_router.exists(), "E7 guard: chat_router.py must be deleted"
+
+
+# ── Chat quality: comprehensive question coverage ─────────────────────────────
+
+_OSE = str(Path(__file__).parents[4])  # repo root
+
+
+def _collect_chat_tokens(live_client, question: str, project_path: str) -> tuple[str, bool]:
+    r = live_client.post(
+        "/api/chat_stream",
+        json={"query": question, "project_path": project_path},
+        stream=True, timeout=(5, 90),
+    )
+    assert r.status_code == 200
+    tokens: list[str] = []
+    done_seen = False
+    for line in r.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data:"):
+            continue
+        try:
+            evt = json.loads(line[5:].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if evt.get("type") == "token" and evt.get("text"):
+            tokens.append(evt["text"])
+        if evt.get("done"):
+            done_seen = True
+            break
+    r.close()
+    return "".join(tokens), done_seen
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("question,kws", [
+    (
+        "The daemon fails with UNIQUE constraint failed on vec_chunks. How do I debug this?",
+        ["vec", "chunk", "index", "unique", "idempot"],
+    ),
+    (
+        "What might cause community enrichment to stay stuck in 'enriching' state?",
+        ["community", "enrichment", "summary", "null", "llm"],
+    ),
+    (
+        "What functions are involved in the indexing pipeline from file to stored vector?",
+        ["index", "embed", "chunk", "store"],
+    ),
+    (
+        "How does federation work — how does the engine handle multiple repos?",
+        ["federat", "member", "symlink", "root"],
+    ),
+])
+def test_chat_comprehensive_question_a(live_client, question, kws):
+    """Chat quality A: debug, enrichment, indexing, federation questions."""
+    answer, done_seen = _collect_chat_tokens(live_client, question, _OSE)
+    al = answer.lower()
+    assert done_seen, f"SSE never sent done for: {question[:60]}"
+    assert len(al) > 30, f"Answer too short: {al!r}"
+    assert "error" not in al[:80], f"Answer starts with error: {al[:200]!r}"
+    assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("question,kws", [
+    (
+        "How does a user search query flow from MCP call to ranked results?",
+        ["search", "rank", "rerank", "vector", "embed"],
+    ),
+    (
+        "Why might GPU memory usage spike after indexing a large repo?",
+        ["gpu", "cuda", "embed", "ort", "arena"],
+    ),
+    (
+        "What does 'UNIQUE constraint failed: vec_chunks.chunk_id' mean and how do I fix it?",
+        ["vec", "unique", "clear", "delete", "idempot"],
+    ),
+    (
+        "What is the knowledge base pipeline and when does it run?",
+        ["kb", "knowledge", "communit", "hierarch", "enrich"],
+    ),
+])
+def test_chat_comprehensive_question_b(live_client, question, kws):
+    """Chat quality B: search flow, GPU, error message, KB pipeline questions."""
+    answer, done_seen = _collect_chat_tokens(live_client, question, _OSE)
+    al = answer.lower()
+    assert done_seen, f"SSE never sent done for: {question[:60]}"
+    assert len(al) > 30, f"Answer too short: {al!r}"
+    assert "error" not in al[:80], f"Answer starts with error: {al[:200]!r}"
+    assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
+
+
+@pytest.mark.slow
+def test_chat_no_project_path_returns_answer(live_client):
+    """Chat with empty project_path still returns a coherent answer (LLM-only, no community context)."""
+    answer, done_seen = _collect_chat_tokens(live_client, "What is a code knowledge base?", "")
+    assert done_seen
+    assert len(answer) > 20, f"Empty project_path must still produce answer: {answer!r}"
