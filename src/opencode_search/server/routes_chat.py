@@ -1,7 +1,9 @@
 """chat_stream (SSE) route — codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback."""
 from __future__ import annotations
 
+import asyncio
 import json
+import shutil
 
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
@@ -9,10 +11,11 @@ from starlette.responses import Response, StreamingResponse
 from opencode_search.core.config import (
     QUERY_LLM_FALLBACK_MODEL,
     QUERY_LLM_MODEL,
-    QUERY_LLM_PROVIDER,
-    QUERY_LLM_TIMEOUT,
     project_graph_db,
 )
+
+_CODEX = shutil.which("codex")
+_CLAUDE = shutil.which("claude")
 
 
 def _build_context(project_path: str, query: str) -> str:
@@ -30,34 +33,30 @@ def _build_context(project_path: str, query: str) -> str:
         gs.close()
 
 
-def _chat_tokens(messages: list[dict]):
-    """Yield tokens: codex/gpt-5.4-mini primary → claude-haiku-4-5 on error or empty."""
-    emitted = False
-    if QUERY_LLM_PROVIDER == "codex":
+async def _stream_answer(prompt: str):
+    """Yield text chunks: codex (8s) → claude-haiku fallback. Never blocks the event loop."""
+    if _CODEX:
         try:
-            from openai import OpenAI
-            for chunk in OpenAI(timeout=QUERY_LLM_TIMEOUT).chat.completions.create(
-                model=QUERY_LLM_MODEL, messages=messages, stream=True
-            ):
-                t = chunk.choices[0].delta.content or ""
-                if t:
-                    emitted = True
-                    yield t
-        except Exception:
+            proc = await asyncio.create_subprocess_exec(
+                _CODEX, "exec", "-m", QUERY_LLM_MODEL, "--ephemeral", prompt,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
+            if stdout.strip():
+                yield stdout.decode()
+                return
+        except (TimeoutError, OSError):
             pass
-    if emitted:
-        return
-    import anthropic
-    sys_msgs = [m["content"] for m in messages if m["role"] == "system"]
-    user_msgs = [m for m in messages if m["role"] != "system"]
-    with anthropic.Anthropic().messages.stream(
-        model=QUERY_LLM_FALLBACK_MODEL, max_tokens=2048,
-        system=sys_msgs[0] if sys_msgs else "You are a helpful code assistant.",
-        messages=user_msgs,
-    ) as stream:
-        for t in stream.text_stream:
-            if t:
-                yield t
+    if not _CLAUDE:
+        raise RuntimeError("claude CLI not found — install Claude Code")
+    proc = await asyncio.create_subprocess_exec(
+        _CLAUDE, "-p", "--model", QUERY_LLM_FALLBACK_MODEL, prompt,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if stdout:
+        yield stdout.decode()
+
 
 
 async def _api_chat_stream(request: Request) -> Response:
@@ -67,16 +66,24 @@ async def _api_chat_stream(request: Request) -> Response:
     if not message:
         return Response('data: {"type":"error","message":"message required"}\n\ndata: {"type":"done"}\n\n',
                         media_type="text/event-stream", status_code=400)
-    context = _build_context(project_path, message)
-    sys_prompt = "You are a helpful code intelligence assistant."
+    loop = asyncio.get_running_loop()
+    try:
+        context = await asyncio.wait_for(
+            loop.run_in_executor(None, _build_context, project_path, message),
+            timeout=12,
+        )
+    except (TimeoutError, Exception):
+        context = ""
+
+    sys_prompt = "You are a helpful code intelligence assistant. Answer using only the context provided; do not invoke any external tools."
     if context:
         sys_prompt += f"\n\nProject context:\n{context}"
-    msgs = [{"role": "system", "content": sys_prompt}, {"role": "user", "content": message}]
+    prompt = f"{sys_prompt}\n\n{message}"
 
     async def _gen():
         try:
-            for t in _chat_tokens(msgs):
-                yield f"data: {json.dumps({'type': 'token', 'text': t})}\n\n".encode()
+            async for chunk in _stream_answer(prompt):
+                yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n".encode()
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n".encode()
         yield b'data: {"type":"done","done":true}\n\n'
