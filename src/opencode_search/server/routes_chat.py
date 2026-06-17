@@ -27,7 +27,7 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
     from opencode_search.kb.answer_cache import get as _cache_get
     from opencode_search.kb.answer_cache import set as _cache_set
     from opencode_search.query.ask import compose_answer
-    from opencode_search.query.search import search as _search
+    from opencode_search.query.search import search_federation as _search_fed
 
     if not project_graph_db(project_path).exists() or not project_vector_db(project_path).exists():
         return "", []
@@ -41,26 +41,19 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 
     embedder = get_embedder()
     all_paths = expand_federation(project_path)
-    stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
+    graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
+    vector_stores = [VectorStore(project_vector_db(p)) for p in all_paths if project_vector_db(p).exists()]
     try:
-        chunks: list[dict] = []
-        for p in all_paths:
-            vdb = project_vector_db(p)
-            if not vdb.exists():
-                continue
-            vs = VectorStore(vdb)
-            try:
-                chunks.extend(_search(query, embedder, vs, scope="all", top_k=8))
-            finally:
-                vs.close()
-        chunks.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
-        answer = compose_answer(query, chunks[:8], stores, scope="all")
+        chunks = _search_fed(query, embedder, vector_stores, top_k=8)
+        answer = compose_answer(query, chunks, graph_stores, scope="all")
         sources = list(dict.fromkeys(c["path"] for c in chunks[:4]))
         _cache_set(cache_dir, f"chat2:{query}", json.dumps({"a": answer, "s": sources}), ttl_s=3600)
         return answer, sources
     finally:
-        for s in stores:
-            s.close()
+        for vs in vector_stores:
+            vs.close()
+        for gs in graph_stores:
+            gs.close()
 
 
 async def _stream_answer(prompt: str, model_used: list[str]):

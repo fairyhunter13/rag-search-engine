@@ -106,7 +106,7 @@ async def ask(
     from opencode_search.kb.answer_cache import get as _cache_get
     from opencode_search.kb.answer_cache import set as _cache_set
     from opencode_search.query.ask import compose_answer
-    from opencode_search.query.search import search as _search
+    from opencode_search.query.search import search_federation as _search_fed
 
     if not project_path:
         projects = [p for p in list_projects() if p.enabled]
@@ -124,25 +124,18 @@ async def ask(
     if not project_vector_db(project_path).exists():
         return f"Project not indexed: {project_path}"
     embedder = get_embedder()
-    stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
+    graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
+    vector_stores = [VectorStore(project_vector_db(p)) for p in all_paths if project_vector_db(p).exists()]
     try:
-        chunks: list[dict] = []
-        for _p in all_paths:
-            _vdb = project_vector_db(_p)
-            if not _vdb.exists():
-                continue
-            _vs = VectorStore(_vdb)
-            try:
-                chunks.extend(_search(query, embedder, _vs, scope="all", top_k=8))
-            finally:
-                _vs.close()
-        chunks.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
-        answer = compose_answer(query, chunks[:8], stores, scope=scope)
+        chunks = _search_fed(query, embedder, vector_stores, top_k=8)
+        answer = compose_answer(query, chunks, graph_stores, scope=scope)
         _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
         return answer
     finally:
-        for s in stores:
-            s.close()
+        for vs in vector_stores:
+            vs.close()
+        for gs in graph_stores:
+            gs.close()
 
 
 @mcp.tool()

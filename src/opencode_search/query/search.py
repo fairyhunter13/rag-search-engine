@@ -54,3 +54,29 @@ def rerank_passages(query: str, passages: list[str]) -> list[float]:
     if not passages:
         return []
     return _get_reranker().rerank(query, passages)
+
+
+def search_federation(
+    query: str,
+    embedder: Embedder,
+    stores: list[VectorStore],
+    *,
+    top_k: int = 8,
+) -> list[dict]:
+    """Embed query ONCE, ANN-search all stores, one global rerank.
+
+    Use instead of calling search() in a loop over federation members — avoids
+    N redundant GPU embeds and produces a single cross-member ranking.
+    """
+    q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
+    chunks: list[dict] = []
+    for vs in stores:
+        chunks.extend(vs.search(q_vec, top_k=top_k * 3))
+    if not chunks:
+        return []
+    passages = [c.get("content", "") for c in chunks]
+    scores = _get_reranker().rerank(query, passages)
+    for c, s in zip(chunks, scores, strict=False):
+        c["rerank_score"] = s
+    chunks.sort(key=lambda c: c.get("rerank_score", 0.0), reverse=True)
+    return chunks[:top_k]
