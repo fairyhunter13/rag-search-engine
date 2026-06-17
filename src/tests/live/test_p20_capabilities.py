@@ -11,7 +11,7 @@ pytestmark = pytest.mark.live
 
 
 @pytest.mark.slow
-def test_p20_capabilities_e2e(tmp_path):
+def test_p20_capabilities_e2e(safe_tmp_path):
     """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, ask context."""
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import get_project, remove_project, upsert_project
@@ -20,10 +20,10 @@ def test_p20_capabilities_e2e(tmp_path):
     from opencode_search.server._overview import handle_overview
 
     # Setup: tmp root with a symlinked python sub-repo
-    member = tmp_path / "member"
+    member = safe_tmp_path / "member"
     member.mkdir()
     (member / "auth.py").write_text("def authenticate(token): return bool(token)\n")
-    root = tmp_path / "root"
+    root = safe_tmp_path / "root"
     root.mkdir()
     (root / "link").symlink_to(member)
     (root / "main.py").write_text("def main(): pass\n")
