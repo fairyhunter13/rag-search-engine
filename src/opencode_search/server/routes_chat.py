@@ -17,9 +17,9 @@ _CODEX = shutil.which("codex")
 _CLAUDE = shutil.which("claude")
 
 
-def _build_context(project_path: str, query: str) -> str:
+def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
     if not project_path:
-        return ""
+        return "", []
     from opencode_search.core.config import index_dir, project_graph_db, project_vector_db
     from opencode_search.embed.embedder import get_embedder
     from opencode_search.graph.store import GraphStore
@@ -32,12 +32,13 @@ def _build_context(project_path: str, query: str) -> str:
     gdb = project_graph_db(project_path)
     vdb = project_vector_db(project_path)
     if not gdb.exists() or not vdb.exists():
-        return ""
+        return "", []
 
     cache_dir = index_dir(project_path) / "ask_cache"
-    cached = _cache_get(cache_dir, f"chat:{query}")
+    cached = _cache_get(cache_dir, f"chat2:{query}")
     if cached:
-        return cached
+        d = json.loads(cached)
+        return d["a"], d["s"]
 
     embedder = get_embedder()
     gs = GraphStore(gdb)
@@ -45,8 +46,9 @@ def _build_context(project_path: str, query: str) -> str:
     try:
         chunks = _search(query, embedder, vs, scope="all", top_k=8)
         answer = compose_answer(query, chunks, [gs], scope="all")
-        _cache_set(cache_dir, f"chat:{query}", answer, ttl_s=3600)
-        return answer
+        sources = list(dict.fromkeys(c["path"] for c in chunks[:4]))
+        _cache_set(cache_dir, f"chat2:{query}", json.dumps({"a": answer, "s": sources}), ttl_s=3600)
+        return answer, sources
     finally:
         gs.close()
         vs.close()
@@ -72,40 +74,55 @@ async def _stream_answer(prompt: str):
         _CLAUDE, "-p", "--model", QUERY_LLM_FALLBACK_MODEL, prompt,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
     )
-    stdout, _ = await proc.communicate()
-    if stdout:
-        yield stdout.decode()
-
+    while chunk := await proc.stdout.read(512):
+        yield chunk.decode(errors="replace")
+    await proc.wait()
 
 
 async def _api_chat_stream(request: Request) -> Response:
     body = await request.json()
     message = body.get("message") or body.get("query", "")
     project_path = body.get("project_path") or body.get("project", "")
+    history = body.get("history", [])
     if not message:
         return Response('data: {"type":"error","message":"message required"}\n\ndata: {"type":"done"}\n\n',
                         media_type="text/event-stream", status_code=400)
     loop = asyncio.get_running_loop()
-    try:
-        context = await asyncio.wait_for(
-            loop.run_in_executor(None, _build_context, project_path, message),
-            timeout=12,
-        )
-    except (TimeoutError, Exception):
-        context = ""
-
-    sys_prompt = "You are a helpful code intelligence assistant. Answer using only the context provided; do not invoke any external tools."
-    if context:
-        sys_prompt += f"\n\nProject context:\n{context}"
-    prompt = f"{sys_prompt}\n\n{message}"
+    t0 = loop.time()
 
     async def _gen():
+        yield b'data: {"type":"thinking"}\n\n'
+        try:
+            context, sources = await asyncio.wait_for(
+                loop.run_in_executor(None, _build_context, project_path, message),
+                timeout=12,
+            )
+        except (TimeoutError, Exception):
+            context, sources = "", []
+
+        sys_prompt = "You are a helpful code intelligence assistant. Answer using only the context provided; do not invoke any external tools."
+        if context:
+            sys_prompt += f"\n\nProject context:\n{context}"
+        if history:
+            hist_str = "".join(
+                f"\n{'User' if t.get('role') == 'user' else 'Assistant'}: {t.get('content', '')[:500]}"
+                for t in history[-6:]
+            )
+            sys_prompt += f"\n\nRecent conversation:{hist_str}"
+        prompt = f"{sys_prompt}\n\n{message}"
+
         try:
             async for chunk in _stream_answer(prompt):
                 yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n".encode()
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n".encode()
-        yield b'data: {"type":"done","done":true}\n\n'
+        done_evt = {
+            "type": "done", "done": True,
+            "model": QUERY_LLM_FALLBACK_MODEL,
+            "elapsed_ms": round((loop.time() - t0) * 1000),
+            "sources": sources,
+        }
+        yield f"data: {json.dumps(done_evt)}\n\n".encode()
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
