@@ -125,4 +125,5 @@ def get_embedder() -> Embedder:
     global _default
     if _default is None:
         _default = Embedder()
+        _default.warmup()
     return _default

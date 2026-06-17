@@ -11,7 +11,6 @@ from starlette.responses import Response, StreamingResponse
 from opencode_search.core.config import (
     QUERY_LLM_FALLBACK_MODEL,
     QUERY_LLM_MODEL,
-    project_graph_db,
 )
 
 _CODEX = shutil.which("codex")
@@ -21,16 +20,36 @@ _CLAUDE = shutil.which("claude")
 def _build_context(project_path: str, query: str) -> str:
     if not project_path:
         return ""
-    gdb = project_graph_db(project_path)
-    if not gdb.exists():
-        return ""
+    from opencode_search.core.config import index_dir, project_graph_db, project_vector_db
+    from opencode_search.embed.embedder import get_embedder
     from opencode_search.graph.store import GraphStore
-    from opencode_search.query.ask import _top_communities_semantic
+    from opencode_search.index.store import VectorStore
+    from opencode_search.kb.answer_cache import get as _cache_get
+    from opencode_search.kb.answer_cache import set as _cache_set
+    from opencode_search.query.ask import compose_answer
+    from opencode_search.query.search import search as _search
+
+    gdb = project_graph_db(project_path)
+    vdb = project_vector_db(project_path)
+    if not gdb.exists() or not vdb.exists():
+        return ""
+
+    cache_dir = index_dir(project_path) / "ask_cache"
+    cached = _cache_get(cache_dir, f"chat:{query}")
+    if cached:
+        return cached
+
+    embedder = get_embedder()
     gs = GraphStore(gdb)
+    vs = VectorStore(vdb)
     try:
-        return _top_communities_semantic(query, [gs], top_k=5)
+        chunks = _search(query, embedder, vs, scope="all", top_k=8)
+        answer = compose_answer(query, chunks, [gs], scope="all")
+        _cache_set(cache_dir, f"chat:{query}", answer, ttl_s=3600)
+        return answer
     finally:
         gs.close()
+        vs.close()
 
 
 async def _stream_answer(prompt: str):

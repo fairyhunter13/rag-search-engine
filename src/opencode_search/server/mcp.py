@@ -8,18 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from opencode_search.daemon.global_prompt import _PROMPT
 from opencode_search.daemon.runtime_state import note_activity, note_query
-from opencode_search.embed.embedder import Embedder
-
-_embedder: Embedder | None = None
-
-
-def _get_embedder() -> Embedder:
-    global _embedder
-    if _embedder is None:
-        _embedder = Embedder()
-        _embedder.warmup()
-    return _embedder
-
+from opencode_search.embed.embedder import get_embedder
 
 mcp = FastMCP("opencode-search", instructions=_PROMPT)
 
@@ -79,7 +68,7 @@ async def search(
                     paths.append(_p)
     else:
         paths = [p.path for p in list_projects() if p.enabled]
-    embedder = _get_embedder()
+    embedder = get_embedder()
     results: list[dict] = []
     t0 = time.monotonic()
     searched: list[str] = []
@@ -134,7 +123,7 @@ async def ask(
     all_paths = expand_federation(project_path)
     if not project_vector_db(project_path).exists():
         return f"Project not indexed: {project_path}"
-    embedder = _get_embedder()
+    embedder = get_embedder()
     stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
     try:
         chunks: list[dict] = []
