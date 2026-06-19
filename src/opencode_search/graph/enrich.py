@@ -39,9 +39,10 @@ _TYPE_ORDER: list[str] = [
     "business_process", "business_rule", "feature",
     "utility", "infrastructure", "domain", "test",
 ]
-_EMBED_CONF_THRESHOLD: float = float(os.getenv("OSE_EMBED_CONF_THRESHOLD", "0.08"))
+_EMBED_CONF_THRESHOLD: float = float(os.getenv("OSE_EMBED_CONF_THRESHOLD", "0.03"))
 _MMR_SEED_N: int = 70        # diverse seeds via MMR (≈10 per type × 7 types)
-_MIN_SEEDS_PER_TYPE: int = 3  # min LLM-labeled examples per type to trust centroid
+_MIN_SEEDS_PER_TYPE: int = 3  # min LLM-labeled examples per type to trust its centroid
+_MIN_PROTO_TYPES: int = 3     # min distinct types covered to use prototypes (else pure-LLM)
 
 # Minimal prompt — type names + one contrastive note; no vocabulary definitions.
 _BACKFILL_BATCH_PROMPT = """\
@@ -57,24 +58,57 @@ Communities:
 Reply with JSON: [{{"id": <N>, "semantic_type": "<type>", "reasoning": "<1 sentence why>"}}]"""
 
 
-def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
-    """Send one LLM call to classify ≤20 communities. Returns [(cid, semantic_type)]."""
-    valid = frozenset(_TYPE_ORDER)
-    items_str = json.dumps([
-        {"id": cid, "title": title, "summary": (summary or "")[:120]}
-        for cid, title, summary in batch
-    ], ensure_ascii=False)
+def _parse_types(raw: str, valid: frozenset[str]) -> dict[int, str]:
+    """Best-effort extract {id: semantic_type} from possibly-noisy LLM output.
+
+    Tolerates <think>…</think> blocks and ```json fences (no regex, string ops only).
+    Returns only items whose type is canonical; {} if nothing parseable.
+    """
+    text = raw.split("</think>")[-1] if "</think>" in raw else raw
+    text = text.replace("```json", "").replace("```", "")
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end <= start:
+        return {}
     try:
-        raw = chat(_BACKFILL_BATCH_PROMPT.format(items=items_str))
-        parsed = json.loads(raw.strip())
-        return [
-            (int(item["id"]),
-             item.get("semantic_type", "feature")
-             if item.get("semantic_type", "") in valid else "feature")
-            for item in parsed
-        ]
+        parsed = json.loads(text[start:end + 1])
     except Exception:
-        return [(cid, "feature") for cid, _, _ in batch]
+        return {}
+    out: dict[int, str] = {}
+    for item in parsed if isinstance(parsed, list) else []:
+        try:
+            st = item.get("semantic_type", "")
+            if st in valid:
+                out[int(item["id"])] = st
+        except Exception:
+            continue
+    return out
+
+
+def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
+    """Classify ≤20 communities via one LLM call. Returns only confidently-parsed (cid, type).
+
+    qwen3 thinking-mode is disabled and the output budget raised so the JSON answer isn't
+    starved. On a total parse failure, splits and retries once rather than mislabeling the
+    whole batch as 'feature'; unparsed communities are omitted (left for the next run).
+    """
+    if not batch:
+        return []
+    valid = frozenset(_TYPE_ORDER)
+    items_str = json.dumps(
+        [{"id": cid, "title": title, "summary": (summary or "")[:120]}
+         for cid, title, summary in batch],
+        ensure_ascii=False,
+    )
+    try:
+        raw = chat(_BACKFILL_BATCH_PROMPT.format(items=items_str),
+                   temperature=0.0, num_predict=2048, think=False)
+    except Exception:
+        raw = ""
+    labels = _parse_types(raw, valid)
+    if not labels and len(batch) > 1:
+        mid = len(batch) // 2
+        return _classify_batch(batch[:mid]) + _classify_batch(batch[mid:])
+    return [(cid, labels[cid]) for cid, _, _ in batch if cid in labels]
 
 
 # ---------------------------------------------------------------------------
@@ -116,16 +150,20 @@ def _community_rich_text(
 # ---------------------------------------------------------------------------
 
 def _prototypes_path(store: GraphStore) -> Path:
-    return Path(str(store._db_path)).parent / "type_prototypes.npy"
+    return Path(str(store._db_path)).parent / "type_prototypes.npz"
 
 
-def _load_stored_prototypes(store: GraphStore) -> np.ndarray | None:
+def _load_stored_prototypes(store: GraphStore) -> tuple[np.ndarray, list[str]] | None:
+    """Return (centroids (K,768), present_types[K]) or None. K may be < 7 (partial coverage)."""
     p = _prototypes_path(store)
-    return np.load(str(p)) if p.exists() else None
+    if not p.exists():
+        return None
+    data = np.load(str(p), allow_pickle=False)
+    return data["vecs"], [str(t) for t in data["types"]]
 
 
-def _save_prototypes(store: GraphStore, proto_vecs: np.ndarray) -> None:
-    np.save(str(_prototypes_path(store)), proto_vecs)
+def _save_prototypes(store: GraphStore, proto_vecs: np.ndarray, types: list[str]) -> None:
+    np.savez(str(_prototypes_path(store)), vecs=proto_vecs, types=np.array(types))
 
 
 def _select_diverse_seeds_mmr(vecs: np.ndarray, n: int) -> list[int]:
@@ -153,10 +191,13 @@ def _select_diverse_seeds_mmr(vecs: np.ndarray, n: int) -> list[int]:
 
 def _build_dynamic_prototypes(
     store: GraphStore, rows: list, all_vecs: np.ndarray, thermal_guard_fn=None,
-) -> np.ndarray | None:
+) -> tuple[np.ndarray, list[str]] | None:
     """Build per-type centroid prototypes from LLM-labeled diverse seed communities.
 
-    Returns (7, 768) L2-normalised centroids, or None if too few seeds per type.
+    Returns (centroids (K,768) L2-normalised, present_types[K]) for the types the seeds
+    actually cover (K = count with ≥_MIN_SEEDS_PER_TYPE labels), or None if fewer than
+    _MIN_PROTO_TYPES types are covered. Real repos rarely span all 7 types, so requiring
+    all 7 would abandon the prototype path and fall back to pure-LLM for everything.
     Prototypes come from ACTUAL community embeddings, never from human-authored text.
     """
     import time
@@ -181,25 +222,34 @@ def _build_dynamic_prototypes(
     for cid, stype in seed_labels.items():
         if cid in cid_to_idx:
             type_vecs[stype].append(all_vecs[cid_to_idx[cid]])
-    if not all(len(type_vecs[t]) >= _MIN_SEEDS_PER_TYPE for t in _TYPE_ORDER):
+    present = [t for t in _TYPE_ORDER if len(type_vecs[t]) >= _MIN_SEEDS_PER_TYPE]
+    if len(present) < _MIN_PROTO_TYPES:
         return None
     centroids = []
-    for stype in _TYPE_ORDER:
+    for stype in present:
         c = np.stack(type_vecs[stype]).mean(axis=0)
         centroids.append(c / (np.linalg.norm(c) + 1e-8))
-    return np.stack(centroids)
+    return np.stack(centroids), present
 
 
 def _classify_by_prototypes(
     all_vecs: np.ndarray,
     proto_vecs: np.ndarray,
+    present_types: list[str],
 ) -> list[tuple[str, float]]:
-    """Cosine similarity to data-derived centroid prototypes → (type, confidence_margin)."""
-    scores = all_vecs @ proto_vecs.T          # (N, 7)
+    """Cosine similarity to data-derived centroid prototypes → (type, confidence_margin).
+
+    present_types[i] labels row i of proto_vecs (K≥_MIN_PROTO_TYPES rows; may be < 7).
+    Confidence = top1−top2 margin among the present types.
+    """
+    scores = all_vecs @ proto_vecs.T          # (N, K)
     top1_idx = scores.argmax(axis=1)
     sorted_sc = np.sort(scores, axis=1)
     confidence = sorted_sc[:, -1] - sorted_sc[:, -2]
-    return [(_TYPE_ORDER[int(i)], float(c)) for i, c in zip(top1_idx, confidence, strict=False)]
+    return [
+        (present_types[int(i)], float(c))
+        for i, c in zip(top1_idx, confidence, strict=False)
+    ]
 
 
 def classify_communities_semantic(
@@ -235,13 +285,13 @@ def classify_communities_semantic(
         for r in rows
     ]
     all_vecs = get_embedder().embed(texts)
-    proto_vecs = _load_stored_prototypes(store)
-    if proto_vecs is None:
-        proto_vecs = _build_dynamic_prototypes(store, rows, all_vecs, thermal_guard_fn)
-        if proto_vecs is not None:
-            _save_prototypes(store, proto_vecs)
-    if proto_vecs is not None:
-        results = _classify_by_prototypes(all_vecs, proto_vecs)
+    proto = _load_stored_prototypes(store)
+    if proto is None:
+        proto = _build_dynamic_prototypes(store, rows, all_vecs, thermal_guard_fn)
+        if proto is not None:
+            _save_prototypes(store, proto[0], proto[1])
+    if proto is not None:
+        results = _classify_by_prototypes(all_vecs, proto[0], proto[1])
         high_conf = [
             (rows[i][0], t) for i, (t, c) in enumerate(results) if c >= _EMBED_CONF_THRESHOLD
         ]
