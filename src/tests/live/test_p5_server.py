@@ -572,7 +572,7 @@ def test_e6_dashboard_chat_haiku_only(live_client):
     """E6/HR10: POST /api/chat_stream streams tokens via claude-haiku-4-5 only (codex removed, no ollama)."""
     r = live_client.post(
         "/api/chat_stream",
-        json={"query": "What is the reranker used in this engine?"},
+        json={"query": "What is the reranker used in this engine?", "project_path": _OSE},
         stream=True, timeout=(5, 90),
     )
     assert r.status_code == 200
