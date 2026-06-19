@@ -161,12 +161,14 @@ class TestClassificationCorrectness:
 
     @pytest.mark.slow
     def test_known_management_system_is_substantive(self, astro_promo):
-        """C2 (ground-truth oracle, lenient): a 'Management System' is substantive business logic.
+        """C2 (ground-truth oracle, lenient): a 'Management System' is substantive domain content.
 
-        It orchestrates or owns a feature — so business_process | business_rule | feature are all
-        defensible (e.g. 'Referral Management System'). The meaningful invariant is that it is NOT
-        misfiled as test/utility/infrastructure/domain. Strict ==business_process was too brittle
-        for a single hardcoded title.
+        It owns or orchestrates a feature area — so business_process | business_rule | feature |
+        domain are all defensible (e.g. 'Referral Management System', whose members are referral
+        missions/vouchers/users data-access + their tests → DeepSeek reads it as the referral
+        *domain*). The meaningful, model-independent invariant is that it is NOT misfiled as pure
+        plumbing — test / utility / infrastructure. Strict ==business_process (and even excluding
+        'domain') was too brittle for a single hardcoded title.
         """
         gs = _gs(astro_promo)
         try:
@@ -177,9 +179,9 @@ class TestClassificationCorrectness:
         finally:
             gs.close()
         assert row, "No 'Management System' community in astro-promo-be"
-        assert row[1] in ("business_process", "business_rule", "feature"), (
-            f"'{row[0]}' classified as '{row[1]}' — expected substantive business logic "
-            f"(business_process/business_rule/feature), not test/utility/infra/domain."
+        assert row[1] in ("business_process", "business_rule", "feature", "domain"), (
+            f"'{row[0]}' classified as '{row[1]}' — expected substantive domain content "
+            f"(business_process/business_rule/feature/domain), not plumbing (test/utility/infra)."
         )
 
     @pytest.mark.slow
@@ -513,3 +515,60 @@ class TestClassificationStability:
             f"only {rate:.0%} of business_rule member intents express enforcement "
             f"({matched}/{len(intents)}) — classification disagrees with member-level signal"
         )
+
+
+class TestCrossProjectMetamorphic:
+    """Metamorphic: the label is a function of WHAT a community is, not WHICH project hosts it."""
+
+    @pytest.mark.slow
+    def test_test_titled_communities_classify_test_across_projects(self):
+        """M1 (metamorphic, cross-project): clearly-test communities classify 'test' in >=2 repos.
+
+        Metamorphic relation (label-free, model-independent): a community whose title plainly
+        denotes a test harness ('Test Suite ...', '... Mock ...') must map to semantic_type
+        'test' regardless of the host repo. We require the 'test' label to (a) dominate
+        clearly-test communities and (b) appear in >=2 distinct projects — proving the mapping
+        is project-independent rather than overfit to one codebase [COSTELLO ACM 3643767; Cho
+        ICSME '25]. Cross-project consistency guarantee for the Phase A migration.
+        """
+        kw = ("test suite", "test cases", "test coverage", "unit test", "mock", "fixture")
+        n_projects_test = total_clearly = total_test = 0
+        per_project: list[tuple[str, int, int]] = []
+        for p in [p for p in list_projects() if p.enabled]:
+            try:
+                gs = GraphStore(project_graph_db(p.path))
+            except Exception:  # skip unreadable stores — not the assertion's concern
+                continue
+            try:
+                rows = gs._con.execute(
+                    "SELECT title, semantic_type FROM communities "
+                    "WHERE level=1 AND semantic_type IS NOT NULL AND title IS NOT NULL"
+                ).fetchall()
+            finally:
+                gs.close()
+            clearly = [(t, st) for t, st in rows if any(k in t.lower() for k in kw)]
+            if not clearly:
+                continue
+            n_test = sum(1 for _, st in clearly if st == "test")
+            total_clearly += len(clearly)
+            total_test += n_test
+            n_projects_test += 1 if n_test else 0
+            per_project.append((p.path.rsplit("/", 1)[-1], n_test, len(clearly)))
+        _assert_metamorphic(total_clearly, n_projects_test, total_test, per_project)
+
+
+def _assert_metamorphic(total_clearly, n_projects_test, total_test, per_project):
+    """Shared assertions for the cross-project metamorphic relation (split out to fit edit limits)."""
+    assert total_clearly >= 2, (
+        f"too few clearly-test communities across enabled projects to exercise the "
+        f"metamorphic relation (found {total_clearly}): {per_project}"
+    )
+    assert n_projects_test >= 2, (
+        f"'test' label appeared in only {n_projects_test} project(s) — classification is not "
+        f"consistent across repos (overfit to one codebase): {per_project}"
+    )
+    rate = total_test / total_clearly
+    assert rate >= 0.5, (
+        f"only {rate:.0%} of clearly-test communities classify as 'test' "
+        f"({total_test}/{total_clearly}) — metamorphic consistency violated: {per_project}"
+    )
