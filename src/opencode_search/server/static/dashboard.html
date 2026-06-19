@@ -415,6 +415,7 @@ a{color:inherit;text-decoration:none}
   <div id="view-wiki" class="view">
     <div class="wiki-sidebar">
       <input id="wiki-search" placeholder="Search pages…" oninput="searchWiki(this.value)" autocomplete="off"/>
+      <button id="wiki-export-btn" class="wiki-page-link" style="border-bottom:1px solid var(--border);color:var(--cyan)" onclick="exportWiki()">⤓ Export bundle</button>
       <div id="wiki-pages"><div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div></div>
     </div>
     <div class="wiki-content-pane">
@@ -459,8 +460,8 @@ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'
 function mdSafe(s){
   if(!s)return '';
   let h=esc(String(s));
-  // 2. Fenced code blocks  ```lang\ncode\n```
-  h=h.replace(/```(?:[^\n]*)?\n([\s\S]*?)```/g,(_,c)=>'<pre><code>'+c+'</code></pre>');
+  // 2. Fenced code blocks  ```lang\ncode\n``` — keep the language as a class so mermaid renders.
+  h=h.replace(/```(\w*)[^\n]*\n([\s\S]*?)```/g,(_,lang,c)=>'<pre><code'+(lang?' class="language-'+lang+'"':'')+'>'+c+'</code></pre>');
   // 3. Inline code
   h=h.replace(/`([^`\n]+)`/g,(_,c)=>'<code>'+c+'</code>');
   // 4. Headings (process before bold/italic)
@@ -919,9 +920,50 @@ async function openWikiPage(name){
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     content.innerHTML=mdSafe(d.content||'');
+    renderMermaid(content);
   }catch(e){
     content.innerHTML='<div class="wiki-empty" style="color:var(--red)">'+esc(e.message)+'</div>';
   }
+}
+
+/* Lazy-load mermaid from CDN ONLY when a page has a diagram (never at page-load — a hanging CDN
+   request would keep `networkidle` from settling and break every browser test). Fails silently
+   offline: the ```mermaid fence then just stays as code. */
+let _mermaidPromise=null;
+function _loadMermaid(){
+  if(_mermaidPromise)return _mermaidPromise;
+  _mermaidPromise=import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')
+    .then(m=>{m.default.initialize({startOnLoad:false,theme:'neutral',securityLevel:'loose'});window.mermaid=m.default;return m.default;})
+    .catch(()=>null);
+  return _mermaidPromise;
+}
+async function renderMermaid(root){
+  const blocks=root.querySelectorAll('code.language-mermaid');
+  if(!blocks.length)return;
+  const mm=await _loadMermaid();
+  if(!mm)return;  // offline — leave fences as code, no crash
+  blocks.forEach(code=>{
+    const pre=code.closest('pre')||code;
+    const div=document.createElement('div');
+    div.className='mermaid';
+    div.textContent=code.textContent;
+    pre.replaceWith(div);
+  });
+  try{await mm.run({nodes:root.querySelectorAll('.mermaid')});}catch(_){}
+}
+
+/* Download the whole wiki as one markdown bundle. */
+async function exportWiki(){
+  if(!_proj)return;
+  try{
+    const r=await fetchWithTimeout(`/api/wiki/export?project=${encodeURIComponent(_proj)}&format=markdown`);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    const blob=new Blob([d.content||''],{type:'text/markdown'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download='wiki-export.md';a.click();
+    URL.revokeObjectURL(a.href);
+  }catch(e){toast('Export failed: '+e.message);}
 }
 
 function searchWiki(q){

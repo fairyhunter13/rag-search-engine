@@ -257,6 +257,27 @@ def _enrich_project(project_path: str) -> None:
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
+    # Federated wiki: (re)generate federation.md for this project if it is a root, and for any
+    # root that owns it as a member (a member edit refreshes the root's aggregate). HR4 holds —
+    # aggregation reads each member's own graph.db; no cross-repo edges. No-op for standalones.
+    try:
+        from opencode_search.kb.wiki import build_federated_index
+        build_federated_index(project_path)
+        _regen_owning_federations(project_path)
+    except Exception as exc:
+        log.warning("federation index %s: %s", project_path, exc)
+
+
+def _regen_owning_federations(member_path: str) -> None:
+    """Regenerate federation.md for any enabled root whose federation list contains member_path."""
+    from opencode_search.core.registry import list_projects
+    from opencode_search.kb.wiki import build_federated_index
+    for entry in list_projects():
+        if entry.enabled and entry.federation and member_path in entry.federation:
+            try:
+                build_federated_index(entry.path)
+            except Exception as exc:
+                log.warning("owning-federation regen %s: %s", entry.path, exc)
 
 
 def on_change(project_path: str, files: list) -> None:
