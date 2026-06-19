@@ -108,7 +108,7 @@ Generated from the live archived engine before wiping `main`.
 ### Chat / intents
 - [x] POST /api/classify {message} -> {intent,confidence,reason}
 - [x] POST /api/chat {message,project_path?,conversation_id?} -> non-streaming response
-- [x] POST /api/chat_stream {message,project_path?,conversation_id?} -> SSE streaming; codex/gpt-5.4-mini + haiku-4.5 fallback (ONLY surface permitted)
+- [x] POST /api/chat_stream {message,project_path?,conversation_id?} -> SSE streaming; claude-haiku-4-5 (Claude Code CLI) ONLY surface; codex removed
 
 ### Health / metrics / ops
 - [x] GET /api/kb_health ?project= -> enrichment % per level + DONE|PENDING verdict
@@ -134,7 +134,7 @@ Generated from the live archived engine before wiping `main`.
 ## 3. Dashboard (5 views, single-page Starlette HTML app)
 
 - [x] Pulse: KPI tiles (chunks, communities, wiki pages, enrichment %, stream errors) + sparklines + daemon-status dot + SSE live feed + op-log + auto-pipeline tile
-- [x] Chat: message input + send button + SSE streaming display + intent indicator + source chips + multi-turn (conversation_id) + toast notifications; uses codex/gpt-5.4-mini only here
+- [x] Chat: message input + send button + SSE streaming display + intent indicator + source chips + multi-turn (conversation_id) + toast notifications; uses claude-haiku-4-5 (Claude Code) only here
 - [x] Admin: project list (watch status) + KB health per project + storage health + action buttons (enrich/rebuild/vacuum) + reload + sweeps pause/resume + jobs list with cancel
 - [x] Wiki: page list per project + markdown renderer + lint results
 - [x] Graph: Sigma.js WebGL render + community hierarchy tree + import cycles + service mesh + surprising connections + export download (JSON/GraphML)
@@ -162,7 +162,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] Chunking (chonkie) -> GPU embed (FastEmbed-GPU + onnxruntime-gpu, jina-v2-base-code 768d, float16) -> sqlite-vec
 - [x] Graph extraction: tree-sitter + tree-sitter-language-pack -> AST -> nodes/edges in SQLite (graph.db)
 - [x] Community detection: leidenalg + igraph -> L1 communities in graph.db
-- [x] LLM enrichment via qwen3-enrich:1.7b (Ollama GPU): symbol intent (20/call batch) + community summary + semantic type
+- [x] LLM enrichment: symbol intent (20/call) + community/L2 summary via local qwen3-enrich:1.7b (Ollama GPU, `chat(think=False)` — no idle spin); semantic_type via cloud DeepSeek (direct classification, daemon reclassify_all=False, <3-member structural guard)
 - [x] Recursive hierarchy: L2+ community-of-communities (Leiden meta-graph)
 - [x] Wiki generation: community summaries -> wiki/ dir pages
 - [x] Answer-cache warming: pre-compute common ask queries
@@ -275,7 +275,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] OPENCODE_LLM_CONCURRENCY default = OLLAMA_NUM_PARALLEL default 3
 
 ### 8.6 Query-tier LLM (dashboard chat ONLY; forbidden everywhere else)
-- [x] OPENCODE_QUERY_LLM_PROVIDER codex | OPENCODE_QUERY_LLM_MODEL gpt-5.4-mini (+ haiku-4.5 fallback)
+- [x] OPENCODE_QUERY_LLM_PROVIDER claude | OPENCODE_QUERY_LLM_MODEL claude-haiku-4-5 (codex removed)
 - [x] OPENCODE_QUERY_LLM_NUM_CTX 4096 | OPENCODE_QUERY_LLM_TIMEOUT 180s
 
 ### 8.7 Daemon constants
@@ -322,7 +322,7 @@ Generated from the live archived engine before wiping `main`.
 ## 12. Hard invariants
 
 - [x] CPU fallback forbidden -- any attempt must raise a fatal error, never fall back silently
-- [x] Dashboard chat (/api/chat, /api/chat_stream) is the ONLY surface for codex/gpt-5.4-mini + haiku-4.5; all other LLM calls use Ollama qwen3 on GPU
+- [x] Dashboard chat (/api/chat_stream) is the ONLY surface for claude-haiku-4-5 (codex removed); KB build = local Ollama qwen3 (summaries, think=false) + cloud DeepSeek (classification + wiki narrative)
 - [x] ~/GoogleDrive and ~/OneDrive are rclone mounts -- never touch, index, or delete
 - [x] Push after every commit -- zero unpushed at all times
 - [x] Registry at ~/.local/share/opencode-search/projects.json; never index /tmp or cache dirs

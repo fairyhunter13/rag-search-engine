@@ -26,11 +26,12 @@ Each must return a non-empty, grounded answer — not a "no data" fallback:
 7. "Which functions are related to AddToCart?" → `graph(callers)` + `graph(impact_narrative)`
 
 ### Constraints enforced in every probe
-- GPU-only: KB build uses ollama qwen3-enrich:1.7b + qwen3-query:8b (never CPU, never cloud)
-- `create_llm_client()` must reject codex/claude-code with RuntimeError
-- Dashboard chat = codex gpt-5.4-mini → haiku-4.5 fallback (the ONLY cloud exception)
+- GPU-only LOCAL: embeddings + reranker + qwen3-enrich:1.7b summaries on GPU (never CPU). Cloud
+  LLM is the explicit exception: DeepSeek (classification + wiki) + claude-haiku-4-5 (chat).
+- `graph/llm.py:chat()` must send `think=False` (no idle busy-spin, Ollama #13461)
+- Dashboard chat = claude-haiku-4-5 (Claude Code CLI) only — codex removed
 - Auto-pipeline on by default: `GET /api/auto_pipeline_status` → `enabled: true`
-- Global integration: all 4 profiles (CLAUDE.md, codex, hermes, opencode) × 7 tools
+- Global integration: profiles (CLAUDE.md, hermes, opencode) × 5 tools — codex removed
 
 ## Loop body
 

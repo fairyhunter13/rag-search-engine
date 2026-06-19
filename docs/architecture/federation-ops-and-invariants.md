@@ -44,7 +44,6 @@ entries into 7 client configs. Canonical URL: `http://127.0.0.1:8765/mcp`.
 | Client family | Format |
 |---|---|
 | Claude `settings.json` | `{"type":"http","url":"http://127.0.0.1:8765/mcp"}` |
-| codex `config.toml` | `url = "http://127.0.0.1:8765/mcp"` (no `env` table) |
 | hermes `config.yaml` | `url: http://127.0.0.1:8765/mcp` (drop command/args/env) |
 | opencode `opencode.jsonc` | `{"type":"remote","url":"http://127.0.0.1:8765/mcp"}` |
 
@@ -116,10 +115,11 @@ kb_state: indexing → searchable → enriching → ready
    converge on reruns.
 8. **Registry↔storage consistency** — cascade-remove + orphan-vacuum keep `projects.json`
    and `INDEX_ROOT` in agreement.
-9. **MCP query actions never generate** — the cloud/query generative LLM (codex→haiku) is
+9. **MCP query actions never generate** — the query generative LLM (**claude-haiku-4-5**) is
    reached only via the dashboard chat box (`POST /api/chat_stream`); MCP query actions
-   (`search`/`ask`/`graph`/`overview`) and `compose_answer` never generate text; the local
-   generative LLM (ollama) is confined to background KB enrichment. (≡ HR9.)
+   (`search`/`ask`/`graph`/`overview`) and `compose_answer` never generate text. Build-path
+   generation is confined to background KB enrichment: **local ollama** for summaries +
+   **cloud DeepSeek** for classification/wiki. (≡ HR9.)
 10. **Reranking is the relevance authority** — every query result set is ordered by
     `rerank_score`, never the bare vector `score`; cross-encoder runs at query time only. (≡ HR8.)
 11. **Both retrieval axes are cross-encoder-ranked** — AXIS A (code chunks) and AXIS B
@@ -150,7 +150,7 @@ Each §13 invariant has a corresponding live test that proves it without mocks:
 | HR7 kb_state → ready | `test_kb_state_ready_all_projects` | `test_p22_kb_e2e.py` |
 | HR8 rerank lift + both axes | `test_e1_rerank_reorders_search_results`, `test_e2_ask_context_is_rerank_ordered`, `test_e3_community_context_is_reranked`, `test_e4_rerank_lift_metric` | `test_p5_server.py` |
 | HR9 MCP embed+rerank only | `test_e5_mcp_query_path_no_generation` | `test_p5_server.py` |
-| HR10 dashboard chat codex→haiku | `test_e6_dashboard_chat_codex_haiku_only`, `test_chat_stream_sse_sends_done` | `test_p5_server.py` / `test_p4_query.py` |
+| HR10 dashboard chat haiku-only | `test_e6_dashboard_chat_haiku_only`, `test_chat_stream_sse_sends_done` | `test_p5_server.py` / `test_p4_query.py` |
 | §16 config inheritance | `test_effective_config_inherits_root_excludes`, `test_iter_files_always_yields_ose_config`, `test_overview_status_includes_config_key` | `test_p22_kb_e2e.py` |
 
 ## 15. Design rationale

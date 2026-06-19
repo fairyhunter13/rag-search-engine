@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-17 (§13a–§13b contract + §14 HR matrix; §16 config inheritance added).
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-19 (codex removed → haiku-only chat HR10; direct-DeepSeek classifier HR11; `think=False` no-idle-spin HR12; LLM lanes split D/E in §8a/§9b).
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
