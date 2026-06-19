@@ -25,3 +25,7 @@ Thumbs.db
 .opencode_verify_report.*
 .opencode_verify_state.*
 .hpv_proof.*
+
+# Local scratch diagnostics (never commit; may contain local device paths)
+scratch_diag.py
+scratch_*.py

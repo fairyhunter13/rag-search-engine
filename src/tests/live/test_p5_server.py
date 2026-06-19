@@ -425,7 +425,7 @@ def test_graph_defaults_project_path_to_first_project():
     assert "matches" in data, f"expected matches key, got: {data}"
 
 
-_OSE = "/home/user/git/github.com/fairyhunter13/opencode-search-engine"
+_OSE = str(Path(__file__).resolve().parents[3])  # repo root, no hardcoded device path
 
 
 

@@ -34,7 +34,7 @@ Run these 5 checks against redacted-name-3:
 - `ask("how does auth work", scope="all")` → must return non-empty answer
 - `graph("main", relation="callers")` → must return graph nodes
 - `overview(what="structure")` → must show 20000+ files, 4500+ communities
-- `federation("/home/user/git/github.com/fairyhunter13/redacted-name-3")` → must list 24+ members
+- `federation("<ACME_PROJECT_PATH>")` → must list 24+ members
 
 ### 5. Lint check
 ```bash
@@ -44,7 +44,7 @@ Must be clean (or only pre-existing E501 lines ≤ 5).
 
 ### 6. Git state (zero-unpushed policy)
 ```bash
-git -C /home/user/git/github.com/fairyhunter13/opencode-search-engine log --oneline @{u}.. 2>/dev/null | wc -l
+git -C "${CLAUDE_PROJECT_DIR:-.}" log --oneline @{u}.. 2>/dev/null | wc -l
 ```
 Must be 0. If unpushed commits exist — push before deploying.
 

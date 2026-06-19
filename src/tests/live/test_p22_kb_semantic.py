@@ -10,7 +10,7 @@ import requests
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
-_OSE = "/home/user/git/github.com/fairyhunter13/opencode-search-engine"
+_OSE = str(Path(__file__).resolve().parents[3])  # repo root, no hardcoded device path
 
 
 def _graph_db(project: str) -> Path:

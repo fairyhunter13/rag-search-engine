@@ -9,7 +9,7 @@ Run these checks in order, reporting pass/fail for each:
 
 ### 1. Index health
 ```
-overview(project_path="/home/user/git/github.com/fairyhunter13/redacted-name-3", what="status")
+overview(project_path="<ACME_PROJECT_PATH>", what="status")
 ```
 Verify: files > 15000, chunks > 80000, communities > 1000, watcher = watching.
 
@@ -28,7 +28,7 @@ Verify: returns ≥3 named top-level domains (not empty / error).
 
 ### 4. Search recall — code lookup
 ```
-search("route handler", project_paths=["/home/user/git/github.com/fairyhunter13/redacted-name-3"])
+search("route handler", project_paths=["<ACME_PROJECT_PATH>"])
 search("database connection pool", project_paths=["..."])
 ```
 Verify: each returns ≥3 results with file paths that exist.

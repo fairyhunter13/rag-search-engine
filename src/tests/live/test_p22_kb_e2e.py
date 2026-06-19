@@ -15,10 +15,17 @@ pytestmark = pytest.mark.live
 _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
 
+def _reg(substr: str, default: str = "") -> str:
+    """Resolve a registered enabled project path by substring (no hardcoded device paths)."""
+    from opencode_search.core.registry import list_projects
+    return next((e.path for e in list_projects() if substr in e.path and e.enabled), default)
+
+
+# Derive OSE root from this file's location; resolve other projects from the live registry.
 _PROJECTS = {
-    "ose": "/home/user/git/github.com/fairyhunter13/opencode-search-engine",
-    "astro": "/home/user/git/github.com/fairyhunter13/redacted-name-3",
-    "payment": "/home/user/go/src/github.com/example-org/redacted-name-0",
+    "ose": str(Path(__file__).resolve().parents[3]),
+    "astro": _reg("redacted-name-3"),
+    "payment": _reg("redacted-name-0"),
 }
 
 

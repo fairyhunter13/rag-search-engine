@@ -8,8 +8,8 @@ else
     DAEMON_UP="DOWN"
 fi
 GPU=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | awk -F', ' '{printf "%s%% GPU %sMB/%sMB", $1, $2, $3}' || echo "unavailable")
-BRANCH=$(git -C /home/user/git/github.com/fairyhunter13/opencode-search-engine rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
-UNPUSHED=$(git -C /home/user/git/github.com/fairyhunter13/opencode-search-engine log --oneline @{u}.. 2>/dev/null | wc -l | tr -d ' ')
+BRANCH=$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+UNPUSHED=$(git -C "${CLAUDE_PROJECT_DIR:-.}" log --oneline @{u}.. 2>/dev/null | wc -l | tr -d ' ')
 TITLE="${PROJ} | ${BRANCH} | daemon:${DAEMON_UP}"
 
 python3 - <<PYEOF

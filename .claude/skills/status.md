@@ -12,7 +12,7 @@ Comprehensive status audit of the opencode-search-engine system.
 - Remove any stale entries with `manage(action='remove_project', delete_index=True)`
 
 ### 2. redacted-name-3 verification (canonical test target)
-- `overview(project_path='/home/user/git/github.com/fairyhunter13/redacted-name-3', what='status')` — confirm watching=true, communities>5000
+- `overview(project_path='<ACME_PROJECT_PATH>', what='status')` — confirm watching=true, communities>5000
 - `search(query='payment handler', project_paths=[acme_path])` — confirm search returns real results
 - `ask(query='how does payment flow work', project_path=acme_path, scope='feature')` — confirm structured answer with entry_points
 - `graph(symbol='PaymentService', project_path=acme_path, relation='impact_narrative')` — confirm graph works

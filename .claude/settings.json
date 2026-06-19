@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/session-start.sh",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
             "timeout": 8,
             "statusMessage": "Loading session context..."
           }
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/guard-engine-indexes.sh",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-engine-indexes.sh",
             "timeout": 5,
             "if": "Bash(rm *)"
           }
@@ -71,7 +71,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/auto-ruff.sh",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/auto-ruff.sh",
             "timeout": 10,
             "async": true,
             "statusMessage": "Auto-fixing lint..."
@@ -96,7 +96,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/stop-check.sh",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/stop-check.sh",
             "timeout": 8,
             "statusMessage": "Checking git state..."
           }
@@ -109,7 +109,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/git/github.com/fairyhunter13/opencode-search-engine/.claude/hooks/post-compact.sh",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-compact.sh",
             "timeout": 5,
             "statusMessage": "Restoring project context..."
           }

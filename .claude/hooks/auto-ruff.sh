@@ -14,7 +14,7 @@ except Exception:
 " 2>/dev/null)
 
 if [[ "$FILE" == *.py ]] && [[ -f "$FILE" ]]; then
-    cd /home/user/git/github.com/fairyhunter13/opencode-search-engine
+    cd "${CLAUDE_PROJECT_DIR:-.}"
     .venv/bin/ruff check --fix --quiet "$FILE" 2>/dev/null || true
 fi
 

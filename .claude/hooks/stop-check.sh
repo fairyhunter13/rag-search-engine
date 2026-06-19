@@ -2,9 +2,9 @@
 # Stop hook: check for unpushed commits and surface as additionalContext.
 # Returns non-blocking feedback — never blocks the stop, just informs.
 
-UNPUSHED=$(git -C /home/user/git/github.com/fairyhunter13/opencode-search-engine log --oneline @{u}.. 2>/dev/null)
-UNCOMMITTED=$(git -C /home/user/git/github.com/fairyhunter13/opencode-search-engine status --short 2>/dev/null | grep -v "^??" | head -5)
-DIRTY=$(git -C /home/user/git/github.com/fairyhunter13/opencode-search-engine status --short 2>/dev/null | wc -l | tr -d ' ')
+UNPUSHED=$(git -C "${CLAUDE_PROJECT_DIR:-.}" log --oneline @{u}.. 2>/dev/null)
+UNCOMMITTED=$(git -C "${CLAUDE_PROJECT_DIR:-.}" status --short 2>/dev/null | grep -v "^??" | head -5)
+DIRTY=$(git -C "${CLAUDE_PROJECT_DIR:-.}" status --short 2>/dev/null | wc -l | tr -d ' ')
 
 if [ -n "$UNPUSHED" ] || [ -n "$UNCOMMITTED" ]; then
     MSG=""

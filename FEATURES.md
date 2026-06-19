@@ -314,7 +314,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] No skipped or xfail tests
 - [x] Session fixtures: pin qwen3-enrich:1.7b resident, pause sweeps (POST /api/sweeps/pause), cap CPU threads
 - [x] Markers: live (daemon+GPU+Ollama required), slow (LLM-heavy >30s)
-- [x] Canonical project: /home/user/git/github.com/fairyhunter13/redacted-name-3
+- [x] Canonical project: a large multi-repo workspace resolved from the registry (no hardcoded device paths)
 - [x] Fast suite (-m "live and not slow"): target <=10 min; full suite: 0 fail/0 skip/0 xfail
 
 ---
