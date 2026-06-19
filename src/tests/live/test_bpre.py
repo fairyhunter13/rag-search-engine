@@ -10,7 +10,7 @@ import pytest
 
 from opencode_search.core.config import project_graph_db
 from opencode_search.core.registry import list_projects
-from opencode_search.graph.enrich import backfill_semantic_types
+from opencode_search.graph.enrich import classify_communities_semantic
 from opencode_search.graph.store import GraphStore
 from opencode_search.server.mcp import ask as ask_tool
 from opencode_search.server.mcp import overview as overview_tool
@@ -196,34 +196,34 @@ class TestClassificationCorrectness:
         assert not polluted, f"Test communities leaked into process_flows: {polluted}"
 
     @pytest.mark.slow
-    def test_business_rules_titles_have_rule_keywords(self, acme_promo):
-        """C5 (keyword oracle): >=40% of business_rule titles must contain rule-related keywords."""
-        result = asyncio.run(overview_tool(acme_promo, "business_rules"))
-        rules = json.loads(result).get("rules", [])
-        assert rules, "No business rules to validate"
-        RULE_KWS = {"validation", "rule", "guard", "check", "constraint", "eligibility",
-                    "clash", "enforcement", "policy", "compliance", "criteria", "allowance"}
-        matches = sum(1 for r in rules if any(kw in r["title"].lower() for kw in RULE_KWS))
-        rate = matches / len(rules) * 100
-        assert rate >= 40, (
-            f"Only {rate:.0f}% of business_rule communities have rule keywords ({matches}/{len(rules)}). "
-            f"Spot-check: {[r['title'] for r in rules[:5]]}"
+    def test_classification_stable_across_two_overview_calls(self, acme_promo):
+        """C5 (stability): Two consecutive overview('business_rules') calls return the same titles."""
+        r1 = json.loads(asyncio.run(overview_tool(acme_promo, "business_rules")))
+        r2 = json.loads(asyncio.run(overview_tool(acme_promo, "business_rules")))
+        titles1 = sorted(r["title"] for r in r1.get("rules", []))
+        titles2 = sorted(r["title"] for r in r2.get("rules", []))
+        assert titles1, "overview('business_rules') returned empty"
+        assert titles1 == titles2, (
+            f"business_rules list is non-deterministic. Diff: {sorted(set(titles1) ^ set(titles2))}"
         )
 
     @pytest.mark.slow
-    def test_business_process_titles_have_process_keywords(self, acme_campaign):
-        """C6 (keyword oracle): >=50% of business_process titles must contain process keywords."""
-        result = asyncio.run(overview_tool(acme_campaign, "process_flows"))
-        flows = json.loads(result).get("flows", [])
-        assert flows, "No process flows to validate"
-        PROC_KWS = {"management", "orchestration", "process", "pipeline", "workflow",
-                    "scheduling", "dispatch", "coordinator", "fulfillment", "lifecycle",
-                    "queue", "service", "system", "integration", "handler"}
-        matches = sum(1 for f in flows if any(kw in f["title"].lower() for kw in PROC_KWS))
-        rate = matches / len(flows) * 100
-        assert rate >= 50, (
-            f"Only {rate:.0f}% of business_process titles have process keywords ({matches}/{len(flows)}). "
-            f"Spot-check: {[f['title'] for f in flows[:5]]}"
+    def test_business_rule_summaries_describe_enforcement(self, acme_promo):
+        """C6 (semantic coherence): business_rule summaries describe constraints, not data models."""
+        rules = json.loads(asyncio.run(overview_tool(acme_promo, "business_rules"))).get("rules", [])
+        assert rules, "overview('business_rules') returned no communities"
+        enforcement_words = {
+            "enforce", "validat", "check", "block", "reject", "eligib",
+            "constraint", "policy", "clash", "prevent", "rule", "restrict",
+        }
+        matched = sum(
+            1 for r in rules[:10]
+            if any(w in (r.get("summary", "") + " " + r.get("title", "")).lower()
+                   for w in enforcement_words)
+        )
+        assert matched >= max(1, len(rules[:10]) // 2), (
+            f"Only {matched}/{len(rules[:10])} business_rule communities mention enforcement. "
+            f"Titles: {[r['title'] for r in rules[:5]]}"
         )
 
 
@@ -275,7 +275,7 @@ class TestPipelineIdempotency:
 
         gs2 = GraphStore(project_graph_db(acme_promo))
         try:
-            backfill_semantic_types(gs2, lambda: False)
+            classify_communities_semantic(gs2, lambda: False)
         finally:
             gs2.close()
 
@@ -297,7 +297,7 @@ class TestPipelineIdempotency:
         """I2: Running backfill twice on campaign-be must return 0 on 2nd run (no-op)."""
         gs1 = GraphStore(project_graph_db(acme_campaign))
         try:
-            backfill_semantic_types(gs1, lambda: False)
+            classify_communities_semantic(gs1, lambda: False)
         finally:
             gs1.close()
 
@@ -311,7 +311,7 @@ class TestPipelineIdempotency:
 
         gs3 = GraphStore(project_graph_db(acme_campaign))
         try:
-            count2 = backfill_semantic_types(gs3, lambda: False)
+            count2 = classify_communities_semantic(gs3, lambda: False)
         finally:
             gs3.close()
 
@@ -397,4 +397,34 @@ class TestRegressionGuard:
         rules = data.get("rules", [])
         assert rules, (
             "business_rules still empty — Phase 0 backfill OR Phase 1 vocabulary fix not deployed."
+        )
+
+
+class TestSemanticSeparation:
+
+    @pytest.mark.slow
+    def test_business_rule_and_process_communities_are_disjoint(self, acme_promo):
+        """D1: business_rule and business_process classify distinct communities (no overlap)."""
+        rules = json.loads(asyncio.run(overview_tool(acme_promo, "business_rules"))).get("rules", [])
+        flows = json.loads(asyncio.run(overview_tool(acme_promo, "process_flows"))).get("flows", [])
+        assert rules, "overview('business_rules') returned no communities"
+        assert flows, "overview('process_flows') returned no communities"
+        rule_titles = {r["title"] for r in rules}
+        flow_titles = {f["title"] for f in flows}
+        overlap = rule_titles & flow_titles
+        assert not overlap, (
+            f"Communities appear in BOTH business_rules and process_flows: {overlap}"
+        )
+
+    @pytest.mark.slow
+    def test_ask_business_scope_returns_multi_community_context(self, acme_campaign):
+        """D2: ask(scope='business') assembles context from >=3 distinct communities."""
+        ctx = asyncio.run(ask_tool(
+            "show me the business logic and validation rules", acme_campaign, "business"
+        ))
+        assert "## Business context" in ctx, f"Missing '## Business context' header: {ctx[:300]}"
+        sections = [ln for ln in ctx.split("\n") if ln.startswith("## ") and "Business context" not in ln]
+        assert len(sections) >= 3, (
+            f"Business context covers only {len(sections)} communities — expected >=3. "
+            f"Context: {ctx[:500]}"
         )

@@ -72,6 +72,7 @@ def _open(db_path: Path) -> sqlite3.Connection:
 
 class GraphStore:
     def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
         self._con = _open(db_path)
 
     @property
