@@ -93,7 +93,12 @@ linked trees.
 4. Enrich L2 communities with NULL summary.
 5. **Classify `semantic_type`** for new/unclassified L1 communities
    (`classify_communities_semantic`, `reclassify_all=False`).
-6. `build_wiki(gs, wiki_dir)`.
+6. `build_wiki(gs, wiki_dir)` — rich bundle: type-grouped `index.md`, deterministic
+   `community_{id}.md` (reused summary + root-relative source citations + edge-drawn mermaid),
+   `domain_{id}.md` (DeepSeek narrative, templated fallback). No GPU; only L2 narrative is cloud.
+7. `build_federated_index(project_path)` + regen of any owning root — writes the federated root's
+   `federation.md` (aggregation of each member's own graph.db; no cross-repo edges, HR4). No-op
+   for standalone projects. (See Part 2 §13b HR13.)
 
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
 `semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.

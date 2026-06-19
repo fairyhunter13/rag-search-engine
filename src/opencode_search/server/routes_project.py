@@ -20,13 +20,37 @@ async def _api_wiki(request: Request) -> JSONResponse:
 
 async def _api_wiki_page(request: Request) -> JSONResponse:
     project = request.query_params.get("project", "")
-    page = request.query_params.get("page", "")
+    # The dashboard sends `name`; accept either to avoid a silent 400 (page/name drift).
+    page = request.query_params.get("page", "") or request.query_params.get("name", "")
     if not project or not page:
         return JSONResponse({"error": "project and page required"}, status_code=400)
     p = project_wiki_dir(project) / f"{page}.md"
     if not p.exists():
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse({"page": page, "content": p.read_text()})
+
+
+async def _api_wiki_export(request: Request) -> JSONResponse:
+    """Bundle the whole wiki into one artifact. ?format=markdown (default) | json.
+
+    markdown: index first, then a table of contents, then every page concatenated under an
+    anchor heading. json: {pages: [{name, content}]}. Pure string assembly over the *.md files.
+    """
+    project = request.query_params.get("project", "")
+    fmt = request.query_params.get("format", "markdown")
+    if not project:
+        return JSONResponse({"error": "project required"}, status_code=400)
+    wiki_dir = project_wiki_dir(project)
+    paths = sorted(wiki_dir.glob("*.md")) if wiki_dir.exists() else []
+    # index first, federation second, then the rest (stable, readable order).
+    order = {"index": 0, "federation": 1}
+    paths.sort(key=lambda p: (order.get(p.stem, 2), p.stem))
+    if fmt == "json":
+        return JSONResponse({"pages": [{"name": p.stem, "content": p.read_text()} for p in paths]})
+    toc = "\n".join(f"- [{p.stem}](#{p.stem})" for p in paths)
+    body = "\n\n".join(f'<a id="{p.stem}"></a>\n\n{p.read_text()}' for p in paths)
+    bundle = f"# Wiki Export\n\n## Contents\n\n{toc}\n\n---\n\n{body}"
+    return JSONResponse({"format": "markdown", "pages": len(paths), "content": bundle})
 
 
 async def _api_wiki_lint(request: Request) -> JSONResponse:
@@ -75,6 +99,7 @@ async def _api_storage_health(request: Request) -> JSONResponse:
 def register(app) -> None:
     app.add_route("/api/wiki", _api_wiki, methods=["GET"])
     app.add_route("/api/wiki/page", _api_wiki_page, methods=["GET"])
+    app.add_route("/api/wiki/export", _api_wiki_export, methods=["GET"])
     app.add_route("/api/wiki_lint", _api_wiki_lint, methods=["GET"])
     app.add_route("/api/kb_health", _api_kb_health, methods=["GET"])
     app.add_route("/api/storage_health", _api_storage_health, methods=["GET"])

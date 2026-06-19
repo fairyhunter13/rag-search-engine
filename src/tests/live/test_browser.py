@@ -337,6 +337,18 @@ def test_wiki_lint_elements_attached(page: Page) -> None:
     expect(page.locator("#wiki-lint-count")).to_be_attached()
 
 
+def test_wiki_export_button_present_and_clickable(page: Page) -> None:
+    """P12.8c: #wiki-export-btn is in the wiki view and clicking it does not crash (Phase B)."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-wiki").click()
+    page.wait_for_timeout(1000)
+    btn = page.locator("#wiki-export-btn")
+    expect(btn).to_be_attached()
+    btn.click()  # triggers a markdown download (or a toast if empty); must not crash the view
+    page.wait_for_timeout(500)
+    expect(btn).to_be_attached()
+
+
 def test_graph_detail_present_after_load(page: Page) -> None:
     """P12.7: #graph-detail is present and non-empty after graph view loads."""
     page.goto(_DASH, wait_until="networkidle")
