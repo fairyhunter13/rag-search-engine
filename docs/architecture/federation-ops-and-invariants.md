@@ -78,8 +78,9 @@ test that proves it.
 │     ├─ _index_files()   → incremental VECTOR re-embed    │
 │     └─ _enrich_project() → KB build, 45s/project debounce│
 │ _index_project = chunk+embed → symbols → edges → L1      │
-│ _enrich_project = enrich L1 → build_hierarchy → L2       │
-│                  → build_wiki   (GPU-only, CPU fatal)    │
+│ _enrich_project = enrich L1+L2 (local qwen3, think=F)    │
+│   → classify semantic_type (cloud DeepSeek)              │
+│   → build_wiki   (embeddings GPU-only, CPU fatal)        │
 └────────────────────────────────────────────────────────┘
 kb_state: indexing → searchable → enriching → ready
           (no vec)   (vec,l1=0)  (0<pct<95)  (l1≥95,l2=100)
@@ -98,7 +99,9 @@ kb_state: indexing → searchable → enriching → ready
 | **HR7** | `kb_state` lifecycle: `indexing → searchable → enriching → ready`; `ready` iff `enriched_pct ≥ 95 AND l2_enriched_pct == 100`. Federated entity = worst-of members. |
 | **HR8** | Two-stage retrieval at query time: Stage 1 = bi-encoder vector search (`sqlite-vec`); Stage 2 = cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU). Both AXIS A (code chunks) and AXIS B (community summaries) are reranked. Results ordered by `rerank_score`, never the bare vector `score`. Reranking never runs at index/KB-build time. |
 | **HR9** | MCP query actions (`search`/`ask`/`graph`/`overview`) perform ONLY embedding + reranking — no generative LLM (cloud or local). `ask` → `compose_answer` = assembled context; generation is delegated to the calling agent (June 2026 MCP best practice). |
-| **HR10** | Dashboard chat (`POST /api/chat_stream`) uses codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback on usage-limit, error, **or empty** response (fresh request, not a mid-stream switch). No ollama in the chat path. Dashboard-only: not wired to any MCP tool. |
+| **HR10** | Dashboard chat (`POST /api/chat_stream`) uses **claude-haiku-4-5** via the Claude Code CLI (`claude -p --model`). **Codex support removed** — no codex, no ollama, no deepseek in the chat path. Dashboard-only: not wired to any MCP tool. |
+| **HR11** | `semantic_type` is assigned by **direct LLM classification (cloud DeepSeek `deepseek-chat`)** over title+summary (batch-20), local ollama as fallback. The daemon classifies only new/unclassified communities (`reclassify_all=False`) → never re-labels settled ones (no churn). A `<3`-member community cannot be `business_process`/`business_rule` (structural guard → `feature`). No embeddings/prototypes in classification. |
+| **HR12** | The build-path **local LLM is never idle-resident-spinning**: every `graph/llm.py:chat()` call sends `think=False` + bounded `num_predict` so qwen3 cannot emit unbounded `<think>` output that truncates at the context limit and busy-spins (#13461). Idle daemon keeps no LLM core pinned; the model unloads at keep_alive idle. (GPU-max / CPU-RAM-min.) |
 
 1. **No inlining** — external symlinked sub-repos are never indexed into the root
    (`federation_mode=True`); indexed only as independent members.
@@ -122,8 +125,8 @@ kb_state: indexing → searchable → enriching → ready
 11. **Both retrieval axes are cross-encoder-ranked** — AXIS A (code chunks) and AXIS B
     (community/architecture context) both pass through `jina-reranker-v1-turbo-en` at
     query time before the context is assembled. (≡ HR8.)
-12. **Dashboard chat uses the ordered fallback chain** — codex/gpt-5.4-mini → claude-haiku-4-5
-    on usage-limit, error, or empty response; never ollama. (≡ HR10.)
+12. **Dashboard chat uses claude-haiku-4-5** via the Claude Code CLI; **codex removed**; never
+    ollama/deepseek. (≡ HR10.)
 
 ## 14. Test coverage map
 

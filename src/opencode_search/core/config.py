@@ -30,9 +30,9 @@ LLM_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
 LLM_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
 LLM_CONCURRENCY = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", os.environ.get("OLLAMA_NUM_PARALLEL", "3")))
 
-# Dashboard chat ONLY — forbidden everywhere else
-QUERY_LLM_PROVIDER = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "codex")
-QUERY_LLM_MODEL = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "gpt-5.4-mini")
+# Dashboard chat ONLY — forbidden everywhere else. Claude Code (haiku) only; codex removed.
+QUERY_LLM_PROVIDER = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "claude")
+QUERY_LLM_MODEL = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "claude-haiku-4-5")
 QUERY_LLM_FALLBACK_MODEL = "claude-haiku-4-5"
 QUERY_LLM_NUM_CTX = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
 QUERY_LLM_TIMEOUT = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))

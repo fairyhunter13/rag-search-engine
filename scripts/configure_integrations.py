@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Configure all system integrations for opencode-search MCP tools.
 
-Writes/verifies system prompt blocks and MCP entries across all 7 config trees:
-  claude (main), claude-account1, claude-account2, codex, hermes,
-  opencode-default, opencode-personal.
+Writes/verifies system prompt blocks and MCP entries across the config trees:
+  claude (main), claude-account1, claude-account2, hermes,
+  opencode-default, opencode-personal.  (Codex support removed.)
 
 Usage:
     .venv/bin/python scripts/configure_integrations.py           # configure + verify
@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,7 +120,7 @@ def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
 
 
 # ---------------------------------------------------------------------------
-# AGENTS.md targets (codex, opencode-default, opencode-personal)
+# AGENTS.md targets (opencode-default, opencode-personal)
 # ---------------------------------------------------------------------------
 
 def _verify_agents_md(md_path: Path, label: str) -> ConfigResult:
@@ -206,56 +205,7 @@ def _repair_settings_json(settings_path: Path, dry_run: bool = False) -> ConfigR
                         message=f"Updated MCP entry: {settings_path}", path=str(settings_path), diff=diff)
 
 
-# ---------------------------------------------------------------------------
-# MCP entry repair: codex config.toml
-# ---------------------------------------------------------------------------
-
-def _verify_codex_toml(config_path: Path) -> ConfigResult:
-    label = "codex/config.toml"
-    if not config_path.exists():
-        return ConfigResult(tool=label, status="missing",
-                            message=f"codex config.toml not found: {config_path}", path=str(config_path))
-    text = config_path.read_text()
-    if "opencode-search" not in text:
-        return ConfigResult(tool=label, status="missing",
-                            message="opencode-search MCP entry not in codex config.toml", path=str(config_path))
-    if CANONICAL_MCP_URL not in text:
-        return ConfigResult(tool=label, status="missing",
-                            message="codex config.toml missing HTTP URL for opencode-search", path=str(config_path))
-    return ConfigResult(tool=label, status="already_ok",
-                        message="codex MCP entry in sync", path=str(config_path))
-
-
-def _repair_codex_toml(config_path: Path, dry_run: bool = False) -> ConfigResult:
-    label = "codex/config.toml"
-    old_text = config_path.read_text() if config_path.exists() else ""
-    mcp_block = (
-        "\n[mcp_servers.opencode-search]\n"
-        f'url = "{CANONICAL_MCP_URL}"\n'
-    )
-    import re
-    has_any = bool(re.search(r"\[mcp_servers\.opencode-search[^\]]*\]", old_text))
-    if has_any:
-        old_text_stripped = re.sub(
-            r"\n\[mcp_servers\.opencode-search[^\]]*\].*?(?=\n\[|\Z)",
-            "",
-            old_text,
-            flags=re.DOTALL,
-        )
-        new_text = old_text_stripped.rstrip() + mcp_block
-    else:
-        new_text = old_text.rstrip() + mcp_block
-    if old_text == new_text:
-        return ConfigResult(tool=label, status="already_ok",
-                            message="codex config.toml already in sync", path=str(config_path))
-    diff = _diff(old_text, new_text, str(config_path))
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would update {config_path}", path=str(config_path), diff=diff)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(new_text)
-    return ConfigResult(tool=label, status="configured",
-                        message=f"Updated codex MCP entry: {config_path}", path=str(config_path), diff=diff)
+# (Codex MCP-client integration removed — opencode-search no longer configures codex.)
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +476,6 @@ _SYSTEM_PROMPT_TARGETS: list[tuple[str, Path, str]] = [
     ("claude", _H / ".claude" / "CLAUDE.md", "claude(main)/CLAUDE.md"),
     ("claude", _H / ".claude-account1" / "CLAUDE.md", "claude(account1)/CLAUDE.md"),
     ("claude", _H / ".claude-account2" / "CLAUDE.md", "claude(account2)/CLAUDE.md"),
-    ("agents", _H / ".codex" / "AGENTS.md", "codex/AGENTS.md"),
     ("agents", _H / ".config" / "opencode" / "AGENTS.md", "opencode-default/AGENTS.md"),
     ("agents", _H / ".config" / "opencode-personal" / "opencode" / "AGENTS.md", "opencode-personal/AGENTS.md"),
     ("hermes_agent", _H / ".hermes" / "config.yaml", "hermes/agent_system_prompt"),
@@ -536,7 +485,6 @@ _MCP_TARGETS: list[tuple[str, Path, str]] = [
     ("settings", _H / ".claude" / "settings.json", "claude(main)/settings.json"),
     ("settings", _H / ".claude-account1" / "settings.json", "claude(account1)/settings.json"),
     ("settings", _H / ".claude-account2" / "settings.json", "claude(account2)/settings.json"),
-    ("codex", _H / ".codex" / "config.toml", "codex/config.toml"),
     ("hermes", _H / ".hermes" / "config.yaml", "hermes/config.yaml"),
     ("opencode", _H / ".config" / "opencode" / "opencode.jsonc", "opencode-default/opencode.jsonc"),
     ("opencode", _H / ".config" / "opencode-personal" / "opencode" / "opencode.jsonc",
@@ -555,8 +503,6 @@ def verify_all() -> list[ConfigResult]:
     for kind, path, label in _MCP_TARGETS:
         if kind == "settings":
             results.append(_verify_settings_json(path))
-        elif kind == "codex":
-            results.append(_verify_codex_toml(path))
         elif kind == "hermes":
             results.append(_verify_hermes_yaml(path))
         elif kind == "opencode":
@@ -577,8 +523,6 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
     for kind, path, label in _MCP_TARGETS:
         if kind == "settings":
             results.append(_repair_settings_json(path, dry_run=dry_run))
-        elif kind == "codex":
-            results.append(_repair_codex_toml(path, dry_run=dry_run))
         elif kind == "hermes":
             results.append(_repair_hermes_yaml(path, dry_run=dry_run))
         elif kind == "opencode":

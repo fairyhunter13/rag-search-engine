@@ -568,8 +568,8 @@ def test_e5_mcp_query_path_no_generation():
 
 
 @pytest.mark.slow
-def test_e6_dashboard_chat_codex_haiku_only(live_client):
-    """E6/HR10: POST /api/chat_stream streams tokens via codex→haiku, no ollama."""
+def test_e6_dashboard_chat_haiku_only(live_client):
+    """E6/HR10: POST /api/chat_stream streams tokens via claude-haiku-4-5 only (codex removed, no ollama)."""
     r = live_client.post(
         "/api/chat_stream",
         json={"query": "What is the reranker used in this engine?"},
@@ -598,9 +598,12 @@ def test_e6_dashboard_chat_codex_haiku_only(live_client):
     src = (Path(__file__).parents[2] / "opencode_search" / "server" / "routes_chat.py").read_text()
     assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
     assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat"
-    assert "--skip-git-repo-check" in src, "E6 guard: codex invocation must have --skip-git-repo-check"
-    assert "stdin=asyncio.subprocess.DEVNULL" in src, "E6 guard: codex invocation must suppress stdin"
-    assert "timeout=20" in src, "E6 guard: codex timeout must be >=20s (was 8s before fix)"
+    assert '"codex"' not in src and "shutil.which(\"codex\")" not in src, (
+        "E6 guard: codex support must be removed from routes_chat.py"
+    )
+    assert "--model" in src and "_CLAUDE" in src, (
+        "E6 guard: chat must invoke the claude CLI with --model (haiku-only)"
+    )
 
 
 @pytest.mark.slow

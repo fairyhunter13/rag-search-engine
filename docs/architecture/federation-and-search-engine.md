@@ -33,8 +33,10 @@ an independent unit.
   `path, enabled, indexed_at, file_count, chunk_count, federation: list[str], …`.
 - **Vector store**: sqlite-vec flat `vec0`, `FLOAT[768]`, exact recall.
 - **Graph store**: SQLite `symbols / edges (caller_sid, callee_sid) / communities`.
-- **Enrichment LLM**: `ollama qwen3-enrich:1.7b` (GPU-local). The query LLM
-  (`codex/gpt-5.4-mini`) is **dashboard-chat only** — never called by MCP tools.
+- **Enrichment LLM**: local `ollama qwen3-enrich:1.7b` (summaries, GPU, `think=False`) + cloud
+  **DeepSeek** `deepseek-chat` (semantic-type classification + Phase B wiki narrative). The query
+  LLM (**claude-haiku-4-5** via Claude Code CLI) is **dashboard-chat only** — never called by MCP
+  tools. **Codex support removed.**
 
 ## 4. Federation discovery (`daemon/federation.py:discover_members`)
 
@@ -89,9 +91,25 @@ linked trees.
 2. Enrich L1 communities with NULL summary (LLM; thermal guard at 80 °C).
 3. If L2 absent: `build_hierarchy` (coarse Leiden, √L1 target).
 4. Enrich L2 communities with NULL summary.
-5. `build_wiki(gs, wiki_dir)`.
+5. **Classify `semantic_type`** for new/unclassified L1 communities
+   (`classify_communities_semantic`, `reclassify_all=False`).
+6. `build_wiki(gs, wiki_dir)`.
 
-All enrichment is **idempotent and gated on `summary IS NULL`**.
+All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
+`semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.
+
+### 8a. LLM lanes within enrichment (resource-critical)
+
+- **Summaries + symbol intents** (steps 2, 4): local `ollama qwen3-enrich:1.7b` via
+  `graph/llm.py:chat(think=False)`. **`think=False` is mandatory** — qwen3 is a thinking model;
+  its `<think>` output otherwise grows into the 4096 context → Ollama truncates → `llama-server`
+  busy-spins a core at ~84% indefinitely (Ollama [#13461](https://github.com/ollama/ollama/issues/13461)).
+  With the flag: clean bounded output, ~2–10% idle CPU, model unloads at keep_alive idle.
+- **Semantic-type classification** (step 5): cloud **DeepSeek** (`deepseek-chat`) over
+  title+summary, batch-20 (`_classify_batch` → `_kb_chat`, DeepSeek primary / Ollama fallback).
+  A 1.7B local model + cosine-to-centroid mislabeled ~61% of business_rules as test suites;
+  DeepSeek separates test-of-business from business logic. Structural guard: a `<3`-member
+  community cannot be a multi-step business_process/rule (demoted to `feature`).
 
 ## 9. Query / read path (`server/mcp.py`)
 
@@ -128,12 +146,15 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | Lane | Surface | LLM(s) | Notes |
 |------|---------|---------|-------|
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
-| **B — Dashboard chat** | `POST /api/chat_stream` | codex/gpt-5.4-mini → claude-haiku-4-5 | Primary: codex; fallback on usage-limit, error, OR empty → haiku (fresh request); no ollama |
-| **D — KB enrichment** | Background sweep | ollama qwen3-enrich:1.7b | Write path only; never runs at query time |
+| **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** (Claude Code CLI) | Codex removed — haiku-only; no ollama, no deepseek |
+| **D — KB summaries** | Background sweep (`enrich_community`/`_l2`/intents) | local ollama qwen3-enrich:1.7b via `chat(think=False)` | Write path only; `think=False` mandatory (no idle spin, #13461); unloads at idle |
+| **E — KB classification + wiki narrative** | Background sweep (`classify_communities_semantic`; Phase B wiki) | cloud DeepSeek `deepseek-chat` (Ollama fallback) | Remote, bounded; key from env / `~/.bash_env`; never on the query path; provides accuracy the 1.7B model lacks |
 
-The cloud/query generative LLM (codex→haiku) is reached **only** via the dashboard chat box.
-The local generative LLM (ollama) is confined to background KB enrichment. MCP query actions
-and `POST /api/ask` never generate text — the caller's own LLM does synthesis.
+The query generative LLM (**claude-haiku-4-5** via the Claude Code CLI) is reached **only** via the
+dashboard chat box. Background KB enrichment uses **local ollama for summaries** (Lane D) and **cloud
+DeepSeek for classification + Phase B wiki narrative** (Lane E) — both write-path only. MCP query
+actions and `POST /api/ask` never generate text. **"GPU-only" (HR6) governs embeddings + reranking +
+the local summary LLM**; the remote DeepSeek lane is not a CPU-fallback and never runs at query time.
 
 ## 16. Per-project config & federation inheritance
 

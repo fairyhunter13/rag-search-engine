@@ -1,4 +1,4 @@
-"""chat_stream (SSE) route — codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback."""
+"""chat_stream (SSE) route — Claude Code (claude-haiku-4-5) only; codex support removed."""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +13,6 @@ from opencode_search.core.config import (
     QUERY_LLM_MODEL,
 )
 
-_CODEX = shutil.which("codex")
 _CLAUDE = shutil.which("claude")
 
 
@@ -57,27 +56,12 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 
 
 async def _stream_answer(prompt: str, model_used: list[str]):
-    """Yield text chunks: codex/gpt-5.4-mini primary → claude-haiku-4-5 fallback."""
-    if _CODEX:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                _CODEX, "exec", "-m", QUERY_LLM_MODEL,
-                "--ephemeral", "--skip-git-repo-check", prompt,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-            if stdout.strip():
-                model_used[0] = QUERY_LLM_MODEL
-                yield stdout.decode()
-                return
-        except (TimeoutError, OSError):
-            pass
+    """Yield text chunks from claude-haiku-4-5 (Claude Code CLI). Codex support removed."""
     if not _CLAUDE:
         raise RuntimeError("claude CLI not found — install Claude Code")
-    model_used[0] = QUERY_LLM_FALLBACK_MODEL
+    model_used[0] = QUERY_LLM_MODEL  # claude-haiku-4-5
     proc = await asyncio.create_subprocess_exec(
-        _CLAUDE, "-p", "--model", QUERY_LLM_FALLBACK_MODEL, prompt,
+        _CLAUDE, "-p", "--model", QUERY_LLM_MODEL, prompt,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
     )
     while chunk := await proc.stdout.read(512):
