@@ -2,11 +2,7 @@
 from __future__ import annotations
 
 import json
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-
-import numpy as np
 
 from opencode_search.graph.llm import chat, deepseek_chat, deepseek_key
 from opencode_search.graph.store import GraphStore
@@ -30,19 +26,19 @@ Reply ONLY with JSON: {{"title": "<short title>", "summary": "<2 sentences>", \
 Hint: if orchestrating multi-step workflows -> business_process; if enforcing constraints/validation -> business_rule."""
 
 # ---------------------------------------------------------------------------
-# Dynamic semantic type classification — Prototypical Networks (June 2026)
-# No static description text, no keywords, no vocabulary assumptions.
-# Prototype vectors are derived from ACTUAL community embeddings (LLM-labeled seeds).
+# Semantic type classification — direct LLM (DeepSeek) over title + summary.
+# Fully semantic (LLM world knowledge); no keywords, no embeddings, no prototypes.
+# DeepSeek separates test-of-business from business logic — which a 1.7B model + cosine
+# similarity to data-derived centroids could not (the embedding of "Test Suite for
+# Campaign Management" sits next to the business centroid). Persisted in
+# communities.semantic_type; the daemon classifies only new/unclassified communities
+# (reclassify_all=False) so it never churns.
 # ---------------------------------------------------------------------------
 
 _TYPE_ORDER: list[str] = [
     "business_process", "business_rule", "feature",
     "utility", "infrastructure", "domain", "test",
 ]
-_EMBED_CONF_THRESHOLD: float = float(os.getenv("OSE_EMBED_CONF_THRESHOLD", "0.03"))
-_MMR_SEED_N: int = 70        # diverse seeds via MMR (≈10 per type × 7 types)
-_MIN_SEEDS_PER_TYPE: int = 3  # min LLM-labeled examples per type to trust its centroid
-_MIN_PROTO_TYPES: int = 3     # min distinct types covered to use prototypes (else pure-LLM)
 
 # Minimal prompt — type names + one contrastive note; no vocabulary definitions.
 _BACKFILL_BATCH_PROMPT = """\
@@ -161,178 +157,53 @@ def _community_rich_text(
     return "\n".join(p for p in parts if p)
 
 
-# ---------------------------------------------------------------------------
-# Prototype persistence + MMR seed selection
-# ---------------------------------------------------------------------------
-
-def _prototypes_path(store: GraphStore) -> Path:
-    return Path(str(store._db_path)).parent / "type_prototypes.npz"
-
-
-def _load_stored_prototypes(store: GraphStore) -> tuple[np.ndarray, list[str]] | None:
-    """Return (centroids (K,768), present_types[K]) or None. K may be < 7 (partial coverage)."""
-    p = _prototypes_path(store)
-    if not p.exists():
-        return None
-    data = np.load(str(p), allow_pickle=False)
-    return data["vecs"], [str(t) for t in data["types"]]
-
-
-def _save_prototypes(store: GraphStore, proto_vecs: np.ndarray, types: list[str]) -> None:
-    np.savez(str(_prototypes_path(store)), vecs=proto_vecs, types=np.array(types))
-
-
-def _select_diverse_seeds_mmr(vecs: np.ndarray, n: int) -> list[int]:
-    """Select n indices maximally covering the embedding space (no keywords, pure geometry).
-
-    Maximum Marginal Relevance: greedily pick each next point farthest from all
-    already-selected points (cosine distance). SIGIR '25: improves few-shot ICL in 70% of settings.
-    """
-    n = min(n, len(vecs))
-    centroid = vecs.mean(axis=0, keepdims=True)
-    dist_to_centroid = 1.0 - (vecs @ centroid.T).squeeze()
-    selected = [int(np.argmin(dist_to_centroid))]
-    selected_set = set(selected)
-    while len(selected) < n:
-        sel_vecs = vecs[selected]
-        max_sim = (vecs @ sel_vecs.T).max(axis=1)
-        dist = 1.0 - max_sim
-        for idx in selected_set:
-            dist[idx] = -1.0
-        next_idx = int(np.argmax(dist))
-        selected.append(next_idx)
-        selected_set.add(next_idx)
-    return selected
-
-
-def _build_dynamic_prototypes(
-    store: GraphStore, rows: list, all_vecs: np.ndarray, thermal_guard_fn=None,
-) -> tuple[np.ndarray, list[str]] | None:
-    """Build per-type centroid prototypes from LLM-labeled diverse seed communities.
-
-    Returns (centroids (K,768) L2-normalised, present_types[K]) for the types the seeds
-    actually cover (K = count with ≥_MIN_SEEDS_PER_TYPE labels), or None if fewer than
-    _MIN_PROTO_TYPES types are covered. Real repos rarely span all 7 types, so requiring
-    all 7 would abandon the prototype path and fall back to pure-LLM for everything.
-    Prototypes come from ACTUAL community embeddings, never from human-authored text.
-    """
-    import time
-    seed_indices = _select_diverse_seeds_mmr(all_vecs, n=_MMR_SEED_N)
-    seed_rows = [(rows[i][0], rows[i][1] or "", rows[i][2] or "") for i in seed_indices]
-    batches = [seed_rows[i: i + 20] for i in range(0, len(seed_rows), 20)]
-    seed_labels: dict[int, str] = {}
-    valid = frozenset(_TYPE_ORDER)
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [pool.submit(_classify_batch, b) for b in batches]
-        for future in as_completed(futures):
-            if thermal_guard_fn and thermal_guard_fn():
-                time.sleep(3)
-            try:
-                for cid, stype in future.result():
-                    if stype in valid:
-                        seed_labels[cid] = stype
-            except Exception:
-                pass
-    cid_to_idx = {rows[i][0]: i for i in seed_indices}
-    type_vecs: dict[str, list] = {t: [] for t in _TYPE_ORDER}
-    for cid, stype in seed_labels.items():
-        if cid in cid_to_idx:
-            type_vecs[stype].append(all_vecs[cid_to_idx[cid]])
-    present = [t for t in _TYPE_ORDER if len(type_vecs[t]) >= _MIN_SEEDS_PER_TYPE]
-    if len(present) < _MIN_PROTO_TYPES:
-        return None
-    centroids = []
-    for stype in present:
-        c = np.stack(type_vecs[stype]).mean(axis=0)
-        centroids.append(c / (np.linalg.norm(c) + 1e-8))
-    return np.stack(centroids), present
-
-
-def _classify_by_prototypes(
-    all_vecs: np.ndarray,
-    proto_vecs: np.ndarray,
-    present_types: list[str],
-) -> list[tuple[str, float]]:
-    """Cosine similarity to data-derived centroid prototypes → (type, confidence_margin).
-
-    present_types[i] labels row i of proto_vecs (K≥_MIN_PROTO_TYPES rows; may be < 7).
-    Confidence = top1−top2 margin among the present types.
-    """
-    scores = all_vecs @ proto_vecs.T          # (N, K)
-    top1_idx = scores.argmax(axis=1)
-    sorted_sc = np.sort(scores, axis=1)
-    confidence = sorted_sc[:, -1] - sorted_sc[:, -2]
-    return [
-        (present_types[int(i)], float(c))
-        for i, c in zip(top1_idx, confidence, strict=False)
-    ]
-
-
 def classify_communities_semantic(
     store: GraphStore, thermal_guard_fn=None, *, reclassify_all: bool = False,
 ) -> int:
-    """Fully dynamic semantic classification. Returns count of type changes."""
-    import time
+    """Classify L1 communities into semantic types via direct LLM (DeepSeek). No embeddings.
 
-    from opencode_search.embed.embedder import get_embedder
+    Returns count of type changes. reclassify_all=True re-labels every L1 community
+    (one-time migration / forced refresh). reclassify_all=False (daemon default) labels only
+    NULL/non-canonical rows, so once a community is classified it is never re-run → stable.
+    """
+    import time
 
     valid = frozenset(_TYPE_ORDER)
     if reclassify_all:
         rows = store._con.execute(
-            "SELECT c.id, c.title, c.summary, c.member_count, c.semantic_type, p.title "
-            "FROM communities c LEFT JOIN communities p ON c.parent_id=p.id "
-            "WHERE c.level=1 AND c.summary IS NOT NULL AND c.summary!=''"
+            "SELECT id, title, summary, semantic_type, member_count FROM communities "
+            "WHERE level=1 AND summary IS NOT NULL AND summary!=''"
         ).fetchall()
     else:
         rows = store._con.execute(
-            "SELECT c.id, c.title, c.summary, c.member_count, c.semantic_type, p.title "
-            "FROM communities c LEFT JOIN communities p ON c.parent_id=p.id "
-            "WHERE c.level=1 AND c.summary IS NOT NULL AND c.summary!='' "
-            f"AND (c.semantic_type IS NULL OR c.semantic_type NOT IN "
+            "SELECT id, title, summary, semantic_type, member_count FROM communities "
+            "WHERE level=1 AND summary IS NOT NULL AND summary!='' "
+            f"AND (semantic_type IS NULL OR semantic_type NOT IN "
             f"({','.join('?' * len(valid))}))",
             tuple(valid),
         ).fetchall()
     if not rows:
         return 0
-    if thermal_guard_fn and thermal_guard_fn():
-        time.sleep(3)
-    texts = [
-        _community_rich_text(store, r[0], r[1] or "", r[2] or "", r[3] or 0, r[5])
-        for r in rows
-    ]
-    all_vecs = get_embedder().embed(texts)
-    proto = _load_stored_prototypes(store)
-    if proto is None:
-        proto = _build_dynamic_prototypes(store, rows, all_vecs, thermal_guard_fn)
-        if proto is not None:
-            _save_prototypes(store, proto[0], proto[1])
-    if proto is not None:
-        results = _classify_by_prototypes(all_vecs, proto[0], proto[1])
-        high_conf = [
-            (rows[i][0], t) for i, (t, c) in enumerate(results) if c >= _EMBED_CONF_THRESHOLD
-        ]
-        llm_pending = [
-            (rows[i][0], rows[i][1] or "", rows[i][2] or "")
-            for i, (_, c) in enumerate(results) if c < _EMBED_CONF_THRESHOLD
-        ]
-    else:
-        high_conf = []
-        llm_pending = [(r[0], r[1] or "", r[2] or "") for r in rows]
-    llm_results: list[tuple[int, str]] = []
-    batches = [llm_pending[i: i + 20] for i in range(0, len(llm_pending), 20)]
+    member_count = {r[0]: (r[4] or 0) for r in rows}
+    pending = [(r[0], r[1] or "", r[2] or "") for r in rows]
+    results: list[tuple[int, str]] = []
+    batches = [pending[i: i + 20] for i in range(0, len(pending), 20)]
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = [pool.submit(_classify_batch, b) for b in batches]
         for future in as_completed(futures):
             if thermal_guard_fn and thermal_guard_fn():
                 time.sleep(3)
             try:  # noqa: SIM105
-                llm_results.extend(future.result())
+                results.extend(future.result())
             except Exception:
                 pass
-    proposed = dict(high_conf + llm_results)
-    current = {r[0]: r[4] for r in rows}
+    current = {r[0]: r[3] for r in rows}
     updates = 0
-    for cid, new_type in proposed.items():
+    for cid, new_type in results:
+        # Structural guard: a multi-step business process / enforced rule spans >1 symbol;
+        # a degenerate (<3-member) community cannot be one — demote to feature.
+        if member_count.get(cid, 0) < 3 and new_type in ("business_process", "business_rule"):
+            new_type = "feature"
         if new_type != current.get(cid):
             store._con.execute("UPDATE communities SET semantic_type=? WHERE id=?", (new_type, cid))
             updates += 1

@@ -251,7 +251,9 @@ def _enrich_project(project_path: str) -> None:
             "WHERE level>=2 AND (summary IS NULL OR summary='')"
         )
         gs.commit()
-        classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=True)
+        # Daemon: classify only new/unclassified communities (stable, no churn). The one-time
+        # migration of stale projects uses reclassify_all=True explicitly.
+        classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
