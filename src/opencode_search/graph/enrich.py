@@ -1,7 +1,9 @@
-"""LLM enrichment: symbol intent (batch 20/call) + community summary."""
+"""LLM enrichment: symbol intent (batch 20/call) + community summary + semantic type backfill."""
 from __future__ import annotations
 
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from opencode_search.graph.llm import chat
 from opencode_search.graph.store import GraphStore
@@ -21,7 +23,133 @@ _COMMUNITY_PROMPT = """\
 Summarize this code community in 2 sentences. Cover: purpose, main patterns.
 Members: {members}
 Reply ONLY with JSON: {{"title": "<short title>", "summary": "<2 sentences>", \
-"semantic_type": "<feature|utility|infrastructure|domain|test>"}}"""
+"semantic_type": "<business_process|business_rule|feature|utility|infrastructure|domain|test>"}}
+Hint: if orchestrating multi-step workflows -> business_process; if enforcing constraints/validation -> business_rule."""
+
+# ---------------------------------------------------------------------------
+# Semantic type backfill -- 3-stage pipeline (keyword -> batch LLM -> commit)
+# ---------------------------------------------------------------------------
+
+# test must be checked first -- mocks must not become business_process/rule
+_KEYWORD_ORDER = ["test", "business_process", "business_rule", "infrastructure", "domain", "utility"]
+
+_KEYWORD_PATTERNS: dict[str, re.Pattern] = {
+    "test": re.compile(r"\b(test|mock|stub|fake|fixture|assert|bench|suite)\b", re.I),
+    "business_process": re.compile(
+        r"\b(management|orchestration|process|pipeline|workflow|scheduling|"
+        r"dispatch|coordinator|fulfillment|lifecycle|queue)\b", re.I
+    ),
+    "business_rule": re.compile(
+        r"\b(validation|rule|guard|check|constraint|eligibility|clash|"
+        r"enforcement|policy|compliance|criteria|allowance)\b", re.I
+    ),
+    "infrastructure": re.compile(
+        r"\b(database|cache|http|grpc|client|repository|store|gateway|"
+        r"connection|pool|config|logging|tracing|metric|middleware)\b", re.I
+    ),
+    "domain": re.compile(r"\b(model|entity|proto|message|struct|enum|schema|type|dto|vo)\b", re.I),
+    "utility": re.compile(
+        r"\b(util|helper|format|convert|parse|encode|decode|transform|serializ)\b", re.I
+    ),
+}
+
+_VALID_TYPES = frozenset(
+    ("business_process", "business_rule", "feature", "utility", "infrastructure", "domain", "test")
+)
+
+
+def classify_by_keyword(title: str) -> str | None:
+    """Return semantic_type from title keywords alone, or None if ambiguous."""
+    for type_name in _KEYWORD_ORDER:
+        if _KEYWORD_PATTERNS[type_name].search(title):
+            return type_name
+    return None
+
+
+_BACKFILL_BATCH_PROMPT = """\
+Classify each community into exactly ONE semantic_type.
+Types: business_process|business_rule|feature|utility|infrastructure|domain|test
+Examples: "Clash Detection"->business_rule, "Management System"->business_process, "Mock Service"->test
+Communities: {items}
+Reply ONLY with JSON array: [{{"id":<N>,"semantic_type":"<type>"}}]"""
+
+
+def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
+    """Send one LLM call to classify <=10 communities. Returns [(cid, semantic_type)]."""
+    items_str = json.dumps([
+        {"id": cid, "title": title, "summary": (summary or "")[:120]}
+        for cid, title, summary in batch
+    ], ensure_ascii=False)
+    try:
+        raw = chat(_BACKFILL_BATCH_PROMPT.format(items=items_str))
+        parsed = json.loads(raw.strip())
+        return [
+            (int(item["id"]),
+             item.get("semantic_type", "feature")
+             if item.get("semantic_type", "") in _VALID_TYPES else "feature")
+            for item in parsed
+        ]
+    except Exception:
+        return [(cid, "feature") for cid, _, _ in batch]
+
+
+def upgrade_to_business_types(store: GraphStore) -> int:
+    """Keyword-only upgrade: reclassify existing (old) types → business_process/rule where title matches.
+
+    Targets communities already classified with the pre-expansion vocabulary (test/domain/utility
+    /feature/infra) that should be business_process or business_rule. Idempotent: returns 0 on 2nd run.
+    """
+    rows = store._con.execute(
+        "SELECT id, title FROM communities WHERE level=1 "
+        "AND semantic_type NOT IN ('business_process', 'business_rule', 'unknown')"
+        "AND semantic_type IS NOT NULL AND title IS NOT NULL"
+    ).fetchall()
+    count = 0
+    for cid, title in rows:
+        new_type = classify_by_keyword(title or "")
+        if new_type in ("business_process", "business_rule"):
+            store._con.execute("UPDATE communities SET semantic_type=? WHERE id=?", (new_type, cid))
+            count += 1
+    if count:
+        store.commit()
+    return count
+
+
+def backfill_semantic_types(store: GraphStore, thermal_guard_fn=None) -> int:
+    """Classify L1 communities with summary but no semantic_type. Idempotent: returns 0 on 2nd run."""
+    import time
+    rows = store._con.execute(
+        "SELECT id, title, summary, member_count FROM communities "
+        "WHERE level=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
+    ).fetchall()
+    if not rows:
+        return 0
+    keyword_updates: list[tuple[int, str]] = []
+    llm_pending: list[tuple[int, str, str]] = []
+    for cid, title, summary, mc in rows:
+        title = title or ""
+        if (mc is not None and mc < 3) or len(title) < 10:
+            keyword_updates.append((cid, "unknown"))
+        elif (t := classify_by_keyword(title)) is not None:
+            keyword_updates.append((cid, t))
+        else:
+            llm_pending.append((cid, title, summary or ""))
+    for cid, stype in keyword_updates:
+        store._con.execute("UPDATE communities SET semantic_type=? WHERE id=?", (stype, cid))
+    batches = [llm_pending[i : i + 10] for i in range(0, len(llm_pending), 10)]
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(_classify_batch, b) for b in batches]
+        for future in as_completed(futures):
+            if thermal_guard_fn is not None and thermal_guard_fn():
+                time.sleep(3)
+            try:
+                for cid, stype in future.result():
+                    store._con.execute(
+                        "UPDATE communities SET semantic_type=? WHERE id=?", (stype, cid))
+            except Exception:
+                pass
+    store.commit()
+    return len(rows)
 
 
 def enrich_community_l2(store: GraphStore, community_id: int) -> None:
