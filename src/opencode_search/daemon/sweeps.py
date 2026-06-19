@@ -209,7 +209,12 @@ def _enrich_project(project_path: str) -> None:
 
     from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
     from opencode_search.core.gpu import gpu_temp_c
-    from opencode_search.graph.enrich import enrich_community, enrich_community_l2
+    from opencode_search.graph.enrich import (
+        backfill_semantic_types,
+        enrich_community,
+        enrich_community_l2,
+        upgrade_to_business_types,
+    )
     from opencode_search.graph.store import GraphStore
     from opencode_search.kb.hierarchy import build_hierarchy
     from opencode_search.kb.wiki import build_wiki
@@ -247,6 +252,8 @@ def _enrich_project(project_path: str) -> None:
             "WHERE level>=2 AND (summary IS NULL OR summary='')"
         )
         gs.commit()
+        backfill_semantic_types(gs, lambda: gpu_temp_c() > 78)
+        upgrade_to_business_types(gs)
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()

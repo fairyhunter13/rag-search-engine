@@ -191,11 +191,23 @@ def handle_overview(project_path: str, what: str) -> str:
                 rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,semantic_type FROM communities WHERE semantic_type IS NOT NULL").fetchall()]
                 return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows]})
             if what == "business_rules":
-                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title FROM communities WHERE semantic_type IN ('rule','constraint','validation')").fetchall()]
-                return json.dumps({"rules": [{"id": r[0], "title": r[1]} for r in rows]})
+                rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT id,title,summary,member_count FROM communities "
+                    "WHERE semantic_type='business_rule' ORDER BY member_count DESC"
+                ).fetchall()]
+                return json.dumps({"rules": [
+                    {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
+                    for r in rows
+                ]})
             if what == "process_flows":
-                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title FROM communities WHERE semantic_type IN ('workflow','process','flow')").fetchall()]
-                return json.dumps({"flows": [{"id": r[0], "title": r[1]} for r in rows]})
+                rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT id,title,summary,member_count FROM communities "
+                    "WHERE semantic_type='business_process' ORDER BY member_count DESC"
+                ).fetchall()]
+                return json.dumps({"flows": [
+                    {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
+                    for r in rows
+                ]})
             if what == "suggested_questions":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT title FROM communities WHERE title IS NOT NULL ORDER BY member_count DESC LIMIT 5"

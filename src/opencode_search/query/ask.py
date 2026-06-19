@@ -89,7 +89,7 @@ def _assemble_context(query: str, chunks: list[dict], stores: list, scope: str) 
         )
     if scope == "business":
         biz_ctx = _community_context(stores, limit=20,
-                                     semantic_types=("rule", "constraint", "feature", "workflow", "process"))[:_MAX_CTX]
+                                     semantic_types=("business_rule", "business_process", "feature"))[:_MAX_CTX]
         return f"## Business context\n{biz_ctx}\n\n## Code\n{chunk_ctx}"
     return chunk_ctx
 
