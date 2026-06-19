@@ -607,9 +607,13 @@ def test_e6_dashboard_chat_haiku_only(live_client):
 
 
 @pytest.mark.slow
-def test_e6b_chat_primary_model_is_codex(live_client):
-    """E6b/HR10: done.model must equal QUERY_LLM_MODEL (gpt-5.4-mini) — codex is primary, not haiku."""
-    from opencode_search.core.config import QUERY_LLM_MODEL
+def test_e6b_chat_model_is_haiku(live_client):
+    """E6b/HR10: done.model is claude-haiku-4-5 — the only chat model (codex removed).
+
+    Asserts the literal model the daemon serves, not config QUERY_LLM_MODEL (which a stray
+    OPENCODE_QUERY_LLM_MODEL env in the test process could shadow); the live daemon is the
+    source of truth and is pinned to claude-haiku-4-5 via its systemd drop-in.
+    """
     r = live_client.post(
         "/api/chat_stream",
         json={"query": "What is the MCP server name in this engine?"},
@@ -629,8 +633,8 @@ def test_e6b_chat_primary_model_is_codex(live_client):
             break
     r.close()
     assert done_evt is not None, "E6b: SSE never sent done:true"
-    assert done_evt.get("model") == QUERY_LLM_MODEL, (
-        f"E6b: codex must be primary; got {done_evt.get('model')!r}, want {QUERY_LLM_MODEL!r}"
+    assert done_evt.get("model") == "claude-haiku-4-5", (
+        f"E6b: chat model must be claude-haiku-4-5 (codex removed); got {done_evt.get('model')!r}"
     )
 
 
