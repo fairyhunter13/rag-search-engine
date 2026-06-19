@@ -113,6 +113,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "opencode_search/embed/embedder.py" = ["E402"]  # ONNX arena env must be set before fastembed import
+"tests/live/test_bpre_processes.py" = ["N802"]  # test method names use A1/B2 category codes (plan §A-H)
 
 [tool.mypy]
 python_version = "3.11"

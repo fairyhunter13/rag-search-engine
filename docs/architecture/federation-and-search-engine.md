@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-19 (codex removed → haiku-only chat HR10; direct-DeepSeek classifier HR11; `think=False` no-idle-spin HR12; LLM lanes split D/E in §8a/§9b).
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-20 (BPRE Phase D — process_graph.db + HR14 added; §8b; codex removed → haiku-only chat HR10; direct-DeepSeek classifier HR11; `think=False` no-idle-spin HR12; LLM lanes split D/E in §8a/§9b).
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -99,6 +99,11 @@ linked trees.
 7. `build_federated_index(project_path)` + regen of any owning root — writes the federated root's
    `federation.md` (aggregation of each member's own graph.db; no cross-repo edges, HR4). No-op
    for standalone projects. (See Part 2 §13b HR13.)
+8. `reconstruct_processes(root_path)` (Phase D BPRE) — runs ONLY for federation roots (≥2 members).
+   Writes `{index_dir}/process_graph.db` containing D2 entry points, D3 cross-service edges
+   (gRPC+Pub/Sub+HTTP), D4 process traces, D5 rules/state machines, D6 BPMN+mermaid+narrative.
+   **GPU-free** for D2-D4 + BPMN/mermaid; cloud DeepSeek for D5 rule text + D6 narrative only.
+   (See §8b and **HR14** below.)
 
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
 `semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.

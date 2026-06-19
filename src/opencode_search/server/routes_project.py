@@ -6,7 +6,12 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from opencode_search.core.config import project_graph_db, project_vector_db, project_wiki_dir
+from opencode_search.core.config import (
+    project_graph_db,
+    project_vector_db,
+    project_wiki_dir,
+    root_process_db,
+)
 
 
 async def _api_wiki(request: Request) -> JSONResponse:
@@ -96,6 +101,29 @@ async def _api_storage_health(request: Request) -> JSONResponse:
     return JSONResponse({"size_mb": round(mb, 1), "path": str(idx)})
 
 
+async def _api_process_bpmn(request: Request) -> JSONResponse:
+    """Return BPMN 2.0 XML for a single process.  ?root=<root_path>&id=<process_id>"""
+    root = request.query_params.get("root", "")
+    process_id = request.query_params.get("id", "")
+    if not root or not process_id:
+        return JSONResponse({"error": "root and id required"}, status_code=400)
+    pdb = root_process_db(root)
+    if not pdb.exists():
+        return JSONResponse({"error": "process_graph.db not found — run BPRE first"}, status_code=404)
+    import sqlite3 as _sq
+    con = _sq.connect(str(pdb))
+    try:
+        row = con.execute(
+            "SELECT bpmn_xml FROM process_artifacts WHERE process_id=?", (process_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    if not row or not row[0]:
+        return JSONResponse({"error": "process not found"}, status_code=404)
+    from starlette.responses import Response
+    return Response(row[0], media_type="application/xml")
+
+
 def register(app) -> None:
     app.add_route("/api/wiki", _api_wiki, methods=["GET"])
     app.add_route("/api/wiki/page", _api_wiki_page, methods=["GET"])
@@ -103,3 +131,4 @@ def register(app) -> None:
     app.add_route("/api/wiki_lint", _api_wiki_lint, methods=["GET"])
     app.add_route("/api/kb_health", _api_kb_health, methods=["GET"])
     app.add_route("/api/storage_health", _api_storage_health, methods=["GET"])
+    app.add_route("/api/process/bpmn", _api_process_bpmn, methods=["GET"])
