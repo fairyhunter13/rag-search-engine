@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from opencode_search.graph.llm import chat
+from opencode_search.graph.llm import chat, deepseek_chat, deepseek_key
 from opencode_search.graph.store import GraphStore
 
 _INTENT_PROMPT = """\
@@ -58,6 +58,25 @@ Communities:
 Reply with JSON: [{{"id": <N>, "semantic_type": "<type>", "reasoning": "<1 sentence why>"}}]"""
 
 
+def _kb_chat(prompt: str, *, max_tokens: int = 2048) -> str:
+    """KB-build LLM call: cloud DeepSeek primary, local Ollama fallback, '' on total failure.
+
+    Removing the *resident* local LLM is the fix for the idle busy-spin load root cause:
+    when a DeepSeek key is present the build path makes stateless HTTPS calls and Ollama is
+    never loaded (no llama-server, no 8 GB RSS, no spinning core). Ollama remains only as an
+    offline fallback. temperature=0 keeps summaries/classification reproducible (no churn).
+    """
+    try:
+        if deepseek_key():
+            return deepseek_chat(prompt, max_tokens=max_tokens)
+    except Exception:
+        pass
+    try:
+        return chat(prompt, temperature=0.0, num_predict=max_tokens, think=False)
+    except Exception:
+        return ""
+
+
 def _parse_types(raw: str, valid: frozenset[str]) -> dict[int, str]:
     """Best-effort extract {id: semantic_type} from possibly-noisy LLM output.
 
@@ -99,12 +118,9 @@ def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
          for cid, title, summary in batch],
         ensure_ascii=False,
     )
-    try:
-        raw = chat(_BACKFILL_BATCH_PROMPT.format(items=items_str),
-                   temperature=0.0, num_predict=2048, think=False)
-    except Exception:
-        raw = ""
-    labels = _parse_types(raw, valid)
+    # DeepSeek (cloud) primary — separates tests from business logic far better than the
+    # local 1.7B model — with local Ollama fallback. No resident LLM when a key is present.
+    labels = _parse_types(_kb_chat(_BACKFILL_BATCH_PROMPT.format(items=items_str)), valid)
     if not labels and len(batch) > 1:
         mid = len(batch) // 2
         return _classify_batch(batch[:mid]) + _classify_batch(batch[mid:])
@@ -336,7 +352,8 @@ def enrich_community_l2(store: GraphStore, community_id: int) -> None:
         return
     children = "; ".join(f"{r[0]}: {r[1][:100]}" for r in rows if r[0])
     try:
-        raw = chat(_L2_COMMUNITY_PROMPT.format(children=children[:2000]))
+        raw = chat(_L2_COMMUNITY_PROMPT.format(children=children[:2000]),
+                   temperature=0.0, num_predict=512, think=False)
         data = json.loads(raw.strip())
         store.upsert_community(
             community_id, level=2,
@@ -360,7 +377,8 @@ def enrich_symbols(store: GraphStore, batch_size: int = 20) -> int:
             for j, s in enumerate(batch)
         )
         try:
-            raw = chat(_INTENT_PROMPT.format(symbols=lines))
+            raw = chat(_INTENT_PROMPT.format(symbols=lines),
+                   temperature=0.0, num_predict=512, think=False)
             intents = json.loads(raw.strip())
             if isinstance(intents, list):
                 for sym, intent in zip(batch, intents, strict=False):
@@ -382,7 +400,8 @@ def enrich_community(store: GraphStore, community_id: int) -> None:
         return
     members = "; ".join(f"{r[1]} {r[0]}" for r in rows)
     try:
-        raw = chat(_COMMUNITY_PROMPT.format(members=members[:2000]))
+        raw = chat(_COMMUNITY_PROMPT.format(members=members[:2000]),
+                   temperature=0.0, num_predict=512, think=False)
         data = json.loads(raw.strip())
         store.upsert_community(
             community_id, level=1,
