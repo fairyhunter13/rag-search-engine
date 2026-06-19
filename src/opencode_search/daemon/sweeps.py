@@ -266,6 +266,14 @@ def _enrich_project(project_path: str) -> None:
         _regen_owning_federations(project_path)
     except Exception as exc:
         log.warning("federation index %s: %s", project_path, exc)
+    # BPRE: reconstruct cross-service processes for federation roots (GPU-free deterministic pass).
+    try:
+        from opencode_search.daemon.federation import expand_federation
+        if len(expand_federation(project_path)) >= 2:
+            from opencode_search.kb.bpre import reconstruct_processes
+            reconstruct_processes(project_path)
+    except Exception as exc:
+        log.warning("bpre reconstruct %s: %s", project_path, exc)
 
 
 def _regen_owning_federations(member_path: str) -> None:

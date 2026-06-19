@@ -200,11 +200,30 @@ def handle_overview(project_path: str, what: str) -> str:
                     for r in rows
                 ]})
             if what == "process_flows":
+                from opencode_search.core.config import root_process_db
+                pdb = root_process_db(project_path)
+                if pdb.exists():
+                    import sqlite3 as _sq
+                    pcon = _sq.connect(str(pdb))
+                    try:
+                        procs = pcon.execute(
+                            "SELECT p.id, p.name, p.entry_service, p.services_json, p.step_count, "
+                            "pa.mermaid FROM processes p LEFT JOIN process_artifacts pa "
+                            "ON pa.process_id=p.id ORDER BY p.step_count DESC"
+                        ).fetchall()
+                    finally:
+                        pcon.close()
+                    return json.dumps({"source": "reconstructed", "flows": [
+                        {"id": r[0], "name": r[1], "entry_service": r[2],
+                         "services": json.loads(r[3] or "[]"),
+                         "step_count": r[4], "mermaid": r[5] or ""}
+                        for r in procs
+                    ]})
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT id,title,summary,member_count FROM communities "
                     "WHERE semantic_type='business_process' ORDER BY member_count DESC"
                 ).fetchall()]
-                return json.dumps({"flows": [
+                return json.dumps({"source": "communities", "flows": [
                     {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
                     for r in rows
                 ]})

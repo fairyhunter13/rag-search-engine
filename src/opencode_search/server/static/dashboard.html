@@ -220,6 +220,18 @@ a{color:inherit;text-decoration:none}
 .msg.ai .msg-bubble table{border-collapse:collapse;width:100%;margin:.4em 0;font-size:.78rem}
 .msg.ai .msg-bubble th,.msg.ai .msg-bubble td{border:1px solid var(--border);padding:5px 8px;text-align:left}
 .msg.ai .msg-bubble th{background:var(--surface-2);color:var(--text-3);font-size:.7rem;text-transform:uppercase}
+/* ── Processes view ──────────────────────────────────────────────────────── */
+#view-processes{flex-direction:row;overflow:hidden}
+.proc-sidebar{width:240px;flex-shrink:0;border-right:1px solid var(--border);background:var(--surface);overflow-y:auto}
+.proc-item{display:block;width:100%;background:none;border:none;text-align:left;padding:9px 14px;font-size:.77rem;color:var(--text-2);cursor:pointer;border-bottom:1px solid var(--border);transition:background var(--trans),color var(--trans)}
+.proc-item:hover,.proc-item.active{background:rgba(123,97,255,.1);color:var(--text)}
+.proc-item .pi-name{font-weight:600;color:var(--text);font-size:.78rem}
+.proc-item .pi-meta{font-size:.7rem;color:var(--text-3);margin-top:2px}
+.proc-pane{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#proc-diagram{flex:1;overflow-y:auto;padding:20px 24px;font-size:.83rem;color:var(--text)}
+.proc-toolbar{display:flex;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+.proc-dl-btn{padding:4px 10px;border:1px solid var(--border);background:var(--surface-2);color:var(--cyan);border-radius:4px;font-size:.73rem;cursor:pointer;text-decoration:none}
+.proc-dl-btn:hover{background:var(--surface-3)}
 /* ── Admin SSE chips + auto-pipeline ────────────────────────────────────── */
 #admin-job-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;min-height:24px}
 .admin-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px 3px 10px;border-radius:12px;font-size:.7rem;font-weight:600;border:1px solid var(--border);background:var(--surface-2);color:var(--text-2);transition:all var(--trans)}
@@ -250,6 +262,7 @@ a{color:inherit;text-decoration:none}
     <button class="vbtn" id="vbtn-admin" onclick="switchView('admin')">Admin</button>
     <button class="vbtn" id="vbtn-graph" onclick="switchView('graph')">Graph</button>
     <button class="vbtn" id="vbtn-wiki" onclick="switchView('wiki')">Wiki</button>
+    <button class="vbtn" id="vbtn-processes" onclick="switchView('processes')">Processes</button>
   </div>
   <div class="nav-right">
     <span class="sdot" id="daemon-dot" title="Daemon status"></span>
@@ -430,6 +443,20 @@ a{color:inherit;text-decoration:none}
     </div>
   </div>
 
+  <!-- ── Processes ──────────────────────────────────────────────────────── -->
+  <div id="view-processes" class="view">
+    <div class="proc-sidebar" id="proc-list">
+      <div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div>
+    </div>
+    <div class="proc-pane">
+      <div class="proc-toolbar">
+        <span id="proc-title" style="flex:1;font-size:.83rem;color:var(--text);font-weight:600">Select a process</span>
+        <a id="proc-bpmn-dl" class="proc-dl-btn" style="display:none" download="process.bpmn">⤓ BPMN 2.0</a>
+      </div>
+      <div id="proc-diagram"><div style="color:var(--text-3);font-size:.8rem;padding:20px">← Select a process to view its sequence diagram</div></div>
+    </div>
+  </div>
+
 </div><!-- /views -->
 
 <!-- Command palette -->
@@ -533,7 +560,7 @@ async function fetchWithTimeout(url,opts={},ms=30000){
 
 /* ── View switching ──────────────────────────────────────────────────────── */
 function switchView(name){
-  ['pulse','chat','admin','graph','wiki'].forEach(v=>{
+  ['pulse','chat','admin','graph','wiki','processes'].forEach(v=>{
     $('view-'+v).classList.toggle('active',v===name);
     $('vbtn-'+v).classList.toggle('active',v===name);
   });
@@ -542,6 +569,7 @@ function switchView(name){
   else if(name==='chat'&&$('chat-in'))$('chat-in').focus();
   else if(name==='graph'&&!window.__graph)loadGraph();
   else if(name==='wiki')loadWiki();
+  else if(name==='processes')loadProcesses();
 }
 
 /* ── Project selector ────────────────────────────────────────────────────── */
@@ -972,6 +1000,44 @@ function searchWiki(q){
   _renderWikiPages(filtered,null);
 }
 
+/* ── Processes view ──────────────────────────────────────────────────────── */
+let _procFlows=[];
+async function loadProcesses(){
+  if(!_proj)return;
+  const list=$('proc-list');
+  list.innerHTML='<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div>';
+  try{
+    const r=await fetchWithTimeout(`/api/overview?project=${encodeURIComponent(_proj)}&what=process_flows`);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    _procFlows=d.flows||[];
+    if(!_procFlows.length){
+      list.innerHTML='<div style="padding:14px;color:var(--text-3);font-size:.77rem">No processes reconstructed yet.</div>';
+      return;
+    }
+    list.innerHTML=_procFlows.map((p,i)=>`
+      <button class="proc-item" onclick="showProcess(${i})">
+        <div class="pi-name">${esc(p.name||p.title||'Process')}</div>
+        <div class="pi-meta">${(p.services||[]).join(' → ')||''} · ${p.step_count||0} steps</div>
+      </button>`).join('');
+  }catch(e){
+    list.innerHTML=`<div style="padding:14px;color:var(--red);font-size:.76rem">Error: ${esc(e.message)}</div>`;
+  }
+}
+async function showProcess(idx){
+  const p=_procFlows[idx];if(!p)return;
+  document.querySelectorAll('.proc-item').forEach((b,i)=>b.classList.toggle('active',i===idx));
+  $('proc-title').textContent=p.name||p.title||'Process';
+  const diag=$('proc-diagram');
+  const dl=$('proc-bpmn-dl');
+  if(p.id&&_proj){dl.style.display='';dl.href=`/api/process/bpmn?root=${encodeURIComponent(_proj)}&id=${encodeURIComponent(p.id)}`;}
+  else{dl.style.display='none';}
+  if(p.mermaid){
+    diag.innerHTML='<div class="mermaid">'+esc(p.mermaid)+'</div>';
+    await _loadMermaid();
+    if(window.mermaid)mermaid.run({nodes:diag.querySelectorAll('.mermaid')});
+  }else{diag.innerHTML='<pre style="font-size:.75rem;color:var(--text-2)">'+esc(JSON.stringify(p,null,2))+'</pre>';}
+}
 async function loadWikiLint(){
   if(!_proj)return;
   try{
@@ -1272,6 +1338,7 @@ const _CMD_ITEMS=[
   {label:'Admin — Projects & ops',action:()=>switchView('admin'),cat:'view'},
   {label:'Graph — Knowledge graph',action:()=>switchView('graph'),cat:'view'},
   {label:'Wiki — Knowledge base pages',action:()=>switchView('wiki'),cat:'view'},
+  {label:'Processes — BPMN process flows',action:()=>switchView('processes'),cat:'view'},
   {label:'Re-index project',action:runReindex,cat:'op'},
   {label:'Generate wiki',action:runWiki,cat:'op'},
   {label:'Refresh Admin',action:loadAdmin,cat:'op'},

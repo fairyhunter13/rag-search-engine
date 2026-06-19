@@ -96,6 +96,11 @@ def project_wiki_dir(project_path: str) -> Path:
     return index_dir(project_path) / "wiki"
 
 
+def root_process_db(root_path: str) -> Path:
+    """Root-level BPRE process graph (cross-service edges, processes). HR4: never in per-member graph.db."""
+    return index_dir(root_path) / "process_graph.db"
+
+
 def embed_batch_size() -> int:
     try:
         from opencode_search.core.gpu import vram_free_mb
