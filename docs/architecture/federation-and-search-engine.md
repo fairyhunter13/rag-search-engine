@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-20 (BPRE Phase D — process_graph.db + HR14 added; §8b; codex removed → haiku-only chat HR10; direct-DeepSeek classifier HR11; `think=False` no-idle-spin HR12; LLM lanes split D/E in §8a/§9b).
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-20 (BPRE Phase D — process_graph.db + HR14 added; §8b; codex removed → haiku-only chat HR10; direct-DeepSeek classifier HR11; `think=False` no-idle-spin HR12; LLM lanes split D/E in §8a/§9b). **2026-06-20**: regex→tree-sitter BPRE migration (`kb/bpre_ast.py`); engine-wide no-heuristic doctrine HR15; A2 `_detect_services` de-heuristic; A3 `kb/patterns.py` framework-labelling→LLM; `OSE_BPRE_LLM_LINK` Tier-2 opt-in; see §7a + **HR14**/HR15 in Part 2.
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -85,6 +85,27 @@ registry is `rmtree`'d.
 no-inlining invariant. Without it a root's file_count balloons ~12× by double-counting
 linked trees.
 
+## 7a. Code-semantic classification doctrine — tree-sitter + LLM only
+
+The *only* code that classifies *what the user's code means* uses **tree-sitter** (structural
+facts) or **LLM** (semantic/linkage facts). No regex, no static/dynamic keyword list, no
+mapping table may substitute for structural analysis of user code.
+
+- **`kb/bpre_ast.py`** is the shared structural home for BPRE (§8 bullet 8) *and*
+  `server/_overview.py _detect_services` (A2) — every module that needs to classify gRPC
+  service structure delegates to this single tree-sitter scanner; no module holds its own regex.
+- **Category B (exempt by name)**: the tree-sitter grammar node-kind tables in
+  `graph/extractor.py` (`_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/…), the extension→language
+  bootstrap in `index/discover.py` (`_EXT_LANG`/`detect_language`), the LLM output-vocabulary
+  tables in `graph/enrich.py`/`kb/wiki.py`, and the API-surface enum in `server/_overview.py
+  _VALID` are the **mechanism that runs** tree-sitter/LLM — not code-semantic heuristics.
+  They are explicitly exempt from the no-regex rule.
+- **`OSE_BPRE_LLM_LINK`** (env flag, default OFF): gates Tier-2 LLM linkage in BPRE.
+  When off, tree-sitter-unreachable cross-service edges (JSON-topic IDs, config-driven
+  client hosts) are **absent**, never heuristically approximated. See HR14 + HR15 in Part 2.
+- **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
+  any new `re.compile`/`re.finditer` in Category-A paths fails CI.
+
 ## 8. Enrichment pipeline (`sweeps._enrich_project`)
 
 1. Prune stale L1 communities.
@@ -100,10 +121,16 @@ linked trees.
    `federation.md` (aggregation of each member's own graph.db; no cross-repo edges, HR4). No-op
    for standalone projects. (See Part 2 §13b HR13.)
 8. `reconstruct_processes(root_path)` (Phase D BPRE) — runs ONLY for federation roots (≥2 members).
-   Writes `{index_dir}/process_graph.db` containing D2 entry points, D3 cross-service edges
-   (gRPC+Pub/Sub+HTTP), D4 process traces, D5 rules/state machines, D6 BPMN+mermaid+narrative.
-   **GPU-free** for D2-D4 + BPMN/mermaid; cloud DeepSeek for D5 rule text + D6 narrative only.
-   (See §8b and **HR14** below.)
+   Writes `{index_dir}/process_graph.db`. **Three-tier extraction** (see §7a + **HR14/HR15** in Part 2):
+   Tier 1 = tree-sitter (`kb/bpre_ast.py`, reusing `graph/extractor.py`): Pass A mines generated
+   `*.pb.go` to discover the gRPC API surface (real constructor/registrar names, **no hardcoded
+   patterns**); Pass B detects call sites per-file against that surface (gRPC, pub/sub, HTTP,
+   status enums). Tier 2 = opt-in LLM linkage (`OSE_BPRE_LLM_LINK`, default OFF) for config-driven
+   edges (JSON-topic IDs, client hosts) tree-sitter cannot resolve. Tier 3 = cloud DeepSeek for D5
+   rule text + D6 narrative. D4 process traces are **handler-anchored and deduped** — keyed on the
+   entry handler's reachable symbol set, not any-edge service adjacency. **GPU-free** for Tier 1 +
+   BPMN/mermaid; byte-identical with `OSE_WIKI_LLM=0` and `OSE_BPRE_LLM_LINK` unset (F1/F2).
+   (See §8b and **HR14** in Part 2.)
 
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
 `semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.
