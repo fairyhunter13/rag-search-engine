@@ -91,8 +91,9 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                 pa[alias]=ip
                 if "pubsub" in ip or ip in s.pubsub_import_paths:pubs[alias]=ip
         f.proto_imports,f.pubsub_imports=pa,pubs
-        def _w(n)->None:
-            k=n.kind()
+        stk=[root]
+        while stk:
+            n=stk.pop();k=n.kind()
             if k=="call_expression":
                 fn=n.child_by_field_name("function");args=n.child_by_field_name("arguments");ln=n.start_position().row+1
                 if fn and fn.kind()=="selector_expression":
@@ -128,10 +129,11 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         if c.kind() in("interpreted_string_literal","raw_string_literal"):
                             v=_t(c,b).strip("\"'`")
                             if v:f.status_enums.append(v)
-            for i in range(n.named_child_count()):_w(n.named_child(i))
-        _w(root)
+            stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     elif lang in("java","kotlin"):
-        def _wj(n)->None:
+        stk=[root]
+        while stk:
+            n=stk.pop()
             if n.kind()=="annotation":
                 nn=n.child_by_field_name("name")
                 if nn:
@@ -141,6 +143,5 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         if an:
                             p=_s1(an,b)
                             if p:f.http_routes.append((_SP[ann],p,n.start_position().row+1))
-            for i in range(n.named_child_count()):_wj(n.named_child(i))
-        _wj(root)
+            stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     return f
