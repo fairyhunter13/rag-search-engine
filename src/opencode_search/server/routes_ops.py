@@ -15,8 +15,9 @@ _metrics: dict = {
 
 
 def _snapshot() -> dict:
+    from opencode_search.daemon.sweeps import _bpre_state
     from opencode_search.query.search import rerank_stats
-    return {**_metrics, "rerank": rerank_stats()}
+    return {**_metrics, "rerank": rerank_stats(), "bpre": dict(_bpre_state)}
 
 
 async def _api_metrics(request: Request) -> JSONResponse:

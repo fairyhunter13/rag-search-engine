@@ -26,7 +26,13 @@ _GRPC_CLIENT = re.compile(r"(\w+)\.New(\w+)Client\s*\(")
 _GRPC_SERVER = re.compile(r"\bRegister(\w+)Server\s*\(")
 _PROTO_IMPORT = re.compile(r'^\s+(\w+)\s+"([^"]*astro-proto[^"]*)"', re.MULTILINE)
 _GO_IMPORT_BLOCK = re.compile(r"import\s*\(([^)]+)\)", re.DOTALL)
-_PUBSUB_PUBLISH = re.compile(r"\.Publish\s*\(\s*\w+\s*,[^,]+,\s*[&*]?(\w+)\.(\w+)\{")
+# Pub/Sub publisher: detect any publish call shape (no inline-type assumption)
+_PUBSUB_PUBLISH_CALL = re.compile(
+    r"\.(?:Publish|PublishWithSchema|PublishMessageV2|BatchPublish\w*)\s*\("
+)
+# Pub/Sub proto type references on publisher side
+_PROTO_MARSHAL = re.compile(r"proto\.Marshal\s*\(\s*[&*]?(\w+)\.(\w+)\b")
+_PROTO_LITERAL = re.compile(r"[&*]?(\w+)\.(\w+)\{")
 _PROTO_UNMARSHAL = re.compile(r"proto\.Unmarshal\s*\([^,]+,\s*[&*]?(\w+)\.(\w+)\b")
 _PUBSUB_RECEIVE = re.compile(r"\.Receive\s*\(\s*\w+\s*,\s*func\b")
 _HTTP_ROUTE_GO = re.compile(r"\.(GET|POST|PUT|DELETE|PATCH)\s*\(\s*\"(/[^\"]+)\"")
@@ -37,6 +43,25 @@ _HTTP_CLIENT_GO = re.compile(
     r'(?:http|client)\.(Get|Post|Put|Delete|Patch)\s*\(\s*(?:[^,]+\+\s*)?\"([^\"]+)\"'
 )
 _STATUS_ENUM = re.compile(r"Status\s*=\s*[\"'](\w+)[\"']|\.(\w+Status)\s*=")
+
+# ─── Test-file exclusion ──────────────────────────────────────────────────────
+
+_TEST_FILE_SUFFIXES: frozenset[str] = frozenset({
+    "_test.go", "_test.py", ".test.ts", ".spec.ts", ".test.js", ".spec.js",
+    "_test.js", "_test.ts",
+})
+_TEST_DIRS: frozenset[str] = frozenset({
+    "testdata", "mocks", "__tests__", "test_helpers", "fixtures",
+})
+
+
+def _is_test_file(path: str) -> bool:
+    p = Path(path)
+    for part in p.parts:
+        if part in _TEST_DIRS:
+            return True
+    name = p.name
+    return any(name.endswith(suf) for suf in _TEST_FILE_SUFFIXES)
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
 _SCHEMA = """
@@ -132,6 +157,8 @@ def _detect_entry_points(con: sqlite3.Connection, member_path: str) -> None:
     service = _service_label(member_path)
     rows: list[tuple] = []
     for src in _source_files(member_path):
+        if _is_test_file(str(src)):
+            continue
         try:
             text = src.read_text(errors="replace")
         except OSError:
@@ -195,10 +222,23 @@ def _build_pubsub_registry(members: list[str]) -> dict[str, tuple[str, str]]:
             except OSError:
                 continue
             aliases = _parse_proto_aliases(text)
-            for m in _PUBSUB_PUBLISH.finditer(text):
-                alias, msg = m.group(1), m.group(2)
-                if alias in aliases:
-                    publishers.setdefault(f"{alias}.{msg}", []).append(member)
+            if not aliases:
+                continue
+            # Publisher: file has a Publish call AND imports an astro-proto alias.
+            # Collect proto types via proto.Marshal() and alias-gated struct literals.
+            if _PUBSUB_PUBLISH_CALL.search(text):
+                proto_types: set[str] = set()
+                for m in _PROTO_MARSHAL.finditer(text):
+                    alias, msg = m.group(1), m.group(2)
+                    if alias in aliases:
+                        proto_types.add(f"{alias}.{msg}")
+                for m in _PROTO_LITERAL.finditer(text):
+                    alias, msg = m.group(1), m.group(2)
+                    if alias in aliases:
+                        proto_types.add(f"{alias}.{msg}")
+                for key in proto_types:
+                    publishers.setdefault(key, []).append(member)
+            # Consumer detection (unchanged — correct: proto.Unmarshal inside sub.Receive)
             if _PUBSUB_RECEIVE.search(text):
                 for m in _PROTO_UNMARSHAL.finditer(text):
                     alias, msg = m.group(1), m.group(2)
@@ -206,7 +246,9 @@ def _build_pubsub_registry(members: list[str]) -> dict[str, tuple[str, str]]:
                         consumers.setdefault(f"{alias}.{msg}", []).append(member)
     result: dict[str, tuple[str, str]] = {}
     for key in set(publishers) & set(consumers):
-        result[key] = (publishers[key][0], consumers[key][0])
+        pub, sub = publishers[key][0], consumers[key][0]
+        if pub != sub:
+            result[key] = (pub, sub)
     return result
 
 
