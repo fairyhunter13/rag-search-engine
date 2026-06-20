@@ -1,6 +1,2 @@
-FROM qwen3:8b
-PARAMETER num_ctx 4096
-PARAMETER num_predict 2048
-PARAMETER temperature 0.1
-PARAMETER top_p 0.9
-SYSTEM "You are a senior software architect. Answer questions about codebases factually and completely based on the provided context. When asked to list features or functionalities, be exhaustive, structured, and include code file references. Never fabricate code, files, or functionality not present in the context."
+# REMOVED: local generative LLM decommissioned.
+# Run: git rm scripts/modelfiles/qwen3-query.modelfile

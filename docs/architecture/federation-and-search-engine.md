@@ -33,10 +33,7 @@ an independent unit.
   `path, enabled, indexed_at, file_count, chunk_count, federation: list[str], …`.
 - **Vector store**: sqlite-vec flat `vec0`, `FLOAT[768]`, exact recall.
 - **Graph store**: SQLite `symbols / edges (caller_sid, callee_sid) / communities`.
-- **Enrichment LLM**: local `ollama qwen3-enrich:1.7b` (summaries, GPU, `think=False`) + cloud
-  **DeepSeek** `deepseek-chat` (semantic-type classification + Phase B wiki narrative). The query
-  LLM (**claude-haiku-4-5** via Claude Code CLI) is **dashboard-chat only** — never called by MCP
-  tools. **Codex support removed.**
+- **Enrichment LLM**: cloud **DeepSeek** `deepseek-chat` only (summaries, intents, semantic-type classification, Phase B wiki narrative) — **no local generative LLM**. Crashes if `DEEPSEEK_API_KEY` absent. The dashboard chat LLM (**claude-haiku-4-5** via Claude Code CLI, **DeepSeek fallback**) is **dashboard-chat only** — never called by MCP tools. **Codex support removed.**
 
 ## 4. Federation discovery (`daemon/federation.py:discover_members`)
 
@@ -137,16 +134,13 @@ All enrichment is **idempotent and gated on `summary IS NULL`** (classification 
 
 ### 8a. LLM lanes within enrichment (resource-critical)
 
-- **Summaries + symbol intents** (steps 2, 4): local `ollama qwen3-enrich:1.7b` via
-  `graph/llm.py:chat(think=False)`. **`think=False` is mandatory** — qwen3 is a thinking model;
-  its `<think>` output otherwise grows into the 4096 context → Ollama truncates → `llama-server`
-  busy-spins a core at ~84% indefinitely (Ollama [#13461](https://github.com/ollama/ollama/issues/13461)).
-  With the flag: clean bounded output, ~2–10% idle CPU, model unloads at keep_alive idle.
-- **Semantic-type classification** (step 5): cloud **DeepSeek** (`deepseek-chat`) over
-  title+summary, batch-20 (`_classify_batch` → `_kb_chat`, DeepSeek primary / Ollama fallback).
-  A 1.7B local model + cosine-to-centroid mislabeled ~61% of business_rules as test suites;
-  DeepSeek separates test-of-business from business logic. Structural guard: a `<3`-member
-  community cannot be a multi-step business_process/rule (demoted to `feature`).
+All KB enrichment — **summaries, symbol intents, semantic-type classification, wiki narrative** — runs
+through cloud **DeepSeek** (`deepseek-chat`) via `graph/llm.py:deepseek_chat`. **No local generative
+LLM**; the daemon crashes loudly at `_enrich_project` entry if `DEEPSEEK_API_KEY` is absent
+(`deepseek_key()` returns `None`). `temperature=0` keeps summaries and classification reproducible
+(no churn). A `<3`-member community cannot be a multi-step `business_process`/`business_rule`
+(structural guard → `feature`). Embedding and reranking are unaffected by the key — they bind
+ONNX/CUDA and run regardless.
 
 ## 9. Query / read path (`server/mcp.py`)
 
@@ -183,15 +177,14 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | Lane | Surface | LLM(s) | Notes |
 |------|---------|---------|-------|
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
-| **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** (Claude Code CLI) | Codex removed — haiku-only; no ollama, no deepseek |
-| **D — KB summaries** | Background sweep (`enrich_community`/`_l2`/intents) | local ollama qwen3-enrich:1.7b via `chat(think=False)` | Write path only; `think=False` mandatory (no idle spin, #13461); unloads at idle |
-| **E — KB classification + wiki narrative** | Background sweep (`classify_communities_semantic`; Phase B wiki) | cloud DeepSeek `deepseek-chat` (Ollama fallback) | Remote, bounded; key from env / `~/.bash_env`; never on the query path; provides accuracy the 1.7B model lacks |
+| **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** primary (Claude Code CLI); **DeepSeek fallback** if haiku absent/empty | Codex removed; haiku insist — DeepSeek only on genuine haiku failure |
+| **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-chat` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
 
-The query generative LLM (**claude-haiku-4-5** via the Claude Code CLI) is reached **only** via the
-dashboard chat box. Background KB enrichment uses **local ollama for summaries** (Lane D) and **cloud
-DeepSeek for classification + Phase B wiki narrative** (Lane E) — both write-path only. MCP query
-actions and `POST /api/ask` never generate text. **"GPU-only" (HR6) governs embeddings + reranking +
-the local summary LLM**; the remote DeepSeek lane is not a CPU-fallback and never runs at query time.
+The query generative LLM (**claude-haiku-4-5** via the Claude Code CLI, with **DeepSeek fallback**) is
+reached **only** via the dashboard chat box. Background KB enrichment uses **cloud DeepSeek for all
+generative tasks** — both write-path only, never on the query path. **"GPU-only" (HR6) governs
+embeddings + reranking** (FastEmbed/ONNX/CUDA); the remote DeepSeek and haiku lanes are cloud and
+are not CPU inference.
 
 ## 16. Per-project config & federation inheritance
 

@@ -12,7 +12,7 @@ Run the fast test suite and report results.
 ## Rules
 
 - Never skip failures — investigate every red test
-- Never mock — all tests use real daemon, real Ollama, real GPU
+- Never mock — all tests use real daemon, real GPU (no local generative LLM)
 - If a test fails due to infrastructure (daemon down, GPU not warm): restart the service and rerun
 - After reporting results, suggest what to fix if anything failed
 

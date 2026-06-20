@@ -363,12 +363,12 @@ def test_api_build_serve_and_export_wiki(live_client):
 
 @pytest.mark.slow
 def test_wiki_narrative_grounded_by_cross_model_judge(tmp_path_factory):
-    """W17 (LLM-as-judge, cross-model): a LOCAL qwen3 judge scores a DeepSeek narrative grounded.
+    """W17 (LLM-as-judge, cross-model): claude CLI judges a DeepSeek narrative as grounded.
 
     Cross-model on purpose — DeepSeek must not grade its own output (self-preference bias). The
     judge is conservative: it only fails a narrative that invents sub-systems absent from context.
     """
-    from opencode_search.graph.llm import chat, deepseek_key
+    from opencode_search.graph.llm import deepseek_key
     if not deepseek_key():
         pytest.skip("no DeepSeek key — nothing to judge")
     project = _enriched_project()
@@ -396,5 +396,12 @@ def test_wiki_narrative_grounded_by_cross_model_judge(tmp_path_factory):
         "(paraphrase is fine), or 'UNGROUNDED' if it invents systems not implied by it.\n\n"
         f"CONTEXT sub-systems: {', '.join(kids)}\n\nNARRATIVE: {narrative}\n\nVerdict:"
     )
-    verdict = chat(prompt, temperature=0.0, num_predict=16, think=False).strip().upper()
+    import shutil
+    import subprocess
+    claude = shutil.which("claude")
+    if not claude:
+        pytest.skip("claude CLI not available for cross-model judge")
+    verdict = subprocess.check_output(
+        [claude, "-p", "--model", "claude-haiku-4-5", prompt], timeout=30,
+    ).decode(errors="replace").strip().upper()
     assert "UNGROUNDED" not in verdict, f"judge flagged narrative ungrounded: {verdict!r}\n{narrative[:200]}"

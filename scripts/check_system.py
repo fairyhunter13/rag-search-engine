@@ -84,8 +84,7 @@ def check_imports() -> None:
 EXPECTED_CONFIG: dict[str, str] = {
     "EMBED_MODEL": "jinaai/jina-embeddings-v2-base-code",
     "RERANK_MODEL": "jinaai/jina-reranker-v1-turbo-en",
-    "LLM_PROVIDER": "ollama",
-    "LLM_MODEL": "qwen3-enrich:1.7b",
+    "QUERY_LLM_MODEL": "claude-haiku-4-5",
 }
 
 
@@ -195,23 +194,31 @@ def check_cli() -> None:
 
 
 def check_llm_provider() -> None:
-    print("\n### LLM provider")
+    print("\n### LLM provider (no local generative LLM — GPU = embeddings+reranking only)")
     try:
-        from opencode_search.core.config import LLM_PROVIDER, LLM_MODEL, QUERY_LLM_PROVIDER, QUERY_LLM_MODEL
+        from opencode_search.core.config import QUERY_LLM_FALLBACK_MODEL, QUERY_LLM_MODEL
     except ImportError as exc:
         _fail("core.config importable", str(exc))
         return
-    _ok(f"OPENCODE_LLM_PROVIDER = {LLM_PROVIDER}")
-    _ok(f"OPENCODE_LLM_MODEL    = {LLM_MODEL}")
-    _ok(f"OPENCODE_QUERY_LLM_PROVIDER = {QUERY_LLM_PROVIDER}")
-    _ok(f"OPENCODE_QUERY_LLM_MODEL    = {QUERY_LLM_MODEL}")
-    if LLM_PROVIDER == "ollama":
-        base_url = os.environ.get("OPENCODE_LLM_BASE_URL", "http://localhost:11434")
-        try:
-            with urllib.request.urlopen(f"{base_url}/api/tags", timeout=3) as _r:
-                _ok(f"Ollama reachable at {base_url}")
-        except Exception as exc:
-            _fail(f"Ollama reachable at {base_url}", str(exc), required=False)
+    _ok(f"OPENCODE_QUERY_LLM_MODEL (primary) = {QUERY_LLM_MODEL}")
+    _ok(f"OSE_DEEPSEEK_MODEL (fallback)      = {QUERY_LLM_FALLBACK_MODEL}")
+    # Check DeepSeek key availability (required for KB build)
+    try:
+        from opencode_search.graph.llm import deepseek_key
+        key = deepseek_key()
+        if key:
+            _ok("DEEPSEEK_API_KEY found — KB build and chat fallback available")
+        else:
+            _fail("DEEPSEEK_API_KEY", "not found in env or ~/.bash_env — KB build will crash", required=False)
+    except Exception as exc:
+        _fail("deepseek_key()", str(exc), required=False)
+    # Check claude CLI (primary chat lane)
+    import shutil
+    claude = shutil.which("claude")
+    if claude:
+        _ok(f"claude CLI found at {claude} — haiku chat lane active")
+    else:
+        _warn("claude CLI not found — chat will fall back to DeepSeek (haiku lane inactive)")
 
 
 # ---------------------------------------------------------------------------

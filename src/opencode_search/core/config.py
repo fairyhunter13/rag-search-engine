@@ -23,17 +23,10 @@ IDLE_SHUTDOWN_S = int(os.environ.get("OPENCODE_MCP_IDLE_SHUTDOWN_S", "900"))
 CLIENT_STALE_S = int(os.environ.get("OPENCODE_MCP_CLIENT_STALE_S", "60"))
 MODEL_IDLE_UNLOAD_S = int(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
 
-LLM_PROVIDER = os.environ.get("OPENCODE_LLM_PROVIDER", "ollama")
-LLM_MODEL = os.environ.get("OPENCODE_LLM_MODEL", "qwen3-enrich:1.7b")
-LLM_BASE_URL = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-LLM_NUM_CTX = int(os.environ.get("OPENCODE_LLM_NUM_CTX", "4096"))
-LLM_TIMEOUT = int(os.environ.get("OPENCODE_LLM_TIMEOUT", "120"))
-LLM_CONCURRENCY = int(os.environ.get("OPENCODE_LLM_CONCURRENCY", os.environ.get("OLLAMA_NUM_PARALLEL", "3")))
-
-# Dashboard chat ONLY — forbidden everywhere else. Claude Code (haiku) only; codex removed.
+# Dashboard chat: haiku primary + DeepSeek fallback. No local generative LLM.
 QUERY_LLM_PROVIDER = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "claude")
 QUERY_LLM_MODEL = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "claude-haiku-4-5")
-QUERY_LLM_FALLBACK_MODEL = "claude-haiku-4-5"
+QUERY_LLM_FALLBACK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-chat")
 QUERY_LLM_NUM_CTX = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
 QUERY_LLM_TIMEOUT = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))
 

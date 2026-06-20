@@ -123,7 +123,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] GET /api/federation ?project=
 - [x] GET /api/events/stream -> SSE daemon-wide events (pipeline progress, sweep events)
 - [x] GET /api/alerts / POST /api/alerts {level,message,...}
-- [x] GET /api/system_status -> GPU temp, VRAM, Ollama status, daemon uptime
+- [x] GET /api/system_status -> GPU temp, VRAM, embedder status, daemon uptime
 - [x] GET /api/integrations_status -> Claude Code / Codex / Hermes MCP config state
 - [x] GET /api/jobs
 - [x] GET /api/jobs/{job_id}
@@ -162,7 +162,7 @@ Generated from the live archived engine before wiping `main`.
 - [x] Chunking (chonkie) -> GPU embed (FastEmbed-GPU + onnxruntime-gpu, jina-v2-base-code 768d, float16) -> sqlite-vec
 - [x] Graph extraction: tree-sitter + tree-sitter-language-pack -> AST -> nodes/edges in SQLite (graph.db)
 - [x] Community detection: leidenalg + igraph -> L1 communities in graph.db
-- [x] LLM enrichment: symbol intent (20/call) + community/L2 summary via local qwen3-enrich:1.7b (Ollama GPU, `chat(think=False)` — no idle spin); semantic_type via cloud DeepSeek (direct classification, daemon reclassify_all=False, <3-member structural guard)
+- [x] LLM enrichment: symbol intent (20/call) + community/L2 summary + semantic_type via cloud DeepSeek only (crash if no DEEPSEEK_API_KEY); no local generative LLM; daemon reclassify_all=False (no churn), <3-member structural guard
 - [x] Recursive hierarchy: L2+ community-of-communities (Leiden meta-graph)
 - [x] Wiki generation: community summaries -> wiki/ dir pages
 - [x] Answer-cache warming: pre-compute common ask queries
@@ -270,12 +270,13 @@ Generated from the live archived engine before wiping `main`.
 - [x] OPENCODE_RERANK_MODEL default jinaai/jina-reranker-v1-turbo-en
 - [x] DEFAULT_DIMS=768; vectors stored as float16 (49% savings vs float32)
 
-### 8.5 Build-tier LLM (KB enrichment; Ollama qwen3 on GPU; NEVER for dashboard chat)
-- [x] OPENCODE_LLM_PROVIDER ollama | OPENCODE_LLM_MODEL qwen3-enrich:1.7b | OPENCODE_LLM_NUM_CTX 4096 | OPENCODE_LLM_TIMEOUT 120s
-- [x] OPENCODE_LLM_CONCURRENCY default = OLLAMA_NUM_PARALLEL default 3
+### 8.5 Build-tier LLM (KB enrichment; cloud DeepSeek; NEVER for dashboard chat; no local LLM)
+- [x] cloud DeepSeek-only (DEEPSEEK_API_KEY required; crash if absent — no local fallback)
+- [x] OSE_DEEPSEEK_MODEL env override (default: deepseek-chat)
 
 ### 8.6 Query-tier LLM (dashboard chat ONLY; forbidden everywhere else)
-- [x] OPENCODE_QUERY_LLM_PROVIDER claude | OPENCODE_QUERY_LLM_MODEL claude-haiku-4-5 (codex removed)
+- [x] OPENCODE_QUERY_LLM_PROVIDER claude | OPENCODE_QUERY_LLM_MODEL claude-haiku-4-5 (primary; codex removed)
+- [x] QUERY_LLM_FALLBACK_MODEL = OSE_DEEPSEEK_MODEL env (default: deepseek-chat) — used when haiku CLI absent or returns empty
 - [x] OPENCODE_QUERY_LLM_NUM_CTX 4096 | OPENCODE_QUERY_LLM_TIMEOUT 180s
 
 ### 8.7 Daemon constants
@@ -310,10 +311,10 @@ Generated from the live archived engine before wiping `main`.
 
 ## 11. Test suite (fresh -- written per rewrite layer)
 
-- [x] No mocks -- all tests hit real daemon (localhost:8765), real GPU, real Ollama qwen3-enrich:1.7b
+- [x] No mocks -- all tests hit real daemon (localhost:8765), real GPU; no local generative LLM
 - [x] No skipped or xfail tests
-- [x] Session fixtures: pin qwen3-enrich:1.7b resident, pause sweeps (POST /api/sweeps/pause), cap CPU threads
-- [x] Markers: live (daemon+GPU+Ollama required), slow (LLM-heavy >30s)
+- [x] Session fixtures: pause sweeps (POST /api/sweeps/pause), cap CPU threads
+- [x] Markers: live (daemon+GPU required), slow (LLM-heavy >30s)
 - [x] Canonical project: a large multi-repo workspace resolved from the registry (no hardcoded device paths)
 - [x] Fast suite (-m "live and not slow"): target <=10 min; full suite: 0 fail/0 skip/0 xfail
 
@@ -322,7 +323,7 @@ Generated from the live archived engine before wiping `main`.
 ## 12. Hard invariants
 
 - [x] CPU fallback forbidden -- any attempt must raise a fatal error, never fall back silently
-- [x] Dashboard chat (/api/chat_stream) is the ONLY surface for claude-haiku-4-5 (codex removed); KB build = local Ollama qwen3 (summaries, think=false) + cloud DeepSeek (classification + wiki narrative)
+- [x] Dashboard chat (/api/chat_stream): claude-haiku-4-5 primary + DeepSeek fallback (codex removed); KB build = cloud DeepSeek-only; no local generative LLM
 - [x] ~/GoogleDrive and ~/OneDrive are rclone mounts -- never touch, index, or delete
 - [x] Push after every commit -- zero unpushed at all times
 - [x] Registry at ~/.local/share/opencode-search/projects.json; never index /tmp or cache dirs

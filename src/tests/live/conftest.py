@@ -7,7 +7,7 @@ _DAEMON = "http://127.0.0.1:8765"
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "live: requires CUDA GPU + daemon at :8765 + Ollama")
+    config.addinivalue_line("markers", "live: requires CUDA GPU + daemon at :8765")
     config.addinivalue_line("markers", "slow: LLM-heavy (>30s)")
 
 
