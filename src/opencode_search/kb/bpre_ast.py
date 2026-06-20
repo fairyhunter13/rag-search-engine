@@ -28,7 +28,7 @@ class ApiSurface:
     proto_import_paths:set=field(default_factory=set)
     pubsub_import_paths:set=field(default_factory=set)
 def _t(n,b):r=n.byte_range();return b[r.start:r.end].decode("utf-8","replace")
-def _s1(a,b):return next((_t(a.named_child(i),b).strip("\"'`") for i in range(a.named_child_count()) if a.named_child(i).kind() in("interpreted_string_literal","raw_string_literal")),None)
+def _s1(a,b):return next((_t(a.named_child(i),b).strip("\"'`") for i in range(a.named_child_count()) if a.named_child(i).kind() in("interpreted_string_literal","raw_string_literal","string_literal")),None)
 def _qt(n,b):p,nm=n.child_by_field_name("package"),n.child_by_field_name("name");return(_t(p,b),_t(nm,b)) if n.kind()=="qualified_type" and p and nm else None
 def _pk(n,b,pa):
     if n.kind()=="unary_expression":n=n.child_by_field_name("operand") or n
