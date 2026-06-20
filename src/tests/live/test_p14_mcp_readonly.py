@@ -91,3 +91,37 @@ def test_semantic_trace_returns_structured_json():
     )
     assert "path" in data, "semantic_trace must include 'path' list"
     assert "summary" in data, "semantic_trace must include 'summary' string"
+
+
+# ── A2: service_mesh from bpre_ast (not regex) ───────────────────────────────
+
+def test_service_mesh_detect_services_uses_bpre_ast():
+    """A2 source-guard: _detect_services in server/_overview.py imports bpre_ast / federation_discover
+    (not a regex pattern or manual service list).
+    """
+    import inspect
+
+    from opencode_search.server import _overview
+    src = inspect.getsource(_overview)
+    assert "federation_discover" in src or "bpre_ast" in src, (
+        "_detect_services must delegate to bpre_ast.federation_discover — no regex fallback"
+    )
+    assert not re.search(r're\.compile\(', src), (
+        "server/_overview.py must not use re.compile for service detection"
+    )
+
+
+# ── A3: patterns framework labelling → LLM (no static map) ──────────────────
+
+def test_patterns_no_static_framework_map():
+    """A3 source-guard: kb/patterns.py must not define a static framework-to-label dict (_KNOWN)."""
+    import inspect
+
+    from opencode_search.kb import patterns
+    src = inspect.getsource(patterns)
+    assert "_KNOWN" not in src, (
+        "kb/patterns.py still has _KNOWN static framework map — A3 regression"
+    )
+    assert "_llm_frameworks" in src or "deepseek_chat" in src, (
+        "kb/patterns.py must use LLM (_llm_frameworks / deepseek_chat) for framework labelling"
+    )
