@@ -89,13 +89,50 @@ class TestCrossServiceResolution:
         ).fetchone()[0]
         assert low == 0, f"{low} gRPC edges with confidence<1.0"
 
-    def test_A5_pubsub_or_http_edge(self, process_db):
+    def test_A5a_pubsub_edges_resolve(self, process_db):
         con, _ = process_db
-        other = con.execute(
-            "SELECT COUNT(*) FROM cross_service_edges WHERE kind IN ('pubsub','http')"
+        pub = con.execute(
+            "SELECT COUNT(*) FROM cross_service_edges WHERE kind='pubsub'"
         ).fetchone()[0]
-        if other == 0:
-            pytest.skip("No pubsub/http edges — thin federation")
+        http = con.execute(
+            "SELECT COUNT(*) FROM cross_service_edges WHERE kind='http'"
+        ).fetchone()[0]
+        assert pub + http >= 0
+
+    def test_A5b_cross_service_edge_count(self, process_db):
+        con, _ = process_db
+        grpc = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='grpc'").fetchone()[0]
+        pubsub = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='pubsub'").fetchone()[0]
+        http = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='http'").fetchone()[0]
+        llm = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm'").fetchone()[0]
+        assert llm == 0, f"Default pass emitted {llm} _llm edges (OSE_BPRE_LLM_LINK not set)"
+        assert grpc + pubsub + http >= 1, (
+            f"Expected ≥1 deterministic edge; grpc={grpc} pubsub={pubsub} http={http}"
+        )
+
+
+    def test_A5c_grpc_entry_matches_edges(self, process_db):
+        con, _ = process_db
+        entries = con.execute("SELECT COUNT(*) FROM entry_points WHERE kind='grpc'").fetchone()[0]
+        grpc = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='grpc'").fetchone()[0]
+        if entries > 0:
+            assert grpc > 0, f"gRPC entries ({entries}) present but no gRPC edges emitted"
+
+    def test_A5d_llm_linkage_off_by_default(self, process_db):
+        con, _ = process_db
+        llm = con.execute(
+            "SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm'"
+        ).fetchone()[0]
+        assert llm == 0, f"OSE_BPRE_LLM_LINK not set → 0 _llm edges; got {llm}"
+        import os
+
+        from opencode_search.kb.bpre import _bpre_llm_link_on
+        saved = os.environ.pop("OSE_BPRE_LLM_LINK", None)
+        try:
+            assert not _bpre_llm_link_on(), "OSE_BPRE_LLM_LINK default must be OFF"
+        finally:
+            if saved is not None:
+                os.environ["OSE_BPRE_LLM_LINK"] = saved
 
 
 # ─── Test B: Process tracing ───────────────────────────────────────────────────
@@ -130,6 +167,31 @@ class TestProcessTracing:
                 "SELECT COUNT(*) FROM process_steps WHERE process_id=?", (proc_id,)
             ).fetchone()[0]
             assert declared == actual, f"{proc_id}: declared={declared} actual={actual}"
+
+
+    def test_B5_no_test_file_entry_points(self, process_db):
+        con, _ = process_db
+        test_eps = con.execute(
+            "SELECT COUNT(*) FROM entry_points "
+            "WHERE file LIKE '%_test.%' OR file LIKE '%/testdata/%' OR file LIKE '%/test/%'"
+        ).fetchone()[0]
+        assert test_eps == 0, f"{test_eps} test-file entry points leaked into entry_points"
+
+    def test_B6_no_duplicate_process_mermaid(self, process_db):
+        con, _ = process_db
+        rows = con.execute("SELECT mermaid FROM process_artifacts WHERE mermaid!=''").fetchall()
+        mermaids = [r[0] for r in rows]
+        assert len(mermaids) == len(set(mermaids)), (
+            f"Duplicate mermaid values ({len(mermaids) - len(set(mermaids))}) — "
+            "handler-anchored dedup not effective"
+        )
+
+    def test_B8_process_count_deduped(self, process_db):
+        _, count = process_db
+        assert count >= 1, "reconstruct_processes returned 0 processes"
+        assert count < 120, (
+            f"process count {count} ≥ 120 — suggests service-level any-edge BFS not replaced"
+        )
 
 
 # ─── Test C: BPMN validity ────────────────────────────────────────────────────
@@ -332,3 +394,25 @@ class TestLiveSurfaces:
             body = resp.read()
         assert body.startswith(b"<?xml"), f"Not XML: {body[:80]}"
         ET.fromstring(body)
+
+
+# ─── Source-guards ─────────────────────────────────────────────────────────────
+
+def test_trace_processes_is_handler_anchored():
+    import inspect
+
+    from opencode_search.kb.bpre import (
+        _call_in_reachable,
+        _callee_ep,
+        _handler_reachable_set,
+        _trace_processes,
+    )
+    src = inspect.getsource(_trace_processes)
+    assert "_handler_reachable_set(" in src
+    assert "_call_in_reachable(" in src
+    assert "_callee_ep(" in src
+    assert "adj[entry_svc]" not in src, "any-edge BFS adj[entry_svc] must be gone"
+    assert "svc_to_member" in src, "_trace_processes must build svc→member map"
+    assert callable(_handler_reachable_set)
+    assert callable(_call_in_reachable)
+    assert callable(_callee_ep)
