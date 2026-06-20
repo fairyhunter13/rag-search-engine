@@ -1,2 +1,1 @@
 # REMOVED: local generative LLM decommissioned.
-# Run: git rm scripts/modelfiles/qwen3-query.modelfile
