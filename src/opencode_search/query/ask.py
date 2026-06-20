@@ -13,7 +13,9 @@ def _top_communities_semantic(query: str, stores: list, top_k: int = 10) -> str:
     for store in stores:
         for r in store._con.execute(
             "SELECT title, summary FROM communities "
-            "WHERE summary IS NOT NULL AND summary != '' ORDER BY level, id LIMIT 50"
+            "WHERE summary IS NOT NULL AND summary != '' "
+            "AND (semantic_type IS NULL OR semantic_type NOT IN ('test','tooling','utility')) "
+            "ORDER BY level, id LIMIT 50"
         ).fetchall():
             if r[0] not in seen:
                 seen.add(r[0])
@@ -32,7 +34,9 @@ def _macro_community_context(stores: list, limit: int = 5) -> str:
     for store in stores:
         for r in store._con.execute(
             "SELECT title, summary FROM communities WHERE level>=2 "
-            "AND summary IS NOT NULL AND summary!='' ORDER BY member_count DESC LIMIT ?", (limit,)
+            "AND summary IS NOT NULL AND summary!='' "
+            "AND (semantic_type IS NULL OR semantic_type NOT IN ('test','tooling','utility')) "
+            "ORDER BY member_count DESC LIMIT ?", (limit,)
         ).fetchall():
             if r[0] not in seen:
                 seen.add(r[0])
@@ -54,7 +58,9 @@ def _community_context(stores: list, limit: int = 20, semantic_types: tuple[str,
         else:
             src = store._con.execute(
                 "SELECT title, summary FROM communities "
-                "WHERE summary IS NOT NULL AND summary != '' ORDER BY level, id LIMIT ?", (limit,),
+                "WHERE summary IS NOT NULL AND summary != '' "
+                "AND (semantic_type IS NULL OR semantic_type NOT IN ('test','tooling','utility')) "
+                "ORDER BY level, id LIMIT ?", (limit,),
             ).fetchall()
         for r in src:
             if r[0] not in seen:

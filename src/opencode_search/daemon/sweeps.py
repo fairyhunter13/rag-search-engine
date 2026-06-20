@@ -9,6 +9,7 @@ _KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project afte
 _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
 _last_kb_enrich: dict[str, float] = {}
 _last_index_fail: dict[str, float] = {}
+_bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +116,11 @@ def _index_project(project_path: str) -> None:
     from opencode_search.core.config import project_graph_db, project_vector_db
     from opencode_search.embed.embedder import get_embedder
     from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_calls, extract_symbols, symbol_id
+    from opencode_search.graph.extractor import (
+        extract_calls_with_lines,
+        extract_symbols,
+        symbol_id,
+    )
     from opencode_search.graph.store import GraphStore
     from opencode_search.index.discover import detect_language, iter_files
     from opencode_search.index.indexer import index_project
@@ -149,26 +154,43 @@ def _index_project(project_path: str) -> None:
                 )
         gs.commit()
         gs.dedup_symbols()
-        # 2b. Call-edge extraction — second pass: names now known, resolve callees
-        file_to_sids: dict[str, list[str]] = {}
+        # 2b. Call-edge extraction — second pass: resolve each call to its enclosing symbol.
+        # Build lookup structures from the now-deduped symbol table.
         name_to_entries: dict[str, list[tuple[str, str]]] = {}
-        for (sid, name, fstr) in gs._con.execute("SELECT sid, name, file FROM symbols"):
-            file_to_sids.setdefault(fstr, []).append(sid)
+        file_to_sym_spans: dict[str, list[tuple[int, int, str]]] = {}
+        for (sid, name, fstr, sl, el) in gs._con.execute(
+            "SELECT sid, name, file, start_line, end_line FROM symbols"
+        ):
             name_to_entries.setdefault(name, []).append((sid, fstr))
+            if fstr:
+                file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
+        for spans in file_to_sym_spans.values():
+            spans.sort()  # sort by start_line for innermost-enclosing scan
         for fpath in iter_files(root, federation_mode=True):
-            call_names = extract_calls(
-                fpath.read_text(errors="replace") if fpath.exists() else "",
-                detect_language(fpath),
-            )
-            if not call_names:
-                continue
             fstr = str(fpath)
-            caller_sids = file_to_sids.get(fstr, [])
-            if not caller_sids:
+            sym_spans = file_to_sym_spans.get(fstr)
+            if not sym_spans:
                 continue
-            caller_sid = caller_sids[0]  # one representative caller per file
-            for name in set(call_names):
-                for (callee_sid, callee_file) in name_to_entries.get(name, []):
+            try:
+                content = fpath.read_text(errors="replace") if fpath.exists() else ""
+            except OSError:
+                continue
+            call_sites = extract_calls_with_lines(content, detect_language(fpath))
+            if not call_sites:
+                continue
+            for callee_name, call_line in call_sites:
+                # Innermost enclosing symbol = smallest span containing call_line
+                caller_sid = ""
+                best_span = -1
+                for sl, el, sid in sym_spans:
+                    if sl <= call_line <= el:
+                        span = el - sl
+                        if caller_sid == "" or span < best_span:
+                            best_span = span
+                            caller_sid = sid
+                if not caller_sid:
+                    continue
+                for (callee_sid, callee_file) in name_to_entries.get(callee_name, []):
                     if callee_file != fstr:
                         gs.upsert_edge(caller_sid, callee_sid)
         gs.commit()
@@ -266,14 +288,23 @@ def _enrich_project(project_path: str) -> None:
         _regen_owning_federations(project_path)
     except Exception as exc:
         log.warning("federation index %s: %s", project_path, exc)
+    # Member-edit refresh: reconstruct processes for any root that owns this project as a member.
+    try:
+        _regen_owning_processes(project_path)
+    except Exception as exc:
+        log.error("owning-process regen %s: %s", project_path, exc, exc_info=True)
     # BPRE: reconstruct cross-service processes for federation roots (GPU-free deterministic pass).
     try:
         from opencode_search.daemon.federation import expand_federation
         if len(expand_federation(project_path)) >= 2:
             from opencode_search.kb.bpre import reconstruct_processes
-            reconstruct_processes(project_path)
+            n = reconstruct_processes(project_path)
+            _bpre_state["last_run"] = project_path
+            _bpre_state["edge_count"] = n
+            _bpre_state["last_error"] = None
     except Exception as exc:
-        log.warning("bpre reconstruct %s: %s", project_path, exc)
+        log.error("bpre reconstruct %s: %s", project_path, exc, exc_info=True)
+        _bpre_state["last_error"] = str(exc)
 
 
 def _regen_owning_federations(member_path: str) -> None:
@@ -286,6 +317,18 @@ def _regen_owning_federations(member_path: str) -> None:
                 build_federated_index(entry.path)
             except Exception as exc:
                 log.warning("owning-federation regen %s: %s", entry.path, exc)
+
+
+def _regen_owning_processes(member_path: str) -> None:
+    """Reconstruct processes for any enabled root whose federation contains member_path (HR14)."""
+    from opencode_search.core.registry import list_projects
+    from opencode_search.kb.bpre import reconstruct_processes
+    for entry in list_projects():
+        if entry.enabled and entry.federation and member_path in entry.federation:
+            try:
+                reconstruct_processes(entry.path)
+            except Exception as exc:
+                log.error("owning-process regen %s: %s", entry.path, exc, exc_info=True)
 
 
 def on_change(project_path: str, files: list) -> None:

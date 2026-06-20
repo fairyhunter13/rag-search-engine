@@ -180,6 +180,42 @@ def _collect_sites(node, code_bytes: bytes, call_type: str, name_field: str,  # 
         _collect_sites(node.named_child(i), code_bytes, call_type, name_field, out, counter, nd, nk)
 
 
+def _collect_calls_with_lines(
+    node, code_bytes: bytes, call_type: str, name_field: str, out: list
+) -> None:
+    if node.kind() == call_type:
+        nn = node.child_by_field_name(name_field)
+        if nn:
+            if nn.kind() in _MEMBER_KINDS:
+                nn = (nn.child_by_field_name("field") or nn.child_by_field_name("property")
+                      or nn.child_by_field_name("name") or nn)
+            br = nn.byte_range()
+            name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+            if name and name.isidentifier():
+                out.append((name, node.start_position().row + 1))
+    for i in range(node.named_child_count()):
+        _collect_calls_with_lines(node.named_child(i), code_bytes, call_type, name_field, out)
+
+
+def extract_calls_with_lines(content: str, language: str) -> list[tuple[str, int]]:
+    """Return (callee_name, line_number) for each call in content (tree-sitter parse)."""
+    ts_lang = _TS_LANG.get(language)
+    call_spec = _CALL_NODE.get(language)
+    if ts_lang is None or call_spec is None:
+        return []
+    try:
+        from tree_sitter_language_pack import api as ts_api
+        tree = ts_api.get_parser(ts_lang).parse(content)
+        root = tree.root_node()
+    except Exception:
+        return []
+    call_type, name_field = call_spec
+    code_bytes = content.encode("utf-8", errors="replace")
+    out: list[tuple[str, int]] = []
+    _collect_calls_with_lines(root, code_bytes, call_type, name_field, out)
+    return out
+
+
 def extract_call_sites(content: str, language: str) -> list[CallSite]:
     """Return ordered call sites (DFS order). Branch depth tracks if/for/switch nesting."""
     ts_lang = _TS_LANG.get(language)
