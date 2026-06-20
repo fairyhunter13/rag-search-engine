@@ -294,38 +294,143 @@ def _resolve_http_edges(
     con.commit()
 
 
-# ─── D4 Process tracing ───────────────────────────────────────────────────────
+def _handler_reachable_set(
+    member_path: str, ep_file: str, ep_line: int,
+) -> tuple[int | None, set[int]]:
+    from opencode_search.core.config import project_graph_db
+    gdb = project_graph_db(member_path)
+    if not gdb.exists():
+        return None, set()
+    try:
+        con = sqlite3.connect(str(gdb), check_same_thread=False)
+        con.execute("PRAGMA query_only=ON")
+        try:
+            abs_ep = str((Path(member_path) / ep_file).resolve())
+            fname = Path(ep_file).name
+            rows = con.execute(
+                "SELECT sid FROM symbols WHERE (file=? OR file LIKE ?) "
+                "AND start_line<=? AND end_line>=? ORDER BY (end_line - start_line) ASC LIMIT 1",
+                (abs_ep, f"%/{fname}", ep_line, ep_line),
+            ).fetchall()
+            if not rows:
+                return None, set()
+            handler_sid: int = rows[0][0]
+            reachable: set[int] = {handler_sid}
+            frontier: list[int] = [handler_sid]
+            for _ in range(8):
+                if not frontier:
+                    break
+                ph = ",".join("?" * len(frontier))
+                nexts = [r[0] for r in con.execute(
+                    f"SELECT callee_sid FROM edges WHERE caller_sid IN ({ph})", frontier,
+                ).fetchall() if r[0] not in reachable]
+                reachable.update(nexts)
+                frontier = nexts
+            return handler_sid, reachable
+        finally:
+            con.close()
+    except Exception:
+        return None, set()
+
+
+def _call_in_reachable(
+    caller_file: str, caller_line: int, member_path: str, reachable: set[int],
+) -> bool:
+    if not reachable:
+        return True  # no handler found — honest service-level fallback
+    from opencode_search.core.config import project_graph_db
+    gdb = project_graph_db(member_path)
+    if not gdb.exists():
+        return True
+    try:
+        con = sqlite3.connect(str(gdb), check_same_thread=False)
+        con.execute("PRAGMA query_only=ON")
+        try:
+            abs_file = str((Path(member_path) / caller_file).resolve())
+            fname = Path(caller_file).name
+            rows = con.execute(
+                "SELECT sid FROM symbols WHERE (file=? OR file LIKE ?) "
+                "AND start_line<=? AND end_line>=? ORDER BY (end_line - start_line) ASC LIMIT 1",
+                (abs_file, f"%/{fname}", caller_line, caller_line),
+            ).fetchall()
+            return bool(rows) and rows[0][0] in reachable
+        finally:
+            con.close()
+    except Exception:
+        return True  # DB error: conservative inclusion fallback
+
+
+def _callee_ep(
+    con: sqlite3.Connection, callee_svc: str, endpoint: str, kind: str,
+) -> tuple[str, int] | None:
+    rows = con.execute(
+        "SELECT file, line FROM entry_points "
+        "WHERE service=? AND kind=? AND trigger LIKE ? LIMIT 1",
+        (callee_svc, kind, f"%{endpoint}%"),
+    ).fetchall()
+    if not rows:
+        rows = con.execute(
+            "SELECT file, line FROM entry_points WHERE service=? AND kind=? LIMIT 1",
+            (callee_svc, kind),
+        ).fetchall()
+    return (rows[0][0], int(rows[0][1])) if rows else None
+
+
+# ─── D4 Handler-anchored process tracing ─────────────────────────────────────
 
 def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
     eps = con.execute(
-        "SELECT ep_id, service, file, line, kind, trigger FROM entry_points WHERE kind IN ('http','grpc')"
+        "SELECT ep_id, service, file, line, kind, trigger FROM entry_points "
+        "WHERE kind IN ('http','grpc')"
     ).fetchall()
     edges_raw = con.execute(
-        "SELECT caller_service, callee_service, callee_endpoint, kind FROM cross_service_edges"
+        "SELECT caller_service, callee_service, callee_endpoint, kind, "
+        "caller_file, caller_line FROM cross_service_edges"
     ).fetchall()
-    adj: dict[str, list[tuple[str, str, str]]] = {}
-    for row in edges_raw:
-        adj.setdefault(row[0], []).append((row[1], row[2], row[3]))
+    svc_to_member: dict[str, str] = {_service_label(m): m for m in members}
+    adj: dict[str, list[tuple]] = {}
+    for caller_svc, callee_svc, ep, kind, cf, cl in edges_raw:
+        adj.setdefault(caller_svc, []).append((callee_svc, ep, kind, cf or "", int(cl or 0)))
     count = 0
     seen_step_seqs: set[tuple] = set()
     for ep_id, entry_svc, ep_file, ep_line, ep_kind, trigger in eps:
-        if entry_svc not in adj:
+        outgoing = adj.get(entry_svc)
+        if not outgoing:
+            continue
+        member_path = svc_to_member.get(entry_svc)
+        _, reachable = _handler_reachable_set(member_path or "", ep_file, int(ep_line))
+        fired: list[tuple[str, str, str]] = []
+        for callee_svc, endpoint, kind, caller_file, caller_line in outgoing:
+            if (not caller_file or caller_line == 0) or (
+                member_path and _call_in_reachable(caller_file, caller_line, member_path, reachable)
+            ):
+                fired.append((callee_svc, endpoint, kind))
+        if not fired:
             continue
         visited: set[str] = {entry_svc}
         steps: list[tuple] = [(ep_id, 0, f"{ep_file}:{ep_line}", entry_svc, "entry", "")]
         order = 1
-        queue: list[tuple[str, int]] = [(entry_svc, 0)]
-        while queue:
-            svc, depth = queue.pop(0)
-            if depth >= 6:
+        for callee_svc, endpoint, kind in fired:
+            if callee_svc in visited:
                 continue
-            for callee_svc, endpoint, kind in adj.get(svc, []):
-                if callee_svc in visited:
+            visited.add(callee_svc)
+            steps.append((ep_id, order, endpoint, callee_svc, kind, ""))
+            order += 1
+            callee_out = adj.get(callee_svc)
+            callee_member = svc_to_member.get(callee_svc)
+            if not callee_out or not callee_member:
+                continue
+            callee_loc = _callee_ep(con, callee_svc, endpoint, kind)
+            if not callee_loc:
+                continue
+            _, c_reach = _handler_reachable_set(callee_member, callee_loc[0], callee_loc[1])
+            for c2_svc, ep2, k2, cf2, cl2 in callee_out:
+                if c2_svc in visited:
                     continue
-                visited.add(callee_svc)
-                steps.append((ep_id, order, endpoint, callee_svc, kind, ""))
-                order += 1
-                queue.append((callee_svc, depth + 1))
+                if not cf2 or cl2 == 0 or _call_in_reachable(cf2, cl2, callee_member, c_reach):
+                    visited.add(c2_svc)
+                    steps.append((ep_id, order, ep2, c2_svc, k2, ""))
+                    order += 1
         if len(visited) < 2:
             continue
         step_seq = tuple((s[3], s[2], s[4]) for s in steps[1:])
