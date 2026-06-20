@@ -43,7 +43,7 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
 - Run all three even if the fast suite has failures (collect full picture first)
 - Never skip tests; never continue-on-error silently
 - For each failure: show traceback, classify as code/infra/flaky, fix code bugs immediately
-- Infrastructure failures (Ollama cold, GPU not warm, daemon down): restart and rerun
+- Infrastructure failures (GPU not warm, daemon down): restart and rerun
 - GPU enforcement: no CPU fallback permitted
 
 ## Report format

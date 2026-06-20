@@ -109,22 +109,26 @@ def path_between(src: str, tgt: str, store: GraphStore, *, max_depth: int = 5) -
 
 def semantic_trace(src: str, tgt: str, store: GraphStore) -> str:
     """LLM narrative trace from src symbol to tgt symbol via the call path."""
-    from opencode_search.graph.llm import chat
+    from opencode_search.graph.llm import deepseek_chat, deepseek_key
     path = path_between(src, tgt, store)
     if not path:
         return f"No call path found from '{src}' to '{tgt}' within depth 5."
+    if not deepseek_key():
+        return "Narrative requires DEEPSEEK_API_KEY (no local generative LLM)."
     steps = " → ".join(p["name"] for p in path)
-    return chat(f"Explain how '{src}' leads to '{tgt}'. Call path: {steps}. Describe each step's purpose.")
+    return deepseek_chat(f"Explain how '{src}' leads to '{tgt}'. Call path: {steps}. Describe each step's purpose.")
 
 
 def impact_narrative(symbol: str, store: GraphStore) -> str:
     """LLM blast-radius summary for a symbol."""
-    from opencode_search.graph.llm import chat
+    from opencode_search.graph.llm import deepseek_chat, deepseek_key
     affected = impact(symbol, store)
     if not affected:
         return f"No callers found for '{symbol}' — low blast radius."
+    if not deepseek_key():
+        return "Narrative requires DEEPSEEK_API_KEY (no local generative LLM)."
     names = ", ".join(r["name"] for r in affected[:20])
-    return chat(
+    return deepseek_chat(
         f"Summarize blast radius of changing '{symbol}'. "
         f"Affected symbols: {names}. "
         f"Reply in 2-3 sentences with risk level (low/medium/high) and affected domains."

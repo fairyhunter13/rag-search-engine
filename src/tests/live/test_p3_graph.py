@@ -140,14 +140,6 @@ def test_detect_communities_idempotent(tmp_path):
         gs.close()
 
 
-# ── LLM client ───────────────────────────────────────────────────────────────
-
-@pytest.mark.slow
-def test_ollama_chat_returns_text():
-    from opencode_search.graph.llm import chat
-    result = chat("Reply with just the word 'pong'.")
-    assert isinstance(result, str) and len(result) > 0
-
 
 # ── enrichment ────────────────────────────────────────────────────────────────
 

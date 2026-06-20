@@ -569,7 +569,7 @@ def test_e5_mcp_query_path_no_generation():
 
 @pytest.mark.slow
 def test_e6_dashboard_chat_haiku_only(live_client):
-    """E6/HR10: POST /api/chat_stream streams tokens via claude-haiku-4-5 only (codex removed, no ollama)."""
+    """E6/HR10: POST /api/chat_stream streams tokens via claude-haiku-4-5 primary + DeepSeek fallback (codex removed)."""
     r = live_client.post(
         "/api/chat_stream",
         json={"query": "What is the reranker used in this engine?", "project_path": _OSE},
@@ -597,7 +597,7 @@ def test_e6_dashboard_chat_haiku_only(live_client):
     assert any(k in answer.lower() for k in kws), f"E6: answer missing engine concept: {answer[:200]}"
     src = (Path(__file__).parents[2] / "opencode_search" / "server" / "routes_chat.py").read_text()
     assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
-    assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat"
+    assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat (no local generative LLM)"
     assert '"codex"' not in src and "shutil.which(\"codex\")" not in src, (
         "E6 guard: codex support must be removed from routes_chat.py"
     )

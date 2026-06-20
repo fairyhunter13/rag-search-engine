@@ -29,7 +29,7 @@ Check all key routes return expected HTTP status:
 ### 4. GPU & resource profile
 - `nvidia-smi --query-gpu=temperature.gpu,memory.used,memory.total --format=csv,noheader`
 - Confirm GPU temp < 85°C, VRAM < 14 GB
-- `curl -s http://localhost:11434/api/ps` — confirm qwen3-query:8b is GPU-resident (size_vram > 0)
+- `curl -s http://127.0.0.1:8765/api/healthz` — confirm embedder loaded (GPU-bound, not CPU)
 
 ### 5. Daemon metrics
 - `GET /api/metrics` — report stream_success_count, stream_error_count, error_by_intent
@@ -45,7 +45,7 @@ Check all key routes return expected HTTP status:
 REGISTRY:   28 indexed, 2 removed (stale), 0 unenriched
 ASTRO:      search ✓  ask ✓  graph ✓  kb_health 100%
 DASHBOARD:  /dashboard 200  /api/projects 200  /api/jobs 200
-GPU:        Xº C  X.X GB / 16.3 GB  qwen3-query GPU-resident ✓
+GPU:        Xº C  X.X GB / 16.3 GB  embedder GPU-bound ✓ (ONNX/CUDA)
 METRICS:    success=N  errors=0
 FAST TESTS: 330 passed 0 failed
 ```

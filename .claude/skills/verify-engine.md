@@ -26,10 +26,9 @@ Each must return a non-empty, grounded answer — not a "no data" fallback:
 7. "Which functions are related to AddToCart?" → `graph(callers)` + `graph(impact_narrative)`
 
 ### Constraints enforced in every probe
-- GPU-only LOCAL: embeddings + reranker + qwen3-enrich:1.7b summaries on GPU (never CPU). Cloud
-  LLM is the explicit exception: DeepSeek (classification + wiki) + claude-haiku-4-5 (chat).
-- `graph/llm.py:chat()` must send `think=False` (no idle busy-spin, Ollama #13461)
-- Dashboard chat = claude-haiku-4-5 (Claude Code CLI) only — codex removed
+- GPU-only: embeddings + reranking via FastEmbed/ONNX/CUDA. No local generative LLM.
+- KB build = cloud DeepSeek-only (crash if no DEEPSEEK_API_KEY); dashboard chat = claude-haiku-4-5 primary + DeepSeek fallback
+- Dashboard chat = claude-haiku-4-5 (Claude Code CLI) primary — codex removed
 - Auto-pipeline on by default: `GET /api/auto_pipeline_status` → `enabled: true`
 - Global integration: profiles (CLAUDE.md, hermes, opencode) × 5 tools — codex removed
 
@@ -39,7 +38,7 @@ Each must return a non-empty, grounded answer — not a "no data" fallback:
 1. RUN the fast test suite → capture all failures
 2. For each failure: search() source → classify code-bug vs infra → fix root cause
    - Code bug: minimal edit → run the specific test → confirm green
-   - Infra (Ollama cold, model eviction): reload qwen3-query:8b → rerun, never skip
+   - Infra (embedding model cold start): wait for GPU warm-up → rerun, never skip
 3. After fixing: run fast suite again → if clean, continue
 4. RUN the slow non-browser suite (145 astro-scenario tests) → fix any failures
 5. PROBE each KB question category via the MCP tools directly → assert non-empty answers

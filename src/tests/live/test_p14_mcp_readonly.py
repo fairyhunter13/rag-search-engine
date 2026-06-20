@@ -47,7 +47,7 @@ def test_mcp_handlers_have_no_llm_generation():
 
 
 def test_ask_mcp_returns_structured_context():
-    """P14.4 runtime: MCP ask returns pre-built artifacts (non-empty, fast, no Ollama generate)."""
+    """P14.4 runtime: MCP ask returns pre-built artifacts (non-empty, fast, no generative LLM on query path)."""
     from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import ask as ask_tool
 

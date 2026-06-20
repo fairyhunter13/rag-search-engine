@@ -146,12 +146,11 @@ ignore_errors = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["src/tests"]
-# reruns=2: 3 total attempts — slow LLM tests swallow Ollama errors silently;
+# reruns=2: 3 total attempts — slow LLM tests can have transient DeepSeek/haiku delays;
 #   tests that pass in isolation always succeed within 3 tries under GPU load
 # reruns-delay=5: fast tests use HTTP to daemon (<1s RTT); 5s is ample retry backoff
-#   (was 30s for Ollama queue drain, but slow tests run separately so 30s was wasteful)
 addopts = "--reruns=2 --reruns-delay=5"
 markers = [
-    "live: requires daemon at :8765, Ollama at :11434, CUDA GPU — skipped if any absent",
+    "live: requires daemon at :8765, CUDA GPU — skipped if any absent",
     "slow: LLM-heavy tests (>30s each) — skip for fast smoke checks with -m 'live and not slow'",
 ]

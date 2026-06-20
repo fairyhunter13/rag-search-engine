@@ -1,4 +1,4 @@
-"""chat_stream (SSE) route — Claude Code (claude-haiku-4-5) only; codex support removed."""
+"""chat_stream (SSE) route — claude-haiku-4-5 primary; DeepSeek fallback; no local generative LLM."""
 from __future__ import annotations
 
 import asyncio
@@ -56,17 +56,29 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 
 
 async def _stream_answer(prompt: str, model_used: list[str]):
-    """Yield text chunks from claude-haiku-4-5 (Claude Code CLI). Codex support removed."""
-    if not _CLAUDE:
-        raise RuntimeError("claude CLI not found — install Claude Code")
-    model_used[0] = QUERY_LLM_MODEL  # claude-haiku-4-5
-    proc = await asyncio.create_subprocess_exec(
-        _CLAUDE, "-p", "--model", QUERY_LLM_MODEL, prompt,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-    )
-    while chunk := await proc.stdout.read(512):
-        yield chunk.decode(errors="replace")
-    await proc.wait()
+    """Yield text chunks from claude-haiku-4-5 (primary); falls back to DeepSeek on failure."""
+    if _CLAUDE:
+        model_used[0] = QUERY_LLM_MODEL
+        proc = await asyncio.create_subprocess_exec(
+            _CLAUDE, "-p", "--model", QUERY_LLM_MODEL, prompt,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        output_bytes = b""
+        while chunk := await proc.stdout.read(512):
+            output_bytes += chunk
+            yield chunk.decode(errors="replace")
+        await proc.wait()
+        if output_bytes:
+            return  # haiku succeeded — do not fall through to DeepSeek
+
+    # Fallback: haiku CLI absent or yielded empty output → DeepSeek
+    from opencode_search.graph.llm import deepseek_chat, deepseek_key
+    if not deepseek_key():
+        raise RuntimeError("claude CLI not found and DEEPSEEK_API_KEY not set — cannot serve chat")
+    model_used[0] = QUERY_LLM_FALLBACK_MODEL
+    loop = asyncio.get_running_loop()
+    text = await loop.run_in_executor(None, deepseek_chat, prompt)
+    yield text
 
 
 async def _api_chat_stream(request: Request) -> Response:

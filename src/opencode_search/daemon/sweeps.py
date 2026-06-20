@@ -229,6 +229,13 @@ def _index_files(project_path: str, files: list) -> None:
 def _enrich_project(project_path: str) -> None:
     import time
 
+    from opencode_search.graph.llm import deepseek_key
+    if not deepseek_key():
+        raise RuntimeError(
+            "KB build requires DEEPSEEK_API_KEY — local generative LLM is decommissioned. "
+            "Set DEEPSEEK_API_KEY in env or ~/.bash_env."
+        )
+
     from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
     from opencode_search.core.gpu import gpu_temp_c
     from opencode_search.graph.enrich import (

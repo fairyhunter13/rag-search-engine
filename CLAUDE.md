@@ -29,7 +29,7 @@ python -m compileall -q src/opencode_search
 ```
 
 **Test markers**:
-- `live` — requires daemon at :8765, Ollama, GPU
+- `live` — requires daemon at :8765, GPU
 - `slow` — LLM-heavy tests (>30s each); skip with `-m "live and not slow"` for fast feedback
 
 **Memory profile**: the live suite loads a real embedder in-process (~1 GB) — intrinsic to the no-mock invariant. Use the fast smoke command above as the default to keep peak RSS lower. Browser tests run in a separate process; don't run them together with the live suite.
@@ -50,7 +50,7 @@ Any CPU fallback must raise a fatal error — never fall back silently.
 - Entry points: `src/opencode_search/server/mcp.py` (MCP server + routes), `src/opencode_search/daemon/` (daemon package), `src/opencode_search/cli.py` (CLI), `src/opencode_search/__main__.py` (bridge-stdio shim)
 - Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/opencode_search/`
 - Registry: `~/.local/share/opencode-search/projects.json`
-- Tests: `src/tests/live/` (live suite — requires daemon at :8765, Ollama, GPU)
-- LLM provider: ollama + qwen3-enrich:1.7b (GPU-local, RTX 5080; systemd service; see `scripts/modelfiles/qwen3-enrich.modelfile`)
+- Tests: `src/tests/live/` (live suite — requires daemon at :8765, GPU; no local generative LLM)
+- LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking only); KB build = cloud DeepSeek; chat = claude-haiku-4-5 + DeepSeek fallback
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 - Architecture: `docs/architecture/federation-and-search-engine.md` + `docs/architecture/federation-ops-and-invariants.md`

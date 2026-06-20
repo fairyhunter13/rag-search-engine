@@ -1,4 +1,4 @@
-"""LLM clients for KB enrichment: local Ollama (GPU) + cloud DeepSeek. FORBIDDEN for dashboard chat."""
+"""KB-build + chat-fallback LLM client: cloud DeepSeek only. No local generative LLM."""
 from __future__ import annotations
 
 import json
@@ -8,10 +8,6 @@ import urllib.request
 from functools import lru_cache
 from pathlib import Path
 
-from opencode_search.core.config import LLM_MODEL
-from opencode_search.core.gpu import assert_ollama_gpu
-
-_OLLAMA_URL = os.environ.get("OPENCODE_OLLAMA_URL", "http://127.0.0.1:11434")
 _DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 _DEEPSEEK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-chat")
 
@@ -20,7 +16,7 @@ _DEEPSEEK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-chat")
 def deepseek_key() -> str | None:
     """DeepSeek API key from env, else parsed from ~/.bash_env (systemd daemon lacks it).
 
-    Returns None when unavailable so callers can fall back to local Ollama / templated output.
+    Returns None when unavailable — callers must raise, not silently swallow.
     """
     k = os.environ.get("DEEPSEEK_API_KEY")
     if k:
@@ -62,41 +58,3 @@ def deepseek_chat(
         raise RuntimeError(f"DeepSeek unreachable: {exc}") from exc
 
 
-def chat(
-    prompt: str, *, model: str = LLM_MODEL, timeout: int = 120,
-    temperature: float | None = None, num_predict: int | None = None,
-    think: bool | None = False,
-) -> str:
-    """Generate via Ollama on GPU. Only for KB build / enrichment, never dashboard chat.
-
-    temperature=0.0 forces greedy/deterministic decoding (used by classification so
-    semantic_type is reproducible across runs); None keeps Ollama's default.
-    think=False (DEFAULT for all KB calls) disables qwen3 thinking-mode. This is THE fix
-    for the idle-CPU root cause: qwen3 is a thinking model and the modelfile's text
-    "no <think>" instruction is only a hint it ignores — it then emits unbounded <think>
-    output that hits the 4096 context window → Ollama truncates → llama-server busy-spins
-    a core at ~84% indefinitely (Ollama #13461). The API `"think": false` is a hard control:
-    clean bounded output, no truncation, ~2.8% idle CPU. Enrichment never wants reasoning,
-    so False is the safe default; pass think=None only to deliberately allow it.
-    """
-    options: dict = {"num_gpu": -1}
-    if temperature is not None:
-        options["temperature"] = temperature
-    if num_predict is not None:
-        options["num_predict"] = num_predict
-    body: dict = {"model": model, "prompt": prompt, "stream": False, "options": options}
-    if think is not None:
-        body["think"] = think
-    payload = json.dumps(body).encode()
-    req = urllib.request.Request(
-        f"{_OLLAMA_URL}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            result = json.loads(resp.read()).get("response", "")
-        assert_ollama_gpu(model, _OLLAMA_URL)
-        return result
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Ollama unreachable at {_OLLAMA_URL}: {exc}") from exc
