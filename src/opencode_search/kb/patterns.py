@@ -7,29 +7,30 @@ from pathlib import Path
 
 from opencode_search.index.discover import detect_language, iter_files
 
-_KNOWN: dict[str, str] = {
-    "fastapi": "FastAPI", "flask": "Flask", "django": "Django", "starlette": "Starlette",
-    "react": "React", "vue": "Vue", "angular": "Angular", "svelte": "Svelte", "sveltejs": "Svelte",
-    "next": "Next.js", "nuxt": "Nuxt", "express": "Express", "astro": "Astro",
-    "torch": "PyTorch", "tensorflow": "TensorFlow", "keras": "Keras",
-    "sqlalchemy": "SQLAlchemy", "prisma": "Prisma", "mongoose": "Mongoose",
-    "pytest": "pytest", "jest": "Jest", "playwright": "Playwright", "spring": "Spring Boot",
-    "gin": "Gin", "echo": "Echo", "axum": "Axum",
-}
+_FRAMEWORK_CACHE: dict[tuple, list[str]] = {}
 
 
 def _llm_frameworks(deps: list[str]) -> list[str]:
-    """Map well-known dependency names to framework labels (no LLM)."""
-    out = set()
-    for d in deps:
-        dl = d.lower()
-        if dl.startswith("@"):
-            key = dl[1:].split("/")[0].split("-")[0]  # @scope/pkg → scope
-        else:
-            key = dl.split("/")[-1].split("-")[0].split("_")[0]
-        if key in _KNOWN:
-            out.add(_KNOWN[key])
-    return sorted(out)
+    """Return framework labels via DeepSeek LLM; falls back to raw dep names when no key."""
+    key = tuple(sorted(set(deps)))
+    if key in _FRAMEWORK_CACHE:
+        return _FRAMEWORK_CACHE[key]
+    try:
+        from opencode_search.graph.llm import deepseek_chat, deepseek_key
+        if not deepseek_key():
+            raise ValueError("no key")
+        sample = sorted({d.split("/")[-1].split("-")[0] for d in deps if d})[:40]
+        raw = deepseek_chat(
+            "List the software frameworks (React, Django, Gin, etc.) used by a project with "
+            "these dependencies. Return ONLY a JSON array of short framework names.\n\n"
+            "Dependencies:\n" + "\n".join(sample),
+            max_tokens=200,
+        ).strip().replace("```json", "").replace("```", "").strip()
+        result = sorted({s.strip() for s in json.loads(raw) if isinstance(s, str) and s.strip()})
+    except Exception:
+        result = sorted({d.split("/")[-1].split("-")[0] for d in deps if d})
+    _FRAMEWORK_CACHE[key] = result
+    return result
 
 
 def _parse_deps(path: Path) -> list[str]:

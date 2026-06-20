@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 
@@ -56,24 +55,12 @@ def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def
 
 
 def _detect_services(root: str) -> list[dict]:
-    """Detect gRPC services via .proto `service` blocks and Go Register*Server calls."""
-    rp = Path(root)
-    names: set[str] = set()
-    for f in rp.rglob("*.proto"):
-        try:
-            for m in re.finditer(r"^service\s+(\w+)\s*\{", f.read_text(), re.MULTILINE):
-                names.add(m.group(1))
-        except OSError:
-            pass
-    for f in rp.rglob("*.go"):
-        try:
-            for m in re.finditer(r"\bRegister(\w+)Server\b", f.read_text()):
-                names.add(m.group(1))
-        except OSError:
-            pass
+    """Detect gRPC services by mining registrar names from generated *.pb.go (tree-sitter)."""
+    from opencode_search.kb.bpre_ast import federation_discover
+    names = set(federation_discover([root]).registrars.values())
     if not names:
         return []
-    return [{"name": rp.name, "path": root, "services": sorted(names)}]
+    return [{"name": Path(root).name, "path": root, "services": sorted(names)}]
 
 
 _VALID = {

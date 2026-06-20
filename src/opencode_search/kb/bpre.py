@@ -15,34 +15,14 @@ import hashlib
 import json
 import logging
 import os
-import re
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from opencode_search.kb.bpre_ast import ApiSurface
 
 log = logging.getLogger(__name__)
-
-# ─── Patterns ─────────────────────────────────────────────────────────────────
-_GRPC_CLIENT = re.compile(r"(\w+)\.New(\w+)Client\s*\(")
-_GRPC_SERVER = re.compile(r"\bRegister(\w+)Server\s*\(")
-_PROTO_IMPORT = re.compile(r'^\s+(\w+)\s+"([^"]*astro-proto[^"]*)"', re.MULTILINE)
-_GO_IMPORT_BLOCK = re.compile(r"import\s*\(([^)]+)\)", re.DOTALL)
-# Pub/Sub publisher: detect any publish call shape (no inline-type assumption)
-_PUBSUB_PUBLISH_CALL = re.compile(
-    r"\.(?:Publish|PublishWithSchema|PublishMessageV2|BatchPublish\w*)\s*\("
-)
-# Pub/Sub proto type references on publisher side
-_PROTO_MARSHAL = re.compile(r"proto\.Marshal\s*\(\s*[&*]?(\w+)\.(\w+)\b")
-_PROTO_LITERAL = re.compile(r"[&*]?(\w+)\.(\w+)\{")
-_PROTO_UNMARSHAL = re.compile(r"proto\.Unmarshal\s*\([^,]+,\s*[&*]?(\w+)\.(\w+)\b")
-_PUBSUB_RECEIVE = re.compile(r"\.Receive\s*\(\s*\w+\s*,\s*func\b")
-_HTTP_ROUTE_GO = re.compile(r"\.(GET|POST|PUT|DELETE|PATCH)\s*\(\s*\"(/[^\"]+)\"")
-_SPRING_MAPPING = re.compile(
-    r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(?(?:value\s*=\s*)?\"([^\"]+)\"'
-)
-_HTTP_CLIENT_GO = re.compile(
-    r'(?:http|client)\.(Get|Post|Put|Delete|Patch)\s*\(\s*(?:[^,]+\+\s*)?\"([^\"]+)\"'
-)
-_STATUS_ENUM = re.compile(r"Status\s*=\s*[\"'](\w+)[\"']|\.(\w+Status)\s*=")
 
 # ─── Test-file exclusion ──────────────────────────────────────────────────────
 
@@ -153,97 +133,66 @@ def _source_files(member_path: str) -> list[Path]:
 
 # ─── D2 Entry-point detection ─────────────────────────────────────────────────
 
-def _detect_entry_points(con: sqlite3.Connection, member_path: str) -> None:
+def _detect_entry_points(
+    con: sqlite3.Connection, member_path: str, surf: ApiSurface,
+) -> None:
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     service = _service_label(member_path)
     rows: list[tuple] = []
     for src in _source_files(member_path):
         if _is_test_file(str(src)):
             continue
         try:
-            text = src.read_text(errors="replace")
+            content = src.read_text(errors="replace")
         except OSError:
             continue
+        ff = scan_file(str(src), content, detect_language(src), surf)
+        if not ff:
+            continue
         rel = _rel_path(str(src), member_path)
-        for m in _HTTP_ROUTE_GO.finditer(text):
-            verb, path = m.group(1), m.group(2)
-            ep_id = _hid(service, rel, verb, path)
-            rows.append((ep_id, service, rel, text[:m.start()].count("\n") + 1, "http", f"{verb} {path}"))
-        for m in _GRPC_SERVER.finditer(text):
-            ep_id = _hid(service, rel, "grpc", m.group(1))
-            rows.append((ep_id, service, rel, text[:m.start()].count("\n") + 1, "grpc", m.group(1)))
-        for m in _SPRING_MAPPING.finditer(text):
-            ep_id = _hid(service, rel, "spring", m.group(1))
-            rows.append((ep_id, service, rel, text[:m.start()].count("\n") + 1, "http", m.group(1)))
-        for m in _PUBSUB_RECEIVE.finditer(text):
-            ep_id = _hid(service, rel, "pubsub", str(m.start()))
-            rows.append((ep_id, service, rel, text[:m.start()].count("\n") + 1, "pubsub", "subscriber"))
+        for verb, path, ln in ff.http_routes:
+            rows.append((_hid(service, rel, verb, path), service, rel, ln, "http", f"{verb} {path}"))
+        for svc_name, ln in ff.grpc_servers:
+            rows.append((_hid(service, rel, "grpc", svc_name), service, rel, ln, "grpc", svc_name))
+        if ff.has_receive_call:
+            rows.append((_hid(service, rel, "pubsub", "recv"), service, rel, 0, "pubsub", "subscriber"))
     con.executemany("INSERT OR IGNORE INTO entry_points VALUES (?,?,?,?,?,?)", rows)
     con.commit()
 
 
-# ─── D3 Proto helpers ─────────────────────────────────────────────────────────
-
-def _parse_proto_aliases(src: str) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    for block in _GO_IMPORT_BLOCK.finditer(src):
-        for m in _PROTO_IMPORT.finditer(block.group(1)):
-            aliases[m.group(1)] = m.group(2)
-    return aliases
-
+# ─── D3 Service/pub-sub/HTTP registries ───────────────────────────────────────
 
 def _build_service_registry(members: list[str]) -> dict[str, str]:
-    """Map {ServiceName → member_path} from RegisterXxxServer CALL sites (not proto definitions)."""
+    """Map {ServiceLabel → member_path} by mining registrar names from generated *.pb.go."""
+    from opencode_search.kb.bpre_ast import federation_discover
     registry: dict[str, str] = {}
     for member in members:
-        for src in _source_files(member):
-            # Skip protobuf-generated files — they define RegisterXxxServer, not call it
-            if src.name.endswith((".pb.go", "_grpc.pb.go")):
-                continue
-            try:
-                text = src.read_text(errors="replace")
-            except OSError:
-                continue
-            # Only look for calls (alias.RegisterXxxServer or dot-qualified forms)
-            for m in re.finditer(r"\bRegister(\w+)Server\s*\(\s*\w+\s*,", text):
-                svc_name = m.group(1)
-                # Avoid overwriting with a later member if already found elsewhere
-                if svc_name not in registry:
-                    registry[svc_name] = member
+        for _fn, svc in federation_discover([member]).registrars.items():
+            registry.setdefault(svc, member)
     return registry
 
 
-def _build_pubsub_registry(members: list[str]) -> dict[str, tuple[str, str]]:
+def _build_pubsub_registry(
+    members: list[str], surf: ApiSurface,
+) -> dict[str, tuple[str, str]]:
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     publishers: dict[str, list[str]] = {}
     consumers: dict[str, list[str]] = {}
     for member in members:
         for src in _source_files(member):
             try:
-                text = src.read_text(errors="replace")
+                content = src.read_text(errors="replace")
             except OSError:
                 continue
-            aliases = _parse_proto_aliases(text)
-            if not aliases:
+            ff = scan_file(str(src), content, detect_language(src), surf)
+            if not ff:
                 continue
-            # Publisher: file has a Publish call AND imports an astro-proto alias.
-            # Collect proto types via proto.Marshal() and alias-gated struct literals.
-            if _PUBSUB_PUBLISH_CALL.search(text):
-                proto_types: set[str] = set()
-                for m in _PROTO_MARSHAL.finditer(text):
-                    alias, msg = m.group(1), m.group(2)
-                    if alias in aliases:
-                        proto_types.add(f"{alias}.{msg}")
-                for m in _PROTO_LITERAL.finditer(text):
-                    alias, msg = m.group(1), m.group(2)
-                    if alias in aliases:
-                        proto_types.add(f"{alias}.{msg}")
-                for key in proto_types:
-                    publishers.setdefault(key, []).append(member)
-            # Consumer detection (unchanged — correct: proto.Unmarshal inside sub.Receive)
-            if _PUBSUB_RECEIVE.search(text):
-                for m in _PROTO_UNMARSHAL.finditer(text):
-                    alias, msg = m.group(1), m.group(2)
-                    if alias in aliases:
-                        consumers.setdefault(f"{alias}.{msg}", []).append(member)
+            for tk, _ln in ff.proto_marshal_types:
+                publishers.setdefault(tk, []).append(member)
+            for tk, _ln in ff.pubsub_consumes:
+                consumers.setdefault(tk, []).append(member)
     result: dict[str, tuple[str, str]] = {}
     for key in set(publishers) & set(consumers):
         pub, sub = publishers[key][0], consumers[key][0]
@@ -252,19 +201,24 @@ def _build_pubsub_registry(members: list[str]) -> dict[str, tuple[str, str]]:
     return result
 
 
-def _build_http_route_map(members: list[str]) -> dict[str, str]:
+def _build_http_route_map(
+    members: list[str], surf: ApiSurface,
+) -> dict[str, str]:
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     route_map: dict[str, str] = {}
     for member in members:
         svc = _service_label(member)
         for src in _source_files(member):
             try:
-                text = src.read_text(errors="replace")
+                content = src.read_text(errors="replace")
             except OSError:
                 continue
-            for m in _HTTP_ROUTE_GO.finditer(text):
-                route_map[f"{m.group(1)} {m.group(2)}"] = svc
-            for m in _SPRING_MAPPING.finditer(text):
-                route_map[f"GET {m.group(1)}"] = svc
+            ff = scan_file(str(src), content, detect_language(src), surf)
+            if not ff:
+                continue
+            for verb, path, _ln in ff.http_routes:
+                route_map[f"{verb} {path}"] = svc
     return route_map
 
 
@@ -272,29 +226,29 @@ def _build_http_route_map(members: list[str]) -> dict[str, str]:
 
 def _resolve_grpc_edges(
     con: sqlite3.Connection, member: str, service_registry: dict[str, str],
+    surf: ApiSurface,
 ) -> None:
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     caller_svc = _service_label(member)
     rows: list[tuple] = []
     for src in _source_files(member):
         try:
-            text = src.read_text(errors="replace")
+            content = src.read_text(errors="replace")
         except OSError:
             continue
-        aliases = _parse_proto_aliases(text)
+        ff = scan_file(str(src), content, detect_language(src), surf)
+        if not ff:
+            continue
         rel = _rel_path(str(src), member)
-        for m in _GRPC_CLIENT.finditer(text):
-            alias, svc_name = m.group(1), m.group(2)
-            if alias not in aliases:
-                continue
+        for _alias, svc_name, ctor, ln in ff.grpc_clients:
             callee_member = service_registry.get(svc_name)
             if not callee_member or callee_member == member:
                 continue
             callee_svc = _service_label(callee_member)
             edge_id = _hid(caller_svc, callee_svc, "grpc", svc_name)
-            line = text[:m.start()].count("\n") + 1
-            rows.append((edge_id, caller_svc, rel, line, callee_svc,
-                         f"{svc_name}Service", "grpc", 1.0,
-                         f"New{svc_name}Client @ {rel}:{line}"))
+            rows.append((edge_id, caller_svc, rel, ln, callee_svc,
+                         f"{svc_name}Service", "grpc", 1.0, f"{ctor} @ {rel}:{ln}"))
     con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
 
@@ -314,24 +268,28 @@ def _resolve_pubsub_edges(
 
 def _resolve_http_edges(
     con: sqlite3.Connection, member: str, http_routes: dict[str, str],
+    surf: ApiSurface,
 ) -> None:
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     caller_svc = _service_label(member)
     rows: list[tuple] = []
     for src in _source_files(member):
         try:
-            text = src.read_text(errors="replace")
+            content = src.read_text(errors="replace")
         except OSError:
             continue
+        ff = scan_file(str(src), content, detect_language(src), surf)
+        if not ff:
+            continue
         rel = _rel_path(str(src), member)
-        for m in _HTTP_CLIENT_GO.finditer(text):
-            verb, path = m.group(1).upper(), m.group(2)
+        for verb, path, ln in ff.http_clients:
             callee_svc = http_routes.get(f"{verb} {path}")
             if not callee_svc or callee_svc == caller_svc:
                 continue
             edge_id = _hid(caller_svc, callee_svc, "http", verb, path)
-            line = text[:m.start()].count("\n") + 1
-            rows.append((edge_id, caller_svc, rel, line, callee_svc,
-                         f"{verb} {path}", "http", 0.8, f"HTTP @ {rel}:{line}"))
+            rows.append((edge_id, caller_svc, rel, ln, callee_svc,
+                         f"{verb} {path}", "http", 0.8, f"HTTP @ {rel}:{ln}"))
     con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
 
@@ -349,6 +307,7 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
     for row in edges_raw:
         adj.setdefault(row[0], []).append((row[1], row[2], row[3]))
     count = 0
+    seen_step_seqs: set[tuple] = set()
     for ep_id, entry_svc, ep_file, ep_line, ep_kind, trigger in eps:
         if entry_svc not in adj:
             continue
@@ -369,6 +328,10 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
                 queue.append((callee_svc, depth + 1))
         if len(visited) < 2:
             continue
+        step_seq = tuple((s[3], s[2], s[4]) for s in steps[1:])
+        if step_seq in seen_step_seqs:
+            continue
+        seen_step_seqs.add(step_seq)
         name = f"{entry_svc}: {trigger or ep_kind}"
         proc_id = _hid(ep_id, entry_svc, name)
         services = sorted(visited)
@@ -420,7 +383,9 @@ def _extract_rules(con: sqlite3.Connection, members: list[str]) -> None:
     con.commit()
 
 
-def _extract_state_machines(con: sqlite3.Connection, members: list[str]) -> None:
+def _extract_state_machines(
+    con: sqlite3.Connection, members: list[str], surf: ApiSurface,
+) -> None:
     if not _bpre_llm_on():
         return
     try:
@@ -429,19 +394,18 @@ def _extract_state_machines(con: sqlite3.Connection, members: list[str]) -> None
             return
     except Exception:
         return
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     for member in members:
         for src in _source_files(member):
             try:
-                text = src.read_text(errors="replace")
+                content = src.read_text(errors="replace")
             except OSError:
                 continue
-            statuses = list(dict.fromkeys(
-                m.group(1) or m.group(2)
-                for m in _STATUS_ENUM.finditer(text)
-                if m.group(1) or m.group(2)
-            ))
-            if len(statuses) < 3:
+            ff = scan_file(str(src), content, detect_language(src), surf)
+            if not ff or len(ff.status_enums) < 3:
                 continue
+            statuses = list(dict.fromkeys(ff.status_enums))
             rel = _rel_path(str(src), member)
             entity = Path(src).stem
             sm_id = _hid(member, rel, entity)
@@ -454,7 +418,7 @@ def _extract_state_machines(con: sqlite3.Connection, members: list[str]) -> None
             )
             try:
                 raw = deepseek_chat(prompt, max_tokens=400)
-                raw = re.sub(r"```[a-z]*\n?", "", raw).strip().rstrip("`").strip()
+                raw = raw.replace("```json", "").replace("```", "").strip().rstrip("`").strip()
                 data = json.loads(raw)
                 states = json.dumps(data.get("states", []))
                 transitions = json.dumps(data.get("transitions", []))
@@ -581,22 +545,24 @@ def reconstruct_processes(root_path: str) -> int:
                     "process_steps", "process_rules", "process_artifacts"):
             con.execute(f"DELETE FROM {tbl}")
         con.commit()
+        from opencode_search.kb.bpre_ast import federation_discover
+        surf = federation_discover(members)
         for member in members:
-            _detect_entry_points(con, member)
+            _detect_entry_points(con, member, surf)
         svc_registry = _build_service_registry(members)
-        pubsub_registry = _build_pubsub_registry(members)
-        http_routes = _build_http_route_map(members)
+        pubsub_registry = _build_pubsub_registry(members, surf)
+        http_routes = _build_http_route_map(members, surf)
         for member in members:
-            _resolve_grpc_edges(con, member, svc_registry)
+            _resolve_grpc_edges(con, member, svc_registry, surf)
         _resolve_pubsub_edges(con, pubsub_registry)
         for member in members:
-            _resolve_http_edges(con, member, http_routes)
+            _resolve_http_edges(con, member, http_routes, surf)
         count = _trace_processes(con, members)
         if count == 0:
             log.info("bpre: no multi-service processes found for %s", root_path)
             return 0
         _extract_rules(con, members)
-        _extract_state_machines(con, members)
+        _extract_state_machines(con, members, surf)
         _synthesize_artifacts(con)
         log.info("bpre: reconstructed %d processes for %s", count, root_path)
         return count
