@@ -184,3 +184,22 @@ def test_all_project_graph_dbs_have_canonical_edges_schema():
         assert "from_id" not in cols, (
             f"{entry.path}: edges still has legacy 'from_id' column — migration did not run."
         )
+
+
+# ── Gap 2: call-site-accurate edges source-guard ─────────────────────────────
+
+def test_index_project_attributes_edges_to_enclosing_symbol():
+    """Gap 2: _index_project resolves each call to the innermost enclosing symbol.
+    Caller_sid must NOT be a file-level representative; it must be the enclosing fn.
+    """
+    import inspect
+
+    from opencode_search.daemon.sweeps import _index_project
+    src = inspect.getsource(_index_project)
+    assert "caller_sids[0]" not in src, (
+        "representative-caller shortcut detected — Gap 2 regression: "
+        "_index_project must attribute each call to its innermost enclosing symbol"
+    )
+    assert "enclosing" in src or "innermost" in src or "start_line" in src, (
+        "_index_project must search for enclosing symbol by line range"
+    )

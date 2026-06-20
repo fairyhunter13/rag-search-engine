@@ -194,3 +194,27 @@ def test_status_includes_level_breakdown_fields(live_client):
     status = _overview_status(_OSE)
     for field in ("enriched_pct", "l1_enriched_pct", "l2_enriched_pct", "kb_state"):
         assert field in status, f"overview(status) missing field {field!r}"
+
+
+# ---------------------------------------------------------------------------
+# Gap 3: ask() synthesis excludes test/tooling communities (source-guard)
+# ---------------------------------------------------------------------------
+
+def test_ask_synthesis_excludes_test_tooling_communities():
+    """Gap 3 source-guard: _top_communities_semantic/_macro_community_context/_community_context
+    all filter out test/tooling/utility semantic_type communities before assembling context.
+    """
+    import inspect
+
+    from opencode_search.query import ask as ask_mod
+    for fn_name in ("_top_communities_semantic", "_macro_community_context", "_community_context"):
+        fn = getattr(ask_mod, fn_name, None)
+        if fn is None:
+            continue
+        src = inspect.getsource(fn)
+        assert "test" in src.lower() and "tooling" in src.lower(), (
+            f"{fn_name} must filter out 'test'/'tooling' semantic_type communities"
+        )
+        assert "NOT IN" in src or "not in" in src.lower(), (
+            f"{fn_name} must use NOT IN exclusion for test/tooling communities"
+        )
