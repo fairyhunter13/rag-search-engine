@@ -449,6 +449,99 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
     return count
 
 
+def _bpre_llm_link_on() -> bool:
+    return os.environ.get("OSE_BPRE_LLM_LINK", "0") == "1"
+
+
+def _llm_link_scan(
+    members: list[str], surf: ApiSurface,
+    known_routes: set[str], known_topics: set[str],
+) -> list[dict]:
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
+    seen: set[str] = set()
+    items: list[dict] = []
+    for member in members:
+        caller_svc = _service_label(member)
+        for src in _source_files(member):
+            try:
+                content = src.read_text(errors="replace")
+            except OSError:
+                continue
+            ff = scan_file(str(src), content, detect_language(src), surf)
+            if not ff:
+                continue
+            for tk, _ln in ff.proto_marshal_types:
+                key = f"pubsub:{caller_svc}:{tk}"
+                if tk not in known_topics and key not in seen:
+                    seen.add(key)
+                    items.append({"kind": "pubsub", "caller": caller_svc, "topic_or_route": tk})
+            for verb, path, _ln in ff.http_clients:
+                route = f"{verb} {path}"
+                key = f"http:{caller_svc}:{route}"
+                if route not in known_routes and key not in seen:
+                    seen.add(key)
+                    items.append({"kind": "http", "caller": caller_svc, "topic_or_route": route})
+    return items
+
+
+def _llm_link_resolve(
+    con: sqlite3.Connection, items: list[dict], svcs: list[str],
+) -> None:
+    from opencode_search.graph.llm import deepseek_chat
+    hints = "\n".join(
+        f"- {u['kind']} '{u['topic_or_route']}' from '{u['caller']}'" for u in items[:30]
+    )
+    prompt = (
+        f"Microservices: {', '.join(svcs)}. For each below, which service is the target?"
+        f" Return ONLY JSON: [{{\"kind\":...,\"caller\":...,\"topic_or_route\":...,\"callee\":...}}]."
+        f" Use null callee if unknown.\n\n{hints}"
+    )
+    try:
+        raw = deepseek_chat(prompt, max_tokens=512)
+    except Exception:
+        return
+    s, e = raw.find("["), raw.rfind("]")
+    if s == -1 or e <= s:
+        return
+    try:
+        parsed = json.loads(raw[s:e + 1])
+    except Exception:
+        return
+    svc_set = set(svcs)
+    rows = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        callee, caller = item.get("callee"), item.get("caller")
+        if not callee or callee not in svc_set or not caller or caller == callee:
+            continue
+        tor = item.get("topic_or_route", "")
+        kind = f"{item.get('kind', 'llm')}_llm"
+        rows.append((_hid(caller, callee, kind, tor), caller, "", 0, callee,
+                     tor, kind, 0.7, f"llm-linked:{tor}"))
+    if rows:
+        con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        con.commit()
+
+
+def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurface) -> None:
+    if not (_bpre_llm_link_on() and _bpre_llm_on()):
+        return
+    from opencode_search.graph.llm import deepseek_key
+    if not deepseek_key():
+        return
+    known_routes: set[str] = {r[0] for r in con.execute(
+        "SELECT callee_endpoint FROM cross_service_edges WHERE kind='http'"
+    ).fetchall()}
+    known_topics: set[str] = {r[0] for r in con.execute(
+        "SELECT callee_endpoint FROM cross_service_edges WHERE kind='pubsub'"
+    ).fetchall()}
+    items = _llm_link_scan(members, surf, known_routes, known_topics)
+    if items:
+        _llm_link_resolve(con, items, [_service_label(m) for m in members])
+
+
 # ─── D5 Rule / state-machine extraction ──────────────────────────────────────
 
 def _extract_rules(con: sqlite3.Connection, members: list[str]) -> None:
@@ -662,6 +755,7 @@ def reconstruct_processes(root_path: str) -> int:
         _resolve_pubsub_edges(con, pubsub_registry)
         for member in members:
             _resolve_http_edges(con, member, http_routes, surf)
+        _llm_link_edges(con, members, surf)
         count = _trace_processes(con, members)
         if count == 0:
             log.info("bpre: no multi-service processes found for %s", root_path)
