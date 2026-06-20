@@ -297,8 +297,8 @@ def test_federated_root_gets_federation_index():
     assert build_federated_index(root) == 1
     fed = (project_wiki_dir(root) / "federation.md").read_text(encoding="utf-8")
     per_member = federated_map(root, lambda gs: dict(gs._con.execute(
-        "SELECT COALESCE(semantic_type,'unclassified'), COUNT(*) FROM communities "
-        "WHERE level=1 GROUP BY semantic_type").fetchall()))
+        "SELECT COALESCE(NULLIF(semantic_type,''),'unclassified'), COUNT(*) FROM communities "
+        "WHERE level=1 GROUP BY COALESCE(NULLIF(semantic_type,''),'unclassified')").fetchall()))
     for path, _types in per_member:
         assert os.path.basename(path) in fed, f"member {os.path.basename(path)} missing"
     union: dict[str, int] = {}

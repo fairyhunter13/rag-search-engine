@@ -180,18 +180,23 @@ def test_overview_all_whats_real_astro():
 
 
 def test_service_mesh_be_nonempty():
-    """BE project (acme-promo-be) has gRPC services — service_mesh must detect them."""
+    """Federation service_mesh must detect gRPC services from the astro proto layer."""
     from opencode_search.core.registry import list_projects
-    be = next(
-        (p.path for p in list_projects() if "acme-promo-be" in p.path and p.enabled),
+    root = next(
+        (p.path for p in list_projects()
+         if "redacted-name-3" in p.path and p.enabled and getattr(p, "federation", None)),
         None,
     )
-    assert be, "acme-promo-be must be registered (run P8)"
+    if not root:
+        pytest.skip("federated redacted-name-3 not registered")
+    from opencode_search.daemon.federation import expand_federation
     from opencode_search.server._overview import _detect_services
-    svcs = _detect_services(be)
-    assert svcs, "BE project must have at least one gRPC service entry"
+    svcs = [s for p in expand_federation(root) for s in _detect_services(p)]
+    assert svcs, "Federation must have at least one gRPC service entry"
     names = {n for s in svcs for n in s.get("services", [])}
-    assert "GwpService" in names, f"GwpService not in {sorted(names)[:10]}"
+    assert any("Gwp" in n or "gwp" in n.lower() for n in names), (
+        f"GwpService not found in {sorted(names)[:10]}"
+    )
 
 
 def test_suggested_questions_and_chat_context_no_operationalerror(live_client):

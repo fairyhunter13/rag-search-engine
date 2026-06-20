@@ -60,7 +60,7 @@ def federation_discover(members:list[str])->ApiSurface:
                                 sv=_ss(fn,"New","ServiceClient","Client")
                                 if sv:surf.constructors[fn]=sv
                             elif fn.startswith("Register") and fn.endswith("Server"):
-                                sv=_ss(fn,"Register","ServiceServer","Server")
+                                sv=_ss(fn,"Register","Server")
                                 if sv:surf.registrars[fn]=sv
                     elif nd.kind()=="import_declaration":
                         for j in range(nd.named_child_count()):

@@ -278,8 +278,8 @@ def build_wiki(store: GraphStore, output_dir: Path) -> int:
 def _federation_member_summary(gs: GraphStore) -> dict:
     """Per-member rollup for federation.md: type counts, top L2 domains, key business communities."""
     types = dict(gs._con.execute(
-        "SELECT COALESCE(semantic_type,'unclassified'), COUNT(*) FROM communities "
-        "WHERE level=1 GROUP BY semantic_type").fetchall())
+        "SELECT COALESCE(NULLIF(semantic_type,''),'unclassified'), COUNT(*) FROM communities "
+        "WHERE level=1 GROUP BY COALESCE(NULLIF(semantic_type,''),'unclassified')").fetchall())
     domains = [r[0] for r in gs._con.execute(
         "SELECT title FROM communities WHERE level>=2 AND title IS NOT NULL AND title!='' "
         "AND title NOT IN ('(leaf)') ORDER BY member_count DESC LIMIT 8").fetchall()]
