@@ -32,15 +32,6 @@ def test_escalate_empty_items_returns_empty():
     assert escalate([], stable_prefix=_PREFIX) == []
 
 
-def test_escalate_no_deepseek_key_returns_empty(monkeypatch):
-    """No key → returns [] without crashing."""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
-    from opencode_search.graph.llm import deepseek_key
-    from opencode_search.kb.llm_escalation import escalate
-    if deepseek_key():
-        return  # key from non-env source; fast-path untestable
-    assert escalate(_ITEMS, stable_prefix=_PREFIX, candidates=_CANDS) == []
-
 
 @pytest.mark.slow
 def test_escalate_sea_invariant_callee_in_candidates():

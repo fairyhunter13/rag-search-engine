@@ -29,6 +29,7 @@ class FileFacts:
 class ApiSurface:
     constructors:dict=field(default_factory=dict)
     registrars:dict=field(default_factory=dict)
+    methods:dict=field(default_factory=dict)
     proto_import_paths:set=field(default_factory=set)
     pubsub_import_paths:set=field(default_factory=set)
 def _t(n,b):r=n.byte_range();return b[r.start:r.end].decode("utf-8","replace")
@@ -74,11 +75,26 @@ def federation_discover(members:list[str])->ApiSurface:
                         if nn:
                             fn=_t(nn,b)
                             if fn.startswith("New") and fn.endswith("Client"):
-                                sv=_ss(fn,"New","ServiceClient","Client")
+                                sv=_ss(fn,"New","Client")
                                 if sv:surf.constructors[fn]=sv
                             elif fn.startswith("Register") and fn.endswith("Server"):
                                 sv=_ss(fn,"Register","Server")
                                 if sv:surf.registrars[fn]=sv
+                    elif nd.kind()=="method_declaration":
+                        recv=nd.child_by_field_name("receiver");nm=nd.child_by_field_name("name")
+                        if recv and nm:
+                            fn=_t(nm,b)
+                            if fn and fn[0].isupper():
+                                for ri in range(recv.named_child_count()):
+                                    rp=recv.named_child(ri)
+                                    if rp.kind()!="parameter_declaration":continue
+                                    for ti in range(rp.named_child_count()):
+                                        tp=rp.named_child(ti);actual=tp
+                                        if tp.kind()=="pointer_type" and tp.named_child_count()>0:actual=tp.named_child(0)
+                                        if actual.kind() in("type_identifier","identifier"):
+                                            rt=_t(actual,b)
+                                            if rt.endswith("Client") and len(rt)>6 and len(fn)>=9:
+                                                sv=rt[:-6];surf.methods.setdefault(fn,sv[0].upper()+sv[1:])
                     elif nd.kind()=="import_declaration":
                         for j in range(nd.named_child_count()):
                             sp=nd.named_child(j)
@@ -119,6 +135,8 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                     if op and fd:
                         base,meth=_t(op,b),_t(fd,b)
                         if meth in s.constructors:f.grpc_clients.append((base,s.constructors[meth],meth,ln))
+                        elif meth in s.registrars:f.grpc_servers.append((s.registrars[meth],ln))
+                        elif meth in s.methods and "." in base:f.grpc_clients.append((base,s.methods[meth],meth,ln))
                         elif base=="proto" and meth=="Marshal" and args and args.named_child_count()>0:
                             tk=_pk(args.named_child(0),b,pa)
                             if tk:f.proto_marshal_types.append((tk,ln))

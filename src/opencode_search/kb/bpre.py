@@ -31,7 +31,7 @@ _TEST_FILE_SUFFIXES: frozenset[str] = frozenset({
     "_test.js", "_test.ts",
 })
 _TEST_DIRS: frozenset[str] = frozenset({
-    "testdata", "mocks", "__tests__", "test_helpers", "fixtures",
+    "testdata", "mocks", "__tests__", "test_helpers", "fixtures", "test",
 })
 
 
@@ -124,8 +124,9 @@ def _source_files(member_path: str) -> list[Path]:
         for dirpath, dirs, files in os.walk(str(root)):
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for f in files:
-                if Path(f).suffix in exts:
-                    out.append(Path(dirpath) / f)
+                p = Path(dirpath) / f
+                if p.suffix in exts and not _is_test_file(str(p)):
+                    out.append(p)
     except OSError:
         pass
     return out
@@ -163,13 +164,24 @@ def _detect_entry_points(
 
 # ─── D3 Service/pub-sub/HTTP registries ───────────────────────────────────────
 
-def _build_service_registry(members: list[str]) -> dict[str, str]:
-    """Map {ServiceLabel → member_path} by mining registrar names from generated *.pb.go."""
-    from opencode_search.kb.bpre_ast import federation_discover
+def _build_service_registry(members: list[str], surf: ApiSurface) -> dict[str, str]:
+    """Map {ServiceLabel → member_path} by scanning non-proto source files for Register*Server calls."""
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
     registry: dict[str, str] = {}
     for member in members:
-        for _fn, svc in federation_discover([member]).registrars.items():
-            registry.setdefault(svc, member)
+        for src in _source_files(member):
+            if str(src).endswith(".pb.go"):
+                continue
+            try:
+                content = src.read_text(errors="replace")
+            except OSError:
+                continue
+            ff = scan_file(str(src), content, detect_language(src), surf)
+            if not ff:
+                continue
+            for svc_name, _ln in ff.grpc_servers:
+                registry.setdefault(svc_name, member)
     return registry
 
 
@@ -248,7 +260,7 @@ def _resolve_grpc_edges(
             if not callee_member or callee_member == member:
                 continue
             callee_svc = _service_label(callee_member)
-            edge_id = _hid(caller_svc, callee_svc, "grpc", svc_name)
+            edge_id = _hid(caller_svc, callee_svc, "grpc", svc_name, rel, str(ln))
             rows.append((edge_id, caller_svc, rel, ln, callee_svc,
                          f"{svc_name}Service", "grpc", 1.0, f"{ctor} @ {rel}:{ln}"))
     con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
@@ -335,11 +347,54 @@ def _handler_reachable_set(
         return None, set()
 
 
+def _precompute_caller_sids(
+    adj: dict[str, list[tuple]], svc_to_member: dict[str, str],
+) -> dict[tuple, object]:
+    """Batch-precompute (member, rel_file, line) → sid for all call sites in adj."""
+    from opencode_search.core.config import project_graph_db
+    cache: dict[tuple, object] = {}
+    locs_by_member: dict[str, set[tuple[str, int]]] = {}
+    for svc, edges in adj.items():
+        m = svc_to_member.get(svc)
+        if not m:
+            continue
+        for _, _, _, cf, cl in edges:
+            if cf and cl > 0:
+                locs_by_member.setdefault(m, set()).add((cf, cl))
+    for member, locs in locs_by_member.items():
+        gdb = project_graph_db(member)
+        if not gdb.exists():
+            continue
+        try:
+            mcon = sqlite3.connect(str(gdb), check_same_thread=False)
+            mcon.execute("PRAGMA query_only=ON")
+            try:
+                for cf, cl in locs:
+                    abs_file = str((Path(member) / cf).resolve())
+                    fname = Path(cf).name
+                    rows = mcon.execute(
+                        "SELECT sid FROM symbols WHERE (file=? OR file LIKE ?) "
+                        "AND start_line<=? AND end_line>=? "
+                        "ORDER BY (end_line - start_line) ASC LIMIT 1",
+                        (abs_file, f"%/{fname}", cl, cl),
+                    ).fetchall()
+                    cache[(member, cf, cl)] = rows[0][0] if rows else None
+            finally:
+                mcon.close()
+        except Exception:
+            pass
+    return cache
+
+
 def _call_in_reachable(
     caller_file: str, caller_line: int, member_path: str, reachable: set[int],
+    _sid_cache: dict | None = None,
 ) -> bool:
     if not reachable:
         return True  # no handler found — honest service-level fallback
+    if _sid_cache is not None:
+        sid = _sid_cache.get((member_path, caller_file, caller_line))
+        return sid is None or sid in reachable
     from opencode_search.core.config import project_graph_db
     gdb = project_graph_db(member_path)
     if not gdb.exists():
@@ -393,6 +448,8 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
     adj: dict[str, list[tuple]] = {}
     for caller_svc, callee_svc, ep, kind, cf, cl in edges_raw:
         adj.setdefault(caller_svc, []).append((callee_svc, ep, kind, cf or "", int(cl or 0)))
+    caller_sids = _precompute_caller_sids(adj, svc_to_member)
+    reach_cache: dict[tuple, tuple] = {}
     count = 0
     seen_step_seqs: set[tuple] = set()
     for ep_id, entry_svc, ep_file, ep_line, ep_kind, trigger in eps:
@@ -400,11 +457,14 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
         if not outgoing:
             continue
         member_path = svc_to_member.get(entry_svc)
-        _, reachable = _handler_reachable_set(member_path or "", ep_file, int(ep_line))
+        rk = (member_path or "", ep_file, int(ep_line))
+        if rk not in reach_cache:
+            reach_cache[rk] = _handler_reachable_set(member_path or "", ep_file, int(ep_line))
+        _, reachable = reach_cache[rk]
         fired: list[tuple[str, str, str]] = []
         for callee_svc, endpoint, kind, caller_file, caller_line in outgoing:
             if (not caller_file or caller_line == 0) or (
-                member_path and _call_in_reachable(caller_file, caller_line, member_path, reachable)
+                member_path and _call_in_reachable(caller_file, caller_line, member_path, reachable, caller_sids)
             ):
                 fired.append((callee_svc, endpoint, kind))
         if not fired:
@@ -425,11 +485,14 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
             callee_loc = _callee_ep(con, callee_svc, endpoint, kind)
             if not callee_loc:
                 continue
-            _, c_reach = _handler_reachable_set(callee_member, callee_loc[0], callee_loc[1])
+            crk = (callee_member, callee_loc[0], callee_loc[1])
+            if crk not in reach_cache:
+                reach_cache[crk] = _handler_reachable_set(callee_member, callee_loc[0], callee_loc[1])
+            _, c_reach = reach_cache[crk]
             for c2_svc, ep2, k2, cf2, cl2 in callee_out:
                 if c2_svc in visited:
                     continue
-                if not cf2 or cl2 == 0 or _call_in_reachable(cf2, cl2, callee_member, c_reach):
+                if not cf2 or cl2 == 0 or _call_in_reachable(cf2, cl2, callee_member, c_reach, caller_sids):
                     visited.add(c2_svc)
                     steps.append((ep_id, order, ep2, c2_svc, k2, ""))
                     order += 1
@@ -781,7 +844,15 @@ def _synthesize_artifacts(con: sqlite3.Connection) -> None:
 # ─── Master entry point ───────────────────────────────────────────────────────
 
 def reconstruct_processes(root_path: str) -> int:
-    """D2→D6 federation-level BPRE pass.  Returns number of reconstructed processes."""
+    """D2→D6 federation-level BPRE pass.  Returns number of reconstructed processes.
+
+    File-level mutex (process_graph.lock) serializes concurrent callers; a fresh
+    build (< 1800 s old, processes > 0) is reused without rebuilding so 25-member
+    federation triggers collapse to a single reconstruction pass.
+    """
+    import fcntl
+    import time
+
     from opencode_search.core.config import root_process_db
     from opencode_search.daemon.federation import expand_federation
     members = expand_federation(root_path)
@@ -789,33 +860,50 @@ def reconstruct_processes(root_path: str) -> int:
         log.debug("bpre: skip %s — fewer than 2 federation members", root_path)
         return 0
     db_path = root_process_db(root_path)
-    con = _init_db(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = db_path.with_suffix(".bpre.lock")
+    _lf = open(str(lock_path), "w")  # noqa: SIM115
     try:
-        for tbl in ("entry_points", "cross_service_edges", "processes",
-                    "process_steps", "process_rules", "process_artifacts"):
-            con.execute(f"DELETE FROM {tbl}")
-        con.commit()
-        from opencode_search.kb.bpre_ast import federation_discover
-        surf = federation_discover(members)
-        for member in members:
-            _detect_entry_points(con, member, surf)
-        svc_registry = _build_service_registry(members)
-        pubsub_registry = _build_pubsub_registry(members, surf)
-        http_routes = _build_http_route_map(members, surf)
-        for member in members:
-            _resolve_grpc_edges(con, member, svc_registry, surf)
-        _resolve_pubsub_edges(con, pubsub_registry)
-        for member in members:
-            _resolve_http_edges(con, member, http_routes, surf)
-        _llm_link_edges(con, members, surf)
-        count = _trace_processes(con, members)
-        if count == 0:
-            log.info("bpre: no multi-service processes found for %s", root_path)
-            return 0
-        _extract_rules(con, members)
-        _extract_state_machines(con, members, surf)
-        _synthesize_artifacts(con)
-        log.info("bpre: reconstructed %d processes for %s", count, root_path)
-        return count
+        fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
+        if db_path.exists() and (time.time() - db_path.stat().st_mtime) < 1800:
+            try:
+                with sqlite3.connect(str(db_path), timeout=5) as _c:
+                    _n = _c.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+                    if _n > 0:
+                        log.info("bpre: reusing fresh result (%d processes) for %s", _n, root_path)
+                        return _n
+            except Exception:
+                pass
+        con = _init_db(db_path)
+        try:
+            for tbl in ("entry_points", "cross_service_edges", "processes",
+                        "process_steps", "process_rules", "process_artifacts"):
+                con.execute(f"DELETE FROM {tbl}")
+            con.commit()
+            from opencode_search.kb.bpre_ast import federation_discover
+            surf = federation_discover(members)
+            for member in members:
+                _detect_entry_points(con, member, surf)
+            svc_registry = _build_service_registry(members, surf)
+            pubsub_registry = _build_pubsub_registry(members, surf)
+            http_routes = _build_http_route_map(members, surf)
+            for member in members:
+                _resolve_grpc_edges(con, member, svc_registry, surf)
+            _resolve_pubsub_edges(con, pubsub_registry)
+            for member in members:
+                _resolve_http_edges(con, member, http_routes, surf)
+            _llm_link_edges(con, members, surf)
+            count = _trace_processes(con, members)
+            if count == 0:
+                log.info("bpre: no multi-service processes found for %s", root_path)
+                return 0
+            _extract_rules(con, members)
+            _extract_state_machines(con, members, surf)
+            _synthesize_artifacts(con)
+            log.info("bpre: reconstructed %d processes for %s", count, root_path)
+            return count
+        finally:
+            con.close()
     finally:
-        con.close()
+        fcntl.flock(_lf.fileno(), fcntl.LOCK_UN)
+        _lf.close()
