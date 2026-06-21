@@ -97,8 +97,9 @@ def _get_project(tag: str) -> str | None:
 
 
 def test_search_code_scope_real_astro(embedder):
+    from tree_sitter_language_pack import has_language
+
     from opencode_search.core.config import project_vector_db
-    from opencode_search.index.discover import _CODE_LANGS
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search
     astro = _get_project("redacted-name-3")
@@ -106,7 +107,7 @@ def test_search_code_scope_real_astro(embedder):
     vs = VectorStore(project_vector_db(astro))
     results = search("component rendering", embedder, vs, scope="code", top_k=5)
     vs.close()
-    assert results and all(r.get("language") in _CODE_LANGS for r in results)
+    assert results and all(has_language(r.get("language", "")) for r in results)
 
 
 def test_search_code_scope_real_be(embedder):
