@@ -26,7 +26,7 @@ MODEL_IDLE_UNLOAD_S = int(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
 # Dashboard chat: haiku primary + DeepSeek fallback. No local generative LLM.
 QUERY_LLM_PROVIDER = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "claude")
 QUERY_LLM_MODEL = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "claude-haiku-4-5")
-QUERY_LLM_FALLBACK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-chat")
+QUERY_LLM_FALLBACK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-v4-flash")
 QUERY_LLM_NUM_CTX = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
 QUERY_LLM_TIMEOUT = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))
 

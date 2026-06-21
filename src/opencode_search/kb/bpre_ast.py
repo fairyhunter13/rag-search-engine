@@ -2,7 +2,7 @@
 
 Tier-1.5 (value-flow): non-literal call arguments (const/var/field) are
 resolved through per-file def-use maps via kb.valueflow before falling back to
-the embed/rerank and LLM tiers.  Scanner extended to Python / TS / JS.
+the GPU-rank and LLM tiers.  Scanner extended to Python / TS / JS.
 """
 from __future__ import annotations
 import logging,os

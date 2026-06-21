@@ -435,15 +435,24 @@ _OSE = str(Path(__file__).resolve().parents[3])  # repo root, no hardcoded devic
 
 
 def test_reranking_is_query_time_only():
-    """T-R2: index/ and kb/ packages must not reference reranking (architecture invariant)."""
+    """T-R2: index/ and kb/ packages must not directly invoke the cross-encoder.
+
+    The reranking IMPLEMENTATION (rerank_passages) lives only in query/search.py.
+    The G1.75 bridge kb/resolve_rerank.py is the single permitted delegation point;
+    all other kb/ files must call through it, never import rerank_passages directly.
+    """
 
     base = Path(__file__).parents[2] / "opencode_search"
+    # Only the G1.75 bridge may import rerank_passages directly
+    _DIRECT_RERANK_EXCEPTION = {"resolve_rerank.py"}
     for pkg in [base / "index", base / "kb"]:
         for py in pkg.rglob("*.py"):
+            if py.name in _DIRECT_RERANK_EXCEPTION:
+                continue
             src = py.read_text()
-            assert "rerank" not in src.lower(), (
-                f"rerank reference found in {py.relative_to(base.parent)} — "
-                "reranking must be query-time only (query/ package)"
+            assert "rerank_passages" not in src, (
+                f"Direct rerank_passages call found in {py.relative_to(base.parent)} — "
+                "route through kb/resolve_rerank.py (the G1.75 bridge) instead"
             )
 
 

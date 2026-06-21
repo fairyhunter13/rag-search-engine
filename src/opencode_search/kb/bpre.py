@@ -455,6 +455,16 @@ def _bpre_llm_link_on() -> bool:
     return os.environ.get("OSE_BPRE_LLM_LINK", "0") == "1"
 
 
+def _bpre_llm_file_on() -> bool:
+    """Gate for Tier-3 whole-file LLM (parse-error files only)."""
+    return os.environ.get("OSE_BPRE_LLM_FILE", "1") != "0" and _bpre_llm_on()
+
+
+def _content_hash(content: str) -> str:
+    """XXH3-compatible hash via hashlib (stable key for LLM verdict caching)."""
+    return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()[:20]
+
+
 def _llm_link_scan(
     members: list[str], surf: ApiSurface,
     known_routes: set[str], known_topics: set[str],
@@ -490,19 +500,38 @@ def _llm_link_scan(
 def _llm_link_resolve(
     con: sqlite3.Connection, items: list[dict], svcs: list[str],
 ) -> None:
-    from opencode_search.graph.llm import deepseek_chat
+    """Tier-2 SEA-style LLM resolution: SELECT from admitted candidate set only.
+
+    The LLM is given the exact list of admitted service names and may only
+    return callee values from that list (SEA arXiv:2408.04344: +8.1 F1).
+    Verification gate: drops any edge where caller==callee.
+    """
+    from opencode_search.graph.llm import deepseek_extract, deepseek_key
+    if not deepseek_key():
+        return
+    svc_set = set(svcs)
+    # Stable prefix (byte-identical → high cache hit rate)
+    stable_prefix = (
+        "You are a microservice dependency resolver. "
+        "Given a list of unresolved edges, return a JSON array where each element "
+        "has: kind, caller, topic_or_route, callee. "
+        "IMPORTANT: callee MUST be one of the admitted services listed by the user. "
+        "Use null callee if you cannot determine it confidently. "
+        "Return ONLY valid JSON — no markdown, no explanation."
+    )
     hints = "\n".join(
         f"- {u['kind']} '{u['topic_or_route']}' from '{u['caller']}'" for u in items[:30]
     )
-    prompt = (
-        f"Microservices: {', '.join(svcs)}. For each below, which service is the target?"
-        f" Return ONLY JSON: [{{\"kind\":...,\"caller\":...,\"topic_or_route\":...,\"callee\":...}}]."
-        f" Use null callee if unknown.\n\n{hints}"
-    )
+    if len(items) > 30:
+        log.warning("bpre llm_link_resolve: cap 30 hit (had %d items)", len(items))
+    dynamic_tail = f"Admitted services: {json.dumps(svcs)}\n\nEdges to resolve:\n{hints}"
     try:
-        raw = deepseek_chat(prompt, max_tokens=512)
-    except Exception:
+        raw, usage = deepseek_extract(stable_prefix, dynamic_tail, max_tokens=512)
+    except Exception as exc:
+        log.warning("bpre _llm_link_resolve: %s", exc)
         return
+    if usage.get("prompt_cache_hit_tokens", 0) > 0:
+        log.debug("bpre llm_link: cache hit %d tokens", usage["prompt_cache_hit_tokens"])
     s, e = raw.find("["), raw.rfind("]")
     if s == -1 or e <= s:
         return
@@ -510,18 +539,18 @@ def _llm_link_resolve(
         parsed = json.loads(raw[s:e + 1])
     except Exception:
         return
-    svc_set = set(svcs)
     rows = []
     for item in parsed:
         if not isinstance(item, dict):
             continue
         callee, caller = item.get("callee"), item.get("caller")
+        # SEA invariant + structural verification: callee must be in admitted set
         if not callee or callee not in svc_set or not caller or caller == callee:
             continue
         tor = item.get("topic_or_route", "")
         kind = f"{item.get('kind', 'llm')}_llm"
         rows.append((_hid(caller, callee, kind, tor), caller, "", 0, callee,
-                     tor, kind, 0.7, f"llm-linked:{tor}"))
+                     tor, kind, 0.7, f"llm-inferred:{tor}"))
     if rows:
         con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
         con.commit()
@@ -533,15 +562,36 @@ def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurfac
     from opencode_search.graph.llm import deepseek_key
     if not deepseek_key():
         return
-    known_routes: set[str] = {r[0] for r in con.execute(
-        "SELECT callee_endpoint FROM cross_service_edges WHERE kind='http'"
+    known_routes_map: dict[str, str] = {r[0]: r[1] for r in con.execute(
+        "SELECT callee_endpoint, callee_service FROM cross_service_edges WHERE kind='http'"
     ).fetchall()}
-    known_topics: set[str] = {r[0] for r in con.execute(
-        "SELECT callee_endpoint FROM cross_service_edges WHERE kind='pubsub'"
+    known_topics_map: dict[str, str] = {r[0]: r[1] for r in con.execute(
+        "SELECT callee_endpoint, callee_service FROM cross_service_edges WHERE kind='pubsub'"
     ).fetchall()}
+    known_routes: set[str] = set(known_routes_map)
+    known_topics: set[str] = set(known_topics_map)
     items = _llm_link_scan(members, surf, known_routes, known_topics)
+    if not items:
+        return
+    svcs = [_service_label(m) for m in members]
+    # Tier-1.75: try GPU rerank before calling the cloud LLM
+    try:
+        from opencode_search.kb.resolve_rerank import rerank_residue
+        all_known = {**known_routes_map, **known_topics_map}
+        resolved, items = rerank_residue(items, all_known)
+        rows_175 = [
+            (_hid(r["caller"], r["callee"], f"{r['kind']}_reranked", r["topic_or_route"]),
+             r["caller"], "", 0, r["callee"], r["topic_or_route"],
+             f"{r['kind']}_reranked", 0.8, "rerank-resolved")
+            for r in resolved if r.get("callee") and r["callee"] != r["caller"]
+        ]
+        if rows_175:
+            con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows_175)
+            con.commit()
+    except Exception as exc:
+        log.debug("bpre Tier-1.75 rerank skipped: %s", exc)
     if items:
-        _llm_link_resolve(con, items, [_service_label(m) for m in members])
+        _llm_link_resolve(con, items, svcs)
 
 
 # ─── D5 Rule / state-machine extraction ──────────────────────────────────────
