@@ -55,8 +55,12 @@ def rerank_candidates(
 
     ranked = sorted(zip(scores, candidates, strict=False), key=lambda x: x[0], reverse=True)
     top_score, top_cand = ranked[0]
-    second_score = ranked[1][0] if len(ranked) >= 2 else 0.0
 
+    # Single candidate: no ambiguity — always bind regardless of margin.
+    if len(ranked) == 1:
+        return top_cand, top_score
+
+    second_score = ranked[1][0]
     if top_score - second_score >= margin:
         return top_cand, top_score
     # Ambiguous — do not commit; let Tier-2 decide

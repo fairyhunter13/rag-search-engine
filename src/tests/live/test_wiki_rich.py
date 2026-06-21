@@ -314,8 +314,9 @@ def test_federated_root_gets_federation_index():
 def test_domain_narrative_is_faithful(tmp_path_factory):
     """W15 (RAGAS/FaithLens faithfulness): a real DeepSeek domain narrative names real children."""
     from opencode_search.graph.llm import deepseek_key
-    if not deepseek_key():
-        pytest.skip("no DeepSeek key — faithfulness needs the real model")
+    assert deepseek_key(), (
+        "DeepSeek key required in live+GPU environment — set OPENCODE_DEEPSEEK_API_KEY"
+    )
     project = _enriched_project()
     out = tmp_path_factory.mktemp("llm")
     _build(project, out, llm=True)
@@ -369,8 +370,9 @@ def test_wiki_narrative_grounded_by_cross_model_judge(tmp_path_factory):
     judge is conservative: it only fails a narrative that invents sub-systems absent from context.
     """
     from opencode_search.graph.llm import deepseek_key
-    if not deepseek_key():
-        pytest.skip("no DeepSeek key — nothing to judge")
+    assert deepseek_key(), (
+        "DeepSeek key required in live+GPU environment — set OPENCODE_DEEPSEEK_API_KEY"
+    )
     project = _enriched_project()
     out = tmp_path_factory.mktemp("judge")
     _build(project, out, llm=True)
@@ -386,8 +388,9 @@ def test_wiki_narrative_grounded_by_cross_model_judge(tmp_path_factory):
                 break
     finally:
         gs.close()
-    if not target:
-        pytest.skip("no multi-child domain to judge")
+    assert target, (
+        "no multi-child domain found — ensure L2 enrichment completed (Workstream E)"
+    )
     txt, kids = target
     narrative = txt.split("**Architecture Domain**", 1)[-1].split("## ", 1)[0].strip()
     prompt = (
@@ -399,8 +402,9 @@ def test_wiki_narrative_grounded_by_cross_model_judge(tmp_path_factory):
     import shutil
     import subprocess
     claude = shutil.which("claude")
-    if not claude:
-        pytest.skip("claude CLI not available for cross-model judge")
+    assert claude, (
+        "claude CLI required in live environment — install Claude Code CLI"
+    )
     verdict = subprocess.check_output(
         [claude, "-p", "--model", "claude-haiku-4-5", prompt], timeout=30,
     ).decode(errors="replace").strip().upper()

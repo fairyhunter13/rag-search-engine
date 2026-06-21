@@ -73,8 +73,9 @@ def test_canonical_body_in_main_claude_md():
             sys.path.remove(_SCRIPTS_SRC)
 
     claude_md = Path.home() / ".claude" / "CLAUDE.md"
-    if not claude_md.exists():
-        pytest.skip("~/.claude/CLAUDE.md not found — claude not installed")
+    assert claude_md.exists(), (
+        "~/.claude/CLAUDE.md not found — Claude Code CLI must be installed in live+GPU environment"
+    )
     text = claude_md.read_text()
     assert CANONICAL_BODY.strip() in text, (
         "CANONICAL_BODY not found verbatim in ~/.claude/CLAUDE.md — drift detected"
