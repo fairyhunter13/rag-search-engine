@@ -187,8 +187,9 @@ def test_service_mesh_be_nonempty():
          if "astro-project" in p.path and p.enabled and getattr(p, "federation", None)),
         None,
     )
-    if not root:
-        pytest.skip("federated astro-project not registered")
+    assert root, (
+        "federated astro-project not registered — run Workstream E (re-index) first"
+    )
     from opencode_search.daemon.federation import expand_federation
     from opencode_search.server._overview import _detect_services
     svcs = [s for p in expand_federation(root) for s in _detect_services(p)]
@@ -532,8 +533,9 @@ def test_e3_community_context_is_reranked():
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.ask import compose_answer
     gdb = project_graph_db(_OSE)
-    if not gdb.exists():
-        pytest.skip("_OSE graph DB not found")
+    assert gdb.exists(), (
+        "_OSE graph DB not found — run Workstream E (re-index) first"
+    )
     gs = GraphStore(gdb)
     try:
         a = compose_answer("how does reranking work", [], [gs], scope="global")

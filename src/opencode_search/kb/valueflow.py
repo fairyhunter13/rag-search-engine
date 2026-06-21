@@ -64,7 +64,7 @@ def build_def_use(root, b: bytes) -> dict[str, str]:
                     du[name] = v
 
         # Go: x := "v"
-        elif k == "short_var_decl":
+        elif k == "short_var_declaration":
             lft, rgt = n.child_by_field_name("left"), n.child_by_field_name("right")
             if lft and rgt and lft.named_child_count() == rgt.named_child_count() == 1:
                 idn = lft.named_child(0)
@@ -137,7 +137,7 @@ def resolve_first_arg(args, b: bytes, du: dict[str, str]) -> str | None:
     """Resolve the first named child of an argument-list node to a string.
 
     Tries the first named child only (conservative — the path/topic arg
-    is always first in gRPC/HTTP/pub-sub call conventions).
+    is always first in typical RPC/HTTP/pub-sub call conventions).
     """
     if args.named_child_count() == 0:
         return None

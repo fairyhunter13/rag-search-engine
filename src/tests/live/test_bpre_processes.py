@@ -384,8 +384,10 @@ class TestLiveSurfaces:
         import urllib.request
         con, _ = process_db
         row = con.execute("SELECT process_id FROM process_artifacts LIMIT 1").fetchone()
-        if not row:
-            pytest.skip("No process artifacts")
+        assert row, (
+            "No process artifacts — run Workstream E (re-index) + "
+            "reconstruct_processes before this test"
+        )
         url = (
             f"http://127.0.0.1:8765/api/process/bpmn"
             f"?root={astro_root}&id={row[0]}"

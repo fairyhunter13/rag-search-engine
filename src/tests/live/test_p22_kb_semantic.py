@@ -28,8 +28,9 @@ def _overview_status(project: str) -> dict:
 
 def _con(project: str):
     gdb = _graph_db(project)
-    if not gdb.exists():
-        pytest.skip(f"graph.db not found for {project}")
+    assert gdb.exists(), (
+        f"graph.db not found for {project} — run Workstream E (re-index) first"
+    )
     return sqlite3.connect(str(gdb))
 
 
@@ -93,8 +94,9 @@ def test_singleton_ratio_below_threshold(live_client):
     con = _con(_OSE)
     try:
         total = con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
-        if total == 0:
-            pytest.skip("no L1 communities")
+        assert total > 0, (
+            "no L1 communities in OSE graph.db — re-index must have completed before running this test"
+        )
         singletons = con.execute(
             "SELECT COUNT(*) FROM communities WHERE level=1 AND member_count=1"
         ).fetchone()[0]
@@ -139,8 +141,9 @@ def test_l2_coarse_resolution_lock():
             "SELECT COUNT(DISTINCT community_id) FROM symbols WHERE community_id IS NOT NULL"
         ).fetchone()[0]
         l2 = con.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
-        if l2 == 0:
-            pytest.skip("no L2 communities yet")
+        assert l2 > 0, (
+            "no L2 communities — re-index + enrichment must complete before this test"
+        )
         target = max(2, round(l1 ** 0.5))
         assert l2 <= 2 * target, f"L2={l2} > 2×√L1={2*target}: hierarchy is degenerate"
         assert l2 < l1 * 0.6, f"L2={l2} ≥ 60% of L1={l1}: coarsening is insufficient"
@@ -165,8 +168,9 @@ def test_global_ask_includes_l2_domain(live_client):
         ).fetchall()]
     finally:
         con.close()
-    if not l2_titles:
-        pytest.skip("no enriched L2 communities yet")
+    assert l2_titles, (
+        "no enriched L2 communities — re-index + enrichment must complete before this test"
+    )
     ctx = asyncio.run(_mcp_ask("What is the overall architecture?", _OSE, "global"))
     found = any(t.lower() in ctx.lower() for t in l2_titles if t)
     assert found, (

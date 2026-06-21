@@ -133,3 +133,40 @@ def test_patterns_no_static_framework_map() -> None:
     assert "deepseek" in src.lower() or "llm" in src.lower(), (
         "patterns.py must use LLM for framework labelling"
     )
+
+
+def test_no_skip_markers_in_live_suite() -> None:
+    """Policy guard: the live suite must contain zero pytest.skip/xfail/skipif markers.
+
+    A reintroduced skip fails this test immediately, making the no-skip policy
+    machine-enforceable.  Complements the gate's -x --strict-markers invocation.
+    """
+    suite_dir = Path(__file__).parent
+    violations: list[str] = []
+    markers = ("pytest.skip(", "pytest.xfail(", "@pytest.mark.xfail", "@pytest.mark.skipif")
+    for py in sorted(suite_dir.glob("*.py")):
+        if py.name == Path(__file__).name:
+            continue  # this file itself contains the marker strings as literals
+        src = py.read_text(errors="replace")
+        for m in markers:
+            if m in src:
+                violations.append(f"{py.name}: contains '{m}'")
+    assert not violations, (
+        "Live suite must contain NO skip/xfail/skipif markers (no-skip policy):\n"
+        + "\n".join(violations)
+    )
+
+
+def test_no_import_re_in_resolution_path() -> None:
+    """Zero-vocab doctrine: Tier-1.5/1.75/2 resolution modules must not use re."""
+    for mod_name in (
+        "opencode_search.kb.valueflow",
+        "opencode_search.kb.resolve_rerank",
+        "opencode_search.kb.llm_escalation",
+    ):
+        src = _source(mod_name)
+        # match standalone "import re" or "import re\n" but not "import rerank_*"
+        assert "\nimport re\n" not in src and not src.startswith("import re\n"), (
+            f"{mod_name} must not import re"
+        )
+        assert "re.compile" not in src, f"{mod_name} must not call re.compile"
