@@ -171,7 +171,6 @@ def classify_communities_semantic(
         ).fetchall()
     if not rows:
         return 0
-    member_count = {r[0]: (r[4] or 0) for r in rows}
     pending = [(r[0], r[1] or "", r[2] or "") for r in rows]
     results: list[tuple[int, str]] = []
     batches = [pending[i: i + 20] for i in range(0, len(pending), 20)]
@@ -187,10 +186,6 @@ def classify_communities_semantic(
     current = {r[0]: r[3] for r in rows}
     updates = 0
     for cid, new_type in results:
-        # Structural guard: a multi-step business process / enforced rule spans >1 symbol;
-        # a degenerate (<3-member) community cannot be one — demote to feature.
-        if member_count.get(cid, 0) < 3 and new_type in ("business_process", "business_rule"):
-            new_type = "feature"
         if new_type != current.get(cid):
             store._con.execute("UPDATE communities SET semantic_type=? WHERE id=?", (new_type, cid))
             updates += 1

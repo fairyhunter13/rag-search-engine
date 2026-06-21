@@ -272,11 +272,11 @@ Generated from the live archived engine before wiping `main`.
 
 ### 8.5 Build-tier LLM (KB enrichment; cloud DeepSeek; NEVER for dashboard chat; no local LLM)
 - [x] cloud DeepSeek-only (DEEPSEEK_API_KEY required; crash if absent — no local fallback)
-- [x] OSE_DEEPSEEK_MODEL env override (default: deepseek-chat)
+- [x] OSE_DEEPSEEK_MODEL env override (default: deepseek-v4-flash)
 
 ### 8.6 Query-tier LLM (dashboard chat ONLY; forbidden everywhere else)
 - [x] OPENCODE_QUERY_LLM_PROVIDER claude | OPENCODE_QUERY_LLM_MODEL claude-haiku-4-5 (primary; codex removed)
-- [x] QUERY_LLM_FALLBACK_MODEL = OSE_DEEPSEEK_MODEL env (default: deepseek-chat) — used when haiku CLI absent or returns empty
+- [x] QUERY_LLM_FALLBACK_MODEL = OSE_DEEPSEEK_MODEL env (default: deepseek-v4-flash) — used when haiku CLI absent or returns empty
 - [x] OPENCODE_QUERY_LLM_NUM_CTX 4096 | OPENCODE_QUERY_LLM_TIMEOUT 180s
 
 ### 8.7 Daemon constants

@@ -33,7 +33,7 @@ an independent unit.
   `path, enabled, indexed_at, file_count, chunk_count, federation: list[str], …`.
 - **Vector store**: sqlite-vec flat `vec0`, `FLOAT[768]`, exact recall.
 - **Graph store**: SQLite `symbols / edges (caller_sid, callee_sid) / communities`.
-- **Enrichment LLM**: cloud **DeepSeek** `deepseek-chat` only (summaries, intents, semantic-type classification, Phase B wiki narrative) — **no local generative LLM**. Crashes if `DEEPSEEK_API_KEY` absent. The dashboard chat LLM (**claude-haiku-4-5** via Claude Code CLI, **DeepSeek fallback**) is **dashboard-chat only** — never called by MCP tools. **Codex support removed.**
+- **Enrichment LLM**: cloud **DeepSeek** `deepseek-v4-flash` only (summaries, intents, semantic-type classification, Phase B wiki narrative) — **no local generative LLM**. Crashes if `DEEPSEEK_API_KEY` absent. The dashboard chat LLM (**claude-haiku-4-5** via Claude Code CLI, **DeepSeek fallback**) is **dashboard-chat only** — never called by MCP tools. **Codex support removed.**
 
 ## 4. Federation discovery (`daemon/federation.py:discover_members`)
 
@@ -147,12 +147,12 @@ All enrichment is **idempotent and gated on `summary IS NULL`** (classification 
 ### 8a. LLM lanes within enrichment (resource-critical)
 
 All KB enrichment — **summaries, symbol intents, semantic-type classification, wiki narrative** — runs
-through cloud **DeepSeek** (`deepseek-chat`) via `graph/llm.py:deepseek_chat`. **No local generative
+through cloud **DeepSeek** (`deepseek-v4-flash`) via `graph/llm.py:deepseek_chat`. **No local generative
 LLM**; the daemon crashes loudly at `_enrich_project` entry if `DEEPSEEK_API_KEY` is absent
 (`deepseek_key()` returns `None`). `temperature=0` keeps summaries and classification reproducible
-(no churn). A `<3`-member community cannot be a multi-step `business_process`/`business_rule`
-(structural guard → `feature`). Embedding and reranking are unaffected by the key — they bind
-ONNX/CUDA and run regardless.
+(no churn). The DeepSeek classifier's output is final — HR15 (no-heuristic doctrine) governs;
+no post-classification size or structural demotion. Embedding and reranking are unaffected by the
+key — they bind ONNX/CUDA and run regardless.
 
 ## 9. Query / read path (`server/mcp.py`)
 
@@ -190,13 +190,13 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 |------|---------|---------|-------|
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
 | **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** primary (Claude Code CLI); **DeepSeek fallback** if haiku absent/empty | Codex removed; haiku insist — DeepSeek only on genuine haiku failure |
-| **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-chat` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
+| **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-v4-flash` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
 
-The query generative LLM (**claude-haiku-4-5** via the Claude Code CLI, with **DeepSeek fallback**) is
-reached **only** via the dashboard chat box. Background KB enrichment uses **cloud DeepSeek for all
-generative tasks** — both write-path only, never on the query path. **"GPU-only" (HR6) governs
-embeddings + reranking** (FastEmbed/ONNX/CUDA); the remote DeepSeek and haiku lanes are cloud and
-are not CPU inference.
+**Two-lane invariant (HR12):**
+- **LOCAL GPU lane = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking (`jinaai/jina-reranker-v1-turbo-en`) ONLY.** CPU binding is fatal; any CPU fallback raises immediately.
+- **CLOUD generative lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, symbol intents, semantic-type classification, wiki-L2 narrative; BPRE Tier-2 link resolution, Tier-3 parse-error files, D5 rule/state-machine text; dashboard-chat fallback) **+** claude-haiku-4-5 via the Claude Code CLI (dashboard-chat primary).
+
+**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. In the 5-tier BPRE resolution ladder (HR16): Tier-1.75 (`kb/resolve_rerank.py`) is the GPU rerank lane — embedding + reranking, zero generation; Tier-2/3 are cloud DeepSeek. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9).
 
 ## 16. Per-project config & federation inheritance
 

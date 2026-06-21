@@ -141,3 +141,104 @@ def test_setup_llm_services_is_stub():
     )
     assert "subprocess" not in text, "tombstone stub must not invoke subprocess"
     assert "systemctl" not in text, "tombstone stub must not manage systemd services"
+
+
+# ---------------------------------------------------------------------------
+# B1 — tree-wide forbidden-token grep (closes the 4-file R6c coverage gap)
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_TOKENS = (
+    "ollama",
+    "qwen",
+    "llama_cpp",
+    "llama.cpp",
+    ":11434",
+    ":11435",
+    "_OLLAMA_URL",
+    "assert_ollama_gpu",
+    "OLLAMA_",
+    "def chat(",
+)
+
+# Lines that name the prohibition are allowed in guard/comment text.
+_B1_ALLOWED_CONTEXTS = (
+    "no local generative LLM",
+    "decommissioned",
+    "ollama.service",   # uninstall note
+    "remove ollama",    # uninstall note
+)
+
+
+def test_no_local_llm_tokens_anywhere_in_src():
+    """B1 tree-wide: src/opencode_search/**/*.py must not contain any local-LLM token.
+
+    R6c only checked 4 named files; this scans the entire package so a new module
+    cannot silently reintroduce Ollama, qwen3, llama.cpp, or a bare 'def chat('.
+    Lines that are pure comments or name the prohibition are exempted.
+    """
+    base = Path(__file__).parents[2] / "opencode_search"
+    violations: list[str] = []
+    for py in base.rglob("*.py"):
+        text = py.read_text(errors="replace")
+        for token in _FORBIDDEN_TOKENS:
+            if token not in text:
+                continue
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if token not in line:
+                    continue
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if any(ctx in line for ctx in _B1_ALLOWED_CONTEXTS):
+                    continue
+                violations.append(
+                    f"{py.relative_to(base.parent)}:{lineno}: "
+                    f"forbidden token {token!r}: {stripped[:80]}"
+                )
+    assert not violations, (
+        "Local-LLM tokens found in src/opencode_search "
+        "(Ollama/qwen3 decommissioned 2026-06-20):\n"
+        + "\n".join(violations[:20])
+    )
+
+
+# ---------------------------------------------------------------------------
+# B2 — positive lane assertion: rerank_passages only in the GPU lane
+# ---------------------------------------------------------------------------
+
+# Canonical allowlist: the ONLY files permitted to use rerank_passages.
+# query/search.py    — defines rerank_passages (GPU cross-encoder)
+# query/ask.py       — calls it for AXIS-B community context ranking
+# kb/resolve_rerank.py — Tier-1.75 bridge (single kb/ delegation point)
+_RERANK_ALLOWLIST = frozenset({
+    "query/search.py",
+    "query/ask.py",
+    "kb/resolve_rerank.py",
+})
+
+
+def test_rerank_passages_only_in_gpu_lane():
+    """B2 positive lane: rerank_passages appears ONLY in the known GPU-lane files.
+
+    Proves 'local GPU = embedding + reranking ONLY' structurally: no module outside
+    the allowlist may call the cross-encoder, so it can never become a generative path.
+    Complements test_p5_server.py::test_reranking_is_query_time_only (index/+kb/ only).
+    """
+    base = Path(__file__).parents[2] / "opencode_search"
+    violations: list[str] = []
+    for py in base.rglob("*.py"):
+        if "rerank_passages" not in py.read_text(errors="replace"):
+            continue
+        rel = py.relative_to(base).as_posix()
+        if rel not in _RERANK_ALLOWLIST:
+            violations.append(str(py.relative_to(base.parent)))
+    assert not violations, (
+        "rerank_passages found outside the GPU-lane allowlist "
+        f"{sorted(_RERANK_ALLOWLIST)}:\n" + "\n".join(violations)
+    )
+    for rel in _RERANK_ALLOWLIST:
+        f = base / rel
+        assert f.exists(), f"Allowlisted file missing: {rel}"
+        assert "rerank_passages" in f.read_text(), (
+            f"Allowlisted file has no rerank_passages: {rel}"
+        )
