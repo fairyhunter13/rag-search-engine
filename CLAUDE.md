@@ -15,10 +15,10 @@ This rule applies to EVERY codebase question, even ones that seem simple. Traini
 
 ```bash
 # Fast smoke check — skips LLM quality tests + browser tests (~5 min)
-.venv/bin/pytest src/tests/live/ -m "live and not slow" --ignore=src/tests/live/test_browser.py -q
+.venv/bin/pytest src/tests/live/ -m "live and not slow" --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
 
 # Full live suite — all intents, quality scoring, watcher (~40 min, no browser)
-.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q
+.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
 
 # Browser / Playwright tests (run separately — conflicts with pytest-asyncio mode=auto)
 .venv/bin/pytest src/tests/live/test_browser.py -v --browser chromium
@@ -37,6 +37,14 @@ python -m compileall -q src/opencode_search
 **Daemon reload** (after code changes): `POST /api/reload` or CLI `opencode-search daemon reload` — daemon restarts via systemd in ~1s.
 
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
+
+**Key env flags** (BPRE resolution ladder):
+- `OSE_BPRE_LLM_LINK=1` — enable Tier-2 SEA-style LLM edge linkage (default OFF; DeepSeek key required)
+- `OSE_BPRE_LLM_FILE=1` — enable Tier-3 whole-file LLM on parse-error files (default OFF)
+- `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
+- `OSE_WIKI_LLM=0` — disable wiki L2 DeepSeek narrative (deterministic rebuild)
+
+**Local generative LLM**: fully decommissioned 2026-06-20. Ollama binary/models/units can be uninstalled: `ollama stop && systemctl --user disable --now ollama.service && sudo apt remove ollama && rm -rf ~/.ollama`.
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 

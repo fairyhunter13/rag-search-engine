@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-20 (BPRE Phase D — process_graph.db + HR14 added; §8b; codex removed → haiku-only chat HR10; direct-DeepSeek classifier HR11; `think=False` no-idle-spin HR12; LLM lanes split D/E in §8a/§9b). **2026-06-20**: regex→tree-sitter BPRE migration (`kb/bpre_ast.py`); engine-wide no-heuristic doctrine HR15; A2 `_detect_services` de-heuristic; A3 `kb/patterns.py` framework-labelling→LLM; `OSE_BPRE_LLM_LINK` Tier-2 opt-in; see §7a + **HR14**/HR15 in Part 2.
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-21. **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -82,7 +82,7 @@ registry is `rmtree`'d.
 no-inlining invariant. Without it a root's file_count balloons ~12× by double-counting
 linked trees.
 
-## 7a. Code-semantic classification doctrine — tree-sitter + LLM only
+## 7a. Code-semantic classification doctrine — tree-sitter + LLM only (HR15–HR19)
 
 The *only* code that classifies *what the user's code means* uses **tree-sitter** (structural
 facts) or **LLM** (semantic/linkage facts). No regex, no static/dynamic keyword list, no
@@ -91,17 +91,29 @@ mapping table may substitute for structural analysis of user code.
 - **`kb/bpre_ast.py`** is the shared structural home for BPRE (§8 bullet 8) *and*
   `server/_overview.py _detect_services` (A2) — every module that needs to classify gRPC
   service structure delegates to this single tree-sitter scanner; no module holds its own regex.
-- **Category B (exempt by name)**: the tree-sitter grammar node-kind tables in
-  `graph/extractor.py` (`_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/…), the extension→language
-  bootstrap in `index/discover.py` (`_EXT_LANG`/`detect_language`), the LLM output-vocabulary
-  tables in `graph/enrich.py`/`kb/wiki.py`, and the API-surface enum in `server/_overview.py
-  _VALID` are the **mechanism that runs** tree-sitter/LLM — not code-semantic heuristics.
-  They are explicitly exempt from the no-regex rule.
-- **`OSE_BPRE_LLM_LINK`** (env flag, default OFF): gates Tier-2 LLM linkage in BPRE.
-  When off, tree-sitter-unreachable cross-service edges (JSON-topic IDs, config-driven
-  client hosts) are **absent**, never heuristically approximated. See HR14 + HR15 in Part 2.
+- **Category B (exempt by name)** — updated 2026-06-21: (a) `graph/extractor.py` — generic
+  call-node detector (node-kind ∋ `"call"`/`"invocation"`), `_MEMBER_KINDS`/`_BRANCH_NODE_KINDS`
+  frozensets, `tree_sitter_language_pack.process()` + `StructureKind`/`SymbolKind` label-space.
+  (`_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE` **deleted** by H1–H3.) (b) `index/discover.py` —
+  `detect_language_from_path` (replaces deleted `_EXT_LANG`/`detect_language`). (c) LLM output-
+  vocabulary tables in `graph/enrich.py`/`kb/wiki.py`. (d) `server/_overview.py _VALID` API enum.
+- **Universal 5-tier resolution ladder** (HR16–HR19, 2026-06-21): strictly monotone
+  1.0→0.9→0.8→0.7→0.5; language-agnostic by construction; each tier sees only prior residue.
+  | Tier | Mechanism | Conf | Gate |
+  |---|---|---|---|
+  | 1 | `process()` extraction — ANY language | 1.0 `EXTRACTED` | always |
+  | 1.5 | value-flow/FQN-join (`kb/valueflow.py`) | 0.9 `RESOLVED` | always |
+  | 1.75 | GPU cross-encoder rerank (`kb/resolve_rerank.py`) | 0.8 `RERANKED` | always |
+  | 2 | SEA-style LLM select (`kb/llm_escalation.py`) | 0.7 `_llm` | `OSE_BPRE_LLM_LINK=1` |
+  | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | `OSE_BPRE_LLM_FILE=1` |
+- **`OSE_BPRE_LLM_LINK`** (default OFF): gates Tier-2. Off → tree-sitter-unreachable edges
+  absent, never heuristically approximated. **`OSE_BPRE_LLM_FILE`** (default OFF): gates Tier-3.
+  **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`; `deepseek-chat` deprecates 2026-07-24).
+  With both OFF + `OSE_WIKI_LLM=0`: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
-  any new `re.compile`/`re.finditer` in Category-A paths fails CI.
+  any new `re.compile`/`re.finditer` in Category-A paths fails CI. `test_valueflow_dynamic.py`,
+  `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`, `test_deterministic_resolution.py`
+  prove the full ladder end-to-end (HR16–HR19 in Part 2).
 
 ## 8. Enrichment pipeline (`sweeps._enrich_project`)
 
