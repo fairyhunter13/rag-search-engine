@@ -60,7 +60,7 @@ def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
             ).fetchone()[0]
             out["placeholder_communities"] = gcon.execute(
                 "SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''"
-                " AND(title LIKE 'Domain %' OR title='' OR title IS NULL)"
+                " AND(title GLOB 'Domain [0-9]*' OR title='' OR title IS NULL)"
             ).fetchone()[0] if el1 > 0 else 0
             rp = str(Path(member_path).resolve())
             out["path_leakage"] = gcon.execute(
