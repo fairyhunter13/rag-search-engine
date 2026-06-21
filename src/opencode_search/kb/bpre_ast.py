@@ -1,10 +1,16 @@
-"""BPRE Tier-1: Pass A discovers gRPC surface from *.pb.go; Pass B detects per file. No regex."""
+"""BPRE Tier-1: Pass A discovers gRPC surface from *.pb.go; Pass B detects per file. No regex.
+
+Tier-1.5 (value-flow): non-literal call arguments (const/var/field) are
+resolved through per-file def-use maps via kb.valueflow before falling back to
+the embed/rerank and LLM tiers.  Scanner extended to Python / TS / JS.
+"""
 from __future__ import annotations
 import logging,os
 from dataclasses import dataclass,field
 from pathlib import Path
 log=logging.getLogger(__name__)
-from opencode_search.graph.extractor import _TS_LANG
+from tree_sitter_language_pack import has_language as _ts_has_language, api as _ts_api
+from opencode_search.kb.valueflow import build_def_use, resolve_first_arg, _t as _vt
 @dataclass
 class FileFacts:
     path:str
@@ -34,10 +40,23 @@ def _pk(n,b,pa):
     tn=n.child_by_field_name("type");r=_qt(tn,b) if tn else None
     return f"{r[0]}.{r[1]}" if r and r[0] in pa else None
 def _ss(fn,px,*sx):n=fn[len(px):];return next((n[:-len(s)] for s in sx if n.endswith(s)),n)
+
+def _s1_or_vf(args, b: bytes, du: dict) -> str | None:
+    """Get a string value from first arg: literal (_s1 fast path) OR value-flow lookup.
+
+    Tier-1.5(a): resolves dynamic routes/topics that _s1 misses.
+    """
+    # Fast path: string literal (original _s1 behaviour)
+    v = _s1(args, b)
+    if v is not None:
+        return v
+    # Value-flow: try first named child as identifier / selector
+    return resolve_first_arg(args, b, du)
+
 def federation_discover(members:list[str])->ApiSurface:
-    surf=ApiSurface();ts=_TS_LANG.get("go")
-    if not ts:return surf
-    try:from tree_sitter_language_pack import api;parser=api.get_parser(ts)
+    surf=ApiSurface()
+    if not _ts_has_language("go"):return surf
+    try:parser=_ts_api.get_parser("go")
     except Exception as e:log.warning("bpre_ast A: %s",e);return surf
     from opencode_search.core.config import IGNORED_DIRS
     for member in members:
@@ -70,11 +89,12 @@ def federation_discover(members:list[str])->ApiSurface:
                             if "pubsub" in p:surf.pubsub_import_paths.add(p)
     log.debug("bpre_ast A: %d ctors %d regs",len(surf.constructors),len(surf.registrars));return surf
 def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
-    ts=_TS_LANG.get(lang)
-    if not ts:return None
-    try:from tree_sitter_language_pack import api;root=api.get_parser(ts).parse(content).root_node()
+    if not _ts_has_language(lang):return None
+    try:root=_ts_api.get_parser(lang).parse(content).root_node()
     except Exception:return None
     b=content.encode("utf-8","replace");f=FileFacts(path=path);s=surface
+    # Tier-1.5(a): pre-pass builds file-scope def-use map for value-flow resolution.
+    du=build_def_use(root,b)
     if lang=="go":
         pa:dict={};pubs:dict={}
         for i in range(root.named_child_count()):
@@ -107,7 +127,7 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                             if tk:f.pubsub_consumes.append((tk,ln))
                         elif meth=="Receive":f.has_receive_call=True
                         elif args:
-                            p=_s1(args,b)
+                            p=_s1_or_vf(args,b,du)
                             if p and p.startswith("/"):f.http_routes.append((meth.upper(),p,ln))
                             elif base in pa and "http" in pa[base]:
                                 if meth=="NewRequest":
@@ -149,7 +169,62 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                             prefix=ann[:-len("Mapping")]
                             verb=prefix.upper() if prefix else "GET"
                         if an:
-                            p=_s1(an,b)
+                            p=_s1_or_vf(an,b,du)
                             if p:f.http_routes.append((verb,p,n.start_position().row+1))
+            stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
+    elif lang=="python":
+        # HTTP: decorators with "/" arg (FastAPI/Flask/aiohttp — structural, not vocab)
+        # gRPC: constructor/registrar names matched against surf (proto FQN discovery)
+        stk=[root]
+        while stk:
+            n=stk.pop();k=n.kind()
+            if k=="decorator":
+                inner=n.named_child(0) if n.named_child_count()>0 else None
+                if inner and inner.kind()=="call":
+                    fn_n=inner.child_by_field_name("function");an=inner.child_by_field_name("arguments")
+                    if fn_n and an:
+                        meth=""
+                        if fn_n.kind()=="attribute":
+                            attr=fn_n.child_by_field_name("attribute")
+                            if attr:meth=_vt(attr,b)
+                        elif fn_n.kind()=="identifier":meth=_vt(fn_n,b)
+                        p=_s1_or_vf(an,b,du)
+                        if p and p.startswith("/"):
+                            f.http_routes.append((meth.upper() if meth else "ANY",p,n.start_position().row+1))
+            elif k=="call":
+                fn_n=n.child_by_field_name("function");an=n.child_by_field_name("arguments")
+                ln=n.start_position().row+1
+                if fn_n and an:
+                    fn_txt=_vt(fn_n,b)
+                    base=fn_txt.rsplit(".",1)[-1] if "." in fn_txt else fn_txt
+                    if base in s.constructors:f.grpc_clients.append(("",s.constructors[base],base,ln))
+                    elif base in s.registrars:f.grpc_servers.append((s.registrars[base],ln))
+            stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
+    elif lang in("typescript","javascript"):
+        # HTTP: app.get('/path', h) or @Get('/path') decorators (structural — no keyword list)
+        stk=[root]
+        while stk:
+            n=stk.pop();k=n.kind()
+            if k=="call_expression":
+                fn_n=n.child_by_field_name("function");an=n.child_by_field_name("arguments")
+                ln=n.start_position().row+1
+                if fn_n and an:
+                    if fn_n.kind()=="member_expression":
+                        prop=fn_n.child_by_field_name("property")
+                        if prop:
+                            meth=_vt(prop,b);p=_s1_or_vf(an,b,du)
+                            if p and p.startswith("/"):f.http_routes.append((meth.upper(),p,ln))
+                    fn_txt=_vt(fn_n,b)
+                    base=fn_txt.rsplit(".",1)[-1] if "." in fn_txt else fn_txt
+                    if base in s.constructors:f.grpc_clients.append(("",s.constructors[base],base,ln))
+                    elif base in s.registrars:f.grpc_servers.append((s.registrars[base],ln))
+            elif k=="decorator":
+                inner=n.named_child(0) if n.named_child_count()>0 else None
+                if inner and inner.kind()=="call_expression":
+                    fn_n=inner.child_by_field_name("function");an=inner.child_by_field_name("arguments")
+                    if fn_n and an:
+                        p=_s1_or_vf(an,b,du)
+                        if p and p.startswith("/"):
+                            f.http_routes.append((_vt(fn_n,b).upper(),p,n.start_position().row+1))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     return f

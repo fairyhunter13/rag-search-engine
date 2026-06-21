@@ -12,24 +12,10 @@ _EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
 # Public alias used by registry path filtering.
 _REGISTRY_EXCLUDE_SEGMENTS = _EXCLUDE
 
-_EXT_LANG: dict[str, str] = {
-    ".py": "python", ".js": "javascript", ".ts": "typescript",
-    ".tsx": "typescript", ".jsx": "javascript", ".go": "go",
-    ".rs": "rust", ".java": "java", ".kt": "kotlin", ".scala": "scala",
-    ".c": "c", ".cpp": "cpp", ".h": "c", ".hpp": "cpp",
-    ".rb": "ruby", ".php": "php", ".cs": "csharp", ".swift": "swift",
-    ".md": "markdown", ".rst": "rst", ".txt": "text",
-    ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
-    ".sh": "bash", ".bash": "bash", ".zsh": "bash", ".sql": "sql",
-    ".html": "html", ".css": "css", ".scss": "css",
-}
-
-_CODE_LANGS = frozenset({
-    "python", "javascript", "typescript", "go", "rust", "java", "kotlin",
-    "scala", "c", "cpp", "ruby", "php", "csharp", "swift", "bash", "sql",
-})
-_TEXT_LANGS = frozenset({"markdown", "rst", "text", "html", "css"})
-_DATA_LANGS = frozenset({"json", "yaml", "toml"})
+# H3: non-parseable text/data formats kept explicitly; code = any language
+# the pack can parse (detected via has_language() in _size_limit).
+_TEXT_LANGS: frozenset[str] = frozenset({"markdown", "rst", "text", "html", "css"})
+_DATA_LANGS: frozenset[str] = frozenset({"json", "yaml", "toml"})
 
 _SIZE_LIMITS: dict[str, int] = {
     "code": 500_000,
@@ -37,17 +23,30 @@ _SIZE_LIMITS: dict[str, int] = {
     "data": 100_000,
     "unknown": 50_000,
 }
+
+
 def detect_language(path: Path) -> str:
-    return _EXT_LANG.get(path.suffix.lower(), "unknown")
+    """Return the pack's language id for path (H3: detect_language_from_path, 306+ langs)."""
+    try:
+        from tree_sitter_language_pack import detect_language_from_path
+        lang = detect_language_from_path(str(path))
+        return lang if lang else "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _size_limit(lang: str) -> int:
-    if lang in _CODE_LANGS:
-        return _SIZE_LIMITS["code"]
     if lang in _TEXT_LANGS:
         return _SIZE_LIMITS["text"]
     if lang in _DATA_LANGS:
         return _SIZE_LIMITS["data"]
+    if lang and lang != "unknown":
+        try:
+            from tree_sitter_language_pack import has_language
+            if has_language(lang):
+                return _SIZE_LIMITS["code"]
+        except Exception:
+            pass
     return _SIZE_LIMITS["unknown"]
 
 

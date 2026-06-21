@@ -52,7 +52,7 @@ dependencies = [
 
     # Structural code graph: AST extraction
     "tree-sitter>=0.23.0",
-    "tree-sitter-language-pack>=0.23.0",
+    "tree-sitter-language-pack>=1.9.1",
 
     # Community detection
     "leidenalg>=0.10.0",

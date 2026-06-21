@@ -92,11 +92,30 @@ def test_bpre_no_hardcoded_api_surface_patterns() -> None:
 
 
 def test_bpre_ast_uses_tree_sitter_only() -> None:
-    """kb/bpre_ast.py must import _TS_LANG from extractor and must NOT import re."""
+    """H4 guard: bpre_ast must use pack-native has_language/get_parser; no _TS_LANG; no re."""
     src = _source("opencode_search.kb.bpre_ast")
-    assert "_TS_LANG" in src, "bpre_ast must reuse _TS_LANG from graph.extractor"
+    assert "_TS_LANG" not in src, "bpre_ast must NOT import _TS_LANG (removed in H4)"
+    assert "has_language" in src, "bpre_ast must use has_language() from the pack (H4)"
+    assert "get_parser" in src, "bpre_ast must use get_parser() from the pack (H4)"
     assert "import re" not in src, "bpre_ast must not import re"
     assert "re.compile" not in src, "bpre_ast must not use re.compile"
+
+
+def test_extractor_has_no_hardcoded_lang_dicts() -> None:
+    """H1/H2 guard: graph/extractor.py must not contain _TS_LANG/_DEF_KINDS/_CALL_NODE."""
+    src = _source("opencode_search.graph.extractor")
+    assert "_TS_LANG" not in src, "extractor must not define _TS_LANG (removed in H1)"
+    assert "_DEF_KINDS" not in src, "extractor must not define _DEF_KINDS (removed in H1)"
+    assert "_CALL_NODE" not in src, "extractor must not define _CALL_NODE (removed in H2)"
+    assert "_STRUCTURE_KIND_MAP" in src, "extractor must use _STRUCTURE_KIND_MAP (H1)"
+    assert "process" in src, "extractor must call process() (H1)"
+
+
+def test_discover_uses_pack_language_detection() -> None:
+    """H3 guard: index/discover.py must use detect_language_from_path; no _EXT_LANG."""
+    src = _source("opencode_search.index.discover")
+    assert "_EXT_LANG" not in src, "discover must not define _EXT_LANG (removed in H3)"
+    assert "detect_language_from_path" in src, "discover must use detect_language_from_path (H3)"
 
 
 def test_overview_detect_services_uses_bpre_ast() -> None:
