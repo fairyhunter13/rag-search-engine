@@ -5,8 +5,6 @@ from dataclasses import dataclass,field
 from pathlib import Path
 log=logging.getLogger(__name__)
 from opencode_search.graph.extractor import _TS_LANG
-_HV=frozenset({"GET","POST","PUT","DELETE","PATCH"})
-_SP={"GetMapping":"GET","PostMapping":"POST","PutMapping":"PUT","DeleteMapping":"DELETE","PatchMapping":"PATCH","RequestMapping":"GET"}
 @dataclass
 class FileFacts:
     path:str
@@ -101,13 +99,6 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                     if op and fd:
                         base,meth=_t(op,b),_t(fd,b)
                         if meth in s.constructors:f.grpc_clients.append((base,s.constructors[meth],meth,ln))
-                        elif meth.upper() in _HV and args:
-                            p=_s1(args,b)
-                            if p and p.startswith("/"):f.http_routes.append((meth.upper(),p,ln))
-                        elif base in("http","client","resty") and meth.capitalize() in("Get","Post","Put","Delete","Patch"):
-                            if args:
-                                p=_s1(args,b)
-                                if p:f.http_clients.append((meth.upper(),p,ln))
                         elif base=="proto" and meth=="Marshal" and args and args.named_child_count()>0:
                             tk=_pk(args.named_child(0),b,pa)
                             if tk:f.proto_marshal_types.append((tk,ln))
@@ -115,6 +106,14 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                             tk=_pk(args.named_child(1),b,pa)
                             if tk:f.pubsub_consumes.append((tk,ln))
                         elif meth=="Receive":f.has_receive_call=True
+                        elif args:
+                            p=_s1(args,b)
+                            if p and p.startswith("/"):f.http_routes.append((meth.upper(),p,ln))
+                            elif base in pa and "http" in pa[base]:
+                                if meth=="NewRequest":
+                                    sv=[_t(args.named_child(i),b).strip("\"'`") for i in range(args.named_child_count()) if args.named_child(i).kind() in("interpreted_string_literal","raw_string_literal","string_literal")]
+                                    if len(sv)>=2:f.http_clients.append((sv[0].upper(),sv[1],ln))
+                                elif p:f.http_clients.append((meth.upper(),p,ln))
                 elif fn and fn.kind()=="identifier":
                     nm=_t(fn,b)
                     if nm in s.registrars:f.grpc_servers.append((s.registrars[nm],ln))
@@ -123,7 +122,7 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                 if r and r[0] in pubs and r[1]=="Message":f.pubsub_message_lines.append(n.start_position().row+1)
             elif k=="const_spec":
                 nn,vn=n.child_by_field_name("name"),n.child_by_field_name("value")
-                if nn and vn and "status" in _t(nn,b).lower():
+                if nn and vn:
                     for i in range(vn.named_child_count()):
                         c=vn.named_child(i)
                         if c.kind() in("interpreted_string_literal","raw_string_literal"):
@@ -138,10 +137,19 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                 nn=n.child_by_field_name("name")
                 if nn:
                     ann=_t(nn,b)
-                    if ann in _SP:
+                    if ann.endswith("Mapping"):
                         an=n.child_by_field_name("arguments")
+                        verb=None
+                        if an:
+                            at=_t(an,b)
+                            if "RequestMethod." in at:
+                                idx=at.find("RequestMethod.")+len("RequestMethod.")
+                                verb=at[idx:].split(")")[0].split(",")[0].strip().rstrip("}").strip().upper()
+                        if not verb:
+                            prefix=ann[:-len("Mapping")]
+                            verb=prefix.upper() if prefix else "GET"
                         if an:
                             p=_s1(an,b)
-                            if p:f.http_routes.append((_SP[ann],p,n.start_position().row+1))
+                            if p:f.http_routes.append((verb,p,n.start_position().row+1))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     return f

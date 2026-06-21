@@ -175,10 +175,10 @@ def _build_service_registry(members: list[str]) -> dict[str, str]:
 
 def _build_pubsub_registry(
     members: list[str], surf: ApiSurface,
-) -> dict[str, tuple[str, str]]:
+) -> dict[str, tuple[str, str, str, int]]:
     from opencode_search.index.discover import detect_language
     from opencode_search.kb.bpre_ast import scan_file
-    publishers: dict[str, list[str]] = {}
+    publishers: dict[str, list[tuple[str, str, int]]] = {}
     consumers: dict[str, list[str]] = {}
     for member in members:
         for src in _source_files(member):
@@ -189,15 +189,17 @@ def _build_pubsub_registry(
             ff = scan_file(str(src), content, detect_language(src), surf)
             if not ff:
                 continue
-            for tk, _ln in ff.proto_marshal_types:
-                publishers.setdefault(tk, []).append(member)
+            rel = _rel_path(str(src), member)
+            for tk, ln in ff.proto_marshal_types:
+                publishers.setdefault(tk, []).append((member, rel, ln))
             for tk, _ln in ff.pubsub_consumes:
                 consumers.setdefault(tk, []).append(member)
-    result: dict[str, tuple[str, str]] = {}
+    result: dict[str, tuple[str, str, str, int]] = {}
     for key in set(publishers) & set(consumers):
-        pub, sub = publishers[key][0], consumers[key][0]
-        if pub != sub:
-            result[key] = (pub, sub)
+        pub_member, pub_file, pub_line = publishers[key][0]
+        sub = consumers[key][0]
+        if pub_member != sub:
+            result[key] = (pub_member, sub, pub_file, pub_line)
     return result
 
 
@@ -254,13 +256,13 @@ def _resolve_grpc_edges(
 
 
 def _resolve_pubsub_edges(
-    con: sqlite3.Connection, pubsub_registry: dict[str, tuple[str, str]],
+    con: sqlite3.Connection, pubsub_registry: dict[str, tuple[str, str, str, int]],
 ) -> None:
     rows = [
         (_hid(_service_label(pub), _service_label(sub), "pubsub", msg),
-         _service_label(pub), "", 0, _service_label(sub), msg, "pubsub", 1.0,
+         _service_label(pub), caller_file, caller_line, _service_label(sub), msg, "pubsub", 1.0,
          f"proto type {msg}")
-        for msg, (pub, sub) in pubsub_registry.items()
+        for msg, (pub, sub, caller_file, caller_line) in pubsub_registry.items()
     ]
     con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
