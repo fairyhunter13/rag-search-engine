@@ -192,7 +192,7 @@ async def graph(
 
 @mcp.tool()
 async def overview(project_path: str = "", what: str = "structure") -> str:
-    """Overview of a project. what: structure|communities|status|projects|patterns|metrics|architecture_domains|hierarchy|import_cycles|surprising_connections|feature_map|business_rules|process_flows|suggested_questions|service_mesh."""
+    """Overview of a project. what: structure|communities|status|projects|patterns|metrics|architecture_domains|hierarchy|import_cycles|surprising_connections|feature_map|business_rules|process_flows|suggested_questions|service_mesh|validate."""
     note_activity()
     from opencode_search.server._overview import handle_overview
     return handle_overview(project_path, what)

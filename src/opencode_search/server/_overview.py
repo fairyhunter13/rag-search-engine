@@ -67,7 +67,7 @@ _VALID = {
     "structure", "projects", "metrics", "patterns", "communities",
     "architecture_domains", "hierarchy", "status", "import_cycles",
     "surprising_connections", "feature_map", "business_rules",
-    "process_flows", "suggested_questions", "service_mesh",
+    "process_flows", "suggested_questions", "service_mesh", "validate",
 }
 
 
@@ -84,6 +84,12 @@ def handle_overview(project_path: str, what: str) -> str:
     if what == "metrics":
         from opencode_search.server.routes_ops import _snapshot
         return json.dumps(_snapshot())
+    if what == "validate":
+        if not project_path:
+            _ps = [p for p in list_projects() if p.enabled]
+            project_path = _ps[0].path if _ps else ""
+        from opencode_search.index.validate import validate_index
+        return json.dumps(validate_index(project_path))
     if not project_path:
         ps = [p for p in list_projects() if p.enabled]
         project_path = ps[0].path if ps else ""
