@@ -246,6 +246,7 @@ def test_modularity_positive_oracle_two_cliques(safe_tmp_path):
     assert not q["degenerate"], f"two-clique must not be degenerate: {q}"
 
 
+@pytest.mark.slow
 def test_owning_root_l3_refresh_is_wired(safe_tmp_path):
     """HE7: _regen_owning_hierarchy calls build_federation_hierarchy (source-guard + behavioral)."""
     from opencode_search.core.config import ProjectEntry
