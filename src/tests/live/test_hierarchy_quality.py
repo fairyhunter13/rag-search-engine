@@ -174,10 +174,24 @@ def test_federation_hierarchy_never_reads_symbols():
 
 @pytest.mark.slow
 def test_global_ask_surfaces_l3_federation_domain(live_client):
-    """HQ7: ask(scope=global) context references an L3 federation-domain title."""
+    """HQ7: ask(scope=global) context references an L3 federation-domain title.
+
+    Builds L3 deterministically (OSE_WIKI_LLM=0) if absent so this never skips on a fresh root.
+    """
+    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
+
     root = _fedroot()
     if not root:
         pytest.skip("no federated root registered")
+    prev = os.environ.get("OSE_WIKI_LLM")
+    os.environ["OSE_WIKI_LLM"] = "0"
+    try:
+        build_federation_hierarchy(root)
+    finally:
+        if prev is None:
+            os.environ.pop("OSE_WIKI_LLM", None)
+        else:
+            os.environ["OSE_WIKI_LLM"] = prev
     gs = GraphStore(project_graph_db(root))
     try:
         l3_titles = [r[0] for r in gs._con.execute(
@@ -185,8 +199,7 @@ def test_global_ask_surfaces_l3_federation_domain(live_client):
         ).fetchall()]
     finally:
         gs.close()
-    if not l3_titles:
-        pytest.skip("no L3 domains yet — run _enrich_project on root first")
+    assert l3_titles, "build_federation_hierarchy must have written L3 rows to root graph.db"
     from opencode_search.server.mcp import ask as _mcp_ask
     ctx = asyncio.run(_mcp_ask("What is the overall cross-service architecture?", root, "global"))
     assert any(t.lower() in ctx.lower() for t in l3_titles), (

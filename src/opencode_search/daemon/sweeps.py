@@ -310,6 +310,7 @@ def _enrich_project(project_path: str) -> None:
     try:
         from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
         build_federation_hierarchy(project_path)
+        _regen_owning_hierarchy(project_path)
     except Exception as exc:
         log.warning("federation hierarchy %s: %s", project_path, exc)
     # Member-edit refresh: reconstruct processes for any root that owns this project as a member.
@@ -341,6 +342,18 @@ def _regen_owning_federations(member_path: str) -> None:
                 build_federated_index(entry.path)
             except Exception as exc:
                 log.warning("owning-federation regen %s: %s", entry.path, exc)
+
+
+def _regen_owning_hierarchy(member_path: str) -> None:
+    """Rebuild federation L3 in any enabled root whose federation list contains member_path."""
+    from opencode_search.core.registry import list_projects
+    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
+    for entry in list_projects():
+        if entry.enabled and entry.federation and member_path in entry.federation:
+            try:
+                build_federation_hierarchy(entry.path)
+            except Exception as exc:
+                log.warning("owning-hierarchy regen %s: %s", entry.path, exc)
 
 
 def _regen_owning_processes(member_path: str) -> None:
