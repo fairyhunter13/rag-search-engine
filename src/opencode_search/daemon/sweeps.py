@@ -81,7 +81,11 @@ def reconcile_projects() -> None:
             if gdb.exists():
                 gs = GraphStore(gdb)
                 try:
-                    needs_idx = gs.community_count() == 0
+                    if gs.community_count() == 0:
+                        needs_idx = True
+                    elif gs.edge_count() == 0 and gs.community_count() > 0:
+                        # Edge-hollow: communities exist but no call graph → stale index
+                        needs_idx = True
                 finally:
                     gs.close()
         try:
@@ -136,9 +140,10 @@ def _index_project(project_path: str) -> None:
     finally:
         vs.close()
 
-    # 2. Tree-sitter extract → graph.db
+    # 2. Tree-sitter extract → graph.db  (clear first so stale rows don't persist)
     gs = GraphStore(project_graph_db(project_path))
     try:
+        gs.clear()
         for fpath in iter_files(root, federation_mode=True):
             try:
                 content = fpath.read_text(errors="replace")

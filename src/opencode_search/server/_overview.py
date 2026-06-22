@@ -143,10 +143,14 @@ def handle_overview(project_path: str, what: str) -> str:
                                           or not project_vector_db(p).exists()) else
                            "ready" if _pct >= 95 else "enriching" if l1p > 0 else "searchable")
                     s, cm = gs.symbol_count(), gs.community_count()
+                    ec = gs.edge_count()
                     tot_sym += s
                     tot_comm += cm
                     tot_fc += ep.file_count if ep else 0
-                    members_info.append({"path": p, "kb_state": _ks, "symbols": s, "communities": cm})
+                    _hollow = (s == 0 and cm > 0) or (ec == 0 and cm > 0)
+                    members_info.append({"path": p, "kb_state": _ks, "symbols": s,
+                                         "communities": cm, "edges": ec,
+                                         "symbol_hollow": _hollow})
                     if _rank.get(_ks, 3) < _rank.get(worst_state, 3):
                         worst_state = _ks
                     if i == 0:
@@ -159,11 +163,13 @@ def handle_overview(project_path: str, what: str) -> str:
                 _has_own = any((_pp / n).is_file() for n in _CONFIG_NAMES)
                 _is_member = any(str(_pp) in (ep.federation or []) for ep in list_projects())
                 _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
+                _any_hollow = any(m.get("symbol_hollow") for m in members_info)
                 return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
                                    "kb_state": worst_state, "enriched_pct": root_pct[0],
                                    "l1_enriched_pct": root_pct[1], "l2_enriched_pct": root_pct[2],
+                                   "symbol_hollow": _any_hollow,
                                    "members": members_info,
                                    "config": {"exclude": _ecfg.exclude,
                                               "use_default_ignores": _ecfg.use_default_ignores,

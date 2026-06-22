@@ -131,8 +131,16 @@ class GraphStore:
     def set_intent(self, sid: str, intent: str) -> None:
         self._con.execute("UPDATE symbols SET intent=? WHERE sid=?", (intent, sid))
 
+    def clear(self) -> None:
+        """Wipe symbols/edges/communities before a full re-index so stale rows don't persist."""
+        self._con.executescript("DELETE FROM symbols; DELETE FROM edges; DELETE FROM communities;")
+        self._con.commit()
+
     def symbol_count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+
+    def edge_count(self) -> int:
+        return self._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
     def community_count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
