@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from opencode_search.graph.llm import deepseek_chat
+from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_chat, deepseek_extract
 from opencode_search.graph.store import GraphStore
+
+log = logging.getLogger(__name__)
 
 _INTENT_PROMPT = """\
 For each symbol below, reply with ONLY a JSON array of short intent strings (≤8 words each).
@@ -24,6 +27,16 @@ Members: {members}
 Reply ONLY with JSON: {{"title": "<short title>", "summary": "<2 sentences>", \
 "semantic_type": "<business_process|business_rule|feature|utility|infrastructure|domain|test>"}}
 Hint: if orchestrating multi-step workflows -> business_process; if enforcing constraints/validation -> business_rule."""
+
+# Stable system prompt for batched enrichment via deepseek_extract (prefix-cached).
+# Byte-identical across all batch calls → high prompt_cache_hit_tokens from batch 2 on.
+_COMMUNITY_SYSTEM_PROMPT = """\
+You are a senior software architect summarizing code communities for a knowledge graph.
+For each community, write a 2-sentence summary covering purpose and main patterns.
+Assign semantic_type from: business_process | business_rule | feature | utility | infrastructure | domain | test
+(business_process: multi-step workflow; business_rule: constraint/validation; test: test code)
+Reply ONLY with a JSON array in the same order as input:
+[{"id": <N>, "title": "<≤8 word title>", "summary": "<2 sentences>", "semantic_type": "<type>"}]"""
 
 # ---------------------------------------------------------------------------
 # Semantic type classification — direct LLM (DeepSeek) over title + summary.
@@ -110,38 +123,93 @@ def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
     return [(cid, labels[cid]) for cid, _, _ in batch if cid in labels]
 
 
-# ---------------------------------------------------------------------------
-# Rich context assembly — DeepWiki-style
-# ---------------------------------------------------------------------------
+def compute_significance(store: GraphStore) -> tuple[list[int], list[int]]:
+    """Classify all unenriched L1 communities into (head, tail) in two SQL queries.
 
-def _community_rich_text(
-    store: GraphStore, cid: int, title: str, summary: str,
-    member_count: int, parent_title: str | None,
-) -> str:
-    """Rich context: title + summary + member intents + file paths + edge count + L2 domain."""
-    rows = store._con.execute(
-        "SELECT name, kind, COALESCE(intent,''), file FROM symbols "
-        "WHERE community_id=? ORDER BY CASE WHEN intent!='' THEN 0 ELSE 1 END LIMIT 10",
-        (cid,),
+    Head = worth LLM narration: member_count≥8 OR ≥2 cross-community edges.
+    Tail = deterministic structural labels only (zero tokens).
+    L2/L3 communities are always handled separately (enrich_community_l2).
+    """
+    unenriched = store._con.execute(
+        "SELECT id, member_count FROM communities "
+        "WHERE (summary IS NULL OR summary = '') AND level = 1"
     ).fetchall()
-    member_lines = "\n  ".join(
-        f"- [{r[1]}] {r[0]}" + (f": {r[2]}" if r[2] else "") for r in rows
-    )
-    files = list(dict.fromkeys(r[3] for r in rows if r[3]))[:4]
-    edge_count = store._con.execute(
-        "SELECT COUNT(*) FROM edges e "
-        "JOIN symbols s ON (e.caller_sid=s.sid OR e.callee_sid=s.sid) "
-        "WHERE s.community_id=?", (cid,)
-    ).fetchone()[0]
-    parts = [
-        title,
-        f"Summary: {summary}" if summary else "",
-        f"Members ({member_count}):\n  {member_lines}" if member_lines else "",
-        "Files: " + ", ".join(files) if files else "",
-        f"Connectivity: high ({edge_count} edges)" if edge_count >= 5 else "",
-        f"Domain: {parent_title}" if parent_title else "",
+    if not unenriched:
+        return [], []
+    cross_deg: dict[int, int] = dict(store._con.execute(
+        """SELECT sc.community_id, COUNT(*)
+           FROM edges e
+           JOIN symbols sc  ON e.caller_sid  = sc.sid
+           JOIN symbols sc2 ON e.callee_sid = sc2.sid
+           WHERE sc.community_id != sc2.community_id
+           GROUP BY sc.community_id"""
+    ).fetchall())
+    head, tail = [], []
+    for cid, mc in unenriched:
+        if (mc or 0) >= 8 or cross_deg.get(cid, 0) >= 2:
+            head.append(cid)
+        else:
+            tail.append(cid)
+    return head, tail
+
+
+def _enrich_one_batch(
+    store: GraphStore, batch_ids: list[int], valid: frozenset[str],
+) -> tuple[list[int], dict]:
+    """One deepseek_extract call for ≤20 communities; parse + upsert results."""
+    items = [
+        {"id": cid, "members": "; ".join(
+            f"{r[1]} {r[0]}" for r in store._con.execute(
+                "SELECT name, kind FROM symbols WHERE community_id=? LIMIT 30", (cid,)
+            ).fetchall()
+        )[:800]}
+        for cid in batch_ids
+        if store._con.execute(
+            "SELECT COUNT(*) FROM symbols WHERE community_id=?", (cid,)
+        ).fetchone()[0] > 0
     ]
-    return "\n".join(p for p in parts if p)
+    if not items:
+        return [], {}
+    try:
+        raw, usage = deepseek_extract(
+            _COMMUNITY_SYSTEM_PROMPT,
+            "Communities:\n" + json.dumps(items, ensure_ascii=False),
+            max_tokens=min(len(items) * 200 + 50, 4096),
+        )
+        _accumulate_llm_tokens(usage, "enrich")
+    except Exception:
+        return [], {}
+    text = raw.split("</think>")[-1] if "</think>" in raw else raw
+    text = text.replace("```json", "").replace("```", "")
+    s, e = text.find("["), text.rfind("]")
+    if s == -1 or e <= s:
+        return [], usage
+    try:
+        parsed = json.loads(text[s:e + 1])
+    except Exception:
+        return [], usage
+    enriched: list[int] = []
+    for item in (parsed if isinstance(parsed, list) else []):
+        try:
+            cid = int(item["id"])
+            if cid not in set(batch_ids):
+                continue
+            st = str(item.get("semantic_type", ""))
+            mc = store._con.execute(
+                "SELECT member_count FROM communities WHERE id=?", (cid,)
+            ).fetchone()
+            store.upsert_community(
+                cid, level=1,
+                title=str(item.get("title", ""))[:200],
+                summary=str(item.get("summary", ""))[:2000],
+                member_count=(mc[0] if mc else 0),
+                semantic_type=(st if st in valid else "utility"),
+            )
+            enriched.append(cid)
+        except Exception:
+            continue
+    store.commit()
+    return enriched, usage
 
 
 def classify_communities_semantic(
@@ -192,6 +260,42 @@ def classify_communities_semantic(
     if updates:
         store.commit()
     return updates
+
+
+def enrich_communities_batch(
+    store: GraphStore, community_ids: list[int], *,
+    thermal_guard_fn=None, budget: int = 50_000,
+) -> tuple[list[int], dict]:
+    """Narrate a list of L1 communities via batched prefix-cached DeepSeek calls.
+
+    Each chunk of 20 is one deepseek_extract call.  System prompt is byte-identical
+    across all chunks → high prompt_cache_hit_tokens from chunk 2 onward.
+    budget: max completion tokens before stopping (safety cap, default 50k).
+    Returns (enriched_ids, aggregate_usage).
+    """
+    import time
+
+    if not community_ids:
+        return [], {}
+    agg: dict[str, int] = {
+        "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 0,
+        "completion_tokens": 0, "calls": 0,
+    }
+    valid = frozenset(_TYPE_ORDER)
+    enriched: list[int] = []
+    for i in range(0, len(community_ids), 20):
+        if agg["completion_tokens"] >= budget:
+            log.warning("enrich_communities_batch: budget %d tokens reached, stopping", budget)
+            break
+        if thermal_guard_fn and thermal_guard_fn():
+            time.sleep(5)
+        batch_enriched, usage = _enrich_one_batch(store, community_ids[i:i + 20], valid)
+        enriched.extend(batch_enriched)
+        for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_tokens"):
+            agg[k] = agg.get(k, 0) + usage.get(k, 0)
+        if usage:
+            agg["calls"] += 1
+    return enriched, agg
 
 
 def enrich_community_l2(store: GraphStore, community_id: int) -> None:

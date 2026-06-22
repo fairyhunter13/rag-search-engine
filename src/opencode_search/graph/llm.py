@@ -3,10 +3,34 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from functools import lru_cache
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Process-level LLM token accounting (deepseek_extract calls only).
+# Accumulate into {category}.{metric} counters; read via llm_token_stats().
+# ---------------------------------------------------------------------------
+
+_token_lock = threading.Lock()
+_llm_token_stats: dict[str, int] = {}
+
+
+def _accumulate_llm_tokens(usage: dict, category: str) -> None:
+    """Thread-safe accumulation of deepseek_extract usage into process-level stats."""
+    with _token_lock:
+        for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_tokens"):
+            key = f"{category}.{k}"
+            _llm_token_stats[key] = _llm_token_stats.get(key, 0) + int(usage.get(k, 0))
+        _llm_token_stats[f"{category}.calls"] = _llm_token_stats.get(f"{category}.calls", 0) + 1
+
+
+def llm_token_stats() -> dict[str, int]:
+    """Snapshot of accumulated LLM token usage across all tracked deepseek_extract calls."""
+    with _token_lock:
+        return dict(_llm_token_stats)
 
 _DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 # Pin to deepseek-v4-flash: the `deepseek-chat` alias deprecates 2026-07-24 15:59 UTC.

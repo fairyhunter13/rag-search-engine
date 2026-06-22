@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+
+# Max DeepSeek completion tokens spent on L1 community narration per _enrich_project run.
+# Prevents runaway cost on unexpectedly large projects.  Default 50k ≈ ≤250 head communities.
+_ENRICH_BUDGET_TOKENS: int = int(os.environ.get("OSE_ENRICH_BUDGET_TOKENS", "50000"))
 
 _PAUSED: bool = False
 _KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change
@@ -242,9 +247,11 @@ def _enrich_project(project_path: str) -> None:
 
     from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
     from opencode_search.core.gpu import gpu_temp_c
+    from opencode_search.graph.community import label_community_structural
     from opencode_search.graph.enrich import (
         classify_communities_semantic,
-        enrich_community,
+        compute_significance,
+        enrich_communities_batch,
         enrich_community_l2,
     )
     from opencode_search.graph.store import GraphStore
@@ -258,12 +265,28 @@ def _enrich_project(project_path: str) -> None:
             "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
         )
         gs.commit()
-        for (cid,) in gs._con.execute(
-            "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1"
-        ).fetchall():
-            enrich_community(gs, cid)
-            if gpu_temp_c() > THERMAL_MAX_C:
-                time.sleep(5)
+        # DIKW token doctrine — Knowledge rung, Phase 1:
+        # Head (member_count≥8 OR cross-community edges≥2): LLM narration, batched+prefix-cached.
+        # Tail (below gate): deterministic structural labels, zero tokens.
+        _head_cids, _tail_cids = compute_significance(gs)
+        for _cid in _tail_cids:
+            label_community_structural(gs, _cid)
+        gs.commit()
+        if _head_cids:
+            _enriched_ids, _usage = enrich_communities_batch(
+                gs, _head_cids,
+                thermal_guard_fn=lambda: gpu_temp_c() > THERMAL_MAX_C,
+                budget=_ENRICH_BUDGET_TOKENS,
+            )
+            log.info(
+                "_enrich_project %s: head=%d tail=%d enriched=%d "
+                "tok(hit=%d miss=%d comp=%d) calls=%d",
+                project_path, len(_head_cids), len(_tail_cids), len(_enriched_ids),
+                _usage.get("prompt_cache_hit_tokens", 0),
+                _usage.get("prompt_cache_miss_tokens", 0),
+                _usage.get("completion_tokens", 0),
+                _usage.get("calls", 0),
+            )
         gs.commit()
         # Stamp any L1 community still lacking a title after LLM enrichment
         # (detect_communities pre-labels via _label_from_names; this covers the case
@@ -292,9 +315,16 @@ def _enrich_project(project_path: str) -> None:
             "WHERE level>=2 AND (summary IS NULL OR summary='')"
         )
         gs.commit()
-        # Daemon: classify only new/unclassified communities (stable, no churn). The one-time
-        # migration of stale projects uses reclassify_all=True explicitly.
-        classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
+        # Legacy backfill: classify any community with a summary but no semantic_type
+        # (pre-Phase-1 data or communities enriched by the old enrich_community path).
+        # Batched enrichment (above) already sets semantic_type, so this is a no-op for
+        # freshly-enriched projects — kept for stale rows from previous runs.
+        _needs_classify = gs._con.execute(
+            "SELECT COUNT(*) FROM communities "
+            "WHERE level=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
+        ).fetchone()[0]
+        if _needs_classify:
+            classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
