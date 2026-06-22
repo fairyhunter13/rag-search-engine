@@ -86,6 +86,7 @@ def test_inv4_root_scoped_search_fanout(safe_tmp_path):
 # Invariant #5: graph(definition) resolves symbols from member's graph.db
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_inv5_graph_definition_fanout(safe_tmp_path):
     """Invariant #5: graph(symbol, root) unions definition matches across members."""
     from opencode_search.core.config import ProjectEntry
@@ -117,6 +118,7 @@ def test_inv5_graph_definition_fanout(safe_tmp_path):
 # Invariant #7: overview(status, root) aggregates counts + includes members[]
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_inv7_overview_status_aggregates(safe_tmp_path):
     """Invariant #7: overview(status, root) sums symbols+communities across members."""
     from opencode_search.core.config import ProjectEntry
