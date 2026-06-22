@@ -35,9 +35,11 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
 
     g = ig.Graph(n=len(symbols), edges=edges_ig, directed=True)
     if g.ecount() == 0:
-        files = sorted({s["file"] for s in symbols})
+        files = sorted(f for f in {s["file"] for s in symbols} if f)
         file_idx = {f: i for i, f in enumerate(files)}
-        mapping: dict[str, int] = {s["sid"]: file_idx[s["file"]] for s in symbols}
+        mapping: dict[str, int] = {
+            s["sid"]: file_idx[s["file"]] for s in symbols if s["file"] in file_idx
+        }
     else:
         # ModularityVertexPartition does not accept resolution_parameter (CPM does).
         part = leidenalg.find_partition(

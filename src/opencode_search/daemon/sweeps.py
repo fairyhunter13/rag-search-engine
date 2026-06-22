@@ -76,7 +76,8 @@ def reconcile_projects() -> None:
         if not entry.enabled:
             continue
         needs_idx = _needs_index(entry.path)
-        if not needs_idx:
+        # Federation roots have 0 own communities by design (HR4) — skip community_count check.
+        if not needs_idx and not entry.federation:
             gdb = project_graph_db(entry.path)
             if gdb.exists():
                 gs = GraphStore(gdb)
@@ -147,6 +148,8 @@ def _index_project(project_path: str) -> None:
                 continue
             lang = detect_language(fpath)
             for sym in extract_symbols(fpath, content, lang):
+                if not sym.name:
+                    continue  # skip name-less nodes (tree-sitter-language-pack can emit None names)
                 sid = symbol_id(sym.file, sym.name, sym.start_line)
                 gs.upsert_symbol(
                     sid, sym.name, sym.qualified_name, sym.kind,
