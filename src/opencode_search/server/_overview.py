@@ -113,16 +113,35 @@ def handle_overview(project_path: str, what: str) -> str:
             if what == "communities":
                 rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities ORDER BY level,id LIMIT 50").fetchall()]
                 return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
-            if what in ("architecture_domains", "hierarchy"):
-                f = "WHERE level>=2" if what == "architecture_domains" else ""
-                rows = [r for gs in _gstores for r in gs.conn.execute(f"SELECT id,title,level FROM communities {f} ORDER BY level,id LIMIT 200").fetchall()]
-                result: dict = {what: [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]}
-                if what == "hierarchy":
-                    result["note"] = "per-member hierarchy; cross-repo hierarchy is not representable"
-                return json.dumps(result)
+            if what == "architecture_domains":
+                rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT id,title,level FROM communities WHERE level>=2 ORDER BY level,id LIMIT 200"
+                ).fetchall()]
+                return json.dumps({"architecture_domains": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
+            if what == "hierarchy":
+                from opencode_search.graph.quality import partition_quality
+                hier_rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT id,title,level FROM communities ORDER BY level,id LIMIT 200"
+                ).fetchall()]
+                quality = partition_quality(_gstores[0]) if _gstores else {}
+                fed_domains = []
+                if _gstores:
+                    fed_domains = [
+                        {"id": r[0], "title": r[1], "summary": r[2]}
+                        for r in _gstores[0].conn.execute(
+                            "SELECT id,title,summary FROM communities "
+                            "WHERE level>=3 AND title IS NOT NULL AND title!='' ORDER BY id"
+                        ).fetchall()
+                    ]
+                return json.dumps({
+                    "hierarchy": [{"id": r[0], "title": r[1], "level": r[2]} for r in hier_rows],
+                    "quality": quality,
+                    "federation_domains": fed_domains,
+                })
             if what == "status":
                 from opencode_search.core.config import project_vector_db
                 from opencode_search.core.registry import get_project
+                from opencode_search.graph.quality import partition_quality
                 e = get_project(project_path)
                 tot_sym, tot_comm, tot_fc = 0, 0, 0
                 members_info: list = []
@@ -147,10 +166,17 @@ def handle_overview(project_path: str, what: str) -> str:
                     tot_sym += s
                     tot_comm += cm
                     tot_fc += ep.file_count if ep else 0
-                    _hollow = (s == 0 and cm > 0) or (ec == 0 and cm > 0)
+                    # Federation roots legitimately have 0 edges (HR4: synthesis L3 rows only).
+                    _is_fedroot = bool(ep and ep.federation)
+                    _hollow = ((s == 0 and cm > 0) or (ec == 0 and cm > 0)) and not _is_fedroot
+                    hq = partition_quality(gs)
+                    # Degenerate partition demotes kb_state below ready (Gate kb_state, user choice).
+                    if hq.get("degenerate") and _ks == "ready":
+                        _ks = "searchable"
                     members_info.append({"path": p, "kb_state": _ks, "symbols": s,
                                          "communities": cm, "edges": ec,
-                                         "symbol_hollow": _hollow})
+                                         "symbol_hollow": _hollow,
+                                         "hierarchy_quality": hq})
                     if _rank.get(_ks, 3) < _rank.get(worst_state, 3):
                         worst_state = _ks
                     if i == 0:
@@ -164,12 +190,14 @@ def handle_overview(project_path: str, what: str) -> str:
                 _is_member = any(str(_pp) in (ep.federation or []) for ep in list_projects())
                 _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
                 _any_hollow = any(m.get("symbol_hollow") for m in members_info)
+                _any_degenerate = any(m.get("hierarchy_quality", {}).get("degenerate") for m in members_info)
                 return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
                                    "kb_state": worst_state, "enriched_pct": root_pct[0],
                                    "l1_enriched_pct": root_pct[1], "l2_enriched_pct": root_pct[2],
                                    "symbol_hollow": _any_hollow,
+                                   "hierarchy_quality": {"degenerate": _any_degenerate},
                                    "members": members_info,
                                    "config": {"exclude": _ecfg.exclude,
                                               "use_default_ignores": _ecfg.use_default_ignores,

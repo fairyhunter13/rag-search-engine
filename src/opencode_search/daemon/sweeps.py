@@ -307,6 +307,11 @@ def _enrich_project(project_path: str) -> None:
         _regen_owning_federations(project_path)
     except Exception as exc:
         log.warning("federation index %s: %s", project_path, exc)
+    try:
+        from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
+        build_federation_hierarchy(project_path)
+    except Exception as exc:
+        log.warning("federation hierarchy %s: %s", project_path, exc)
     # Member-edit refresh: reconstruct processes for any root that owns this project as a member.
     try:
         _regen_owning_processes(project_path)
