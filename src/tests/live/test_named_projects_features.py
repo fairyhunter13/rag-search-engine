@@ -37,15 +37,6 @@ _OVERVIEW_WHATS_SLOW = ["communities", "patterns"]
 _SEARCH_SCOPES = ["code", "docs", "all"]
 
 
-@pytest.fixture(scope="module")
-def named_proj(request):
-    key = request.param
-    path = _PROJECTS.get(key, "")
-    if not path:
-        pytest.skip(f"Project '{key}' not in registry")
-    return path
-
-
 class TestNamedProjectsSearch:
     """T3a: search returns results for each named root across all scopes."""
 
@@ -55,8 +46,7 @@ class TestNamedProjectsSearch:
     def test_search_returns_results(self, key: str, scope: str) -> None:
         from opencode_search.server.mcp import search as search_tool
         path = _PROJECTS.get(key, "")
-        if not path:
-            pytest.skip(f"{key} not in registry")
+        assert path, f"{key} not in registry — all 3 named projects must be registered"
         data = json.loads(asyncio.run(search_tool("function", scope=scope, project_paths=[path])))
         assert "results" in data, f"{key} scope={scope}: missing 'results'"
         assert "total" in data, f"{key} scope={scope}: missing 'total'"
@@ -71,8 +61,7 @@ class TestNamedProjectsOverview:
     def test_overview_what_returns_dict(self, key: str, what: str) -> None:
         from opencode_search.server.mcp import overview as overview_tool
         path = _PROJECTS.get(key, "")
-        if not path:
-            pytest.skip(f"{key} not in registry")
+        assert path, f"{key} not in registry — all 3 named projects must be registered"
         result = asyncio.run(overview_tool(path, what))
         data = json.loads(result)
         assert isinstance(data, dict), f"{key} overview({what!r}) must return JSON object"
@@ -84,8 +73,7 @@ class TestNamedProjectsOverview:
     def test_overview_slow_what_returns_dict(self, key: str, what: str) -> None:
         from opencode_search.server.mcp import overview as overview_tool
         path = _PROJECTS.get(key, "")
-        if not path:
-            pytest.skip(f"{key} not in registry")
+        assert path, f"{key} not in registry — all 3 named projects must be registered"
         result = asyncio.run(overview_tool(path, what))
         data = json.loads(result)
         assert isinstance(data, dict), f"{key} overview({what!r}) must return JSON object"
@@ -99,8 +87,7 @@ class TestNamedProjectsAsk:
     def test_ask_global_non_empty(self, key: str) -> None:
         from opencode_search.server.mcp import ask as ask_tool
         path = _PROJECTS.get(key, "")
-        if not path:
-            pytest.skip(f"{key} not in registry")
+        assert path, f"{key} not in registry — all 3 named projects must be registered"
         result = asyncio.run(ask_tool("What is the overall architecture?", path, "global"))
         assert isinstance(result, str) and len(result.strip()) > 20, (
             f"{key}: ask(global) returned empty/short: {result!r}"
@@ -117,15 +104,12 @@ class TestNamedProjectsGraph:
         from opencode_search.core.config import project_graph_db
         from opencode_search.server.mcp import graph as graph_tool
         path = _PROJECTS.get(key, "")
-        if not path:
-            pytest.skip(f"{key} not in registry")
+        assert path, f"{key} not in registry — all 3 named projects must be registered"
         gdb = project_graph_db(path)
-        if not gdb.exists():
-            pytest.skip(f"{key}: no graph.db")
+        assert gdb.exists(), f"{key}: no graph.db — project must be indexed"
         con = sqlite3.connect(str(gdb))
         row = con.execute("SELECT name FROM symbols LIMIT 1").fetchone()
         con.close()
-        if not row:
-            pytest.skip(f"{key}: no symbols in graph.db")
+        assert row, f"{key}: no symbols in graph.db — project must have symbols extracted"
         data = json.loads(asyncio.run(graph_tool(row[0], path, "definition")))
         assert isinstance(data, dict), f"{key}: graph(definition) must return JSON object"

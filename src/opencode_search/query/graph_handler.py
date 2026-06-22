@@ -6,12 +6,17 @@ from opencode_search.graph.store import GraphStore
 _SYM_KEYS = ("sid", "name", "qualified_name", "kind", "file", "start_line", "end_line", "language")
 
 
-def _lookup_sid(store: GraphStore, symbol: str) -> str | None:
-    row = store._con.execute(
-        "SELECT sid FROM symbols WHERE name=? OR qualified_name=? LIMIT 1",
+def _lookup_sids(store: GraphStore, symbol: str) -> list[str]:
+    rows = store._con.execute(
+        "SELECT sid FROM symbols WHERE name=? OR qualified_name=?",
         (symbol, symbol),
-    ).fetchone()
-    return row[0] if row else None
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _lookup_sid(store: GraphStore, symbol: str) -> str | None:
+    sids = _lookup_sids(store, symbol)
+    return sids[0] if sids else None
 
 
 def definition(symbol: str, store: GraphStore) -> list[dict]:
@@ -24,25 +29,27 @@ def definition(symbol: str, store: GraphStore) -> list[dict]:
 
 
 def callers(symbol: str, store: GraphStore) -> list[dict]:
-    sid = _lookup_sid(store, symbol)
-    if sid is None:
+    sids = _lookup_sids(store, symbol)
+    if not sids:
         return []
+    ph = ",".join("?" * len(sids))
     rows = store._con.execute(
-        "SELECT s.name,s.file,s.start_line FROM edges e "
-        "JOIN symbols s ON e.caller_sid=s.sid WHERE e.callee_sid=? LIMIT 50",
-        (sid,),
+        f"SELECT DISTINCT s.name,s.file,s.start_line FROM edges e "
+        f"JOIN symbols s ON e.caller_sid=s.sid WHERE e.callee_sid IN ({ph}) LIMIT 50",
+        sids,
     ).fetchall()
     return [{"name": r[0], "file": r[1], "start_line": r[2]} for r in rows]
 
 
 def callees(symbol: str, store: GraphStore) -> list[dict]:
-    sid = _lookup_sid(store, symbol)
-    if sid is None:
+    sids = _lookup_sids(store, symbol)
+    if not sids:
         return []
+    ph = ",".join("?" * len(sids))
     rows = store._con.execute(
-        "SELECT s.name,s.file,s.start_line FROM edges e "
-        "JOIN symbols s ON e.callee_sid=s.sid WHERE e.caller_sid=? LIMIT 50",
-        (sid,),
+        f"SELECT DISTINCT s.name,s.file,s.start_line FROM edges e "
+        f"JOIN symbols s ON e.callee_sid=s.sid WHERE e.caller_sid IN ({ph}) LIMIT 50",
+        sids,
     ).fetchall()
     return [{"name": r[0], "file": r[1], "start_line": r[2]} for r in rows]
 

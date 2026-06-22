@@ -62,7 +62,7 @@ class TestKnowledgeBuiltCorrectly:
         """T1a: Named roots with ≥50 symbols must have ≥1 community."""
         s = status_by_key.get(key, {})
         if s.get("symbols", 0) < _SYM_THRESHOLD:
-            pytest.skip(f"{key}: {s.get('symbols', 0)} symbols < threshold")
+            return  # below threshold — legitimately no communities required
         assert s.get("communities", 0) > 0, (
             f"{key}: {s['symbols']} symbols but communities=0 — "
             "detect_communities was skipped (JSON-race victim)"
@@ -90,9 +90,9 @@ class TestKnowledgeBuiltCorrectly:
         """T1c: L1 enrichment must be 100% for ready projects with communities."""
         s = status_by_key.get(key, {})
         if s.get("kb_state") != "ready":
-            pytest.skip(f"{key}: kb_state={s.get('kb_state')!r}")
+            return  # kb_state checked independently by test_kb_state_ready
         if s.get("communities", 0) == 0:
-            pytest.skip(f"{key}: 0 communities (below threshold or legitimately empty)")
+            return  # legitimately empty — no enrichment expected
         pct = s.get("l1_enriched_pct", 0.0)
         assert pct == 100.0, (
             f"{key}: l1_enriched_pct={pct}% — some L1 communities lack DeepSeek summaries"

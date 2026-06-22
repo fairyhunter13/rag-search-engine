@@ -295,23 +295,28 @@ def test_kb_health_measures_summary_not_title(live_client):
     from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
 
-    project = next(
-        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
-        None,
-    )
-    assert project, "At least one project with a graph DB must be registered"
-
-    gdb = project_graph_db(project)
-    con = sqlite3.connect(str(gdb))
-    try:
-        total = con.execute("SELECT COUNT(*) FROM communities WHERE level = 1").fetchone()[0]
-        summarized = con.execute(
-            "SELECT COUNT(*) FROM communities WHERE level = 1 AND summary IS NOT NULL AND summary != ''"
-        ).fetchone()[0]
-    finally:
-        con.close()
-
-    assert total > 0, "Project must have communities"
+    project = None
+    total = summarized = 0
+    for p in list_projects():
+        if not p.enabled:
+            continue
+        gdb = project_graph_db(p.path)
+        if not gdb.exists():
+            continue
+        con = sqlite3.connect(str(gdb))
+        try:
+            t = con.execute("SELECT COUNT(*) FROM communities WHERE level = 1").fetchone()[0]
+            if t > 0:
+                total = t
+                summarized = con.execute(
+                    "SELECT COUNT(*) FROM communities WHERE level = 1 "
+                    "AND summary IS NOT NULL AND summary != ''"
+                ).fetchone()[0]
+                project = p.path
+                break
+        finally:
+            con.close()
+    assert project, "At least one project with L1 communities must be registered"
     r = live_client.get(f"/api/kb_health?project={project}")
     assert r.status_code == 200, f"kb_health {r.status_code}: {r.text}"
     d = r.json()
