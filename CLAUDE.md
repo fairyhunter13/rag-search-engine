@@ -44,8 +44,6 @@ python -m compileall -q src/opencode_search
 - `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
 - `OSE_WIKI_LLM=0` — disable wiki L2 DeepSeek narrative (deterministic rebuild)
 
-**Local generative LLM**: fully decommissioned 2026-06-20. Ollama binary, systemd unit, user/group, and model data have been removed from the host.
-
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
 ## GPU-only enforcement
