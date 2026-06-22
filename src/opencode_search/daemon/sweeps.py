@@ -81,11 +81,7 @@ def reconcile_projects() -> None:
             if gdb.exists():
                 gs = GraphStore(gdb)
                 try:
-                    if gs.community_count() == 0:
-                        needs_idx = True
-                    elif gs.edge_count() == 0 and gs.community_count() > 0:
-                        # Edge-hollow: communities exist but no call graph → stale index
-                        needs_idx = True
+                    needs_idx = gs.community_count() == 0
                 finally:
                     gs.close()
         try:

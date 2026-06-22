@@ -90,14 +90,15 @@ def test_overview_status_includes_symbol_hollow_field(project_with_communities):
     assert result["symbol_hollow"] is False, f"healthy project must not be hollow; members={result.get('members', [])[:2]}"
 
 
-def test_reconcile_treats_edge_hollow_as_needs_reindex():
-    """GH4: reconcile_projects source-guard: must check edge_count() for stale detection."""
+def test_reconcile_triggers_reindex_when_communities_empty():
+    """GH4: reconcile_projects source-guard: community_count()==0 forces a full re-index."""
     import inspect
 
     from opencode_search.daemon import sweeps
     src = inspect.getsource(sweeps.reconcile_projects)
-    assert "edge_count()" in src, "reconcile must check edge_count() to detect edge-hollow graphs"
-    assert "community_count() > 0" in src, "reconcile edge-hollow check must require community_count() > 0"
+    assert "community_count() == 0" in src, (
+        "reconcile must force re-index when community_count()==0 (no graph built yet)"
+    )
 
 
 def test_index_project_clears_graph_before_rebuild():
