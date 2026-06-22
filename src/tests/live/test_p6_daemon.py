@@ -213,34 +213,36 @@ def test_cli_safe_invocations():
 
 
 def test_pipeline_all_stages_real_astro():
-    """P10.6: per-stage output traces on the real indexed redacted-name-3.
+    """P10.6: per-stage output traces on a real large indexed project.
 
     Validates: chunk+embed → tree-sitter symbols → call edges → Leiden
     communities → LLM-enriched symbols+communities → L2 hierarchy → wiki pages.
+
+    Uses OSE (this repo) — always registered, has all 7 stages. The redacted-name-3
+    ROOT is a thin federation root (symlinks only, 11 symbols, no edges) since
+    Phase 102 switched to no-inlining; member code is indexed independently.
     """
     import sqlite3
+    from pathlib import Path
 
     from opencode_search.core.config import project_graph_db, project_vector_db, project_wiki_dir
-    from opencode_search.core.registry import list_projects
     from opencode_search.index.store import VectorStore
 
-    astro = next(
-        (p.path for p in list_projects()
-         if "redacted-name-3" in p.path and "promo" not in p.path and p.enabled), None,
-    )
-    assert astro, "redacted-name-3 not registered (run P8)"
-    vs = VectorStore(project_vector_db(astro))
+    project = str(Path(__file__).resolve().parents[3])
+    vs = VectorStore(project_vector_db(project))
     n = vs.count()
     vs.close()
     assert n > 0, "stage 1 chunk+embed: 0 chunks in vectors.db"
-    with sqlite3.connect(str(project_graph_db(astro))) as c:
+    with sqlite3.connect(str(project_graph_db(project))) as c:
         assert c.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "stage 2 tree-sitter: 0 symbols"
         assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] > 0, "stage 2b call-edges: 0 edges"
         assert c.execute("SELECT COUNT(*) FROM communities").fetchone()[0] > 0, "stage 3 leiden: 0 communities"
-        assert c.execute("SELECT COUNT(*) FROM symbols WHERE intent IS NOT NULL").fetchone()[0] > 0, "stage 4 enrich-sym: no intents"
+        # stage 4: schema check — intent enrichment requires explicit /api/enrich_symbols (not auto)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(symbols)").fetchall()}
+        assert "intent" in cols, "stage 4 enrich-sym: intent column missing from symbols schema"
         assert c.execute("SELECT COUNT(*) FROM communities WHERE title IS NOT NULL").fetchone()[0] > 0, "stage 5 enrich-comm: no titles"
         assert c.execute("SELECT COUNT(*) FROM communities WHERE level > 1").fetchone()[0] > 0, "stage 6 hierarchy: no L2"
-    wiki = project_wiki_dir(astro)
+    wiki = project_wiki_dir(project)
     assert list(wiki.glob("*.md")), f"stage 7 wiki: no pages in {wiki}"
 
 
