@@ -1,6 +1,7 @@
 """Leiden community detection on the symbol call graph."""
 from __future__ import annotations
 
+import os
 from collections import Counter
 
 from opencode_search.graph.store import GraphStore
@@ -88,3 +89,53 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
     )
     store.commit()
     return mapping
+
+
+def label_community_structural(store: GraphStore, cid: int) -> None:
+    """Deterministic structural label for a tail community — zero LLM tokens.
+
+    Sets title (reuses _label_from_names if absent), templated summary listing
+    member kinds and source files, and structural semantic_type from file paths.
+    Byte-identical on repeated runs. HR15 Category B exempt (filesystem heuristic).
+    """
+    rows = store._con.execute(
+        "SELECT name, kind, file FROM symbols WHERE community_id=? LIMIT 30",
+        (cid,),
+    ).fetchall()
+    if not rows:
+        return
+    existing = store._con.execute(
+        "SELECT title, member_count FROM communities WHERE id=?", (cid,)
+    ).fetchone()
+    title = (existing[0] if existing and existing[0] else None) or _label_from_names(
+        [r[0] for r in rows]
+    )
+    _label_community_structural_finish(store, cid, rows, title,
+                                        (existing[1] if existing else None) or len(rows))
+
+
+def _label_community_structural_finish(
+    store: GraphStore, cid: int, rows: list, title: str, member_count: int,
+) -> None:
+    kinds = list(dict.fromkeys(r[1] for r in rows if r[1]))[:4]
+    files = list(dict.fromkeys(r[2] for r in rows if r[2]))[:3]
+    file_names = [os.path.basename(f) for f in files]
+    kind_str = ", ".join(kinds) if kinds else "mixed"
+    file_str = ", ".join(file_names) if file_names else "—"
+    summary = f"{member_count} symbol(s) ({kind_str}) from {file_str}."
+    if file_names:
+        summary += f" Primary: {file_names[0]}."
+    all_files_lower = " ".join(f.lower() for f in files)
+    if any(p in all_files_lower for p in ("/test", "test_", "_test.", "_spec.", "spec_")):
+        sem_type = "test"
+    elif any(p in all_files_lower for p in ("config", "setting", "propert", "infra", "deploy")):
+        sem_type = "infrastructure"
+    else:
+        sem_type = "utility"
+    store.upsert_community(
+        cid, level=1,
+        title=title[:200],
+        summary=summary[:2000],
+        member_count=member_count,
+        semantic_type=sem_type,
+    )
