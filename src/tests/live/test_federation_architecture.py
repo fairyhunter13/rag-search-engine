@@ -37,6 +37,7 @@ def _clean(paths):
         shutil.rmtree(index_dir(str(p)), ignore_errors=True)
 
 
+@pytest.mark.slow
 def test_inv1_no_inlining(safe_tmp_path):
     """Invariant #1: root index must not contain symbols from the member path."""
     from opencode_search.daemon.federation import index_members
