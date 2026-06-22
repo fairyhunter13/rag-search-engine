@@ -94,9 +94,9 @@ def test_chat_stream_model_in_allowed_set(live_client):
     events = _collect_chat_events(live_client, p, "List the main packages.")
     done_evs = [e for e in events if e.get("type") == "done"]
     assert done_evs, "No done event received"
-    model_used = done_evs[0].get("model_used", [])
-    if isinstance(model_used, str):
-        model_used = [model_used]
+    # done event uses "model" (string); "model_used" is a legacy list key
+    raw = done_evs[0].get("model_used") or done_evs[0].get("model", "")
+    model_used = raw if isinstance(raw, list) else ([raw] if raw else [])
     assert any(
         m in _ALLOWED_MODELS or any(x in m for x in ("haiku", "deepseek"))
         for m in model_used
