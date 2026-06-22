@@ -261,6 +261,14 @@ def _enrich_project(project_path: str) -> None:
             if gpu_temp_c() > THERMAL_MAX_C:
                 time.sleep(5)
         gs.commit()
+        # Stamp any L1 community still lacking a title after LLM enrichment
+        # (detect_communities pre-labels via _label_from_names; this covers the case
+        # where enrichment silently failed or communities were inserted without it)
+        gs._con.execute(
+            "UPDATE communities SET title='Community-' || CAST(id AS TEXT) "
+            "WHERE level=1 AND (title IS NULL OR title='')"
+        )
+        gs.commit()
         _l2_exists = gs._con.execute(
             "SELECT COUNT(*) FROM communities WHERE level>=2"
         ).fetchone()[0]
