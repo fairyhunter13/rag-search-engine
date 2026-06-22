@@ -44,7 +44,13 @@ python -m compileall -q src/opencode_search
 - `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
 - `OSE_WIKI_LLM=0` — disable wiki L2 DeepSeek narrative (deterministic rebuild)
 
-**Local generative LLM**: fully decommissioned 2026-06-20. Ollama binary/models/units can be uninstalled: `ollama stop && systemctl --user disable --now ollama.service && sudo apt remove ollama && rm -rf ~/.ollama`.
+**Local generative LLM**: fully decommissioned 2026-06-20. Ollama binary/models/units can be uninstalled (system-level install — NOT apt, NOT `--user`):
+```bash
+sudo systemctl stop ollama.service && sudo systemctl disable ollama.service
+sudo rm /etc/systemd/system/ollama.service && sudo systemctl daemon-reload
+sudo rm /usr/local/bin/ollama && sudo rm -rf /usr/share/ollama
+sudo userdel ollama && sudo groupdel ollama && rm -rf ~/.ollama
+```
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 

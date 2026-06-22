@@ -1,0 +1,116 @@
+"""T2: real federation composed-entity validity — tests against the live redacted-name-3 root.
+
+Synthetic-fixture tests (test_federation_architecture/logical_entity) prove invariants
+in isolation. This file validates that the *real* 25-member production federation holds
+the same invariants — a composition gap invisible to single-unit analysis (arXiv 2606.02019).
+
+Metamorphic testing principle (MetaRAG arXiv 2509.09360 / MeTMaP ACM 2024):
+behavior must stay invariant under semantically-neutral transforms. Here:
+  root-scoped search ⊇ member-scoped search  (fan-out monotonicity)
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+pytestmark = pytest.mark.live
+
+_SYM_THRESHOLD = 50  # same as test_knowledge_built.py
+
+
+def _reg(substr: str) -> str:
+    from opencode_search.core.registry import list_projects
+    return next((e.path for e in list_projects() if substr in e.path and e.enabled), "")
+
+
+@pytest.fixture(scope="module")
+def acme_root() -> str:
+    path = _reg("redacted-name-3")
+    assert path, "redacted-name-3 must be registered and enabled"
+    return path
+
+
+@pytest.fixture(scope="module")
+def acme_status(acme_root) -> dict:
+    import requests
+    r = requests.post(
+        "http://127.0.0.1:8765/api/overview",
+        json={"what": "status", "project_path": acme_root},
+        headers={"Content-Type": "application/json"},
+        timeout=30,
+    )
+    assert r.status_code == 200
+    return json.loads(r.text)
+
+
+class TestRealFederation:
+    """T2: real redacted-name-3 federation as one composed entity."""
+
+    def test_member_list_non_empty(self, acme_status: dict) -> None:
+        """T2a: federation must report ≥2 members (root + at least one member)."""
+        members = acme_status.get("members", [])
+        assert len(members) >= 2, f"Expected ≥2 members, got {len(members)}"
+
+    def test_no_member_has_symbols_without_communities(self, acme_status: dict) -> None:
+        """T2b: composition invariant — no member with ≥50 symbols may have 0 communities.
+
+        A single non-enriched member silently degrades aggregate overview/ask quality.
+        """
+        violations = [
+            f"{m['path']} (sym={m['symbols']}, comm={m['communities']})"
+            for m in acme_status.get("members", [])
+            if m.get("symbols", 0) >= _SYM_THRESHOLD and m.get("communities", 0) == 0
+        ]
+        assert not violations, (
+            "Members with ≥50 symbols and 0 communities:\n" + "\n".join(violations)
+        )
+
+    def test_aggregate_symbols_matches_member_sum(self, acme_status: dict) -> None:
+        """T2c: overview(status) aggregate symbols == Σ member symbols."""
+        members = acme_status.get("members", [])
+        member_sum = sum(m.get("symbols", 0) for m in members)
+        root_total = acme_status.get("symbols", -1)
+        assert root_total == member_sum, (
+            f"Aggregate symbols={root_total} ≠ Σ member={member_sum}"
+        )
+
+    def test_aggregate_communities_matches_member_sum(self, acme_status: dict) -> None:
+        """T2d: overview(status) aggregate communities == Σ member communities."""
+        members = acme_status.get("members", [])
+        member_sum = sum(m.get("communities", 0) for m in members)
+        root_total = acme_status.get("communities", -1)
+        assert root_total == member_sum, (
+            f"Aggregate communities={root_total} ≠ Σ member={member_sum}"
+        )
+
+    @pytest.mark.slow
+    def test_root_scoped_search_reaches_member_content(self, acme_root: str) -> None:
+        """T2e: metamorphic fan-out — search([root]) reaches member content.
+
+        Monotonicity: root-scoped search projects_searched must include member paths.
+        """
+        from opencode_search.daemon.federation import expand_federation
+        from opencode_search.server.mcp import search as mcp_search
+
+        members = expand_federation(acme_root)
+        assert len(members) >= 2, "Need ≥2 members for fan-out test"
+        data = json.loads(asyncio.run(mcp_search("function", project_paths=[acme_root])))
+        searched = data.get("projects_searched", [])
+        member_paths = [m for m in members if m != acme_root]
+        covered = [m for m in member_paths if m in searched]
+        assert covered, (
+            f"search([root]) did not reach any members in projects_searched.\n"
+            f"members: {member_paths[:3]}\nsearched: {searched[:5]}"
+        )
+
+    @pytest.mark.slow
+    def test_all_members_kb_state_ready(self, acme_status: dict) -> None:
+        """T2f: every federation member must be kb_state=ready."""
+        not_ready = [
+            f"{m['path']}: {m['kb_state']}"
+            for m in acme_status.get("members", [])
+            if m.get("kb_state") != "ready"
+        ]
+        assert not not_ready, "Members not ready:\n" + "\n".join(not_ready)
