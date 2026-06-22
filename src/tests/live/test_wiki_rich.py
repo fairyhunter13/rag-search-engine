@@ -340,21 +340,9 @@ def test_domain_narrative_is_faithful(tmp_path_factory):
 
 
 @pytest.mark.slow
-def test_api_build_serve_and_export_wiki(live_client):
+def test_api_build_serve_and_export_wiki(live_client, project_with_communities):
     """W16 (API e2e): build_hierarchy?action=wiki → page serves rich content → export bundles it."""
-    import sqlite3
-    project = None
-    for _p in list_projects():
-        if not _p.enabled:
-            continue
-        _gdb = project_graph_db(_p.path)
-        if not _gdb.exists():
-            continue
-        with sqlite3.connect(str(_gdb)) as _con:
-            if _con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0] > 0:
-                project = _p.path
-                break
-    assert project, "need an indexed project with ≥1 L1 community"
+    project = project_with_communities
     r = live_client.post(f"/api/build_hierarchy?project={project}&action=wiki", data=b"")
     assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
     assert r.json().get("pages_written", 0) > 0

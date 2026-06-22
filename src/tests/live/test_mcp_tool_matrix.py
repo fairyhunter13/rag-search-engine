@@ -37,12 +37,18 @@ def indexed_proj():
 
 @pytest.fixture(scope="module")
 def graph_proj():
-    p = next(
-        (e for e in list_projects() if e.enabled and project_graph_db(e.path).exists()),
-        None,
-    )
-    assert p, "At least one project with graph.db required — run Workstream E"
-    return p.path
+    # Require symbols > 0 so thin federation roots (0 own symbols) are skipped — graph
+    # relation tests need an actual symbol to look up via any_symbol.
+    for e in list_projects():
+        if not e.enabled:
+            continue
+        gdb = project_graph_db(e.path)
+        if not gdb.exists():
+            continue
+        with sqlite3.connect(str(gdb)) as con:
+            if con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0:
+                return e.path
+    pytest.fail("No project with graph.db and symbols required — run Workstream E")
 
 
 @pytest.fixture(scope="module")

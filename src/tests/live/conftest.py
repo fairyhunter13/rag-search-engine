@@ -63,6 +63,30 @@ def embedder(cuda_ep):
     return e
 
 
+@pytest.fixture(scope="session")
+def project_with_communities():
+    """First enabled project that owns ≥1 L1 community in its own graph.db.
+
+    Skips thin federation roots (0 own communities) — they are architecturally correct
+    (HR4: federation is query-time union, not inlined into the root) but unusable for
+    per-project write-path tests (wiki build, hierarchy build) that operate on a single db.
+    """
+    import sqlite3
+
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    for p in list_projects():
+        if not p.enabled:
+            continue
+        gdb = project_graph_db(p.path)
+        if not gdb.exists():
+            continue
+        with sqlite3.connect(str(gdb)) as con:
+            if con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0] > 0:
+                return p.path
+    pytest.fail("No enabled project with ≥1 L1 community — run _enrich_project first")
+
+
 @pytest.fixture()
 def safe_tmp_path():
     """Temporary directory outside /tmp and ~/.cache — safe for registry registration tests."""
