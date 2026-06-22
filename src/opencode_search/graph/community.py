@@ -94,9 +94,10 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
 def label_community_structural(store: GraphStore, cid: int) -> None:
     """Deterministic structural label for a tail community — zero LLM tokens.
 
-    Sets title (reuses _label_from_names if absent), templated summary listing
-    member kinds and source files, and structural semantic_type from file paths.
-    Byte-identical on repeated runs. HR15 Category B exempt (filesystem heuristic).
+    Sets title (reuses _label_from_names if absent) and templated summary listing
+    member kinds and source files. semantic_type is left NULL (abstained): it is a
+    Knowledge-rung judgment, only assigned by the LLM on head/lazy paths (HR23).
+    Byte-identical on repeated runs.
     """
     rows = store._con.execute(
         "SELECT name, kind, file FROM symbols WHERE community_id=? LIMIT 30",
@@ -125,17 +126,13 @@ def _label_community_structural_finish(
     summary = f"{member_count} symbol(s) ({kind_str}) from {file_str}."
     if file_names:
         summary += f" Primary: {file_names[0]}."
-    all_files_lower = " ".join(f.lower() for f in files)
-    if any(p in all_files_lower for p in ("/test", "test_", "_test.", "_spec.", "spec_")):
-        sem_type = "test"
-    elif any(p in all_files_lower for p in ("config", "setting", "propert", "infra", "deploy")):
-        sem_type = "infrastructure"
-    else:
-        sem_type = "utility"
     store.upsert_community(
         cid, level=1,
         title=title[:200],
         summary=summary[:2000],
         member_count=member_count,
-        semantic_type=sem_type,
     )
+    # Explicit NULL clobbers the COALESCE in upsert_community's ON CONFLICT clause,
+    # which would otherwise preserve any prior '' or 'utility' on the stored row.
+    # semantic_type is a Knowledge judgment — the tail abstains until lazily read.
+    store._con.execute("UPDATE communities SET semantic_type=NULL WHERE id=?", (cid,))

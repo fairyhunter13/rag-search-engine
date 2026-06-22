@@ -66,7 +66,7 @@ def l3_root():
     from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     prev = os.environ.get("OSE_WIKI_LLM")
     os.environ["OSE_WIKI_LLM"] = "0"
     try:
@@ -191,7 +191,7 @@ def test_partition_quality_consistent_across_live_federation():
 
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     failures = []
     for mpath in expand_federation(root):
         gdb = project_graph_db(mpath)
@@ -308,7 +308,7 @@ def test_l3_narrative_faithful_to_children():
     from opencode_search.kb.federation_hierarchy import _group_by_type
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     assert deepseek_key(), "DeepSeek key required"
 
     def _ml2(gs: GraphStore) -> list[tuple]:
@@ -342,11 +342,11 @@ def test_l3_narrative_grounded_by_cross_model_judge():
     from opencode_search.kb.federation_hierarchy import _group_by_type
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     assert deepseek_key(), "DeepSeek key required"
     claude = shutil.which("claude")
     if not claude:
-        pytest.skip("claude CLI not found")
+        pytest.fail("claude CLI not found — install Claude Code CLI to run HE9")
 
     def _ml2(gs: GraphStore) -> list[tuple]:
         return gs._con.execute(
@@ -375,7 +375,7 @@ def test_l3_narrative_grounded_by_cross_model_judge():
                 [claude, "-p", "--model", "claude-haiku-4-5", prompt], timeout=45, text=True,
             ).strip()
         except subprocess.TimeoutExpired:
-            pytest.skip(f"claude CLI timed out on {_cid}")
+            pytest.fail(f"claude CLI timed out on {_cid}")
         assert "UNGROUNDED" not in verdict, (
             f"L3 {title!r} UNGROUNDED. Context:{context[:160]} Summary:{summary[:160]}"
         )
@@ -388,7 +388,7 @@ def test_global_ask_surfaces_l3_after_live_build():
     from opencode_search.server.mcp import ask as _mcp_ask
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     assert deepseek_key(), "DeepSeek key required"
     l3_rows_ask = _build_l3_llm_on(root)
     l3_titles = [r[1] for r in l3_rows_ask if r[1]]

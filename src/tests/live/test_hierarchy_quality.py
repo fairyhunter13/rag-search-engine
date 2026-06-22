@@ -105,7 +105,7 @@ def test_hierarchy_includes_federation_domains_and_quality(live_client):
     """HQ4: overview(hierarchy) on a federated root exposes federation_domains + quality."""
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     r = live_client.post("/api/overview", json={"project": root, "what": "hierarchy"})
     assert r.status_code == 200, f"overview hierarchy failed: {r.text[:200]}"
     d = r.json()
@@ -118,7 +118,7 @@ def test_federation_hierarchy_creates_no_edges():
     from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     prev = os.environ.get("OSE_WIKI_LLM")
     os.environ["OSE_WIKI_LLM"] = "0"
     try:
@@ -140,7 +140,7 @@ def test_federation_hierarchy_deterministic_with_llm_off():
     from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     prev = os.environ.get("OSE_WIKI_LLM")
     os.environ["OSE_WIKI_LLM"] = "0"
     try:
@@ -182,7 +182,7 @@ def test_global_ask_surfaces_l3_federation_domain(live_client):
 
     root = _fedroot()
     if not root:
-        pytest.skip("no federated root registered")
+        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
     prev = os.environ.get("OSE_WIKI_LLM")
     os.environ["OSE_WIKI_LLM"] = "0"
     try:
