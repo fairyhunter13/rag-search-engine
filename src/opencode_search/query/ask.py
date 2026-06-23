@@ -95,13 +95,15 @@ def _tree_walk_context(query: str, stores: list, top_k: int = 8) -> str:
                     "SELECT title,summary FROM communities WHERE parent_id=? AND narrated=1 AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') LIMIT 15", (did,)
                 ).fetchall():
                     if ctitle and ctitle not in seen:
-                        seen.add(ctitle);candidates.append((dtitle,ctitle,csumm))
+                        seen.add(ctitle)
+                        candidates.append((dtitle, ctitle, csumm))
         else:
             for r in store._con.execute(
                 "SELECT title,summary FROM communities WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') LIMIT 20"
             ).fetchall():
                 if r[0] and r[0] not in seen:
-                    seen.add(r[0]);candidates.append(("",r[0],r[1]))
+                    seen.add(r[0])
+                    candidates.append(("", r[0], r[1]))
     if not candidates:
         return ""
     scores = rerank_passages(query, [c[2] for c in candidates])
