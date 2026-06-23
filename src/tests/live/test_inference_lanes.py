@@ -238,3 +238,27 @@ def test_rerank_passages_only_in_gpu_lane():
         assert "rerank_passages" in f.read_text(), (
             f"Allowlisted file has no rerank_passages: {rel}"
         )
+
+
+# ---------------------------------------------------------------------------
+# GPU-primary-EP source-guards (collection-time, no GPU required)
+# ---------------------------------------------------------------------------
+
+
+def test_embedder_never_requests_cpu_ep():
+    """Source-guard: embed/embedder.py must never list CPUExecutionProvider in a providers=[...] arg."""
+    import re
+    src = (_SRC / "embed" / "embedder.py").read_text()
+    matches = re.findall(r'providers\s*=\s*\[.*?CPUExecutionProvider.*?\]', src, re.DOTALL)
+    assert not matches, (
+        "embed/embedder.py must not request CPUExecutionProvider; found: " + str(matches)
+    )
+
+
+def test_embedder_does_not_use_is_cuda_available():
+    """Source-guard: Embedder/Reranker must use assert_cuda_available (fatal), not is_cuda_available."""
+    src = (_SRC / "embed" / "embedder.py").read_text()
+    assert "is_cuda_available" not in src, (
+        "embed/embedder.py must not call is_cuda_available() — "
+        "use assert_cuda_available() (fatal) for runtime enforcement"
+    )
