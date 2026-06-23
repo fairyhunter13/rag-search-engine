@@ -1,6 +1,7 @@
 """Background sweep jobs: maintenance; event-driven on_change KB enrich."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -17,6 +18,123 @@ _last_index_fail: dict[str, float] = {}
 _bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
 
 log = logging.getLogger(__name__)
+
+# Composite pipeline algorithm version — bump either component constant to trigger re-derive.
+def _pipeline_algo_version() -> str:
+    from opencode_search.graph.community import ALGO_VERSION
+    from opencode_search.kb.hierarchy import HIER_VERSION
+    return f"{ALGO_VERSION}+{HIER_VERSION}"
+
+
+def _source_fingerprint(path: str) -> str:
+    """SHA-1 over sorted 'relpath:mtime' for every project file — stat-only, GPU-free."""
+    from pathlib import Path
+
+    from opencode_search.index.discover import iter_files
+    root = Path(path)
+    parts: list[str] = []
+    try:
+        for f in iter_files(root, federation_mode=True):
+            try:
+                rel = str(f.relative_to(root))
+                mtime = int(f.stat().st_mtime)
+                parts.append(f"{rel}:{mtime}")
+            except (OSError, ValueError):
+                pass
+    except Exception:
+        pass
+    parts.sort()
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()
+
+
+def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
+    """True if algo-version or source fingerprint has drifted from stored stamps."""
+    return (
+        gs.get_meta("algo_version") != _pipeline_algo_version()
+        or gs.get_meta("source_sig") != _source_fingerprint(path)
+    )
+
+
+def _extract_graph(gs, root) -> None:
+    """Extract symbols + call edges from source into gs (caller must gs.clear() first)."""
+    from opencode_search.graph.extractor import (
+        extract_calls_with_lines,
+        extract_symbols,
+        symbol_id,
+    )
+    from opencode_search.index.discover import detect_language, iter_files
+    for fpath in iter_files(root, federation_mode=True):
+        try:
+            content = fpath.read_text(errors="replace")
+        except OSError:
+            continue
+        lang = detect_language(fpath)
+        for sym in extract_symbols(fpath, content, lang):
+            if not sym.name:
+                continue
+            sid = symbol_id(sym.file, sym.name, sym.start_line)
+            gs.upsert_symbol(sid, sym.name, sym.qualified_name, sym.kind,
+                             sym.file, sym.start_line, sym.end_line, sym.language)
+    gs.commit()
+    gs.dedup_symbols()
+    name_to_entries: dict[str, list[tuple[str, str]]] = {}
+    file_to_sym_spans: dict[str, list[tuple[int, int, str]]] = {}
+    for (sid, name, fstr, sl, el) in gs._con.execute(
+        "SELECT sid, name, file, start_line, end_line FROM symbols"
+    ):
+        name_to_entries.setdefault(name, []).append((sid, fstr))
+        if fstr:
+            file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
+    for spans in file_to_sym_spans.values():
+        spans.sort()
+    for fpath in iter_files(root, federation_mode=True):
+        fstr = str(fpath)
+        sym_spans = file_to_sym_spans.get(fstr)
+        if not sym_spans:
+            continue
+        try:
+            content = fpath.read_text(errors="replace") if fpath.exists() else ""
+        except OSError:
+            continue
+        call_sites = extract_calls_with_lines(content, detect_language(fpath))
+        if not call_sites:
+            continue
+        for callee_name, call_line in call_sites:
+            caller_sid, best_span = "", -1
+            for sl, el, sid in sym_spans:
+                if sl <= call_line <= el:
+                    span = el - sl
+                    if caller_sid == "" or span < best_span:
+                        best_span, caller_sid = span, sid
+            if not caller_sid:
+                continue
+            for (callee_sid, callee_file) in name_to_entries.get(callee_name, []):
+                if callee_file != fstr:
+                    gs.upsert_edge(caller_sid, callee_sid)
+    gs.commit()
+
+
+def _rederive_graph(project_path: str) -> None:
+    """Re-extract symbols+edges, re-detect communities, wipe stale L2+, stamp meta."""
+    from pathlib import Path
+
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.store import GraphStore
+    root = Path(project_path)
+    gs = GraphStore(project_graph_db(project_path))
+    try:
+        gs.clear()
+        _extract_graph(gs, root)
+        detect_communities(gs)
+        gs._con.execute("DELETE FROM communities WHERE level>=2")
+        gs.commit()
+        gs.set_meta("algo_version", _pipeline_algo_version())
+        gs.set_meta("source_sig", _source_fingerprint(project_path))
+        gs.commit()
+    finally:
+        gs.close()
+    log.info("_rederive_graph %s: re-extracted and re-detected", project_path)
 
 
 def _needs_index(path: str) -> bool:
@@ -81,18 +199,25 @@ def reconcile_projects() -> None:
         if not entry.enabled:
             continue
         needs_idx = _needs_index(entry.path)
-        # Federation roots have 0 own communities by design (HR4) — skip community_count check.
+        needs_rederive = False
+        # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
         if not needs_idx and not entry.federation:
             gdb = project_graph_db(entry.path)
             if gdb.exists():
                 gs = GraphStore(gdb)
                 try:
-                    needs_idx = gs.community_count() == 0
+                    if gs.community_count() == 0:
+                        needs_idx = True
+                    elif _graph_stale(entry.path, gs):
+                        needs_rederive = True
                 finally:
                     gs.close()
         try:
             if needs_idx:
                 _index_project(entry.path)
+                _enrich_project(entry.path)
+            elif needs_rederive:
+                _rederive_graph(entry.path)
                 _enrich_project(entry.path)
             elif _needs_enrich(entry.path):
                 _enrich_project(entry.path)  # enrich-only; skip expensive re-index
@@ -122,13 +247,7 @@ def _index_project(project_path: str) -> None:
     from opencode_search.core.config import project_graph_db, project_vector_db
     from opencode_search.embed.embedder import get_embedder
     from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import (
-        extract_calls_with_lines,
-        extract_symbols,
-        symbol_id,
-    )
     from opencode_search.graph.store import GraphStore
-    from opencode_search.index.discover import detect_language, iter_files
     from opencode_search.index.indexer import index_project
     from opencode_search.index.store import VectorStore
 
@@ -142,68 +261,15 @@ def _index_project(project_path: str) -> None:
     finally:
         vs.close()
 
-    # 2. Tree-sitter extract → graph.db  (clear first so stale rows don't persist)
+    # 2. Tree-sitter extract + community detection → graph.db; stamp pipeline meta.
     gs = GraphStore(project_graph_db(project_path))
     try:
         gs.clear()
-        for fpath in iter_files(root, federation_mode=True):
-            try:
-                content = fpath.read_text(errors="replace")
-            except OSError:
-                continue
-            lang = detect_language(fpath)
-            for sym in extract_symbols(fpath, content, lang):
-                if not sym.name:
-                    continue  # skip name-less nodes (tree-sitter-language-pack can emit None names)
-                sid = symbol_id(sym.file, sym.name, sym.start_line)
-                gs.upsert_symbol(
-                    sid, sym.name, sym.qualified_name, sym.kind,
-                    sym.file, sym.start_line, sym.end_line, sym.language,
-                )
-        gs.commit()
-        gs.dedup_symbols()
-        # 2b. Call-edge extraction — second pass: resolve each call to its enclosing symbol.
-        # Build lookup structures from the now-deduped symbol table.
-        name_to_entries: dict[str, list[tuple[str, str]]] = {}
-        file_to_sym_spans: dict[str, list[tuple[int, int, str]]] = {}
-        for (sid, name, fstr, sl, el) in gs._con.execute(
-            "SELECT sid, name, file, start_line, end_line FROM symbols"
-        ):
-            name_to_entries.setdefault(name, []).append((sid, fstr))
-            if fstr:
-                file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
-        for spans in file_to_sym_spans.values():
-            spans.sort()  # sort by start_line for innermost-enclosing scan
-        for fpath in iter_files(root, federation_mode=True):
-            fstr = str(fpath)
-            sym_spans = file_to_sym_spans.get(fstr)
-            if not sym_spans:
-                continue
-            try:
-                content = fpath.read_text(errors="replace") if fpath.exists() else ""
-            except OSError:
-                continue
-            call_sites = extract_calls_with_lines(content, detect_language(fpath))
-            if not call_sites:
-                continue
-            for callee_name, call_line in call_sites:
-                # Innermost enclosing symbol = smallest span containing call_line
-                caller_sid = ""
-                best_span = -1
-                for sl, el, sid in sym_spans:
-                    if sl <= call_line <= el:
-                        span = el - sl
-                        if caller_sid == "" or span < best_span:
-                            best_span = span
-                            caller_sid = sid
-                if not caller_sid:
-                    continue
-                for (callee_sid, callee_file) in name_to_entries.get(callee_name, []):
-                    if callee_file != fstr:
-                        gs.upsert_edge(caller_sid, callee_sid)
-        gs.commit()
-        # 3. Leiden community detection
+        _extract_graph(gs, root)
         detect_communities(gs)
+        gs.set_meta("algo_version", _pipeline_algo_version())
+        gs.set_meta("source_sig", _source_fingerprint(project_path))
+        gs.commit()
     finally:
         gs.close()
 
@@ -297,10 +363,13 @@ def _enrich_project(project_path: str) -> None:
             "WHERE level=1 AND (title IS NULL OR title='')"
         )
         gs.commit()
-        _l2_exists = gs._con.execute(
+        _n_l1 = gs._con.execute(
+            "SELECT COUNT(*) FROM communities WHERE level=1"
+        ).fetchone()[0]
+        _n_l2 = gs._con.execute(
             "SELECT COUNT(*) FROM communities WHERE level>=2"
         ).fetchone()[0]
-        if _l2_exists == 0:
+        if _n_l2 == 0 or (_n_l1 >= 4 and _n_l2 > 2 * round(_n_l1 ** 0.5)):
             build_hierarchy(gs)
         _l2_ids = [r[0] for r in gs._con.execute(
             "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level >= 2"

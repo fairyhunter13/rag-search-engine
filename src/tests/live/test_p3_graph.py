@@ -206,17 +206,18 @@ def test_all_project_graph_dbs_have_canonical_edges_schema():
 # ── Gap 2: call-site-accurate edges source-guard ─────────────────────────────
 
 def test_index_project_attributes_edges_to_enclosing_symbol():
-    """Gap 2: _index_project resolves each call to the innermost enclosing symbol.
+    """Gap 2: _extract_graph resolves each call to the innermost enclosing symbol.
     Caller_sid must NOT be a file-level representative; it must be the enclosing fn.
+    Edge extraction was extracted from _index_project into _extract_graph (self-healing refactor).
     """
     import inspect
 
-    from opencode_search.daemon.sweeps import _index_project
-    src = inspect.getsource(_index_project)
+    from opencode_search.daemon.sweeps import _extract_graph
+    src = inspect.getsource(_extract_graph)
     assert "caller_sids[0]" not in src, (
         "representative-caller shortcut detected — Gap 2 regression: "
-        "_index_project must attribute each call to its innermost enclosing symbol"
+        "_extract_graph must attribute each call to its innermost enclosing symbol"
     )
-    assert "enclosing" in src or "innermost" in src or "start_line" in src, (
-        "_index_project must search for enclosing symbol by line range"
+    assert "start_line" in src or "sl <= call_line" in src, (
+        "_extract_graph must search for enclosing symbol by line range"
     )
