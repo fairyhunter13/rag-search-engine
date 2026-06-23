@@ -20,6 +20,18 @@ def test_embedder_bound_to_cuda(embedder):
     assert providers[0] == "CUDAExecutionProvider", f"Embedder not on GPU: {providers}"
 
 
+def test_reranker_bound_to_cuda(embedder):
+    """P32.4: Reranker ONNX session must have CUDAExecutionProvider as primary (position-0) EP."""
+    from opencode_search.embed.embedder import Reranker
+    r = Reranker()
+    r._init()
+    try:
+        providers = r._model.model.model.get_providers()
+        assert providers[0] == "CUDAExecutionProvider", f"Reranker not on GPU: {providers}"
+    finally:
+        del r
+
+
 def test_embed_returns_float16(embedder):
     texts = ["def hello():", "class Foo:", "import os"]
     vecs = embedder.embed(texts)
