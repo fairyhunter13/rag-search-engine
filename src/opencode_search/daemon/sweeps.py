@@ -229,7 +229,7 @@ def _index_files(project_path: str, files: list) -> None:
 
     vs = VectorStore(project_vector_db(project_path))
     try:
-        index_files([Path(str(f)) for f in files], get_embedder(), vs)
+        index_files([Path(str(f)) for f in files], get_embedder(), vs, project_root=Path(project_path))
     finally:
         vs.close()
 
