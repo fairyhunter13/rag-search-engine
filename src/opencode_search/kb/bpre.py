@@ -713,38 +713,71 @@ def _mermaid_sequence(process_name: str,
     return "\n".join(lines)
 
 
+_BPRE_NARRATIVE_SYSTEM = (
+    "Describe each business process in 3-5 sentences using ONLY the facts provided. "
+    "Do not invent service names or steps. Name real services only. "
+    'Reply with JSON: [{"id": <N>, "narrative": "<3-5 sentences>"}]'
+)
+
+
+def _generate_narratives_batch(procs_data: list[tuple]) -> dict[int, str]:
+    """Batch BPRE narrative generation via deepseek_extract (≤20/call). Returns {proc_id: narrative}."""
+    try:
+        from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_extract, deepseek_key
+        if not deepseek_key():
+            return {}
+    except Exception:
+        return {}
+    results: dict[int, str] = {}
+    for i in range(0, len(procs_data), 20):
+        batch = procs_data[i : i + 20]
+        items = []
+        for proc_id, name, services_json, steps in batch:
+            try:
+                services = ", ".join(json.loads(services_json))
+                items.append({"id": proc_id, "process": name, "services": services,
+                    "steps": "; ".join(f"{s[1]}:{s[0]}" for s in steps[:12])})
+            except Exception:
+                continue
+        if not items:
+            continue
+        try:
+            raw, u = deepseek_extract(
+                _BPRE_NARRATIVE_SYSTEM,
+                "Processes:\n" + json.dumps(items, ensure_ascii=False),
+                max_tokens=min(len(items) * 400 + 50, 8192),
+            )
+            _accumulate_llm_tokens(u, "bpre")
+        except Exception:
+            continue
+        t = raw.split("</think>")[-1] if "</think>" in raw else raw
+        t = t.replace("```json", "").replace("```", "")
+        if (s := t.find("[")) == -1 or (e := t.rfind("]")) <= s:
+            continue
+        try:
+            for it in json.loads(t[s : e + 1]):
+                results[int(it["id"])] = str(it.get("narrative", "")).strip()
+        except Exception:
+            pass
+    return results
+
+
 def _synthesize_artifacts(con: sqlite3.Connection) -> None:
     procs = con.execute(
         "SELECT id, name, entry_service, services_json FROM processes"
     ).fetchall()
-    try:
-        from opencode_search.graph.llm import deepseek_chat, deepseek_key
-        has_llm = _bpre_llm_on() and bool(deepseek_key())
-    except Exception:
-        has_llm = False
+    procs_data = []
     for proc_id, name, _entry_svc, services_json in procs:
-        steps_raw = con.execute(
+        steps = [(r[0], r[1], r[2], r[3]) for r in con.execute(
             "SELECT sid_or_endpoint, service, kind, guard FROM process_steps "
             "WHERE process_id=? ORDER BY order_index", (proc_id,),
-        ).fetchall()
-        steps = [(r[0], r[1], r[2], r[3]) for r in steps_raw]
-        bpmn = _bpmn_xml(proc_id, name, steps)
-        mermaid = _mermaid_sequence(name, steps)
-        narrative = ""
-        if has_llm:
-            try:
-                services_list = ", ".join(json.loads(services_json))
-                step_summary = "; ".join(f"{s[1]}:{s[0]}" for s in steps[:12])
-                narrative = deepseek_chat(
-                    f"Describe this business process in 3-5 sentences using ONLY the facts below.\n"
-                    f"Process: {name}\nServices: {services_list}\nSteps: {step_summary}\n\n"
-                    f"Do not invent service names or steps. Name real services.",
-                    max_tokens=300,
-                ).strip()
-            except Exception:
-                narrative = ""
+        ).fetchall()]
+        procs_data.append((proc_id, name, services_json, steps))
+    narratives = _generate_narratives_batch(procs_data) if _bpre_llm_on() else {}
+    for proc_id, name, _sjson, steps in procs_data:
         con.execute("INSERT OR REPLACE INTO process_artifacts VALUES (?,?,?,?)",
-                    (proc_id, narrative, mermaid, bpmn))
+                    (proc_id, narratives.get(proc_id, ""),
+                     _mermaid_sequence(name, steps), _bpmn_xml(proc_id, name, steps)))
     con.commit()
 
 

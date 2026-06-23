@@ -12,7 +12,10 @@ GraphRAG roll-up (root summaries cost 97% fewer tokens than source text via chil
 """
 from __future__ import annotations
 
+import logging
 import os
+
+log = logging.getLogger(__name__)
 
 _L3_OFFSET = 20_000  # L1 < 10000; L2 in [10000, 20000); L3 starts here
 
@@ -72,6 +75,26 @@ def build_federation_hierarchy(root_path: str) -> int:
 
     if len(expand_federation(root_path)) < 2:
         return 0
+
+    # Freshness guard: skip L3 rebuild if root graph.db was written within 1800s.
+    # Caps a member-edit storm at ≤1 L3 rebuild per 30 min per root (mirrors BPRE reuse).
+    import time as _time
+    _root_gdb = project_graph_db(root_path)
+    if _root_gdb.exists():
+        try:
+            if (_time.time() - _root_gdb.stat().st_mtime) < 1800:
+                _gs_tmp = GraphStore(_root_gdb)
+                try:
+                    _n3 = _gs_tmp._con.execute(
+                        "SELECT COUNT(*) FROM communities WHERE level>=3"
+                    ).fetchone()[0]
+                finally:
+                    _gs_tmp.close()
+                if _n3 > 0:
+                    log.debug("build_federation_hierarchy: L3 fresh (%d themes), skip", _n3)
+                    return _n3
+        except Exception:
+            pass
 
     # Collect per-member L2 domain rows (title + semantic_type only — never reads symbols).
     def _member_l2(gs: GraphStore) -> list[tuple]:
