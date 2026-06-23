@@ -61,7 +61,7 @@ def test_ab1_ab2_tail_is_sql_null(safe_tmp_path):
         empty = gs._con.execute(
             "SELECT COUNT(*) FROM communities WHERE id=? AND semantic_type=''", (cid,)
         ).fetchone()[0]
-        assert empty == 0, "AB2: must be true NULL not '' — '' NOT IN ('test','tooling') pollutes"
+        assert empty == 0, "AB2: must be true NULL not '' — '' NOT IN ('test') pollutes"
     finally:
         gs.close()
 

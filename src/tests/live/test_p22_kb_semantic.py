@@ -205,20 +205,26 @@ def test_status_includes_level_breakdown_fields(live_client):
 # ---------------------------------------------------------------------------
 
 def test_ask_synthesis_excludes_test_tooling_communities():
-    """Gap 3 source-guard: _top_communities_semantic/_macro_community_context/_community_context
-    all filter out test/tooling/utility semantic_type communities before assembling context.
+    """Gap 3 taxonomy-consistency: filter literals ∈ _TYPE_ORDER; test-typed excluded (behavioral).
+
+    Rewritten from brittle string-scan that pinned 'tooling' (never in _TYPE_ORDER).
+    The correct invariant: every exclusion literal is a valid taxonomy member.
     """
     import inspect
+    import re
 
+    from opencode_search.graph.enrich import _TYPE_ORDER, EXCLUDED_FROM_RETRIEVAL
     from opencode_search.query import ask as ask_mod
+
+    valid = frozenset(_TYPE_ORDER)
     for fn_name in ("_top_communities_semantic", "_macro_community_context", "_community_context"):
         fn = getattr(ask_mod, fn_name, None)
         if fn is None:
             continue
         src = inspect.getsource(fn)
-        assert "test" in src.lower() and "tooling" in src.lower(), (
-            f"{fn_name} must filter out 'test'/'tooling' semantic_type communities"
-        )
-        assert "NOT IN" in src or "not in" in src.lower(), (
-            f"{fn_name} must use NOT IN exclusion for test/tooling communities"
-        )
+        assert "NOT IN" in src or "not in" in src.lower(), f"{fn_name} must use NOT IN exclusion"
+        for clause in re.findall(r"semantic_type\s+NOT\s+IN\s*\(([^)]+)\)", src, re.IGNORECASE):
+            for lit in re.findall(r"['\"]([^'\"]+)['\"]", clause):
+                assert lit in valid, f"{fn_name}: {lit!r} not in _TYPE_ORDER — dead predicate"
+    for excl in EXCLUDED_FROM_RETRIEVAL:
+        assert excl in valid, f"EXCLUDED_FROM_RETRIEVAL member {excl!r} not in _TYPE_ORDER"

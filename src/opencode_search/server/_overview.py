@@ -111,7 +111,7 @@ def handle_overview(project_path: str, what: str) -> str:
         _gstores = [GraphStore(project_graph_db(p)) for p in _paths]
         try:
             if what == "communities":
-                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities ORDER BY level,id LIMIT 50").fetchall()]
+                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities WHERE level>=1 ORDER BY level,id LIMIT 50").fetchall()]
                 return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
             if what == "architecture_domains":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
@@ -215,7 +215,10 @@ def handle_overview(project_path: str, what: str) -> str:
                 ).fetchall()]
                 return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]]})
             if what == "feature_map":
-                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,semantic_type FROM communities WHERE semantic_type IS NOT NULL").fetchall()]
+                rows = [r for gs in _gstores for r in gs.conn.execute(
+                    "SELECT id,title,semantic_type FROM communities "
+                    "WHERE semantic_type IS NOT NULL AND semantic_type != '' AND level=1"
+                ).fetchall()]
                 return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows]})
             if what == "business_rules":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
@@ -256,7 +259,7 @@ def handle_overview(project_path: str, what: str) -> str:
                 ]})
             if what == "suggested_questions":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT title FROM communities WHERE title IS NOT NULL ORDER BY member_count DESC LIMIT 5"
+                    "SELECT title FROM communities WHERE title IS NOT NULL AND level>=1 ORDER BY member_count DESC LIMIT 5"
                 ).fetchall()]
                 qs = list(dict.fromkeys(f"How does {r[0]} work?" for r in rows if r[0]))[:5]
                 if not qs:
