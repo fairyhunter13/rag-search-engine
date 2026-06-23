@@ -195,13 +195,17 @@ def _render_domain(store: GraphStore, cid: int, title: str, summary: str) -> str
     children = store._con.execute(
         "SELECT id, title, semantic_type FROM communities WHERE parent_id=? ORDER BY id", (cid,)
     ).fetchall()
-    ctx = []
-    for kid, ktitle, kstype in children:
-        ks = store._con.execute("SELECT summary FROM communities WHERE id=?", (kid,)).fetchone()
-        ksum = ks[0] if ks and ks[0] else ""
-        ctx.append(f"- {ktitle} [{kstype or 'community'}]: {ksum[:160]}")
-    context = f"Domain: {title}\nSummary: {summary}\nSub-communities:\n" + "\n".join(ctx)
-    narrative = _narrate(context, "architecture domain") or _template_domain(title, summary, children)
+    # Phase 2c derived view: reuse stored summary (from enrich_community_l2) — zero new tokens.
+    # Only fall through to _narrate() when no summary is stored yet.
+    if not summary:
+        ctx = []
+        for kid, ktitle, kstype in children:
+            ks = store._con.execute("SELECT summary FROM communities WHERE id=?", (kid,)).fetchone()
+            ksum = ks[0] if ks and ks[0] else ""
+            ctx.append(f"- {ktitle} [{kstype or 'community'}]: {ksum[:160]}")
+        context = f"Domain: {title}\nSub-communities:\n" + "\n".join(ctx)
+        summary = _narrate(context, "architecture domain") or _template_domain(title, summary, children)
+    narrative = summary
     parts = [f"# {title}", "", "**Architecture Domain**", "", narrative, ""]
     if children:
         parts += ["## Sub-communities", ""]
