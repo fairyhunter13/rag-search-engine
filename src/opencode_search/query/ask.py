@@ -72,6 +72,40 @@ def _community_context(stores: list, limit: int = 20, semantic_types: tuple[str,
     return "\n\n".join(f"## {r[0]}\n{r[1]}" for r in rows[:limit] if r[1])
 
 
+def _tree_walk_context(query: str, stores: list, top_k: int = 8) -> str:
+    """Hierarchy tree-walk: rank L1 communities within L2 domain context (Phase 2.5).
+
+    Drills parent_id (L2 domains → L1 children) then reranks by summary relevance.
+    Returns traceable context ([Domain → Community] pairs). Falls back to flat L1 pool
+    when no L2 hierarchy exists yet.
+    """
+    from opencode_search.query.search import rerank_passages
+    candidates: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for store in stores:
+        dom = store._con.execute(
+            "SELECT id, COALESCE(title,'Domain') FROM communities WHERE level>=2 ORDER BY member_count DESC LIMIT 10"
+        ).fetchall()
+        if dom:
+            for did, dtitle in dom:
+                for ctitle, csumm in store._con.execute(
+                    "SELECT title,summary FROM communities WHERE parent_id=? AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') LIMIT 15", (did,)
+                ).fetchall():
+                    if ctitle and ctitle not in seen:
+                        seen.add(ctitle);candidates.append((dtitle,ctitle,csumm))
+        else:
+            for r in store._con.execute(
+                "SELECT title,summary FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') LIMIT 20"
+            ).fetchall():
+                if r[0] and r[0] not in seen:
+                    seen.add(r[0]);candidates.append(("",r[0],r[1]))
+    if not candidates:
+        return ""
+    scores = rerank_passages(query, [c[2] for c in candidates])
+    ranked = sorted(zip(scores,candidates,strict=False),key=lambda x:x[0],reverse=True)
+    return "\n\n".join((f"[{d} → {c}]" if d else f"[{c}]")+"\n"+s for _,(d,c,s) in ranked[:top_k])
+
+
 def _assemble_context(query: str, chunks: list[dict], stores: list, scope: str) -> str:
     """Assemble pre-built context string from DB artifacts — no LLM call."""
     chunk_ctx = "\n\n".join(
@@ -79,15 +113,15 @@ def _assemble_context(query: str, chunks: list[dict], stores: list, scope: str) 
         for r in chunks
     )[:_MAX_CTX]
     if scope == "global":
+        tree_ctx = _tree_walk_context(query, stores)[:_MAX_CTX]
         macro = _macro_community_context(stores)
-        semantic = _top_communities_semantic(query, stores)[:_MAX_CTX]
-        community_ctx = (f"{macro}\n\n{semantic}" if macro else semantic)[:_MAX_CTX]
-        return f"## Architecture (community map)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
+        community_ctx = (f"{macro}\n\n{tree_ctx}" if macro else tree_ctx)[:_MAX_CTX]
+        return f"## Architecture (hierarchy tree-walk)\n{community_ctx}\n\n## Code\n{chunk_ctx}"
     if scope in ("architecture", "all"):
+        tree_ctx = _tree_walk_context(query, stores)[:_MAX_CTX]
         macro = _macro_community_context(stores)
-        l1_ctx = _community_context(stores)[:_MAX_CTX]
-        community_ctx = (f"{macro}\n\n{l1_ctx}" if macro else l1_ctx)[:_MAX_CTX]
-        return f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
+        community_ctx = (f"{macro}\n\n{tree_ctx}" if macro else tree_ctx)[:_MAX_CTX]
+        return f"## Code\n{chunk_ctx}\n\n## Architecture (tree-walk)\n{community_ctx}"
     if scope == "wiki":
         community_ctx = _community_context(stores, limit=10)[:_MAX_CTX]
         return f"## Wiki\n{community_ctx}\n\n## Code\n{chunk_ctx}"
