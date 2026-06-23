@@ -53,6 +53,10 @@ _TYPE_ORDER: list[str] = [
     "utility", "infrastructure", "domain", "test",
 ]
 
+# Communities with these types are excluded from retrieval context (ask.py).
+# Keep literals in ask.py in sync with this set; test_schema_consistency.py enforces it.
+EXCLUDED_FROM_RETRIEVAL: frozenset[str] = frozenset({"test"})
+
 # Minimal prompt — type names + one contrastive note; no vocabulary definitions.
 _BACKFILL_BATCH_PROMPT = """\
 Classify each code community into ONE of these semantic types:

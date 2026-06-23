@@ -265,6 +265,10 @@ def _enrich_project(project_path: str) -> None:
             "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
         )
         gs.commit()
+        # DIKW Phase 2 — Information spine: deterministic dir/file structural nodes.
+        # Zero tokens; idempotent; level=0 so orphan-delete and significance gate skip them.
+        from opencode_search.kb.structure import build_structure_tree
+        build_structure_tree(gs, project_path)
         # DIKW token doctrine — Knowledge rung, Phase 1:
         # Head (member_count≥8 OR cross-community edges≥2): LLM narration, batched+prefix-cached.
         # Tail (below gate): deterministic structural labels, zero tokens.
@@ -441,7 +445,7 @@ def burst_enrich_federation(root_path: str) -> dict:
         _enrich_project(path)
         gs = GraphStore(gdb)
         try:
-            total = gs._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
+            total = gs._con.execute("SELECT COUNT(*) FROM communities WHERE level>=1").fetchone()[0]
             pending = gs._con.execute(
                 "SELECT COUNT(*) FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1"
             ).fetchone()[0]

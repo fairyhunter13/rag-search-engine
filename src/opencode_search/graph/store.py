@@ -67,6 +67,14 @@ def _open(db_path: Path) -> sqlite3.Connection:
     if "parent_id" not in _cols:
         con.execute("ALTER TABLE communities ADD COLUMN parent_id INTEGER")
         con.commit()
+    # Schema migration: Phase 2 Information spine — kind (dir/file/community/domain) + path.
+    if "kind" not in _cols:
+        con.execute("ALTER TABLE communities ADD COLUMN kind TEXT DEFAULT 'community'")
+        con.execute("UPDATE communities SET kind='domain' WHERE level>=2")
+        con.commit()
+    if "path" not in _cols:
+        con.execute("ALTER TABLE communities ADD COLUMN path TEXT")
+        con.commit()
     return con
 
 
@@ -143,7 +151,8 @@ class GraphStore:
         return self._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
     def community_count(self) -> int:
-        return self._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
+        """Count semantic communities (level>=1). Excludes structural spine (level=0)."""
+        return self._con.execute("SELECT COUNT(*) FROM communities WHERE level>=1").fetchone()[0]
 
     def list_symbols(self, limit: int = 5000) -> list[dict]:
         rows = self._con.execute(
