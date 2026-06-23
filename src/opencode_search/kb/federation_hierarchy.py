@@ -17,23 +17,29 @@ import os
 _L3_OFFSET = 20_000  # L1 < 10000; L2 in [10000, 20000); L3 starts here
 
 
+_L3_SYSTEM = (
+    "You are documenting a cross-service software architecture domain. "
+    "Using ONLY the facts in the user message, write a clear 2-3 sentence overview: "
+    "what this domain does and how the services collaborate. "
+    "Name real sub-systems; do not invent identifiers; no preamble. "
+    'Reply with JSON: {"narrative": "<2-3 sentences>"}'
+)
+
+
 def _l3_narrate(theme: str, child_summaries: list[str]) -> str:
     """Synthesise a 2-3 sentence cross-service narrative, or '' for templated fallback."""
     if os.environ.get("OSE_WIKI_LLM", "1") == "0":
         return ""
     try:
-        from opencode_search.graph.llm import deepseek_chat, deepseek_key
+        from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_extract, deepseek_key
         if not deepseek_key():
             return ""
         context = "\n".join(f"- {s[:200]}" for s in child_summaries[:8])
-        prompt = (
-            f"You are documenting a cross-service software architecture domain '{theme}'. "
-            "Using ONLY the facts below (from multiple services), write a clear 2-3 sentence "
-            "overview: what this domain does and how the services collaborate. "
-            "Name real sub-systems; do not invent identifiers; no preamble.\n\n"
-            f"{context}"
-        )
-        return deepseek_chat(prompt, max_tokens=300).strip()
+        raw, usage = deepseek_extract(_L3_SYSTEM, f"Domain: {theme}\n\n{context}", max_tokens=300)
+        _accumulate_llm_tokens(usage, "l3")
+        import json
+        data = json.loads(raw) if raw.strip().startswith("{") else {}
+        return str(data.get("narrative", "")).strip()
     except Exception:
         return ""
 

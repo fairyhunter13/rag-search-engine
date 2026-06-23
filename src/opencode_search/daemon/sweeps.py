@@ -235,8 +235,6 @@ def _index_files(project_path: str, files: list) -> None:
 
 
 def _enrich_project(project_path: str) -> None:
-    import time
-
     from opencode_search.graph.llm import deepseek_key
     if not deepseek_key():
         raise RuntimeError(
@@ -251,7 +249,7 @@ def _enrich_project(project_path: str) -> None:
         classify_communities_semantic,
         compute_significance,
         enrich_communities_batch,
-        enrich_community_l2,
+        enrich_communities_l2_batch,
     )
     from opencode_search.graph.store import GraphStore
     from opencode_search.kb.hierarchy import build_hierarchy
@@ -304,13 +302,13 @@ def _enrich_project(project_path: str) -> None:
         ).fetchone()[0]
         if _l2_exists == 0:
             build_hierarchy(gs)
-        for (cid,) in gs._con.execute(
+        _l2_ids = [r[0] for r in gs._con.execute(
             "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level >= 2"
-        ).fetchall():
-            enrich_community_l2(gs, cid)
-            gs.commit()
-            if gpu_temp_c() > THERMAL_MAX_C:
-                time.sleep(5)
+        ).fetchall()]
+        enrich_communities_l2_batch(
+            gs, _l2_ids,
+            thermal_guard_fn=lambda: gpu_temp_c() > THERMAL_MAX_C,
+        )
         # Orphan L2 communities (no L1 children) never get enriched by enrich_community_l2;
         # stamp a placeholder so l2_enriched_pct can reach 100%.
         gs._con.execute(
@@ -318,13 +316,12 @@ def _enrich_project(project_path: str) -> None:
             "WHERE level>=2 AND (summary IS NULL OR summary='')"
         )
         gs.commit()
-        # Legacy backfill: classify any community with a summary but no semantic_type
-        # (pre-Phase-1 data or communities enriched by the old enrich_community path).
-        # Batched enrichment (above) already sets semantic_type, so this is a no-op for
-        # freshly-enriched projects — kept for stale rows from previous runs.
+        # Classify any narrated L1 community that is still missing a semantic_type.
+        # Gate: narrated=1 only — the abstained tail (narrated=0) is never classified;
+        # it stays semantic_type=NULL until lazily promoted at query time (narrate_community_lazy).
         _needs_classify = gs._con.execute(
             "SELECT COUNT(*) FROM communities "
-            "WHERE level=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
+            "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
         ).fetchone()[0]
         if _needs_classify:
             classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
