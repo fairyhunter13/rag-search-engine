@@ -1,6 +1,7 @@
-"""Coarse-resolution L2 hierarchy: k-core partition of the L1 community graph → ~√(n_L1) domains."""
+"""Coarse-resolution L2 hierarchy: partition the L1 community call graph → ~√(n_L1) domains."""
 from __future__ import annotations
 
+import os
 from collections import Counter
 
 from opencode_search.graph.store import GraphStore
@@ -8,79 +9,69 @@ from opencode_search.graph.store import GraphStore
 _L2_OFFSET = 10_000
 
 
-def _coarse_partition(g, target: int) -> list:
-    """Deterministic k-core coarse partition: raise k threshold until ≤ target components.
-
-    Finds the lowest k such that the induced subgraph on nodes with coreness≥k has
-    ≤ target connected components. Nodes excluded from the k-core get their own singleton
-    components. Byte-reproducible for the same input graph.
-    """
-    n = g.vcount()
-    coreness = g.coreness()
-    best_membership = list(range(n))  # worst case: each node is its own component
-    for k in range(0, max(coreness) + 1):
-        core_verts = [i for i, c in enumerate(coreness) if c >= k]
-        if not core_verts:
-            break
-        sub = g.induced_subgraph(core_verts)
-        comps = sub.connected_components()
-        membership = list(range(n))  # non-core nodes stay as singletons
-        for comp_id, comp in enumerate(comps):
-            for local_i in comp:
-                membership[core_verts[local_i]] = n + comp_id
-        # Re-number to [0, n_unique)
-        remap: dict[int, int] = {}
-        for m in membership:
-            if m not in remap:
-                remap[m] = len(remap)
-        membership = [remap[m] for m in membership]
-        n_comps = len(set(membership))
-        best_membership = membership
-        if n_comps <= target:
-            return membership
-    return best_membership
-
-
 def build_hierarchy(store: GraphStore) -> int:
-    """Build coarse L2 communities (~√n_L1) by partitioning the symbol call graph.
+    """Build coarse L2 communities (~√n_L1) by partitioning the L1 community call graph.
 
-    Returns count of L2 communities created. No-op if <2 L1 communities or no call edges.
+    Connected L1 communities → fastgreedy (≤target groups); isolated ones → directory prefix.
+    Returns count of L2 communities created. No-op if <2 L1 communities or no cross-L1 edges.
     """
     import igraph as ig
 
     sym_rows = store._con.execute(
-        "SELECT sid, community_id FROM symbols WHERE community_id IS NOT NULL"
+        "SELECT sid, community_id, file FROM symbols WHERE community_id IS NOT NULL"
     ).fetchall()
     if not sym_rows:
         return 0
-    n_l1 = len({r[1] for r in sym_rows})
+    l1_ids = sorted({r[1] for r in sym_rows})
+    n_l1 = len(l1_ids)
     if n_l1 < 2:
         return 0
     target = max(2, round(n_l1 ** 0.5))
 
+    sid_to_l1 = {r[0]: r[1] for r in sym_rows}
+    l1_idx = {cid: i for i, cid in enumerate(l1_ids)}
+
+    # Build L1-community graph: one node per L1 community, edge for each cross-community call.
     edge_rows = store._con.execute("SELECT caller_sid, callee_sid FROM edges").fetchall()
-    # Only partition symbols that participate in at least one call edge (singletons can't be merged).
-    edge_sids = {sid for r in edge_rows for sid in r}
-    sym_rows = [(r[0], r[1]) for r in sym_rows if r[0] in edge_sids]
-    if not sym_rows:
-        return 0
-    sids = [r[0] for r in sym_rows]
-    idx = {sid: i for i, sid in enumerate(sids)}
-    edges_ig = [(idx[r[0]], idx[r[1]]) for r in edge_rows
-                if r[0] in idx and r[1] in idx and r[0] != r[1]]
-    g = ig.Graph(n=len(sids), edges=edges_ig, directed=False)
-    if g.ecount() == 0:
+    comm_edges: set[tuple[int, int]] = set()
+    for caller_sid, callee_sid in edge_rows:
+        la = sid_to_l1.get(caller_sid)
+        lb = sid_to_l1.get(callee_sid)
+        if la is not None and lb is not None and la != lb:
+            a, b = l1_idx[la], l1_idx[lb]
+            comm_edges.add((min(a, b), max(a, b)))
+    if not comm_edges:
         return 0
 
-    membership = _coarse_partition(g, target)
-    sid_to_coarse = {sids[i]: membership[i] for i in range(len(sids))}
+    conn_verts = sorted({v for e in comm_edges for v in e})
+    iso_verts = sorted(set(range(n_l1)) - set(conn_verts))
 
-    # Parent each L1 community by plurality of its symbols' coarse assignment.
-    l1_votes: dict[int, list[int]] = {}
-    for sid, l1_cid in sym_rows:
-        l1_votes.setdefault(l1_cid, []).append(sid_to_coarse[sid])
-    l1_parent = {l1_cid: Counter(votes).most_common(1)[0][0]
-                 for l1_cid, votes in l1_votes.items()}
+    # Phase 1: fastgreedy on the connected subgraph → ≤target groups labeled 0..n_fg-1.
+    g_full = ig.Graph(n=n_l1, edges=list(comm_edges), directed=False)
+    g_conn = g_full.induced_subgraph(conn_verts)
+    n_cut = min(target, len(conn_verts))
+    mship = g_conn.community_fastgreedy().as_clustering(n=n_cut).membership
+    l2_label: dict[int, int] = {conn_verts[i]: mship[i] for i in range(len(conn_verts))}
+    n_fg = max(mship) + 1 if mship else 0
+
+    # Phase 2: isolated L1 communities → group by top-level directory relative to project root.
+    all_files = [r[2] for r in sym_rows if r[2]]
+    root_prefix = (os.path.commonpath(all_files) + os.sep) if len(all_files) > 1 else ""
+    l1_to_topdir: dict[int, str] = {}
+    for _sid, l1_cid, file in sym_rows:
+        vi = l1_idx[l1_cid]
+        if vi not in l1_to_topdir and file:
+            rel = file[len(root_prefix):] if root_prefix and file.startswith(root_prefix) else file
+            l1_to_topdir[vi] = rel.split(os.sep)[0] or "__root__"
+
+    dir_to_gid: dict[str, int] = {}
+    for vi in iso_verts:
+        d = l1_to_topdir.get(vi, "__no_file__")
+        if d not in dir_to_gid:
+            dir_to_gid[d] = n_fg + len(dir_to_gid)
+        l2_label[vi] = dir_to_gid[d]
+
+    l1_parent = {l1_ids[vi]: l2_label[vi] for vi in range(n_l1)}
 
     store._con.execute("DELETE FROM communities WHERE level >= 2")
     child_counts: Counter = Counter(l1_parent.values())
