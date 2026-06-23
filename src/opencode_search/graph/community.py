@@ -1,4 +1,4 @@
-"""Leiden community detection on the symbol call graph."""
+"""Deterministic k-core community detection on the symbol call graph."""
 from __future__ import annotations
 
 import os
@@ -18,15 +18,20 @@ def _label_from_names(names: list[str]) -> str:
     return word.capitalize()
 
 
-def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[str, int]:
-    """Run Leiden on call edges; fall back to file-level grouping if no edges.
+def detect_communities(store: GraphStore) -> dict[str, int]:
+    """Deterministic k-core community detection on the symbol call graph.
+
+    Replaces non-deterministic Leiden. Uses igraph.coreness() (linear time,
+    byte-reproducible). Assigns symbols to communities by (k-shell, connected
+    component) — dense hubs get high coreness and form tight communities.
+    Falls back to file-level grouping when no call edges.
 
     Returns {sid: community_id} and commits assignments + community records.
     """
     import igraph as ig
-    import leidenalg
 
-    symbols = store.list_symbols()
+    # Sort by sid so runs on the same data produce identical vertex ordering.
+    symbols = sorted(store.list_symbols(), key=lambda s: s["sid"])
     if not symbols:
         return {}
 
@@ -35,35 +40,37 @@ def detect_communities(store: GraphStore, *, resolution: float = 1.0) -> dict[st
     edges_ig = [(idx[c], idx[e]) for c, e in all_edges if c in idx and e in idx]
 
     g = ig.Graph(n=len(symbols), edges=edges_ig, directed=True)
-    if g.ecount() == 0:
+    g_und = g.as_undirected(combine_edges="first")
+
+    if g_und.ecount() == 0:
         files = sorted(f for f in {s["file"] for s in symbols} if f)
         file_idx = {f: i for i, f in enumerate(files)}
         mapping: dict[str, int] = {
             s["sid"]: file_idx[s["file"]] for s in symbols if s["file"] in file_idx
         }
     else:
-        # ModularityVertexPartition does not accept resolution_parameter (CPM does).
-        part = leidenalg.find_partition(
-            g.as_undirected(),
-            leidenalg.ModularityVertexPartition,
-            n_iterations=3,
-        )
-        mapping = {symbols[i]["sid"]: part.membership[i] for i in range(len(symbols))}
-        # Merge singleton communities into file-level groups so isolated/leaf
-        # symbols share a community with their file-mates instead of staying alone.
-        _counts = Counter(mapping.values())
-        _singletons = {cid for cid, cnt in _counts.items() if cnt == 1}
-        if _singletons:
-            _file_base = max(_counts) + 1
-            _sid_file = {s["sid"]: s["file"] for s in symbols}
-            _file_cid: dict[str, int] = {}
-            for _sid in list(mapping):
-                if mapping[_sid] in _singletons:
-                    _f = _sid_file.get(_sid, "")
-                    if _f not in _file_cid:
-                        _file_cid[_f] = _file_base
-                        _file_base += 1
-                    mapping[_sid] = _file_cid[_f]
+        coreness = g_und.coreness()
+        cid_counter = 0
+        mapping = {}
+        # k-shell groups (k≥1): nodes with coreness==k → connected components.
+        for k in sorted(set(coreness), reverse=True):
+            if k == 0:
+                continue
+            shell = [i for i, c in enumerate(coreness) if c == k]
+            sub = g_und.induced_subgraph(shell)
+            for comp in sub.connected_components():
+                for local_i in comp:
+                    mapping[symbols[shell[local_i]]["sid"]] = cid_counter
+                cid_counter += 1
+        # k=0 (isolated nodes): group by file for coherent communities.
+        file_cid: dict[str, int] = {}
+        for s in symbols:
+            if s["sid"] not in mapping:
+                f = s["file"] or ""
+                if f not in file_cid:
+                    file_cid[f] = cid_counter
+                    cid_counter += 1
+                mapping[s["sid"]] = file_cid[f]
 
     for sid, cid in mapping.items():
         store.assign_community(sid, cid)

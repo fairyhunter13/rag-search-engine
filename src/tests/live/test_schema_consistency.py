@@ -179,3 +179,46 @@ def test_sc7_semantic_type_three_state_contract():
         "SC7: feature_map must exclude '' — L2 default must not appear as a typed feature"
     )
     assert re.search(r"level\s*=\s*1", blk), "SC7: feature_map must scope to level=1"
+
+
+def test_sc8_no_leidenalg_in_community_or_hierarchy():
+    """SC8a: community.py and hierarchy.py must not import leidenalg (k-core replaced Leiden)."""
+    for mod_name in ("opencode_search.graph.community", "opencode_search.kb.hierarchy"):
+        mod = importlib.import_module(mod_name)
+        src = inspect.getsource(mod)
+        assert "leidenalg" not in src, (
+            f"SC8: {mod_name} still imports leidenalg — Phase 2.0c k-core swap not complete"
+        )
+
+
+def test_sc8_detect_communities_deterministic(safe_tmp_path):
+    """SC8b: detect_communities is byte-identical on two runs with the same graph."""
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.extractor import extract_symbols, symbol_id
+    from opencode_search.graph.store import GraphStore
+
+    fpath = safe_tmp_path / "svc.py"
+    fpath.write_text(
+        "def alpha(): pass\ndef beta(): return alpha()\n"
+        "def gamma(): return beta()\ndef delta(): return gamma()\n"
+        "class Engine:\n    def run(self): return delta()\n"
+    )
+    content = fpath.read_text()
+
+    def _build(db_path) -> dict[str, int]:
+        gs = GraphStore(db_path)
+        for s in extract_symbols(fpath, content, "python"):
+            gs.upsert_symbol(symbol_id(str(fpath), s.name, s.start_line),
+                             s.name, s.qualified_name, s.kind,
+                             str(fpath), s.start_line, s.end_line, s.language)
+        gs.commit()
+        m = detect_communities(gs)
+        gs.close()
+        return m
+
+    m1 = _build(safe_tmp_path / "g1.db")
+    m2 = _build(safe_tmp_path / "g2.db")
+    assert m1 == m2, (
+        f"SC8b: detect_communities non-deterministic — "
+        f"diff: {set(m1.items()) ^ set(m2.items())}"
+    )

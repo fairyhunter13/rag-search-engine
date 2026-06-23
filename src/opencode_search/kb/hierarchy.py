@@ -1,4 +1,4 @@
-"""Coarse-resolution L2 hierarchy: partition the symbol call graph at low γ → ~√(n_L1) domains."""
+"""Coarse-resolution L2 hierarchy: k-core partition of the L1 community graph → ~√(n_L1) domains."""
 from __future__ import annotations
 
 from collections import Counter
@@ -9,18 +9,36 @@ _L2_OFFSET = 10_000
 
 
 def _coarse_partition(g, target: int) -> list:
-    """Step γ down until community count ≤ target; return the smallest partition found."""
-    import leidenalg
-    best = None
-    for gamma in (1.0, 0.5, 0.25, 0.1, 0.05):
-        part = leidenalg.find_partition(
-            g, leidenalg.RBConfigurationVertexPartition,
-            resolution_parameter=gamma, n_iterations=3,
-        )
-        best = part
-        if len(set(part.membership)) <= target:
-            return part.membership
-    return best.membership  # smallest found (lowest γ)
+    """Deterministic k-core coarse partition: raise k threshold until ≤ target components.
+
+    Finds the lowest k such that the induced subgraph on nodes with coreness≥k has
+    ≤ target connected components. Nodes excluded from the k-core get their own singleton
+    components. Byte-reproducible for the same input graph.
+    """
+    n = g.vcount()
+    coreness = g.coreness()
+    best_membership = list(range(n))  # worst case: each node is its own component
+    for k in range(0, max(coreness) + 1):
+        core_verts = [i for i, c in enumerate(coreness) if c >= k]
+        if not core_verts:
+            break
+        sub = g.induced_subgraph(core_verts)
+        comps = sub.connected_components()
+        membership = list(range(n))  # non-core nodes stay as singletons
+        for comp_id, comp in enumerate(comps):
+            for local_i in comp:
+                membership[core_verts[local_i]] = n + comp_id
+        # Re-number to [0, n_unique)
+        remap: dict[int, int] = {}
+        for m in membership:
+            if m not in remap:
+                remap[m] = len(remap)
+        membership = [remap[m] for m in membership]
+        n_comps = len(set(membership))
+        best_membership = membership
+        if n_comps <= target:
+            return membership
+    return best_membership
 
 
 def build_hierarchy(store: GraphStore) -> int:
