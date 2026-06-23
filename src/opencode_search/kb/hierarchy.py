@@ -6,14 +6,20 @@ from collections import Counter
 
 from opencode_search.graph.store import GraphStore
 
+# Bump when the L2 partitioning algorithm changes so reconcile re-derives stale hierarchies.
+HIER_VERSION = "lp1"  # two-phase L1-community-graph partition (fastgreedy + dir-group), v1
+
 _L2_OFFSET = 10_000
 
 
 def build_hierarchy(store: GraphStore) -> int:
     """Build coarse L2 communities (~√n_L1) by partitioning the L1 community call graph.
 
-    Connected L1 communities → fastgreedy (≤target groups); isolated ones → directory prefix.
-    Returns count of L2 communities created. No-op if <2 L1 communities or no cross-L1 edges.
+    Phase 1: fastgreedy on connected L1 communities → ≤target groups.
+    Phase 2: isolated L1 communities (no cross-community edges) → group by top-level directory.
+    Edge-sparse repos with no cross-community edges at all fall through to Phase 2 only,
+    producing a directory-based L2 instead of an empty hierarchy.
+    Returns count of L2 communities created. No-op if <2 L1 communities.
     """
     import igraph as ig
 
@@ -40,21 +46,8 @@ def build_hierarchy(store: GraphStore) -> int:
         if la is not None and lb is not None and la != lb:
             a, b = l1_idx[la], l1_idx[lb]
             comm_edges.add((min(a, b), max(a, b)))
-    if not comm_edges:
-        return 0
 
-    conn_verts = sorted({v for e in comm_edges for v in e})
-    iso_verts = sorted(set(range(n_l1)) - set(conn_verts))
-
-    # Phase 1: fastgreedy on the connected subgraph → ≤target groups labeled 0..n_fg-1.
-    g_full = ig.Graph(n=n_l1, edges=list(comm_edges), directed=False)
-    g_conn = g_full.induced_subgraph(conn_verts)
-    n_cut = min(target, len(conn_verts))
-    mship = g_conn.community_fastgreedy().as_clustering(n=n_cut).membership
-    l2_label: dict[int, int] = {conn_verts[i]: mship[i] for i in range(len(conn_verts))}
-    n_fg = max(mship) + 1 if mship else 0
-
-    # Phase 2: isolated L1 communities → group by top-level directory relative to project root.
+    # Top-level directory mapping (needed for both Phase 2 and edge-sparse fallthrough).
     all_files = [r[2] for r in sym_rows if r[2]]
     root_prefix = (os.path.commonpath(all_files) + os.sep) if len(all_files) > 1 else ""
     l1_to_topdir: dict[int, str] = {}
@@ -64,6 +57,25 @@ def build_hierarchy(store: GraphStore) -> int:
             rel = file[len(root_prefix):] if root_prefix and file.startswith(root_prefix) else file
             l1_to_topdir[vi] = rel.split(os.sep)[0] or "__root__"
 
+    l2_label: dict[int, int] = {}
+    n_fg = 0
+
+    if comm_edges:
+        conn_verts = sorted({v for e in comm_edges for v in e})
+        iso_verts = sorted(set(range(n_l1)) - set(conn_verts))
+
+        # Phase 1: fastgreedy on the connected subgraph → ≤target groups labeled 0..n_fg-1.
+        g_full = ig.Graph(n=n_l1, edges=list(comm_edges), directed=False)
+        g_conn = g_full.induced_subgraph(conn_verts)
+        n_cut = min(target, len(conn_verts))
+        mship = g_conn.community_fastgreedy().as_clustering(n=n_cut).membership
+        l2_label = {conn_verts[i]: mship[i] for i in range(len(conn_verts))}
+        n_fg = max(mship) + 1 if mship else 0
+    else:
+        # Edge-sparse repo: no cross-community edges → all L1 communities are isolated.
+        iso_verts = list(range(n_l1))
+
+    # Phase 2: isolated L1 communities → group by top-level directory relative to project root.
     dir_to_gid: dict[str, int] = {}
     for vi in iso_verts:
         d = l1_to_topdir.get(vi, "__no_file__")

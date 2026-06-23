@@ -7,6 +7,9 @@ from collections import Counter
 
 from opencode_search.graph.store import GraphStore
 
+# Bump when the detection algorithm changes so reconcile re-derives stale graphs.
+ALGO_VERSION = "fg1"  # fastgreedy modularity + directory-group for edgeless, v1
+
 # Seed igraph's RNG once so fastgreedy tie-breaks are byte-reproducible.
 # community_fastgreedy is agglomerative-greedy (no stochastic step), but
 # igraph does not doc-guarantee bit-identical output across builds without this.

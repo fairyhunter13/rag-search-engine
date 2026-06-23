@@ -106,6 +106,12 @@ def _open(db_path: Path) -> sqlite3.Connection:
             "WHERE narrated=1 AND semantic_type IS NULL AND kind NOT IN ('dir','file')"
         )
         con.commit()
+    # Schema migration: key-value meta store for algo-version + source-fingerprint stamps.
+    # Survives GraphStore.clear() (which only deletes symbols/edges/communities).
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
+    )
+    con.commit()
     return con
 
 
@@ -190,6 +196,16 @@ class GraphStore:
         ).fetchall()
         keys = ("sid", "name", "qualified_name", "kind", "file", "start_line", "end_line", "language")
         return [dict(zip(keys, r, strict=True)) for r in rows]
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._con.execute(
+            "INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
 
     def commit(self) -> None:
         self._con.commit()
