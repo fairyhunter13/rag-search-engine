@@ -14,20 +14,27 @@ def test_no_cpu_fallback(cuda_ep):
     assert "CUDAExecutionProvider" in ort.get_available_providers()
 
 
-def test_embedder_bound_to_cuda(embedder):
-    """P32.3: verify the real ONNX session bound to CUDA EP, not just that it's compiled in."""
+def test_embedder_bound_to_gpu(embedder):
+    """P32.3: verify the real ONNX session bound to a GPU EP (not just compiled in), not CPU."""
+    from opencode_search.core.gpu import GPU_EP_NAMES
     providers = embedder._model.model.model.get_providers()
-    assert providers[0] == "CUDAExecutionProvider", f"Embedder not on GPU: {providers}"
+    assert providers[0] in GPU_EP_NAMES, f"Embedder not on GPU: {providers}"
+    assert providers[0] != "CPUExecutionProvider", f"Embedder bound to CPU: {providers}"
+    # On this RTX 5080 host DISABLE_TENSORRT=1, primary must be CUDA.
+    assert providers[0] == "CUDAExecutionProvider", f"Expected CUDA primary on this host: {providers}"
 
 
-def test_reranker_bound_to_cuda(embedder):
-    """P32.4: Reranker ONNX session must have CUDAExecutionProvider as primary (position-0) EP."""
+def test_reranker_bound_to_gpu(embedder):
+    """P32.4: Reranker ONNX session must have a GPU EP as primary (position-0)."""
+    from opencode_search.core.gpu import GPU_EP_NAMES
     from opencode_search.embed.embedder import Reranker
     r = Reranker()
     r._init()
     try:
         providers = r._model.model.model.get_providers()
-        assert providers[0] == "CUDAExecutionProvider", f"Reranker not on GPU: {providers}"
+        assert providers[0] in GPU_EP_NAMES, f"Reranker not on GPU: {providers}"
+        assert providers[0] != "CPUExecutionProvider", f"Reranker bound to CPU: {providers}"
+        assert providers[0] == "CUDAExecutionProvider", f"Expected CUDA primary on this host: {providers}"
     finally:
         del r
 

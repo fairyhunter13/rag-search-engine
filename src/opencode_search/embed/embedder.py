@@ -6,22 +6,22 @@ import threading
 import numpy as np
 
 from opencode_search.core.config import EMBED_DEVICE, EMBED_MODEL, RERANK_MODEL, THERMAL_MAX_C
-from opencode_search.core.gpu import assert_cuda_available, gpu_temp_c
+from opencode_search.core.gpu import (
+    GPU_EP_NAMES,
+    assert_gpu_available,
+    gpu_temp_c,
+    select_gpu_providers,
+)
 
 # Prevents concurrent GPU inference races (embed + rerank on same device).
 _GPU_INFER_LOCK = threading.Lock()
-
-# kSameAsRequested + enable_mem_pattern=False stop ORT BFC pre-allocating 24GB on a 16GB GPU.
-# cuda_mem_limit was removed in ORT 1.26; arena strategy alone does NOT prevent the allocation —
-# enable_mem_pattern=False on SessionOptions is the required companion fix.
-_CUDA_PROVIDER_OPTIONS = {"arena_extend_strategy": "kSameAsRequested"}
 
 
 class Embedder:
     def __init__(self, model: str = EMBED_MODEL, device: str = EMBED_DEVICE):
         if "cpu" in device.lower():
             raise RuntimeError("CPU embedding is forbidden — use device='cuda'.")
-        assert_cuda_available()
+        assert_gpu_available()
         self._model_name = model
         self._model = None
 
@@ -53,7 +53,7 @@ class Embedder:
 
         self._model = TextEmbedding(
             model_name=self._model_name,
-            providers=[("CUDAExecutionProvider", _CUDA_PROVIDER_OPTIONS)],
+            providers=select_gpu_providers(),
             max_length=512,
         )
         # FastEmbed reads model_max_length=8192 from tokenizer_config.json and
@@ -62,8 +62,8 @@ class Embedder:
         # sequences cause FusedMatMul to request 24 GB workspace on a 16 GB GPU.
         self._model.model.tokenizer.enable_truncation(max_length=512)
         providers = self._model.model.model.get_providers()
-        if not providers or providers[0] != "CUDAExecutionProvider":
-            raise RuntimeError(f"Embedder not using CUDAExecutionProvider as primary EP (providers={providers}). CPU inference is forbidden.")
+        if not providers or providers[0] not in GPU_EP_NAMES:
+            raise RuntimeError(f"Embedder not bound to a GPU EP (providers={providers}). CPU inference is forbidden.")
 
     def warmup(self) -> None:
         if self._model is None:
@@ -94,7 +94,7 @@ class Reranker:
     """Cross-encoder reranker (jina-reranker-v1-turbo-en) on GPU."""
 
     def __init__(self, model: str = RERANK_MODEL) -> None:
-        assert_cuda_available()
+        assert_gpu_available()
         self._model_name = model
         self._model = None
 
@@ -102,11 +102,11 @@ class Reranker:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
         self._model = TextCrossEncoder(
             model_name=self._model_name,
-            providers=["CUDAExecutionProvider"],
+            providers=select_gpu_providers(),
         )
         providers = self._model.model.model.get_providers()
-        if not providers or providers[0] != "CUDAExecutionProvider":
-            raise RuntimeError(f"Reranker not using CUDAExecutionProvider as primary EP (providers={providers}). CPU inference is forbidden.")
+        if not providers or providers[0] not in GPU_EP_NAMES:
+            raise RuntimeError(f"Reranker not bound to a GPU EP (providers={providers}). CPU inference is forbidden.")
 
     def rerank(self, query: str, passages: list[str]) -> list[float]:
         if not passages:

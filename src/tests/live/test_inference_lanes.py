@@ -119,11 +119,11 @@ def test_config_has_no_ollama_knobs():
 
 
 def test_gpu_module_has_no_ollama_guard():
-    """R6c static: core/gpu.py no longer contains assert_ollama_gpu; assert_cuda_available survives."""
+    """R6c static: core/gpu.py no longer contains assert_ollama_gpu; assert_gpu_available is the guard."""
     text = (_SRC / "core" / "gpu.py").read_text()
     assert "assert_ollama_gpu" not in text, "core/gpu.py still defines assert_ollama_gpu (decommissioned)"
-    assert "assert_cuda_available" in text, (
-        "core/gpu.py must still define assert_cuda_available (GPU guard for embeddings+reranking)"
+    assert "assert_gpu_available" in text, (
+        "core/gpu.py must define assert_gpu_available (GPU guard for embeddings+reranking)"
     )
 
 
@@ -246,19 +246,23 @@ def test_rerank_passages_only_in_gpu_lane():
 
 
 def test_embedder_never_requests_cpu_ep():
-    """Source-guard: embed/embedder.py must never list CPUExecutionProvider in a providers=[...] arg."""
+    """Source-guard: embedder.py and gpu.py must never list CPUExecutionProvider in a providers=[...] arg."""
     import re
+    for name, path in [("embedder.py", _SRC / "embed" / "embedder.py"), ("gpu.py", _SRC / "core" / "gpu.py")]:
+        src = path.read_text()
+        matches = re.findall(r'providers\s*=\s*\[.*?CPUExecutionProvider.*?\]', src, re.DOTALL)
+        assert not matches, (
+            f"{name} must not request CPUExecutionProvider; found: " + str(matches)
+        )
+
+
+def test_embedder_does_not_use_is_gpu_available():
+    """Source-guard: Embedder/Reranker must use assert_gpu_available (fatal), not is_gpu_available."""
     src = (_SRC / "embed" / "embedder.py").read_text()
-    matches = re.findall(r'providers\s*=\s*\[.*?CPUExecutionProvider.*?\]', src, re.DOTALL)
-    assert not matches, (
-        "embed/embedder.py must not request CPUExecutionProvider; found: " + str(matches)
+    assert "is_gpu_available" not in src, (
+        "embed/embedder.py must not call is_gpu_available() — "
+        "use assert_gpu_available() (fatal) for runtime enforcement"
     )
-
-
-def test_embedder_does_not_use_is_cuda_available():
-    """Source-guard: Embedder/Reranker must use assert_cuda_available (fatal), not is_cuda_available."""
-    src = (_SRC / "embed" / "embedder.py").read_text()
-    assert "is_cuda_available" not in src, (
-        "embed/embedder.py must not call is_cuda_available() — "
-        "use assert_cuda_available() (fatal) for runtime enforcement"
+    assert "assert_gpu_available" in src, (
+        "embed/embedder.py must call assert_gpu_available() in __init__"
     )

@@ -58,10 +58,10 @@ def serve(host: str | None = None, port: int | None = None) -> None:
     )
 
     from opencode_search.core.config import DAEMON_HOST, DAEMON_PORT
-    from opencode_search.core.gpu import assert_cuda_available
+    from opencode_search.core.gpu import assert_gpu_available
     from opencode_search.server.routes import create_app
 
-    assert_cuda_available()  # exit 1 on no-CUDA; CPU fallback is forbidden
+    assert_gpu_available()  # exit 1 when no GPU EP available; CPU fallback is forbidden
     _start_background()
     app = create_app()
     h = host or DAEMON_HOST

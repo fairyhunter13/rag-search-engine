@@ -162,8 +162,8 @@ def list_projects_cmd() -> None:
 @app.command()
 def health(json_out: bool = typer.Option(False, "--json")) -> None:
     """Exit 1 if GPU unavailable."""
-    from opencode_search.core.gpu import is_cuda_available
-    ok = is_cuda_available()
+    from opencode_search.core.gpu import is_gpu_available
+    ok = is_gpu_available()
     if json_out:
         import json
         typer.echo(json.dumps({"ok": ok}))

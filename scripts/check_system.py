@@ -115,13 +115,13 @@ def check_config() -> None:
 def check_gpu() -> None:
     print("\n### GPU")
     try:
-        from opencode_search.core.gpu import assert_cuda_available
-        assert_cuda_available()
-        _ok("assert_cuda_available() — CUDA provider present")
+        from opencode_search.core.gpu import assert_gpu_available
+        assert_gpu_available()
+        _ok("assert_gpu_available() — GPU EP present")
     except SystemExit as exc:
-        _fail("assert_cuda_available()", f"SystemExit({exc.code})")
+        _fail("assert_gpu_available()", f"SystemExit({exc.code})")
     except Exception as exc:
-        _fail("assert_cuda_available()", str(exc))
+        _fail("assert_gpu_available()", str(exc))
 
 
 # ---------------------------------------------------------------------------
