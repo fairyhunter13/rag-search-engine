@@ -7,7 +7,7 @@ from collections import Counter
 from opencode_search.graph.store import GraphStore
 
 # Bump when the L2 partitioning algorithm changes so reconcile re-derives stale hierarchies.
-HIER_VERSION = "lp1"  # two-phase L1-community-graph partition (fastgreedy + dir-group), v1
+HIER_VERSION = "lp2"  # two-phase L1-community-graph partition (fastgreedy + capped dir-group), v2
 
 _L2_OFFSET = 10_000
 
@@ -75,13 +75,23 @@ def build_hierarchy(store: GraphStore) -> int:
         # Edge-sparse repo: no cross-community edges → all L1 communities are isolated.
         iso_verts = list(range(n_l1))
 
-    # Phase 2: isolated L1 communities → group by top-level directory relative to project root.
+    # Phase 2: isolated L1 communities → group by top-level directory, capped so that
+    # total L2 ≤ target (Phase-1 used n_fg slots; Phase-2 gets remaining = target - n_fg).
+    # When directories exceed the remaining capacity, overflow dirs merge into "__other__".
+    remaining = max(1, target - n_fg)
+    iso_dir_set = {l1_to_topdir.get(vi, "__no_file__") for vi in iso_verts}
+    if len(iso_dir_set) <= remaining:
+        top_dirs: set[str] = iso_dir_set
+    else:
+        freq: Counter = Counter(l1_to_topdir.get(vi, "__no_file__") for vi in iso_verts)
+        top_dirs = {d for d, _ in freq.most_common(remaining - 1)}
     dir_to_gid: dict[str, int] = {}
     for vi in iso_verts:
         d = l1_to_topdir.get(vi, "__no_file__")
-        if d not in dir_to_gid:
-            dir_to_gid[d] = n_fg + len(dir_to_gid)
-        l2_label[vi] = dir_to_gid[d]
+        bucket = d if d in top_dirs else "__other__"
+        if bucket not in dir_to_gid:
+            dir_to_gid[bucket] = n_fg + len(dir_to_gid)
+        l2_label[vi] = dir_to_gid[bucket]
 
     l1_parent = {l1_ids[vi]: l2_label[vi] for vi in range(n_l1)}
 
