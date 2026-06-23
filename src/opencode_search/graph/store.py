@@ -21,10 +21,7 @@ def _open(db_path: Path) -> sqlite3.Connection:
             start_line INTEGER,
             end_line INTEGER,
             language TEXT,
-            signature TEXT,
-            docstring TEXT,
-            community_id INTEGER,
-            intent TEXT
+            community_id INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_sym_file ON symbols(file);
         CREATE INDEX IF NOT EXISTS idx_sym_name ON symbols(name);
@@ -67,6 +64,14 @@ def _open(db_path: Path) -> sqlite3.Connection:
     if "parent_id" not in _cols:
         con.execute("ALTER TABLE communities ADD COLUMN parent_id INTEGER")
         con.commit()
+    # Schema migration F-G/F-D: drop write-only columns (signature, docstring, intent).
+    # SQLite 3.35+ supports ALTER TABLE DROP COLUMN; current system has 3.45.1.
+    _sym_cols = {r[1] for r in con.execute("PRAGMA table_info(symbols)")}
+    for _dead_col in ("signature", "docstring", "intent"):
+        if _dead_col in _sym_cols:
+            con.execute(f"ALTER TABLE symbols DROP COLUMN {_dead_col}")
+    if any(c in _sym_cols for c in ("signature", "docstring", "intent")):
+        con.commit()
     # Schema migration: Phase 2 Information spine — kind (dir/file/community/domain) + path.
     if "kind" not in _cols:
         con.execute("ALTER TABLE communities ADD COLUMN kind TEXT DEFAULT 'community'")
@@ -88,18 +93,17 @@ class GraphStore:
         return self._con
 
     def upsert_symbol(self, sid: str, name: str, qualified_name: str, kind: str,
-                      file: str, start_line: int, end_line: int, language: str,
-                      signature: str = "", docstring: str = "") -> None:
+                      file: str, start_line: int, end_line: int, language: str) -> None:
         self._con.execute(
             """INSERT INTO symbols
-               (sid,name,qualified_name,kind,file,start_line,end_line,language,signature,docstring)
-               VALUES (?,?,?,?,?,?,?,?,?,?)
+               (sid,name,qualified_name,kind,file,start_line,end_line,language)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(sid) DO UPDATE SET
                  name=excluded.name, qualified_name=excluded.qualified_name,
                  kind=excluded.kind, file=excluded.file,
                  start_line=excluded.start_line, end_line=excluded.end_line,
                  language=excluded.language""",
-            (sid, name, qualified_name, kind, file, start_line, end_line, language, signature, docstring),
+            (sid, name, qualified_name, kind, file, start_line, end_line, language),
         )
 
     def dedup_symbols(self) -> int:
@@ -136,9 +140,6 @@ class GraphStore:
     def set_community_parent(self, cid: int, parent_id: int) -> None:
         self._con.execute("UPDATE communities SET parent_id=? WHERE id=?", (parent_id, cid))
 
-    def set_intent(self, sid: str, intent: str) -> None:
-        self._con.execute("UPDATE symbols SET intent=? WHERE sid=?", (intent, sid))
-
     def clear(self) -> None:
         """Wipe symbols/edges/communities before a full re-index so stale rows don't persist."""
         self._con.executescript("DELETE FROM symbols; DELETE FROM edges; DELETE FROM communities;")
@@ -156,10 +157,10 @@ class GraphStore:
 
     def list_symbols(self, limit: int = 5000) -> list[dict]:
         rows = self._con.execute(
-            "SELECT sid,name,qualified_name,kind,file,start_line,end_line,language,intent "
+            "SELECT sid,name,qualified_name,kind,file,start_line,end_line,language "
             "FROM symbols LIMIT ?", (limit,)
         ).fetchall()
-        keys = ("sid", "name", "qualified_name", "kind", "file", "start_line", "end_line", "language", "intent")
+        keys = ("sid", "name", "qualified_name", "kind", "file", "start_line", "end_line", "language")
         return [dict(zip(keys, r, strict=True)) for r in rows]
 
     def commit(self) -> None:

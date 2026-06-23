@@ -143,24 +143,6 @@ def test_detect_communities_idempotent(tmp_path):
 
 # ── enrichment ────────────────────────────────────────────────────────────────
 
-@pytest.mark.slow
-def test_enrich_symbols_assigns_intent():
-    from opencode_search.graph.enrich import enrich_symbols
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
-    with tempfile.TemporaryDirectory() as tmp:
-        store = GraphStore(Path(tmp) / "g.db")
-        for s in extract_symbols(Path("calc.py"), _PY, "python"):
-            sid = symbol_id(s.file, s.name, s.start_line)
-            store.upsert_symbol(sid, s.name, s.qualified_name, s.kind,
-                                s.file, s.start_line, s.end_line, s.language)
-        store.commit()
-        count = enrich_symbols(store)
-        assert count > 0
-        assert any(r.get("intent") for r in store.list_symbols())
-        store.close()
-
-
 # ── R3: cross-project edges-schema guard ─────────────────────────────────────
 
 def test_all_project_graph_dbs_have_canonical_edges_schema():

@@ -158,16 +158,16 @@ def _mermaid_domain(store: GraphStore, parent_cid: int) -> str:
 def _members_table(store: GraphStore, cid: int, root: str) -> str:
     """Markdown table of community members with project-root-relative source citations."""
     rows = store._con.execute(
-        "SELECT name, kind, COALESCE(intent,''), file, start_line FROM symbols "
-        "WHERE community_id=? ORDER BY CASE WHEN intent!='' THEN 0 ELSE 1 END, name LIMIT 25",
+        "SELECT name, kind, file, start_line FROM symbols "
+        "WHERE community_id=? ORDER BY name LIMIT 25",
         (cid,)).fetchall()
     if not rows:
         return ""
-    out = ["| Symbol | Kind | Intent | Source |", "|---|---|---|---|"]
-    for name, kind, intent, file, line in rows:
+    out = ["| Symbol | Kind | Source |", "|---|---|---|"]
+    for name, kind, file, line in rows:
         rel = _rel(file or "", root)
         src = f"[{rel}:{line}]({rel})" if rel and line else ""
-        out.append(f"| `{name}` | {kind or ''} | {(intent or '').replace('|', '/')} | {src} |")
+        out.append(f"| `{name}` | {kind or ''} | {src} |")
     return "\n".join(out)
 
 

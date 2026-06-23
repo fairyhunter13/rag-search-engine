@@ -477,38 +477,6 @@ class TestClassificationStability:
             f"already-classified communities (would churn overview results every enrich)"
         )
 
-    @pytest.mark.slow
-    def test_business_rule_member_intents_show_enforcement(self, acme_promo):
-        """D6 (cross-signal coherence): business_rule members' intents express enforcement.
-
-        Reads per-symbol `intent` (the dense DeepWiki signal that drives _community_rich_text),
-        confirming the classifier's decisions agree with member-level evidence, not just summaries.
-        """
-        gs = _gs(acme_promo)
-        try:
-            cids = [r[0] for r in gs._con.execute(
-                "SELECT id FROM communities WHERE level=1 AND semantic_type='business_rule' LIMIT 10"
-            ).fetchall()]
-            assert cids, "no business_rule communities in promo-be"
-            intents = [r[0].lower() for cid in cids for r in gs._con.execute(
-                "SELECT intent FROM symbols WHERE community_id=? AND intent IS NOT NULL AND intent!=''",
-                (cid,),
-            ).fetchall()]
-        finally:
-            gs.close()
-        if not intents:
-            # Intent enrichment hasn't completed yet — invariant is vacuously satisfied.
-            return
-        words = ("valid", "check", "enforc", "rule", "constraint", "eligib", "allow",
-                 "reject", "block", "verif", "ensure", "require", "restrict", "limit", "polic")
-        matched = sum(1 for it in intents if any(w in it for w in words))
-        rate = matched / len(intents)
-        assert rate >= 0.20, (
-            f"only {rate:.0%} of business_rule member intents express enforcement "
-            f"({matched}/{len(intents)}) — classification disagrees with member-level signal"
-        )
-
-
 class TestCrossProjectMetamorphic:
     """Metamorphic: the label is a function of WHAT a community is, not WHICH project hosts it."""
 

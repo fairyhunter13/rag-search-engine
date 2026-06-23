@@ -159,7 +159,6 @@ def _index_project(project_path: str) -> None:
                 gs.upsert_symbol(
                     sid, sym.name, sym.qualified_name, sym.kind,
                     sym.file, sym.start_line, sym.end_line, sym.language,
-                    sym.signature, sym.docstring,
                 )
         gs.commit()
         gs.dedup_symbols()

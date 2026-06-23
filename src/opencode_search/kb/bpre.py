@@ -66,16 +66,6 @@ CREATE TABLE IF NOT EXISTS process_steps (
     kind TEXT NOT NULL, guard TEXT DEFAULT '',
     PRIMARY KEY (process_id, order_index)
 );
-CREATE TABLE IF NOT EXISTS process_rules (
-    process_id TEXT NOT NULL, step_order INTEGER NOT NULL,
-    rule_text TEXT NOT NULL, source_sid TEXT DEFAULT '',
-    PRIMARY KEY (process_id, step_order)
-);
-CREATE TABLE IF NOT EXISTS state_machines (
-    id TEXT PRIMARY KEY, entity TEXT NOT NULL,
-    states_json TEXT DEFAULT '[]', transitions_json TEXT DEFAULT '[]',
-    source TEXT DEFAULT ''
-);
 CREATE TABLE IF NOT EXISTS process_artifacts (
     process_id TEXT PRIMARY KEY, narrative TEXT DEFAULT '',
     mermaid TEXT DEFAULT '', bpmn_xml TEXT DEFAULT ''
@@ -90,6 +80,9 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(_SCHEMA)
+    # Migration F-H/F-I: drop write-only tables removed in Phase 2a.
+    for _dead_tbl in ("process_rules", "state_machines"):
+        con.execute(f"DROP TABLE IF EXISTS {_dead_tbl}")
     con.commit()
     return con
 
@@ -657,92 +650,6 @@ def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurfac
         _llm_link_resolve(con, items, svcs)
 
 
-# ─── D5 Rule / state-machine extraction ──────────────────────────────────────
-
-def _extract_rules(con: sqlite3.Connection, members: list[str]) -> None:
-    if not _bpre_llm_on():
-        return
-    try:
-        from opencode_search.core.config import project_graph_db
-        from opencode_search.graph.llm import deepseek_chat, deepseek_key
-        if not deepseek_key():
-            return
-    except Exception:
-        return
-    for member in members:
-        gdb = project_graph_db(member)
-        if not gdb.exists():
-            continue
-        import sqlite3 as _sq
-        mcon = _sq.connect(str(gdb))
-        try:
-            rows = mcon.execute(
-                "SELECT id, title, summary FROM communities "
-                "WHERE semantic_type='business_rule' AND summary IS NOT NULL AND summary!='' LIMIT 30"
-            ).fetchall()
-        finally:
-            mcon.close()
-        for cid, title, summary in rows:
-            try:
-                rule_text = deepseek_chat(
-                    f"Extract the business rule in one concise sentence.\n"
-                    f"Title: {title}\nSummary: {summary[:600]}\n\nRule:",
-                    max_tokens=120,
-                ).strip()
-            except Exception:
-                rule_text = summary[:120]
-            con.execute("INSERT OR IGNORE INTO process_rules VALUES ('',0,?,?)",
-                        (rule_text, _hid(member, str(cid))))
-    con.commit()
-
-
-def _extract_state_machines(
-    con: sqlite3.Connection, members: list[str], surf: ApiSurface,
-) -> None:
-    if not _bpre_llm_on():
-        return
-    try:
-        from opencode_search.graph.llm import deepseek_chat, deepseek_key
-        if not deepseek_key():
-            return
-    except Exception:
-        return
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
-    for member in members:
-        for src in _source_files(member):
-            try:
-                content = src.read_text(errors="replace")
-            except OSError:
-                continue
-            ff = scan_file(str(src), content, detect_language(src), surf)
-            if not ff or len(ff.status_enums) < 3:
-                continue
-            statuses = list(dict.fromkeys(ff.status_enums))
-            rel = _rel_path(str(src), member)
-            entity = Path(src).stem
-            sm_id = _hid(member, rel, entity)
-            if con.execute("SELECT 1 FROM state_machines WHERE id=?", (sm_id,)).fetchone():
-                continue
-            prompt = (
-                f"From the status values, infer the state machine for entity '{entity}'.\n"
-                f"Return JSON: {{\"states\":[...],\"transitions\":[{{\"from\":\"A\",\"to\":\"B\",\"event\":\"X\"}}]}}\n\n"
-                f"Statuses: {', '.join(statuses)[:400]}"
-            )
-            try:
-                raw = deepseek_chat(prompt, max_tokens=400)
-                raw = raw.replace("```json", "").replace("```", "").strip().rstrip("`").strip()
-                data = json.loads(raw)
-                states = json.dumps(data.get("states", []))
-                transitions = json.dumps(data.get("transitions", []))
-            except Exception:
-                states = json.dumps(statuses)
-                transitions = "[]"
-            con.execute("INSERT OR IGNORE INTO state_machines VALUES (?,?,?,?,?)",
-                        (sm_id, entity, states, transitions, rel))
-    con.commit()
-
-
 # ─── D6 Synthesis ─────────────────────────────────────────────────────────────
 
 def _bpmn_xml(process_id: str, process_name: str,
@@ -877,7 +784,7 @@ def reconstruct_processes(root_path: str) -> int:
         con = _init_db(db_path)
         try:
             for tbl in ("entry_points", "cross_service_edges", "processes",
-                        "process_steps", "process_rules", "process_artifacts"):
+                        "process_steps", "process_artifacts"):
                 con.execute(f"DELETE FROM {tbl}")
             con.commit()
             from opencode_search.kb.bpre_ast import federation_discover
@@ -897,8 +804,6 @@ def reconstruct_processes(root_path: str) -> int:
             if count == 0:
                 log.info("bpre: no multi-service processes found for %s", root_path)
                 return 0
-            _extract_rules(con, members)
-            _extract_state_machines(con, members, surf)
             _synthesize_artifacts(con)
             log.info("bpre: reconstructed %d processes for %s", count, root_path)
             return count

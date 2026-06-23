@@ -237,9 +237,6 @@ def test_pipeline_all_stages_real_astro():
         assert c.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "stage 2 tree-sitter: 0 symbols"
         assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] > 0, "stage 2b call-edges: 0 edges"
         assert c.execute("SELECT COUNT(*) FROM communities").fetchone()[0] > 0, "stage 3 leiden: 0 communities"
-        # stage 4: schema check — intent enrichment requires explicit /api/enrich_symbols (not auto)
-        cols = {r[1] for r in c.execute("PRAGMA table_info(symbols)").fetchall()}
-        assert "intent" in cols, "stage 4 enrich-sym: intent column missing from symbols schema"
         assert c.execute("SELECT COUNT(*) FROM communities WHERE title IS NOT NULL").fetchone()[0] > 0, "stage 5 enrich-comm: no titles"
         assert c.execute("SELECT COUNT(*) FROM communities WHERE level > 1").fetchone()[0] > 0, "stage 6 hierarchy: no L2"
     wiki = project_wiki_dir(project)

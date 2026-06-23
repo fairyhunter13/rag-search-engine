@@ -25,17 +25,13 @@ def test_kb_chat_is_deepseek_only():
 
 
 def test_enrich_callers_use_kb_chat():
-    """R6a static: enrich_community / enrich_community_l2 / enrich_symbols all route through _kb_chat."""
+    """R6a static: enrich_community_l2 routes through _kb_chat (enrich_community/enrich_symbols deleted F-B/F-D)."""
     from opencode_search.graph import enrich
 
-    for fn_name in ("enrich_community", "enrich_community_l2", "enrich_symbols"):
-        src = inspect.getsource(getattr(enrich, fn_name))
-        assert "_kb_chat(" in src, f"{fn_name} must call _kb_chat() — not bare deepseek_chat or deleted chat()"
-        # Detect bare chat() calls (the old qwen3 invocation) — _kb_chat / deepseek_chat are fine
-        residue = src.replace("_kb_chat(", "").replace("deepseek_chat(", "")
-        assert "chat(" not in residue, (
-            f"{fn_name} still has bare chat() call (local generative LLM decommissioned)"
-        )
+    src = inspect.getsource(enrich.enrich_community_l2)
+    assert "_kb_chat(" in src, "enrich_community_l2 must call _kb_chat()"
+    residue = src.replace("_kb_chat(", "").replace("deepseek_chat(", "")
+    assert "chat(" not in residue, "enrich_community_l2 has bare chat() call"
 
 
 def test_enrich_project_crashes_without_key():

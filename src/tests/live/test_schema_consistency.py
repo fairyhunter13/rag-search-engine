@@ -123,13 +123,8 @@ def test_sc5_taxonomy_single_source():
     )
 
 
-# Phase-2a removes each entry when consumed-or-deleted; new dead items fail CI.
-_KNOWN_DEAD: frozenset[str] = frozenset({
-    "symbols.signature", "symbols.docstring",  # F-G: upsert_symbol writes; never SELECTed
-    "symbols.intent",   # F-D: only enrich_symbols writes; no live production caller
-    "process_rules",    # F-H: zero payload SELECTs; PK=('',0) degenerate
-    "state_machines",   # F-I: payload write-only; only self-dedup existence SELECT
-})
+# Phase-2a cleaned all dead items (F-B/D/G/H/I); new dead items fail CI.
+_KNOWN_DEAD: frozenset[str] = frozenset()
 
 
 def test_sc6_no_dead_data_beyond_allowlist():
