@@ -82,12 +82,14 @@ def _open(db_path: Path) -> sqlite3.Connection:
         con.execute("ALTER TABLE communities ADD COLUMN path TEXT")
         con.commit()
     # Schema migration Phase 3: narrated flag (0=unnarrated tail/structure, 1=LLM-narrated).
-    # Backfill narrated=1 for communities that already have summaries (narrated by a prior run).
+    # Backfill narrated=1 only for communities with LLM evidence (semantic_type IS NOT NULL);
+    # templated tails (semantic_type IS NULL) stay narrated=0 per the abstention doctrine.
     if "narrated" not in _cols:
         con.execute("ALTER TABLE communities ADD COLUMN narrated INTEGER DEFAULT 0")
         con.execute(
             "UPDATE communities SET narrated=1 "
-            "WHERE level>=1 AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file')"
+            "WHERE level>=1 AND summary IS NOT NULL AND summary!='' "
+            "AND kind NOT IN ('dir','file') AND semantic_type IS NOT NULL"
         )
         con.commit()
     return con

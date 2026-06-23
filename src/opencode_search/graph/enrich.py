@@ -45,17 +45,21 @@ _TYPE_ORDER: list[str] = [
 EXCLUDED_FROM_RETRIEVAL: frozenset[str] = frozenset({"test"})
 
 # Minimal prompt — type names + one contrastive note; no vocabulary definitions.
-_BACKFILL_BATCH_PROMPT = """\
+# Stable system prompt for classify (prefix-cached — byte-identical across all classify batches).
+_CLASSIFY_SYSTEM = """\
 Classify each code community into ONE of these semantic types:
 business_process | business_rule | feature | utility | infrastructure | domain | test
 
 Reason from what the code DOES (file paths, summary).
 Key distinction: business_process orchestrates multiple steps; business_rule enforces a constraint.
 
-Communities:
-{items}
+Reply with JSON: [{"id": <N>, "semantic_type": "<type>", "reasoning": "<1 sentence why>"}]"""
 
-Reply with JSON: [{{"id": <N>, "semantic_type": "<type>", "reasoning": "<1 sentence why>"}}]"""
+# Stable system prompt for batched L2 domain narration (prefix-cached).
+_L2_BATCH_SYSTEM = """\
+You are a senior software architect summarizing architecture domains.
+For each domain, write a 2-sentence summary covering purpose and main sub-systems.
+Reply ONLY with a JSON array: [{"id": <N>, "title": "<short domain name>", "summary": "<2 sentences>"}]"""
 
 
 def _kb_chat(prompt: str, *, max_tokens: int = 2048) -> str:
@@ -94,7 +98,7 @@ def _parse_types(raw: str, valid: frozenset[str]) -> dict[int, str]:
 
 
 def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
-    """Classify ≤20 communities via one LLM call. Returns only confidently-parsed (cid, type).
+    """Classify ≤20 narrated communities via prefix-cached deepseek_extract call.
 
     On a total parse failure, splits and retries once rather than mislabeling the
     whole batch as 'feature'; unparsed communities are omitted (left for the next run).
@@ -107,7 +111,12 @@ def _classify_batch(batch: list[tuple[int, str, str]]) -> list[tuple[int, str]]:
          for cid, title, summary in batch],
         ensure_ascii=False,
     )
-    labels = _parse_types(_kb_chat(_BACKFILL_BATCH_PROMPT.format(items=items_str)), valid)
+    try:
+        raw, usage = deepseek_extract(_CLASSIFY_SYSTEM, "Communities:\n" + items_str)
+        _accumulate_llm_tokens(usage, "classify")
+    except Exception:
+        return []
+    labels = _parse_types(raw, valid)
     if not labels and len(batch) > 1:
         mid = len(batch) // 2
         return _classify_batch(batch[:mid]) + _classify_batch(batch[mid:])
@@ -222,12 +231,12 @@ def classify_communities_semantic(
     if reclassify_all:
         rows = store._con.execute(
             "SELECT id, title, summary, semantic_type, member_count FROM communities "
-            "WHERE level=1 AND summary IS NOT NULL AND summary!=''"
+            "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!=''"
         ).fetchall()
     else:
         rows = store._con.execute(
             "SELECT id, title, summary, semantic_type, member_count FROM communities "
-            "WHERE level=1 AND summary IS NOT NULL AND summary!='' "
+            "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' "
             f"AND (semantic_type IS NULL OR semantic_type NOT IN "
             f"({','.join('?' * len(valid))}))",
             tuple(valid),
@@ -291,6 +300,64 @@ def enrich_communities_batch(
         if usage:
             agg["calls"] += 1
     return enriched, agg
+
+
+def _l2_upsert_parsed(store: GraphStore, parsed: list, batch_set: set) -> int:
+    n = 0
+    for it in (x for x in parsed if isinstance(x, dict)):
+        try:
+            cid = int(it["id"])
+            if cid not in batch_set:
+                continue
+            mc = store._con.execute("SELECT COALESCE(member_count,0) FROM communities WHERE id=?", (cid,)).fetchone()
+            store.upsert_community(cid, level=2, narrated=1,
+                title=str(it.get("title",""))[:200], summary=str(it.get("summary",""))[:2000],
+                member_count=(mc[0] if mc else 0))
+            n += 1
+        except Exception:
+            continue
+    return n
+
+
+def enrich_communities_l2_batch(
+    store: GraphStore, community_ids: list[int], *, thermal_guard_fn=None,
+) -> int:
+    """Batch L2 narration via prefix-cached deepseek_extract (≤20/call). Returns count enriched."""
+    import time
+    if not community_ids:
+        return 0
+    enriched = 0
+    for i in range(0, len(community_ids), 20):
+        if thermal_guard_fn and thermal_guard_fn():
+            time.sleep(5)
+        batch = community_ids[i : i + 20]
+        items = []
+        for cid in batch:
+            ch = store._con.execute(
+                "SELECT title, summary FROM communities "
+                "WHERE parent_id=? AND summary IS NOT NULL AND summary!=''", (cid,)).fetchall()
+            if ch:
+                items.append({"id": cid, "children":
+                    "; ".join(f"{r[0]}: {r[1][:100]}" for r in ch if r[0])[:2000]})
+        if not items:
+            continue
+        try:
+            raw, u = deepseek_extract(_L2_BATCH_SYSTEM,
+                "Domains:\n" + json.dumps(items, ensure_ascii=False),
+                max_tokens=min(len(items) * 200 + 50, 4096))
+            _accumulate_llm_tokens(u, "l2")
+        except Exception:
+            continue
+        t = (raw.split("</think>")[-1] if "</think>" in raw else raw).replace("```json","").replace("```","")
+        if (s := t.find("[")) == -1 or (e := t.rfind("]")) <= s:
+            continue
+        try:
+            parsed = json.loads(t[s : e + 1])
+        except Exception:
+            continue
+        enriched += _l2_upsert_parsed(store, parsed, set(batch))
+        store.commit()
+    return enriched
 
 
 def enrich_community_l2(store: GraphStore, community_id: int) -> None:
