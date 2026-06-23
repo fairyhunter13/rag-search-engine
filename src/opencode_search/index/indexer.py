@@ -53,7 +53,7 @@ def index_project(
         except OSError:
             continue
         lang = detect_language(fpath)
-        file_chunks = chunk_file(fpath, content, lang)
+        file_chunks = chunk_file(fpath, content, lang, project_root=root)
         chunks.extend(file_chunks)
         file_count += 1
 
@@ -86,6 +86,8 @@ def index_files(
     files: list[Path],
     embedder,
     store: VectorStore,
+    *,
+    project_root: Path | None = None,
 ) -> tuple[int, int]:
     """Incremental re-index: delete stale chunks for changed paths, embed fresh ones."""
     for fpath in files:
@@ -97,7 +99,7 @@ def index_files(
         except OSError:
             continue
         lang = detect_language(fpath)
-        chunks.extend(chunk_file(fpath, content, lang))
+        chunks.extend(chunk_file(fpath, content, lang, project_root=project_root))
     if not chunks:
         store.flush()
         return len(files), 0

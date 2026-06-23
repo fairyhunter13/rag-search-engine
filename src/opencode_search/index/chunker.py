@@ -30,10 +30,22 @@ def _line_chunks(
     return chunks
 
 
-def chunk_file(path: Path, content: str, language: str) -> list[Chunk]:
-    """Chunk one file. Falls back to line-based if chonkie fails."""
+def chunk_file(
+    path: Path, content: str, language: str,
+    *, project_root: Path | None = None,
+) -> list[Chunk]:
+    """Chunk one file. Falls back to line-based if chonkie fails.
+
+    Prepends a deterministic structural-path header to every chunk so the
+    embedder knows the repo context without extra tokens (cAST, arXiv 2506.15655).
+    """
     if not content.strip():
         return []
+    try:
+        rel = str(path.relative_to(project_root)) if project_root else path.name
+    except ValueError:
+        rel = path.name
+    header = f"# {rel}\n"
     try:
         from chonkie import CodeChunker
         chunker = CodeChunker(chunk_size=512, chunk_overlap=64)
@@ -45,10 +57,13 @@ def chunk_file(path: Path, content: str, language: str) -> list[Chunk]:
                     start_line=getattr(c, "start_index", 0),
                     end_line=getattr(c, "end_index", 0),
                     language=language,
-                    content=c.text,
+                    content=header + c.text,
                 )
                 for c in raw
             ]
     except Exception:
         pass
-    return _line_chunks(content, str(path), language)
+    chunks = _line_chunks(content, str(path), language)
+    for c in chunks:
+        c.content = header + c.content
+    return chunks
