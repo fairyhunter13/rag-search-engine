@@ -141,6 +141,41 @@ def test_detect_communities_idempotent(tmp_path):
 
 
 
+def test_detect_communities_fastgreedy_no_singleton_explosion(tmp_path):
+    """B3: fastgreedy partition on a chained-call graph must not fragment into singletons.
+
+    Regression lock: the prior exact-k-shell partitioner produced singleton_ratio>=60%
+    by inducing subgraphs on exact-coreness shells, cutting edges to neighbours in
+    other shells. fastgreedy keeps the graph connected — singleton_ratio must stay <0.60
+    and degenerate must be False on a chain of 10+ connected symbols.
+    """
+    from opencode_search.graph.community import detect_communities
+    from opencode_search.graph.quality import partition_quality
+    from opencode_search.graph.store import GraphStore
+
+    gs = GraphStore(tmp_path / "g.db")
+    try:
+        # Build a 12-node chain: s0→s1→s2→…→s11 (all connected, all different coreness)
+        sids = [f"s{i}" for i in range(12)]
+        for sid in sids:
+            gs.upsert_symbol(sid, sid, sid, "function", "a.py", 1, 2, "python")
+        for i in range(len(sids) - 1):
+            gs.upsert_edge(sids[i], sids[i + 1])
+        gs.commit()
+        detect_communities(gs)
+        q = partition_quality(gs)
+    finally:
+        gs.close()
+
+    assert not q["degenerate"], (
+        f"chained-call graph must not be degenerate after fastgreedy; quality={q}"
+    )
+    assert q["singleton_ratio"] < 0.60, (
+        f"singleton_ratio={q['singleton_ratio']:.1%} ≥ 60% — fastgreedy fragmented the chain "
+        f"(regression: exact-k-shell singleton explosion returned)"
+    )
+
+
 # ── enrichment ────────────────────────────────────────────────────────────────
 
 # ── R3: cross-project edges-schema guard ─────────────────────────────────────

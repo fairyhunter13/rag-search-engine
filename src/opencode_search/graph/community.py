@@ -1,10 +1,22 @@
-"""Deterministic k-core community detection on the symbol call graph."""
+"""Deterministic modularity community detection on the symbol call graph."""
 from __future__ import annotations
 
 import os
+import random
 from collections import Counter
 
 from opencode_search.graph.store import GraphStore
+
+# Seed igraph's RNG once so fastgreedy tie-breaks are byte-reproducible.
+# community_fastgreedy is agglomerative-greedy (no stochastic step), but
+# igraph does not doc-guarantee bit-identical output across builds without this.
+random.seed(0)
+try:
+    import igraph as _ig_seed
+    _ig_seed.set_random_number_generator(random.Random(0))
+    del _ig_seed
+except Exception:
+    pass
 
 
 def _label_from_names(names: list[str]) -> str:
@@ -19,12 +31,12 @@ def _label_from_names(names: list[str]) -> str:
 
 
 def detect_communities(store: GraphStore) -> dict[str, int]:
-    """Deterministic k-core community detection on the symbol call graph.
+    """Deterministic modularity community detection on the symbol call graph.
 
-    Replaces non-deterministic Leiden. Uses igraph.coreness() (linear time,
-    byte-reproducible). Assigns symbols to communities by (k-shell, connected
-    component) — dense hubs get high coreness and form tight communities.
-    Falls back to file-level grouping when no call edges.
+    Uses igraph community_fastgreedy (agglomerative Clauset-Newman-Moore) on the
+    edged subgraph, then groups edgeless symbols by directory. Replaces the prior
+    exact-k-shell partition which fragmented connected nodes across shell boundaries
+    into singletons (k-core is a node ranking, not a partition).
 
     Returns {sid: community_id} and commits assignments + community records.
     """
@@ -42,35 +54,36 @@ def detect_communities(store: GraphStore) -> dict[str, int]:
     g = ig.Graph(n=len(symbols), edges=edges_ig, directed=True)
     g_und = g.as_undirected(combine_edges="first")
 
+    mapping: dict[str, int] = {}
+    cid_counter = 0
+
     if g_und.ecount() == 0:
-        files = sorted(f for f in {s["file"] for s in symbols} if f)
-        file_idx = {f: i for i, f in enumerate(files)}
-        mapping: dict[str, int] = {
-            s["sid"]: file_idx[s["file"]] for s in symbols if s["file"] in file_idx
+        # No call edges at all — group every symbol by directory.
+        dirs = sorted({os.path.dirname(s["file"] or "") for s in symbols})
+        dir_idx = {d: i for i, d in enumerate(dirs)}
+        mapping = {
+            s["sid"]: dir_idx[os.path.dirname(s["file"] or "")] for s in symbols
         }
     else:
-        coreness = g_und.coreness()
-        cid_counter = 0
-        mapping = {}
-        # k-shell groups (k≥1): nodes with coreness==k → connected components.
-        for k in sorted(set(coreness), reverse=True):
-            if k == 0:
-                continue
-            shell = [i for i, c in enumerate(coreness) if c == k]
-            sub = g_und.induced_subgraph(shell)
-            for comp in sub.connected_components():
-                for local_i in comp:
-                    mapping[symbols[shell[local_i]]["sid"]] = cid_counter
-                cid_counter += 1
-        # k=0 (isolated nodes): group by file for coherent communities.
-        file_cid: dict[str, int] = {}
+        # Partition symbols with ≥1 call edge using fastgreedy modularity.
+        edged_verts = sorted({v for e in edges_ig for v in e})
+        sub = g_und.induced_subgraph(edged_verts)
+        # Simplified undirected subgraph for fastgreedy (no self-loops).
+        sub = sub.simplify()
+        membership = sub.community_fastgreedy().as_clustering().membership
+        for local_i, label in enumerate(membership):
+            mapping[symbols[edged_verts[local_i]]["sid"]] = label
+        cid_counter = max(membership) + 1 if membership else 0
+
+        # Group edgeless symbols by directory (avoids N-singleton explosion).
+        dir_cid: dict[str, int] = {}
         for s in symbols:
             if s["sid"] not in mapping:
-                f = s["file"] or ""
-                if f not in file_cid:
-                    file_cid[f] = cid_counter
+                d = os.path.dirname(s["file"] or "")
+                if d not in dir_cid:
+                    dir_cid[d] = cid_counter
                     cid_counter += 1
-                mapping[s["sid"]] = file_cid[f]
+                mapping[s["sid"]] = dir_cid[d]
 
     for sid, cid in mapping.items():
         store.assign_community(sid, cid)
