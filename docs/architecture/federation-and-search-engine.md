@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-21. **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-23. **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 freshness 1800s guard in `build_federation_hierarchy`); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -72,10 +72,10 @@ registry is `rmtree`'d.
 
 ## 7. Indexing pipeline (`sweeps._index_project`)
 
-1. **Chunk + embed** → `vectors.db` (`index/indexer.index_project`).
+1. **Chunk + embed** → `vectors.db` (`index/indexer.index_project`). Each chunk receives a deterministic structural-path header `# <repo-relative-path>` prepended to its content (cAST, arXiv 2506.15655; `chunk_file(project_root=...)`).
 2. **Symbol extraction** (tree-sitter) over `iter_files(root, federation_mode=True)`.
 3. **Call-edge resolution** (second pass): cross-file edges only.
-4. **Community detection**: Leiden L1.
+4. **Community detection**: k-core L1 (`igraph.coreness()`, deterministic, byte-reproducible).
 5. Stamp `indexed_at`, `file_count`, `chunk_count` in registry.
 
 `federation_mode=True` prunes symlink dirs/files pointing **outside** the root — the
@@ -119,7 +119,7 @@ mapping table may substitute for structural analysis of user code.
 
 1. Prune stale L1 communities.
 2. Enrich L1 communities with NULL summary (LLM; thermal guard at 80 °C).
-3. If L2 absent: `build_hierarchy` (coarse Leiden, √L1 target).
+3. If L2 absent: `build_hierarchy` (coarse k-core partition, `_coarse_partition`, ≤√L1 target).
 4. Enrich L2 communities with NULL summary.
 5. **Classify `semantic_type`** for new/unclassified L1 communities
    (`classify_communities_semantic`, `reclassify_all=False`).
