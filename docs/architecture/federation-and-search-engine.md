@@ -75,7 +75,7 @@ registry is `rmtree`'d.
 1. **Chunk + embed** → `vectors.db` (`index/indexer.index_project`). Each chunk receives a deterministic structural-path header `# <repo-relative-path>` prepended to its content (cAST, arXiv 2506.15655; `chunk_file(project_root=...)`).
 2. **Symbol extraction** (tree-sitter) over `iter_files(root, federation_mode=True)`.
 3. **Call-edge resolution** (second pass): cross-file edges only.
-4. **Community detection**: k-core L1 (`igraph.coreness()`, deterministic, byte-reproducible).
+4. **Community detection** (L1): fastgreedy modularity (`igraph.community_fastgreedy`, deterministic; edgeless symbols grouped by directory). Stamps `meta[algo_version]` + `meta[source_sig]` so `reconcile_projects` auto-repairs drift.
 5. Stamp `indexed_at`, `file_count`, `chunk_count` in registry.
 
 `federation_mode=True` prunes symlink dirs/files pointing **outside** the root — the
@@ -119,7 +119,7 @@ mapping table may substitute for structural analysis of user code.
 
 1. Prune stale L1 communities.
 2. Enrich L1 communities with NULL summary (LLM; thermal guard at 80 °C).
-3. If L2 absent: `build_hierarchy` (coarse k-core partition, `_coarse_partition`, ≤√L1 target).
+3. If L2 absent **or over-granular** (`n_l2 > 2×round(√n_l1)` for n_l1≥4): `build_hierarchy` — two-phase L1-community-graph partition: Phase 1 = fastgreedy on connected L1 communities (≤round(√n_l1) groups); Phase 2 = isolated/edge-sparse L1 communities grouped by top-level directory. Edge-sparse repos (no cross-community edges) get a directory-based L2 instead of an empty hierarchy (M4).
 4. Enrich L2 communities with NULL summary.
 5. **Classify `semantic_type`** for new/unclassified L1 communities
    (`classify_communities_semantic`, `reclassify_all=False`).
