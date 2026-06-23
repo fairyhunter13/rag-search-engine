@@ -92,6 +92,20 @@ def _open(db_path: Path) -> sqlite3.Connection:
             "AND kind NOT IN ('dir','file') AND semantic_type IS NOT NULL"
         )
         con.commit()
+    # Data migration Phase 4D: correct over-stamped narrated=1 on tail rows.
+    # Phase 3 backfill used summary IS NOT NULL; existing DBs may have narrated=1 on
+    # tail rows (semantic_type IS NULL). One-time sweep corrects them to narrated=0 so
+    # the classify gate and retrieval selectors behave correctly.
+    _over = con.execute(
+        "SELECT COUNT(*) FROM communities "
+        "WHERE narrated=1 AND semantic_type IS NULL AND kind NOT IN ('dir','file')"
+    ).fetchone()[0]
+    if _over:
+        con.execute(
+            "UPDATE communities SET narrated=0 "
+            "WHERE narrated=1 AND semantic_type IS NULL AND kind NOT IN ('dir','file')"
+        )
+        con.commit()
     return con
 
 
