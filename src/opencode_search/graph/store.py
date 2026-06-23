@@ -36,7 +36,8 @@ def _open(db_path: Path) -> sqlite3.Connection:
             title TEXT,
             summary TEXT,
             member_count INTEGER DEFAULT 0,
-            semantic_type TEXT
+            semantic_type TEXT,
+            narrated INTEGER DEFAULT 0
         );
     """)
     con.commit()
@@ -79,6 +80,15 @@ def _open(db_path: Path) -> sqlite3.Connection:
         con.commit()
     if "path" not in _cols:
         con.execute("ALTER TABLE communities ADD COLUMN path TEXT")
+        con.commit()
+    # Schema migration Phase 3: narrated flag (0=unnarrated tail/structure, 1=LLM-narrated).
+    # Backfill narrated=1 for communities that already have summaries (narrated by a prior run).
+    if "narrated" not in _cols:
+        con.execute("ALTER TABLE communities ADD COLUMN narrated INTEGER DEFAULT 0")
+        con.execute(
+            "UPDATE communities SET narrated=1 "
+            "WHERE level>=1 AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file')"
+        )
         con.commit()
     return con
 
@@ -125,16 +135,18 @@ class GraphStore:
         self._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (community_id, sid))
 
     def upsert_community(self, cid: int, level: int, title: str | None, summary: str,
-                         member_count: int, semantic_type: str = "") -> None:
+                         member_count: int, semantic_type: str = "",
+                         narrated: int | None = None) -> None:
         self._con.execute(
-            """INSERT INTO communities (id,level,title,summary,member_count,semantic_type)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO communities (id,level,title,summary,member_count,semantic_type,narrated)
+               VALUES (?,?,?,?,?,?,COALESCE(?,0))
                ON CONFLICT(id) DO UPDATE SET
                  title=COALESCE(excluded.title, title),
                  summary=COALESCE(excluded.summary, summary),
                  member_count=excluded.member_count,
-                 semantic_type=COALESCE(excluded.semantic_type, semantic_type)""",
-            (cid, level, title, summary, member_count, semantic_type),
+                 semantic_type=COALESCE(excluded.semantic_type, semantic_type),
+                 narrated=MAX(narrated, COALESCE(excluded.narrated, 0))""",
+            (cid, level, title, summary, member_count, semantic_type, narrated),
         )
 
     def set_community_parent(self, cid: int, parent_id: int) -> None:

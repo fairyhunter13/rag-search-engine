@@ -194,8 +194,12 @@ def _enrich_one_batch(
                 title=str(item.get("title", ""))[:200],
                 summary=str(item.get("summary", ""))[:2000],
                 member_count=(mc[0] if mc else 0),
-                semantic_type=(st if st in valid else "utility"),
+                semantic_type=(st if st in valid else None),
+                narrated=1,
             )
+            # Explicit NULL when LLM returns invalid type (abstain, not force "utility").
+            if st not in valid:
+                store._con.execute("UPDATE communities SET semantic_type=NULL WHERE id=?", (cid,))
             enriched.append(cid)
         except Exception:
             continue
@@ -307,9 +311,26 @@ def enrich_community_l2(store: GraphStore, community_id: int) -> None:
             title=data.get("title", "")[:200],
             summary=data.get("summary", "")[:2000],
             member_count=len(rows),
+            narrated=1,
         )
         store.commit()
     except Exception:
         pass
 
+
+def narrate_community_lazy(store: "GraphStore", cid: int) -> bool:
+    """Lazy query-time narration for a single tail community (Phase 3).
+
+    Generates title/summary/semantic_type via one deepseek_extract call, persists
+    to DB, sets narrated=1 (idempotency guard — will never re-narrate this community).
+    Returns True if narration succeeded, False on any error / already narrated.
+    """
+    row = store._con.execute(
+        "SELECT narrated FROM communities WHERE id=?", (cid,)
+    ).fetchone()
+    if not row or row[0]:
+        return False  # already narrated or not found
+    valid = frozenset(_TYPE_ORDER)
+    enriched, _ = _enrich_one_batch(store, [cid], valid)
+    return bool(enriched)
 
