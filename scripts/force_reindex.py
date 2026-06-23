@@ -42,6 +42,7 @@ def rebuild(path: str, enrich_only: bool = False, force_enrich: bool = False) ->
     from opencode_search.core.config import project_graph_db
     from opencode_search.daemon.sweeps import _enrich_project, _index_project
     from opencode_search.embed.embedder import get_embedder
+    from opencode_search.graph.community import detect_communities
     from opencode_search.graph.store import GraphStore
     tag = Path(path).name
     if not enrich_only:
@@ -53,15 +54,30 @@ def rebuild(path: str, enrich_only: bool = False, force_enrich: bool = False) ->
         emb = get_embedder()
         emb.warmup()  # ensure CUDA EP is bound before enrichment
     if force_enrich:
-        # Clear L1+ communities so _enrich_project re-detects from scratch.
+        # Clear L1+ then re-detect from existing symbols/edges so _enrich_project
+        # sees a fresh community set built with Phase 4 k-core logic.
+        # Note: _enrich_project does NOT call detect_communities — it works on
+        # existing L1 rows. So we must re-detect explicitly after clearing.
         gdb = project_graph_db(path)
         if gdb.exists():
             gs = GraphStore(gdb)
             try:
                 gs._con.execute("DELETE FROM communities WHERE level>=1")
                 gs.commit()
-                n = gs._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
-                print(f"[{tag}] cleared L1+ communities; {n} level=0 spine nodes remain", flush=True)
+                n_spine = gs._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]
+                n_syms = gs._con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+                if n_syms:
+                    detect_communities(gs)
+                    n_l1 = gs._con.execute(
+                        "SELECT COUNT(*) FROM communities WHERE level=1"
+                    ).fetchone()[0]
+                    print(
+                        f"[{tag}] re-detected {n_l1} L1 communities "
+                        f"({n_spine} spine nodes, {n_syms} symbols)",
+                        flush=True,
+                    )
+                else:
+                    print(f"[{tag}] no symbols — skipping detect_communities", flush=True)
             finally:
                 gs.close()
     print(f"[{tag}] enrich ...", flush=True)
