@@ -136,7 +136,7 @@ def test_ab6_typed_head_in_ask_path(safe_tmp_path):
     gs, cid = _build_tail_store(safe_tmp_path)
     try:
         gs._con.execute(
-            "UPDATE communities SET semantic_type='service',"
+            "UPDATE communities SET semantic_type='service',narrated=1,"
             "summary='payment gateway service for order routing' WHERE id=?", (cid,)
         )
         gs.commit()
