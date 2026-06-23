@@ -318,7 +318,7 @@ def enrich_community_l2(store: GraphStore, community_id: int) -> None:
         pass
 
 
-def narrate_community_lazy(store: "GraphStore", cid: int) -> bool:
+def narrate_community_lazy(store: GraphStore, cid: int) -> bool:
     """Lazy query-time narration for a single tail community (Phase 3).
 
     Generates title/summary/semantic_type via one deepseek_extract call, persists

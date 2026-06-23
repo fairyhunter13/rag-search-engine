@@ -139,6 +139,7 @@ def test_lw7_unnarrated_absent_from_top_communities(safe_tmp_path):
 def test_lw8_narrated_column_exists(project_with_communities):
     """LW8: narrated column present in live communities table."""
     import sqlite3
+
     from opencode_search.core.config import project_graph_db
     with sqlite3.connect(str(project_graph_db(project_with_communities))) as con:
         cols = {r[1] for r in con.execute("PRAGMA table_info(communities)")}

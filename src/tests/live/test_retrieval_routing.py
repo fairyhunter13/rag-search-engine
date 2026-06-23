@@ -36,7 +36,8 @@ def test_rr1_global_scope_tree_walk_header(project_with_communities):
             f"global scope must include Architecture + tree-walk; got: {ctx[:200]!r}"
         )
     finally:
-        for s in stores: s.close()
+        for s in stores:
+            s.close()
 
 
 def test_rr2_architecture_scope_tree_walk_header(project_with_communities):
@@ -49,7 +50,8 @@ def test_rr2_architecture_scope_tree_walk_header(project_with_communities):
             f"architecture scope must include tree-walk header; got: {ctx[:200]!r}"
         )
     finally:
-        for s in stores: s.close()
+        for s in stores:
+            s.close()
 
 
 def test_rr3_feature_scope_no_tree_walk(project_with_communities):
@@ -62,7 +64,8 @@ def test_rr3_feature_scope_no_tree_walk(project_with_communities):
             "feature scope must not use tree-walk header"
         )
     finally:
-        for s in stores: s.close()
+        for s in stores:
+            s.close()
 
 
 def test_rr4_tree_walk_context_grounded(project_with_communities):
@@ -80,7 +83,8 @@ def test_rr4_tree_walk_context_grounded(project_with_communities):
         for c in re.findall(r"\[(?:[^\]]+? → )?([^\]]+)\]", ctx):
             assert c in all_titles, f"RR4: tree-walk cited {c!r} not in DB (hallucination)"
     finally:
-        for s in stores: s.close()
+        for s in stores:
+            s.close()
 
 
 def test_rr5_adaptive_mr(project_with_communities):
@@ -92,7 +96,8 @@ def test_rr5_adaptive_mr(project_with_communities):
         code = len(re.findall(r"\[", _tree_walk_context("authenticate", stores, top_k=1)))
         assert arch >= code, f"RR5: architecture ({arch}) should cite >= refs as narrow ({code})"
     finally:
-        for s in stores: s.close()
+        for s in stores:
+            s.close()
 
 
 def test_rr6_determinism_mr(project_with_communities):
@@ -105,7 +110,8 @@ def test_rr6_determinism_mr(project_with_communities):
             "RR6: tree-walk context must be deterministic"
         )
     finally:
-        for s in stores: s.close()
+        for s in stores:
+            s.close()
 
 
 def test_rr7_empty_fallback_no_summaries(safe_tmp_path):
