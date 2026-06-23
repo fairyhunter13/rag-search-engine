@@ -121,7 +121,7 @@ def handle_overview(project_path: str, what: str) -> str:
             if what == "hierarchy":
                 from opencode_search.graph.quality import partition_quality
                 hier_rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT id,title,level FROM communities ORDER BY level,id LIMIT 200"
+                    "SELECT id,title,level,kind,path,summary FROM communities ORDER BY level,id LIMIT 500"
                 ).fetchall()]
                 quality = partition_quality(_gstores[0]) if _gstores else {}
                 fed_domains = []
@@ -134,7 +134,11 @@ def handle_overview(project_path: str, what: str) -> str:
                         ).fetchall()
                     ]
                 return json.dumps({
-                    "hierarchy": [{"id": r[0], "title": r[1], "level": r[2]} for r in hier_rows],
+                    "hierarchy": [
+                        {"id": r[0], "title": r[1], "level": r[2],
+                         "kind": r[3], "path": r[4], "summary": r[5]}
+                        for r in hier_rows
+                    ],
                     "quality": quality,
                     "federation_domains": fed_domains,
                 })

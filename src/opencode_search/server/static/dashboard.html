@@ -232,6 +232,17 @@ a{color:inherit;text-decoration:none}
 .proc-toolbar{display:flex;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
 .proc-dl-btn{padding:4px 10px;border:1px solid var(--border);background:var(--surface-2);color:var(--cyan);border-radius:4px;font-size:.73rem;cursor:pointer;text-decoration:none}
 .proc-dl-btn:hover{background:var(--surface-3)}
+/* ── Hierarchy view ─────────────────────────────────────────────────────── */
+#view-hierarchy{flex-direction:row;overflow:hidden}
+.hier-sidebar{width:260px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--surface);padding:4px 0}
+.hier-group-hdr{padding:8px 12px 4px;font-size:.68rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;user-select:none}
+.hier-node{display:block;width:100%;background:none;border:none;text-align:left;font-size:.76rem;color:var(--text-2);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:4px 12px;transition:background var(--trans),color var(--trans)}
+.hier-node:hover,.hier-node.active{background:rgba(123,97,255,.1);color:var(--text)}
+.hier-detail{flex:1;overflow-y:auto;padding:20px 24px;font-size:.83rem;color:var(--text)}
+.hier-detail h2{font-size:1rem;font-weight:600;margin:0 0 6px;color:var(--text)}
+.hier-detail .hier-meta{font-size:.73rem;color:var(--text-3);margin-bottom:12px}
+.hier-detail .hier-summary{color:var(--text-2);line-height:1.6;font-size:.82rem}
+.hier-quality{margin-top:20px;padding:10px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);font-size:.76rem;color:var(--text-2)}
 /* ── Admin SSE chips + auto-pipeline ────────────────────────────────────── */
 #admin-job-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;min-height:24px}
 .admin-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px 3px 10px;border-radius:12px;font-size:.7rem;font-weight:600;border:1px solid var(--border);background:var(--surface-2);color:var(--text-2);transition:all var(--trans)}
@@ -263,6 +274,7 @@ a{color:inherit;text-decoration:none}
     <button class="vbtn" id="vbtn-graph" onclick="switchView('graph')">Graph</button>
     <button class="vbtn" id="vbtn-wiki" onclick="switchView('wiki')">Wiki</button>
     <button class="vbtn" id="vbtn-processes" onclick="switchView('processes')">Processes</button>
+    <button class="vbtn" id="vbtn-hierarchy" onclick="switchView('hierarchy')">Hierarchy</button>
   </div>
   <div class="nav-right">
     <span class="sdot" id="daemon-dot" title="Daemon status"></span>
@@ -457,6 +469,15 @@ a{color:inherit;text-decoration:none}
     </div>
   </div>
 
+  <div id="view-hierarchy" class="view">
+    <div class="hier-sidebar" id="hier-tree">
+      <div style="padding:12px;color:var(--text-3);font-size:.76rem">Select a project to load hierarchy.</div>
+    </div>
+    <div class="hier-detail" id="hier-detail">
+      <div style="color:var(--text-3);font-size:.8rem">← Select a node to see details</div>
+    </div>
+  </div>
+
 </div><!-- /views -->
 
 <!-- Command palette -->
@@ -560,7 +581,7 @@ async function fetchWithTimeout(url,opts={},ms=30000){
 
 /* ── View switching ──────────────────────────────────────────────────────── */
 function switchView(name){
-  ['pulse','chat','admin','graph','wiki','processes'].forEach(v=>{
+  ['pulse','chat','admin','graph','wiki','processes','hierarchy'].forEach(v=>{
     $('view-'+v).classList.toggle('active',v===name);
     $('vbtn-'+v).classList.toggle('active',v===name);
   });
@@ -570,6 +591,7 @@ function switchView(name){
   else if(name==='graph'&&!window.__graph)loadGraph();
   else if(name==='wiki')loadWiki();
   else if(name==='processes')loadProcesses();
+  else if(name==='hierarchy')loadHierarchy();
 }
 
 /* ── Project selector ────────────────────────────────────────────────────── */
@@ -604,6 +626,7 @@ function switchProject(path){
   else if(active&&active.id==='view-admin')loadAdmin();
   else if(active&&active.id==='view-graph')loadGraph();
   else if(active&&active.id==='view-wiki')loadWiki();
+  else if(active&&active.id==='view-hierarchy')loadHierarchy();
 }
 
 /* ── Sparkline ───────────────────────────────────────────────────────────── */
@@ -1037,6 +1060,36 @@ async function showProcess(idx){
     await _loadMermaid();
     if(window.mermaid)mermaid.run({nodes:diag.querySelectorAll('.mermaid')});
   }else{diag.innerHTML='<pre style="font-size:.75rem;color:var(--text-2)">'+esc(JSON.stringify(p,null,2))+'</pre>';}
+}
+/* ── Hierarchy view ──────────────────────────────────────────────────────── */
+let _hierData=null;
+async function loadHierarchy(){
+  if(!_proj)return;
+  const tree=$('hier-tree');tree.innerHTML='<div style="padding:12px;color:var(--text-3);font-size:.76rem">Loading…</div>';
+  $('hier-detail').innerHTML='<div style="color:var(--text-3);font-size:.8rem">← Select a node to see details</div>';
+  try{const r=await fetchWithTimeout(`/api/overview?project=${encodeURIComponent(_proj)}&what=hierarchy`);if(!r.ok)throw new Error('HTTP '+r.status);_hierData=await r.json();_renderHierTree(_hierData);}
+  catch(e){tree.innerHTML='<div style="padding:12px;color:var(--red);font-size:.76rem">Error: '+esc(e.message)+'</div>';}
+}
+function _renderHierTree(data){
+  const tree=$('hier-tree'),nodes=data.hierarchy||[];
+  if(!nodes.length){tree.innerHTML='<div style="padding:12px;color:var(--text-3)">No hierarchy built yet.</div>';return;}
+  const byLevel={};nodes.forEach(n=>{(byLevel[n.level]=byLevel[n.level]||[]).push(n);});
+  const levels=Object.keys(byLevel).map(Number).sort((a,b)=>a-b);
+  const ICONS={0:'📁',1:'◈',2:'⬡',3:'◻'},LABELS={0:'Structure',1:'Communities',2:'Domains',3:'Arch Domains'};
+  tree.innerHTML=levels.map(lvl=>{const all=byLevel[lvl],items=all.slice(0,60),icon=ICONS[lvl]||'◻',label=LABELS[lvl]||('Level '+lvl);
+    return '<div class="hier-group"><div class="hier-group-hdr">'+icon+' '+label+' ('+all.length+')</div>'
+      +items.map(n=>'<button class="hier-node" style="padding-left:'+(12+lvl*8)+'px" onclick="showHierNode('+n.id+','+lvl+',this)">'+esc(n.title||'(untitled)')+'</button>').join('')
+      +(all.length>60?'<div style="padding:3px 12px;color:var(--text-3);font-size:.7rem">…+'+(all.length-60)+' more</div>':'')+'</div>';
+  }).join('');
+  const q=data.quality||{};if(q.modularity!==undefined)tree.innerHTML+='<div class="hier-quality">Q='+(q.modularity||0).toFixed(3)+' · '+(q.community_count||0)+' L1 communities</div>';
+}
+function showHierNode(id,level,btn){
+  document.querySelectorAll('.hier-node').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');
+  const detail=$('hier-detail');if(!_hierData)return;
+  const node=(_hierData.hierarchy||[]).find(n=>n.id===id);
+  if(!node){detail.innerHTML='<div style="color:var(--text-3)">Node not found</div>';return;}
+  const ph=node.path?'<code style="font-size:.72rem;background:var(--surface-2);padding:1px 5px;border-radius:3px;border:1px solid var(--border)">'+esc(node.path)+'</code>':'';
+  detail.innerHTML='<h2>'+esc(node.title||'(untitled)')+'</h2><div class="hier-meta">Level '+level+(node.kind?' · '+node.kind:'')+(ph?' · '+ph:'')+'</div>'+(node.summary?'<div class="hier-summary">'+esc(node.summary)+'</div>':'<div style="color:var(--text-3);font-size:.8rem">No summary yet.</div>');
 }
 async function loadWikiLint(){
   if(!_proj)return;
