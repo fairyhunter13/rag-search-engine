@@ -143,3 +143,54 @@ def test_fg3_templated_build_produces_no_reusable_rows():
         for p in (root, m1, m2):
             remove_project(p)
         shutil.rmtree(base, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# FG4 — per-theme child_sig: order-independent, changes on membership change
+# ---------------------------------------------------------------------------
+
+def test_fg4_per_theme_child_sig_drives_reuse():
+    """FG4: _child_sig changes when theme membership changes, is order-independent."""
+    from opencode_search.kb.federation_hierarchy import _child_sig
+    s1 = _child_sig(["svc-a", "svc-b"])
+    s2 = _child_sig(["svc-a", "svc-b", "svc-c"])
+    s3 = _child_sig(["svc-b", "svc-a"])
+    assert s1 != s2, "adding a member must change child_sig"
+    assert s1 == s3, "child_sig must be order-independent (sorted)"
+
+
+# ---------------------------------------------------------------------------
+# FG5 — watcher-effectiveness: content sig gates reuse, not the clock
+# ---------------------------------------------------------------------------
+
+def test_fg5_content_sig_gates_not_time():
+    """FG5: build_federation_hierarchy re-narrates a theme whose child set changed,
+    even called back-to-back (no 1800 s wall-clock gate)."""
+    _SAFE_BASE.mkdir(parents=True, exist_ok=True)
+    base = Path(tempfile.mkdtemp(dir=_SAFE_BASE))
+    m1 = _make_fg_member(base, "m1", "feature")
+    m2 = _make_fg_member(base, "m2", "domain")
+    root = _make_root(base, [m1, m2])
+    try:
+        from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
+        _build_templated(root)
+        rows_before = _l3_title_summary(root)
+        # Extend the 'feature' theme by adding a new L2 community in m1.
+        gs = GraphStore(project_graph_db(m1))
+        try:
+            gs.upsert_community(10002, level=2, title="m1-extra",
+                                summary="extra", member_count=1, narrated=1)
+            gs._con.execute(
+                "UPDATE communities SET semantic_type='feature' WHERE id=10002")
+            gs.commit()
+        finally:
+            gs.close()
+        build_federation_hierarchy(root)
+        rows_after = _l3_title_summary(root)
+        assert rows_before != rows_after or len(rows_after) != len(rows_before), (
+            "must re-narrate when child membership changes (content sig gate, not clock)"
+        )
+    finally:
+        for p in (root, m1, m2):
+            remove_project(p)
+        shutil.rmtree(base, ignore_errors=True)

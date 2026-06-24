@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS process_artifacts (
     process_id TEXT PRIMARY KEY, narrative TEXT DEFAULT '',
     mermaid TEXT DEFAULT '', bpmn_xml TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 # ─── Tiny helpers ─────────────────────────────────────────────────────────────
@@ -85,6 +86,37 @@ def _init_db(db_path: Path) -> sqlite3.Connection:
         con.execute(f"DROP TABLE IF EXISTS {_dead_tbl}")
     con.commit()
     return con
+
+
+def _bpre_get_meta(con: sqlite3.Connection, key: str) -> str | None:
+    row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _bpre_set_meta(con: sqlite3.Connection, key: str, value: str) -> None:
+    con.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, value))
+
+
+def _bpre_algo_version() -> str:
+    """SHA-4 over source bytes of modules that determine BPRE output (definition fingerprint)."""
+    import contextlib
+    root = Path(__file__).resolve().parent
+    modules = [
+        root / "bpre.py", root / "bpre_ast.py",
+        root / "valueflow.py", root / "resolve_rerank.py",
+    ]
+    h = hashlib.sha1()
+    for p in modules:
+        with contextlib.suppress(OSError):
+            h.update(p.read_bytes())
+    return h.hexdigest()[:4]
+
+
+def _bpre_source_sig(members: list[str]) -> str:
+    """sha1 over sorted per-member source fingerprints — stat-only, GPU-free."""
+    from opencode_search.daemon.sweeps import _source_fingerprint
+    parts = sorted(_source_fingerprint(m) for m in members)
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()
 
 
 def _hid(*parts: str) -> str:
@@ -106,6 +138,33 @@ def _rel_path(file: str, root: str) -> str:
 
 def _bpre_llm_on() -> bool:
     return os.environ.get("OSE_WIKI_LLM", "1") != "0"
+
+
+def _proc_sig(name: str, services_json: str, steps: list) -> str:
+    """Content hash over (process name, sorted services, ordered step tuples)."""
+    try:
+        svcs = sorted(json.loads(services_json))
+    except Exception:
+        svcs = []
+    step_tuples = [(s[2], s[0], s[3]) for s in steps]  # (kind, sid_or_endpoint, guard)
+    payload = json.dumps([name, svcs, step_tuples], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(payload.encode()).hexdigest()
+
+
+def _narrative_incomplete(con: sqlite3.Connection) -> bool:
+    """True iff LLM is on + key present + any process_artifact has an empty narrative."""
+    if not _bpre_llm_on():
+        return False
+    try:
+        from opencode_search.graph.llm import deepseek_key
+        if not deepseek_key():
+            return False
+    except Exception:
+        return False
+    n = con.execute(
+        "SELECT COUNT(*) FROM process_artifacts WHERE narrative=''"
+    ).fetchone()[0]
+    return n > 0
 
 
 def _source_files(member_path: str) -> list[Path]:
@@ -762,7 +821,14 @@ def _generate_narratives_batch(procs_data: list[tuple]) -> dict[int, str]:
     return results
 
 
-def _synthesize_artifacts(con: sqlite3.Connection) -> None:
+def _synthesize_artifacts(con: sqlite3.Connection,
+                          old_narr: dict[str, str] | None = None) -> None:
+    """Build BPMN/mermaid/narrative for every process.
+
+    old_narr: {_proc_sig → narrative} snapshot from the previous build.  When provided,
+    narratives for processes whose content is unchanged are carried over byte-identically;
+    only new/changed/empty processes are sent to DeepSeek (delta narration).
+    """
     procs = con.execute(
         "SELECT id, name, entry_service, services_json FROM processes"
     ).fetchall()
@@ -773,7 +839,21 @@ def _synthesize_artifacts(con: sqlite3.Connection) -> None:
             "WHERE process_id=? ORDER BY order_index", (proc_id,),
         ).fetchall()]
         procs_data.append((proc_id, name, services_json, steps))
-    narratives = _generate_narratives_batch(procs_data) if _bpre_llm_on() else {}
+    # Delta narration: carry over unchanged narratives; only narrate the rest.
+    if old_narr and _bpre_llm_on():
+        carried: dict[int, str] = {}
+        need_narr: list[tuple] = []
+        for item in procs_data:
+            proc_id, name, services_json, steps = item
+            sig = _proc_sig(name, services_json, steps)
+            if sig in old_narr:
+                carried[proc_id] = old_narr[sig]
+            else:
+                need_narr.append(item)
+        new_narr = _generate_narratives_batch(need_narr) if need_narr else {}
+        narratives: dict = {**carried, **new_narr}
+    else:
+        narratives = _generate_narratives_batch(procs_data) if _bpre_llm_on() else {}
     for proc_id, name, _sjson, steps in procs_data:
         con.execute("INSERT OR REPLACE INTO process_artifacts VALUES (?,?,?,?)",
                     (proc_id, narratives.get(proc_id, ""),
@@ -786,12 +866,13 @@ def _synthesize_artifacts(con: sqlite3.Connection) -> None:
 def reconstruct_processes(root_path: str) -> int:
     """D2→D6 federation-level BPRE pass.  Returns number of reconstructed processes.
 
-    File-level mutex (process_graph.lock) serializes concurrent callers; a fresh
-    build (< 1800 s old, processes > 0) is reused without rebuilding so 25-member
-    federation triggers collapse to a single reconstruction pass.
+    File-level mutex (process_graph.lock) serializes concurrent callers.
+    Reuse guard: stamp-based (algo + source signature), not time-based — drift decides,
+    not age.  Burst fan-out collapses: first caller rebuilds+stamps; subsequent callers
+    in the same burst hit matching stamps → reuse.  Watcher-triggered calls always land
+    when member source actually changed (_bpre_source_sig detects it).
     """
     import fcntl
-    import time
 
     from opencode_search.core.config import root_process_db
     from opencode_search.daemon.federation import expand_federation
@@ -805,17 +886,38 @@ def reconstruct_processes(root_path: str) -> int:
     _lf = open(str(lock_path), "w")  # noqa: SIM115
     try:
         fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
-        if db_path.exists() and (time.time() - db_path.stat().st_mtime) < 1800:
-            try:
-                with sqlite3.connect(str(db_path), timeout=5) as _c:
-                    _n = _c.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
-                    if _n > 0:
-                        log.info("bpre: reusing fresh result (%d processes) for %s", _n, root_path)
-                        return _n
-            except Exception:
-                pass
         con = _init_db(db_path)
         try:
+            # Stamp-based full-skip: reuse iff definition + source unchanged + narratives complete.
+            # A 0-process result is also reusable when stamped (stable no-process federation).
+            algo = _bpre_algo_version()
+            src_sig = _bpre_source_sig(members)
+            _n = con.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+            stamps_match = (
+                _bpre_get_meta(con, "bpre_algo") == algo
+                and _bpre_get_meta(con, "bpre_source_sig") == src_sig
+            )
+            if stamps_match and (_n == 0 or not _narrative_incomplete(con)):
+                log.info("bpre: reusing stamp-matched result (%d processes) for %s", _n, root_path)
+                con.close()
+                return _n
+            # Snapshot existing narratives keyed by process content (delta narration).
+            old_narr: dict[str, str] = {}
+            try:
+                rows = con.execute(
+                    "SELECT p.name, p.services_json, pa.narrative "
+                    "FROM processes p JOIN process_artifacts pa ON pa.process_id=p.id "
+                    "WHERE pa.narrative!=''"
+                ).fetchall()
+                for pname, svc_json, narr in rows:
+                    steps = con.execute(
+                        "SELECT sid_or_endpoint, service, kind, guard FROM process_steps "
+                        "WHERE process_id=(SELECT id FROM processes WHERE name=? LIMIT 1) "
+                        "ORDER BY order_index", (pname,)
+                    ).fetchall()
+                    old_narr[_proc_sig(pname, svc_json, steps)] = narr
+            except Exception:
+                old_narr = {}
             for tbl in ("entry_points", "cross_service_edges", "processes",
                         "process_steps", "process_artifacts"):
                 con.execute(f"DELETE FROM {tbl}")
@@ -836,8 +938,16 @@ def reconstruct_processes(root_path: str) -> int:
             count = _trace_processes(con, members)
             if count == 0:
                 log.info("bpre: no multi-service processes found for %s", root_path)
+                # Still stamp so reconcile doesn't rebuild a stable no-process federation.
+                _bpre_set_meta(con, "bpre_algo", algo)
+                _bpre_set_meta(con, "bpre_source_sig", src_sig)
+                con.commit()
+                con.close()
                 return 0
-            _synthesize_artifacts(con)
+            _synthesize_artifacts(con, old_narr)
+            _bpre_set_meta(con, "bpre_algo", algo)
+            _bpre_set_meta(con, "bpre_source_sig", src_sig)
+            con.commit()
             log.info("bpre: reconstructed %d processes for %s", count, root_path)
             return count
         finally:
