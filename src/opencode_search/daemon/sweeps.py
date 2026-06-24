@@ -244,6 +244,25 @@ def reconcile_projects() -> None:
         except Exception as exc:
             log.warning("reconcile %s: %s", entry.path, exc)
 
+    # Federation root-pass: self-heal L3 information hierarchy + BPRE process graph.
+    # Watcher already drives these on member edits (on_change → _enrich_project →
+    # _regen_owning_hierarchy + _regen_owning_processes); this pass backstops the
+    # quiescent fleet and heals any suite-clobbered narratives.
+    # Both calls are no-ops when stamps match and narratives are complete ($0, stat-only).
+    for entry in list_projects():
+        if not entry.enabled or not entry.federation:
+            continue
+        try:
+            from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
+            build_federation_hierarchy(entry.path)
+        except Exception as exc:
+            log.warning("reconcile L3 hierarchy %s: %s", entry.path, exc)
+        try:
+            from opencode_search.kb.bpre import reconstruct_processes
+            reconstruct_processes(entry.path)
+        except Exception as exc:
+            log.warning("reconcile bpre %s: %s", entry.path, exc)
+
 
 _VACUUM_BLOAT_BYTES: int = 256 * 1024 * 1024  # VACUUM when freelist > 256 MB
 

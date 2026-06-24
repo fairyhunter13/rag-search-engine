@@ -6,7 +6,8 @@ Validates:
   - all non-LLM edges have confidence ∈ [0.8, 1.0] (strict ladder invariant)
   - no edge below the Tier-2 LLM floor (0.7)
 
-Requires: daemon at :8765, fully indexed astro-project federation (Workstream E done).
+Uses a synthetic 2-service Go gRPC federation so the live astro process_graph.db is
+never mutated by the test suite.
 """
 from __future__ import annotations
 
@@ -16,37 +17,37 @@ import sqlite3
 import pytest
 
 from opencode_search.core.config import root_process_db
-from opencode_search.core.registry import list_projects
 from opencode_search.kb.bpre import reconstruct_processes
 
 pytestmark = pytest.mark.live
 
 
 @pytest.fixture(scope="module")
-def astro_root():
-    p = next(
-        (e.path for e in list_projects()
-         if "astro-project" in e.path and "promo" not in e.path and e.enabled),
-        None,
+def synth_fed():
+    """Synthetic 2-service Go gRPC federation — isolated, never touches production."""
+    from tests.live._bpre_fixture import (
+        build_synth_federation,
+        teardown_synth_federation,
     )
-    assert p, "astro-project must be registered + enabled — run Workstream E first"
-    return p
+    fed = build_synth_federation()
+    yield fed
+    teardown_synth_federation(fed)
 
 
 @pytest.fixture(scope="module")
-def det_db(astro_root):
-    """Run reconstruct_processes once with all LLM gates OFF."""
+def det_db(synth_fed):
+    """Run reconstruct_processes once on the synthetic root with all LLM gates OFF."""
     prev = {k: os.environ.get(k) for k in ("OSE_WIKI_LLM", "OSE_BPRE_LLM_LINK", "OSE_BPRE_LLM_FILE")}
     os.environ.update({"OSE_WIKI_LLM": "0", "OSE_BPRE_LLM_LINK": "0", "OSE_BPRE_LLM_FILE": "0"})
     try:
-        count = reconstruct_processes(astro_root)
+        count = reconstruct_processes(synth_fed.root)
     finally:
         for k, v in prev.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-    db = root_process_db(astro_root)
+    db = root_process_db(synth_fed.root)
     assert db.exists(), "process_graph.db must exist after reconstruct_processes"
     con = sqlite3.connect(str(db))
     yield con, count
@@ -56,8 +57,8 @@ def det_db(astro_root):
 @pytest.mark.slow
 class TestDeterministicResolution:
 
-    def test_process_db_created(self, astro_root):
-        assert root_process_db(astro_root).exists(), "process_graph.db must be created by E"
+    def test_process_db_created(self, synth_fed):
+        assert root_process_db(synth_fed.root).exists(), "process_graph.db must be created"
 
     def test_no_llm_edges_when_gates_off(self, det_db):
         con, _ = det_db
@@ -92,18 +93,18 @@ class TestDeterministicResolution:
         ).fetchone()[0]
         assert n == 0, f"{n} edges below the 0.7 Tier-2 floor"
 
-    def test_deterministic_two_runs_same_count(self, astro_root):
+    def test_deterministic_two_runs_same_count(self, synth_fed):
         """Two deterministic runs must produce byte-identical edge counts."""
         env_patch = {"OSE_WIKI_LLM": "0", "OSE_BPRE_LLM_LINK": "0", "OSE_BPRE_LLM_FILE": "0"}
         prev = {k: os.environ.get(k) for k in env_patch}
         os.environ.update(env_patch)
         try:
-            reconstruct_processes(astro_root)
-            db = root_process_db(astro_root)
+            reconstruct_processes(synth_fed.root)
+            db = root_process_db(synth_fed.root)
             c1 = sqlite3.connect(str(db)).execute(
                 "SELECT COUNT(*) FROM cross_service_edges"
             ).fetchone()[0]
-            reconstruct_processes(astro_root)
+            reconstruct_processes(synth_fed.root)
             c2 = sqlite3.connect(str(db)).execute(
                 "SELECT COUNT(*) FROM cross_service_edges"
             ).fetchone()[0]

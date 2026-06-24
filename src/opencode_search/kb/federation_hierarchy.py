@@ -7,11 +7,18 @@ HR4-safe: synthesis rows only, no cross-repo edges.
 Token budget: ≤ ~8 DeepSeek calls per root per enrich, reusing paid-for L2 summaries.
 Deterministic with OSE_WIKI_LLM=0 / missing key (templated fallback, byte-identical).
 
+Staleness model (Enzyme IVM, arXiv 2603.27775): per-theme child_sig (SHA-1 over sorted
+child titles) replaces the 1800 s mtime window.  A theme is re-narrated only when its
+membership changed or its algo fingerprint drifted — true delta, watcher-effective, $0
+when quiescent.
+
 Research grounding: arXiv 2606.02019 (federation composition invariants),
 GraphRAG roll-up (root summaries cost 97% fewer tokens than source text via child reuse).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 
@@ -21,6 +28,22 @@ _L3_OFFSET = 20_000  # L1 < 10000; L2 in [10000, 20000); L3 starts here
 # Unique substring present in every templated L3 fallback but absent from real DeepSeek prose.
 # Used by _reusable_existing to prevent the freshness guard from freezing stale placeholders.
 _TEMPLATED_MARK = "member-service architecture communities"
+
+
+def _child_sig(child_titles: list[str]) -> str:
+    """SHA-1 over sorted child titles — the membership fingerprint for one L3 theme."""
+    return hashlib.sha1("\n".join(sorted(child_titles)).encode()).hexdigest()
+
+
+def _l3_algo_version() -> str:
+    """SHA-4 over this module's source bytes (definition fingerprint)."""
+    import contextlib
+    p = __file__  # .pyc or .py — we want the source
+    src = p[:-1] if p.endswith(".pyc") else p
+    h = hashlib.sha1()
+    with contextlib.suppress(OSError):
+        h.update(open(src, "rb").read())  # noqa: SIM115
+    return h.hexdigest()[:4]
 
 
 _L3_SYSTEM = (
@@ -117,30 +140,35 @@ def build_federation_hierarchy(root_path: str) -> int:
     if not root_gdb.exists():
         return 0
 
-    import time as _time
     gs = GraphStore(root_gdb)
     try:
-        # Freshness guard: reuse existing REAL summaries when root graph.db is <1800s old.
-        # member_count is always recomputed (cheap); only _l3_narrate (LLM) is capped.
-        # Templated placeholders are deliberately excluded from reuse so they always get
-        # re-narrated by DeepSeek on the next rebuild rather than being frozen indefinitely.
-        fresh = (root_gdb.stat().st_mtime + 1800) > _time.time()
-        existing: dict[str, str] = {}
-        if fresh:
-            rows_existing = gs._con.execute(
-                "SELECT title, summary FROM communities WHERE level>=3"
-            ).fetchall()
-            existing = _reusable_existing(rows_existing)
+        # Per-theme delta narration (Enzyme-style content fingerprint, not 1800 s TTL):
+        # reuse a theme's real-prose summary iff its child membership is unchanged AND
+        # the algo fingerprint hasn't drifted.  Structure/member_count always recomputed.
+        rows_existing = gs._con.execute(
+            "SELECT title, summary FROM communities WHERE level>=3"
+        ).fetchall()
+        existing = _reusable_existing(rows_existing)
+        algo = _l3_algo_version()
+        try:
+            old_sigs: dict[str, str] = json.loads(gs.get_meta("l3_theme_sigs") or "{}")
+        except Exception:
+            old_sigs = {}
+        algo_match = gs.get_meta("l3_algo") == algo
 
         gs._con.execute("DELETE FROM communities WHERE level>=3")
         gs.commit()
 
+        new_sigs: dict[str, str] = {}
         written = 0
         for i, (stype, child_titles) in enumerate(themes):
             cid = _L3_OFFSET + i
             theme_label = stype.replace("_", " ").title()
             title = f"Federation: {theme_label}"
-            if fresh and title in existing:
+            csig = _child_sig(child_titles)
+            new_sigs[title] = csig
+            # Reuse iff membership unchanged + algo unchanged + real prose present.
+            if algo_match and old_sigs.get(title) == csig and title in existing:
                 summary = existing[title]
             else:
                 summary = _l3_narrate(theme_label, child_titles)
@@ -158,6 +186,8 @@ def build_federation_hierarchy(root_path: str) -> int:
             )
             written += 1
 
+        gs.set_meta("l3_theme_sigs", json.dumps(new_sigs, sort_keys=True))
+        gs.set_meta("l3_algo", algo)
         gs.commit()
         return written
     finally:

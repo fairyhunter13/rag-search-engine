@@ -22,7 +22,20 @@ pytestmark = pytest.mark.live
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
+def synth_fed():
+    """Synthetic 2-service Go gRPC federation — isolated, never touches production."""
+    from tests.live._bpre_fixture import (
+        build_synth_federation,
+        teardown_synth_federation,
+    )
+    fed = build_synth_federation()
+    yield fed
+    teardown_synth_federation(fed)
+
+
+@pytest.fixture(scope="module")
 def astro_root():
+    """Read-only reference to the live astro root (no reconstruct_processes calls here)."""
     p = next((e.path for e in list_projects() if "astro-project" in e.path and e.enabled), None)
     assert p, "astro-project must be registered and enabled"
     return p
@@ -30,30 +43,25 @@ def astro_root():
 
 @pytest.fixture(scope="module")
 def astro_members(astro_root):
+    """Federation members of the live astro root — read-only, no reconstruct calls."""
     from opencode_search.daemon.federation import expand_federation
-    members = expand_federation(astro_root)
-    assert len(members) >= 2, "astro-project must have ≥2 federation members"
-    return members
+    return expand_federation(astro_root)
 
 
 @pytest.fixture(scope="module")
-def process_db(astro_root):
-    """Run reconstruct_processes once (OSE_WIKI_LLM=0 for deterministic fast pass).
-
-    LLM narrative/rule generation is suppressed so the fixture completes in ~15s
-    instead of minutes.  Slow tests that need LLM output set OSE_WIKI_LLM=1 themselves.
-    """
+def process_db(synth_fed):
+    """Run reconstruct_processes once on the synthetic root (OSE_WIKI_LLM=0, GPU-free)."""
     import os
     prev = os.environ.get("OSE_WIKI_LLM")
     os.environ["OSE_WIKI_LLM"] = "0"
     try:
-        count = reconstruct_processes(astro_root)
+        count = reconstruct_processes(synth_fed.root)
     finally:
         if prev is None:
             os.environ.pop("OSE_WIKI_LLM", None)
         else:
             os.environ["OSE_WIKI_LLM"] = prev
-    db = root_process_db(astro_root)
+    db = root_process_db(synth_fed.root)
     assert db.exists(), "process_graph.db must be created"
     con = sqlite3.connect(str(db))
     yield con, count
@@ -353,12 +361,12 @@ class TestHR4AndResourceGuards:
 
 class TestLiveSurfaces:
 
-    def test_H1_overview_returns_reconstructed(self, astro_root, process_db):
+    def test_H1_overview_returns_reconstructed(self, synth_fed, process_db):
         import asyncio
 
         from opencode_search.server.mcp import overview as overview_tool
         loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(overview_tool(astro_root, what="process_flows"))
+        result = loop.run_until_complete(overview_tool(synth_fed.root, what="process_flows"))
         loop.close()
         data = json.loads(result)
         assert data.get("source") == "reconstructed", (
@@ -367,12 +375,12 @@ class TestLiveSurfaces:
         flows = data.get("flows", [])
         assert flows, "No flows returned from overview(process_flows)"
 
-    def test_H2_flows_have_mermaid(self, astro_root, process_db):
+    def test_H2_flows_have_mermaid(self, synth_fed, process_db):
         import asyncio
 
         from opencode_search.server.mcp import overview as overview_tool
         loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(overview_tool(astro_root, what="process_flows"))
+        result = loop.run_until_complete(overview_tool(synth_fed.root, what="process_flows"))
         loop.close()
         data = json.loads(result)
         mermaid_flows = [f for f in data.get("flows", [])
@@ -380,17 +388,14 @@ class TestLiveSurfaces:
         assert mermaid_flows, "No flow with sequenceDiagram in overview response"
 
     @pytest.mark.slow
-    def test_H3_api_bpmn_endpoint(self, astro_root, process_db):
+    def test_H3_api_bpmn_endpoint(self, synth_fed, process_db):
         import urllib.request
         con, _ = process_db
         row = con.execute("SELECT process_id FROM process_artifacts LIMIT 1").fetchone()
-        assert row, (
-            "No process artifacts — run Workstream E (re-index) + "
-            "reconstruct_processes before this test"
-        )
+        assert row, "No process artifacts in synthetic root"
         url = (
             f"http://127.0.0.1:8765/api/process/bpmn"
-            f"?root={astro_root}&id={row[0]}"
+            f"?root={synth_fed.root}&id={row[0]}"
         )
         with urllib.request.urlopen(url, timeout=10) as resp:
             body = resp.read()
