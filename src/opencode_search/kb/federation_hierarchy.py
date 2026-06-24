@@ -18,6 +18,9 @@ import os
 log = logging.getLogger(__name__)
 
 _L3_OFFSET = 20_000  # L1 < 10000; L2 in [10000, 20000); L3 starts here
+# Unique substring present in every templated L3 fallback but absent from real DeepSeek prose.
+# Used by _reusable_existing to prevent the freshness guard from freezing stale placeholders.
+_TEMPLATED_MARK = "member-service architecture communities"
 
 
 _L3_SYSTEM = (
@@ -45,6 +48,21 @@ def _l3_narrate(theme: str, child_summaries: list[str]) -> str:
         return str(data.get("narrative", "")).strip()
     except Exception:
         return ""
+
+
+def _reusable_existing(rows: list[tuple[str, str | None]]) -> dict[str, str]:
+    """Title→summary map of REAL narratives only.
+
+    Templated placeholders (containing _TEMPLATED_MARK) are excluded so the freshness guard
+    never freezes them — they will be re-narrated by DeepSeek on the next rebuild instead of
+    being reused indefinitely. Real narratives are cost-capped as before.
+    """
+    out: dict[str, str] = {}
+    for title, summary in rows:
+        s = summary or ""
+        if s and _TEMPLATED_MARK not in s:
+            out[title] = s
+    return out
 
 
 def _group_by_type(member_l2_rows: list[tuple[str, str, str | None]]) -> list[tuple[str, list[str]]]:
@@ -102,15 +120,17 @@ def build_federation_hierarchy(root_path: str) -> int:
     import time as _time
     gs = GraphStore(root_gdb)
     try:
-        # Freshness guard: reuse existing summaries when root graph.db is <1800s old.
+        # Freshness guard: reuse existing REAL summaries when root graph.db is <1800s old.
         # member_count is always recomputed (cheap); only _l3_narrate (LLM) is capped.
+        # Templated placeholders are deliberately excluded from reuse so they always get
+        # re-narrated by DeepSeek on the next rebuild rather than being frozen indefinitely.
         fresh = (root_gdb.stat().st_mtime + 1800) > _time.time()
         existing: dict[str, str] = {}
         if fresh:
-            for row in gs._con.execute(
+            rows_existing = gs._con.execute(
                 "SELECT title, summary FROM communities WHERE level>=3"
-            ).fetchall():
-                existing[row[0]] = row[1]
+            ).fetchall()
+            existing = _reusable_existing(rows_existing)
 
         gs._con.execute("DELETE FROM communities WHERE level>=3")
         gs.commit()
@@ -127,7 +147,7 @@ def build_federation_hierarchy(root_path: str) -> int:
             if not summary:
                 summary = (
                     f"Cross-service {theme_label} domain spanning {len(child_titles)} "
-                    f"member-service architecture communities."
+                    f"{_TEMPLATED_MARK}."
                 )
             gs.upsert_community(
                 cid, level=3,
