@@ -26,6 +26,9 @@ Thumbs.db
 .opencode_verify_state.*
 .hpv_proof.*
 
+# docgen auto-generated docs/ hierarchy (written into each repo by run_docgen — not source)
+/docs/
+
 # Local scratch diagnostics (never commit; may contain local device paths)
 scratch_diag.py
 scratch_*.py

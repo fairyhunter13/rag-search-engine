@@ -936,6 +936,7 @@ function _showNodeDetail(nodeId){
 
 /* ── Wiki ────────────────────────────────────────────────────────────────── */
 let _wikiPages=[];
+let _docsTree=[];
 
 async function loadWiki(){
   if(!_proj)return;
@@ -944,26 +945,51 @@ async function loadWiki(){
   $('wiki-content').innerHTML='<div class="wiki-empty">← Pick a page to read</div>';
   $('wiki-lint-panel').style.display='none';
   try{
-    const r=await fetchWithTimeout(`/api/wiki?project=${encodeURIComponent(_proj)}`);
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    _wikiPages=d.pages||[];
-    _renderWikiPages(_wikiPages,null);
+    const [wr,dr]=await Promise.all([
+      fetchWithTimeout(`/api/wiki?project=${encodeURIComponent(_proj)}`),
+      fetchWithTimeout(`/api/docs?project=${encodeURIComponent(_proj)}`).catch(()=>null),
+    ]);
+    if(!wr.ok)throw new Error('HTTP '+wr.status);
+    const wd=await wr.json();
+    _wikiPages=wd.pages||[];
+    _docsTree=dr&&dr.ok?(await dr.json()).tree||[]:[];
+    _renderWikiPages(_wikiPages,null,null);
     if(_wikiPages.length)loadWikiLint();
   }catch(e){
     pagesEl.innerHTML='<div style="padding:12px 14px;color:var(--red);font-size:.76rem">'+esc(e.message)+'</div>';
   }
 }
 
-function _renderWikiPages(pages,activeSlug){
+function _renderWikiPages(pages,activeWiki,activeDocs){
   const el=$('wiki-pages');
-  if(!pages.length){el.innerHTML='<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">No wiki pages. Run the Wiki op to generate.</div>';return;}
-  el.innerHTML=pages.map(p=>`<button class="wiki-page-link${p===activeSlug?' active':''}" onclick="openWikiPage(${JSON.stringify(p)})">${esc(p)}</button>`).join('');
+  let html='';
+  if(_docsTree.length){
+    html+='<div style="padding:4px 10px 2px;font-size:.72rem;color:var(--text-3);font-weight:600;letter-spacing:.05em">📐 DOCS · C4×DIÁTAXIS</div>';
+    html+=_docsTree.map(p=>`<button class="wiki-page-link${p===activeDocs?' active':''}" onclick="openDocsPage(${JSON.stringify(p)})">${esc(p)}</button>`).join('');
+    if(pages.length)html+='<div style="padding:4px 10px 2px;font-size:.72rem;color:var(--text-3);font-weight:600;letter-spacing:.05em;margin-top:4px">📖 KB WIKI</div>';
+  }
+  if(!pages.length&&!_docsTree.length){html='<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">No wiki pages. Run the Wiki op to generate.</div>';}
+  else{html+=pages.map(p=>`<button class="wiki-page-link${p===activeWiki?' active':''}" onclick="openWikiPage(${JSON.stringify(p)})">${esc(p)}</button>`).join('');}
+  el.innerHTML=html;
+}
+
+async function openDocsPage(relPath){
+  if(!_proj)return;
+  _renderWikiPages(_wikiPages,null,relPath);
+  const content=$('wiki-content');
+  content.innerHTML='<div class="wiki-empty" style="color:var(--text-3)">Loading…</div>';
+  try{
+    const r=await fetchWithTimeout(`/api/docs/page?project=${encodeURIComponent(_proj)}&path=${encodeURIComponent(relPath)}`);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    content.innerHTML=mdSafe(d.content||'');
+    renderMermaid(content);
+  }catch(e){content.innerHTML='<div class="wiki-empty" style="color:var(--red)">'+esc(e.message)+'</div>';}
 }
 
 async function openWikiPage(name){
   if(!_proj)return;
-  _renderWikiPages(_wikiPages,name);
+  _renderWikiPages(_wikiPages,name,null);
   const content=$('wiki-content');
   content.innerHTML='<div class="wiki-empty" style="color:var(--text-3)">Loading…</div>';
   try{
@@ -1019,8 +1045,11 @@ async function exportWiki(){
 
 function searchWiki(q){
   const lower=q.trim().toLowerCase();
-  const filtered=lower?_wikiPages.filter(p=>p.toLowerCase().includes(lower)):_wikiPages;
-  _renderWikiPages(filtered,null);
+  const filteredWiki=lower?_wikiPages.filter(p=>p.toLowerCase().includes(lower)):_wikiPages;
+  const prevDocs=_docsTree;
+  if(lower)_docsTree=_docsTree.filter(p=>p.toLowerCase().includes(lower));
+  _renderWikiPages(filteredWiki,null,null);
+  _docsTree=prevDocs;
 }
 
 /* ── Processes view ──────────────────────────────────────────────────────── */

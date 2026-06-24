@@ -76,26 +76,6 @@ def build_federation_hierarchy(root_path: str) -> int:
     if len(expand_federation(root_path)) < 2:
         return 0
 
-    # Freshness guard: skip L3 rebuild if root graph.db was written within 1800s.
-    # Caps a member-edit storm at ≤1 L3 rebuild per 30 min per root (mirrors BPRE reuse).
-    import time as _time
-    _root_gdb = project_graph_db(root_path)
-    if _root_gdb.exists():
-        try:
-            if (_time.time() - _root_gdb.stat().st_mtime) < 1800:
-                _gs_tmp = GraphStore(_root_gdb)
-                try:
-                    _n3 = _gs_tmp._con.execute(
-                        "SELECT COUNT(*) FROM communities WHERE level>=3"
-                    ).fetchone()[0]
-                finally:
-                    _gs_tmp.close()
-                if _n3 > 0:
-                    log.debug("build_federation_hierarchy: L3 fresh (%d themes), skip", _n3)
-                    return _n3
-        except Exception:
-            pass
-
     # Collect per-member L2 domain rows (title + semantic_type only — never reads symbols).
     def _member_l2(gs: GraphStore) -> list[tuple]:
         return gs._con.execute(
@@ -118,8 +98,20 @@ def build_federation_hierarchy(root_path: str) -> int:
     root_gdb = project_graph_db(root_path)
     if not root_gdb.exists():
         return 0
+
+    import time as _time
     gs = GraphStore(root_gdb)
     try:
+        # Freshness guard: reuse existing summaries when root graph.db is <1800s old.
+        # member_count is always recomputed (cheap); only _l3_narrate (LLM) is capped.
+        fresh = (root_gdb.stat().st_mtime + 1800) > _time.time()
+        existing: dict[str, str] = {}
+        if fresh:
+            for row in gs._con.execute(
+                "SELECT title, summary FROM communities WHERE level>=3"
+            ).fetchall():
+                existing[row[0]] = row[1]
+
         gs._con.execute("DELETE FROM communities WHERE level>=3")
         gs.commit()
 
@@ -127,7 +119,11 @@ def build_federation_hierarchy(root_path: str) -> int:
         for i, (stype, child_titles) in enumerate(themes):
             cid = _L3_OFFSET + i
             theme_label = stype.replace("_", " ").title()
-            summary = _l3_narrate(theme_label, child_titles)
+            title = f"Federation: {theme_label}"
+            if fresh and title in existing:
+                summary = existing[title]
+            else:
+                summary = _l3_narrate(theme_label, child_titles)
             if not summary:
                 summary = (
                     f"Cross-service {theme_label} domain spanning {len(child_titles)} "
@@ -135,7 +131,7 @@ def build_federation_hierarchy(root_path: str) -> int:
                 )
             gs.upsert_community(
                 cid, level=3,
-                title=f"Federation: {theme_label}",
+                title=title,
                 summary=summary,
                 member_count=len(child_titles),
                 semantic_type="domain",

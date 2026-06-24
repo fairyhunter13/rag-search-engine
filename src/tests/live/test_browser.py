@@ -599,3 +599,72 @@ def test_chat_debug_question_via_browser(page: Page) -> None:
     assert any(k in history for k in ("community", "enrich", "summary", "null")), (
         f"Debug answer must mention domain keywords: {history[:300]!r}"
     )
+
+
+# ── Processes view ────────────────────────────────────────────────────────────
+
+def test_processes_view_switches_in(page: Page) -> None:
+    """Processes nav shows #view-processes and hides the 5 standard views."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-processes").click()
+    page.wait_for_timeout(500)
+    expect(page.locator("#view-processes")).to_be_visible()
+    for v in _VIEWS:
+        expect(page.locator(f"#view-{v}")).to_be_hidden()
+
+
+def test_processes_sidebar_attached(page: Page) -> None:
+    """#proc-list is part of the Processes view DOM."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-processes").click()
+    expect(page.locator("#proc-list")).to_be_attached()
+
+
+# ── Hierarchy view ────────────────────────────────────────────────────────────
+
+def test_hierarchy_view_switches_in(page: Page) -> None:
+    """Hierarchy nav shows #view-hierarchy and hides the 5 standard views."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-hierarchy").click()
+    page.wait_for_timeout(500)
+    expect(page.locator("#view-hierarchy")).to_be_visible()
+    for v in _VIEWS:
+        expect(page.locator(f"#view-{v}")).to_be_hidden()
+
+
+def test_hierarchy_tree_and_detail_attached(page: Page) -> None:
+    """#hier-tree and #hier-detail are part of the Hierarchy view DOM."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-hierarchy").click()
+    expect(page.locator("#hier-tree")).to_be_attached()
+    expect(page.locator("#hier-detail")).to_be_attached()
+
+
+def test_hierarchy_loads_data(page: Page) -> None:
+    """After selecting a project, #hier-tree shows hierarchy nodes (not empty prompt)."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-hierarchy").click()
+    page.wait_for_timeout(4000)
+    txt = page.locator("#hier-tree").inner_text() or ""
+    assert txt.strip() and "Select a project" not in txt, f"hier-tree not loaded: {txt[:80]!r}"
+
+
+# ── Wiki Docs group ───────────────────────────────────────────────────────────
+
+def test_wiki_sidebar_and_content_attached(page: Page) -> None:
+    """#wiki-pages sidebar and #wiki-content pane are always in the Wiki DOM."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.locator("#vbtn-wiki").click()
+    expect(page.locator("#wiki-pages")).to_be_attached()
+    expect(page.locator("#wiki-content")).to_be_attached()
+
+
+def test_wiki_view_has_buttons_after_load(page: Page) -> None:
+    """After project selection, Wiki sidebar has ≥1 button (KB or Docs)."""
+    page.goto(_DASH, wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.locator("#vbtn-wiki").click()
+    page.wait_for_timeout(3000)
+    btns = page.locator("#wiki-pages button").count()
+    assert btns >= 1, f"#wiki-pages has no buttons after load: {btns}"

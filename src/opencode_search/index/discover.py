@@ -58,12 +58,27 @@ def is_forbidden_root(path: Path) -> bool:
     )
 
 
+def _is_generated_docs_dir(p: Path) -> bool:
+    """True if p is a docgen-generated docs/ tree (contains _meta/provenance.json)."""
+    return p.is_dir() and (p / "_meta" / "provenance.json").exists()
+
+
 def is_ignored_path(p: Path, root: Path | None = None) -> bool:
-    """True if any segment of p (relative to root if given) is in the canonical ignore set."""
+    """True if any segment of p is in the canonical ignore set, or p is under a generated docs/ tree."""
     if root and not p.is_relative_to(root):
         return False
     check = p.relative_to(root) if root else p
-    return any(part in _EXCLUDE for part in check.parts)
+    if any(part in _EXCLUDE for part in check.parts):
+        return True
+    # Walk prefix dirs: if a "docs" segment on disk is a docgen-generated tree, ignore it.
+    base = root or Path()
+    parts = check.parts
+    for i, part in enumerate(parts):
+        if part == "docs":
+            candidate = base / Path(*parts[: i + 1])
+            if _is_generated_docs_dir(candidate):
+                return True
+    return False
 
 
 def iter_files(
@@ -78,7 +93,9 @@ def iter_files(
         dp = Path(dirpath)
         dirnames[:] = [
             d for d in dirnames
-            if d not in exc_dirs and not d.endswith(".egg-info")
+            if d not in exc_dirs
+            and not d.endswith(".egg-info")
+            and not (d == "docs" and _is_generated_docs_dir(dp / d))
         ]
         if federation_mode:
             dirnames[:] = [
