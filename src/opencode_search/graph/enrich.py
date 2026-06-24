@@ -401,3 +401,41 @@ def narrate_community_lazy(store: GraphStore, cid: int) -> bool:
     enriched, _ = _enrich_one_batch(store, [cid], valid)
     return bool(enriched)
 
+
+def assign_l2_semantic_types(store: GraphStore) -> int:
+    """Propagate plurality L1 semantic_type to each L2 community (zero-cost, deterministic).
+
+    L2 communities never receive a semantic_type from the batch-narration prompt, so
+    federation_hierarchy._group_by_type() sees only NULLs → single 'Federation: Domain' theme.
+    Fix: for each L2, tally typed L1 children and assign the plurality type (tie-broken by
+    _TYPE_ORDER priority). Leaf/orphan L2 with no typed children stay NULL. Idempotent.
+    Returns count of rows updated.
+    """
+    from collections import Counter
+
+    _priority = {t: i for i, t in enumerate(_TYPE_ORDER)}
+    valid = frozenset(_TYPE_ORDER)
+    l2_ids = [r[0] for r in store._con.execute(
+        "SELECT id FROM communities WHERE level=2").fetchall()]
+    updated = 0
+    for l2_id in l2_ids:
+        child_types = [
+            r[0] for r in store._con.execute(
+                "SELECT semantic_type FROM communities "
+                "WHERE parent_id=? AND level=1 AND narrated=1 AND semantic_type IS NOT NULL",
+                (l2_id,),
+            ).fetchall() if r[0] in valid
+        ]
+        if not child_types:
+            continue
+        counts = Counter(child_types)
+        best = max(counts, key=lambda t: (counts[t], -_priority[t]))
+        cur = store._con.execute(
+            "SELECT semantic_type FROM communities WHERE id=?", (l2_id,)).fetchone()
+        if cur and cur[0] == best:
+            continue
+        store._con.execute("UPDATE communities SET semantic_type=? WHERE id=?", (best, l2_id))
+        updated += 1
+    if updated:
+        store.commit()
+    return updated

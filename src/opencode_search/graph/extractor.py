@@ -169,6 +169,21 @@ def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:
                 start_line=s.span.start_line + 1, end_line=s.span.end_line + 1,
                 language=language, signature=s.signature or "", docstring=s.doc_comment or "",
             ))
+        # process() may yield only class/module nodes (e.g. Java, Kotlin) with no methods.
+        # Supplement via _generic_walk so method names enter the symbol table for call-edge resolution.
+        if not any(s.kind in ("function", "method") for s in syms):
+            try:
+                parser, ok = _get_parser_for(language)
+                if ok:
+                    gw_root = parser.parse(content).root_node()
+                    code_bytes = content.encode("utf-8", errors="replace")
+                    known = {s.name for s in syms}
+                    syms.extend(
+                        s for s in _generic_walk(gw_root, code_bytes, file_str, language)
+                        if s.name not in known
+                    )
+            except Exception:
+                pass
         return syms
     # process() returned no structure — fall back to generic AST walk
     parser, ok = _get_parser_for(language)

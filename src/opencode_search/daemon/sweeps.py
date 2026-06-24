@@ -225,11 +225,44 @@ def reconcile_projects() -> None:
             log.warning("reconcile %s: %s", entry.path, exc)
 
 
+_VACUUM_BLOAT_BYTES: int = 256 * 1024 * 1024  # VACUUM when freelist > 256 MB
+
+
+def _vacuum_if_bloated(db_path, threshold: int = _VACUUM_BLOAT_BYTES) -> bool:
+    """VACUUM db_path when freelist occupies more than threshold bytes. Returns True if vacuumed."""
+    import sqlite3
+    from pathlib import Path
+    p = Path(db_path)
+    if not p.exists():
+        return False
+    try:
+        with sqlite3.connect(str(p), timeout=10) as con:
+            page_size = con.execute("PRAGMA page_size").fetchone()[0]
+            freelist = con.execute("PRAGMA freelist_count").fetchone()[0]
+            if page_size * freelist <= threshold:
+                return False
+            log.info("VACUUM %s (freelist=%d pages, ~%d MB)", p.name,
+                     freelist, page_size * freelist // (1024 * 1024))
+            con.execute("VACUUM")
+            log.info("VACUUM %s done", p.name)
+            return True
+    except Exception as exc:
+        log.warning("VACUUM %s: %s", p.name, exc)
+        return False
+
+
 def maintenance() -> None:
-    """Vacuum orphan index dirs not present in the registry."""
+    """Vacuum orphan index dirs; reclaim fragmented SQLite space (bloat-gated)."""
     if _PAUSED:
         return
-    from opencode_search.core.config import INDEX_ROOT, index_dir
+    import sqlite3  # noqa: F401 — ensure available before list_projects() import
+
+    from opencode_search.core.config import (
+        INDEX_ROOT,
+        index_dir,
+        project_graph_db,
+        project_vector_db,
+    )
     from opencode_search.core.registry import list_projects
 
     if not INDEX_ROOT.exists():
@@ -239,6 +272,12 @@ def maintenance() -> None:
         if d.is_dir() and d.name not in known:
             log.info("vacuum orphan: %s", d)
             shutil.rmtree(d, ignore_errors=True)
+
+    for entry in list_projects():
+        if not entry.enabled:
+            continue
+        _vacuum_if_bloated(project_vector_db(entry.path))
+        _vacuum_if_bloated(project_graph_db(entry.path))
 
 
 def _index_project(project_path: str) -> None:
@@ -394,6 +433,11 @@ def _enrich_project(project_path: str) -> None:
         ).fetchone()[0]
         if _needs_classify:
             classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
+        # Propagate plurality L1 semantic_type to each L2 — zero-cost, deterministic.
+        # Without this, L2 communities have NULL semantic_type and federation_hierarchy groups
+        # all member L2 communities into a single 'Federation: Domain' theme.
+        from opencode_search.graph.enrich import assign_l2_semantic_types
+        assign_l2_semantic_types(gs)
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
