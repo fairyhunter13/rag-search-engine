@@ -134,7 +134,7 @@ def build_federation_hierarchy(root_path: str) -> int:
                 title=title,
                 summary=summary,
                 member_count=len(child_titles),
-                semantic_type="domain",
+                semantic_type=stype,
             )
             written += 1
 

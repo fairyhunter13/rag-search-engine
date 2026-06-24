@@ -20,10 +20,30 @@ _bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
 log = logging.getLogger(__name__)
 
 # Composite pipeline algorithm version — bump either component constant to trigger re-derive.
+# Also folds a SHA-4 of key pipeline modules so code-only changes self-heal without a manual bump.
+def _code_fingerprint() -> str:
+    """4-char SHA over source bytes of modules that determine graph/hierarchy output."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]  # src/opencode_search/
+    modules = [
+        root / "graph" / "extractor.py",
+        root / "graph" / "enrich.py",
+        root / "graph" / "community.py",
+        root / "kb" / "hierarchy.py",
+        root / "kb" / "structure.py",
+    ]
+    import contextlib
+    h = hashlib.sha1()
+    for p in modules:
+        with contextlib.suppress(OSError):
+            h.update(p.read_bytes())
+    return h.hexdigest()[:4]
+
+
 def _pipeline_algo_version() -> str:
     from opencode_search.graph.community import ALGO_VERSION
     from opencode_search.kb.hierarchy import HIER_VERSION
-    return f"{ALGO_VERSION}+{HIER_VERSION}"
+    return f"{ALGO_VERSION}+{HIER_VERSION}+{_code_fingerprint()}"
 
 
 def _source_fingerprint(path: str) -> str:

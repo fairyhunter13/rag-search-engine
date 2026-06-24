@@ -72,11 +72,12 @@ def test_rederive_graph_has_no_embedder_call():
 
 
 def test_pipeline_algo_version_reflects_both_constants():
-    """T1d: _pipeline_algo_version() composes ALGO_VERSION + HIER_VERSION."""
-    from opencode_search.daemon.sweeps import _pipeline_algo_version
+    """T1d: _pipeline_algo_version() composes ALGO_VERSION + HIER_VERSION + code_fp."""
+    from opencode_search.daemon.sweeps import _code_fingerprint, _pipeline_algo_version
     from opencode_search.graph.community import ALGO_VERSION
     from opencode_search.kb.hierarchy import HIER_VERSION
-    assert _pipeline_algo_version() == f"{ALGO_VERSION}+{HIER_VERSION}"
+    expected = f"{ALGO_VERSION}+{HIER_VERSION}+{_code_fingerprint()}"
+    assert _pipeline_algo_version() == expected
 
 
 def test_source_fingerprint_changes_on_file_add(tmp_path):
