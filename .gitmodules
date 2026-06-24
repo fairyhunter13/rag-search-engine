@@ -1,0 +1,3 @@
+[submodule "vendor/docgen"]
+	path = vendor/docgen
+	url = https://github.com/fairyhunter13/ose-docgen.git
