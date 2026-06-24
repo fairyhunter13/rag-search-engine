@@ -1,6 +1,6 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-23. **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 freshness 1800s guard in `build_federation_hierarchy`); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
+> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-25. **2026-06-25**: Phase 1 — edge-free degeneracy exemption (D, HR20 `ec>0` guard on all three clauses); dashboard chat = Haiku-only (F, no DeepSeek fallback); architecture doc-sync + engineering principles register (§1a, HR27–HR29). **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 incremental self-heal via per-theme `child_sig` (Enzyme-IVM), 1800s window removed (`2380d45`)); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -12,6 +12,22 @@ more project trees and serves five MCP tools (`search`, `ask`, `graph`, `overvie
 **Federation** treats a *root* project that contains **symlinks to external sub-repos** as
 one **logical repository**, while storing and indexing each linked sub-repo ("member") as
 an independent unit.
+
+## 1a. Engineering principles (doctrine)
+
+The governing principle is **P0: most efficient + most effective, for *everything* in OSE**. Every component, lane, and algorithm is chosen and tuned for maximum efficiency *and* effectiveness; all principles below are corollaries (§9b per-workload engine assignment, no cross-lane bleed; HR6, HR9, HR10, HR12, HR26).
+
+1. **DeepSeek = least/minimum token usage (DIKW token economy).** The cloud generative lane spends the *fewest possible* tokens: significance-gated head only, prefix-cached, abstention on the tail, child-reuse roll-ups; `$0` when quiescent; spend only to climb Information→Knowledge→Wisdom, and only at the nodes/queries actually read (HR22–HR24).
+2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR15, HR16 5-tier ladder, §7a).
+3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26).
+4. **No local generative LLM** — cloud DeepSeek for KB, Claude Code for chat/docgen (HR12).
+5. **Determinism + idempotence** — byte-identical reruns with LLM off; enrichment gated on `summary IS NULL`, never re-labels settled rows (HR3, HR11, HR13, HR21, HR24, HR25).
+6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`ask`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval; all generative spend (DeepSeek) is **enrichment-time**, pre-built into the KB the read-path serves (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
+7. **Self-healing** — event-driven (watcher) + reconcile re-derive on algo/source drift (HR1, HR2, HR25, §10).
+8. **Root-only docgen + universal config** — one root-owned `docs/`; `.opencode-index.yaml` honored by every enumerator (HR27, HR29).
+9. **Two-stage retrieval; rerank is the relevance authority.** Query = bi-encoder vector recall (`sqlite-vec`) → cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU); results ordered by `rerank_score`, **never the bare vector `score`**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
+10. **Public-repo hygiene.** Every emitted artifact (wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN, docgen pages, citations) is **project-root-relative**; absolute device paths and company/device names never leak — `symbols.file` stores absolute paths, so strip to root-relative before any artifact (HR13).
+11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU).
 
 ## 2. Vocabulary
 
@@ -33,7 +49,7 @@ an independent unit.
   `path, enabled, indexed_at, file_count, chunk_count, federation: list[str], …`.
 - **Vector store**: sqlite-vec flat `vec0`, `FLOAT[768]`, exact recall.
 - **Graph store**: SQLite `symbols / edges (caller_sid, callee_sid) / communities`.
-- **Enrichment LLM**: cloud **DeepSeek** `deepseek-v4-flash` only (summaries, intents, semantic-type classification, Phase B wiki narrative) — **no local generative LLM**. Crashes if `DEEPSEEK_API_KEY` absent. The dashboard chat LLM (**claude-haiku-4-5** via Claude Code CLI, **DeepSeek fallback**) is **dashboard-chat only** — never called by MCP tools. **Codex support removed.**
+- **Enrichment LLM**: cloud **DeepSeek** `deepseek-v4-flash` only (summaries, intents, semantic-type classification, Phase B wiki narrative) — **no local generative LLM**. Crashes if `DEEPSEEK_API_KEY` absent. The dashboard chat LLM (**claude-haiku-4-5** via Claude Code CLI only, **no DeepSeek fallback** — emits SSE error when CLI unavailable) is **dashboard-chat only** — never called by MCP tools. **Codex support removed.**
 
 ## 4. Federation discovery (`daemon/federation.py:discover_members`)
 
@@ -141,6 +157,9 @@ mapping table may substitute for structural analysis of user code.
    BPMN/mermaid; byte-identical with `OSE_WIKI_LLM=0` and `OSE_BPRE_LLM_LINK` unset (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
+9. **`run_docgen` (root-only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). Opt-in; triggered manually or by the enrichment sweep.
+10. **`index_docs` (scope=docs)** — embeds generated `docs/` pages into the vector store; idempotent per-path replace; runs after `run_docgen`; watcher/fingerprint exclude `docs/` from the code path (HR28).
+
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
 `semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.
 
@@ -164,9 +183,9 @@ key — they bind ONNX/CUDA and run regardless.
   re-ranks (Stage 2)** to global top-k by `rerank_score`, then `compose_answer` over the
   root's `GraphStore`. No LLM synthesis; persistent cache TTL 3600 s.
 - **`graph`**: per-project call-graph queries (definition/callers/callees/impact/…).
-- **`overview`**: 15 `what=` views (structure, communities, status, projects, patterns,
+- **`overview`**: 16 `what=` views (structure, communities, status, projects, patterns,
   metrics, architecture_domains, hierarchy, import_cycles, surprising_connections,
-  feature_map, business_rules, process_flows, suggested_questions, service_mesh).
+  feature_map, business_rules, process_flows, suggested_questions, service_mesh, validate).
 
 ## 9a. Reranking (Stage 2)
 
@@ -189,12 +208,13 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | Lane | Surface | LLM(s) | Notes |
 |------|---------|---------|-------|
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
-| **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** primary (Claude Code CLI); **DeepSeek fallback** if haiku absent/empty | Codex removed; haiku insist — DeepSeek only on genuine haiku failure |
+| **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** only (Claude Code CLI); emits SSE error event when CLI unavailable | Codex removed; DeepSeek is KB-enrichment-exclusive (HR12) — no chat fallback |
 | **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-v4-flash` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
+| **E — Docgen portal** | `ose-docgen portal` (opt-in, manual) | Claude Code **Sonnet 4.6** (architect/verify) + **Haiku 4.5** (explore/write/skills) | Daemon auto-path stays $0/GPU-free; portal is OSE-independent (no `graph.db`); never invoked by daemon |
 
 **Two-lane invariant (HR12):**
 - **LOCAL GPU lane = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking (`jinaai/jina-reranker-v1-turbo-en`) ONLY.** CPU binding is fatal; any CPU fallback raises immediately.
-- **CLOUD generative lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, symbol intents, semantic-type classification, wiki-L2 narrative; BPRE Tier-2 link resolution, Tier-3 parse-error files, D5 rule/state-machine text; dashboard-chat fallback) **+** claude-haiku-4-5 via the Claude Code CLI (dashboard-chat primary).
+- **CLOUD generative lane** = DeepSeek `deepseek-v4-flash` (KB enrichment only: summaries, symbol intents, semantic-type classification, wiki-L2 narrative; BPRE Tier-2 link resolution, Tier-3 parse-error files, D5 rule/state-machine text) **+** claude-haiku-4-5 via the Claude Code CLI (dashboard-chat only; no DeepSeek fallback — emits SSE error when CLI unavailable).
 
 **No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. In the 5-tier BPRE resolution ladder (HR16): Tier-1.75 (`kb/resolve_rerank.py`) is the GPU rerank lane — embedding + reranking, zero generation; Tier-2/3 are cloud DeepSeek. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9).
 
@@ -245,3 +265,14 @@ drops the engine's own config from the index.
 
 `source` values: `"own"` (project has its own `.opencode-index.yaml`),
 `"inherited"` (federation member using root's config), `"default"` (standalone, no config file).
+
+### 16.5 Config honored by every enumerator (HR29)
+
+`.opencode-index.yaml` is enforced not only in `iter_files` but in **every** project-source enumerator:
+
+- **Incremental/watcher path** (`daemon/sweeps.py::on_change`): changed-file list filtered through `is_excluded(path, effective_config(project).exclude, project)` before embedding.
+- **Structural spine** (`kb/structure.py`): spine built from `iter_files(root, cfg=effective_config(root))` — the canonical enumerator, not a bespoke `os.walk`.
+- **BPRE walks** (`kb/bpre.py::_source_files`, `kb/bpre_ast.py::federation_discover`): per-member `is_excluded` filter applied; no-op when member has no config file.
+- **Portal + docs walk** (Part A `repo_explore`, §8 step 10): inherit `effective_config` as above.
+
+No enumerator may silently index a file that `effective_config` would exclude.

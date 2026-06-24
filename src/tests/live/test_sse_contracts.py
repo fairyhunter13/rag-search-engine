@@ -16,7 +16,7 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-_ALLOWED_MODELS = {"claude-haiku-4-5", "deepseek-v4-flash", "deepseek-v4-flash-fallback"}
+_ALLOWED_MODELS = {"claude-haiku-4-5"}  # chat lane is Haiku-only (EC2)
 
 
 def _any_project():
@@ -89,18 +89,16 @@ def test_chat_stream_done_not_first(live_client):
 
 @pytest.mark.slow
 def test_chat_stream_model_in_allowed_set(live_client):
-    """done event model_used must be haiku or deepseek (no codex, no random models)."""
+    """done event model must be claude-haiku-4-5 (chat lane is Haiku-only — EC2)."""
     p = _any_project()
     events = _collect_chat_events(live_client, p, "List the main packages.")
     done_evs = [e for e in events if e.get("type") == "done"]
     assert done_evs, "No done event received"
-    # done event uses "model" (string); "model_used" is a legacy list key
-    raw = done_evs[0].get("model_used") or done_evs[0].get("model", "")
-    model_used = raw if isinstance(raw, list) else ([raw] if raw else [])
-    assert any(
-        m in _ALLOWED_MODELS or any(x in m for x in ("haiku", "deepseek"))
-        for m in model_used
-    ), f"model_used must be haiku or deepseek; got {model_used}"
+    # done event uses "model" (string)
+    model = done_evs[0].get("model", "")
+    assert model in _ALLOWED_MODELS or "haiku" in model, (
+        f"chat model must be haiku-only; got {model!r}"
+    )
 
 
 @pytest.mark.slow

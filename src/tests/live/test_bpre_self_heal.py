@@ -110,7 +110,7 @@ def test_bsh5_delta_carry_over(synth_fed):
     with sqlite3.connect(str(db)) as con:
         procs = con.execute("SELECT id, name, services_json FROM processes").fetchall()
     if not procs:
-        pytest.skip("no processes in synthetic root — _trace_processes returned 0")
+        pytest.fail("synth_fed produced 0 processes — _trace_processes extraction failed (check fixture setup)")
     # Build old_narr keyed by proc content sig.
     old_narr: dict[str, str] = {}
     with sqlite3.connect(str(db)) as con:

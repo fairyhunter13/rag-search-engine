@@ -43,13 +43,37 @@ def test_partition_quality_on_ose():
         gs.close()
     assert q["n_l1"] > 0, "OSE must have at least one L1 community"
     assert 0.0 <= q["coverage"] <= 1.0, f"coverage out of range: {q['coverage']}"
-    assert 0.0 <= q["singleton_ratio"] < 1.0, f"singleton_ratio out of range: {q['singleton_ratio']}"
+    assert 0.0 <= q["singleton_ratio"] <= 1.0, f"singleton_ratio out of range: {q['singleton_ratio']}"
     assert isinstance(q["degenerate"], bool), "degenerate must be a bool"
     assert isinstance(q["modularity_q"], float), "modularity_q must be a float"
 
 
+def test_edge_free_graph_not_degenerate(tmp_path):
+    """DQ1: edge-free graph (ec=0) → degenerate=False regardless of singleton_ratio (HR20).
+
+    An edge-free project structurally cannot form non-singleton communities via detection
+    (Leiden requires edges); all clauses now require ec>0 so the gate is skipped entirely.
+    """
+    from opencode_search.graph.quality import partition_quality
+    gs = GraphStore(tmp_path / "edgefree.db")
+    try:
+        for i in range(7):
+            gs.upsert_symbol(f"s{i}", f"fn{i}", f"fn{i}", "function", "a.py", i+1, i+2, "python")
+            gs.upsert_community(i, level=1, title=f"C{i}", summary="", member_count=1)
+            gs._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (i, f"s{i}"))
+        # NO edges — exactly like domain-calloff (7 symbols, 0 edges)
+        gs.commit()
+        q = partition_quality(gs)
+    finally:
+        gs.close()
+    assert q["singleton_ratio"] == 1.0, f"expected singleton_ratio=1.0 for all-singleton, got {q}"
+    assert not q["degenerate"], (
+        f"edge-free project must NOT be degenerate (ec=0 exempts all clauses per HR20): {q}"
+    )
+
+
 def test_degenerate_fires_on_all_singleton_graph(tmp_path):
-    """HQ2: degenerate=True when singleton_ratio >= 0.60."""
+    """HQ2: degenerate=True when singleton_ratio >= 0.60 AND edges exist (ec>0)."""
     from opencode_search.graph.quality import partition_quality
     gs = GraphStore(tmp_path / "g.db")
     try:

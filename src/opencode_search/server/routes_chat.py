@@ -1,4 +1,4 @@
-"""chat_stream (SSE) route — claude-haiku-4-5 primary; DeepSeek fallback; no local generative LLM."""
+"""chat_stream (SSE) route — claude-haiku-4-5 only; no DeepSeek fallback; no local generative LLM."""
 from __future__ import annotations
 
 import asyncio
@@ -8,10 +8,7 @@ import shutil
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
-from opencode_search.core.config import (
-    QUERY_LLM_FALLBACK_MODEL,
-    QUERY_LLM_MODEL,
-)
+from opencode_search.core.config import QUERY_LLM_MODEL
 
 _CLAUDE = shutil.which("claude")
 
@@ -56,29 +53,30 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 
 
 async def _stream_answer(prompt: str, model_used: list[str]):
-    """Yield text chunks from claude-haiku-4-5 (primary); falls back to DeepSeek on failure."""
-    if _CLAUDE:
-        model_used[0] = QUERY_LLM_MODEL
-        proc = await asyncio.create_subprocess_exec(
-            _CLAUDE, "-p", "--model", QUERY_LLM_MODEL, prompt,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        )
-        output_bytes = b""
-        while chunk := await proc.stdout.read(512):
-            output_bytes += chunk
-            yield chunk.decode(errors="replace")
-        await proc.wait()
-        if output_bytes:
-            return  # haiku succeeded — do not fall through to DeepSeek
+    """Yield text chunks from claude-haiku-4-5. Raises RuntimeError if CLI absent or empty output.
 
-    # Fallback: haiku CLI absent or yielded empty output → DeepSeek
-    from opencode_search.graph.llm import deepseek_chat, deepseek_key
-    if not deepseek_key():
-        raise RuntimeError("claude CLI not found and DEEPSEEK_API_KEY not set — cannot serve chat")
-    model_used[0] = QUERY_LLM_FALLBACK_MODEL
-    loop = asyncio.get_running_loop()
-    text = await loop.run_in_executor(None, deepseek_chat, prompt)
-    yield text
+    DeepSeek is the KB-enrichment-exclusive engine (HR12); it has no role in dashboard chat.
+    """
+    if not _CLAUDE:
+        raise RuntimeError(
+            "claude CLI unavailable — dashboard chat requires claude-haiku-4-5 "
+            "(DeepSeek is KB-enrichment-only)"
+        )
+    model_used[0] = QUERY_LLM_MODEL
+    proc = await asyncio.create_subprocess_exec(
+        _CLAUDE, "-p", "--model", QUERY_LLM_MODEL, prompt,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+    )
+    output_bytes = b""
+    while chunk := await proc.stdout.read(512):
+        output_bytes += chunk
+        yield chunk.decode(errors="replace")
+    await proc.wait()
+    if not output_bytes:
+        raise RuntimeError(
+            "claude-haiku-4-5 yielded empty output — dashboard chat requires claude-haiku-4-5 "
+            "(DeepSeek is KB-enrichment-only)"
+        )
 
 
 async def _api_chat_stream(request: Request) -> Response:
@@ -121,7 +119,7 @@ async def _api_chat_stream(request: Request) -> Response:
             sys_prompt += f"\n\nRecent conversation:{hist_str}"
         prompt = f"{sys_prompt}\n\n{message}"
 
-        model_used = [QUERY_LLM_FALLBACK_MODEL]
+        model_used = [QUERY_LLM_MODEL]
         try:
             async for chunk in _stream_answer(prompt, model_used):
                 yield f"data: {json.dumps({'type': 'token', 'text': chunk})}\n\n".encode()

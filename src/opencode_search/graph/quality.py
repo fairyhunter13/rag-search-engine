@@ -70,9 +70,9 @@ def partition_quality(store: GraphStore) -> dict:
     ).fetchone()[0]
     level_max = level_max_row if level_max_row else 1
 
-    # Composite degenerate verdict (no edge-free penalty for coverage/modularity).
+    # Composite degenerate verdict (no edge-free penalty for any clause — HR20).
     degenerate = bool(
-        singleton_ratio >= 0.60
+        (ec > 0 and singleton_ratio >= 0.60)
         or (ec > 0 and coverage < 0.20)
         or (ec > 0 and n_l1 >= 2 and modularity_q < 0.05)
     )
