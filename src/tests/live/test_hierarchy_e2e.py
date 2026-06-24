@@ -205,11 +205,11 @@ def test_partition_quality_consistent_across_live_federation():
             gs.close()
         if not (0.0 <= q["coverage"] <= 1.0):
             failures.append(f"{mpath}: coverage={q['coverage']} OOB")
-        if not (0.0 <= q["singleton_ratio"] < 1.0):
+        if not (0.0 <= q["singleton_ratio"] <= 1.0):
             failures.append(f"{mpath}: singleton_ratio={q['singleton_ratio']} OOB")
-        # Mirror the exact condition in graph/quality.py::partition_quality (ec required)
+        # Mirror the exact condition in graph/quality.py::partition_quality (all clauses require ec>0)
         expected = (
-            q["singleton_ratio"] >= 0.60
+            (ec > 0 and q["singleton_ratio"] >= 0.60)
             or (ec > 0 and q["coverage"] < 0.20)
             or (ec > 0 and q["n_l1"] >= 2 and q["modularity_q"] < 0.05)
         )

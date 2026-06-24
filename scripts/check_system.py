@@ -194,31 +194,30 @@ def check_cli() -> None:
 
 
 def check_llm_provider() -> None:
-    print("\n### LLM provider (no local generative LLM — GPU = embeddings+reranking only)")
+    print("\n### LLM provider (GPU = embed+rerank only; chat = claude-haiku-4-5 only; DeepSeek = KB enrichment only)")
     try:
-        from opencode_search.core.config import QUERY_LLM_FALLBACK_MODEL, QUERY_LLM_MODEL
+        from opencode_search.core.config import QUERY_LLM_MODEL
     except ImportError as exc:
         _fail("core.config importable", str(exc))
         return
-    _ok(f"OPENCODE_QUERY_LLM_MODEL (primary) = {QUERY_LLM_MODEL}")
-    _ok(f"OSE_DEEPSEEK_MODEL (fallback)      = {QUERY_LLM_FALLBACK_MODEL}")
-    # Check DeepSeek key availability (required for KB build)
+    _ok(f"QUERY_LLM_MODEL (chat, haiku-only) = {QUERY_LLM_MODEL}")
+    # DeepSeek = KB-enrichment-exclusive; not a chat fallback (HR12)
     try:
         from opencode_search.graph.llm import deepseek_key
         key = deepseek_key()
         if key:
-            _ok("DEEPSEEK_API_KEY found — KB build and chat fallback available")
+            _ok("DEEPSEEK_API_KEY found — KB enrichment available (KB-exclusive; no chat fallback)")
         else:
             _fail("DEEPSEEK_API_KEY", "not found in env or ~/.bash_env — KB build will crash", required=False)
     except Exception as exc:
         _fail("deepseek_key()", str(exc), required=False)
-    # Check claude CLI (primary chat lane)
+    # claude CLI is the sole chat lane; no DeepSeek fallback (F / HR10)
     import shutil
     claude = shutil.which("claude")
     if claude:
-        _ok(f"claude CLI found at {claude} — haiku chat lane active")
+        _ok(f"claude CLI found at {claude} — haiku-4-5 chat lane active")
     else:
-        _warn("claude CLI not found — chat will fall back to DeepSeek (haiku lane inactive)")
+        _warn("claude CLI not found — chat will emit SSE error (no DeepSeek fallback; KB/search unaffected)")
 
 
 # ---------------------------------------------------------------------------

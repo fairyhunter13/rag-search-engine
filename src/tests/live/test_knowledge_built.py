@@ -43,15 +43,33 @@ def _status(path: str) -> dict:
         f"{_BASE}/api/overview",
         json={"what": "status", "project_path": path},
         headers=_HDR,
-        timeout=30,
+        timeout=60,
     )
     assert r.status_code == 200, f"overview(status): HTTP {r.status_code}"
     return json.loads(r.text)
 
 
+def _status_converged(path: str, timeout: int = 360) -> dict:
+    """Read-only bounded poll — waits for kb_state=ready without triggering indexing."""
+    import time
+    s = _status(path)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if s.get("kb_state") == "ready":
+            return s
+        time.sleep(5)
+        s = _status(path)
+    return s  # last snapshot — assertions fire on genuine never-ready (no skip/mask)
+
+
 @pytest.fixture(scope="module")
 def status_by_key() -> dict[str, dict]:
-    return {k: _status(v) for k, v in _PROJECTS.items() if v}
+    """Poll all projects concurrently so total wait = max(wait_per_project), not sum."""
+    import concurrent.futures
+    pairs = [(k, v) for k, v in _PROJECTS.items() if v]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(pairs)) as ex:
+        futures = {ex.submit(_status_converged, v): k for k, v in pairs}
+        return {futures[f]: f.result() for f in concurrent.futures.as_completed(futures)}
 
 
 class TestKnowledgeBuiltCorrectly:

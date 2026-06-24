@@ -816,7 +816,6 @@ def test_chat_sse_event_ordering(live_client):
 @pytest.mark.slow
 def test_chat_done_event_metadata(live_client):
     """done event must carry model, elapsed_ms, and non-empty sources for indexed project."""
-    from opencode_search.core.config import QUERY_LLM_FALLBACK_MODEL
     done_evt = None
     r = live_client.post(
         "/api/chat_stream",
@@ -837,7 +836,7 @@ def test_chat_done_event_metadata(live_client):
     r.close()
     assert done_evt is not None, "No done event received"
     from opencode_search.core.config import QUERY_LLM_MODEL
-    assert done_evt.get("model") in (QUERY_LLM_MODEL, QUERY_LLM_FALLBACK_MODEL), f"done.model wrong: {done_evt.get('model')!r}"
+    assert done_evt.get("model") == QUERY_LLM_MODEL, f"done.model wrong: {done_evt.get('model')!r}"
     assert isinstance(done_evt.get("elapsed_ms"), int), f"done.elapsed_ms not int: {done_evt}"
     assert isinstance(done_evt.get("sources"), list), f"done.sources not list: {done_evt}"
     # sources may be empty if no chunks matched; field presence and type is what matters

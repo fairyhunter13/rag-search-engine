@@ -1,4 +1,4 @@
-"""R6 inference-lane guards: DeepSeek-only KB; haiku+DeepSeek chat; no local generative LLM."""
+"""R6 inference-lane guards: DeepSeek-only KB; haiku-only chat; no local generative LLM."""
 import inspect
 from pathlib import Path
 
@@ -51,30 +51,26 @@ def test_enrich_project_crashes_without_key():
 
 
 # ---------------------------------------------------------------------------
-# R6b — Dashboard chat: haiku primary + DeepSeek fallback
+# R6b — Dashboard chat: haiku-only (EC2 — chat-lane purity)
 # ---------------------------------------------------------------------------
 
 
-def test_stream_answer_has_deepseek_fallback():
-    """R6b static: routes_chat.py _stream_answer has a real DeepSeek fallback branch."""
+def test_chat_lane_is_haiku_only():
+    """EC2 / R6b static: routes_chat.py has no DeepSeek symbols — chat lane is Haiku-only."""
     from opencode_search.server import routes_chat
 
     src = inspect.getsource(routes_chat)
-    assert "deepseek_chat" in src, "routes_chat.py must reference deepseek_chat for the fallback lane"
-    assert "QUERY_LLM_FALLBACK_MODEL" in src, (
-        "routes_chat.py must reference QUERY_LLM_FALLBACK_MODEL (set on fallback fire)"
+    assert "deepseek_chat" not in src, (
+        "routes_chat.py must NOT reference deepseek_chat (chat is Haiku-only; DeepSeek is KB-enrichment-only)"
     )
-    assert "deepseek_key()" in src, "routes_chat.py must guard DeepSeek fallback with deepseek_key()"
+    assert "QUERY_LLM_FALLBACK_MODEL" not in src, (
+        "routes_chat.py must NOT reference QUERY_LLM_FALLBACK_MODEL (fallback lane removed)"
+    )
+    assert "deepseek_key()" not in src, (
+        "routes_chat.py must NOT call deepseek_key() (no DeepSeek in chat lane)"
+    )
     assert "codex" not in src.lower(), "routes_chat.py must not reference codex (removed)"
-
-
-def test_chat_fallback_model_is_deepseek():
-    """R6b static: QUERY_LLM_FALLBACK_MODEL defaults to deepseek-chat (not haiku or codex)."""
-    from opencode_search.core.config import QUERY_LLM_FALLBACK_MODEL
-
-    assert "deepseek" in QUERY_LLM_FALLBACK_MODEL.lower(), (
-        f"QUERY_LLM_FALLBACK_MODEL must be a DeepSeek model; got {QUERY_LLM_FALLBACK_MODEL!r}"
-    )
+    assert "QUERY_LLM_MODEL" in src, "routes_chat.py must reference QUERY_LLM_MODEL (haiku)"
 
 
 def test_chat_primary_model_is_haiku():
