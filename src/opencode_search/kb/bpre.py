@@ -171,13 +171,16 @@ def _source_files(member_path: str) -> list[Path]:
     exts = {".go", ".java", ".py", ".ts", ".js", ".kt"}
     root = Path(member_path)
     from opencode_search.core.config import IGNORED_DIRS
+    from opencode_search.core.index_config import effective_config, is_excluded
+    cfg = effective_config(root)
     out: list[Path] = []
     try:
         for dirpath, dirs, files in os.walk(str(root)):
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for f in files:
                 p = Path(dirpath) / f
-                if p.suffix in exts and not _is_test_file(str(p)):
+                if (p.suffix in exts and not _is_test_file(str(p))
+                        and not (cfg.exclude and is_excluded(p, cfg.exclude, root))):
                     out.append(p)
     except OSError:
         pass

@@ -367,13 +367,24 @@ def _index_files(project_path: str, files: list) -> None:
     from pathlib import Path
 
     from opencode_search.core.config import project_vector_db
+    from opencode_search.core.index_config import effective_config, is_excluded
     from opencode_search.embed.embedder import get_embedder
+    from opencode_search.index.discover import is_ignored_path
     from opencode_search.index.indexer import index_files
     from opencode_search.index.store import VectorStore
 
+    root = Path(project_path)
+    cfg = effective_config(root)
+    filtered = [
+        Path(str(f)) for f in files
+        if not is_ignored_path(Path(str(f)), root)
+        and not (cfg.exclude and is_excluded(Path(str(f)), cfg.exclude, root))
+    ]
+    if not filtered:
+        return
     vs = VectorStore(project_vector_db(project_path))
     try:
-        index_files([Path(str(f)) for f in files], get_embedder(), vs, project_root=Path(project_path))
+        index_files(filtered, get_embedder(), vs, project_root=root)
     finally:
         vs.close()
 
@@ -519,6 +530,21 @@ def _enrich_project(project_path: str) -> None:
         run_docgen(project_path)
     except Exception as exc:
         log.error("docgen %s: %s", project_path, exc, exc_info=True)
+    # Re-embed generated docs/ under scope=docs (HR28); no-op if no generated docs/ exists.
+    try:
+        from opencode_search.core.config import project_vector_db
+        from opencode_search.embed.embedder import get_embedder
+        from opencode_search.index.indexer import index_docs
+        from opencode_search.index.store import VectorStore
+        _vs = VectorStore(project_vector_db(project_path))
+        try:
+            _n = index_docs(project_path, get_embedder(), _vs)
+            if _n:
+                log.info("index_docs %s: %d doc chunks", project_path, _n)
+        finally:
+            _vs.close()
+    except Exception as exc:
+        log.error("index_docs %s: %s", project_path, exc, exc_info=True)
 
 
 def _regen_owning_federations(member_path: str) -> None:

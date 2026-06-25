@@ -83,6 +83,7 @@ def is_ignored_path(p: Path, root: Path | None = None) -> bool:
 
 def iter_files(
     root: Path, *, federation_mode: bool = False, cfg: ProjectConfig | None = None,
+    include_generated_docs: bool = False,
 ) -> Iterator[Path]:
     """Yield indexable files under root, skipping ignored dirs and big files."""
     root = root.resolve()
@@ -95,7 +96,7 @@ def iter_files(
             d for d in dirnames
             if d not in exc_dirs
             and not d.endswith(".egg-info")
-            and not (d == "docs" and _is_generated_docs_dir(dp / d))
+            and not (not include_generated_docs and d == "docs" and _is_generated_docs_dir(dp / d))
         ]
         if federation_mode:
             dirnames[:] = [

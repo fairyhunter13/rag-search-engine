@@ -60,12 +60,16 @@ def federation_discover(members:list[str])->ApiSurface:
     try:parser=_ts_api.get_parser("go")
     except Exception as e:log.warning("bpre_ast A: %s",e);return surf
     from opencode_search.core.config import IGNORED_DIRS
+    from opencode_search.core.index_config import effective_config, is_excluded
     for member in members:
+        _mcfg=effective_config(Path(member))
         for dp,dirs,fs in os.walk(member):
             dirs[:]=[d for d in dirs if d not in IGNORED_DIRS]
             for fname in fs:
                 if not fname.endswith(".pb.go"):continue
-                try:c=(Path(dp)/fname).read_text(errors="replace");root=parser.parse(c).root_node()
+                _fp=Path(dp)/fname
+                if _mcfg.exclude and is_excluded(_fp,_mcfg.exclude,Path(member)):continue
+                try:c=_fp.read_text(errors="replace");root=parser.parse(c).root_node()
                 except Exception:continue
                 b=c.encode("utf-8","replace")
                 for i in range(root.named_child_count()):

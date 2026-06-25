@@ -10,8 +10,9 @@ import os
 from binascii import crc32 as _crc32
 from pathlib import Path
 
+from opencode_search.core.index_config import effective_config, is_excluded
 from opencode_search.graph.store import GraphStore
-from opencode_search.index.discover import _EXCLUDE
+from opencode_search.index.discover import _EXCLUDE, _is_generated_docs_dir
 
 _DIR_BASE: int = 1 << 30   # 1_073_741_824 — well above any L1/L2/L3 id
 _FILE_BASE: int = 1 << 31  # 2_147_483_648
@@ -33,6 +34,7 @@ def build_structure_tree(store: GraphStore, root: str) -> None:
     (_EXCLUDE + .egg-info). Idempotent: ON CONFLICT updates titles/summaries.
     """
     root_path = Path(root).resolve()
+    cfg = effective_config(root_path)
 
     dir_parents: dict[str, str | None] = {}  # rel_dir -> parent rel (None = root)
     file_parents: dict[str, str] = {}         # rel_file -> rel_dir
@@ -41,7 +43,10 @@ def build_structure_tree(store: GraphStore, root: str) -> None:
         dp = Path(dirpath_str)
         dirnames[:] = sorted(
             d for d in dirnames
-            if d not in _EXCLUDE and not d.endswith(".egg-info")
+            if d not in _EXCLUDE
+            and not d.endswith(".egg-info")
+            and not (d == "docs" and _is_generated_docs_dir(dp / d))
+            and not (cfg.exclude and is_excluded(dp / d, cfg.exclude, root_path))
         )
 
         rel_dir = str(dp.relative_to(root_path)) if dp != root_path else "."
@@ -58,6 +63,8 @@ def build_structure_tree(store: GraphStore, root: str) -> None:
 
         for fn in sorted(filenames):
             fp = dp / fn
+            if cfg.exclude and is_excluded(fp, cfg.exclude, root_path):
+                continue
             rel_file = str(fp.relative_to(root_path))
             file_parents[rel_file] = rel_dir
 

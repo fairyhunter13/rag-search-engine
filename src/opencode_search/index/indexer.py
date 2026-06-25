@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import numpy as np
@@ -122,3 +123,59 @@ def index_files(
         )
     store.flush()
     return len(files), len(chunks)
+
+
+def index_docs(
+    project_path: str | Path,
+    embedder,
+    store: VectorStore,
+    *,
+    project_root: Path | None = None,
+) -> int:
+    """Idempotent embed-only pass for generated docs/ tree (HR28). Returns chunk count."""
+    from opencode_search.index.discover import _TEXT_LANGS, _is_generated_docs_dir
+
+    root = Path(project_path).resolve()
+    docs_dir = root / os.environ.get("OSE_DOCGEN_DIR", "docs")
+    if not _is_generated_docs_dir(docs_dir):
+        return 0
+    pr = project_root or root
+    chunks: list[Chunk] = []
+    for fpath in sorted(docs_dir.rglob("*")):
+        if not fpath.is_file():
+            continue
+        lang = detect_language(fpath)
+        if lang not in _TEXT_LANGS:
+            continue
+        store.delete_by_path(str(fpath))
+        try:
+            content = fpath.read_text(errors="replace")
+        except OSError:
+            continue
+        chunks.extend(chunk_file(fpath, content, lang, project_root=pr))
+    return _embed_docs(chunks, embedder, store)
+
+
+def _embed_docs(chunks: list[Chunk], embedder, store: VectorStore) -> int:
+    if not chunks:
+        store.flush()
+        return 0
+    batch = embed_batch_size()
+    texts = [c.content for c in chunks]
+    vectors: list[np.ndarray] = []
+    for i in range(0, len(texts), batch):
+        _thermal_pace()
+        vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
+        vectors.extend(vecs)
+    for pos, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
+        store.insert(
+            chunk_id=_chunk_id(chunk.path, pos),
+            path=chunk.path,
+            start=chunk.start_line,
+            end=chunk.end_line,
+            language=chunk.language,
+            content=chunk.content,
+            vector=vec,
+        )
+    store.flush()
+    return len(chunks)

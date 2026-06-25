@@ -34,7 +34,10 @@ def search(
             results = [r for r in results if r.get("language") in _TEXT_LANGS]
         elif scope == "code":
             from tree_sitter_language_pack import has_language
-            results = [r for r in results if has_language(r.get("language", ""))]
+            results = [
+                r for r in results
+                if has_language(r.get("language", "")) and r.get("language") not in _TEXT_LANGS
+            ]
     passages = [r.get("content", "") for r in results]
     scores = _get_reranker().rerank(query, passages)
     for r, s in zip(results, scores, strict=False):
