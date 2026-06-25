@@ -49,27 +49,10 @@ def _status(path: str) -> dict:
     return json.loads(r.text)
 
 
-def _status_converged(path: str, timeout: int = 360) -> dict:
-    """Read-only bounded poll — waits for kb_state=ready without triggering indexing."""
-    import time
-    s = _status(path)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if s.get("kb_state") == "ready":
-            return s
-        time.sleep(5)
-        s = _status(path)
-    return s  # last snapshot — assertions fire on genuine never-ready (no skip/mask)
-
-
 @pytest.fixture(scope="module")
 def status_by_key() -> dict[str, dict]:
-    """Poll all projects concurrently so total wait = max(wait_per_project), not sum."""
-    import concurrent.futures
-    pairs = [(k, v) for k, v in _PROJECTS.items() if v]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(pairs)) as ex:
-        futures = {ex.submit(_status_converged, v): k for k, v in pairs}
-        return {futures[f]: f.result() for f in concurrent.futures.as_completed(futures)}
+    """Snapshot status for all projects (non-polling — durable structural gates only)."""
+    return {k: _status(v) for k, v in _PROJECTS.items() if v}
 
 
 class TestKnowledgeBuiltCorrectly:
@@ -103,23 +86,3 @@ class TestKnowledgeBuiltCorrectly:
             + "\n".join(violations)
         )
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
-    def test_l1_enriched_pct_complete(self, key: str, status_by_key: dict) -> None:
-        """T1c: L1 enrichment must be 100% for ready projects with communities."""
-        s = status_by_key.get(key, {})
-        if s.get("kb_state") != "ready":
-            return  # kb_state checked independently by test_kb_state_ready
-        if s.get("communities", 0) == 0:
-            return  # legitimately empty — no enrichment expected
-        pct = s.get("l1_enriched_pct", 0.0)
-        assert pct == 100.0, (
-            f"{key}: l1_enriched_pct={pct}% — some L1 communities lack DeepSeek summaries"
-        )
-
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
-    def test_kb_state_ready(self, key: str, status_by_key: dict) -> None:
-        """T1d: All named roots must be kb_state=ready."""
-        s = status_by_key.get(key, {})
-        assert s.get("kb_state") == "ready", (
-            f"{key}: kb_state={s.get('kb_state')!r} — enrichment incomplete"
-        )

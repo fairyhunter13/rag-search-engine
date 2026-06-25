@@ -58,13 +58,18 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         s = _overview("status", project)
-        if s.get("kb_state") == "ready" and s.get("l2_enriched_pct") == 100.0:
+        if (s.get("kb_state") == "ready"
+                and s.get("l1_enriched_pct") == 100.0
+                and s.get("l2_enriched_pct") == 100.0):
             return
         time.sleep(3)
     s = _overview("status", project)
-    assert s.get("kb_state") == "ready" and s.get("l2_enriched_pct") == 100.0, (
+    assert (s.get("kb_state") == "ready"
+            and s.get("l1_enriched_pct") == 100.0
+            and s.get("l2_enriched_pct") == 100.0), (
         f"{project!r} did not reach ready in {timeout}s — "
-        f"kb_state={s.get('kb_state')!r}, l2={s.get('l2_enriched_pct')}"
+        f"kb_state={s.get('kb_state')!r}, "
+        f"l1={s.get('l1_enriched_pct')}, l2={s.get('l2_enriched_pct')}"
     )
 
 
