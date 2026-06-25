@@ -25,16 +25,81 @@ def _inject_vendor() -> bool:
     return True
 
 
+def _is_federation_member(project_path: str) -> bool:
+    """True iff project_path appears in any enabled root's federation list (HR27)."""
+    from opencode_search.core.registry import list_projects
+    return any(
+        e.enabled and project_path in (e.federation or [])
+        for e in list_projects()
+    )
+
+
+def _cleanup_generated_docs(project_path: str) -> None:
+    """Remove generated docs/ from a federation member (R5 self-heal). O(1) if no marker."""
+    docs_dir = Path(project_path) / os.environ.get("OSE_DOCGEN_DIR", "docs")
+    if not (docs_dir / "_meta" / "provenance.json").exists():
+        return
+    if not _inject_vendor():
+        return
+    try:
+        from ose_docgen.cleanup import clean_generated  # type: ignore[import]
+        result = clean_generated(docs_dir)
+        log.info(
+            "docgen cleanup %s: removed=%d preserved=%d",
+            project_path, len(result["removed"]), len(result["preserved"]),
+        )
+    except Exception as exc:
+        log.error("docgen cleanup failed for %s: %s", project_path, exc, exc_info=True)
+
+
+def cleanup_member_docs() -> dict:
+    """One-shot R5 remediation: clean generated docs/ from every federation member.
+
+    Idempotent. Returns aggregate report {"members": [{path, removed, preserved}]}.
+    """
+    from opencode_search.core.registry import list_projects
+
+    members: set[str] = set()
+    for entry in list_projects():
+        if entry.enabled and entry.federation:
+            members.update(entry.federation)
+
+    report: list[dict] = []
+    for member in sorted(members):
+        docs_dir = Path(member) / os.environ.get("OSE_DOCGEN_DIR", "docs")
+        if not (docs_dir / "_meta" / "provenance.json").exists():
+            continue
+        if not _inject_vendor():
+            break
+        try:
+            from ose_docgen.cleanup import clean_generated  # type: ignore[import]
+            result = clean_generated(docs_dir)
+            report.append({
+                "path": member,
+                "removed": len(result["removed"]),
+                "preserved": len(result["preserved"]),
+            })
+        except Exception as exc:
+            log.error("docgen cleanup %s: %s", member, exc)
+            report.append({"path": member, "error": str(exc)})
+
+    return {"members": report}
+
+
 def run_docgen(project_path: str) -> None:
     """Generate or update the docs/ C4×Diátaxis tree for project_path.
 
     Deterministic ($0) unless OSE_DOCGEN_LLM=1. Writes into <project>/docs/.
-    Never raises — all errors are logged.
+    Federation members are cleaned (not generated) per HR27. Never raises.
     """
     if os.environ.get("OSE_DOCGEN", "1") == "0":
         return
     if not _inject_vendor():
         log.warning("docgen: vendor/docgen/src not found at %s — skipping", _VENDOR_SRC)
+        return
+    # R4 (HR27): federation members never own a generated docs/ — clean existing and return
+    if _is_federation_member(project_path):
+        _cleanup_generated_docs(project_path)
         return
     try:
         from ose_docgen.generate import generate  # type: ignore[import]
