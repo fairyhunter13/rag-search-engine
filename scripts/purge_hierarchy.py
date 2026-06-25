@@ -1,8 +1,8 @@
 """WS-E: one-shot purge of L2/L3 community rows from all registered projects' graph.dbs.
 
-Runs DELETE FROM communities WHERE level != 1  +  UPDATE parent_id=NULL on L1 rows  +
-clears stale meta keys.  Idempotent — safe to run again.
-Never opens a repo file; only touches data-dir graph.dbs.
+Also deletes stale domain_*.md wiki pages (written by the now-deleted kb/hierarchy.py
+L2 domain generation loop).  Idempotent — safe to run again.
+Never opens a repo file; only touches data-dir graph.dbs and wiki dirs.
 """
 from __future__ import annotations
 
@@ -49,17 +49,21 @@ def _purge_one(db_path: Path) -> dict:
     }
 
 
-def main() -> None:
-    import json
+def _purge_wiki_domain_pages(wiki_dir: Path) -> int:
+    """Delete stale domain_*.md pages written by the now-removed L2 domain loop."""
+    return sum(1 for f in wiki_dir.glob("domain_*.md") if (f.unlink() or True))
 
-    from opencode_search.core.config import project_graph_db
+
+def main() -> None:
+    from opencode_search.core.config import project_graph_db, project_wiki_dir
     from opencode_search.core.registry import list_projects
 
     projects = list_projects()
-    total_deleted = 0
+    total_db_deleted = 0
+    total_wiki_deleted = 0
     errors: list[str] = []
 
-    print(f"Purging L2/L3 communities from {len(projects)} registered project(s)…\n")
+    print(f"Purging L2/L3 data from {len(projects)} registered project(s)…\n")
     for p in projects:
         db = project_graph_db(p.path)
         try:
@@ -68,17 +72,20 @@ def main() -> None:
             errors.append(f"{p.path}: {exc}")
             print(f"  ERROR {p.path}: {exc}")
             continue
+        wiki_deleted = _purge_wiki_domain_pages(project_wiki_dir(p.path))
+        total_wiki_deleted += wiki_deleted
         if result.get("skipped"):
             print(f"  SKIP   {Path(p.path).name} — {result['reason']}")
         else:
             d = result["deleted"]
             r = result["remaining"]
             m = result["meta_cleared"]
-            flag = " (had L2/L3)" if d else ""
-            print(f"  OK     {Path(p.path).name:<50}  deleted={d:>4}  L1={r:>4}  meta_cleared={m}{flag}")
-            total_deleted += d
+            w = f"  wiki={wiki_deleted}" if wiki_deleted else ""
+            flag = " (had L2/L3)" if d or wiki_deleted else ""
+            print(f"  OK     {Path(p.path).name:<50}  db={d:>5}  L1={r:>4}  meta={m}{w}{flag}")
+            total_db_deleted += d
 
-    print(f"\nDone. Total L2/L3 rows deleted: {total_deleted}.")
+    print(f"\nDone. DB rows deleted: {total_db_deleted}. Wiki domain pages deleted: {total_wiki_deleted}.")
     if errors:
         print(f"\n{len(errors)} error(s):")
         for e in errors:
