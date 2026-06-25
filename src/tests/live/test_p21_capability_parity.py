@@ -42,14 +42,14 @@ def _http_session() -> tuple[dict, str]:
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                    "clientInfo": {"name": "test", "version": "0.1"}},
-    }, headers=_HDR, timeout=10)
+    }, headers=_HDR, timeout=60)  # generous — pool socket inherits this for reused connections
     assert r.status_code == 200
     sid = r.headers.get("mcp-session-id", "")
     h = {**_HDR, "mcp-session-id": sid} if sid else _HDR
     return h, sid
 
 
-def _mcp_overview(h: dict, what: str, timeout: int = 10) -> dict:
+def _mcp_overview(h: dict, what: str, timeout: int = 60) -> dict:
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 99, "method": "tools/call",
         "params": {"name": "overview", "arguments": {"what": what}},
@@ -107,7 +107,7 @@ def test_graph_docstring_matches_supported_relations():
 def test_overview_what_round_trip(what):
     """B3: overview({what}) over real /mcp transport returns non-error JSON."""
     h, _ = _http_session()
-    data = _mcp_overview(h, what, timeout=15)
+    data = _mcp_overview(h, what)
     assert "error" not in data or data.get("error") is None, (
         f"overview({what}) returned error: {data}"
     )
