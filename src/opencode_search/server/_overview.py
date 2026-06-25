@@ -68,6 +68,7 @@ _VALID = {
     "architecture_domains", "hierarchy", "status", "import_cycles",
     "surprising_connections", "feature_map", "business_rules",
     "process_flows", "suggested_questions", "service_mesh", "validate",
+    "world_model",
 }
 
 
@@ -90,6 +91,13 @@ def handle_overview(project_path: str, what: str) -> str:
             project_path = _ps[0].path if _ps else ""
         from opencode_search.index.validate import validate_index
         return json.dumps(validate_index(project_path))
+    if what == "world_model":
+        from pathlib import Path as _WmPath
+
+        import opencode_search
+        _ose_root = str(_WmPath(opencode_search.__file__).resolve().parents[2])
+        from opencode_search.kb.world_model import world_model_report
+        return json.dumps(world_model_report(_ose_root))
     if not project_path:
         ps = [p for p in list_projects() if p.enabled]
         project_path = ps[0].path if ps else ""

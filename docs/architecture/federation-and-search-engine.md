@@ -18,16 +18,36 @@ an independent unit.
 The governing principle is **P0: most efficient + most effective, for *everything* in OSE**. Every component, lane, and algorithm is chosen and tuned for maximum efficiency *and* effectiveness; all principles below are corollaries (§9b per-workload engine assignment, no cross-lane bleed; HR6, HR9, HR10, HR12, HR26).
 
 1. **DeepSeek = least/minimum token usage (DIKW token economy).** The cloud generative lane spends the *fewest possible* tokens: significance-gated head only, prefix-cached, abstention on the tail, child-reuse roll-ups; `$0` when quiescent; spend only to climb Information→Knowledge→Wisdom, and only at the nodes/queries actually read (HR22–HR24).
-2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR15, HR16 5-tier ladder, §7a).
+2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR14, HR15, HR16 5-tier ladder, HR17, HR18, §7a).
 3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26).
 4. **No local generative LLM** — cloud DeepSeek for KB, Claude Code for chat/docgen (HR12).
-5. **Determinism + idempotence** — byte-identical reruns with LLM off; enrichment gated on `summary IS NULL`, never re-labels settled rows (HR3, HR11, HR13, HR21, HR24, HR25).
+5. **Determinism + idempotence** — byte-identical reruns with LLM off; enrichment gated on `summary IS NULL`, never re-labels settled rows (HR3, HR11, HR13, HR20, HR21, HR24, HR25).
 6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`ask`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval; all generative spend (DeepSeek) is **enrichment-time**, pre-built into the KB the read-path serves (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
 7. **Self-healing** — event-driven (watcher) + reconcile re-derive on algo/source drift (HR1, HR2, HR25, §10).
-8. **Root-only docgen + universal config** — one root-owned `docs/`; `.opencode-index.yaml` honored by every enumerator (HR27, HR29).
+8. **Root-only docgen + universal config** — one root-owned `docs/`; `.opencode-index.yaml` honored by every enumerator (HR27, HR28, HR29).
 9. **Two-stage retrieval; rerank is the relevance authority.** Query = bi-encoder vector recall (`sqlite-vec`) → cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU); results ordered by `rerank_score`, **never the bare vector `score`**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
 10. **Public-repo hygiene.** Every emitted artifact (wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN, docgen pages, citations) is **project-root-relative**; absolute device paths and company/device names never leak — `symbols.file` stores absolute paths, so strip to root-relative before any artifact (HR13).
-11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU).
+11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU). Machine-verified Concept→Spec→Impl→Test traceability closes the V&V loop (HR30).
+
+## 1b. World model & traceability V&V
+
+OSE maintains a **machine-verified Requirements Traceability Matrix** across four layers:
+
+| Layer | Where it lives | Form |
+|---|---|---|
+| **Concept** | §1a principles register (P0 + P1–P11) | prose + HR refs |
+| **Spec** | §13b HR1–HR30 + `FEATURES.md` parity checklist | table + `[x]`/`[ ]` |
+| **Implementation** | source tree under `src/opencode_search/` | code |
+| **Test** | §14 test coverage map + `src/tests/live/` | table + test files |
+
+`kb/world_model.py` (GPU-free parse, <1 s) reads all four layers and runs four chain checks:
+
+- **C1 Concept→Spec (hard gate):** every §1a principle HR ref resolves to a real §13b row; every HR is cited by ≥1 principle (exempt: `_DOCTRINE_EXEMPT = {"HR19"}`). Gaps: `principle_dangling_hr`, `hr_doctrine_orphan`.
+- **C2 Spec→Test (hard gate):** every HR has ≥1 §14 row; every backtick test name is collectable (AST-scanned from `src/tests/live/`). Gaps: `hr_untested`, `phantom_test_ref`.
+- **C3 Spec→Impl (hard gate):** every file path anchor cited in §13b exists under `src/`. Gap: `dead_code_anchor`.
+- **C4 Feature→Spec (report-only):** each `[x]` feature maps to ≥1 HR via declared ref or GPU-embed+abstain (reuses `kb/resolve_rerank.py` margin=0.10). Never flips verdict.
+
+`verdict=VALID` iff C1+C2+C3 are gap-free. Surfaced at `overview(what='world_model')`. Guard test `test_world_model_traceability.py` hard-gates CI and writes a validation stamp `{validated_at, suite_result, commit}` to the registry dir on pass (HR30).
 
 ## 2. Vocabulary
 
