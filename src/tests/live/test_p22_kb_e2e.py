@@ -59,17 +59,15 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
     while time.monotonic() < deadline:
         s = _overview("status", project)
         if (s.get("kb_state") == "ready"
-                and s.get("l1_enriched_pct") == 100.0
-                and s.get("l2_enriched_pct") == 100.0):
+                and s.get("l1_enriched_pct") == 100.0):
             return
         time.sleep(3)
     s = _overview("status", project)
     assert (s.get("kb_state") == "ready"
-            and s.get("l1_enriched_pct") == 100.0
-            and s.get("l2_enriched_pct") == 100.0), (
+            and s.get("l1_enriched_pct") == 100.0), (
         f"{project!r} did not reach ready in {timeout}s — "
         f"kb_state={s.get('kb_state')!r}, "
-        f"l1={s.get('l1_enriched_pct')}, l2={s.get('l2_enriched_pct')}"
+        f"l1={s.get('l1_enriched_pct')}"
     )
 
 
@@ -82,7 +80,7 @@ def test_e2e_status_has_required_fields(live_client, proj_key):
     """S5a: overview(status) returns required fields for each named project."""
     project = _PROJECTS[proj_key]
     status = _overview("status", project)
-    for field in ("kb_state", "enriched_pct", "l1_enriched_pct", "l2_enriched_pct",
+    for field in ("kb_state", "enriched_pct", "l1_enriched_pct",
                   "symbols", "communities"):
         assert field in status, f"overview(status) missing {field!r} for {proj_key}"
     assert status["kb_state"] in ("indexing", "searchable", "enriching", "ready"), (
@@ -91,14 +89,15 @@ def test_e2e_status_has_required_fields(live_client, proj_key):
 
 
 @pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
-def test_e2e_no_domain_placeholders(live_client, proj_key):
-    """S5b: architecture_domains must not contain 'Domain N' placeholder titles."""
+def test_e2e_no_l1_placeholders(live_client, proj_key):
+    """S5b: L1 communities must not contain 'Domain N' placeholder titles."""
     project = _PROJECTS[proj_key]
-    data = _overview("architecture_domains", project)
-    domains = data.get("architecture_domains", [])
+    data = _overview("communities", project)
+    communities = data.get("communities", [])
     placeholder = re.compile(r"^Domain\s+\d+$", re.IGNORECASE)
-    bad = [d.get("title", "") for d in domains if placeholder.match(d.get("title", "") or "")]
-    assert not bad, f"{proj_key}: placeholder domain titles found: {bad}"
+    bad = [c.get("title", "") for c in communities if c.get("level") == 1
+           and placeholder.match(c.get("title", "") or "")]
+    assert not bad, f"{proj_key}: placeholder community titles found: {bad}"
 
 
 @pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
@@ -189,7 +188,7 @@ def test_federation_kb_reflects_root_only(live_client):
 @pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["ose", "payment", "astro"])
 def test_kb_state_ready_all_projects(live_client, proj_key):
-    """T1/TC1/HR7: converge+assert kb_state='ready' and l2_enriched_pct==100 for all 3 projects."""
+    """T1/TC1/HR7: converge+assert kb_state='ready' and l1_enriched_pct==100 for all 3 projects."""
     _converge_ready(_PROJECTS[proj_key])
 
 

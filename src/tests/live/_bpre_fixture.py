@@ -1,11 +1,10 @@
-"""Synthetic 2-service Go gRPC federation fixture for BPRE + L3 isolation.
+"""Synthetic 2-service Go gRPC federation fixture for BPRE isolation.
 
 Builds a minimal but real multi-service mesh under ~/.local/share/ocs-test-dirs:
   svc-cart   — cart.pb.go with NewCartServiceClient / RegisterCartServiceServer / GetCart
   svc-checkout — checkout.go with HTTP route + NewCartServiceClient(conn).GetCart(...) call
 
-Both members get a GPU-free graph.db via _rederive_graph, plus L2 community rows so
-build_federation_hierarchy can generate L3 themes.  A root dir ties them together.
+Both members get a GPU-free graph.db via _rederive_graph.  A root dir ties them together.
 
 Usage (module-scope fixture):
     from tests.live._bpre_fixture import bpre_root_fixture
@@ -102,17 +101,6 @@ def _make_member(base: Path, name: str, src_files: dict[str, str],
     except Exception:
         pass  # graph.db may be empty on rare parse failure; tests tolerate
 
-    # Add a minimal L2 community so federation_hierarchy can group themes.
-    gdb = project_graph_db(str(d))
-    gdb.parent.mkdir(parents=True, exist_ok=True)
-    gs = GraphStore(gdb)
-    try:
-        gs.upsert_community(10001, level=2, title=f"{name}-domain",
-                            summary=f"{name} service domain", member_count=1, narrated=1)
-        gs._con.execute("UPDATE communities SET semantic_type=? WHERE id=10001", (stype,))
-        gs.commit()
-    finally:
-        gs.close()
     return str(d)
 
 

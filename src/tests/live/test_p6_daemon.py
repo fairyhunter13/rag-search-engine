@@ -216,11 +216,10 @@ def test_pipeline_all_stages_real_astro():
     """P10.6: per-stage output traces on a real large indexed project.
 
     Validates: chunk+embed → tree-sitter symbols → call edges → Leiden
-    communities → LLM-enriched symbols+communities → L2 hierarchy → wiki pages.
+    communities → LLM-enriched symbols+communities → wiki pages.
 
-    Uses OSE (this repo) — always registered, has all 7 stages. The redacted-name-3
-    ROOT is a thin federation root (symlinks only, 11 symbols, no edges) since
-    Phase 102 switched to no-inlining; member code is indexed independently.
+    Uses OSE (this repo) — always registered, has all 6 stages. L2 hierarchy
+    removed in WS-B; wiki now generates community pages (flat-L1 only).
     """
     import sqlite3
     from pathlib import Path
@@ -238,9 +237,8 @@ def test_pipeline_all_stages_real_astro():
         assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] > 0, "stage 2b call-edges: 0 edges"
         assert c.execute("SELECT COUNT(*) FROM communities").fetchone()[0] > 0, "stage 3 leiden: 0 communities"
         assert c.execute("SELECT COUNT(*) FROM communities WHERE title IS NOT NULL").fetchone()[0] > 0, "stage 5 enrich-comm: no titles"
-        assert c.execute("SELECT COUNT(*) FROM communities WHERE level > 1").fetchone()[0] > 0, "stage 6 hierarchy: no L2"
     wiki = project_wiki_dir(project)
-    assert list(wiki.glob("*.md")), f"stage 7 wiki: no pages in {wiki}"
+    assert list(wiki.glob("*.md")), f"stage 6 wiki: no pages in {wiki}"
 
 
 def test_maintenance_vacuums_orphan():

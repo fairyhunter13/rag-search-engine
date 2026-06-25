@@ -65,10 +65,9 @@ def _detect_services(root: str) -> list[dict]:
 
 _VALID = {
     "structure", "projects", "metrics", "patterns", "communities",
-    "architecture_domains", "hierarchy", "status", "import_cycles",
+    "status", "import_cycles",
     "surprising_connections", "feature_map", "business_rules",
     "process_flows", "suggested_questions", "service_mesh", "validate",
-    "world_model",
 }
 
 
@@ -91,13 +90,6 @@ def handle_overview(project_path: str, what: str) -> str:
             project_path = _ps[0].path if _ps else ""
         from opencode_search.index.validate import validate_index
         return json.dumps(validate_index(project_path))
-    if what == "world_model":
-        from pathlib import Path as _WmPath
-
-        import opencode_search
-        _ose_root = str(_WmPath(opencode_search.__file__).resolve().parents[2])
-        from opencode_search.kb.world_model import world_model_report
-        return json.dumps(world_model_report(_ose_root))
     if not project_path:
         ps = [p for p in list_projects() if p.enabled]
         project_path = ps[0].path if ps else ""
@@ -121,35 +113,6 @@ def handle_overview(project_path: str, what: str) -> str:
             if what == "communities":
                 rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities WHERE level>=1 ORDER BY level,id LIMIT 50").fetchall()]
                 return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
-            if what == "architecture_domains":
-                rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT id,title,level FROM communities WHERE level>=2 ORDER BY level,id LIMIT 200"
-                ).fetchall()]
-                return json.dumps({"architecture_domains": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
-            if what == "hierarchy":
-                from opencode_search.graph.quality import partition_quality
-                hier_rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT id,title,level,kind,path,summary FROM communities ORDER BY level,id LIMIT 500"
-                ).fetchall()]
-                quality = partition_quality(_gstores[0]) if _gstores else {}
-                fed_domains = []
-                if _gstores:
-                    fed_domains = [
-                        {"id": r[0], "title": r[1], "summary": r[2]}
-                        for r in _gstores[0].conn.execute(
-                            "SELECT id,title,summary FROM communities "
-                            "WHERE level>=3 AND title IS NOT NULL AND title!='' ORDER BY id"
-                        ).fetchall()
-                    ]
-                return json.dumps({
-                    "hierarchy": [
-                        {"id": r[0], "title": r[1], "level": r[2],
-                         "kind": r[3], "path": r[4], "summary": r[5]}
-                        for r in hier_rows
-                    ],
-                    "quality": quality,
-                    "federation_domains": fed_domains,
-                })
             if what == "status":
                 from opencode_search.core.config import project_vector_db
                 from opencode_search.core.registry import get_project
@@ -159,16 +122,13 @@ def handle_overview(project_path: str, what: str) -> str:
                 members_info: list = []
                 worst_state = "ready"
                 _rank = {"indexing": 0, "searchable": 1, "enriching": 2, "ready": 3}
-                root_pct = (100.0, 100.0, 100.0)
+                root_pct = (100.0, 100.0)
                 for i, (p, gs) in enumerate(zip(_paths, _gstores, strict=False)):
                     c = gs.conn
                     l1t = c.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
                     l1s = c.execute("SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
-                    l2t = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2").fetchone()[0]
-                    l2s = c.execute("SELECT COUNT(*) FROM communities WHERE level>=2 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
                     l1p = round(l1s / l1t * 100, 1) if l1t else 100.0
-                    l2p = round(l2s / l2t * 100, 1) if l2t else 100.0
-                    _pct = round(min(l1p, l2p), 1)
+                    _pct = l1p
                     ep = get_project(p)
                     _ks = ("indexing" if (ep is None or ep.indexed_at is None
                                           or not project_vector_db(p).exists()) else
@@ -192,7 +152,7 @@ def handle_overview(project_path: str, what: str) -> str:
                     if _rank.get(_ks, 3) < _rank.get(worst_state, 3):
                         worst_state = _ks
                     if i == 0:
-                        root_pct = (_pct, l1p, l2p)
+                        root_pct = (_pct, l1p)
                 from pathlib import Path as _P
 
                 from opencode_search.core.index_config import _CONFIG_NAMES, effective_config
@@ -207,7 +167,7 @@ def handle_overview(project_path: str, what: str) -> str:
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
                                    "kb_state": worst_state, "enriched_pct": root_pct[0],
-                                   "l1_enriched_pct": root_pct[1], "l2_enriched_pct": root_pct[2],
+                                   "l1_enriched_pct": root_pct[1],
                                    "symbol_hollow": _any_hollow,
                                    "hierarchy_quality": {"degenerate": _any_degenerate},
                                    "members": members_info,

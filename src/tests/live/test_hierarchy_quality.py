@@ -1,30 +1,20 @@
-"""Live e2e tests for information-hierarchy quality gate + federation-global L3 (HQ1-HQ7).
+"""Live e2e tests for partition quality gate (HQ1-HQ3).
 
-Research: arXiv 2501.07025 (composite quality signal), 2606.02019 (federation invariants),
-2603.05207 (k-core deferred; recursive Leiden rejected). No mocks; GPU-only.
+No mocks; GPU-only. L2/L3 hierarchy removed (WS-B): only flat-L1 partition quality tests remain.
 """
 from __future__ import annotations
 
-import asyncio
-import inspect
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from opencode_search.core.config import project_graph_db
-from opencode_search.core.registry import list_projects
-from opencode_search.daemon.federation import expand_federation
 from opencode_search.graph.store import GraphStore
 
 pytestmark = pytest.mark.live
 
 _OSE = str(Path(__file__).parents[3])
-
-
-def _fedroot() -> str | None:
-    return next((p.path for p in list_projects() if p.enabled and len(expand_federation(p.path)) > 1), None)
 
 
 def test_partition_quality_on_ose():
@@ -132,107 +122,3 @@ def test_kb_state_demoted_when_degenerate(safe_tmp_path):
         remove_project(proj)
 
 
-def test_hierarchy_includes_federation_domains_and_quality(live_client):
-    """HQ4: overview(hierarchy) on a federated root exposes federation_domains + quality."""
-    root = _fedroot()
-    if not root:
-        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
-    r = live_client.post("/api/overview", json={"project": root, "what": "hierarchy"})
-    assert r.status_code == 200, f"overview hierarchy failed: {r.text[:200]}"
-    d = r.json()
-    assert "hierarchy" in d and "quality" in d and "federation_domains" in d
-    assert "n_l1" in d["quality"]
-
-
-def test_federation_hierarchy_creates_no_edges():
-    """HQ5a: build_federation_hierarchy must not create edges in root graph.db (HR4)."""
-    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-    root = _fedroot()
-    if not root:
-        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "0"
-    try:
-        build_federation_hierarchy(root)
-    finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
-    gs = GraphStore(project_graph_db(root))
-    try:
-        assert gs.edge_count() == 0, f"must not add edges (HR4); got {gs.edge_count()}"
-    finally:
-        gs.close()
-
-
-def test_federation_hierarchy_deterministic_with_llm_off():
-    """HQ5b: two builds with OSE_WIKI_LLM=0 produce identical L3 rows."""
-    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-    root = _fedroot()
-    if not root:
-        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "0"
-    try:
-        def _rows():
-            gs = GraphStore(project_graph_db(root))
-            try:
-                return gs._con.execute(
-                    "SELECT id,title,summary,member_count FROM communities WHERE level>=3 ORDER BY id"
-                ).fetchall()
-            finally:
-                gs.close()
-        build_federation_hierarchy(root)
-        r1 = _rows()
-        build_federation_hierarchy(root)
-        r2 = _rows()
-    finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
-    assert r1 == r2, f"non-deterministic with OSE_WIKI_LLM=0: {r1[:3]} vs {r2[:3]}"
-
-
-def test_federation_hierarchy_never_reads_symbols():
-    """HQ6: source-guard — no FROM symbols in federation_hierarchy.py (token frugality)."""
-    from opencode_search.kb import federation_hierarchy
-    src = inspect.getsource(federation_hierarchy)
-    assert "FROM symbols" not in src, "must not read FROM symbols (roll-up from L2 summaries only)"
-    assert "level=2" in src or "level>=2" in src, "must read L2 communities as roll-up input"
-
-
-@pytest.mark.slow
-def test_global_ask_surfaces_l3_federation_domain(live_client):
-    """HQ7: ask(scope=global) context references an L3 federation-domain title.
-
-    Builds L3 deterministically (OSE_WIKI_LLM=0) if absent so this never skips on a fresh root.
-    """
-    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-
-    root = _fedroot()
-    if not root:
-        pytest.fail("no federated root registered — register a federation root before running hierarchy tests")
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "0"
-    try:
-        build_federation_hierarchy(root)
-    finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
-    gs = GraphStore(project_graph_db(root))
-    try:
-        l3_titles = [r[0] for r in gs._con.execute(
-            "SELECT title FROM communities WHERE level>=3 AND title IS NOT NULL AND title!=''"
-        ).fetchall()]
-    finally:
-        gs.close()
-    assert l3_titles, "build_federation_hierarchy must have written L3 rows to root graph.db"
-    from opencode_search.server.mcp import ask as _mcp_ask
-    ctx = asyncio.run(_mcp_ask("What is the overall cross-service architecture?", root, "global"))
-    assert any(t.lower() in ctx.lower() for t in l3_titles), (
-        f"ask(scope=global) did not mention any L3 domain.\nL3: {l3_titles[:5]}\nCtx: {ctx[:300]}"
-    )

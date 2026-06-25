@@ -22,15 +22,13 @@ log = logging.getLogger(__name__)
 # Composite pipeline algorithm version — bump either component constant to trigger re-derive.
 # Also folds a SHA-4 of key pipeline modules so code-only changes self-heal without a manual bump.
 def _code_fingerprint() -> str:
-    """4-char SHA over source bytes of modules that determine graph/hierarchy output."""
+    """4-char SHA over source bytes of modules that determine graph output."""
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]  # src/opencode_search/
     modules = [
         root / "graph" / "extractor.py",
         root / "graph" / "enrich.py",
         root / "graph" / "community.py",
-        root / "kb" / "hierarchy.py",
-        root / "kb" / "structure.py",
     ]
     import contextlib
     h = hashlib.sha1()
@@ -42,8 +40,7 @@ def _code_fingerprint() -> str:
 
 def _pipeline_algo_version() -> str:
     from opencode_search.graph.community import ALGO_VERSION
-    from opencode_search.kb.hierarchy import HIER_VERSION
-    return f"{ALGO_VERSION}+{HIER_VERSION}+{_code_fingerprint()}"
+    return f"{ALGO_VERSION}+{_code_fingerprint()}"
 
 
 def _source_fingerprint(path: str) -> str:
@@ -244,19 +241,10 @@ def reconcile_projects() -> None:
         except Exception as exc:
             log.warning("reconcile %s: %s", entry.path, exc)
 
-    # Federation root-pass: self-heal L3 information hierarchy + BPRE process graph.
-    # Watcher already drives these on member edits (on_change → _enrich_project →
-    # _regen_owning_hierarchy + _regen_owning_processes); this pass backstops the
-    # quiescent fleet and heals any suite-clobbered narratives.
-    # Both calls are no-ops when stamps match and narratives are complete ($0, stat-only).
+    # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet).
     for entry in list_projects():
         if not entry.enabled or not entry.federation:
             continue
-        try:
-            from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-            build_federation_hierarchy(entry.path)
-        except Exception as exc:
-            log.warning("reconcile L3 hierarchy %s: %s", entry.path, exc)
         try:
             from opencode_search.kb.bpre import reconstruct_processes
             reconstruct_processes(entry.path)
@@ -404,10 +392,8 @@ def _enrich_project(project_path: str) -> None:
         classify_communities_semantic,
         compute_significance,
         enrich_communities_batch,
-        enrich_communities_l2_batch,
     )
     from opencode_search.graph.store import GraphStore
-    from opencode_search.kb.hierarchy import build_hierarchy
     from opencode_search.kb.wiki import build_wiki
 
     gs = GraphStore(project_graph_db(project_path))
@@ -417,11 +403,6 @@ def _enrich_project(project_path: str) -> None:
             "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
         )
         gs.commit()
-        # DIKW Phase 2 — Information spine: deterministic dir/file structural nodes.
-        # Zero tokens; idempotent; level=0 so orphan-delete and significance gate skip them.
-        from opencode_search.kb.structure import build_structure_tree
-        build_structure_tree(gs, project_path)
-        # DIKW token doctrine — Knowledge rung, Phase 1:
         # Head (member_count≥8 OR cross-community edges≥2): LLM narration, batched+prefix-cached.
         # Tail (below gate): deterministic structural labels, zero tokens.
         _head_cids, _tail_cids = compute_significance(gs)
@@ -444,50 +425,17 @@ def _enrich_project(project_path: str) -> None:
                 _usage.get("calls", 0),
             )
         gs.commit()
-        # Stamp any L1 community still lacking a title after LLM enrichment
-        # (detect_communities pre-labels via _label_from_names; this covers the case
-        # where enrichment silently failed or communities were inserted without it)
         gs._con.execute(
             "UPDATE communities SET title='Community-' || CAST(id AS TEXT) "
             "WHERE level=1 AND (title IS NULL OR title='')"
         )
         gs.commit()
-        _n_l1 = gs._con.execute(
-            "SELECT COUNT(*) FROM communities WHERE level=1"
-        ).fetchone()[0]
-        _n_l2 = gs._con.execute(
-            "SELECT COUNT(*) FROM communities WHERE level>=2"
-        ).fetchone()[0]
-        if _n_l2 == 0 or (_n_l1 >= 4 and _n_l2 > 2 * round(_n_l1 ** 0.5)):
-            build_hierarchy(gs)
-        _l2_ids = [r[0] for r in gs._con.execute(
-            "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level >= 2"
-        ).fetchall()]
-        enrich_communities_l2_batch(
-            gs, _l2_ids,
-            thermal_guard_fn=lambda: gpu_temp_c() > THERMAL_MAX_C,
-        )
-        # Orphan L2 communities (no L1 children) never get enriched by enrich_community_l2;
-        # stamp a placeholder so l2_enriched_pct can reach 100%.
-        gs._con.execute(
-            "UPDATE communities SET title='(leaf)', summary='(no child communities)' "
-            "WHERE level>=2 AND (summary IS NULL OR summary='')"
-        )
-        gs.commit()
-        # Classify any narrated L1 community that is still missing a semantic_type.
-        # Gate: narrated=1 only — the abstained tail (narrated=0) is never classified;
-        # it stays semantic_type=NULL until lazily promoted at query time (narrate_community_lazy).
         _needs_classify = gs._con.execute(
             "SELECT COUNT(*) FROM communities "
             "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
         ).fetchone()[0]
         if _needs_classify:
             classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
-        # Propagate plurality L1 semantic_type to each L2 — zero-cost, deterministic.
-        # Without this, L2 communities have NULL semantic_type and federation_hierarchy groups
-        # all member L2 communities into a single 'Federation: Domain' theme.
-        from opencode_search.graph.enrich import assign_l2_semantic_types
-        assign_l2_semantic_types(gs)
         build_wiki(gs, project_wiki_dir(project_path))
     finally:
         gs.close()
@@ -500,12 +448,6 @@ def _enrich_project(project_path: str) -> None:
         _regen_owning_federations(project_path)
     except Exception as exc:
         log.warning("federation index %s: %s", project_path, exc)
-    try:
-        from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-        build_federation_hierarchy(project_path)
-        _regen_owning_hierarchy(project_path)
-    except Exception as exc:
-        log.warning("federation hierarchy %s: %s", project_path, exc)
     # Member-edit refresh: reconstruct processes for any root that owns this project as a member.
     try:
         _regen_owning_processes(project_path)
@@ -558,17 +500,6 @@ def _regen_owning_federations(member_path: str) -> None:
             except Exception as exc:
                 log.warning("owning-federation regen %s: %s", entry.path, exc)
 
-
-def _regen_owning_hierarchy(member_path: str) -> None:
-    """Rebuild federation L3 in any enabled root whose federation list contains member_path."""
-    from opencode_search.core.registry import list_projects
-    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-    for entry in list_projects():
-        if entry.enabled and entry.federation and member_path in entry.federation:
-            try:
-                build_federation_hierarchy(entry.path)
-            except Exception as exc:
-                log.warning("owning-hierarchy regen %s: %s", entry.path, exc)
 
 
 def _regen_owning_processes(member_path: str) -> None:

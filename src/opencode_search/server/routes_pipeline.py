@@ -23,22 +23,19 @@ async def _api_build_hierarchy(request: Request) -> JSONResponse:
 
     from opencode_search.core.config import project_wiki_dir
     from opencode_search.graph.store import GraphStore
-    from opencode_search.kb.hierarchy import build_hierarchy
     from opencode_search.kb.wiki import build_wiki
     from opencode_search.server.routes_ops import publish_event
     gdb = project_graph_db(project_path)
     if not gdb.exists():
         return JSONResponse({"error": "not indexed"}, status_code=404)
+    if action != "wiki":
+        return JSONResponse({"error": "only action=wiki is supported"}, status_code=400)
     job_id = str(int(_time.time()))
     gs = GraphStore(gdb)
     try:
-        if action == "wiki":
-            n = build_wiki(gs, project_wiki_dir(project_path))
-            publish_event({"type": "job", "job_id": job_id, "action": "wiki", "status": "done"})
-            return JSONResponse({"status": "ok", "pages_written": n})
-        n = build_hierarchy(gs)
-        publish_event({"type": "job", "job_id": job_id, "action": "reindex", "status": "done"})
-        return JSONResponse({"status": "ok", "communities_built": n})
+        n = build_wiki(gs, project_wiki_dir(project_path))
+        publish_event({"type": "job", "job_id": job_id, "action": "wiki", "status": "done"})
+        return JSONResponse({"status": "ok", "pages_written": n})
     except Exception:
         publish_event({"type": "job", "job_id": job_id, "action": action, "status": "error"})
         raise

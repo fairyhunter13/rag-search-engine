@@ -1,14 +1,10 @@
 """Rich, navigable wiki bundle generated from the graph store (DeepWiki-style).
 
-Layout: a sectioned `index.md`, one `community_{id}.md` per L1 community, one `domain_{id}.md`
-per L2 architecture domain, and — for federated roots — a `federation.md` aggregating members.
-
-Community pages, citations and diagrams are FULLY DETERMINISTIC: they reuse the cached community
-summary as prose and draw call-graphs from real `edges`, so a `Sources:[file:line]()` always
-resolves on disk and every mermaid node maps to a real symbol/community. Only the L2-domain
-narrative calls the cloud LLM (DeepSeek); the kill-switch ``OSE_WIKI_LLM=0`` and any
-missing-key/error path fall back to templated prose, so the wiki always builds with zero local
-GPU. Citations are project-root-relative so the absolute device path never leaks (public repo).
+Layout: a sectioned `index.md`, one `community_{id}.md` per L1 community, and — for federated
+roots — a `federation.md` aggregating members. Community pages, citations and diagrams are FULLY
+DETERMINISTIC: they reuse the cached community summary as prose and draw call-graphs from real
+`edges`, so a `Sources:[file:line]()` always resolves on disk. Citations are project-root-relative
+so the absolute device path never leaks (public repo).
 """
 from __future__ import annotations
 
@@ -30,33 +26,6 @@ _TYPE_LABEL = {
 _TYPE_ORDER = ["business_process", "business_rule", "feature", "domain",
                "infrastructure", "utility", "test"]
 _MERMAID_CAP = 40  # max nodes and max edges per diagram (hygiene + readability)
-_LEAF_TITLES = ("(leaf)",)  # placeholder L2 communities stamped by _enrich_project
-
-
-def _wiki_llm_on() -> bool:
-    return os.environ.get("OSE_WIKI_LLM", "1") != "0"
-
-
-def _narrate(context: str, kind: str) -> str:
-    """DeepSeek-synthesized narrative for `context`, or '' to signal the caller to template.
-
-    Returns '' (→ deterministic templated prose) when the kill-switch is set, no key is present,
-    or any error occurs. The wiki must always build without the local LLM.
-    """
-    if not _wiki_llm_on():
-        return ""
-    try:
-        from opencode_search.graph.llm import deepseek_chat, deepseek_key
-        if not deepseek_key():
-            return ""
-        prompt = (
-            f"You are documenting a software {kind}. Using ONLY the facts below, write a clear "
-            f"2-4 sentence overview: its purpose and how its parts fit together. Name real "
-            f"sub-systems; do not invent identifiers; no preamble.\n\n{context}"
-        )
-        return deepseek_chat(prompt, max_tokens=400).strip()
-    except Exception:
-        return ""
 
 
 # ── path / text helpers ──────────────────────────────────────────────────────
@@ -131,27 +100,6 @@ def _mermaid_callgraph(store: GraphStore, cid: int) -> str:
     return _render_mermaid([(a, b) for a, b in rows])
 
 
-def _mermaid_domain(store: GraphStore, parent_cid: int) -> str:
-    """Architecture diagram: inter-community call edges among the L1 children of an L2 domain."""
-    kids = {r[0]: (r[1] or f"Community {r[0]}") for r in store._con.execute(
-        "SELECT id, title FROM communities WHERE parent_id=?", (parent_cid,)).fetchall()}
-    if len(kids) < 2:
-        return ""
-    ph = ",".join("?" * len(kids))
-    rows = store._con.execute(
-        f"SELECT s1.community_id, s2.community_id FROM edges e "
-        f"JOIN symbols s1 ON e.caller_sid=s1.sid JOIN symbols s2 ON e.callee_sid=s2.sid "
-        f"WHERE s1.community_id IN ({ph}) AND s2.community_id IN ({ph}) "
-        f"AND s1.community_id!=s2.community_id",
-        tuple(kids) + tuple(kids)).fetchall()
-    seen: set[tuple[int, int]] = set()
-    edges: list[tuple[str, str]] = []
-    for a, b in rows:
-        if (a, b) not in seen:
-            seen.add((a, b))
-            edges.append((kids[a], kids[b]))
-    return _render_mermaid(edges)
-
 
 # ── page renderers ───────────────────────────────────────────────────────────
 
@@ -185,48 +133,10 @@ def _render_community(store: GraphStore, root: str, cid: int, title: str,
     return "\n".join(parts) + "\n"
 
 
-def _template_domain(title: str, summary: str, children: list) -> str:
-    names = ", ".join(t for _, t, _ in children[:6] if t)
-    base = summary or f"The {title} domain."
-    return f"{base} It groups {len(children)} sub-communities: {names}." if names else base
-
-
-def _render_domain(store: GraphStore, cid: int, title: str, summary: str) -> str:
-    children = store._con.execute(
-        "SELECT id, title, semantic_type FROM communities WHERE parent_id=? ORDER BY id", (cid,)
-    ).fetchall()
-    # Phase 2c derived view: reuse stored summary (from enrich_community_l2) — zero new tokens.
-    # Only fall through to _narrate() when no summary is stored yet.
-    if not summary:
-        ctx = []
-        for kid, ktitle, kstype in children:
-            ks = store._con.execute("SELECT summary FROM communities WHERE id=?", (kid,)).fetchone()
-            ksum = ks[0] if ks and ks[0] else ""
-            ctx.append(f"- {ktitle} [{kstype or 'community'}]: {ksum[:160]}")
-        context = f"Domain: {title}\nSub-communities:\n" + "\n".join(ctx)
-        summary = _narrate(context, "architecture domain") or _template_domain(title, summary, children)
-    narrative = summary
-    parts = [f"# {title}", "", "**Architecture Domain**", "", narrative, ""]
-    if children:
-        parts += ["## Sub-communities", ""]
-        parts += [f"- [{kt}](community_{kid}.md) — {_TYPE_LABEL.get(ks or '', 'community')}"
-                  for kid, kt, ks in children]
-        parts.append("")
-    diagram = _mermaid_domain(store, cid)
-    if diagram:
-        parts += ["## Architecture", "", diagram, ""]
-    parts += ["---", "", "[← Index](index.md)"]
-    return "\n".join(parts) + "\n"
-
-
-def _render_index(l1: list, l2: list) -> str:
+def _render_index(l1: list) -> str:
     n_types = len({(r[3] or "feature") for r in l1})
     parts = ["# Project Wiki", "",
              f"{len(l1)} code communities across {n_types} semantic types.", ""]
-    if l2:
-        parts += ["## Architecture Domains", ""]
-        parts += [f"- [{title}](domain_{cid}.md)" for cid, title, _s, _m in l2]
-        parts.append("")
     by_type: dict[str, list] = {}
     for cid, title, _summary, stype, _mc, _parent in l1:
         by_type.setdefault(stype or "feature", []).append((cid, title))
@@ -244,11 +154,10 @@ def _render_index(l1: list, l2: list) -> str:
 # ── public API ───────────────────────────────────────────────────────────────
 
 def build_wiki(store: GraphStore, output_dir: Path) -> int:
-    """Write a rich wiki bundle (index + per-community + per-domain pages). Returns page count.
+    """Write a rich wiki bundle (index + per-community pages). Returns page count.
 
     Community pages are deterministic (reuse cached summaries, cite real sources, draw real
-    edges); domain pages add a DeepSeek narrative (templated fallback). Signature/return are
-    unchanged so existing callers (sweeps, /api/build_hierarchy, cli) keep working.
+    edges). Signature/return unchanged so existing callers keep working.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     root = _project_root(store)
@@ -256,23 +165,14 @@ def build_wiki(store: GraphStore, output_dir: Path) -> int:
         "SELECT id, title, summary, semantic_type, member_count, parent_id FROM communities "
         "WHERE level=1 AND title IS NOT NULL AND title!='' AND summary IS NOT NULL AND summary!='' "
         "ORDER BY id").fetchall()
-    ph = ",".join("?" * len(_LEAF_TITLES))
-    l2 = store._con.execute(
-        f"SELECT id, title, summary, member_count FROM communities "
-        f"WHERE level>=2 AND title IS NOT NULL AND title!='' AND title NOT IN ({ph}) ORDER BY id",
-        _LEAF_TITLES).fetchall()
-    if not l1 and not l2:
+    if not l1:
         return 0
     count = 0
-    (output_dir / "index.md").write_text(_render_index(l1, l2), encoding="utf-8")
+    (output_dir / "index.md").write_text(_render_index(l1), encoding="utf-8")
     count += 1
     for cid, title, summary, stype, mc, _parent in l1:
         (output_dir / f"community_{cid}.md").write_text(
             _render_community(store, root, cid, title, summary, stype, mc or 0), encoding="utf-8")
-        count += 1
-    for cid, title, summary, _mc in l2:
-        (output_dir / f"domain_{cid}.md").write_text(
-            _render_domain(store, cid, title, summary or ""), encoding="utf-8")
         count += 1
     return count
 
@@ -280,18 +180,15 @@ def build_wiki(store: GraphStore, output_dir: Path) -> int:
 # ── federated index ──────────────────────────────────────────────────────────
 
 def _federation_member_summary(gs: GraphStore) -> dict:
-    """Per-member rollup for federation.md: type counts, top L2 domains, key business communities."""
+    """Per-member rollup for federation.md: type counts + key business communities."""
     types = dict(gs._con.execute(
         "SELECT COALESCE(NULLIF(semantic_type,''),'unclassified'), COUNT(*) FROM communities "
         "WHERE level=1 GROUP BY COALESCE(NULLIF(semantic_type,''),'unclassified')").fetchall())
-    domains = [r[0] for r in gs._con.execute(
-        "SELECT title FROM communities WHERE level>=2 AND title IS NOT NULL AND title!='' "
-        "AND title NOT IN ('(leaf)') ORDER BY member_count DESC LIMIT 8").fetchall()]
     top = [r[0] for r in gs._con.execute(
         "SELECT title FROM communities WHERE level=1 AND title IS NOT NULL "
         "AND semantic_type IN ('business_process','business_rule') "
         "ORDER BY member_count DESC LIMIT 8").fetchall()]
-    return {"types": types, "domains": domains, "top": top}
+    return {"types": types, "top": top}
 
 
 def _render_federation(root_path: str, per_member: list) -> str:
@@ -301,10 +198,8 @@ def _render_federation(root_path: str, per_member: list) -> str:
              f"(root: `{os.path.basename(root_path)}`).", ""]
     for path, data in per_member:
         parts += [f"## {os.path.basename(path)}" + ("  _(root)_" if path == root_path else ""), ""]
-        if data["domains"]:
-            parts.append("**Domains:** " + ", ".join(data["domains"]))
         if data["top"]:
-            parts += ["", "**Key business logic:** " + ", ".join(data["top"])]
+            parts.append("**Key business logic:** " + ", ".join(data["top"]))
         parts.append("")
         for st, n in data["types"].items():
             rollup[st] = rollup.get(st, 0) + n

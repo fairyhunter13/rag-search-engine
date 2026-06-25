@@ -181,14 +181,13 @@ def test_sc7_semantic_type_three_state_contract():
     assert re.search(r"level\s*=\s*1", blk), "SC7: feature_map must scope to level=1"
 
 
-def test_sc8_no_leidenalg_in_community_or_hierarchy():
-    """SC8a: community.py and hierarchy.py must not import leidenalg (k-core replaced Leiden)."""
-    for mod_name in ("opencode_search.graph.community", "opencode_search.kb.hierarchy"):
-        mod = importlib.import_module(mod_name)
-        src = inspect.getsource(mod)
-        assert "leidenalg" not in src, (
-            f"SC8: {mod_name} still imports leidenalg — Phase 2.0c k-core swap not complete"
-        )
+def test_sc8_no_leidenalg_in_community():
+    """SC8a: community.py must not import leidenalg (k-core replaced Leiden)."""
+    import opencode_search.graph.community as mod
+    src = inspect.getsource(mod)
+    assert "leidenalg" not in src, (
+        "SC8: graph.community still imports leidenalg — Phase 2.0c k-core swap not complete"
+    )
 
 
 def test_sc8_detect_communities_deterministic(safe_tmp_path):

@@ -551,7 +551,7 @@ def test_journey_operator_reindex_sees_job_chip(page: Page) -> None:
     proj = page.evaluate("_proj") or ""
     assert proj, "window._proj must be set before triggering build"
     page.request.post(
-        f"http://127.0.0.1:8765/api/build_hierarchy?project={proj}",
+        f"http://127.0.0.1:8765/api/build_hierarchy?project={proj}&action=wiki",
         headers={"Content-Type": "application/json"},
     )
     page.wait_for_selector(".admin-chip", timeout=30000)
@@ -618,36 +618,6 @@ def test_processes_sidebar_attached(page: Page) -> None:
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-processes").click()
     expect(page.locator("#proc-list")).to_be_attached()
-
-
-# ── Hierarchy view ────────────────────────────────────────────────────────────
-
-def test_hierarchy_view_switches_in(page: Page) -> None:
-    """Hierarchy nav shows #view-hierarchy and hides the 5 standard views."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-hierarchy").click()
-    page.wait_for_timeout(500)
-    expect(page.locator("#view-hierarchy")).to_be_visible()
-    for v in _VIEWS:
-        expect(page.locator(f"#view-{v}")).to_be_hidden()
-
-
-def test_hierarchy_tree_and_detail_attached(page: Page) -> None:
-    """#hier-tree and #hier-detail are part of the Hierarchy view DOM."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-hierarchy").click()
-    expect(page.locator("#hier-tree")).to_be_attached()
-    expect(page.locator("#hier-detail")).to_be_attached()
-
-
-def test_hierarchy_loads_data(page: Page) -> None:
-    """After selecting a project, #hier-tree shows hierarchy nodes (not empty prompt)."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
-    page.locator("#vbtn-hierarchy").click()
-    page.wait_for_timeout(4000)
-    txt = page.locator("#hier-tree").inner_text() or ""
-    assert txt.strip() and "Select a project" not in txt, f"hier-tree not loaded: {txt[:80]!r}"
 
 
 # ── Wiki Docs group ───────────────────────────────────────────────────────────

@@ -77,12 +77,9 @@ def test_hh2_on_change_filters_excluded(safe_tmp_path, embedder):
     )
 
 
-def test_hh3_structure_and_bpre_exclude(safe_tmp_path):
-    """HH3: excluded dir absent from structural spine and _source_files BPRE walk."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.graph.store import GraphStore
+def test_hh3_bpre_exclude(safe_tmp_path):
+    """HH3: excluded dir absent from _source_files BPRE walk."""
     from opencode_search.kb.bpre import _source_files
-    from opencode_search.kb.structure import build_structure_tree
 
     root = safe_tmp_path / "proj_hh3"
     root.mkdir()
@@ -91,21 +88,6 @@ def test_hh3_structure_and_bpre_exclude(safe_tmp_path):
     secret.mkdir()
     (secret / "credentials.go").write_text("package main\nfunc creds() {}\n")
     _write_config(root, _EXCLUDE_CFG)
-
-    gdb = project_graph_db(str(root))
-    gs = GraphStore(gdb)
-    try:
-        build_structure_tree(gs, str(root))
-        all_paths = [
-            r[0] for r in gs._con.execute("SELECT path FROM communities").fetchall()
-        ]
-    finally:
-        gs.close()
-
-    assert any("app.py" in p for p in all_paths), "app.py must appear in structural spine"
-    assert not any("secret" in p for p in all_paths), (
-        f"secret/ must be excluded from structural spine; found: {[p for p in all_paths if 'secret' in p]}"
-    )
 
     bpre_files = _source_files(str(root))
     bpre_strs = [str(f) for f in bpre_files]

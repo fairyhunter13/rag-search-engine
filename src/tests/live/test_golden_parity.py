@@ -13,8 +13,6 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
     ("structure",            {"path", "symbols", "communities", "files_with_symbols"}, True),
     ("communities",          {"communities"},                                  True),
     ("status",               {"path", "symbols", "communities"},              True),
-    ("hierarchy",            {"hierarchy"},                                     True),
-    ("architecture_domains", {"architecture_domains"},                         True),
     ("import_cycles",        {"cycles", "cycle_count", "has_cycles"},         False),
     ("surprising_connections", {"connections"},                                False),
     ("suggested_questions",  {"questions"},                                    True),

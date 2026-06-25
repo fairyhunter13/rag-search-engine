@@ -100,7 +100,7 @@ def test_graph_docstring_matches_supported_relations():
 
 @pytest.mark.parametrize("what", sorted([
     "structure", "communities", "status", "projects", "patterns",
-    "metrics", "architecture_domains", "hierarchy", "import_cycles",
+    "metrics", "import_cycles",
     "surprising_connections", "feature_map", "business_rules",
     "process_flows", "suggested_questions", "service_mesh",
 ]))

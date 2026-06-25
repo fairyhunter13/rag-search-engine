@@ -1,18 +1,7 @@
-"""P4 kb/ tests: hierarchy, wiki, answer_cache, patterns (all fast)."""
+"""P4 kb/ tests: wiki, answer_cache, patterns (all fast)."""
 import pytest
 
 pytestmark = pytest.mark.live
-
-
-def test_hierarchy_no_cross_edges_is_ok(mini_stores):
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.kb.hierarchy import build_hierarchy
-    gs = GraphStore(mini_stores["gdb"])
-    count = build_hierarchy(gs)
-    gs.close()
-    # DELIBERATE: mini_stores has no cross-community call edges (only 3 files,
-    # all in one community); count=0 is correct here — testing no-crash.
-    assert count >= 0
 
 
 def test_wiki_writes_pages(mini_stores, tmp_path):

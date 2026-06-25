@@ -28,8 +28,8 @@ _PROJECTS = {
 }
 
 _OVERVIEW_WHATS_FAST = [
-    "structure", "status", "projects", "metrics", "hierarchy",
-    "architecture_domains", "feature_map", "business_rules",
+    "structure", "status", "projects", "metrics",
+    "feature_map", "business_rules",
     "process_flows", "service_mesh", "suggested_questions",
     "surprising_connections", "import_cycles",
 ]

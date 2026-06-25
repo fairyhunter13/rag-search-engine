@@ -128,10 +128,9 @@ def test_bsh5_delta_carry_over(synth_fed):
 
 
 def test_sg_reconcile_has_root_pass():
-    """SG: reconcile_projects source contains both federation root-pass calls."""
+    """SG: reconcile_projects source contains the BPRE root-pass call."""
     import inspect
 
     from opencode_search.daemon.sweeps import reconcile_projects
     src = inspect.getsource(reconcile_projects)
-    assert "build_federation_hierarchy(" in src
     assert "reconstruct_processes(" in src

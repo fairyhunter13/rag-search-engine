@@ -201,32 +201,19 @@ def status() -> None:
 
 
 def ocs_index_main() -> None:
-    """One-shot onboarding: index → enrich → hierarchy → wiki."""
+    """One-shot onboarding: index → enrich → wiki."""
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "."
     import pathlib
     resolved = str(pathlib.Path(path).expanduser().resolve())
-    from opencode_search.core.config import ProjectEntry, project_graph_db, project_wiki_dir
+    from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import upsert_project
     from opencode_search.daemon.sweeps import _enrich_project, _index_project
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.kb.hierarchy import build_hierarchy
-    from opencode_search.kb.wiki import build_wiki
     print(f"Indexing {resolved}...")
     upsert_project(ProjectEntry(path=resolved, enabled=True))
     _index_project(resolved)
     print("Enriching...")
     _enrich_project(resolved)
-    print("Building hierarchy...")
-    gdb = project_graph_db(resolved)
-    if gdb.exists():
-        gs = GraphStore(gdb)
-        try:
-            build_hierarchy(gs)
-            n = build_wiki(gs, project_wiki_dir(resolved))
-            print(f"Wiki: {n} pages written.")
-        finally:
-            gs.close()
     print("Done.")
 
 

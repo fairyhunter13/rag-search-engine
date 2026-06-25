@@ -1,10 +1,8 @@
-"""Token economy invariants (TE1–TE6, Phase 4A–F closed).
+"""Token economy invariants (TE1–TE4, TE6; L2/L3 hierarchy removed in WS-B).
 
-TE1  llm_token_stats() returns dotted-namespace keys (enrich/classify/l2)
+TE1  llm_token_stats() returns dotted-namespace keys (enrich/classify)
 TE2  classify_communities_semantic makes 0 calls for narrated=0 tail rows (leak A gate)
-TE3  enrich_communities_l2_batch accumulates to l2.* namespace (leak B+C)
 TE4  _generate_narratives_batch returns {} safely when DeepSeek key absent
-TE5  L3 freshness guard: build_federation_hierarchy reuses on 2nd call < 1800s (leak F)
 TE6  _BPRE_NARRATIVE_SYSTEM is a module-level string constant (stable prefix for caching)
 """
 from __future__ import annotations
@@ -55,27 +53,6 @@ def test_te2_classify_skips_narrated_zero(safe_tmp_path):
         gs.close()
 
 
-def test_te3_l2_batch_accumulates_l2_namespace(safe_tmp_path):
-    """TE3: enrich_communities_l2_batch routes usage to l2.* namespace (leak B+C)."""
-    from opencode_search.graph.enrich import enrich_communities_l2_batch
-    from opencode_search.graph.llm import deepseek_key, llm_token_stats
-    from opencode_search.graph.store import GraphStore
-    if not deepseek_key():
-        pytest.fail("TE3 requires OPENCODE_DEEPSEEK_API_KEY to verify l2.* accumulation")
-    gs = GraphStore(safe_tmp_path / "l2.db")
-    try:
-        gs.upsert_community(1, level=1, title="Payment", summary="Handles payments.",
-                            member_count=5, narrated=1)
-        gs.upsert_community(100, level=2, title="", summary="", member_count=1)
-        gs._con.execute("UPDATE communities SET parent_id=100 WHERE id=1")
-        gs.commit()
-        before = llm_token_stats().get("l2.calls", 0)
-        enrich_communities_l2_batch(gs, [100])
-        after = llm_token_stats().get("l2.calls", 0)
-        assert after > before, f"TE3: l2.calls did not increase ({before}→{after})"
-    finally:
-        gs.close()
-
 
 def test_te4_bpre_batch_no_key_safe():
     """TE4: _generate_narratives_batch returns {} when DeepSeek key absent."""
@@ -87,22 +64,6 @@ def test_te4_bpre_batch_no_key_safe():
     procs = [(1, "Proc", '["svc"]', [("fn", "svc", "task", "")])]
     assert _generate_narratives_batch(procs) == {}, "TE4: must return {} without key"
 
-
-def test_te5_l3_freshness_guard_second_call(live_client):
-    """TE5: build_federation_hierarchy returns cached count on 2nd call < 1800s (leak F)."""
-    from opencode_search.core.registry import list_projects
-    from opencode_search.daemon.federation import expand_federation
-    from opencode_search.kb.federation_hierarchy import build_federation_hierarchy
-    root_path = ""
-    for p in list_projects():
-        if p.enabled and len(expand_federation(p.path)) >= 2:
-            root_path = p.path
-            break
-    if not root_path:
-        pytest.fail("TE5 requires a registered federation root with ≥2 members")
-    n1 = build_federation_hierarchy(root_path)
-    n2 = build_federation_hierarchy(root_path)
-    assert n2 == n1, f"TE5: freshness guard failed — 1st={n1}, 2nd={n2}"
 
 
 def test_te6_bpre_narrative_system_constant():

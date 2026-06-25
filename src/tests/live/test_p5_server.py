@@ -168,8 +168,7 @@ def test_overview_all_whats_real_astro():
     )
     assert astro, "redacted-name-3 must be registered (run P8)"
     whats = [
-        "structure", "communities", "status", "hierarchy",
-        "architecture_domains", "import_cycles",
+        "structure", "communities", "status", "import_cycles",
         "surprising_connections", "suggested_questions",
         "service_mesh", "feature_map", "business_rules", "process_flows",
     ]
@@ -362,8 +361,8 @@ def test_enrich_project_uses_summary_gate(safe_tmp_path):
     assert post > 0, "enrichment gate must use summary IS NULL, not title IS NULL"
 
 
-def test_build_hierarchy_empty_body_not_500(live_client):
-    """P28.1: POST /api/build_hierarchy with empty body + project in query param must not 500."""
+def test_build_hierarchy_default_action_returns_400(live_client):
+    """P28.1: POST /api/build_hierarchy without action=wiki returns 400 (only wiki supported)."""
     from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
     project = next(
@@ -372,8 +371,7 @@ def test_build_hierarchy_empty_body_not_500(live_client):
     )
     assert project, "At least one indexed project required"
     r = live_client.post(f"/api/build_hierarchy?project={project}", data=b"")
-    assert r.status_code != 500, f"empty body must not 500: {r.status_code} {r.text[:80]}"
-    assert r.status_code in (200, 400)
+    assert r.status_code == 400, f"default action must return 400 (wiki-only): {r.status_code} {r.text[:80]}"
 
 
 def test_build_hierarchy_action_wiki(live_client):

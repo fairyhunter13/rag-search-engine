@@ -14,24 +14,12 @@ _SRC = Path(__file__).parents[2] / "opencode_search"
 # ---------------------------------------------------------------------------
 
 
-def test_kb_chat_is_deepseek_only():
-    """R6a static: _kb_chat in graph/enrich.py delegates to deepseek_chat — no local ollama fallback."""
-    from opencode_search.graph import enrich
-
-    src = inspect.getsource(enrich._kb_chat)
-    assert "deepseek_chat" in src, "_kb_chat must delegate to deepseek_chat"
-    # No silent swallow — deepseek_chat raises on missing key/unreachable; _kb_chat must not hide that
-    assert 'return ""' not in src, "_kb_chat must not silently swallow failures (no 'return \"\"')"
-
-
-def test_enrich_callers_use_kb_chat():
-    """R6a static: enrich_community_l2 routes through _kb_chat (enrich_community/enrich_symbols deleted F-B/F-D)."""
-    from opencode_search.graph import enrich
-
-    src = inspect.getsource(enrich.enrich_community_l2)
-    assert "_kb_chat(" in src, "enrich_community_l2 must call _kb_chat()"
-    residue = src.replace("_kb_chat(", "").replace("deepseek_chat(", "")
-    assert "chat(" not in residue, "enrich_community_l2 has bare chat() call"
+def test_kb_enrich_is_deepseek_only():
+    """R6a static: enrich.py KB enrichment uses deepseek_extract (no local ollama/generative fallback)."""
+    import opencode_search.graph.enrich as enrich_mod
+    src = inspect.getsource(enrich_mod)
+    assert "deepseek_extract" in src, "enrich.py must use deepseek_extract for KB enrichment"
+    assert "ollama" not in src.lower(), "enrich.py must not reference ollama"
 
 
 def test_enrich_project_crashes_without_key():

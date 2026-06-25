@@ -58,7 +58,6 @@ CORE_MODULES = [
     "opencode_search.embed",
     "opencode_search.index.store",
     "opencode_search.graph.store",
-    "opencode_search.kb.hierarchy",
     "opencode_search.kb.wiki",
     "opencode_search.query.search",
     "opencode_search.daemon",

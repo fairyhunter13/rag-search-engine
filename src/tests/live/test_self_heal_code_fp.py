@@ -34,8 +34,6 @@ def test_sh2_code_fingerprint_changes_on_module_edit(tmp_path):
         root / "graph" / "extractor.py",
         root / "graph" / "enrich.py",
         root / "graph" / "community.py",
-        root / "kb" / "hierarchy.py",
-        root / "kb" / "structure.py",
     ]
     h = hashlib.sha1()
     for i, p in enumerate(modules):
@@ -55,7 +53,7 @@ def test_sh3_algo_version_includes_code_fp():
     fp = _code_fingerprint()
     assert fp in ver, f"code_fp {fp!r} not in algo_version {ver!r}"
     parts = ver.split("+")
-    assert len(parts) == 3, f"expected 3-part version 'ALGO+HIER+code_fp', got {ver!r}"
+    assert len(parts) == 2, f"expected 2-part version 'ALGO+code_fp', got {ver!r}"
 
 
 def test_sh4_baseline_seed_no_mutation(safe_tmp_path):

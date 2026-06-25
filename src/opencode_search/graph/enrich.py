@@ -5,15 +5,10 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_chat, deepseek_extract
+from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_extract
 from opencode_search.graph.store import GraphStore
 
 log = logging.getLogger(__name__)
-
-_L2_COMMUNITY_PROMPT = """\
-Summarize this architecture domain in 2 sentences. Cover: purpose, main sub-systems.
-Sub-communities: {children}
-Reply ONLY with JSON: {{"title": "<short domain name>", "summary": "<2 sentences>"}}"""
 
 # Stable system prompt for batched enrichment via deepseek_extract (prefix-cached).
 # Byte-identical across all batch calls → high prompt_cache_hit_tokens from batch 2 on.
@@ -54,21 +49,6 @@ Reason from what the code DOES (file paths, summary).
 Key distinction: business_process orchestrates multiple steps; business_rule enforces a constraint.
 
 Reply with JSON: [{"id": <N>, "semantic_type": "<type>", "reasoning": "<1 sentence why>"}]"""
-
-# Stable system prompt for batched L2 domain narration (prefix-cached).
-_L2_BATCH_SYSTEM = """\
-You are a senior software architect summarizing architecture domains.
-For each domain, write a 2-sentence summary covering purpose and main sub-systems.
-Reply ONLY with a JSON array: [{"id": <N>, "title": "<short domain name>", "summary": "<2 sentences>"}]"""
-
-
-def _kb_chat(prompt: str, *, max_tokens: int = 2048) -> str:
-    """KB-build LLM: cloud DeepSeek only. Raises if no key or unreachable.
-
-    Local generative LLM is decommissioned — DeepSeek is the sole KB-build path.
-    temperature=0 keeps summaries/classification reproducible (no churn).
-    """
-    return deepseek_chat(prompt, max_tokens=max_tokens)
 
 
 def _parse_types(raw: str, valid: frozenset[str]) -> dict[int, str]:
@@ -128,7 +108,7 @@ def compute_significance(store: GraphStore) -> tuple[list[int], list[int]]:
 
     Head = worth LLM narration: member_count≥8 OR ≥2 cross-community edges.
     Tail = deterministic structural labels only (zero tokens).
-    L2/L3 communities are always handled separately (enrich_community_l2).
+    L2/L3 communities are never generated (WS-B); only L1 is used.
     """
     unenriched = store._con.execute(
         "SELECT id, member_count FROM communities "
@@ -302,88 +282,6 @@ def enrich_communities_batch(
     return enriched, agg
 
 
-def _l2_upsert_parsed(store: GraphStore, parsed: list, batch_set: set) -> int:
-    n = 0
-    for it in (x for x in parsed if isinstance(x, dict)):
-        try:
-            cid = int(it["id"])
-            if cid not in batch_set:
-                continue
-            mc = store._con.execute("SELECT COALESCE(member_count,0) FROM communities WHERE id=?", (cid,)).fetchone()
-            store.upsert_community(cid, level=2, narrated=1,
-                title=str(it.get("title",""))[:200], summary=str(it.get("summary",""))[:2000],
-                member_count=(mc[0] if mc else 0))
-            n += 1
-        except Exception:
-            continue
-    return n
-
-
-def enrich_communities_l2_batch(
-    store: GraphStore, community_ids: list[int], *, thermal_guard_fn=None,
-) -> int:
-    """Batch L2 narration via prefix-cached deepseek_extract (≤20/call). Returns count enriched."""
-    import time
-    if not community_ids:
-        return 0
-    enriched = 0
-    for i in range(0, len(community_ids), 20):
-        if thermal_guard_fn and thermal_guard_fn():
-            time.sleep(5)
-        batch = community_ids[i : i + 20]
-        items = []
-        for cid in batch:
-            ch = store._con.execute(
-                "SELECT title, summary FROM communities "
-                "WHERE parent_id=? AND summary IS NOT NULL AND summary!=''", (cid,)).fetchall()
-            if ch:
-                items.append({"id": cid, "children":
-                    "; ".join(f"{r[0]}: {r[1][:100]}" for r in ch if r[0])[:2000]})
-        if not items:
-            continue
-        try:
-            raw, u = deepseek_extract(_L2_BATCH_SYSTEM,
-                "Domains:\n" + json.dumps(items, ensure_ascii=False),
-                max_tokens=min(len(items) * 200 + 50, 4096))
-            _accumulate_llm_tokens(u, "l2")
-        except Exception:
-            continue
-        t = (raw.split("</think>")[-1] if "</think>" in raw else raw).replace("```json","").replace("```","")
-        if (s := t.find("[")) == -1 or (e := t.rfind("]")) <= s:
-            continue
-        try:
-            parsed = json.loads(t[s : e + 1])
-        except Exception:
-            continue
-        enriched += _l2_upsert_parsed(store, parsed, set(batch))
-        store.commit()
-    return enriched
-
-
-def enrich_community_l2(store: GraphStore, community_id: int) -> None:
-    """Assign title+summary to one L2 community from its enriched L1 child summaries."""
-    rows = store._con.execute(
-        "SELECT title, summary FROM communities "
-        "WHERE parent_id=? AND summary IS NOT NULL AND summary!=''",
-        (community_id,),
-    ).fetchall()
-    if not rows:
-        return
-    children = "; ".join(f"{r[0]}: {r[1][:100]}" for r in rows if r[0])
-    try:
-        raw = _kb_chat(_L2_COMMUNITY_PROMPT.format(children=children[:2000]), max_tokens=512)
-        data = json.loads(raw.strip())
-        store.upsert_community(
-            community_id, level=2,
-            title=data.get("title", "")[:200],
-            summary=data.get("summary", "")[:2000],
-            member_count=len(rows),
-            narrated=1,
-        )
-        store.commit()
-    except Exception:
-        pass
-
 
 def narrate_community_lazy(store: GraphStore, cid: int) -> bool:
     """Lazy query-time narration for a single tail community (Phase 3).
@@ -402,40 +300,3 @@ def narrate_community_lazy(store: GraphStore, cid: int) -> bool:
     return bool(enriched)
 
 
-def assign_l2_semantic_types(store: GraphStore) -> int:
-    """Propagate plurality L1 semantic_type to each L2 community (zero-cost, deterministic).
-
-    L2 communities never receive a semantic_type from the batch-narration prompt, so
-    federation_hierarchy._group_by_type() sees only NULLs → single 'Federation: Domain' theme.
-    Fix: for each L2, tally typed L1 children and assign the plurality type (tie-broken by
-    _TYPE_ORDER priority). Leaf/orphan L2 with no typed children stay NULL. Idempotent.
-    Returns count of rows updated.
-    """
-    from collections import Counter
-
-    _priority = {t: i for i, t in enumerate(_TYPE_ORDER)}
-    valid = frozenset(_TYPE_ORDER)
-    l2_ids = [r[0] for r in store._con.execute(
-        "SELECT id FROM communities WHERE level=2").fetchall()]
-    updated = 0
-    for l2_id in l2_ids:
-        child_types = [
-            r[0] for r in store._con.execute(
-                "SELECT semantic_type FROM communities "
-                "WHERE parent_id=? AND level=1 AND narrated=1 AND semantic_type IS NOT NULL",
-                (l2_id,),
-            ).fetchall() if r[0] in valid
-        ]
-        if not child_types:
-            continue
-        counts = Counter(child_types)
-        best = max(counts, key=lambda t: (counts[t], -_priority[t]))
-        cur = store._con.execute(
-            "SELECT semantic_type FROM communities WHERE id=?", (l2_id,)).fetchone()
-        if cur and cur[0] == best:
-            continue
-        store._con.execute("UPDATE communities SET semantic_type=? WHERE id=?", (best, l2_id))
-        updated += 1
-    if updated:
-        store.commit()
-    return updated

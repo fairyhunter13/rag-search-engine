@@ -190,22 +190,11 @@ def test_callgraph_mermaid_backed_by_real_edges(wiki):
     assert checked >= 1, "no community call-graphs to verify (expected some communities with edges)"
 
 
-def test_domain_pages_list_exact_db_children(wiki):
-    """W7 (cross-doc consistency): each domain page links exactly its real DB child communities."""
-    d, project = wiki["dir"], wiki["project"]
-    gs = GraphStore(project_graph_db(project))
-    try:
-        checked = 0
-        for f in d.glob("domain_*.md"):
-            cid = int(f.stem.split("_")[1])
-            db_kids = {r[0] for r in gs._con.execute(
-                "SELECT id FROM communities WHERE parent_id=?", (cid,)).fetchall()}
-            linked = {int(m) for m in re.findall(r"community_(\d+)\.md", _read(d, f.name))}
-            assert linked == db_kids, f"domain_{cid} children {linked} != DB {db_kids}"
-            checked += 1
-    finally:
-        gs.close()
-    assert checked >= 1, "no domain pages to verify"
+def test_no_domain_pages_generated(wiki):
+    """W7 (WS-B): build_wiki must NOT write domain_*.md files (L2 hierarchy removed)."""
+    d = wiki["dir"]
+    domain_pages = list(d.glob("domain_*.md"))
+    assert not domain_pages, f"domain_*.md pages must not be generated after WS-B: {domain_pages[:3]}"
 
 
 def test_community_page_structure(wiki):
@@ -264,22 +253,14 @@ def test_wiki_builder_uses_no_embedder_or_local_llm():
     assert "import chat" not in src, "wiki narrative must use cloud DeepSeek, not resident chat()"
 
 
-def test_build_without_llm_uses_templated_prose(tmp_path_factory):
-    """W12 (graceful degradation): with OSE_WIKI_LLM=0 the wiki builds with templated prose.
-
-    Exercises the real kill-switch — the same `_narrate() -> ''` fallback branch a missing
-    DeepSeek key takes — so the wiki always builds without the cloud LLM, using only real
-    integration (this repo forbids test doubles). The determinism test proves this path is stable.
-    """
+def test_build_without_llm_builds_successfully(tmp_path_factory):
+    """W12 (graceful degradation): wiki builds with OSE_WIKI_LLM=0 — no LLM required."""
     project = _enriched_project()
     assert project
     out = tmp_path_factory.mktemp("nollm")
     n = _build(project, out, llm=False)
     assert n > 1, "wiki must build with the LLM kill-switch on"
-    domains = list(out.glob("domain_*.md"))
-    if domains:
-        txt = domains[0].read_text()
-        assert "**Architecture Domain**" in txt and txt.strip(), "domain page must have templated prose"
+    assert (out / "index.md").exists(), "index.md must always be generated"
 
 
 def test_standalone_project_has_no_federation_page():
@@ -310,33 +291,6 @@ def test_federated_root_gets_federation_index():
             assert str(n) in fed, f"rollup missing count for {st}={n}"
 
 
-@pytest.mark.slow
-def test_domain_narrative_is_faithful(tmp_path_factory):
-    """W15 (RAGAS/FaithLens faithfulness): a real DeepSeek domain narrative names real children."""
-    from opencode_search.graph.llm import deepseek_key
-    assert deepseek_key(), (
-        "DeepSeek key required in live+GPU environment — set OPENCODE_DEEPSEEK_API_KEY"
-    )
-    project = _enriched_project()
-    out = tmp_path_factory.mktemp("llm")
-    _build(project, out, llm=True)
-    gs = GraphStore(project_graph_db(project))
-    try:
-        checked = 0
-        for f in sorted(out.glob("domain_*.md"))[:3]:
-            cid = int(f.stem.split("_")[1])
-            kids = [r[0] for r in gs._con.execute(
-                "SELECT title FROM communities WHERE parent_id=? AND title IS NOT NULL", (cid,)).fetchall()]
-            if len(kids) < 2:
-                continue
-            narrative = f.read_text().split("**Architecture Domain**", 1)[-1].split("## ", 1)[0]
-            tokens = {w.lower() for k in kids for w in re.findall(r"[A-Za-z]{4,}", k)}
-            hit = sum(1 for t in tokens if t in narrative.lower())
-            assert hit >= 1, f"domain_{cid} narrative references no real child terms: {narrative[:160]!r}"
-            checked += 1
-        assert checked >= 1, "no multi-child domain to check faithfulness"
-    finally:
-        gs.close()
 
 
 @pytest.mark.slow
@@ -360,50 +314,3 @@ def test_api_build_serve_and_export_wiki(live_client, project_with_communities):
     assert isinstance(exj.json().get("pages"), list), "json export must return a pages list"
 
 
-@pytest.mark.slow
-def test_wiki_narrative_grounded_by_cross_model_judge(tmp_path_factory):
-    """W17 (LLM-as-judge, cross-model): claude CLI judges a DeepSeek narrative as grounded.
-
-    Cross-model on purpose — DeepSeek must not grade its own output (self-preference bias). The
-    judge is conservative: it only fails a narrative that invents sub-systems absent from context.
-    """
-    from opencode_search.graph.llm import deepseek_key
-    assert deepseek_key(), (
-        "DeepSeek key required in live+GPU environment — set OPENCODE_DEEPSEEK_API_KEY"
-    )
-    project = _enriched_project()
-    out = tmp_path_factory.mktemp("judge")
-    _build(project, out, llm=True)
-    gs = GraphStore(project_graph_db(project))
-    try:
-        target = None
-        for f in sorted(out.glob("domain_*.md")):
-            cid = int(f.stem.split("_")[1])
-            kids = [r[0] for r in gs._con.execute(
-                "SELECT title FROM communities WHERE parent_id=? AND title IS NOT NULL", (cid,)).fetchall()]
-            if len(kids) >= 2:
-                target = (f.read_text(), kids)
-                break
-    finally:
-        gs.close()
-    assert target, (
-        "no multi-child domain found — ensure L2 enrichment completed (Workstream E)"
-    )
-    txt, kids = target
-    narrative = txt.split("**Architecture Domain**", 1)[-1].split("## ", 1)[0].strip()
-    prompt = (
-        "You are a grounding judge. CONTEXT lists the real sub-systems of a software domain. Reply "
-        "ONLY 'GROUNDED' if the NARRATIVE describes only sub-systems consistent with the context "
-        "(paraphrase is fine), or 'UNGROUNDED' if it invents systems not implied by it.\n\n"
-        f"CONTEXT sub-systems: {', '.join(kids)}\n\nNARRATIVE: {narrative}\n\nVerdict:"
-    )
-    import shutil
-    import subprocess
-    claude = shutil.which("claude")
-    assert claude, (
-        "claude CLI required in live environment — install Claude Code CLI"
-    )
-    verdict = subprocess.check_output(
-        [claude, "-p", "--model", "claude-haiku-4-5", prompt], timeout=30,
-    ).decode(errors="replace").strip().upper()
-    assert "UNGROUNDED" not in verdict, f"judge flagged narrative ungrounded: {verdict!r}\n{narrative[:200]}"
