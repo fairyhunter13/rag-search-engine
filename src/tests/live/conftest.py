@@ -65,11 +65,11 @@ def embedder(cuda_ep):
 
 @pytest.fixture(scope="session")
 def project_with_communities():
-    """First enabled project that owns ≥1 L1 community in its own graph.db.
+    """First enabled project that owns ≥3 L1 communities in its own graph.db.
 
-    Skips thin federation roots (0 own communities) — they are architecturally correct
-    (HR4: federation is query-time union, not inlined into the root) but unusable for
-    per-project write-path tests (wiki build, hierarchy build) that operate on a single db.
+    Requires ≥3 L1 communities so diversity-based tests (e.g. AB3 type distribution)
+    are meaningful. Skips thin federation roots (0-1 own communities — architecturally
+    correct per HR4 but unusable for per-project write-path / distribution tests).
     """
     import sqlite3
 
@@ -82,9 +82,9 @@ def project_with_communities():
         if not gdb.exists():
             continue
         with sqlite3.connect(str(gdb)) as con:
-            if con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0] > 0:
+            if con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0] >= 3:
                 return p.path
-    pytest.fail("No enabled project with ≥1 L1 community — run _enrich_project first")
+    pytest.fail("No enabled project with ≥3 L1 communities — run _enrich_project first")
 
 
 @pytest.fixture()

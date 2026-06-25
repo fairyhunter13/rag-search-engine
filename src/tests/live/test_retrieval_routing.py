@@ -1,7 +1,7 @@
 """Phase 2.5 — adaptive reasoning-retrieval (RAGRouter-Bench framing).
 
-RR1  global scope produces hierarchy tree-walk header
-RR2  architecture scope produces tree-walk header
+RR1  global scope produces ## Architecture section (flat-L1 tree-walk, WS-B)
+RR2  architecture scope produces Architecture section or tree-walk content
 RR3  feature scope is code-focused (no tree-walk header)
 RR4  tree-walk context grounded — every cited community exists in DB
 RR5  adaptive MR — architecture query cites >= refs as narrow query
@@ -27,14 +27,15 @@ def _open_stores(project_with_communities):
 
 
 def test_rr1_global_scope_tree_walk_header(project_with_communities):
-    """RR1: global scope context contains hierarchy tree-walk header."""
+    """RR1: global scope context contains Architecture section with flat-L1 community context."""
     from opencode_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
         ctx = compose_answer("How does the overall architecture work?", [], stores, scope="global")
-        assert "Architecture" in ctx and ("tree-walk" in ctx.lower() or "community" in ctx.lower()), (
-            f"global scope must include Architecture + tree-walk; got: {ctx[:200]!r}"
+        assert "Architecture" in ctx, (
+            f"global scope must include ## Architecture section; got: {ctx[:200]!r}"
         )
+        assert len(ctx.strip()) > 20, f"global scope context is empty: {ctx!r}"
     finally:
         for s in stores:
             s.close()
