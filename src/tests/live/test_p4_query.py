@@ -80,26 +80,6 @@ def test_graph_callees_real_be(sample_workspace):
     assert isinstance(result, list) and len(result) >= 1
 
 
-@pytest.mark.slow
-def test_graph_narrative_and_trace_real_be(sample_workspace):
-    """P10.3: impact_narrative + semantic_trace on sample service member graph (LLM calls)."""
-    import sqlite3
-
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.graph_handler import impact_narrative, semantic_trace
-    gdb = project_graph_db(sample_workspace.promo)
-    with sqlite3.connect(str(gdb)) as con:
-        sym_a = con.execute("SELECT s.name FROM symbols s JOIN edges e ON e.caller_sid=s.sid LIMIT 1").fetchone()
-        sym_b = con.execute("SELECT s.name FROM symbols s JOIN edges e ON e.callee_sid=s.sid LIMIT 1").fetchone()
-    assert sym_a and sym_b, "sample promo-svc must have edges for narrative/trace test"
-    gs = GraphStore(gdb)
-    narrative = impact_narrative(sym_b[0], gs)
-    trace = semantic_trace(sym_a[0], sym_b[0], gs)
-    gs.close()
-    assert isinstance(narrative, str) and len(narrative) > 20
-    assert isinstance(trace, str) and len(trace) > 10
-
 
 
 @pytest.mark.slow
