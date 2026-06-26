@@ -20,7 +20,7 @@ def test_embedder_bound_to_gpu(embedder):
     providers = embedder._model.model.model.get_providers()
     assert providers[0] in GPU_EP_NAMES, f"Embedder not on GPU: {providers}"
     assert providers[0] != "CPUExecutionProvider", f"Embedder bound to CPU: {providers}"
-    # On this RTX 5080 host DISABLE_TENSORRT=1, primary must be CUDA.
+    # On CUDA GPU host DISABLE_TENSORRT=1, primary must be CUDA.
     assert providers[0] == "CUDAExecutionProvider", f"Expected CUDA primary on this host: {providers}"
 
 

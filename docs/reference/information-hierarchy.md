@@ -33,7 +33,7 @@ The name "hierarchy" is precise: Wurman (1989, *Information Anxiety*, LATCH fram
 
 ## 3. Canonical 5-section order (per-domain leaf files)
 
-Defined from inosoft's gold-standard exemplar (`docs/information-hierarchy/`):
+Defined from a companion repo's gold-standard exemplar (`docs/information-hierarchy/`):
 
 ```
 §1  [Topic] Hierarchy                  ← the value/generality tree (PRIMARY / SECONDARY / TERTIARY)
@@ -56,7 +56,7 @@ IA's labeling, navigation, and search systems appear **once**, under §4, as sup
 | NN/g — "Visual Hierarchy in UX: Definition" (2026) | Visual hierarchy = "arranging elements by relative importance" expressed through size/contrast/position on screen. |
 | Topcoder — IA vs UX (2026) | "IA is the skeleton and information hierarchy holds the content together." |
 | Oracle / TIBCO / OLAP drill-roll documentation (2026) | Drill-down = root→leaf, general→specific. Roll-up = leaf→root, specific→general. |
-| inosoft-project `docs/information-hierarchy/` (human-authored, June 2026) | Gold-standard exemplar: per-domain importance/generality spines, canonical 5-section order, every claim `[code: file:line]` grounded. |
+| companion-governance-repo `docs/information-hierarchy/` (human-authored, June 2026) | Gold-standard exemplar: per-domain importance/generality spines, canonical 5-section order, every claim `[code: file:line]` grounded. |
 
 ---
 
