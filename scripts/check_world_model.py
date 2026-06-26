@@ -25,12 +25,14 @@ def _parse_invariants(yaml_raw: str) -> list[dict]:
         grep_m = re.search(r'grep: "([^"]+)"', check_raw)
         paths_m = re.search(r'paths: "([^"]+)"', check_raw)
         verdict_m = re.search(r'verdict_if_match: (\w+)', check_raw)
+        exclude_m = re.search(r'exclude_paths: "([^"]+)"', check_raw)
         if grep_m and paths_m:
             entries.append({
                 "id": pid, "principle": principle,
                 "check": {
                     "grep": grep_m.group(1).replace("\\\\", "\\"),
                     "paths": paths_m.group(1),
+                    "exclude_paths": exclude_m.group(1).split() if exclude_m else [],
                     "verdict_if_match": verdict_m.group(1) if verdict_m else "AT_RISK",
                 },
             })
@@ -49,17 +51,27 @@ def _git_changed_files(base: str | None, head: str | None) -> list[str]:
     return out.stdout.splitlines()
 
 
+def _strip_comments(text: str) -> str:
+    """Remove whole-line Python comments so they don't trigger pattern matches."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 def _check_one(inv: dict, changed_files: list[str]) -> tuple[str, str | None]:
     chk = inv["check"]
     if chk is None:
         return "MANUAL", None
     pattern = chk["grep"]
     path_specs = chk["paths"].split()
+    exclude_paths = {Path(p) for p in chk.get("exclude_paths", [])}
     verdict_if_match = chk["verdict_if_match"]
 
     relevant = []
     for f in changed_files:
         fp = Path(f)
+        if any(fp == ep or str(fp).endswith(str(ep)) for ep in exclude_paths):
+            continue
         for spec in path_specs:
             sp = Path(spec)
             if sp.is_dir() and str(fp).startswith(str(sp)):
@@ -73,7 +85,7 @@ def _check_one(inv: dict, changed_files: list[str]) -> tuple[str, str | None]:
         if not fpath.exists():
             continue
         try:
-            text = fpath.read_text(errors="replace")
+            text = _strip_comments(fpath.read_text(errors="replace"))
         except OSError:
             continue
         if re.search(pattern, text):
