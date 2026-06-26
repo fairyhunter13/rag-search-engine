@@ -18,14 +18,13 @@ _C4_BUCKETS = ["01-context", "02-containers", "03-components",
 
 
 def _any_project():
-    from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
     for p in list_projects():
         if not p.enabled or "ocs-test-dirs" in p.path:
             continue
         if Path(p.path).name.startswith(("tmp", "test-")):
             continue
-        if project_graph_db(p.path).exists():
+        if Path(p.path).is_dir():
             return p.path
     return None
 
@@ -38,19 +37,18 @@ def _fedroot():
          if p.enabled and len(expand_federation(p.path)) > 1), None)
 
 
-def _gen(proj, out, member_dbs=None):
+def _gen(proj, out, member_paths=None):
     from ose_docgen.generate import generate
 
-    from opencode_search.core.config import project_graph_db
-    return generate(project_path=out, graph_db_path=project_graph_db(proj),
-                    member_db_paths=member_dbs or [], docs_dir=str(out / "docs"), llm=False)
+    return generate(project_path=proj, member_paths=member_paths or [],
+                    docs_dir=str(out / "docs"), llm=False)
 
 
 @pytest.fixture(scope="module")
 def docs_out(tmp_path_factory):
     proj = _any_project()
     if not proj:
-        pytest.fail("no enabled project with graph.db")
+        pytest.fail("no enabled project")
     out = tmp_path_factory.mktemp("dge")
     r = _gen(proj, out)
     assert r.get("errors", []) == [], f"generate errors: {r['errors']}"
@@ -125,23 +123,20 @@ def test_c5_ose_docgen_off(tmp_path):
 
 
 def test_c7_federated_generates_more_files_with_members(tmp_path_factory):
-    """C7: federated root with member_dbs generates more docs than without (members add containers)."""
-    from opencode_search.core.config import project_graph_db
+    """C7: federated root with member_paths generates >= docs than without."""
     from opencode_search.daemon.federation import expand_federation
     root = _fedroot()
     if not root:
         pytest.fail("no federated root")
-    members = [m for m in expand_federation(root) if m != root]
-    member_dbs = [str(project_graph_db(m)) for m in members if project_graph_db(m).exists()]
-    if not member_dbs:
-        pytest.fail("no member graph.dbs")
+    members = [m for m in expand_federation(root) if m != root and Path(m).is_dir()]
+    if not members:
+        pytest.fail("no member repo dirs")
     out_no = tmp_path_factory.mktemp("fed_no")
     out_yes = tmp_path_factory.mktemp("fed_yes")
     r_no = _gen(root, out_no, [])
-    r_yes = _gen(root, out_yes, member_dbs)
+    r_yes = _gen(root, out_yes, members)
     assert r_no.get("errors", []) == []
     assert r_yes.get("errors", []) == []
-    # With member_dbs: at minimum, docs tree should exist and not be smaller
     n_no = len(list((out_no / "docs").rglob("*.md")))
     n_yes = len(list((out_yes / "docs").rglob("*.md")))
-    assert n_yes >= n_no, f"member_dbs should not reduce docs count ({n_yes} < {n_no})"
+    assert n_yes >= n_no, f"member_paths should not reduce docs count ({n_yes} < {n_no})"

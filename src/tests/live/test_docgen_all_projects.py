@@ -44,38 +44,29 @@ def _should_skip(path: str) -> bool:
     )
 
 
-def _collect_projects() -> list[tuple[str, Path]]:
-    """Return [(project_path, graph_db)] for every real, runnable indexed project."""
-    from opencode_search.core.config import project_graph_db
+def _collect_projects() -> list[str]:
+    """Return project_paths for every real, runnable indexed project."""
     from opencode_search.core.registry import list_projects
 
-    result: list[tuple[str, Path]] = []
+    result: list[str] = []
     for p in list_projects():
-        if not p.enabled:
+        if not p.enabled or _should_skip(p.path):
             continue
-        if _should_skip(p.path):
+        if not Path(p.path).is_dir():
             continue
-        gdb = project_graph_db(p.path)
-        if not gdb.exists() or not _db_has_content(gdb):
-            continue
-        result.append((p.path, gdb))
+        result.append(p.path)
     return result
 
 
 _ALL_PROJECTS = _collect_projects()
-_PROJECT_IDS = [Path(pp).name for pp, _ in _ALL_PROJECTS]
+_PROJECT_IDS = [Path(pp).name for pp in _ALL_PROJECTS]
 
 
 @pytest.mark.live
-@pytest.mark.parametrize("project_path,graph_db", _ALL_PROJECTS, ids=_PROJECT_IDS)
-def test_docgen_skeleton_no_errors(project_path, graph_db, tmp_path):
+@pytest.mark.parametrize("project_path", _ALL_PROJECTS, ids=_PROJECT_IDS)
+def test_docgen_skeleton_no_errors(project_path, tmp_path):
     """Every indexed project must yield a valid docs skeleton with no errors."""
-    result = generate(
-        project_path=project_path,
-        graph_db_path=graph_db,
-        docs_dir=str(tmp_path),
-        llm=False,
-    )
+    result = generate(project_path=project_path, docs_dir=str(tmp_path), llm=False)
     assert result["errors"] == [], f"{Path(project_path).name}: errors: {result['errors']}"
     assert len(result["written"]) + len(result["skipped"]) > 5, (
         f"{Path(project_path).name}: expected >5 files, got {len(result['written'])+len(result['skipped'])}"
@@ -83,10 +74,10 @@ def test_docgen_skeleton_no_errors(project_path, graph_db, tmp_path):
 
 
 @pytest.mark.live
-@pytest.mark.parametrize("project_path,graph_db", _ALL_PROJECTS, ids=_PROJECT_IDS)
-def test_docgen_no_path_leak(project_path, graph_db, tmp_path):
+@pytest.mark.parametrize("project_path", _ALL_PROJECTS, ids=_PROJECT_IDS)
+def test_docgen_no_path_leak(project_path, tmp_path):
     """No absolute device path may appear in any generated .md file."""
-    generate(project_path=project_path, graph_db_path=graph_db, docs_dir=str(tmp_path), llm=False)
+    generate(project_path=project_path, docs_dir=str(tmp_path), llm=False)
     home = str(Path.home())
     leaks = []
     for md in tmp_path.rglob("*.md"):
@@ -96,11 +87,11 @@ def test_docgen_no_path_leak(project_path, graph_db, tmp_path):
 
 
 @pytest.mark.live
-@pytest.mark.parametrize("project_path,graph_db", _ALL_PROJECTS, ids=_PROJECT_IDS)
-def test_docgen_idempotent(project_path, graph_db, tmp_path):
+@pytest.mark.parametrize("project_path", _ALL_PROJECTS, ids=_PROJECT_IDS)
+def test_docgen_idempotent(project_path, tmp_path):
     """Second run with same source must produce zero writes."""
-    generate(project_path=project_path, graph_db_path=graph_db, docs_dir=str(tmp_path), llm=False)
-    r2 = generate(project_path=project_path, graph_db_path=graph_db, docs_dir=str(tmp_path), llm=False)
+    generate(project_path=project_path, docs_dir=str(tmp_path), llm=False)
+    r2 = generate(project_path=project_path, docs_dir=str(tmp_path), llm=False)
     assert r2["written"] == [], (
         f"{Path(project_path).name}: second run wrote {len(r2['written'])} files"
     )
@@ -108,21 +99,17 @@ def test_docgen_idempotent(project_path, graph_db, tmp_path):
 
 # ── Standardization sub-track (5 real docs-bearing projects) ─────────────────
 
-_DOCS_PROJECTS = [
-    (pp, gdb) for pp, gdb in _ALL_PROJECTS
-    if (Path(pp) / "docs").is_dir()
-]
-_DOCS_IDS = [Path(pp).name for pp, _ in _DOCS_PROJECTS]
+_DOCS_PROJECTS = [pp for pp in _ALL_PROJECTS if (Path(pp) / "docs").is_dir()]
+_DOCS_IDS = [Path(pp).name for pp in _DOCS_PROJECTS]
 
 
 @pytest.mark.live
-@pytest.mark.parametrize("project_path,graph_db", _DOCS_PROJECTS, ids=_DOCS_IDS)
-def test_standardize_human_files_preserved(project_path, graph_db, tmp_path):
+@pytest.mark.parametrize("project_path", _DOCS_PROJECTS, ids=_DOCS_IDS)
+def test_standardize_human_files_preserved(project_path, tmp_path):
     """Human docs in existing docs/ must be byte-unchanged after standardization."""
     from ose_docgen.provenance import classify
 
     real_docs = Path(project_path) / "docs"
-    # Copy human-prose files into tmp_path to simulate existing hierarchy
     human_hashes: dict[str, str] = {}
     for f in real_docs.rglob("*"):
         if f.is_file() and classify(f) == "human":
@@ -132,7 +119,7 @@ def test_standardize_human_files_preserved(project_path, graph_db, tmp_path):
             dest.write_bytes(f.read_bytes())
             human_hashes[str(rel)] = hashlib.sha256(f.read_bytes()).hexdigest()
 
-    generate(project_path=project_path, graph_db_path=graph_db, docs_dir=str(tmp_path), llm=False)
+    generate(project_path=project_path, docs_dir=str(tmp_path), llm=False)
 
     for rel, before_hash in human_hashes.items():
         after = (tmp_path / rel).read_bytes()
@@ -142,8 +129,8 @@ def test_standardize_human_files_preserved(project_path, graph_db, tmp_path):
 
 
 @pytest.mark.live
-@pytest.mark.parametrize("project_path,graph_db", _DOCS_PROJECTS, ids=_DOCS_IDS)
-def test_standardize_migration_md_emitted(project_path, graph_db, tmp_path):
+@pytest.mark.parametrize("project_path", _DOCS_PROJECTS, ids=_DOCS_IDS)
+def test_standardize_migration_md_emitted(project_path, tmp_path):
     """MIGRATION.md must be emitted for every docs-bearing project."""
-    generate(project_path=project_path, graph_db_path=graph_db, docs_dir=str(tmp_path), llm=False)
+    generate(project_path=project_path, docs_dir=str(tmp_path), llm=False)
     assert (tmp_path / "_meta" / "MIGRATION.md").exists()

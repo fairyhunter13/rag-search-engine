@@ -18,14 +18,13 @@ if str(_VENDOR_SRC) not in sys.path:
 
 
 def _any_project() -> str | None:
-    from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
     for p in list_projects():
         if not p.enabled:
             continue
         if "ocs-test-dirs" in p.path or Path(p.path).name.startswith(("tmp", "test-")):
             continue
-        if project_graph_db(p.path).exists():
+        if Path(p.path).is_dir():
             return p.path
     return None
 
@@ -33,16 +32,14 @@ def _any_project() -> str | None:
 def _gen(proj: str, out: Path) -> None:
     from ose_docgen.generate import generate
 
-    from opencode_search.core.config import project_graph_db
-    generate(project_path=out, graph_db_path=project_graph_db(proj),
-             docs_dir=str(out / "docs"), llm=False)
+    generate(project_path=proj, docs_dir=str(out / "docs"), llm=False)
 
 
 @pytest.fixture(scope="module")
 def docs_proj_tmp(tmp_path_factory):
     proj = _any_project()
     if not proj:
-        pytest.fail("no enabled project with graph.db — index a project first")
+        pytest.fail("no enabled project — index a project first")
     out = tmp_path_factory.mktemp("docgen")
     _gen(proj, out)
     return out
@@ -129,12 +126,10 @@ class TestDocgenPipeline:
         """generate() must return no errors."""
         from ose_docgen.generate import generate
 
-        from opencode_search.core.config import project_graph_db
         proj = _any_project()
         if not proj:
             pytest.fail("no enabled project — index a project first")
         out2 = Path(str(docs_proj_tmp) + "-errors-check")
         out2.mkdir(exist_ok=True)
-        r = generate(project_path=out2, graph_db_path=project_graph_db(proj),
-                     docs_dir=str(out2 / "docs"), llm=False)
+        r = generate(project_path=proj, docs_dir=str(out2 / "docs"), llm=False)
         assert r.get("errors", []) == [], f"errors: {r['errors']}"
