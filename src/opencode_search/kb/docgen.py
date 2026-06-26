@@ -104,17 +104,10 @@ def run_docgen(project_path: str) -> None:
     try:
         from ose_docgen.generate import generate  # type: ignore[import]
 
-        from opencode_search.core.config import project_graph_db
         from opencode_search.daemon.federation import expand_federation
 
-        gdb = project_graph_db(project_path)
-        if not gdb.exists():
-            return
-
         members = expand_federation(project_path)
-        member_dbs = [
-            project_graph_db(m) for m in members if m != project_path
-        ]
+        member_dirs = [m for m in members if m != project_path]
         docs_dir = str(
             Path(project_path) / os.environ.get("OSE_DOCGEN_DIR", "docs")
         )
@@ -122,9 +115,8 @@ def run_docgen(project_path: str) -> None:
 
         result = generate(
             project_path=project_path,
-            graph_db_path=gdb,
-            member_db_paths=[str(p) for p in member_dbs if p.exists()],
             docs_dir=docs_dir,
+            member_paths=member_dirs,
             llm=llm,
         )
         log.info(
