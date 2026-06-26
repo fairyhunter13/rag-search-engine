@@ -26,14 +26,9 @@ _HDR = {"Content-Type": "application/json"}
 _SYM_THRESHOLD = 50
 
 
-from tests.live._projects import federation_root as _federation_root
-from tests.live._projects import standalone_project as _standalone_project
+from tests.live._sample_workspace import SampleWorkspace
 
-_PROJECTS = {
-    "ose": str(Path(__file__).resolve().parents[3]),
-    "federation": _federation_root(),
-    "standalone": _standalone_project(),
-}
+_OSE = str(Path(__file__).resolve().parents[3])
 
 
 def _status(path: str) -> dict:
@@ -48,9 +43,14 @@ def _status(path: str) -> dict:
 
 
 @pytest.fixture(scope="module")
-def status_by_key() -> dict[str, dict]:
+def status_by_key(sample_workspace: SampleWorkspace) -> dict[str, dict]:
     """Snapshot status for all projects (non-polling — durable structural gates only)."""
-    return {k: _status(v) for k, v in _PROJECTS.items() if v}
+    projects = {
+        "ose": _OSE,
+        "federation": sample_workspace.fed_root,
+        "standalone": sample_workspace.ledger,
+    }
+    return {k: _status(v) for k, v in projects.items() if v}
 
 
 class TestKnowledgeBuiltCorrectly:

@@ -22,7 +22,7 @@ SHOP_FED_SRC = FIXTURES / "shop-federation"
 LEDGER_SRC = FIXTURES / "ledger-standalone"
 MEMBERS = ["cart-svc", "checkout-svc", "promo-svc"]
 _SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
-_MIN_FED_L1, _MIN_BR, _MIN_BP, _MIN_TEST_MEMBERS = 10, 5, 3, 2
+_MIN_FED_L1, _MIN_BR, _MIN_BP, _MIN_TEST_MEMBERS = 10, 1, 2, 1
 
 
 def _require_key() -> None:

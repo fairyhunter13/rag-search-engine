@@ -101,6 +101,18 @@ func MaxUsageRule(details *PromoDetails, totalUsages int) error {
 	return nil
 }
 
+// OrderValueCapRule rejects orders exceeding the maximum eligible order value for a promo.
+// High-value promo codes may be restricted to orders below a cap to limit discount exposure.
+func OrderValueCapRule(details *PromoDetails, orderTotal float64) error {
+	if details.MaxOrderValue > 0 && orderTotal > details.MaxOrderValue {
+		return fmt.Errorf(
+			"order total %.2f exceeds the maximum order value %.2f for promo %s",
+			orderTotal, details.MaxOrderValue, details.Code,
+		)
+	}
+	return nil
+}
+
 // computeDiscount calculates the discount amount from a percentage and order total.
 func computeDiscount(orderTotal, discountPct float64) float64 {
 	if discountPct <= 0 || discountPct > 100 {

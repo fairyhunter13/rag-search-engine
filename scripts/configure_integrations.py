@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path

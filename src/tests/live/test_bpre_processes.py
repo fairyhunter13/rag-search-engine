@@ -33,10 +33,11 @@ def synth_fed():
 
 
 @pytest.fixture(scope="module")
-def fed_root():
+def fed_root(sample_workspace) -> str:
     """Read-only reference to the sample federation root (no reconstruct_processes calls here)."""
-    from tests.live._projects import federation_root
-    return federation_root()
+    from tests.live._sample_workspace import SampleWorkspace
+    assert isinstance(sample_workspace, SampleWorkspace)
+    return sample_workspace.fed_root
 
 
 @pytest.fixture(scope="module")
@@ -49,8 +50,8 @@ def fed_members(fed_root):
 @pytest.fixture(scope="module")
 def process_db(synth_fed):
     """Run reconstruct_processes once on the synthetic root (no DeepSeek key — deterministic)."""
-    from unittest.mock import patch
-    with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+    from opencode_search.graph.llm import no_deepseek
+    with no_deepseek():
         count = reconstruct_processes(synth_fed.root)
     db = root_process_db(synth_fed.root)
     assert db.exists(), "process_graph.db must be created"
@@ -289,9 +290,9 @@ class TestMetamorphicDeterminism:
     @pytest.mark.slow
     def test_F1_deterministic_rerun(self, fed_root, process_db):
         """Full reconstruction re-run — slow because it re-calls reconstruct_processes."""
-        from unittest.mock import patch
+        from opencode_search.graph.llm import no_deepseek
         con, _ = process_db
-        with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+        with no_deepseek():
             before = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
             reconstruct_processes(fed_root)
             after = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
@@ -302,9 +303,9 @@ class TestMetamorphicDeterminism:
     @pytest.mark.slow
     def test_F2_bpmn_idempotent(self, fed_root, process_db):
         """BPMN idempotency — slow because it re-calls reconstruct_processes."""
-        from unittest.mock import patch
+        from opencode_search.graph.llm import no_deepseek
         con, _ = process_db
-        with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+        with no_deepseek():
             before = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
             reconstruct_processes(fed_root)
             after = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}

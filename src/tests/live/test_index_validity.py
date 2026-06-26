@@ -10,36 +10,39 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
-
-
-from tests.live._projects import federation_root as _federation_root
-from tests.live._projects import standalone_project as _standalone_project
-
-_PROJECTS = {
-    "ose": str(Path(__file__).resolve().parents[3]),
-    "federation": _federation_root(),
-    "standalone": _standalone_project(),
-}
+_OSE = str(Path(__file__).resolve().parents[3])
 
 
 @pytest.fixture(scope="session")
-def validate_reports() -> dict:
+def index_projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
+    return {
+        "ose": _OSE,
+        "federation": sample_workspace.fed_root,
+        "standalone": sample_workspace.ledger,
+    }
+
+
+@pytest.fixture(scope="session")
+def validate_reports(index_projects: dict[str, str]) -> dict:
     from opencode_search.core.registry import list_projects
     all_proj = list(list_projects())
-    for key, path in _PROJECTS.items():
+    for key, path in index_projects.items():
         if not path:
             pytest.fail(f"Project '{key}' not found in registry — register + index it first")
         ep = next((p for p in all_proj if p.path == path and p.enabled), None)
         if ep is None:
             pytest.fail(f"Project '{key}' not enabled in registry")
-        if not ep.indexed_at:
+        is_fed_root = bool(getattr(ep, "federation", None))
+        if not ep.indexed_at and not is_fed_root:
             pytest.fail(f"Project '{key}' has no indexed_at — index it first")
     reports: dict[str, dict] = {}
-    for key, path in _PROJECTS.items():
+    for key, path in index_projects.items():
         r = requests.post(
             f"{_BASE}/api/overview",
             json={"what": "validate", "project_path": path},
@@ -55,8 +58,8 @@ def _chk(reports: dict, key: str) -> dict:
     return reports[key].get("checks", {})
 
 
-def _root_member_chk(reports: dict, key: str) -> dict | None:
-    path = _PROJECTS[key]
+def _root_member_chk(reports: dict, projects: dict[str, str], key: str) -> dict | None:
+    path = projects[key]
     return next(
         (m["checks"] for m in reports[key].get("members", []) if m["path"] == path),
         None,
@@ -122,8 +125,10 @@ class TestIndexValidity:
         assert pg.get("out_of_band", 0) == 0, f"out-of-band confidence: {pg}"
 
     @pytest.mark.parametrize("key", ["ose", "standalone"])
-    def test_standalone_no_process_graph(self, key: str, validate_reports: dict) -> None:
-        root_chk = _root_member_chk(validate_reports, key)
+    def test_standalone_no_process_graph(
+        self, key: str, validate_reports: dict, index_projects: dict[str, str]
+    ) -> None:
+        root_chk = _root_member_chk(validate_reports, index_projects, key)
         assert root_chk is not None, f"root member not found for {key}"
         assert root_chk.get("process_graph") is None, (
             f"{key} is standalone but has process_graph: {root_chk.get('process_graph')}"

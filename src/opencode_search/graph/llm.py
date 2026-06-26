@@ -1,6 +1,7 @@
 """KB-build + chat-fallback LLM client: cloud DeepSeek only. No local generative LLM."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -39,12 +40,17 @@ _DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 _DEEPSEEK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
+_deepseek_disabled = False
+
+
 @lru_cache(maxsize=1)
 def deepseek_key() -> str | None:
     """DeepSeek API key from env, else parsed from ~/.bash_env (systemd daemon lacks it).
 
     Returns None when unavailable — callers must raise, not silently swallow.
     """
+    if _deepseek_disabled:
+        return None
     k = os.environ.get("DEEPSEEK_API_KEY")
     if k:
         return k.strip()
@@ -56,6 +62,19 @@ def deepseek_key() -> str | None:
     except OSError:
         pass
     return None
+
+
+@contextlib.contextmanager
+def no_deepseek():
+    """Context manager that suppresses DeepSeek for the duration (no-key path, no network calls)."""
+    global _deepseek_disabled
+    _deepseek_disabled = True
+    deepseek_key.cache_clear()
+    try:
+        yield
+    finally:
+        _deepseek_disabled = False
+        deepseek_key.cache_clear()
 
 
 def deepseek_chat(

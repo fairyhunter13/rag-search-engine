@@ -61,32 +61,41 @@ def test_graph_impact_returns_list(mini_stores):
     assert isinstance(result, list)
 
 
-def test_graph_callees_real_be():
-    """P10.3: callees() on real BE graph with 63k edges returns ≥1 result."""
+def test_graph_callees_real_be(sample_workspace):
+    """P10.3: callees() on sample service member graph returns ≥1 result for an edge-connected fn."""
+    import sqlite3
+
     from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.graph_handler import callees
-    from tests.live._projects import service_member
-    be = service_member()
-    gs = GraphStore(project_graph_db(be))
-    result = callees("NewService", gs)
+    gdb = project_graph_db(sample_workspace.promo)
+    with sqlite3.connect(str(gdb)) as con:
+        row = con.execute(
+            "SELECT s.name FROM symbols s JOIN edges e ON e.caller_sid=s.sid LIMIT 1"
+        ).fetchone()
+    assert row is not None, "sample promo-svc must have ≥1 edge in graph"
+    gs = GraphStore(gdb)
+    result = callees(row[0], gs)
     gs.close()
     assert isinstance(result, list) and len(result) >= 1
 
 
 @pytest.mark.slow
-def test_graph_narrative_and_trace_real_be():
-    """P10.3: impact_narrative + semantic_trace on real BE graph (LLM calls)."""
+def test_graph_narrative_and_trace_real_be(sample_workspace):
+    """P10.3: impact_narrative + semantic_trace on sample service member graph (LLM calls)."""
+    import sqlite3
+
     from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.graph_handler import impact_narrative, semantic_trace
-    from tests.live._projects import service_member
-    be = service_member()
-    gs = GraphStore(project_graph_db(be))
-    narrative = impact_narrative("Run", gs)
-    trace = semantic_trace("NewService", "Run", gs)
+    gdb = project_graph_db(sample_workspace.promo)
+    with sqlite3.connect(str(gdb)) as con:
+        sym_a = con.execute("SELECT s.name FROM symbols s JOIN edges e ON e.caller_sid=s.sid LIMIT 1").fetchone()
+        sym_b = con.execute("SELECT s.name FROM symbols s JOIN edges e ON e.callee_sid=s.sid LIMIT 1").fetchone()
+    assert sym_a and sym_b, "sample promo-svc must have edges for narrative/trace test"
+    gs = GraphStore(gdb)
+    narrative = impact_narrative(sym_b[0], gs)
+    trace = semantic_trace(sym_a[0], sym_b[0], gs)
     gs.close()
     assert isinstance(narrative, str) and len(narrative) > 20
     assert isinstance(trace, str) and len(trace) > 10

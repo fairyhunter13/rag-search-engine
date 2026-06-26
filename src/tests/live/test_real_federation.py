@@ -21,9 +21,10 @@ _SYM_THRESHOLD = 50  # same as test_knowledge_built.py
 
 
 @pytest.fixture(scope="module")
-def fed_root() -> str:
-    from tests.live._projects import federation_root
-    return federation_root()
+def fed_root(sample_workspace) -> str:
+    from tests.live._sample_workspace import SampleWorkspace
+    assert isinstance(sample_workspace, SampleWorkspace)
+    return sample_workspace.fed_root
 
 
 @pytest.fixture(scope="module")

@@ -1,0 +1,103 @@
+[
+  {
+    "community_id": 0,
+    "level": 1,
+    "title": "Testvalidatecartitems",
+    "summary": "4 symbol(s) (function) from checkout_test.go, pipeline.go. Primary: checkout_test.go.",
+    "member_count": 4,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "TestValidateCartItems_Valid",
+      "TestValidateCartItems_ZeroPrice",
+      "TestValidateCartItems_ZeroQty",
+      "validateCartItems"
+    ]
+  },
+  {
+    "community_id": 1,
+    "level": 1,
+    "title": "Testcomputetotal",
+    "summary": "4 symbol(s) (function, method) from checkout_test.go, checkout.go, pipeline.go. Primary: checkout_test.go.",
+    "member_count": 4,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "CalculatePricing",
+      "TestComputeTotal",
+      "TestComputeTotal_Empty",
+      "computeTotal"
+    ]
+  },
+  {
+    "community_id": 2,
+    "level": 1,
+    "title": "Testestimateshipping",
+    "summary": "3 symbol(s) (function) from checkout_test.go, pipeline.go. Primary: checkout_test.go.",
+    "member_count": 3,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "TestEstimateShipping_Empty",
+      "TestEstimateShipping_Items",
+      "estimateShipping"
+    ]
+  },
+  {
+    "community_id": 3,
+    "level": 1,
+    "title": "Registerhttphandlers",
+    "summary": "6 symbol(s) (function, method) from main.go, checkout_grpc.pb.go, checkout.go. Primary: main.go.",
+    "member_count": 6,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "GetOrderStatus",
+      "NewService",
+      "PlaceOrder",
+      "RegisterCheckoutServiceServer",
+      "RegisterHTTPHandlers",
+      "main"
+    ]
+  },
+  {
+    "community_id": 4,
+    "level": 1,
+    "title": "Testorderstore",
+    "summary": "7 symbol(s) (function, method) from checkout_test.go, checkout.go, pipeline.go. Primary: checkout_test.go.",
+    "member_count": 7,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "CommitOrder",
+      "TestGenerateOrderID",
+      "TestOrderStore_NotFound",
+      "TestOrderStore_SaveAndLoad",
+      "generateOrderID",
+      "load",
+      "save"
+    ]
+  },
+  {
+    "community_id": 5,
+    "level": 1,
+    "title": "Checkout Service Pipeline",
+    "summary": "This community implements a checkout workflow including request validation, cart retrieval, promotion application, order placement, and status tracking. It also includes unit tests to verify pricing results and order confirmation logic.",
+    "member_count": 11,
+    "semantic_type": "business_process",
+    "narrated": 1,
+    "member_signature": [
+      "Execute",
+      "FetchCart",
+      "GetOrderStatus",
+      "NewCheckoutServiceClient",
+      "NewPipeline",
+      "PlaceOrder",
+      "TestOrderResult_Confirmed",
+      "TestPricingResult_Total",
+      "ValidateRequest",
+      "applyPromo",
+      "applyPromoDiscount"
+    ]
+  }
+]

@@ -1,0 +1,84 @@
+[
+  {
+    "community_id": 0,
+    "level": 1,
+    "title": "Store Item Tests",
+    "summary": "Contains tests for adding, merging, and removing items from a store. Uses get and removeItem methods to verify functionality.",
+    "member_count": 5,
+    "semantic_type": "test",
+    "narrated": 1,
+    "member_signature": [
+      "TestStore_AddItem",
+      "TestStore_AddItem_Merge",
+      "TestStore_RemoveItem",
+      "get",
+      "removeItem"
+    ]
+  },
+  {
+    "community_id": 1,
+    "level": 1,
+    "title": "Store Validation Tests",
+    "summary": "Tests invalid quantity, empty product, total calculation, and item count for a store. Provides store creation and basic operations add, total, itemCount.",
+    "member_count": 8,
+    "semantic_type": "test",
+    "narrated": 1,
+    "member_signature": [
+      "TestStore_EmptyProduct",
+      "TestStore_InvalidQty",
+      "TestStore_ItemCount",
+      "TestStore_Total",
+      "add",
+      "itemCount",
+      "newStore",
+      "total"
+    ]
+  },
+  {
+    "community_id": 2,
+    "level": 1,
+    "title": "Registercartserviceserver",
+    "summary": "3 symbol(s) (function) from main.go, cart_grpc.pb.go, cart.go. Primary: main.go.",
+    "member_count": 3,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "NewCartServer",
+      "RegisterCartServiceServer",
+      "main"
+    ]
+  },
+  {
+    "community_id": 3,
+    "level": 1,
+    "title": "Store Clear Tests",
+    "summary": "Tests the clear functionality of a store. Uses the clear method to reset the store state.",
+    "member_count": 2,
+    "semantic_type": "test",
+    "narrated": 1,
+    "member_signature": [
+      "TestStore_Clear",
+      "clear"
+    ]
+  },
+  {
+    "community_id": 4,
+    "level": 1,
+    "title": "Cart Service Client",
+    "summary": "Provides a client for cart service with methods to add items, get cart, and clear cart. Also includes functions for cart total and item count calculation.",
+    "member_count": 9,
+    "semantic_type": "domain",
+    "narrated": 1,
+    "member_signature": [
+      "AddItem",
+      "AddItem",
+      "CartItemCount",
+      "CartTotal",
+      "ClearCart",
+      "ClearCart",
+      "GetCart",
+      "GetCart",
+      "NewCartServiceClient"
+    ]
+  }
+]

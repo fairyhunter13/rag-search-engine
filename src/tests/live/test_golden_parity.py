@@ -26,9 +26,10 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
 
 
 @pytest.fixture(scope="module")
-def fed_root():
-    from tests.live._projects import federation_root
-    return federation_root()
+def fed_root(sample_workspace) -> str:
+    from tests.live._sample_workspace import SampleWorkspace
+    assert isinstance(sample_workspace, SampleWorkspace)
+    return sample_workspace.fed_root
 
 
 @pytest.mark.parametrize("what,required_keys,non_empty", OVERVIEW_SHAPE)

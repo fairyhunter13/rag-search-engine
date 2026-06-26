@@ -35,15 +35,19 @@ func ReleasePromo(promoCode, userID string) {
 	}
 }
 
+// GetCurrentReservation returns the userID currently holding the promo slot, or "" if free.
+func GetCurrentReservation(code string) string {
+	slotLedger.mu.RLock()
+	defer slotLedger.mu.RUnlock()
+	return slotLedger.held[code]
+}
+
 // FulfillmentWorkflow runs the full promo fulfillment pipeline in order:
-//  1. Check discount eligibility (user has prior orders; not already claimed)
-//  2. Validate the promo window (time-bounded campaign)
-//  3. Enforce minimum order value
-//  4. Check global usage cap
-//  5. Reserve the promo slot to prevent concurrent double-application
-//  6. Compute and return the discount amount
+//  1. Run all validation rules via DefaultRuleEngine
+//  2. Reserve the promo slot to prevent concurrent double-application
+//  3. Compute and return the discount amount
 //
-// The slot is always released (via defer) whether or not step 6 succeeds.
+// The slot is always released (via defer) whether or not step 3 succeeds.
 func FulfillmentWorkflow(
 	userID, code string,
 	orderTotal float64,
@@ -51,21 +55,14 @@ func FulfillmentWorkflow(
 	alreadyClaimed bool,
 	totalUsages int,
 ) (float64, error) {
-	if err := DiscountEligibilityRule(userID, code, priorOrders, alreadyClaimed); err != nil {
-		return 0, fmt.Errorf("eligibility: %w", err)
-	}
 	details := lookupPromo(code)
 	if details == nil {
 		return 0, fmt.Errorf("promo %s not found", code)
 	}
-	if err := PromoWindowRule(details, clockNow()); err != nil {
-		return 0, fmt.Errorf("window: %w", err)
-	}
-	if err := MinOrderRule(details, orderTotal); err != nil {
-		return 0, fmt.Errorf("min order: %w", err)
-	}
-	if err := MaxUsageRule(details, totalUsages); err != nil {
-		return 0, fmt.Errorf("usage cap: %w", err)
+	ctx := NewRuleContext(userID, code, orderTotal, priorOrders, alreadyClaimed, totalUsages, nil, details)
+	engine := DefaultRuleEngine()
+	if violations := engine.RunAll(ctx); len(violations) > 0 {
+		return 0, fmt.Errorf("rule violation: %s", violations[0].Error())
 	}
 	if err := ReservePromo(code, userID); err != nil {
 		return 0, fmt.Errorf("reservation: %w", err)

@@ -1,0 +1,96 @@
+[
+  {
+    "community_id": 0,
+    "level": 1,
+    "title": "Double-Entry Accounting Process",
+    "summary": "The Journal class and double_entry function implement double-entry bookkeeping. Tests verify that entries are balanced, trial balances reconcile, and transaction counts are correct.",
+    "member_count": 6,
+    "semantic_type": "business_process",
+    "narrated": 1,
+    "member_signature": [
+      "Journal",
+      "double_entry",
+      "test_double_entry_balanced",
+      "test_reconcile",
+      "test_transaction_count",
+      "test_trial_balance"
+    ]
+  },
+  {
+    "community_id": 1,
+    "level": 1,
+    "title": "Account Credit and Balance Logic",
+    "summary": "Functions for making credit entries and computing account balances are defined and tested. Tests ensure credits are correctly applied and unknown accounts raise errors.",
+    "member_count": 6,
+    "semantic_type": "business_rule",
+    "narrated": 1,
+    "member_signature": [
+      "compute_account_balance",
+      "entry_balance",
+      "make_credit",
+      "test_entry_balance",
+      "test_make_credit",
+      "test_unknown_account_raises"
+    ]
+  },
+  {
+    "community_id": 2,
+    "level": 1,
+    "title": "Test",
+    "summary": "7 symbol(s) (function, class) from test_ledger.py, journal.py, entries.py. Primary: test_ledger.py.",
+    "member_count": 7,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "Transaction",
+      "make_debit",
+      "test_debit_nonpositive_raises",
+      "test_make_debit",
+      "test_unbalanced_transaction_raises",
+      "test_validate_entry_missing_id",
+      "validate_entry"
+    ]
+  },
+  {
+    "community_id": 3,
+    "level": 1,
+    "title": "Chart",
+    "summary": "6 symbol(s) (function, class) from test_ledger.py, accounts.py. Primary: test_ledger.py.",
+    "member_count": 6,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "Account",
+      "ChartOfAccounts",
+      "_chart",
+      "test_chart_add_and_get",
+      "test_chart_duplicate_raises",
+      "test_chart_invalid_type_raises"
+    ]
+  },
+  {
+    "community_id": 4,
+    "level": 1,
+    "title": "Normal",
+    "summary": "2 symbol(s) (function, class) from accounts.py, entries.py. Primary: accounts.py.",
+    "member_count": 2,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "JournalEntry",
+      "normal_balance_sign"
+    ]
+  },
+  {
+    "community_id": 5,
+    "level": 1,
+    "title": "Test",
+    "summary": "1 symbol(s) (function) from test_ledger.py. Primary: test_ledger.py.",
+    "member_count": 1,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "test_chart_list_by_type"
+    ]
+  }
+]
