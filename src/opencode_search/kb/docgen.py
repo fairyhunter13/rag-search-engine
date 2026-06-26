@@ -87,9 +87,9 @@ def cleanup_member_docs() -> dict:
 
 
 def run_docgen(project_path: str) -> None:
-    """Generate or update the docs/ C4×Diátaxis tree for project_path.
+    """Generate Information Hierarchy docs for project_path via claude -p.
 
-    Deterministic ($0) unless OSE_DOCGEN_LLM=1. Writes into <project>/docs/.
+    Kill-switch: OSE_DOCGEN=0 → no output. Manual trigger only.
     Federation members are cleaned (not generated) per HR27. Never raises.
     """
     if os.environ.get("OSE_DOCGEN", "1") == "0":
@@ -111,13 +111,11 @@ def run_docgen(project_path: str) -> None:
         docs_dir = str(
             Path(project_path) / os.environ.get("OSE_DOCGEN_DIR", "docs")
         )
-        llm = os.environ.get("OSE_DOCGEN_LLM", "0") == "1"
 
         result = generate(
             project_path=project_path,
             docs_dir=docs_dir,
             member_paths=member_dirs,
-            llm=llm,
         )
         log.info(
             "docgen %s: written=%d skipped=%d errors=%d",

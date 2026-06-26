@@ -465,13 +465,7 @@ def _enrich_project(project_path: str) -> None:
     except Exception as exc:
         log.error("bpre reconstruct %s: %s", project_path, exc, exc_info=True)
         _bpre_state["last_error"] = str(exc)
-    # Docgen: write C4×Diátaxis docs/ tree into the project repo ($0 by default).
-    # OSE_DOCGEN=0 skips; OSE_DOCGEN_LLM=1 enables Haiku narration. Never crashes the pass.
-    try:
-        from opencode_search.kb.docgen import run_docgen
-        run_docgen(project_path)
-    except Exception as exc:
-        log.error("docgen %s: %s", project_path, exc, exc_info=True)
+    # Docgen is manual-trigger only (CLI/dashboard). Not wired into the auto-pipeline.
     # Re-embed generated docs/ under scope=docs (HR28); no-op if no generated docs/ exists.
     try:
         from opencode_search.core.config import project_vector_db

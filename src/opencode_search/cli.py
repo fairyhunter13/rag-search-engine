@@ -191,6 +191,31 @@ def kb_status(project: str | None = typer.Option(None, "--project", "-p")) -> No
 
 
 @app.command()
+def docgen(
+    path: str = typer.Argument(..., help="Project root to generate IH docs for."),
+) -> None:
+    """Generate Information Hierarchy docs for a project (manual trigger; LLM-native)."""
+    from opencode_search.kb.docgen import run_docgen
+    typer.echo(f"Running docgen for {path} ...")
+    run_docgen(path)
+    typer.echo("Done.")
+
+
+@app.command()
+def okf(
+    path: str = typer.Argument(..., help="Project root to generate OKF bundle for."),
+) -> None:
+    """Generate OKF v0.1 knowledge bundle for a project (manual trigger; LLM-native)."""
+    from opencode_search.kb.okf import run_okf
+    typer.echo(f"Running OKF for {path} ...")
+    result = run_okf(path)
+    written = len(result.get("written", []))
+    skipped = len(result.get("skipped", []))
+    mode = result.get("mode", "on")
+    typer.echo(f"Done. mode={mode} written={written} skipped={skipped}")
+
+
+@app.command()
 def status() -> None:
     """Show daemon status and registered projects."""
     from opencode_search.core.config import DAEMON_HOST, DAEMON_PORT

@@ -1,4 +1,4 @@
-"""Live e2e: docgen C4×Diátaxis ↔ graph hierarchy mapping (no mocks, C1-C7)."""
+"""Phase 2 — docgen IH: kill-switch, source guards, MCP-absence, manual-trigger. (no mocks)"""
 from __future__ import annotations
 
 import os
@@ -13,8 +13,7 @@ _VENDOR_SRC = Path(__file__).parent.parent.parent.parent / "vendor" / "docgen" /
 if str(_VENDOR_SRC) not in sys.path:
     sys.path.insert(0, str(_VENDOR_SRC))
 
-_C4_BUCKETS = ["01-context", "02-containers", "03-components",
-               "04-reference", "05-how-to", "06-decisions"]
+_OSE = str(Path(__file__).resolve().parents[3])
 
 
 def _any_project():
@@ -29,86 +28,49 @@ def _any_project():
     return None
 
 
-def _fedroot():
-    from opencode_search.core.registry import list_projects
-    from opencode_search.daemon.federation import expand_federation
-    return next(
-        (p.path for p in list_projects()
-         if p.enabled and len(expand_federation(p.path)) > 1), None)
 
-
-def _gen(proj, out, member_paths=None):
+def test_ih_kill_switch_off(tmp_path):
+    """Phase 2: OSE_DOCGEN=0 -> generate() returns mode=off, writes nothing."""
     from ose_docgen.generate import generate
-
-    return generate(project_path=proj, member_paths=member_paths or [],
-                    docs_dir=str(out / "docs"), llm=False)
-
-
-@pytest.fixture(scope="module")
-def docs_out(tmp_path_factory):
     proj = _any_project()
-    if not proj:
-        pytest.fail("no enabled project")
-    out = tmp_path_factory.mktemp("dge")
-    r = _gen(proj, out)
-    assert r.get("errors", []) == [], f"generate errors: {r['errors']}"
-    return out, proj
+    assert proj, "no enabled project"
+    prev = os.environ.get("OSE_DOCGEN")
+    os.environ["OSE_DOCGEN"] = "0"
+    try:
+        r = generate(project_path=proj, docs_dir=str(tmp_path))
+    finally:
+        if prev is None:
+            os.environ.pop("OSE_DOCGEN", None)
+        else:
+            os.environ["OSE_DOCGEN"] = prev
+    assert r.get("mode") == "off"
+    assert r["written"] == []
+    assert not list(tmp_path.rglob("*.md")), "kill-switch must produce no files"
 
 
-def test_c1_readme_and_all_buckets_and_meta(docs_out):
-    """C1: README + all 6 C4 buckets + _meta/provenance.json."""
-    out, _ = docs_out
-    docs = out / "docs"
-    all_mds = list(docs.rglob("*.md"))
-    names = {f.name for f in all_mds}
-    assert "README.md" in names
-    assert (docs / "_meta" / "provenance.json").exists()
-    for bucket in _C4_BUCKETS:
-        assert any(bucket in str(f) for f in all_mds), f"missing bucket {bucket!r}"
+def test_ih_no_tree_sitter_import_in_vendor():
+    """Phase 2: no 'import tree_sitter' on the doc-tooling path (vendor/docgen)."""
+    vendor_src = Path(_OSE) / "vendor" / "docgen" / "src"
+    for py in vendor_src.rglob("*.py"):
+        text = py.read_text(encoding="utf-8", errors="replace")
+        assert "import tree_sitter" not in text and "from tree_sitter" not in text, \
+            f"tree_sitter import found in {py.relative_to(vendor_src)}"
 
 
-def test_c3_provenance_frontmatter(docs_out):
-    """C3: every generated .md has generated:true, source_sig, c4_level."""
-    from ose_docgen.provenance import _parse_fm
-    out, _ = docs_out
-    for md in (out / "docs").rglob("*.md"):
-        if "_meta" in md.parts:
-            continue
-        fm = _parse_fm(md.read_text(encoding="utf-8"))
-        assert fm.get("generated") == "true", f"{md.name}: no generated:true"
-        assert fm.get("source_sig"), f"{md.name}: no source_sig"
-        assert fm.get("c4_level"), f"{md.name}: no c4_level"
+def test_ih_no_c4_skeleton_files():
+    """Phase 2: C4 skeleton files deleted (tree.py, _tree_a/b/c.py)."""
+    vendor_src = Path(_OSE) / "vendor" / "docgen" / "src" / "ose_docgen"
+    for dead_file in ("tree.py", "_tree_a.py", "_tree_b.py", "_tree_c.py", "_tree_util.py"):
+        assert not (vendor_src / dead_file).exists(), f"Dead C4 skeleton file still present: {dead_file}"
 
 
-def test_c4_no_home_path_leak(docs_out):
-    """C4: no /home/ absolute path in any generated file."""
-    out, _ = docs_out
-    for md in (out / "docs").rglob("*.md"):
-        assert "/home/" not in md.read_text(encoding="utf-8"), \
-            f"{md.relative_to(out)}: /home/ leaked"
-
-
-def test_c6_idempotent(docs_out):
-    """C6: second generate() on same graph.db produces no file changes."""
-    import hashlib
-    out, proj = docs_out
-    docs = out / "docs"
-    h1 = {str(f.relative_to(docs)): hashlib.sha256(f.read_bytes()).hexdigest()
-          for f in docs.rglob("*.md")}
-    _gen(proj, out)
-    h2 = {str(f.relative_to(docs)): hashlib.sha256(f.read_bytes()).hexdigest()
-          for f in docs.rglob("*.md")}
-    assert h1 == h2
-
-
-def test_c5_ose_docgen_off(tmp_path):
-    """C5: OSE_DOCGEN=0 → run_docgen touches nothing (no-op)."""
+def test_ih_run_docgen_off_touches_nothing():
+    """Phase 2: OSE_DOCGEN=0 -> run_docgen() is a no-op (touches no files)."""
     from opencode_search.kb.docgen import run_docgen
     proj = _any_project()
-    if not proj:
-        pytest.fail("no enabled project")
-    before_docs = Path(proj) / "docs"
-    existed = before_docs.exists()
+    assert proj
+    ih_dir = Path(proj) / "docs" / "information-hierarchy"
+    existed = ih_dir.exists()
     prev = os.environ.get("OSE_DOCGEN")
     os.environ["OSE_DOCGEN"] = "0"
     try:
@@ -118,25 +80,58 @@ def test_c5_ose_docgen_off(tmp_path):
             os.environ.pop("OSE_DOCGEN", None)
         else:
             os.environ["OSE_DOCGEN"] = prev
-    # docs dir state must be unchanged from before the call
-    assert before_docs.exists() == existed
+    assert ih_dir.exists() == existed
 
 
-def test_c7_federated_generates_more_files_with_members(tmp_path_factory):
-    """C7: federated root with member_paths generates >= docs than without."""
-    from opencode_search.daemon.federation import expand_federation
-    root = _fedroot()
-    if not root:
-        pytest.fail("no federated root")
-    members = [m for m in expand_federation(root) if m != root and Path(m).is_dir()]
-    if not members:
-        pytest.fail("no member repo dirs")
-    out_no = tmp_path_factory.mktemp("fed_no")
-    out_yes = tmp_path_factory.mktemp("fed_yes")
-    r_no = _gen(root, out_no, [])
-    r_yes = _gen(root, out_yes, members)
-    assert r_no.get("errors", []) == []
-    assert r_yes.get("errors", []) == []
-    n_no = len(list((out_no / "docs").rglob("*.md")))
-    n_yes = len(list((out_yes / "docs").rglob("*.md")))
-    assert n_yes >= n_no, f"member_paths should not reduce docs count ({n_yes} < {n_no})"
+def test_ih_not_in_auto_sweep(live_client):
+    """Phase 2: /api/docgen is absent from MCP; MCP only has index/search/ask/graph/overview."""
+    from opencode_search.server.mcp import _MCP_TOOLS
+    tool_names = {t.name for t in _MCP_TOOLS}
+    assert "docgen" not in tool_names, "docgen must NOT be an MCP tool"
+    assert "okf" not in tool_names, "okf must NOT be an MCP tool"
+
+
+def test_ih_api_docgen_route_present(live_client):
+    """Phase 2: /api/docgen POST route exists and requires project param."""
+    r = live_client.post("/api/docgen", json={})
+    assert r.status_code == 400, f"/api/docgen without project must return 400: {r.status_code}"
+
+
+def test_ih_api_docgen_route_no_project_field(live_client):
+    """Phase 2: /api/docgen with JSON body missing project_path returns 400."""
+    r = live_client.post("/api/docgen", json={"other": "field"})
+    assert r.status_code == 400, f"/api/docgen missing project_path must return 400: {r.status_code}"
+
+
+def test_ih_docgen_not_in_sweeps():
+    """Phase 2: run_docgen is not called from _enrich_project in sweeps.py."""
+    sweeps_path = Path(_OSE) / "src" / "opencode_search" / "daemon" / "sweeps.py"
+    src = sweeps_path.read_text()
+    lines = src.splitlines()
+    in_enrich = False
+    for line in lines:
+        if "def _enrich_project" in line:
+            in_enrich = True
+        if in_enrich and "run_docgen" in line and not line.strip().startswith("#"):
+            pytest.fail(f"run_docgen still called in _enrich_project: {line.strip()}")
+
+
+@pytest.mark.slow
+def test_ih_generate_llm_structure(tmp_path):
+    """Phase 2 (@slow): LLM-native IH generation produces valid IH structure."""
+    from ose_docgen.generate import generate
+    proj = _any_project()
+    assert proj, "no enabled project found"
+    r = generate(project_path=proj, docs_dir=str(tmp_path / "docs"))
+    assert r.get("mode") != "off", "OSE_DOCGEN must not be 0 for this slow test"
+    assert "no_profile" not in r.get("errors", []), "claude profile must be configured"
+    ih_dir = tmp_path / "docs" / "information-hierarchy"
+    assert ih_dir.exists(), "information-hierarchy/ dir must be created"
+    pages = list(ih_dir.rglob("*.md"))
+    assert pages, "at least one IH page must be written"
+    assert (ih_dir / "index.md").exists(), "index.md must be present"
+    home = str(Path.home())
+    for p in pages:
+        assert home not in p.read_text(encoding="utf-8", errors="replace"), \
+            f"home path leaked in {p.name}"
+    assert not any("fragment_" in p.name for p in pages), "numeric-sequence naming found (must be semantic)"

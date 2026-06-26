@@ -1,8 +1,7 @@
-"""Thin OSE adapter: run OKF v0.1 generator for a project.
+"""Thin OSE adapter: run OKF v0.1 generate() for a project.
 
-Injects vendor/okf/src so OSE calls the tool without import coupling.
-Kill-switch: OSE_OKF=0 skips (default=1, $0/deterministic always).
-Output dir: <project>/docs/okf/ (override with OSE_OKF_DIR).
+Kill-switch: OSE_OKF=0 skips (default=1). LLM-native via claude -p.
+Manual-trigger only — never wired into the auto-enrich sweep.
 """
 from __future__ import annotations
 
@@ -13,7 +12,9 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_VENDOR_SRC = Path(__file__).parent.parent.parent.parent / "vendor" / "okf" / "src"
+_VENDOR_SRC = (
+    Path(__file__).parent.parent.parent.parent / "vendor" / "okf" / "src"
+)
 
 
 def _inject_vendor() -> bool:
@@ -24,29 +25,19 @@ def _inject_vendor() -> bool:
     return True
 
 
-def run_okf(project_path: str) -> None:
-    """Generate or update the OKF v0.1 bundle for project_path.
-
-    Deterministic, $0. Writes into <project>/docs/okf/.
-    Federation members are skipped (OKF is root-only). Never raises.
-    """
+def run_okf(project_path: str) -> dict:
+    """Generate OKF v0.1 bundle for project_path. Kill-switch: OSE_OKF=0 → no output."""
     if os.environ.get("OSE_OKF", "1") == "0":
-        return
+        return {"written": [], "skipped": [], "mode": "off"}
     if not _inject_vendor():
         log.warning("okf: vendor/okf/src not found at %s — skipping", _VENDOR_SRC)
-        return
+        return {"written": [], "skipped": [], "errors": ["vendor_missing"]}
     try:
         from okf.generate import generate  # type: ignore[import]
-
-        out_dir = str(
-            Path(project_path) / os.environ.get("OSE_OKF_DIR", "docs/okf")
-        )
-        result = generate(project_path=project_path, out_dir=out_dir)
-        log.info(
-            "okf %s: written=%d skipped=%d",
-            project_path,
-            len(result.get("written", [])),
-            len(result.get("skipped", [])),
-        )
+        result = generate(project_path=project_path)
+        log.info("okf %s: written=%d skipped=%d",
+                 project_path, len(result.get("written", [])), len(result.get("skipped", [])))
+        return result
     except Exception as exc:
         log.error("okf failed for %s: %s", project_path, exc, exc_info=True)
+        return {"written": [], "skipped": [], "errors": [str(exc)]}

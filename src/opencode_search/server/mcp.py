@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import NamedTuple
 
 from mcp.server.fastmcp import FastMCP
 
@@ -11,6 +12,19 @@ from opencode_search.daemon.runtime_state import note_activity, note_query
 from opencode_search.embed.embedder import get_embedder
 
 mcp = FastMCP("opencode-search", instructions=_PROMPT)
+
+
+class _ToolInfo(NamedTuple):
+    name: str
+
+# Static list of all MCP tools. Update when adding/removing @mcp.tool() handlers.
+_MCP_TOOLS: list[_ToolInfo] = [
+    _ToolInfo("search"),
+    _ToolInfo("ask"),
+    _ToolInfo("graph"),
+    _ToolInfo("overview"),
+    _ToolInfo("index"),
+]
 
 
 def _resolve_roots(requested: list[str]) -> list[str]:
