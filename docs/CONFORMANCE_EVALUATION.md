@@ -81,12 +81,23 @@
 
 ## 5. Remaining open items
 
-None. All L1 invariants CONFORMS; all L3 RTM entries resolved; registers synced.
+Code conformance: all items resolved. One test requires Claude API quota (see note below).
 
 ```bash
 python scripts/check_world_model.py --all   # CONFORMS
 .venv/bin/pytest src/tests/live/test_world_model_traceability.py -q  # 1 passed
+.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -m "live and not slow" -q  # 600 passed
 ```
+
+**Note — `test_ih_generate_llm_structure` (slow, API-dependent):** This test drives the full IH generation pipeline (`explore_repo` → `architect` → `write_pages`) via real `claude -p` subprocess calls. It passes when the Claude subscription account has capacity (verified in isolation: 341s, 14 pages written). Under heavy API load (quota exhaustion from concurrent diagnostic runs), the architect subprocess times out at 180s and returns None. This is an environmental constraint, not a code bug. Run this test in isolation or in a fresh 5-hour rate-limit window.
+
+Additional fixes applied during this audit (beyond the 5 gaps):
+- Deleted `test_graph_narrative_and_trace_real_be` (was testing deleted P2-violating LLM functions)
+- Added `test_fp17_no_llm_in_graph_handler` deletion guard to `test_feature_proof.py`
+- Fixed `test_known_business_rule_classified_correctly` (community topology keyword set)
+- Fixed `test_process_db_created` (missing `det_db` fixture dependency)
+- Fixed ose-docgen architect tool-access: `if tools is not None:` prevents default tool use causing 180s timeout
+- Added `max_pages` override to `generate()`/`portal()` for test speed control
 
 ---
 
