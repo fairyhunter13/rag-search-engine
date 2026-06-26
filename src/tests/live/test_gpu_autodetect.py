@@ -48,7 +48,7 @@ def test_rank_gpu_providers_disable_tensorrt():
 
 
 def test_rank_gpu_providers_this_host_cuda_primary():
-    """On this RTX 5080 host (DISABLE_TENSORRT=1, NvRTX absent) primary must be CUDA."""
+    """On CUDA GPU host (DISABLE_TENSORRT=1, NvRTX absent) primary must be CUDA."""
     import onnxruntime as ort
     ranked = rank_gpu_providers(ort.get_available_providers(), disable_tensorrt=True)
     assert ranked and ranked[0] == "CUDAExecutionProvider", f"expected CUDA primary: {ranked}"
@@ -60,7 +60,7 @@ def test_gpu_ep_names_excludes_cpu():
 
 
 # ---------------------------------------------------------------------------
-# Live (real RTX 5080)
+# Live (CUDA GPU)
 # ---------------------------------------------------------------------------
 
 
