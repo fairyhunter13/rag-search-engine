@@ -19,6 +19,10 @@ Use this skill to check conformance and understand OSE's governing laws.
 | P9 | Flat-L1 communities only — no L2/L3 hierarchy in OSE KB (WS-B 2026-06-26). |
 | P10 | Every line of code is a liability — prefer no change, then deletion, then smallest diff. |
 | P11 | Push after every commit — zero unpushed is the policy. |
+| P12 | Doc-tooling (docgen + OKF) is LLM-native via claude -p; no tree-sitter on the doc-tooling path. |
+| P13 | Docgen + OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools. |
+| P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling. No cross-lane calls. |
+| P15 | Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback. |
 
 ## L2 Components
 
@@ -28,7 +32,7 @@ Use this skill to check conformance and understand OSE's governing laws.
 | embed | `opencode_search.embed` | get_embedder · get_reranker |
 | index | `opencode_search.index` | index_project · VectorStore |
 | graph | `opencode_search.graph` | extract_symbols · detect_communities · GraphStore |
-| kb | `opencode_search.kb` | enrich_communities_batch · build_wiki · reconstruct_processes · run_docgen |
+| kb | `opencode_search.kb` | enrich_communities_batch · build_wiki · reconstruct_processes · run_docgen · run_okf |
 | query | `opencode_search.query` | search · compose_answer |
 | server | `opencode_search.server` | mcp · routes_pipeline · routes_project · _overview |
 | daemon | `opencode_search.daemon` | sweeps · watcher · federation · scheduler |

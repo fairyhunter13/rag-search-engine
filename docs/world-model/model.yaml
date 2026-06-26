@@ -44,6 +44,18 @@ L1_invariants:
   - id: P11
     principle: "Push after every commit — zero unpushed is the policy."
     check: null
+  - id: P12
+    principle: "Doc-tooling (docgen + OKF) is LLM-native via claude -p; no tree-sitter on the doc-tooling path."
+    check: {grep: "import tree_sitter|from tree_sitter", paths: "vendor/docgen/src/ vendor/okf/src/", verdict_if_match: AT_RISK}
+  - id: P13
+    principle: "Docgen + OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools."
+    check: {grep: "run_docgen|run_okf", paths: "src/opencode_search/daemon/sweeps.py", verdict_if_match: AT_RISK}
+  - id: P14
+    principle: "LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling. No cross-lane calls."
+    check: null
+  - id: P15
+    principle: "Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback."
+    check: null
 
 # ── L2: Components (capability → module → entry points) ─────────────────────
 L2_components:
@@ -51,7 +63,7 @@ L2_components:
   embed:   {module: "opencode_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
   index:   {module: "opencode_search.index",   ops: [index_project, VectorStore]}
   graph:   {module: "opencode_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
-  kb:      {module: "opencode_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_docgen]}
+  kb:      {module: "opencode_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_docgen, run_okf]}
   query:   {module: "opencode_search.query",   ops: [search, compose_answer]}
   server:  {module: "opencode_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
   daemon:  {module: "opencode_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
@@ -91,6 +103,24 @@ L3_specs:
   - id: HR20
     spec: "Partition quality gate: degenerate=True demotes kb_state to searchable."
     test: test_partition_quality_on_ose
+  - id: HR25
+    spec: "Docgen IH is LLM-native via claude -p; no tree-sitter import on the doc-tooling path."
+    test: test_ih_no_tree_sitter_import_in_vendor
+  - id: HR26
+    spec: "Docgen and OKF are manual-trigger only; not called from _enrich_project or MCP tools."
+    test: test_ih_docgen_not_in_sweeps
+  - id: HR27
+    spec: "Kill-switch OSE_DOCGEN=0 → generate() returns mode=off, writes no files."
+    test: test_ih_kill_switch_off
+  - id: HR28
+    spec: "OKF v0.1 bundle: one concept per semantic-named file; index.md present; type required; no fragment_ naming."
+    test: test_okf_llm_generate_structure
+  - id: HR29
+    spec: "Kill-switch OSE_OKF=0 → generate() returns mode=off, writes no files."
+    test: test_okf_kill_switch_off
+  - id: HR30
+    spec: "MCP surface = index+search+ask+graph+overview only; docgen and okf absent from _MCP_TOOLS."
+    test: test_api_docgen_not_in_mcp
 
 # ── L4: Code patterns & generation rules ─────────────────────────────────────
 L4_patterns:
