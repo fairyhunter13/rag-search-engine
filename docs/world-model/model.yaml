@@ -1,0 +1,102 @@
+# OSE World Model — structured, queryable, partially-executable representation
+# of what OSE is, why it is built this way, and how it MUST be built.
+# Four-layer schema (agentic-coding, June 2026): L1 invariants → L2 components →
+# L3 behavior specs → L4 code patterns.  check_world_model.py evaluates L1/L3
+# predicates against working-tree diffs to emit CONFORMS / AT_RISK.
+schema_version: "0.1"
+
+# ── L1: Architecture & Invariants (rules of the game) ────────────────────────
+# Each entry: id, principle (the law), check (executable predicate for AT_RISK detection).
+L1_invariants:
+  - id: P0
+    principle: "GPU-only inference — embed+rerank on CUDA; CPU fallback raises fatally."
+    check: {grep: "cpu_fallback|CPU_ONLY|providers.*cpu", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+  - id: P1
+    principle: "No local generative LLM. KB=DeepSeek-only. Chat=claude-haiku-4-5 only."
+    check: {grep: "ollama|qwen3|llama|local.*model", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+  - id: P2
+    principle: "MCP query path (search/ask/graph/overview) runs NO generative LLM — only embed+rerank."
+    check: {grep: "deepseek_extract|deepseek_chat|claude.*ask|haiku.*ask", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
+  - id: P3
+    principle: "Federation = query-time union; no cross-repo edges; members have independent stores."
+    check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+  - id: P4
+    principle: "Indexing is event-driven (watcher); no periodic sweeps or timers."
+    check: {grep: "register.*kb_sweep|register.*auto_index|threading.Timer.*sweep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
+  - id: P5
+    principle: "Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score."
+    check: {grep: "order.*score[^_]|sort.*score[^_]|rerank.*skip", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
+  - id: P6
+    principle: "No heuristics — tree-sitter + LLM only. No re, no keyword maps in Category A paths."
+    check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/opencode_search/kb/bpre.py src/opencode_search/server/_overview.py", verdict_if_match: AT_RISK}
+  - id: P7
+    principle: "Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts."
+    check: {grep: "/home/|/root/|/Users/", paths: "src/opencode_search/kb/wiki.py src/opencode_search/kb/bpre.py", verdict_if_match: AT_RISK}
+  - id: P8
+    principle: "No mocks in tests — real daemon at :8765, real GPU, real embedder."
+    check: {grep: "unittest.mock|MagicMock|patch\\(", paths: "src/tests/", verdict_if_match: AT_RISK}
+  - id: P9
+    principle: "Flat-L1 communities only — no L2/L3 hierarchy in OSE KB (WS-B 2026-06-26)."
+    check: {grep: "level.*[23456789]|level=2|level=3|build_hierarchy|build_federation_hierarchy", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+  - id: P10
+    principle: "Every line of code is a liability — prefer no change, then deletion, then smallest diff."
+    check: null
+  - id: P11
+    principle: "Push after every commit — zero unpushed is the policy."
+    check: null
+
+# ── L2: Components (capability → module → entry points) ─────────────────────
+L2_components:
+  core:    {module: "opencode_search.core",    ops: [config, registry, types]}
+  embed:   {module: "opencode_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
+  index:   {module: "opencode_search.index",   ops: [index_project, VectorStore]}
+  graph:   {module: "opencode_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
+  kb:      {module: "opencode_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_docgen]}
+  query:   {module: "opencode_search.query",   ops: [search, compose_answer]}
+  server:  {module: "opencode_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
+  daemon:  {module: "opencode_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
+
+# ── L3: Behavior specs (HRs — each maps to a §14 test) ──────────────────────
+L3_specs:
+  - id: HR1
+    spec: "Watcher is the steady-state indexing trigger; on_change incremental-embeds."
+    test: test_p34_watcher_updates_vector_index
+  - id: HR4
+    spec: "Federation query-time union; no cross-repo edges; expand_federation fan-out."
+    test: test_inv1_each_member_has_own_stores
+  - id: HR6
+    spec: "GPU-only embed+rerank; CPU fallback fatal; assert_cuda_available at startup."
+    test: test_p32_gpu_providers_bound_to_cuda
+  - id: HR8
+    spec: "Two-stage retrieval; rerank_score is the ranking authority; both AXIS A+B reranked."
+    test: test_il3_search_orders_by_rerank_score
+  - id: HR9
+    spec: "MCP query actions run no generative LLM — embed+rerank only."
+    test: test_il2_mcp_search_uses_no_llm
+  - id: HR10
+    spec: "Dashboard chat uses claude-haiku-4-5 only; no DeepSeek fallback."
+    test: test_kb_chat_is_haiku_only
+  - id: HR11
+    spec: "semantic_type assigned by DeepSeek classify batch-20; reclassify_all=False (no churn)."
+    test: test_ab3_no_type_dominates
+  - id: HR12
+    spec: "KB enrichment uses cloud DeepSeek only; crashes if DEEPSEEK_API_KEY absent."
+    test: test_kb_enrich_is_deepseek_only
+  - id: HR13
+    spec: "Wiki artifacts use project-root-relative paths; no absolute device paths."
+    test: test_w2_community_page_exists
+  - id: HR15
+    spec: "No re.compile/re.finditer in Category A (bpre.py, _overview.py services)."
+    test: test_no_code_semantic_regex_in_category_a
+  - id: HR20
+    spec: "Partition quality gate: degenerate=True demotes kb_state to searchable."
+    test: test_partition_quality_on_ose
+
+# ── L4: Code patterns & generation rules ─────────────────────────────────────
+L4_patterns:
+  - "upsert_community: always pass summary=None (never empty string) to avoid churn"
+  - "project_graph_db: content-addressed path (slug + sha256[:16])"
+  - "expand_federation returns [root] + entry.federation — canonical logical-repo primitive"
+  - "deepseek_extract: prefix-cached stable system prompt; dynamic user prompt only"
+  - "graph.db communities: level=1 only (L2/L3 deleted WS-B 2026-06-26)"
+  - "iter_files: federation_mode=True prunes symlink dirs pointing outside root"

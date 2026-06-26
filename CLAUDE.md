@@ -62,3 +62,17 @@ Any CPU fallback must raise a fatal error — never fall back silently.
 - LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking only); KB build = cloud DeepSeek; chat = claude-haiku-4-5 + DeepSeek fallback
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 - Architecture: `docs/architecture/federation-and-search-engine.md` + `docs/architecture/federation-ops-and-invariants.md`
+
+## World model & info-hierarchy
+
+The OSE world model (governing laws, component map, behavior specs) lives in `docs/world-model/`.
+The DIKW doctrine ladder lives in `docs/info-hierarchy.md`.
+Generated Claude Code skills: `.claude/skills/world-model.md` + `.claude/skills/info-hierarchy.md`.
+
+```bash
+# Check working-tree conformance (GPU-free, daemon-free):
+python scripts/check_world_model.py
+
+# Regenerate skills after editing model.yaml or info-hierarchy.md:
+python scripts/gen_world_model_skills.py
+```
