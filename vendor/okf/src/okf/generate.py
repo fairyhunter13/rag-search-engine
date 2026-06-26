@@ -16,7 +16,7 @@ from pathlib import Path
 OKF_VERSION = "0.1"
 MODEL_HAIKU = "claude-haiku-4-5"
 MODEL_SONNET = "claude-sonnet-4-6"
-_TIMEOUT = 180
+_TIMEOUT = 300  # SONNET can exceed 180s under full-suite system load
 
 _raw_profiles = os.environ.get(
     "OSE_OKF_CLAUDE_PROFILES",
