@@ -20,7 +20,7 @@ _TIMEOUT = 180
 
 _raw_profiles = os.environ.get(
     "OSE_OKF_CLAUDE_PROFILES",
-    f"{os.path.expanduser('~/.claude')},{os.path.expanduser('~/.claude1')}",
+    f"{os.path.expanduser('~/.claude')},{os.path.expanduser('~/.claude-account1')}",
 )
 _PROFILES: list[str] = [p.strip() for p in _raw_profiles.split(",") if p.strip()]
 

@@ -1,6 +1,6 @@
 # opencode-search-engine — Claude Code Instructions
 
-This project is indexed in **opencode-search**. You MUST use the MCP tools before any native file exploration.
+Indexed in opencode-search — global MCP doctrine lives in `~/.claude/CLAUDE.md`; project protocol below.
 
 ## Mandatory tool-use protocol (no exceptions)
 

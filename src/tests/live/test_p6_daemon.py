@@ -162,6 +162,27 @@ def test_global_prompt_inject_remove(tmp_path):
     assert "opencode-search-global-instructions" not in md.read_text()
 
 
+def test_bare_home_claude_md_not_written_by_daemon(tmp_path):
+    """P8 guard: daemon startup path does NOT create/write bare ~/CLAUDE.md."""
+    from pathlib import Path
+
+    from typer.testing import CliRunner
+
+    from opencode_search.cli_daemon import daemon_app
+
+    bare = Path.home() / "CLAUDE.md"
+    existed_before = bare.exists()
+
+    runner = CliRunner()
+    # install-global no longer calls inject_claude_md() → should not touch ~/CLAUDE.md
+    # (it only calls remove_claude_md() which is a no-op when file is absent)
+    if not existed_before:
+        runner.invoke(daemon_app, ["install-global"])
+        assert not bare.exists(), (
+            "P8: daemon install-global recreated bare ~/CLAUDE.md — decommission incomplete"
+        )
+
+
 def test_ensure_running_false_for_wrong_port():
     from opencode_search.daemon.server import ensure_running
 

@@ -677,18 +677,20 @@ def test_e7_trimmed_http_surface(live_client):
 
 
 def test_e8_global_prompt_tool_accuracy():
-    """E8: _PROMPT documents all 5 MCP tool names and their key parameters."""
+    """E8: _PROMPT is the canonical Phase-100 body — 5 tools + RESILIENCE + no drift."""
     from opencode_search.daemon.global_prompt import _PROMPT
 
     for tool in ("search", "ask", "graph", "overview", "index"):
         assert tool in _PROMPT, f"E8: _PROMPT missing tool '{tool}'"
-    for param in ("scope", "project_paths"):
-        assert param in _PROMPT, f"E8: _PROMPT missing search param '{param}'"
-    assert "project_path" in _PROMPT, "E8: _PROMPT missing ask/graph/overview param 'project_path'"
-    for param in ("symbol", "relation"):
-        assert param in _PROMPT, f"E8: _PROMPT missing graph param '{param}'"
-    assert "what" in _PROMPT, "E8: _PROMPT missing overview param 'what'"
-    assert "enabled" in _PROMPT, "E8: _PROMPT missing index param 'enabled'"
+    assert "5-tool" in _PROMPT, "E8: _PROMPT is not Phase-100 canonical (missing '5-tool')"
+    assert "RESILIENCE" in _PROMPT, "E8: _PROMPT missing RESILIENCE rule"
+    assert "NEVER auto-index" in _PROMPT, "E8: _PROMPT missing NEVER auto-index rule"
+    assert "whenever the current project is indexed" in _PROMPT, (
+        "E8: _PROMPT missing 'whenever the current project is indexed'"
+    )
+    # MCP server instructions must equal _PROMPT (no separate stale copy)
+    from opencode_search.server.mcp import mcp
+    assert mcp.instructions == _PROMPT, "E8: mcp.instructions diverged from _PROMPT"
 
 
 # ── Chat quality: comprehensive question coverage ─────────────────────────────

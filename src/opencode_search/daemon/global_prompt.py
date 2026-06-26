@@ -1,4 +1,9 @@
-"""Inject MCP tool instructions into ~/CLAUDE.md and editor configs."""
+"""MCP tool instructions for the opencode-search server.
+
+_PROMPT mirrors CANONICAL_BODY from scripts/integrations/canonical.py — update
+both files in sync when doctrine changes. Single write path: configure_integrations.py
+writes to ~/.claude{,-account1,-account2}/CLAUDE.md; bare ~/CLAUDE.md is NOT written.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,17 +11,22 @@ from pathlib import Path
 _START = "[opencode-search-global-instructions:start]"
 _END = "[opencode-search-global-instructions:end]"
 
+# Canonical MCP doctrine (June 2026 Phase 100). Mirrors scripts/integrations/canonical.py.
 _PROMPT = """\
-MANDATORY: Use the opencode-search MCP server as the primary code lookup tool.
+MANDATORY: Use the opencode-search MCP server as the primary code lookup tool whenever the current project is indexed.
 
-5-tool API (v3):
-- search(query, scope, project_paths): find specific code/files/functions
-- ask(query, project_path, scope): how does X work? architecture, design
-- graph(symbol, project_path, relation): call graph analysis
-- overview(project_path, what): project overview, patterns, communities
-- index(project_path, enabled): register or remove a project
+5-tool API (v3 — June 2026 Phase 100): search · ask · graph · overview · index
+See MCP tool schemas for full parameter reference (scope/relation/what variants, etc.).
 
-Rules: call search before grep/find; use ask for 'how does X work'; GPU-only."""
+Rules (no exceptions):
+- Call search/ask/graph/overview BEFORE any Bash grep/find, Glob, or Grep tool call.
+- Never delegate codebase questions to sub-agents via the Agent tool.
+- GPU-only inference — CPU fallback is forbidden for all OSE operations.
+- RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs/errors,
+  immediately fall back to native Read/Grep/Glob/Bash — never wait or retry the MCP call.
+- NEVER auto-index. Only call index(enabled=True) when the user explicitly asks.
+- If not indexed, say so and ask before indexing.\
+"""
 
 
 def _inject(text: str, prompt: str) -> str:

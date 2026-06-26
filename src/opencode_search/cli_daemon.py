@@ -59,10 +59,14 @@ def daemon_stop(
 
 @daemon_app.command("install-global")
 def daemon_install_global(transport: str = typer.Option("stdio", "--transport")) -> None:
-    """Inject MCP block into ~/CLAUDE.md and editor configs."""
-    from opencode_search.daemon.global_prompt import inject_claude_md
-    inject_claude_md()
-    typer.echo("Injected global prompt into ~/CLAUDE.md.")
+    """Register the MCP server in Claude Code profiles via configure_integrations.py."""
+    from opencode_search.daemon.global_prompt import remove_claude_md
+    remove_claude_md()  # clean up any legacy bare ~/CLAUDE.md written by older versions
+    typer.echo(
+        "Legacy ~/CLAUDE.md cleaned (if present).\n"
+        "Run: python scripts/configure_integrations.py --apply-all\n"
+        "  to write the canonical doctrine to ~/.claude{,-account1,-account2}/CLAUDE.md"
+    )
     if transport == "http":
         import json
         from pathlib import Path
