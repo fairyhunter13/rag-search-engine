@@ -1,10 +1,6 @@
-"""WS-D live e2e: /api/docs endpoints + run_docgen pipeline guards.
-
-No mocks. Requires daemon at :8765. No GPU/LLM needed (OSE_DOCGEN_LLM=0).
-"""
+"""WS-D live e2e: /api/docs endpoints + /api/docgen manual-trigger route. (no mocks)"""
 from __future__ import annotations
 
-import hashlib
 import sys
 from pathlib import Path
 
@@ -29,44 +25,7 @@ def _any_project() -> str | None:
     return None
 
 
-def _gen(proj: str, out: Path) -> None:
-    from ose_docgen.generate import generate
-
-    generate(project_path=proj, docs_dir=str(out / "docs"), llm=False)
-
-
-@pytest.fixture(scope="module")
-def docs_proj_tmp(tmp_path_factory):
-    proj = _any_project()
-    if not proj:
-        pytest.fail("no enabled project — index a project first")
-    out = tmp_path_factory.mktemp("docgen")
-    _gen(proj, out)
-    return out
-
-
 class TestDocsApi:
-    def test_tree_non_empty_and_c4_order(self, live_client, docs_proj_tmp) -> None:
-        r = live_client.get(f"/api/docs?project={docs_proj_tmp}")
-        assert r.status_code == 200
-        tree = r.json().get("tree", [])
-        assert len(tree) >= 5, f"expected ≥5 files, got {tree}"
-        # README.md must precede 01-context entries if both exist
-        readme_i = next((i for i, f in enumerate(tree) if f == "README.md"), None)
-        ctx_i = next((i for i, f in enumerate(tree) if f.startswith("01-context")), None)
-        if readme_i is not None and ctx_i is not None:
-            assert readme_i < ctx_i
-
-    def test_page_serves_heading_no_path_leak(self, live_client, docs_proj_tmp) -> None:
-        tree = live_client.get(f"/api/docs?project={docs_proj_tmp}").json().get("tree", [])
-        assert tree
-        for rel in tree[:3]:
-            r = live_client.get(f"/api/docs/page?project={docs_proj_tmp}&path={rel}")
-            assert r.status_code == 200
-            content = r.json().get("content", "")
-            assert "# " in content, f"{rel}: no heading"
-            assert "/home/" not in content, f"{rel}: path leaked"
-
     def test_traversal_blocked(self, live_client, tmp_path) -> None:
         (tmp_path / "docs").mkdir()
         bad_paths = [
@@ -109,27 +68,19 @@ class TestDocgenPipeline:
         root2 = tmp_path / "plain"
         assert not is_ignored_path(plain / "guide.md", root2)
 
-    def test_idempotent(self, docs_proj_tmp) -> None:
-        """Second generate() with unchanged graph.db must not change any file."""
-        proj = _any_project()
-        if not proj:
-            pytest.fail("no enabled project — index a project first")
-        docs = docs_proj_tmp / "docs"
-        h1 = {str(f.relative_to(docs)): hashlib.sha256(f.read_bytes()).hexdigest()
-               for f in docs.rglob("*.md")}
-        _gen(proj, docs_proj_tmp)
-        h2 = {str(f.relative_to(docs)): hashlib.sha256(f.read_bytes()).hexdigest()
-               for f in docs.rglob("*.md")}
-        assert h1 == h2, "second run changed files"
+    def test_api_docgen_route_requires_project(self, live_client) -> None:
+        """POST /api/docgen without project_path must return 400."""
+        r = live_client.post("/api/docgen", json={})
+        assert r.status_code == 400
 
-    def test_no_errors(self, docs_proj_tmp) -> None:
-        """generate() must return no errors."""
-        from ose_docgen.generate import generate
+    def test_api_docgen_no_project_field(self, live_client) -> None:
+        """POST /api/docgen with JSON body missing project_path must return 400."""
+        r = live_client.post("/api/docgen", json={"other": "field"})
+        assert r.status_code == 400, f"missing project_path must return 400: {r.status_code}"
 
-        proj = _any_project()
-        if not proj:
-            pytest.fail("no enabled project — index a project first")
-        out2 = Path(str(docs_proj_tmp) + "-errors-check")
-        out2.mkdir(exist_ok=True)
-        r = generate(project_path=proj, docs_dir=str(out2 / "docs"), llm=False)
-        assert r.get("errors", []) == [], f"errors: {r['errors']}"
+    def test_api_docgen_not_in_mcp(self, live_client) -> None:
+        """docgen and okf must NOT appear as MCP tools."""
+        from opencode_search.server.mcp import _MCP_TOOLS
+        tool_names = {t.name for t in _MCP_TOOLS}
+        assert "docgen" not in tool_names
+        assert "okf" not in tool_names

@@ -1,70 +1,136 @@
-"""WS-C: OKF v0.1 standalone generator live test.
-
-GPU-free, OSE-daemon-free for Phase 1 cases (no inject needed).
-Uses real vendor/okf/src directly via sys.path injection.
-"""
+"""Phase 2c — OKF v0.1: kill-switch, source guards, MCP-absence, manual-trigger. (no mocks)"""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
-_VENDOR = Path(__file__).resolve().parents[3] / "vendor" / "okf" / "src"
-sys.path.insert(0, str(_VENDOR))
-
-from okf.generate import OKF_VERSION, generate
-
 pytestmark = pytest.mark.live
+
+_VENDOR = Path(__file__).resolve().parents[3] / "vendor" / "okf" / "src"
+if str(_VENDOR) not in sys.path:
+    sys.path.insert(0, str(_VENDOR))
 
 _OSE = str(Path(__file__).resolve().parents[3])
 
 
-class TestOKFStandalone:
-    def test_okf_version_constant(self):
-        assert OKF_VERSION == "0.1"
+def test_okf_version_constant():
+    from okf.generate import OKF_VERSION
+    assert OKF_VERSION == "0.1"
 
-    def test_okf_generates_on_ose(self, tmp_path):
-        result = generate(_OSE, out_dir=tmp_path / "okf")
-        assert result["version"] == OKF_VERSION
-        assert result["project"] == "opencode-search-engine"
-        assert len(result["written"]) > 0
-        assert result["errors"] == [] if "errors" in result else True
 
-    def test_okf_index_has_frontmatter(self, tmp_path):
-        out = tmp_path / "okf"
-        generate(_OSE, out_dir=out)
-        index = out / "index.md"
-        assert index.exists()
-        text = index.read_text()
-        assert f'okf_version: "{OKF_VERSION}"' in text
-        assert "generated: true" in text
+def test_okf_kill_switch_off(tmp_path):
+    """OSE_OKF=0 -> generate() returns mode=off, writes nothing."""
+    from okf.generate import generate
+    prev = os.environ.get("OSE_OKF")
+    os.environ["OSE_OKF"] = "0"
+    try:
+        r = generate(project_path=_OSE, out_dir=str(tmp_path))
+    finally:
+        if prev is None:
+            os.environ.pop("OSE_OKF", None)
+        else:
+            os.environ["OSE_OKF"] = prev
+    assert r.get("mode") == "off", f"Expected mode=off, got {r}"
+    assert r["written"] == []
+    assert not list(tmp_path.rglob("*.md")), "kill-switch must produce no files"
 
-    def test_okf_fragments_have_type_field(self, tmp_path):
-        out = tmp_path / "okf"
-        generate(_OSE, out_dir=out)
-        for frag in out.glob("fragment_*.md"):
-            content = frag.read_text()
-            assert "type:" in content, f"fragment {frag.name} missing type field"
 
-    def test_okf_no_absolute_paths(self, tmp_path):
-        out = tmp_path / "okf"
-        generate(_OSE, out_dir=out)
-        home = str(Path.home())
-        for md in out.glob("*.md"):
-            assert home not in md.read_text(), f"Absolute path in {md.name}"
+def test_okf_adapter_kill_switch_returns_dict():
+    """run_okf with OSE_OKF=0 returns dict with mode=off."""
+    from opencode_search.kb.okf import run_okf
+    prev = os.environ.get("OSE_OKF")
+    os.environ["OSE_OKF"] = "0"
+    try:
+        r = run_okf(_OSE)
+    finally:
+        if prev is None:
+            os.environ.pop("OSE_OKF", None)
+        else:
+            os.environ["OSE_OKF"] = prev
+    assert isinstance(r, dict), f"run_okf must return dict, got {type(r)}"
+    assert r.get("mode") == "off"
+    assert r["written"] == []
 
-    def test_okf_adapter_no_raise(self, tmp_path):
-        """kb.okf.run_okf must not raise."""
-        from opencode_search.kb.okf import run_okf
-        run_okf(_OSE)
 
-    def test_okf_kill_switch(self, tmp_path):
-        """OSE_OKF=0 skips silently."""
-        import os
-        os.environ["OSE_OKF"] = "0"
-        try:
-            from opencode_search.kb.okf import run_okf
-            run_okf(_OSE)
-        finally:
-            del os.environ["OSE_OKF"]
+def test_okf_no_tree_sitter_import_in_vendor():
+    """No 'import tree_sitter' on the OKF doc-tooling path."""
+    for py in _VENDOR.rglob("*.py"):
+        text = py.read_text(encoding="utf-8", errors="replace")
+        assert "import tree_sitter" not in text and "from tree_sitter" not in text, \
+            f"tree_sitter import found in vendor/okf/{py.relative_to(_VENDOR)}"
+
+
+def test_okf_no_fragment_naming_in_vendor():
+    """OKF generates semantic concept names, never fragment_N.md."""
+    src = Path(_OSE) / "vendor" / "okf" / "src"
+    for py in src.rglob("*.py"):
+        text = py.read_text(encoding="utf-8", errors="replace")
+        assert "fragment_" not in text, \
+            f"fragment_ naming found in vendor/okf/{py.relative_to(src)}"
+
+
+def test_okf_not_in_mcp_tools(live_client):
+    """OKF must NOT be an MCP tool; MCP = index/search/ask/graph/overview only."""
+    from opencode_search.server.mcp import _MCP_TOOLS
+    tool_names = {t.name for t in _MCP_TOOLS}
+    assert "okf" not in tool_names, "okf must NOT be an MCP tool"
+    assert "docgen" not in tool_names, "docgen must NOT be an MCP tool"
+
+
+def test_okf_api_route_present(live_client):
+    """/api/okf POST route exists and requires project_path."""
+    r = live_client.post("/api/okf", json={})
+    assert r.status_code == 400, f"/api/okf without project must return 400: {r.status_code}"
+
+
+def test_okf_api_route_no_project_field(live_client):
+    """/api/okf POST with JSON body missing project_path returns 400."""
+    r = live_client.post("/api/okf", json={"other": "field"})
+    assert r.status_code == 400, f"/api/okf missing project_path must return 400: {r.status_code}"
+
+
+def test_okf_not_in_sweeps():
+    """run_okf is not called from _enrich_project in sweeps.py."""
+    sweeps_path = Path(_OSE) / "src" / "opencode_search" / "daemon" / "sweeps.py"
+    src = sweeps_path.read_text()
+    lines = src.splitlines()
+    in_enrich = False
+    for line in lines:
+        if "def _enrich_project" in line:
+            in_enrich = True
+        if in_enrich and "run_okf" in line and not line.strip().startswith("#"):
+            pytest.fail(f"run_okf still called in _enrich_project: {line.strip()}")
+
+
+def test_okf_no_home_path_in_vendor():
+    """No absolute home path may appear in vendor/okf source files."""
+    home = str(Path.home())
+    for py in _VENDOR.rglob("*.py"):
+        text = py.read_text(encoding="utf-8", errors="replace")
+        assert home not in text, f"Home path leaked in vendor/okf/{py.relative_to(_VENDOR)}"
+
+
+@pytest.mark.slow
+def test_okf_llm_generate_structure(tmp_path):
+    """Phase 2c (@slow): LLM-native OKF generates valid v0.1 bundle structure."""
+    from okf.generate import OKF_VERSION, generate
+    r = generate(project_path=_OSE, out_dir=str(tmp_path / "okf"))
+    assert r.get("mode") != "off", "OSE_OKF must not be 0 for this slow test"
+    assert "no_profile" not in r.get("errors", []), "claude profile must be configured"
+    assert "discover_failed" not in r.get("errors", []), f"OKF discover failed: {r.get('errors')}"
+    out = tmp_path / "okf"
+    assert out.exists(), "OKF output dir must be created"
+    pages = list(out.rglob("*.md"))
+    assert pages, "at least one OKF page must be written"
+    assert (out / "index.md").exists(), "index.md must be present"
+    for p in pages:
+        text = p.read_text(encoding="utf-8", errors="replace")
+        assert f'okf_version: "{OKF_VERSION}"' in text, f"{p.name}: missing okf_version"
+        assert "type:" in text, f"{p.name}: missing required type field"
+        assert str(Path.home()) not in text, f"home path leaked in {p.name}"
+    concept_pages = [p for p in pages if p.name != "index.md"]
+    for p in concept_pages:
+        assert "fragment_" not in p.name, f"fragment_ naming found: {p.name}"

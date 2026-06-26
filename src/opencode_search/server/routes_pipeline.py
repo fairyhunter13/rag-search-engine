@@ -55,6 +55,42 @@ async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
     return JSONResponse({"enabled": not sweeps._PAUSED, "pending": pending})
 
 
+async def _api_docgen(request: Request) -> JSONResponse:
+    project_path = ""
+    try:
+        body = await request.json()
+        project_path = body.get("project_path", "")
+    except Exception:
+        pass
+    if not project_path:
+        return JSONResponse({"error": "project_path required"}, status_code=400)
+    import asyncio
+
+    from opencode_search.kb.docgen import run_docgen
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, run_docgen, project_path)
+    return JSONResponse({"status": "ok", "project": project_path})
+
+
+async def _api_okf(request: Request) -> JSONResponse:
+    project_path = ""
+    try:
+        body = await request.json()
+        project_path = body.get("project_path", "")
+    except Exception:
+        pass
+    if not project_path:
+        return JSONResponse({"error": "project_path required"}, status_code=400)
+    import asyncio
+
+    from opencode_search.kb.okf import run_okf
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, run_okf, project_path)
+    return JSONResponse({"status": "ok", "project": project_path, **result})
+
+
 def register(app) -> None:
     app.add_route("/api/build_wiki", _api_build_wiki, methods=["POST"])
     app.add_route("/api/auto_pipeline_status", _api_auto_pipeline_status, methods=["GET"])
+    app.add_route("/api/docgen", _api_docgen, methods=["POST"])
+    app.add_route("/api/okf", _api_okf, methods=["POST"])

@@ -1,26 +1,74 @@
-"""OKF v0.1 generator — standalone, zero OSE input.
+"""OKF v0.1 generator -- LLM-native via claude -p.
 
-generate(project_path, out_dir=None) → dict
-  Writes an OKF v0.1 markdown bundle to out_dir (default: <project>/docs/okf/).
-  All files carry okf_version: "0.1" in YAML frontmatter.
-  Entry point: index.md + log.md + one fragment per top-level module.
-
-No opencode_search import. No graph.db. GPU-free, daemon-free.
+generate(project_path, out_dir=None) -> dict
+Kill-switch: OSE_OKF=0 -> returns empty dict immediately (no output).
+No deterministic skeleton. claude -p reads repo source, identifies semantic
+concepts, infers type, synthesizes bodies with [code: file:line] citations.
 """
 from __future__ import annotations
 
-import datetime
+import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
-from okf.repo_parser import repo_summary
-
 OKF_VERSION = "0.1"
-_FRAG_TYPES = ("architecture", "component", "pattern", "decision")
+MODEL_HAIKU = "claude-haiku-4-5"
+MODEL_SONNET = "claude-sonnet-4-6"
+_TIMEOUT = 180
+
+_raw_profiles = os.environ.get(
+    "OSE_OKF_CLAUDE_PROFILES",
+    f"{os.path.expanduser('~/.claude')},{os.path.expanduser('~/.claude1')}",
+)
+_PROFILES: list[str] = [p.strip() for p in _raw_profiles.split(",") if p.strip()]
 
 
-def _frontmatter(frag_type: str, title: str) -> str:
+def _claude() -> str:
+    c = shutil.which("claude")
+    if not c:
+        raise RuntimeError("'claude' CLI not found in PATH")
+    return c
+
+
+def _subprocess_env(config_dir: str) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env["CLAUDE_CONFIG_DIR"] = config_dir
+    env["CLAUDE_CODE_SAFE_MODE"] = "1"
+    return env
+
+
+def _pick_profile() -> str | None:
+    return _PROFILES[0] if _PROFILES else None
+
+
+def _run_claude(prompt: str, model: str, add_dirs: list[str], profile: str) -> str | None:
+    cmd = [_claude(), "-p", prompt, "--model", model,
+           "--output-format", "json", "--allow-dangerously-skip-permissions",
+           "--allowedTools", "Read,Bash"]
+    for d in add_dirs:
+        cmd += ["--add-dir", d]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=_TIMEOUT, env=_subprocess_env(profile))
+        if r.returncode != 0:
+            return None
+        data = json.loads(r.stdout)
+        if isinstance(data, list):
+            for b in data:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    return b.get("text", "")
+        if isinstance(data, dict):
+            return data.get("result") or data.get("text") or ""
+        return str(data) or None
+    except Exception:
+        return None
+
+
+def _frontmatter(concept_type: str, title: str) -> str:
     return (
-        f"---\nokf_version: \"{OKF_VERSION}\"\ntype: {frag_type}\n"
+        f"---\nokf_version: \"{OKF_VERSION}\"\ntype: {concept_type}\n"
         f"title: \"{title}\"\ngenerated: true\n---\n\n"
     )
 
@@ -48,63 +96,87 @@ def generate(
     project_path: str | Path,
     out_dir: str | Path | None = None,
 ) -> dict:
-    """Generate OKF v0.1 bundle for project_path.
+    """Generate OKF v0.1 bundle via claude -p. Kill-switch: OSE_OKF=0 -> no output."""
+    if os.environ.get("OSE_OKF", "1") == "0":
+        return {"written": [], "skipped": [], "version": OKF_VERSION, "mode": "off"}
 
-    Args:
-        project_path: Root of the repo to document.
-        out_dir: Output directory (default: <project_path>/docs/okf/).
-
-    Returns:
-        dict with keys: written, skipped, version, project.
-    """
     root = Path(project_path).resolve()
     if out_dir is None:
         out_dir = root / "docs" / "okf"
     out = Path(out_dir)
 
-    summary = repo_summary(root)
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    profile = _pick_profile()
+    if not profile:
+        return {"written": [], "skipped": [], "errors": ["no_profile"], "version": OKF_VERSION}
 
+    # Phase 1: discover concepts via LLM
+    prompt_discover = (
+        "Analyze this repository and identify its key semantic concepts for an OKF v0.1 knowledge bundle. "
+        "Output ONLY valid JSON with key 'concepts' (list of objects). "
+        "Each concept: 'name' (semantic kebab-case filename without .md, e.g. 'search-pipeline', 'gpu-inference'), "
+        "'type' (open vocabulary: Module|Service|Command|Event|Policy|Process|DataModel|Endpoint|Invariant|Pattern|Pipeline|Protocol|Configuration), "
+        "'title' (human-readable), 'description' (one sentence), "
+        "'grounding_sources' (list of up to 5 repo-relative file paths). "
+        "Include 5-15 concepts. Names must be semantic domain terms (e.g. 'search-pipeline'), never numeric sequences. "
+        "No /home/ or absolute paths.\n\n"
+        "Analyze the repository structure and source files to identify the most important concepts."
+    )
+    text = _run_claude(prompt_discover, MODEL_SONNET, [str(root)], profile)
+    concepts_data = _parse_json(text)
+    if not concepts_data or "concepts" not in concepts_data:
+        return {"written": [], "skipped": [], "errors": ["discover_failed"], "version": OKF_VERSION}
+
+    concepts = concepts_data["concepts"]
     written: list[str] = []
     skipped: list[str] = []
+    out.mkdir(parents=True, exist_ok=True)
 
-    def record(path: Path, content: str) -> None:
-        status = _write(path, content)
-        (written if status == "written" else skipped).append(str(path.relative_to(out)))
+    # Phase 2: write one page per concept
+    for concept in concepts:
+        name = concept.get("name", "").strip().replace(" ", "-").lower()
+        if not name:
+            continue
+        ctype = concept.get("type", "Module")
+        title = concept.get("title", name.replace("-", " ").title())
+        srcs = ", ".join(concept.get("grounding_sources", [])[:5]) or "repository source"
+        prompt_write = (
+            f"Write the OKF v0.1 concept page for '{title}' (type: {ctype}). "
+            f"Ground it in: {srcs}. Output ONLY the markdown body (no frontmatter). "
+            "Include: definition, key responsibilities, important code references as [code: file:line], "
+            "and cross-links to related concepts using markdown links. "
+            "No /home/ or absolute paths. Be factual -- only what you can verify."
+        )
+        body = _run_claude(prompt_write, MODEL_HAIKU, [str(root)], profile)
+        if not body or not body.strip():
+            continue
+        content = _frontmatter(ctype, title) + body.strip() + "\n"
+        status = _write(out / f"{name}.md", content)
+        (written if status == "written" else skipped).append(f"{name}.md")
 
     # index.md
-    modules_list = "\n".join(f"- [{m}](fragment_{m}.md)" for m in summary["top_modules"])
-    lang_list = ", ".join(
-        f"{lang} ({count})" for lang, count in
-        sorted(summary["languages"].items(), key=lambda x: -x[1])
+    concept_links = "\n".join(
+        f"- [{c.get('title', c.get('name', ''))}]({c.get('name', '').replace(' ', '-').lower()}.md)"
+        for c in concepts if c.get("name")
     )
-    index_body = (
-        f"# {summary['name']} — OKF Index\n\n"
-        f"Generated: {now}\n\n"
-        f"## Overview\n\n"
-        f"| Files | {summary['file_count']} |\n"
-        f"| Languages | {lang_list or '—'} |\n\n"
-        f"## Fragments\n\n{modules_list}\n"
+    index_content = (
+        _frontmatter("architecture", f"{root.name} -- OKF Index")
+        + f"# {root.name} Knowledge Graph\n\n"
+        + "This OKF v0.1 bundle maps the semantic concepts of this repository.\n\n"
+        + "## Concepts\n\n" + concept_links + "\n"
     )
-    record(out / "index.md", _frontmatter("architecture", f"{summary['name']} — Index") + index_body)
+    s = _write(out / "index.md", index_content)
+    (written if s == "written" else skipped).append("index.md")
 
-    # log.md
-    log_body = f"# Change Log\n\n| Date | Change |\n|------|--------|\n| {now} | Initial OKF bundle generated |\n"
-    record(out / "log.md", _frontmatter("decision", "Change Log") + log_body)
+    return {"written": written, "skipped": skipped, "version": OKF_VERSION, "project": root.name}
 
-    # one fragment per top-level module
-    for mod in summary["top_modules"]:
-        body = (
-            f"# {mod.replace('_', ' ').title()}\n\n"
-            f"**Module**: `{mod}`\n\n"
-            f"Top-level module in `{summary['name']}`. "
-            f"See source under `{mod}/` for implementation details.\n"
-        )
-        record(out / f"fragment_{mod}.md", _frontmatter("component", mod.replace("_", " ").title()) + body)
 
-    return {
-        "written": written,
-        "skipped": skipped,
-        "version": OKF_VERSION,
-        "project": summary["name"],
-    }
+def _parse_json(text: str | None) -> dict | None:
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("```", 1)[1].lstrip("json").rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        return None
