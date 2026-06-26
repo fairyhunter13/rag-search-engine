@@ -49,12 +49,11 @@ def index_members(root_path: str) -> int:
             upsert_project(ProjectEntry(path=m, enabled=True))
             registered += 1
     root_entry = get_project(root_path)
-    if root_entry is not None and root_entry.federation != members:
-        # Only overwrite when symlinks were found or the existing list is empty.
-        # Preserves explicitly registered federations (e.g. copied test fixtures).
-        if members or not root_entry.federation:
-            root_entry.federation = members
-            upsert_project(root_entry)
+    # Only overwrite when symlinks were actually found or the existing list is empty.
+    # Preserves explicitly registered federations when discovery returns nothing.
+    if root_entry is not None and root_entry.federation != members and (members or not root_entry.federation):
+        root_entry.federation = members
+        upsert_project(root_entry)
     return registered
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Optional
 
 AccountType = str  # 'asset', 'liability', 'equity', 'revenue', 'expense'
 
@@ -15,7 +14,7 @@ class Account:
     account_id: str
     name: str
     account_type: AccountType
-    parent_id: Optional[str] = None
+    parent_id: str | None = None
     tags: list[str] = field(default_factory=list)
 
 
@@ -44,7 +43,7 @@ class ChartOfAccounts:
             raise ValueError(f"Invalid account type: {account.account_type!r}")
         self._accounts[account.account_id] = account
 
-    def get(self, account_id: str) -> Optional[Account]:
+    def get(self, account_id: str) -> Account | None:
         return self._accounts.get(account_id)
 
     def remove(self, account_id: str) -> None:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-
 from ledger.accounts import Account, ChartOfAccounts
 from ledger.entries import entry_balance, make_credit, make_debit, validate_entry
 from ledger.journal import Journal, Transaction, double_entry
