@@ -12,9 +12,9 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 
 | Layer | What | Where in OSE |
 |-------|------|-------------|
-| **L1** | Architecture invariants (laws — what changes are permitted) | §1a P0–P11 in `federation-and-search-engine.md` |
+| **L1** | Architecture invariants (laws — what changes are permitted) | §1a + `model.yaml` P0–P15 in `federation-and-search-engine.md` |
 | **L2** | Components — capability→module→operation map | `src/opencode_search/{core,embed,index,graph,kb,query,server,daemon}/` |
-| **L3** | Behavior specs — HRs, invariants, workflows | §13b HR1–HR20 in `federation-ops-and-invariants.md` |
+| **L3** | Behavior specs — HRs, invariants, workflows | §13b HR1–HR31 in `federation-ops-and-invariants.md` |
 | **L4** | Code patterns & generation rules | `model.yaml` L4_patterns; enforced by `test_no_code_semantic_regex.py` |
 
 `model.yaml` in this directory is the machine-readable instantiation.
@@ -35,6 +35,10 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 | P9 | Flat-L1 communities only (WS-B 2026-06-26) |
 | P10 | Every line of code is a liability |
 | P11 | Push after every commit |
+| P12 | Doc-tooling (docgen + OKF) is LLM-native via `claude -p`; no tree-sitter on the doc-tooling path |
+| P13 | Docgen + OKF = manual-trigger only; never from auto-sweep or MCP tools |
+| P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling |
+| P15 | Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback |
 
 ## Tools
 

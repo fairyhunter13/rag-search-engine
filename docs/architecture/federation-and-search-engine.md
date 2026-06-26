@@ -32,14 +32,14 @@ The governing principle is **P0: most efficient + most effective, for *everythin
 ## 1b. World model & governance/spec WM *(updated Phase 1 2026-06-26)*
 
 OSE's world model is a **governance/spec WM** (see `docs/world-model/` + `docs/reference/world-model.md`):
-- **State** = codebase + invariants/laws (P0–P11 in §1a)
+- **State** = codebase + invariants/laws (P0–P15 in §1a + `model.yaml`)
 - **Action** = a diff/change
 - **Guard** = does the diff satisfy the preconditions?
 - **Planner/validator** = `scripts/check_world_model.py` (GPU-free; emits CONFORMS/AT_RISK)
 
 The old `kb/world_model.py` Requirements Traceability Matrix (`overview(what='world_model')`, HR30) was **deleted** (WS-B 2026-06-26) along with `FEATURES.md`. The governance/spec WM in `docs/world-model/model.yaml` (L1–L4 layers) **replaces** it as the normative source of truth. `scripts/check_world_model.py` provides the executable conformance check.
 
-Human-verified RTM: §1a principles → §13b HRs → §14 test map (three layers, no automated V&V; `test_feature_proof.py` guards the non-import of deleted modules).
+RTM: §1a principles → §13b HRs → §14 test map (three layers). L3 traceability is machine-verified by `test_world_model_traceability.py` (asserts every `model.yaml` L3_specs `test:` resolves to a live `def test_…`). `test_feature_proof.py` guards non-import of deleted modules.
 
 ## 2. Vocabulary
 
