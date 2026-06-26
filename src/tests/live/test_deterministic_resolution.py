@@ -48,7 +48,7 @@ def det_db(synth_fed):
 @pytest.mark.slow
 class TestDeterministicResolution:
 
-    def test_process_db_created(self, synth_fed):
+    def test_process_db_created(self, synth_fed, det_db):
         assert root_process_db(synth_fed.root).exists(), "process_graph.db must be created"
 
     def test_no_llm_edges_when_key_absent(self, det_db):
