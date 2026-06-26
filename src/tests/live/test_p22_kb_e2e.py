@@ -39,7 +39,12 @@ def _graph_db(project: str) -> Path:
 
 
 def _converge_ready(project: str, timeout: int = 240) -> None:
-    """Index (if needed) + enrich all members, poll until kb_state==ready, l2==100."""
+    """Index (if needed) + enrich all members, poll until kb_state==ready, l1==100.
+
+    Re-calls _enrich_project when l1_enriched_pct < 100: head communities can fail
+    a DeepSeek batch (throttle/timeout), leaving them unenriched until the next call.
+    Each retry picks up exactly the communities still missing a summary (idempotent).
+    """
     import time
 
     from opencode_search.daemon.sweeps import _enrich_project, _index_project
@@ -51,12 +56,18 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
             _index_project(m["path"])  # never-indexed members need full index first
         if ks != "ready":
             _enrich_project(m["path"])
+    _last_retry = time.monotonic()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         s = _overview("status", project)
         if (s.get("kb_state") == "ready"
                 and s.get("l1_enriched_pct") == 100.0):
             return
+        # Re-enrich if head communities are still unenriched (DeepSeek batch may have failed).
+        # Throttle retries to once per 30s to avoid hammering DeepSeek on transient errors.
+        if s.get("l1_enriched_pct", 0) < 100.0 and time.monotonic() - _last_retry >= 30:
+            _enrich_project(project)
+            _last_retry = time.monotonic()
         time.sleep(3)
     s = _overview("status", project)
     assert (s.get("kb_state") == "ready"
