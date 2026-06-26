@@ -145,7 +145,7 @@ def test_okf_llm_generate_structure(tmp_path, service_path, capfd):
         r = generate(project_path=service_path, out_dir=str(tmp_path / "okf"))
     assert r.get("mode") != "off", "OSE_OKF must not be 0 for this slow test"
     assert "no_profile" not in r.get("errors", []), "claude profile must be configured"
-    assert "discover_failed" not in r.get("errors", []), f"OKF discover failed: {r.get('errors')}"
+    assert "discover_failed" not in r.get("errors", []), f"OKF discover failed: {r.get('errors')} debug={r.get('_debug')}"
     out = tmp_path / "okf"
     assert out.exists(), "OKF output dir must be created"
     pages = list(out.rglob("*.md"))
