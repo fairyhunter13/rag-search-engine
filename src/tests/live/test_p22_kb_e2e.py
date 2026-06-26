@@ -185,7 +185,9 @@ def test_federation_kb_reflects_root_only(live_client):
 @pytest.mark.parametrize("proj_key", ["service", "standalone", "federation"])
 def test_kb_state_ready_all_projects(live_client, proj_key, projects):
     """T1/TC1/HR7: converge+assert kb_state='ready' and l1_enriched_pct==100 for all 3 projects."""
-    _converge_ready(projects[proj_key])
+    # federation root aggregates all members — DeepSeek enrichment can exceed the default 240s
+    timeout = 600 if proj_key == "federation" else 240
+    _converge_ready(projects[proj_key], timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
