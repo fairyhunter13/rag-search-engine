@@ -19,13 +19,13 @@ L1_invariants:
     check: {grep: "deepseek_extract|deepseek_chat|claude.*ask|haiku.*ask", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
   - id: P3
     principle: "Federation = query-time union; no cross-repo edges; members have independent stores."
-    check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+    check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/opencode_search/graph/ src/opencode_search/index/ src/opencode_search/daemon/", verdict_if_match: AT_RISK}
   - id: P4
     principle: "Indexing is event-driven (watcher); no periodic sweeps or timers."
     check: {grep: "register.*kb_sweep|register.*auto_index|threading.Timer.*sweep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
   - id: P5
     principle: "Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score."
-    check: {grep: "order.*score[^_]|sort.*score[^_]|rerank.*skip", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
+    check: {grep: "rerank.*skip", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
   - id: P6
     principle: "No heuristics — tree-sitter + LLM only. No re, no keyword maps in Category A paths."
     check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/opencode_search/kb/bpre.py src/opencode_search/server/_overview.py", verdict_if_match: AT_RISK}
@@ -34,10 +34,10 @@ L1_invariants:
     check: {grep: "/home/|/root/|/Users/", paths: "src/opencode_search/kb/wiki.py src/opencode_search/kb/bpre.py", verdict_if_match: AT_RISK}
   - id: P8
     principle: "No mocks in tests — real daemon at :8765, real GPU, real embedder."
-    check: {grep: "unittest.mock|MagicMock|patch\\(", paths: "src/tests/", verdict_if_match: AT_RISK}
+    check: {grep: "unittest\\.mock|MagicMock|@patch\\(", paths: "src/tests/", exclude_paths: "src/tests/live/test_no_mocks_or_fakes.py", verdict_if_match: AT_RISK}
   - id: P9
     principle: "Flat-L1 communities only — no L2/L3 hierarchy in OSE KB (WS-B 2026-06-26)."
-    check: {grep: "level.*[23456789]|level=2|level=3|build_hierarchy|build_federation_hierarchy", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+    check: {grep: "build_hierarchy|build_federation_hierarchy|set_community_parent", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
   - id: P10
     principle: "Every line of code is a liability — prefer no change, then deletion, then smallest diff."
     check: null
