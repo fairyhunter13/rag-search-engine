@@ -113,6 +113,23 @@ def test_okf_no_home_path_in_vendor():
         assert home not in text, f"Home path leaked in vendor/okf/{py.relative_to(_VENDOR)}"
 
 
+def test_okf_index_md_no_frontmatter_in_source():
+    """P9 spec: index.md assembly must NOT call _frontmatter (OKF v0.1: reserved files carry no frontmatter)."""
+    gen_py = _VENDOR / "okf" / "generate.py"
+    src = gen_py.read_text(encoding="utf-8")
+    lines = src.splitlines()
+    in_index_section = False
+    for line in lines:
+        if "# index.md" in line:
+            in_index_section = True
+        elif in_index_section and line.startswith("    # ") and "index.md" not in line:
+            break
+        elif in_index_section and "_frontmatter" in line:
+            raise AssertionError(
+                f"P9: index.md assembly calls _frontmatter — OKF v0.1 spec violation: {line.strip()}"
+            )
+
+
 @pytest.mark.slow
 def test_okf_llm_generate_structure(tmp_path):
     """Phase 2c (@slow): LLM-native OKF generates valid v0.1 bundle structure."""
@@ -125,12 +142,16 @@ def test_okf_llm_generate_structure(tmp_path):
     assert out.exists(), "OKF output dir must be created"
     pages = list(out.rglob("*.md"))
     assert pages, "at least one OKF page must be written"
-    assert (out / "index.md").exists(), "index.md must be present"
-    for p in pages:
+    index = out / "index.md"
+    assert index.exists(), "index.md must be present"
+    # OKF v0.1 spec: index.md and log.md must carry NO frontmatter
+    index_text = index.read_text(encoding="utf-8")
+    assert not index_text.startswith("---"), "P9: index.md must not have frontmatter (OKF v0.1 spec)"
+    # Concept pages: frontmatter required
+    concept_pages = [p for p in pages if p.name not in ("index.md", "log.md")]
+    for p in concept_pages:
         text = p.read_text(encoding="utf-8", errors="replace")
         assert f'okf_version: "{OKF_VERSION}"' in text, f"{p.name}: missing okf_version"
         assert "type:" in text, f"{p.name}: missing required type field"
         assert str(Path.home()) not in text, f"home path leaked in {p.name}"
-    concept_pages = [p for p in pages if p.name != "index.md"]
-    for p in concept_pages:
         assert "fragment_" not in p.name, f"fragment_ naming found: {p.name}"

@@ -153,14 +153,13 @@ def generate(
         status = _write(out / f"{name}.md", content)
         (written if status == "written" else skipped).append(f"{name}.md")
 
-    # index.md
+    # index.md — OKF v0.1: reserved file, MUST NOT carry frontmatter (spec §3).
     concept_links = "\n".join(
-        f"- [{c.get('title', c.get('name', ''))}]({c.get('name', '').replace(' ', '-').lower()}.md)"
+        f"- [{c.get('title', c.get('name', ''))}](/{c.get('name', '').replace(' ', '-').lower()}.md)"
         for c in concepts if c.get("name")
     )
     index_content = (
-        _frontmatter("architecture", f"{root.name} -- OKF Index")
-        + f"# {root.name} Knowledge Graph\n\n"
+        f"# {root.name} Knowledge Graph\n\n"
         + "This OKF v0.1 bundle maps the semantic concepts of this repository.\n\n"
         + "## Concepts\n\n" + concept_links + "\n"
     )
