@@ -570,7 +570,7 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
 
 
 def _bpre_llm_link_on() -> bool:
-    return os.environ.get("OSE_BPRE_LLM_LINK", "0") == "1"
+    return os.environ.get("OSE_BPRE_LLM_LINK", "1") != "0"
 
 
 def _bpre_llm_file_on() -> bool:

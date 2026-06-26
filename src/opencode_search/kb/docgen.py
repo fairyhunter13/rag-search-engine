@@ -1,7 +1,7 @@
 """Thin OSE adapter: run ose-docgen generate() for a project.
 
 Injects vendor/docgen/src so OSE calls the tool without import coupling.
-Kill-switch: OSE_DOCGEN=0 skips (default=1, $0/deterministic unless OSE_DOCGEN_LLM=1).
+Kill-switch: OSE_DOCGEN=0 → no output; always LLM-native (claude -p).
 """
 from __future__ import annotations
 

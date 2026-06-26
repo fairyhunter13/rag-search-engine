@@ -113,7 +113,7 @@ class TestCrossServiceResolution:
         pubsub = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='pubsub'").fetchone()[0]
         http = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='http'").fetchone()[0]
         llm = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm'").fetchone()[0]
-        assert llm == 0, f"Default pass emitted {llm} _llm edges (OSE_BPRE_LLM_LINK not set)"
+        assert llm == 0, f"process_db runs with OSE_WIKI_LLM=0; no LLM edges expected; got {llm}"
         assert grpc + pubsub + http >= 1, (
             f"Expected ≥1 deterministic edge; grpc={grpc} pubsub={pubsub} http={http}"
         )
@@ -126,21 +126,26 @@ class TestCrossServiceResolution:
         if entries > 0:
             assert grpc > 0, f"gRPC entries ({entries}) present but no gRPC edges emitted"
 
-    def test_A5d_llm_linkage_off_by_default(self, process_db):
+    def test_A5d_llm_linkage_default_on(self, process_db):
         con, _ = process_db
         llm = con.execute(
             "SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm'"
         ).fetchone()[0]
-        assert llm == 0, f"OSE_BPRE_LLM_LINK not set → 0 _llm edges; got {llm}"
+        # process_db sets OSE_WIKI_LLM=0 which gates ALL LLM via _bpre_llm_on(); so 0 LLM edges.
+        assert llm == 0, f"OSE_WIKI_LLM=0 gates LLM edges; got {llm}"
         import os
 
         from opencode_search.kb.bpre import _bpre_llm_link_on
         saved = os.environ.pop("OSE_BPRE_LLM_LINK", None)
         try:
-            assert not _bpre_llm_link_on(), "OSE_BPRE_LLM_LINK default must be OFF"
+            assert _bpre_llm_link_on(), "OSE_BPRE_LLM_LINK default must be ON"
+            os.environ["OSE_BPRE_LLM_LINK"] = "0"
+            assert not _bpre_llm_link_on(), "OSE_BPRE_LLM_LINK=0 must opt-out"
         finally:
             if saved is not None:
                 os.environ["OSE_BPRE_LLM_LINK"] = saved
+            else:
+                os.environ.pop("OSE_BPRE_LLM_LINK", None)
 
 
 # ─── Test B: Process tracing ───────────────────────────────────────────────────
