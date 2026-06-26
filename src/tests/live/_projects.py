@@ -1,13 +1,25 @@
-"""Capability-based project discovery for the live test suite.
+"""Project path resolvers for the live test suite.
 
-Resolvers return paths to the sample workspace fixture (built by the session-scoped
-conftest fixture). Falls back to registry capability discovery until the sample workspace
-wiring is complete. Hard-fails (never skips) when nothing matches — preserving the
-no-skip invariant.
+Resolvers prefer sample workspace paths (built by the `sample_workspace` session
+fixture in conftest.py). Fall back to registry capability discovery when the sample
+workspace is absent. Hard-fail (never skip) when nothing matches.
+
+Prefer using the `federation_root_path`, `standalone_project_path`, and
+`service_member_path` fixtures in conftest.py rather than calling these directly.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+_SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
+
+
+def _sample_ws() -> Path | None:
+    """Most-recently created sample-ws- dir, or None if absent."""
+    candidates = sorted(_SAFE_BASE.glob("sample-ws-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
 
 
 def _enabled_projects():
@@ -16,23 +28,28 @@ def _enabled_projects():
 
 
 def federation_root() -> str:
-    """First enabled project that has federation members. Hard-fails when nothing matches."""
-    hit = next(
-        (p.path for p in _enabled_projects() if getattr(p, "federation", None)),
-        None,
-    )
+    """shop-federation root from the sample workspace, else first registry federation root."""
+    ws = _sample_ws()
+    if ws:
+        p = ws / "shop-federation"
+        if p.is_dir():
+            return str(p)
+    hit = next((p.path for p in _enabled_projects() if getattr(p, "federation", None)), None)
     if hit:
         return hit
     pytest.fail(
-        "No enabled project with federation members found. "
-        "Register a federation root (e.g. run the sample-workspace fixture)."
+        "No federation root found — start the sample_workspace fixture before this test."
     )
 
 
 def standalone_project() -> str:
-    """First enabled, indexed, non-federation project. Hard-fails when nothing matches."""
+    """ledger-standalone from the sample workspace, else first registry standalone project."""
+    ws = _sample_ws()
+    if ws:
+        p = ws / "ledger-standalone"
+        if p.is_dir():
+            return str(p)
     from opencode_search.core.config import project_vector_db
-
     hit = next(
         (p.path for p in _enabled_projects()
          if not getattr(p, "federation", None) and project_vector_db(p.path).exists()),
@@ -41,23 +58,25 @@ def standalone_project() -> str:
     if hit:
         return hit
     pytest.fail(
-        "No enabled standalone indexed project found. "
-        "Register a standalone project (e.g. run the sample-workspace fixture)."
+        "No standalone project found — start the sample_workspace fixture before this test."
     )
 
 
 def service_member() -> str:
-    """First enabled member of the federation root. Hard-fails when nothing matches."""
+    """promo-svc from the sample workspace (business-rule-rich), else first registry member."""
+    ws = _sample_ws()
+    if ws:
+        p = ws / "shop-federation" / "promo-svc"
+        if p.is_dir():
+            return str(p)
     root = federation_root()
     from opencode_search.core.registry import list_projects
     root_entry = next((p for p in list_projects() if p.path == root), None)
     if root_entry and getattr(root_entry, "federation", None):
-        members = root_entry.federation
-        enabled_paths = {p.path for p in list_projects() if p.enabled}
-        hit = next((m for m in members if m in enabled_paths), None)
+        enabled = {p.path for p in list_projects() if p.enabled}
+        hit = next((m for m in root_entry.federation if m in enabled), None)
         if hit:
             return hit
     pytest.fail(
-        "No enabled federation member found. "
-        "Register a federation with members (e.g. run the sample-workspace fixture)."
+        "No federation member found — start the sample_workspace fixture before this test."
     )

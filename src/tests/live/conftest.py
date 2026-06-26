@@ -3,9 +3,11 @@ import contextlib
 import pytest
 import requests
 
-from tests.live._projects import federation_root as _federation_root
-from tests.live._projects import service_member as _service_member
-from tests.live._projects import standalone_project as _standalone_project
+from tests.live._sample_workspace import (
+    SampleWorkspace,
+    build_sample_workspace,
+    teardown_sample_workspace,
+)
 
 _DAEMON = "http://127.0.0.1:8765"
 
@@ -92,18 +94,18 @@ def project_with_communities():
 
 
 @pytest.fixture(scope="session")
-def federation_root_path() -> str:
-    return _federation_root()
+def federation_root_path(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.fed_root
 
 
 @pytest.fixture(scope="session")
-def standalone_project_path() -> str:
-    return _standalone_project()
+def standalone_project_path(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.ledger
 
 
 @pytest.fixture(scope="session")
-def service_member_path() -> str:
-    return _service_member()
+def service_member_path(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
 
 
 @pytest.fixture()
@@ -154,3 +156,17 @@ def mini_stores(embedder, tmp_path_factory):
     detect_communities(gs)
     gs.close()
     yield {"proj": proj, "vdb": vdb, "gdb": gdb, "sd": sd}
+
+
+@pytest.fixture(scope="session")
+def sample_workspace() -> SampleWorkspace:
+    """Session-scoped sample workspace: GPU-indexed fixture projects + replayed enrichment golden.
+
+    Builds shop-federation (cart/checkout/promo) + ledger-standalone under
+    ~/.local/share/ocs-test-dirs. DeepSeek is suppressed; enrichment.json
+    goldens are replayed from src/tests/fixtures/sample_projects/.
+    Teardown removes all registry entries and the temp directory.
+    """
+    ws = build_sample_workspace()
+    yield ws
+    teardown_sample_workspace(ws)
