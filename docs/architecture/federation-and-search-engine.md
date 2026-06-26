@@ -29,25 +29,17 @@ The governing principle is **P0: most efficient + most effective, for *everythin
 10. **Public-repo hygiene.** Every emitted artifact (wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN, docgen pages, citations) is **project-root-relative**; absolute device paths and company/device names never leak — `symbols.file` stores absolute paths, so strip to root-relative before any artifact (HR13).
 11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU). Machine-verified Concept→Spec→Impl→Test traceability closes the V&V loop (HR30).
 
-## 1b. World model & traceability V&V
+## 1b. World model & governance/spec WM *(updated Phase 1 2026-06-26)*
 
-OSE maintains a **machine-verified Requirements Traceability Matrix** across four layers:
+OSE's world model is a **governance/spec WM** (see `docs/world-model/` + `docs/reference/world-model.md`):
+- **State** = codebase + invariants/laws (P0–P11 in §1a)
+- **Action** = a diff/change
+- **Guard** = does the diff satisfy the preconditions?
+- **Planner/validator** = `scripts/check_world_model.py` (GPU-free; emits CONFORMS/AT_RISK)
 
-| Layer | Where it lives | Form |
-|---|---|---|
-| **Concept** | §1a principles register (P0 + P1–P11) | prose + HR refs |
-| **Spec** | §13b HR1–HR30 + `FEATURES.md` parity checklist | table + `[x]`/`[ ]` |
-| **Implementation** | source tree under `src/opencode_search/` | code |
-| **Test** | §14 test coverage map + `src/tests/live/` | table + test files |
+The old `kb/world_model.py` Requirements Traceability Matrix (`overview(what='world_model')`, HR30) was **deleted** (WS-B 2026-06-26) along with `FEATURES.md`. The governance/spec WM in `docs/world-model/model.yaml` (L1–L4 layers) **replaces** it as the normative source of truth. `scripts/check_world_model.py` provides the executable conformance check.
 
-`kb/world_model.py` (GPU-free parse, <1 s) reads all four layers and runs four chain checks:
-
-- **C1 Concept→Spec (hard gate):** every §1a principle HR ref resolves to a real §13b row; every HR is cited by ≥1 principle (exempt: `_DOCTRINE_EXEMPT = {"HR19"}`). Gaps: `principle_dangling_hr`, `hr_doctrine_orphan`.
-- **C2 Spec→Test (hard gate):** every HR has ≥1 §14 row; every backtick test name is collectable (AST-scanned from `src/tests/live/`). Gaps: `hr_untested`, `phantom_test_ref`.
-- **C3 Spec→Impl (hard gate):** every file path anchor cited in §13b exists under `src/`. Gap: `dead_code_anchor`.
-- **C4 Feature→Spec (report-only):** each `[x]` feature maps to ≥1 HR via declared ref or GPU-embed+abstain (reuses `kb/resolve_rerank.py` margin=0.10). Never flips verdict.
-
-`verdict=VALID` iff C1+C2+C3 are gap-free. Surfaced at `overview(what='world_model')`. Guard test `test_world_model_traceability.py` hard-gates CI and writes a validation stamp `{validated_at, suite_result, commit}` to the registry dir on pass (HR30).
+Human-verified RTM: §1a principles → §13b HRs → §14 test map (three layers, no automated V&V; `test_feature_proof.py` guards the non-import of deleted modules).
 
 ## 2. Vocabulary
 
@@ -154,18 +146,17 @@ mapping table may substitute for structural analysis of user code.
 ## 8. Enrichment pipeline (`sweeps._enrich_project`)
 
 1. Prune stale L1 communities.
-2. Enrich L1 communities with NULL summary (LLM; thermal guard at 80 °C).
-3. If L2 absent **or over-granular** (`n_l2 > 2×round(√n_l1)` for n_l1≥4): `build_hierarchy` — two-phase L1-community-graph partition: Phase 1 = fastgreedy on connected L1 communities (≤round(√n_l1) groups); Phase 2 = isolated/edge-sparse L1 communities grouped by top-level directory. Edge-sparse repos (no cross-community edges) get a directory-based L2 instead of an empty hierarchy (M4).
-4. Enrich L2 communities with NULL summary.
-5. **Classify `semantic_type`** for new/unclassified L1 communities
+2. Enrich **flat L1** communities with NULL summary (LLM; thermal guard at 80 °C).
+   *(L2 `build_hierarchy` + L2 enrich steps deleted WS-B 2026-06-26 — flat-L1 only.)*
+3. **Classify `semantic_type`** for new/unclassified L1 communities
    (`classify_communities_semantic`, `reclassify_all=False`).
-6. `build_wiki(gs, wiki_dir)` — rich bundle: type-grouped `index.md`, deterministic
-   `community_{id}.md` (reused summary + root-relative source citations + edge-drawn mermaid),
-   `domain_{id}.md` (DeepSeek narrative, templated fallback). No GPU; only L2 narrative is cloud.
-7. `build_federated_index(project_path)` + regen of any owning root — writes the federated root's
+4. `build_wiki(gs, wiki_dir)` — flat bundle: type-grouped `index.md`, deterministic
+   `community_{id}.md` (reused summary + root-relative source citations + edge-drawn mermaid).
+   No GPU; L1 narration is cloud DeepSeek. *(L2 `domain_{id}.md` pages deleted WS-B 2026-06-26.)*
+5. `build_federated_index(project_path)` + regen of any owning root — writes the federated root's
    `federation.md` (aggregation of each member's own graph.db; no cross-repo edges, HR4). No-op
    for standalone projects. (See Part 2 §13b HR13.)
-8. `reconstruct_processes(root_path)` (Phase D BPRE) — runs ONLY for federation roots (≥2 members).
+6. `reconstruct_processes(root_path)` (Phase D BPRE) — runs ONLY for federation roots (≥2 members).
    Writes `{index_dir}/process_graph.db`. **Three-tier extraction** (see §7a + **HR14/HR15** in Part 2):
    Tier 1 = tree-sitter (`kb/bpre_ast.py`, reusing `graph/extractor.py`): Pass A mines generated
    `*.pb.go` to discover the gRPC API surface (real constructor/registrar names, **no hardcoded
@@ -177,8 +168,8 @@ mapping table may substitute for structural analysis of user code.
    BPMN/mermaid; byte-identical with `OSE_WIKI_LLM=0` and `OSE_BPRE_LLM_LINK` unset (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
-9. **`run_docgen` (root-only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). Opt-in; triggered manually or by the enrichment sweep.
-10. **`index_docs` (scope=docs)** — embeds generated `docs/` pages into the vector store; idempotent per-path replace; runs after `run_docgen`; watcher/fingerprint exclude `docs/` from the code path (HR28).
+7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`opencode-search docgen <project>`).
+8. **`index_docs` (scope=docs)** — embeds generated `docs/` pages into the vector store; idempotent per-path replace; runs after `run_docgen`; watcher/fingerprint exclude `docs/` from the code path (HR28).
 
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
 `semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.
@@ -203,9 +194,10 @@ key — they bind ONNX/CUDA and run regardless.
   re-ranks (Stage 2)** to global top-k by `rerank_score`, then `compose_answer` over the
   root's `GraphStore`. No LLM synthesis; persistent cache TTL 3600 s.
 - **`graph`**: per-project call-graph queries (definition/callers/callees/impact/…).
-- **`overview`**: 16 `what=` views (structure, communities, status, projects, patterns,
-  metrics, architecture_domains, hierarchy, import_cycles, surprising_connections,
-  feature_map, business_rules, process_flows, suggested_questions, service_mesh, validate).
+- **`overview`**: `what=` views: structure, communities, status, projects, patterns,
+  metrics, import_cycles, surprising_connections, feature_map, business_rules, process_flows,
+  suggested_questions, service_mesh, validate.
+  *(`architecture_domains`, `hierarchy`, `world_model` deleted WS-B 2026-06-26.)*
 
 ## 9a. Reranking (Stage 2)
 
@@ -291,8 +283,8 @@ drops the engine's own config from the index.
 `.opencode-index.yaml` is enforced not only in `iter_files` but in **every** project-source enumerator:
 
 - **Incremental/watcher path** (`daemon/sweeps.py::on_change`): changed-file list filtered through `is_excluded(path, effective_config(project).exclude, project)` before embedding.
-- **Structural spine** (`kb/structure.py`): spine built from `iter_files(root, cfg=effective_config(root))` — the canonical enumerator, not a bespoke `os.walk`.
+- *(Structural spine `kb/structure.py` deleted WS-B 2026-06-26.)*
 - **BPRE walks** (`kb/bpre.py::_source_files`, `kb/bpre_ast.py::federation_discover`): per-member `is_excluded` filter applied; no-op when member has no config file.
-- **Portal + docs walk** (Part A `repo_explore`, §8 step 10): inherit `effective_config` as above.
+- **Portal + docs walk** (Part A `repo_explore`, §8 step 8): inherit `effective_config` as above.
 
 No enumerator may silently index a file that `effective_config` would exclude.
