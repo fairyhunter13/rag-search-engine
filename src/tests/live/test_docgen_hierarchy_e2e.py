@@ -108,10 +108,11 @@ def test_ih_docgen_not_in_sweeps():
 
 
 @pytest.mark.slow
-def test_ih_generate_llm_structure(tmp_path, service_path):
+def test_ih_generate_llm_structure(tmp_path, service_path, capfd):
     """Phase 2 (@slow): LLM-native IH generation produces valid IH structure."""
     from ose_docgen.generate import generate
-    r = generate(project_path=service_path, docs_dir=str(tmp_path / "docs"), max_pages=3)
+    with capfd.disabled():
+        r = generate(project_path=service_path, docs_dir=str(tmp_path / "docs"), max_pages=3)
     assert r.get("mode") != "off", "OSE_DOCGEN must not be 0 for this slow test"
     assert "no_profile" not in r.get("errors", []), "claude profile must be configured"
     ih_dir = tmp_path / "docs" / "information-hierarchy"
