@@ -43,7 +43,12 @@ def _pick_profile() -> str | None:
     return _PROFILES[0] if _PROFILES else None
 
 
+_last_run_stderr: str = ""
+_last_run_returncode: int = 0
+
+
 def _run_claude(prompt: str, model: str, add_dirs: list[str], profile: str) -> str | None:
+    global _last_run_stderr, _last_run_returncode
     cmd = [_claude(), "-p", prompt, "--model", model,
            "--output-format", "json", "--allow-dangerously-skip-permissions",
            "--allowedTools", "Read,Bash"]
@@ -52,6 +57,8 @@ def _run_claude(prompt: str, model: str, add_dirs: list[str], profile: str) -> s
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                            timeout=_TIMEOUT, env=_subprocess_env(profile))
+        _last_run_stderr = r.stderr
+        _last_run_returncode = r.returncode
         if r.returncode != 0:
             return None
         data = json.loads(r.stdout)
@@ -62,7 +69,9 @@ def _run_claude(prompt: str, model: str, add_dirs: list[str], profile: str) -> s
         if isinstance(data, dict):
             return data.get("result") or data.get("text") or ""
         return str(data) or None
-    except Exception:
+    except Exception as e:
+        _last_run_stderr = str(e)
+        _last_run_returncode = -1
         return None
 
 
@@ -124,7 +133,11 @@ def generate(
     text = _run_claude(prompt_discover, MODEL_SONNET, [str(root)], profile)
     concepts_data = _parse_json(text)
     if not concepts_data or "concepts" not in concepts_data:
-        return {"written": [], "skipped": [], "errors": ["discover_failed"], "version": OKF_VERSION}
+        return {
+            "written": [], "skipped": [], "errors": ["discover_failed"], "version": OKF_VERSION,
+            "_debug": {"returncode": _last_run_returncode, "stderr": _last_run_stderr[:500],
+                       "text": (text or "")[:200]},
+        }
 
     concepts = concepts_data["concepts"]
     written: list[str] = []
