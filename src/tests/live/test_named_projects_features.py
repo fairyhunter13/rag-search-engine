@@ -13,16 +13,20 @@ from pathlib import Path
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
-from tests.live._projects import federation_root as _federation_root
-from tests.live._projects import standalone_project as _standalone_project
+_OSE = str(Path(__file__).resolve().parents[3])
 
-_PROJECTS = {
-    "ose": str(Path(__file__).resolve().parents[3]),
-    "federation": _federation_root(),
-    "standalone": _standalone_project(),
-}
+
+@pytest.fixture(scope="module")
+def named_projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
+    return {
+        "ose": _OSE,
+        "federation": sample_workspace.fed_root,
+        "standalone": sample_workspace.ledger,
+    }
 
 _OVERVIEW_WHATS_FAST = [
     "structure", "status", "projects", "metrics",
@@ -40,9 +44,9 @@ class TestNamedProjectsSearch:
     @pytest.mark.parametrize("key,scope", [
         (k, s) for k in ("ose", "federation", "standalone") for s in _SEARCH_SCOPES
     ])
-    def test_search_returns_results(self, key: str, scope: str) -> None:
+    def test_search_returns_results(self, named_projects: dict, key: str, scope: str) -> None:
         from opencode_search.server.mcp import search as search_tool
-        path = _PROJECTS.get(key, "")
+        path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         data = json.loads(asyncio.run(search_tool("function", scope=scope, project_paths=[path])))
         assert "results" in data, f"{key} scope={scope}: missing 'results'"
@@ -55,9 +59,9 @@ class TestNamedProjectsOverview:
     @pytest.mark.parametrize("key,what", [
         (k, w) for k in ("ose", "federation", "standalone") for w in _OVERVIEW_WHATS_FAST
     ])
-    def test_overview_what_returns_dict(self, key: str, what: str) -> None:
+    def test_overview_what_returns_dict(self, named_projects: dict, key: str, what: str) -> None:
         from opencode_search.server.mcp import overview as overview_tool
-        path = _PROJECTS.get(key, "")
+        path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         result = asyncio.run(overview_tool(path, what))
         data = json.loads(result)
@@ -67,9 +71,9 @@ class TestNamedProjectsOverview:
     @pytest.mark.parametrize("key,what", [
         (k, w) for k in ("ose", "federation", "standalone") for w in _OVERVIEW_WHATS_SLOW
     ])
-    def test_overview_slow_what_returns_dict(self, key: str, what: str) -> None:
+    def test_overview_slow_what_returns_dict(self, named_projects: dict, key: str, what: str) -> None:
         from opencode_search.server.mcp import overview as overview_tool
-        path = _PROJECTS.get(key, "")
+        path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         result = asyncio.run(overview_tool(path, what))
         data = json.loads(result)
@@ -81,9 +85,9 @@ class TestNamedProjectsAsk:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
-    def test_ask_global_non_empty(self, key: str) -> None:
+    def test_ask_global_non_empty(self, named_projects: dict, key: str) -> None:
         from opencode_search.server.mcp import ask as ask_tool
-        path = _PROJECTS.get(key, "")
+        path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         result = asyncio.run(ask_tool("What is the overall architecture?", path, "global"))
         assert isinstance(result, str) and len(result.strip()) > 20, (
@@ -95,12 +99,12 @@ class TestNamedProjectsGraph:
     """T3d: graph tool works for each named root (at least definition relation)."""
 
     @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
-    def test_graph_definition_returns_dict(self, key: str) -> None:
+    def test_graph_definition_returns_dict(self, named_projects: dict, key: str) -> None:
         import sqlite3
 
         from opencode_search.core.config import project_graph_db
         from opencode_search.server.mcp import graph as graph_tool
-        path = _PROJECTS.get(key, "")
+        path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         gdb = project_graph_db(path)
         assert gdb.exists(), f"{key}: no graph.db — project must be indexed"
