@@ -16,8 +16,8 @@ import sqlite3
 
 import pytest
 
-from opencode_search.core.config import project_graph_db, project_vector_db
-from opencode_search.core.registry import list_projects
+from opencode_search.core.config import project_graph_db
+from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
@@ -26,29 +26,15 @@ _ASK_SCOPES = ["architecture", "global", "feature", "wiki", "business"]
 
 
 @pytest.fixture(scope="module")
-def indexed_proj():
-    p = next(
-        (e for e in list_projects() if e.enabled and project_vector_db(e.path).exists()),
-        None,
-    )
-    assert p, "At least one indexed project required — run Workstream E"
-    return p.path
+def indexed_proj(sample_workspace: SampleWorkspace) -> str:
+    """Sample promo-svc — has vectors.db (GPU-indexed by sample_workspace fixture)."""
+    return sample_workspace.promo
 
 
 @pytest.fixture(scope="module")
-def graph_proj():
-    # Require symbols > 0 so thin federation roots (0 own symbols) are skipped — graph
-    # relation tests need an actual symbol to look up via any_symbol.
-    for e in list_projects():
-        if not e.enabled:
-            continue
-        gdb = project_graph_db(e.path)
-        if not gdb.exists():
-            continue
-        with sqlite3.connect(str(gdb)) as con:
-            if con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0:
-                return e.path
-    pytest.fail("No project with graph.db and symbols required — run Workstream E")
+def graph_proj(sample_workspace: SampleWorkspace) -> str:
+    """Sample promo-svc — has graph.db with symbols (GPU-indexed by sample_workspace fixture)."""
+    return sample_workspace.promo
 
 
 @pytest.fixture(scope="module")

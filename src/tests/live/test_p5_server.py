@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
+
+
+@pytest.fixture(scope="module")
+def service_path(sample_workspace: SampleWorkspace) -> str:
+    """Sample promo-svc — indexed, 7 L1 communities, has graph.db + vectors.db."""
+    return sample_workspace.promo
 
 
 def test_mcp_has_five_tools():
@@ -182,41 +190,22 @@ def test_service_mesh_be_nonempty():
     )
 
 
-def test_suggested_questions_and_chat_context_no_operationalerror(live_client):
+def test_suggested_questions_and_chat_context_no_operationalerror(live_client, service_path):
     """P23.2: ORDER BY member_count (not node_count) — no OperationalError on real graph DBs."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-
-    project = next(
-        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
-        None,
-    )
-    assert project, "At least one project with a graph DB must be registered"
-
-    r = live_client.get(f"/api/suggested_questions?project={project}")
+    r = live_client.get(f"/api/suggested_questions?project={service_path}")
     assert r.status_code == 200, f"suggested_questions 500 (likely node_count bug): {r.text}"
     assert "questions" in r.json()
 
 
-def test_mcp_search_subdir_resolves_to_root():
+def test_mcp_search_subdir_resolves_to_root(service_path):
     """P23.1: search with a non-root project_paths resolves to the enclosing registered root."""
 
-    from opencode_search.core.config import project_vector_db
-    from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import search as search_tool
 
-    # Use a non-federated project so projects_searched is exactly [root] after subdir resolution.
-    indexed = next(
-        (p for p in list_projects()
-         if p.enabled and project_vector_db(p.path).exists() and not p.federation),
-        None,
-    )
-    assert indexed, "At least one non-federated indexed project must be registered"
-
-    subdir = str(Path(indexed.path) / "src")
+    subdir = str(Path(service_path) / "src")
     result = json.loads(asyncio.run(search_tool("function definition", project_paths=[subdir])))
-    assert result["projects_searched"] == [indexed.path], (
-        f"subdir {subdir!r} must resolve to root {indexed.path!r}; got {result['projects_searched']}"
+    assert result["projects_searched"] == [service_path], (
+        f"subdir {subdir!r} must resolve to root {service_path!r}; got {result['projects_searched']}"
     )
     assert result["total"] > 0, "Expected results from indexed project"
 
@@ -270,36 +259,25 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
         remove_project(proj_path)
 
 
-def test_kb_health_measures_summary_not_title(live_client):
+def test_kb_health_measures_summary_not_title(live_client, service_path):
     """P25.1: /api/kb_health counts summary-enriched communities, not just titled ones."""
     import sqlite3
 
     from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
 
-    project = None
-    total = summarized = 0
-    for p in list_projects():
-        if not p.enabled:
-            continue
-        gdb = project_graph_db(p.path)
-        if not gdb.exists():
-            continue
-        con = sqlite3.connect(str(gdb))
-        try:
-            t = con.execute("SELECT COUNT(*) FROM communities WHERE level = 1").fetchone()[0]
-            if t > 0:
-                total = t
-                summarized = con.execute(
-                    "SELECT COUNT(*) FROM communities WHERE level = 1 "
-                    "AND summary IS NOT NULL AND summary != ''"
-                ).fetchone()[0]
-                project = p.path
-                break
-        finally:
-            con.close()
-    assert project, "At least one project with L1 communities must be registered"
-    r = live_client.get(f"/api/kb_health?project={project}")
+    gdb = project_graph_db(service_path)
+    assert gdb.exists(), "promo-svc graph.db not found — sample_workspace fixture must run first"
+    con = sqlite3.connect(str(gdb))
+    try:
+        total = con.execute("SELECT COUNT(*) FROM communities WHERE level = 1").fetchone()[0]
+        summarized = con.execute(
+            "SELECT COUNT(*) FROM communities WHERE level = 1 "
+            "AND summary IS NOT NULL AND summary != ''"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    assert total > 0, "promo-svc must have L1 communities"
+    r = live_client.get(f"/api/kb_health?project={service_path}")
     assert r.status_code == 200, f"kb_health {r.status_code}: {r.text}"
     d = r.json()
     expected_pct = round(summarized / total * 100, 1) if total else 0
@@ -344,46 +322,25 @@ def test_enrich_project_uses_summary_gate(safe_tmp_path):
     assert post > 0, "enrichment gate must use summary IS NULL, not title IS NULL"
 
 
-def test_build_wiki_default_action_succeeds(live_client):
+def test_build_wiki_default_action_succeeds(live_client, service_path):
     """P28.1: POST /api/build_wiki without explicit action defaults to wiki and returns pages_written."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-    project = next(
-        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
-        None,
-    )
-    assert project, "At least one indexed project required"
-    r = live_client.post(f"/api/build_wiki?project={project}", data=b"")
+    r = live_client.post(f"/api/build_wiki?project={service_path}", data=b"")
     assert r.status_code == 200, f"default action (wiki) must succeed: {r.status_code} {r.text[:80]}"
     assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
 
 
-def test_build_wiki_action_wiki(live_client):
+def test_build_wiki_action_wiki(live_client, service_path):
     """P28.2: action=wiki calls build_wiki and returns pages_written."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-    project = next(
-        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
-        None,
-    )
-    assert project, "At least one indexed project required"
-    r = live_client.post(f"/api/build_wiki?project={project}&action=wiki", data=b"")
+    r = live_client.post(f"/api/build_wiki?project={service_path}&action=wiki", data=b"")
     assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
     assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
 
 
-def test_overview_status_has_kb_state():
+def test_overview_status_has_kb_state(service_path):
     """P25.2: overview(what='status') returns kb_state in 4-value set + numeric enriched_pct."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import overview as overview_tool
 
-    project = next(
-        (p.path for p in list_projects() if p.enabled and project_graph_db(p.path).exists()),
-        None,
-    )
-    assert project, "At least one project with graph DB must be registered"
-    data = json.loads(asyncio.run(overview_tool(project, "status")))
+    data = json.loads(asyncio.run(overview_tool(service_path, "status")))
     assert "kb_state" in data, f"kb_state missing from status: {data}"
     assert data["kb_state"] in ("indexing", "searchable", "enriching", "ready"), (
         f"kb_state={data['kb_state']!r} not in expected set"
@@ -418,7 +375,7 @@ def test_graph_defaults_project_path_to_first_project():
     assert "matches" in data, f"expected matches key, got: {data}"
 
 
-_OSE = str(Path(__file__).resolve().parents[3])  # repo root, no hardcoded device path
+_OSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
 
 
 
@@ -469,18 +426,18 @@ def test_search_reranks_full_pool(mini_stores, embedder):
 
 
 @pytest.mark.slow
-def test_e1_rerank_reorders_search_results():
-    """E1/HR8: MCP search on _OSE — rerank_score sorted desc, lift detected on ≥1 of 4 queries."""
+def test_e1_rerank_reorders_search_results(service_path):
+    """E1/HR8: MCP search on sample service — rerank_score sorted desc, lift detected on ≥1 of 4 queries."""
     from opencode_search.server.mcp import search as _mcp_search
     queries = [
-        "cross-encoder reranker invocation",
-        "daemon health check endpoint",
-        "sqlite vector store embed",
-        "leiden community detection",
+        "discount rule application",
+        "coupon validation logic",
+        "order processing function",
+        "checkout service integration",
     ]
     lift_found = False
     for q in queries:
-        data = json.loads(asyncio.run(_mcp_search(q, project_paths=[_OSE])))
+        data = json.loads(asyncio.run(_mcp_search(q, project_paths=[service_path])))
         res = data.get("results", [])
         assert res, f"E1: no results for {q!r}"
         rs = [r.get("rerank_score") for r in res]
@@ -496,37 +453,36 @@ def test_e1_rerank_reorders_search_results():
 
 
 @pytest.mark.slow
-def test_e2_ask_context_is_rerank_ordered():
+def test_e2_ask_context_is_rerank_ordered(service_path):
     """E2/HR8: MCP ask returns assembled context with path markers, first chunk = rerank top-1."""
     from opencode_search.server.mcp import ask as _mcp_ask
     from opencode_search.server.mcp import search as _mcp_search
-    q = "how does the cross-encoder reranker get invoked"
-    ctx = asyncio.run(_mcp_ask(q, _OSE, "all"))
+    q = "how does the promotion rule engine apply discounts"
+    ctx = asyncio.run(_mcp_ask(q, service_path, "all"))
     assert ctx and "[" in ctx, f"E2: empty or no path markers: {ctx[:80]}"
-    top = json.loads(asyncio.run(_mcp_search(q, project_paths=[_OSE])))["results"]
+    top = json.loads(asyncio.run(_mcp_search(q, project_paths=[service_path])))["results"]
     assert top, "E2: search returned no results"
     assert top[0].get("path", "") in ctx, (
         f"E2: rerank top-1 {top[0].get('path')!r} not found in ask context"
     )
     # Structural guard: assembled context starts with a section header, not LLM prose.
-    # ("I think"/"In conclusion" can appear in indexed source files, not a reliable indicator.)
     assert ctx.startswith("## "), "E2: LLM prose in ctx — assembled context must start with ## section marker"
 
 
 @pytest.mark.slow
-def test_e3_community_context_is_reranked():
+def test_e3_community_context_is_reranked(service_path):
     """E3/HR8/D2: compose_answer(scope=global) top community differs between distinct queries."""
     from opencode_search.core.config import project_graph_db
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.ask import compose_answer
-    gdb = project_graph_db(_OSE)
+    gdb = project_graph_db(service_path)
     assert gdb.exists(), (
-        "_OSE graph DB not found — run Workstream E (re-index) first"
+        "sample promo-svc graph DB not found — sample_workspace fixture must run first"
     )
     gs = GraphStore(gdb)
     try:
-        a = compose_answer("how does reranking work", [], [gs], scope="global")
-        b = compose_answer("how does daemon health check work", [], [gs], scope="global")
+        a = compose_answer("how does coupon validation work", [], [gs], scope="global")
+        b = compose_answer("how does checkout integration work", [], [gs], scope="global")
     finally:
         gs.close()
     assert a, "E3: compose_answer empty for query A"
@@ -540,7 +496,7 @@ def test_e3_community_context_is_reranked():
 
 
 @pytest.mark.slow
-def test_e4_rerank_lift_metric(live_client):
+def test_e4_rerank_lift_metric(live_client, service_path):
     """E4/D3: /api/metrics exposes rerank block; in-process search increments the counter."""
     from opencode_search.query.search import rerank_stats
     from opencode_search.server.mcp import search as _mcp_search
@@ -553,7 +509,7 @@ def test_e4_rerank_lift_metric(live_client):
     before = rerank_stats()["queries"]
     N = 3
     for i in range(N):
-        asyncio.run(_mcp_search(f"reranker invocation {i}", project_paths=[_OSE]))
+        asyncio.run(_mcp_search(f"discount rule {i}", project_paths=[service_path]))
     after = rerank_stats()["queries"]
     assert after >= before + N, f"E4: queries did not rise by {N}: {before} → {after}"
 
@@ -571,11 +527,11 @@ def test_e5_mcp_query_path_no_generation():
 
 
 @pytest.mark.slow
-def test_e6_dashboard_chat_haiku_only(live_client):
+def test_e6_dashboard_chat_haiku_only(live_client, service_path):
     """E6/HR10: POST /api/chat_stream streams tokens via claude-haiku-4-5 primary + DeepSeek fallback (codex removed)."""
     r = live_client.post(
         "/api/chat_stream",
-        json={"query": "What is the reranker used in this engine?", "project_path": _OSE},
+        json={"query": "What does this service do?", "project_path": service_path},
         stream=True, timeout=(5, 90),
     )
     assert r.status_code == 200
@@ -596,8 +552,8 @@ def test_e6_dashboard_chat_haiku_only(live_client):
     answer = "".join(tokens)
     assert done_seen, "E6: SSE never sent done:true"
     assert answer, "E6: no tokens received from /api/chat_stream"
-    kws = ("rerank", "jina", "embed", "daemon", "vector", "community", "gpu", "encoder")
-    assert any(k in answer.lower() for k in kws), f"E6: answer missing engine concept: {answer[:200]}"
+    kws = ("promo", "coupon", "discount", "order", "rule", "checkout", "cart", "price", "community")
+    assert any(k in answer.lower() for k in kws), f"E6: answer missing service concept: {answer[:200]}"
     src = (Path(__file__).parents[2] / "opencode_search" / "server" / "routes_chat.py").read_text()
     assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
     assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat (no local generative LLM)"
@@ -707,25 +663,25 @@ def _collect_chat_tokens(live_client, question: str, project_path: str, **extra)
 @pytest.mark.slow
 @pytest.mark.parametrize("question,kws", [
     (
-        "The daemon fails with UNIQUE constraint failed on vec_chunks. How do I debug this?",
-        ["vec", "chunk", "index", "unique", "idempot"],
+        "What happens when a discount code is applied to an order?",
+        ["discount", "coupon", "order", "rule", "promo"],
     ),
     (
-        "What might cause community enrichment to stay stuck in 'enriching' state?",
-        ["community", "enrichment", "summary", "null", "llm"],
+        "What functions are involved in validating a coupon code?",
+        ["coupon", "valid", "rule", "code", "check"],
     ),
     (
-        "What functions are involved in the indexing pipeline from file to stored vector?",
-        ["index", "embed", "chunk", "store"],
+        "How does promo-svc process an incoming order request?",
+        ["order", "process", "request", "promo", "service"],
     ),
     (
-        "How does federation work — how does the engine handle multiple repos?",
-        ["federat", "member", "symlink", "root"],
+        "How does promo-svc integrate with checkout or cart services?",
+        ["checkout", "cart", "integrat", "service", "federation"],
     ),
 ])
-def test_chat_comprehensive_question_a(live_client, question, kws):
-    """Chat quality A: debug, enrichment, indexing, federation questions."""
-    answer, done_seen = _collect_chat_tokens(live_client, question, _OSE)
+def test_chat_comprehensive_question_a(live_client, service_path, question, kws):
+    """Chat quality A: promo-svc domain questions about discount, coupon, order, integration."""
+    answer, done_seen = _collect_chat_tokens(live_client, question, service_path)
     al = answer.lower()
     assert done_seen, f"SSE never sent done for: {question[:60]}"
     assert len(al) > 30, f"Answer too short: {al!r}"
@@ -736,25 +692,25 @@ def test_chat_comprehensive_question_a(live_client, question, kws):
 @pytest.mark.slow
 @pytest.mark.parametrize("question,kws", [
     (
-        "How does a user search query flow from MCP call to ranked results?",
-        ["search", "rank", "rerank", "vector", "embed"],
+        "What is the overall architecture of this service?",
+        ["service", "function", "module", "class", "communit"],
     ),
     (
-        "Why might GPU memory usage spike after indexing a large repo?",
-        ["gpu", "cuda", "embed", "ort", "arena"],
+        "What are the main data models or classes in this service?",
+        ["class", "model", "data", "object", "struct"],
     ),
     (
-        "What does 'UNIQUE constraint failed: vec_chunks.chunk_id' mean and how do I fix it?",
-        ["vec", "unique", "clear", "delete", "idempot"],
+        "What does this service expose and how does it handle errors?",
+        ["error", "exception", "return", "handle", "response"],
     ),
     (
-        "What is the knowledge base pipeline and when does it run?",
-        ["kb", "knowledge", "communit", "hierarch", "enrich"],
+        "What business rules does this service implement?",
+        ["rule", "business", "logic", "valid", "check"],
     ),
 ])
-def test_chat_comprehensive_question_b(live_client, question, kws):
-    """Chat quality B: search flow, GPU, error message, KB pipeline questions."""
-    answer, done_seen = _collect_chat_tokens(live_client, question, _OSE)
+def test_chat_comprehensive_question_b(live_client, service_path, question, kws):
+    """Chat quality B: structural, model, error-handling, business-rule questions against promo-svc."""
+    answer, done_seen = _collect_chat_tokens(live_client, question, service_path)
     al = answer.lower()
     assert done_seen, f"SSE never sent done for: {question[:60]}"
     assert len(al) > 30, f"Answer too short: {al!r}"
@@ -771,12 +727,12 @@ def test_chat_no_project_path_returns_answer(live_client):
 
 
 @pytest.mark.slow
-def test_chat_sse_event_ordering(live_client):
+def test_chat_sse_event_ordering(live_client, service_path):
     """SSE contract: thinking must be first event, at least one token, done must be last."""
     events: list[str] = []
     r = live_client.post(
         "/api/chat_stream",
-        json={"query": "What is the embedder used for?", "project_path": _OSE},
+        json={"query": "What does this service do?", "project_path": service_path},
         stream=True, timeout=(5, 60),
     )
     assert r.status_code == 200
@@ -798,12 +754,12 @@ def test_chat_sse_event_ordering(live_client):
 
 
 @pytest.mark.slow
-def test_chat_done_event_metadata(live_client):
+def test_chat_done_event_metadata(live_client, service_path):
     """done event must carry model, elapsed_ms, and non-empty sources for indexed project."""
     done_evt = None
     r = live_client.post(
         "/api/chat_stream",
-        json={"query": "How does the graph store work?", "project_path": _OSE},
+        json={"query": "What does this service do?", "project_path": service_path},
         stream=True, timeout=(5, 60),
     )
     assert r.status_code == 200
@@ -827,18 +783,18 @@ def test_chat_done_event_metadata(live_client):
 
 
 @pytest.mark.slow
-def test_chat_multiturn_history_influences_answer(live_client):
+def test_chat_multiturn_history_influences_answer(live_client, service_path):
     """Multi-turn: history prepended to prompt makes follow-up context-aware."""
     history = [
-        {"role": "user", "content": "Tell me about the VectorStore class."},
-        {"role": "assistant", "content": "VectorStore is defined in index/store.py and wraps sqlite-vec for chunk storage."},
+        {"role": "user", "content": "Tell me about the promo rule engine."},
+        {"role": "assistant", "content": "The promo rule engine validates discount codes and applies coupon rules to orders."},
     ]
     answer, done_seen = _collect_chat_tokens(
-        live_client, "What file is it in?", _OSE, history=history,
+        live_client, "What file implements it?", service_path, history=history,
     )
     assert done_seen, "done event never received"
     assert len(answer) > 10, f"Answer too short: {answer!r}"
     al = answer.lower()
-    assert any(k in al for k in ["store", "index", "file", "vector", "sqlite"]), (
-        f"Follow-up must reference VectorStore context from history: {al[:300]!r}"
+    assert any(k in al for k in ["promo", "rule", "coupon", "discount", "file", "implement"]), (
+        f"Follow-up must reference promo rule context from history: {al[:300]!r}"
     )

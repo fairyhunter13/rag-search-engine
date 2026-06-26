@@ -19,39 +19,16 @@ from pathlib import Path
 import pytest
 
 from opencode_search.core.config import project_graph_db, project_wiki_dir
-from opencode_search.core.registry import list_projects
-from opencode_search.daemon.federation import expand_federation, federated_map
+from opencode_search.daemon.federation import federated_map
 from opencode_search.graph.store import GraphStore
 from opencode_search.kb.wiki import build_federated_index, build_wiki
+from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
 _LINK_RE = re.compile(r"\]\(([^)]+)\)")
 _CITE_RE = re.compile(r"\[([^\]]+):(\d+)\]\(([^)]+)\)")
 _MERMAID_RE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
-
-
-def _enriched_project(min_communities: int = 10) -> str | None:
-    for p in list_projects():
-        if not p.enabled or not project_graph_db(p.path).exists():
-            continue
-        gs = GraphStore(project_graph_db(p.path))
-        try:
-            n = gs._con.execute(
-                "SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL "
-                "AND summary!=''").fetchone()[0]
-        finally:
-            gs.close()
-        if n >= min_communities:
-            return p.path
-    return None
-
-
-def _federated_root() -> str | None:
-    for p in list_projects():
-        if p.enabled and len(expand_federation(p.path)) > 1:
-            return p.path
-    return None
 
 
 def _build(project: str, out: Path, llm: bool = False) -> int:
@@ -80,9 +57,9 @@ def _read(d: Path, name: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def wiki(tmp_path_factory):
-    project = _enriched_project()
-    assert project, "need an enabled project with >=10 enriched L1 communities"
+def wiki(tmp_path_factory, sample_workspace: SampleWorkspace):
+    """Build a wiki from sample promo-svc (7 enriched L1 communities)."""
+    project = sample_workspace.promo
     out = tmp_path_factory.mktemp("wiki")
     n = _build(project, out, llm=False)
     assert n > 1, f"expected multiple pages, got {n}"
@@ -217,10 +194,9 @@ def test_index_groups_by_semantic_type(wiki):
     assert present >= max(1, len(types) - 1), f"index missing type sections; have {types}"
 
 
-def test_deterministic_build_is_byte_identical(tmp_path_factory):
+def test_deterministic_build_is_byte_identical(tmp_path_factory, sample_workspace: SampleWorkspace):
     """W10 (determinism): two wiki builds are byte-identical (template-based, no LLM variance)."""
-    project = _enriched_project()
-    assert project
+    project = sample_workspace.promo
     a = tmp_path_factory.mktemp("det_a")
     b = tmp_path_factory.mktemp("det_b")
     _build(project, a, llm=False)
@@ -245,28 +221,23 @@ def test_wiki_builder_uses_no_embedder_or_local_llm():
     assert "import chat" not in src, "wiki narrative must use cloud DeepSeek, not resident chat()"
 
 
-def test_build_without_llm_builds_successfully(tmp_path_factory):
+def test_build_without_llm_builds_successfully(tmp_path_factory, sample_workspace: SampleWorkspace):
     """W12: wiki builds without LLM (template-based prose, always deterministic)."""
-    project = _enriched_project()
-    assert project
     out = tmp_path_factory.mktemp("nollm")
-    n = _build(project, out, llm=False)
+    n = _build(sample_workspace.promo, out, llm=False)
     assert n > 1, "wiki must build from template prose without any cloud LLM"
     assert (out / "index.md").exists(), "index.md must always be generated"
 
 
-def test_standalone_project_has_no_federation_page():
+def test_standalone_project_has_no_federation_page(sample_workspace: SampleWorkspace):
     """W14: build_federated_index is a no-op for a project with no members."""
-    standalone = next((p.path for p in list_projects()
-                       if p.enabled and len(expand_federation(p.path)) == 1), None)
-    assert standalone, "need a standalone project"
-    assert build_federated_index(standalone) == 0
+    assert build_federated_index(sample_workspace.ledger) == 0
 
 
-def test_federated_root_gets_federation_index():
+def test_federated_root_gets_federation_index(sample_workspace: SampleWorkspace):
     """W13: a federated root (>1 member) gets federation.md naming members; rollup == union."""
-    root = _federated_root()
-    assert root, "no federated root registered — register a project with federation members"
+    root = sample_workspace.fed_root
+    assert root, "sample federation root must be built by sample_workspace fixture"
     assert build_federated_index(root) == 1
     fed = (project_wiki_dir(root) / "federation.md").read_text(encoding="utf-8")
     per_member = federated_map(root, lambda gs: dict(gs._con.execute(

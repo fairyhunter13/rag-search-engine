@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 
@@ -79,41 +81,20 @@ def test_symbol_hollow_flag_fires_on_edge_free_graph(safe_tmp_path):
         remove_project(proj)
 
 
-def test_overview_status_includes_symbol_hollow_field():
+def test_overview_status_includes_symbol_hollow_field(sample_workspace: SampleWorkspace):
     """GH3: healthy standalone project (edges>0) must have symbol_hollow=False in overview(status).
 
-    Uses a non-federation-root project with communities AND edges to avoid false positives
-    from federation roots where a hollow member (0 symbols) propagates _any_hollow=True.
+    Uses sample promo-svc (7 L1 communities, edges present) — not a federation root from
+    its own perspective, so hollow-member propagation does not apply.
     """
     import asyncio
-    import sqlite3
 
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-    from opencode_search.daemon.federation import expand_federation
     from opencode_search.server.mcp import overview as overview_tool
 
-    target = ""
-    for p in list_projects():
-        if not p.enabled:
-            continue
-        if len(expand_federation(p.path)) >= 2:
-            continue  # skip federation roots — hollow members propagate _any_hollow=True
-        gdb = project_graph_db(p.path)
-        if not gdb.exists():
-            continue
-        with sqlite3.connect(str(gdb)) as con:
-            l1 = con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
-            edges = con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-            if l1 > 0 and edges > 0:
-                target = p.path
-                break
-    if not target:
-        pytest.fail("GH3: no enabled standalone project with L1 communities and edges found")
-    result = json.loads(asyncio.run(overview_tool(target, "status")))
+    result = json.loads(asyncio.run(overview_tool(sample_workspace.promo, "status")))
     assert "symbol_hollow" in result, f"symbol_hollow missing; keys={list(result)}"
     assert result["symbol_hollow"] is False, (
-        f"standalone project with edges must not be hollow; path={target}"
+        f"promo-svc with edges must not be hollow; got {result}"
     )
 
 

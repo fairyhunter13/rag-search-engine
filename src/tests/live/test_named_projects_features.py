@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 import pytest
 
@@ -17,13 +16,10 @@ from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
-_OSE = str(Path(__file__).resolve().parents[3])
-
-
 @pytest.fixture(scope="module")
 def named_projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
     return {
-        "ose": _OSE,
+        "service": sample_workspace.promo,
         "federation": sample_workspace.fed_root,
         "standalone": sample_workspace.ledger,
     }
@@ -42,7 +38,7 @@ class TestNamedProjectsSearch:
     """T3a: search returns results for each named root across all scopes."""
 
     @pytest.mark.parametrize("key,scope", [
-        (k, s) for k in ("ose", "federation", "standalone") for s in _SEARCH_SCOPES
+        (k, s) for k in ("service", "federation", "standalone") for s in _SEARCH_SCOPES
     ])
     def test_search_returns_results(self, named_projects: dict, key: str, scope: str) -> None:
         from opencode_search.server.mcp import search as search_tool
@@ -57,7 +53,7 @@ class TestNamedProjectsOverview:
     """T3b: all 15 overview what= values return valid JSON for each named root."""
 
     @pytest.mark.parametrize("key,what", [
-        (k, w) for k in ("ose", "federation", "standalone") for w in _OVERVIEW_WHATS_FAST
+        (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_FAST
     ])
     def test_overview_what_returns_dict(self, named_projects: dict, key: str, what: str) -> None:
         from opencode_search.server.mcp import overview as overview_tool
@@ -69,7 +65,7 @@ class TestNamedProjectsOverview:
 
     @pytest.mark.slow
     @pytest.mark.parametrize("key,what", [
-        (k, w) for k in ("ose", "federation", "standalone") for w in _OVERVIEW_WHATS_SLOW
+        (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_SLOW
     ])
     def test_overview_slow_what_returns_dict(self, named_projects: dict, key: str, what: str) -> None:
         from opencode_search.server.mcp import overview as overview_tool
@@ -84,7 +80,7 @@ class TestNamedProjectsAsk:
     """T3c: ask returns non-empty context for each named root."""
 
     @pytest.mark.slow
-    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
+    @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
     def test_ask_global_non_empty(self, named_projects: dict, key: str) -> None:
         from opencode_search.server.mcp import ask as ask_tool
         path = named_projects.get(key, "")
@@ -98,7 +94,7 @@ class TestNamedProjectsAsk:
 class TestNamedProjectsGraph:
     """T3d: graph tool works for each named root (at least definition relation)."""
 
-    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
+    @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
     def test_graph_definition_returns_dict(self, named_projects: dict, key: str) -> None:
         import sqlite3
 

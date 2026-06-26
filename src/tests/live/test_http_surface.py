@@ -21,12 +21,19 @@ from __future__ import annotations
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 
-def _any_project(enabled_only=True):
-    from opencode_search.core.registry import list_projects
-    return next((e.path for e in list_projects() if e.enabled or not enabled_only), None)
+@pytest.fixture(scope="module")
+def project(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
+
+
+@pytest.fixture(scope="module")
+def fed_root(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.fed_root
 
 
 def test_root_not_500(live_client):
@@ -58,42 +65,30 @@ def test_api_events_stream_sse_content_type(live_client):
     assert "text/event-stream" in ct, f"events/stream must be SSE; content-type={ct}"
 
 
-def test_api_graph_export(live_client):
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-    p = next((e.path for e in list_projects() if e.enabled and project_graph_db(e.path).exists()), None)
-    assert p, "Need an indexed project with graph.db"
-    r = live_client.get(f"/api/graph_export?project={p}")
+def test_api_graph_export(live_client, project):
+    r = live_client.get(f"/api/graph_export?project={project}")
     assert r.status_code == 200, f"/api/graph_export: {r.status_code}"
     data = r.json()
     assert isinstance(data, dict), "graph_export must return JSON object"
 
 
-def test_api_wiki_registered_project(live_client):
-    p = _any_project()
-    assert p, "Need a registered project"
-    r = live_client.get(f"/api/wiki?project={p}")
+def test_api_wiki_registered_project(live_client, project):
+    r = live_client.get(f"/api/wiki?project={project}")
     assert r.status_code in (200, 404), f"/api/wiki unexpected {r.status_code}"
 
 
-def test_api_wiki_page(live_client):
-    p = _any_project()
-    assert p
-    r = live_client.get(f"/api/wiki/page?project={p}&page=overview")
+def test_api_wiki_page(live_client, project):
+    r = live_client.get(f"/api/wiki/page?project={project}&page=overview")
     assert r.status_code in (200, 404), f"/api/wiki/page unexpected {r.status_code}"
 
 
-def test_api_wiki_export(live_client):
-    p = _any_project()
-    assert p
-    r = live_client.get(f"/api/wiki/export?project={p}")
+def test_api_wiki_export(live_client, project):
+    r = live_client.get(f"/api/wiki/export?project={project}")
     assert r.status_code in (200, 404), f"/api/wiki/export unexpected {r.status_code}"
 
 
-def test_api_kb_health(live_client):
-    p = _any_project()
-    assert p
-    r = live_client.get(f"/api/kb_health?project={p}")
+def test_api_kb_health(live_client, project):
+    r = live_client.get(f"/api/kb_health?project={project}")
     assert r.status_code == 200, f"/api/kb_health: {r.status_code}"
     data = r.json()
     assert "verdict" in data or "kb_state" in data or "status" in data, (
@@ -107,13 +102,9 @@ def test_api_storage_health(live_client):
     assert isinstance(r.json(), dict)
 
 
-def test_api_process_bpmn(live_client):
-    from opencode_search.core.registry import list_projects
-    root = next((e.path for e in list_projects() if e.enabled
-                 and getattr(e, "federation", None)), None)
-    assert root, "Need a federated root for /api/process/bpmn — register a project with federation members"
+def test_api_process_bpmn(live_client, fed_root):
     # endpoint requires root= and id=; nonexistent id returns 404 (acceptable)
-    r = live_client.get(f"/api/process/bpmn?root={root}&id=probe")
+    r = live_client.get(f"/api/process/bpmn?root={fed_root}&id=probe")
     assert r.status_code in (200, 404), f"/api/process/bpmn unexpected {r.status_code}"
 
 

@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio, json, sqlite3
 from pathlib import Path
 import pytest
+
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
-_OSE = str(Path(__file__).resolve().parents[3])
+_OSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
 _REMOVED = ["hierarchy", "architecture_domains", "world_model"]
 _WHATS = ["structure","status","projects","metrics","import_cycles",
           "surprising_connections","feature_map","business_rules",
@@ -29,9 +32,9 @@ def test_fp0_deleted_modules():
         with pytest.raises(ModuleNotFoundError): __import__(mod)
 
 
-def test_fp1_removed_whats_error(live_client):
+def test_fp1_removed_whats_error(live_client, service_path):
     for w in _REMOVED:
-        r = live_client.post("/api/overview", json={"project_path": _OSE, "what": w})
+        r = live_client.post("/api/overview", json={"project_path": service_path, "what": w})
         body = r.json()
         assert "error" in body and "unknown" in body["error"].lower(), f"{w!r}: {body}"
 
@@ -41,59 +44,59 @@ def test_fp2_valid_set():
     for w in _REMOVED: assert w not in _VALID, f"{w!r} still in _VALID"
 
 
-def test_fp3_l1_only_in_all_dbs():
+def test_fp3_l1_only_in_all_dbs(sample_workspace):
     from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
+    from tests.live._projects import sample_project_paths
     bad = []
-    for e in list_projects():
-        gdb = project_graph_db(e.path)
+    for path in sample_project_paths(sample_workspace):
+        gdb = project_graph_db(path)
         if not gdb.exists(): continue
         with sqlite3.connect(str(gdb)) as c:
             n = c.execute("SELECT COUNT(*) FROM communities WHERE level!=1").fetchone()[0]
-        if n: bad.append(f"{Path(e.path).name}: {n}")
+        if n: bad.append(f"{Path(path).name}: {n}")
     assert not bad, "non-L1 rows remain:\n" + "\n".join(bad)
 
 
-def test_fp4_no_domain_pages():
+def test_fp4_no_domain_pages(service_path):
     from opencode_search.core.config import project_wiki_dir
-    d = project_wiki_dir(_OSE)
+    d = project_wiki_dir(service_path)
     # If wiki dir doesn't exist, there are trivially no domain pages — test passes.
     if d.exists():
         assert not list(d.glob("domain_*.md")), "domain_*.md found — L2 re-appeared"
 
 
-# ── L2: OSE standalone ───────────────────────────────────────────────────
+# ── L2: sample service member ─────────────────────────────────────────────
 
-def test_fp5_ose_search():
+def test_fp5_service_search(service_path):
     from opencode_search.server.mcp import search as t
-    d = json.loads(asyncio.run(t("function definition", project_paths=[_OSE])))
+    d = json.loads(asyncio.run(t("function definition", project_paths=[service_path])))
     assert d.get("total", 0) > 0, f"search 0: {d}"
 
 
-def test_fp6_ose_graph():
+def test_fp6_service_graph(service_path):
     from opencode_search.server.mcp import graph as t
-    sym = _sym(_OSE); assert sym
+    sym = _sym(service_path); assert sym
     for rel in ("callers","callees","impact","definition"):
-        d = json.loads(asyncio.run(t(sym, _OSE, rel)))
+        d = json.loads(asyncio.run(t(sym, service_path, rel)))
         assert isinstance(d, dict)
 
 
 @pytest.mark.parametrize("what", _WHATS)
-def test_fp7_ose_overview(what):
+def test_fp7_service_overview(what, service_path):
     from opencode_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(_OSE, what)))
+    d = json.loads(asyncio.run(t(service_path, what)))
     assert isinstance(d, dict) and "error" not in d, f"{what!r}: {d}"
 
 
-def test_fp8_ose_status():
+def test_fp8_service_status(service_path):
     from opencode_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(_OSE, "status")))
+    d = json.loads(asyncio.run(t(service_path, "status")))
     assert "l1_enriched_pct" in d and "hierarchy_quality" in d
     assert "l2_enriched_pct" not in d
 
 
-def test_fp9_ose_wiki(live_client):
-    r = live_client.get(f"/api/wiki?project={_OSE}")
+def test_fp9_service_wiki(live_client, service_path):
+    r = live_client.get(f"/api/wiki?project={service_path}")
     assert r.status_code == 200
     assert not any("domain_" in p for p in r.json().get("pages", []))
 
@@ -101,9 +104,12 @@ def test_fp9_ose_wiki(live_client):
 # ── L2: federation root ──────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def fed_root(sample_workspace) -> str:
-    from tests.live._sample_workspace import SampleWorkspace
-    assert isinstance(sample_workspace, SampleWorkspace)
+def service_path(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
+
+
+@pytest.fixture(scope="module")
+def fed_root(sample_workspace: SampleWorkspace) -> str:
     return sample_workspace.fed_root
 
 
@@ -136,11 +142,11 @@ def test_fp13_federation_wiki_no_domain(live_client, fed_root):
 # ── L3: quality (@slow) ──────────────────────────────────────────────────
 
 @pytest.mark.slow
-def test_fp14_ask_flat_l1():
+def test_fp14_ask_flat_l1(service_path):
     from opencode_search.server.mcp import ask as t
-    result = asyncio.run(t("What is the overall architecture?", _OSE, "global"))
+    result = asyncio.run(t("What is the overall architecture?", service_path, "global"))
     assert len(result.strip()) > 100
-    assert any(k in result.lower() for k in ("search","embed","graph","daemon","community","kb","query"))
+    assert any(k in result.lower() for k in ("cart","checkout","promo","order","discount","coupon","fulfillment","price","rule"))
 
 
 # ── L4: Phase-1b flat-KB source guards ──────────────────────────────────
@@ -156,7 +162,7 @@ def test_fp16_no_level2_query_in_quality():
     """Phase-1b guard: no WHERE level=2 query in graph/quality.py (always-0 dead metric)."""
     import inspect
     from opencode_search import graph
-    quality_path = Path(inspect.getfile(graph)) / "../quality.py"
+    quality_path = Path(inspect.getfile(graph)).parent / "quality.py"
     quality_path = quality_path.resolve()
     src = quality_path.read_text()
     assert "WHERE level=2" not in src, \

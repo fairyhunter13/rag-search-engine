@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _PY = """
@@ -180,26 +182,24 @@ def test_detect_communities_fastgreedy_no_singleton_explosion(tmp_path):
 
 # ── R3: cross-project edges-schema guard ─────────────────────────────────────
 
-def test_all_project_graph_dbs_have_canonical_edges_schema():
-    """Every registered project's graph.db must have caller_sid/callee_sid (not legacy from_id/to_id)."""
+def test_all_project_graph_dbs_have_canonical_edges_schema(sample_workspace: SampleWorkspace):
+    """Sample project graph.dbs must have caller_sid/callee_sid (not legacy from_id/to_id)."""
     import sqlite3
 
     from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-    for entry in list_projects():
-        if not entry.enabled:
-            continue
-        gdb = project_graph_db(entry.path)
+    from tests.live._projects import sample_project_paths
+    for path in sample_project_paths(sample_workspace):
+        gdb = project_graph_db(path)
         if not gdb.exists():
             continue
         with sqlite3.connect(str(gdb)) as con:
             cols = {r[1] for r in con.execute("PRAGMA table_info(edges)")}
         assert "caller_sid" in cols and "callee_sid" in cols, (
-            f"{entry.path}: edges schema missing caller_sid/callee_sid (found: {cols}). "
+            f"{path}: edges schema missing caller_sid/callee_sid (found: {cols}). "
             "Run GraphStore._open() migration or re-index."
         )
         assert "from_id" not in cols, (
-            f"{entry.path}: edges still has legacy 'from_id' column — migration did not run."
+            f"{path}: edges still has legacy 'from_id' column — migration did not run."
         )
 
 

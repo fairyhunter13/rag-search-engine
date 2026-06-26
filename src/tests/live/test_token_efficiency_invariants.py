@@ -1,7 +1,7 @@
 """Token-efficiency invariant guard.
 
-Proves that removing OSE_WIKI_LLM / OSE_BPRE_LLM_LINK / OSE_BPRE_LLM_FILE did not
-widen LLM scope. Every LLM lane is gated on a deterministic precondition, not a flag:
+Proves that removing the three deprecated LLM-toggle flags did not widen LLM scope.
+Every LLM lane is gated on a deterministic precondition, not a flag:
 
   TEI1 — _llm_link_edges source contains an early-exit after _llm_link_scan returns [].
   TEI2 — synth gRPC federation yields zero unresolved items → Tier-2 LLM never fires.
