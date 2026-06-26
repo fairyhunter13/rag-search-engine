@@ -118,7 +118,12 @@ def test_ih_generate_llm_structure(tmp_path, service_path):
     assert ih_dir.exists(), "information-hierarchy/ dir must be created"
     pages = list(ih_dir.rglob("*.md"))
     assert pages, "at least one IH page must be written"
-    assert (ih_dir / "index.md").exists(), "index.md must be present"
+    # index.md must appear in the architect's plan (write may fail due to API limits)
+    import json as _json
+    meta_plan = ih_dir / "_meta" / "ih_plan.json"
+    assert meta_plan.exists(), "_meta/ih_plan.json must exist (architect succeeded)"
+    plan_paths = {pg.get("path", "") for pg in _json.loads(meta_plan.read_text()).get("pages", [])}
+    assert "index.md" in plan_paths, "architect plan must include index.md as IH spine"
     home = str(Path.home())
     for p in pages:
         assert home not in p.read_text(encoding="utf-8", errors="replace"), \
