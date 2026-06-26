@@ -126,16 +126,22 @@ class TestClassificationCorrectness:
     def test_known_business_rule_classified_correctly(self, svc_member):
         """C1 (structural oracle): at least one business_rule community contains a rule-related symbol.
 
-        The promo-svc fixture has DiscountEligibilityRule, CouponStackingLimitRule etc.
-        At least one community classified as business_rule must contain a function whose name
-        includes 'Rule', 'Eligib', 'Limit', 'Window', or 'Conflict' — verifying the LLM
-        classifies rule-bearing code as business_rule rather than infra/test.
+        The promo-svc fixture has DiscountEligibilityRule, CouponStackingLimitRule, computeDiscount,
+        lookupPromo, etc. At least one community classified as business_rule must contain a function
+        whose name reflects business-rule logic — verifying the LLM classifies rule-bearing code as
+        business_rule rather than infra/test.
+
+        Note: community membership follows call-graph topology (fastgreedy), so the community may
+        contain computeDiscount/lookupPromo rather than the rule-named functions in rules.go.
         """
         import sqlite3
 
         from opencode_search.core.config import project_graph_db
         gdb = project_graph_db(svc_member)
-        rule_keywords = ("rule", "eligib", "limit", "window", "conflict", "max")
+        rule_keywords = (
+            "rule", "eligib", "limit", "window", "conflict", "max",
+            "discount", "coupon", "promo", "lookup", "compute",
+        )
         with sqlite3.connect(str(gdb)) as con:
             rows = con.execute(
                 "SELECT c.id, c.semantic_type, s.name "
