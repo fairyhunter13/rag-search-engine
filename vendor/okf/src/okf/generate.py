@@ -40,7 +40,30 @@ def _subprocess_env(config_dir: str) -> dict[str, str]:
 
 
 def _pick_profile() -> str | None:
-    return _PROFILES[0] if _PROFILES else None
+    """Pick the profile with the most headroom (checks usage-exact.json cache)."""
+    import time
+    best: str | None = None
+    best_util = 1.1
+    for p in _PROFILES:
+        creds = Path(p) / ".credentials.json"
+        if not creds.exists():
+            continue
+        cache = Path(p) / "usage-exact.json"
+        try:
+            if cache.exists():
+                data = json.loads(cache.read_text(encoding="utf-8"))
+                if time.time() - data.get("_ts", 0) < 300:
+                    util = max(data.get("five_hour_pct", 0.0), data.get("seven_day_pct", 0.0))
+                    if util < 1.0 and util < best_util:
+                        best_util = util
+                        best = p
+                    continue
+        except Exception:
+            pass
+        # No valid cache — assume available; take as fallback
+        if best is None:
+            best = p
+    return best
 
 
 _last_run_stderr: str = ""
@@ -101,6 +124,10 @@ def _is_generated(path: Path) -> bool:
         return False
 
 
+def _all_valid_profiles() -> list[str]:
+    return [p for p in _PROFILES if (Path(p) / ".credentials.json").exists()]
+
+
 def generate(
     project_path: str | Path,
     out_dir: str | Path | None = None,
@@ -114,11 +141,11 @@ def generate(
         out_dir = root / "docs" / "okf"
     out = Path(out_dir)
 
-    profile = _pick_profile()
-    if not profile:
+    valid = _all_valid_profiles()
+    if not valid:
         return {"written": [], "skipped": [], "errors": ["no_profile"], "version": OKF_VERSION}
 
-    # Phase 1: discover concepts via LLM
+    # Phase 1: discover concepts via LLM — try each profile until one succeeds
     prompt_discover = (
         "Analyze this repository and identify its key semantic concepts for an OKF v0.1 knowledge bundle. "
         "Output ONLY valid JSON with key 'concepts' (list of objects). "
@@ -130,7 +157,17 @@ def generate(
         "No /home/ or absolute paths.\n\n"
         "Analyze the repository structure and source files to identify the most important concepts."
     )
-    text = _run_claude(prompt_discover, MODEL_SONNET, [str(root)], profile)
+    # Prefer the usage-aware pick; fall back through remaining profiles on failure.
+    preferred = _pick_profile() or valid[0]
+    ordered = [preferred] + [p for p in valid if p != preferred]
+    text: str | None = None
+    profile = preferred
+    for p in ordered:
+        text = _run_claude(prompt_discover, MODEL_SONNET, [str(root)], p)
+        if text is not None:
+            profile = p
+            break
+
     concepts_data = _parse_json(text)
     if not concepts_data or "concepts" not in concepts_data:
         return {
