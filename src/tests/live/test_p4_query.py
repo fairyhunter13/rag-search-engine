@@ -67,8 +67,8 @@ def test_graph_callees_real_be():
     from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.graph_handler import callees
-    be = next((p.path for p in list_projects() if "astro-promo-be" in p.path and p.enabled), None)
-    assert be, "astro-promo-be must be registered (run P8)"
+    from tests.live._projects import service_member
+    be = service_member()
     gs = GraphStore(project_graph_db(be))
     result = callees("NewService", gs)
     gs.close()
@@ -82,8 +82,8 @@ def test_graph_narrative_and_trace_real_be():
     from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
     from opencode_search.query.graph_handler import impact_narrative, semantic_trace
-    be = next((p.path for p in list_projects() if "astro-promo-be" in p.path and p.enabled), None)
-    assert be, "astro-promo-be must be registered (run P8)"
+    from tests.live._projects import service_member
+    be = service_member()
     gs = GraphStore(project_graph_db(be))
     narrative = impact_narrative("Run", gs)
     trace = semantic_trace("NewService", "Run", gs)

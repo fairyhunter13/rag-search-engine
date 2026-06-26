@@ -13,7 +13,6 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from opencode_search.core.config import root_process_db
-from opencode_search.core.registry import list_projects
 from opencode_search.kb.bpre import reconstruct_processes
 
 pytestmark = pytest.mark.live
@@ -35,10 +34,9 @@ def synth_fed():
 
 @pytest.fixture(scope="module")
 def astro_root():
-    """Read-only reference to the live astro root (no reconstruct_processes calls here)."""
-    p = next((e.path for e in list_projects() if "astro-project" in e.path and e.enabled), None)
-    assert p, "astro-project must be registered and enabled"
-    return p
+    """Read-only reference to the live federation root (no reconstruct_processes calls here)."""
+    from tests.live._projects import federation_root
+    return federation_root()
 
 
 @pytest.fixture(scope="module")
@@ -50,17 +48,10 @@ def astro_members(astro_root):
 
 @pytest.fixture(scope="module")
 def process_db(synth_fed):
-    """Run reconstruct_processes once on the synthetic root (OSE_WIKI_LLM=0, GPU-free)."""
-    import os
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "0"
-    try:
+    """Run reconstruct_processes once on the synthetic root (no DeepSeek key — deterministic)."""
+    from unittest.mock import patch
+    with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
         count = reconstruct_processes(synth_fed.root)
-    finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
     db = root_process_db(synth_fed.root)
     assert db.exists(), "process_graph.db must be created"
     con = sqlite3.connect(str(db))
@@ -113,7 +104,7 @@ class TestCrossServiceResolution:
         pubsub = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='pubsub'").fetchone()[0]
         http = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind='http'").fetchone()[0]
         llm = con.execute("SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm'").fetchone()[0]
-        assert llm == 0, f"process_db runs with OSE_WIKI_LLM=0; no LLM edges expected; got {llm}"
+        assert llm == 0, f"process_db runs without DeepSeek key; no LLM edges expected; got {llm}"
         assert grpc + pubsub + http >= 1, (
             f"Expected ≥1 deterministic edge; grpc={grpc} pubsub={pubsub} http={http}"
         )
@@ -126,26 +117,13 @@ class TestCrossServiceResolution:
         if entries > 0:
             assert grpc > 0, f"gRPC entries ({entries}) present but no gRPC edges emitted"
 
-    def test_A5d_llm_linkage_default_on(self, process_db):
+    def test_A5d_no_llm_edges_when_key_absent(self, process_db):
         con, _ = process_db
         llm = con.execute(
             "SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm'"
         ).fetchone()[0]
-        # process_db sets OSE_WIKI_LLM=0 which gates ALL LLM via _bpre_llm_on(); so 0 LLM edges.
-        assert llm == 0, f"OSE_WIKI_LLM=0 gates LLM edges; got {llm}"
-        import os
-
-        from opencode_search.kb.bpre import _bpre_llm_link_on
-        saved = os.environ.pop("OSE_BPRE_LLM_LINK", None)
-        try:
-            assert _bpre_llm_link_on(), "OSE_BPRE_LLM_LINK default must be ON"
-            os.environ["OSE_BPRE_LLM_LINK"] = "0"
-            assert not _bpre_llm_link_on(), "OSE_BPRE_LLM_LINK=0 must opt-out"
-        finally:
-            if saved is not None:
-                os.environ["OSE_BPRE_LLM_LINK"] = saved
-            else:
-                os.environ.pop("OSE_BPRE_LLM_LINK", None)
+        # process_db pops DEEPSEEK_API_KEY; all LLM lanes are suppressed by key-absence.
+        assert llm == 0, f"No DeepSeek key → 0 LLM edges; got {llm}"
 
 
 # ─── Test B: Process tracing ───────────────────────────────────────────────────
@@ -311,29 +289,27 @@ class TestMetamorphicDeterminism:
     @pytest.mark.slow
     def test_F1_deterministic_rerun(self, astro_root, process_db):
         """Full reconstruction re-run — slow because it re-calls reconstruct_processes."""
-        import os
-        os.environ["OSE_WIKI_LLM"] = "0"
+        from unittest.mock import patch
         con, _ = process_db
-        before = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
-        reconstruct_processes(astro_root)
-        after = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
+        with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+            before = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
+            reconstruct_processes(astro_root)
+            after = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
         assert set(before.keys()) == set(after.keys()), "Re-run produced different process IDs"
         for pid in before:
             assert before[pid] == after[pid], f"step_count changed on re-run for {pid}"
-        del os.environ["OSE_WIKI_LLM"]
 
     @pytest.mark.slow
     def test_F2_bpmn_idempotent(self, astro_root, process_db):
         """BPMN idempotency — slow because it re-calls reconstruct_processes."""
-        import os
-        os.environ["OSE_WIKI_LLM"] = "0"
+        from unittest.mock import patch
         con, _ = process_db
-        before = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
-        reconstruct_processes(astro_root)
-        after = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
+        with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+            before = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
+            reconstruct_processes(astro_root)
+            after = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
         for pid in before:
             assert before.get(pid) == after.get(pid), f"BPMN changed on re-run for {pid}"
-        del os.environ["OSE_WIKI_LLM"]
 
 
 # ─── Test G: HR4 + resource guards ───────────────────────────────────────────

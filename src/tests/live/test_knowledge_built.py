@@ -26,15 +26,13 @@ _HDR = {"Content-Type": "application/json"}
 _SYM_THRESHOLD = 50
 
 
-def _reg(substr: str) -> str:
-    from opencode_search.core.registry import list_projects
-    return next((e.path for e in list_projects() if substr in e.path and e.enabled), "")
-
+from tests.live._projects import federation_root as _federation_root
+from tests.live._projects import standalone_project as _standalone_project
 
 _PROJECTS = {
     "ose": str(Path(__file__).resolve().parents[3]),
-    "astro": _reg("astro-project"),
-    "payment": _reg("payment-gateway"),
+    "federation": _federation_root(),
+    "standalone": _standalone_project(),
 }
 
 
@@ -58,9 +56,9 @@ def status_by_key() -> dict[str, dict]:
 class TestKnowledgeBuiltCorrectly:
     """T1: every sufficiently large member must have ≥1 L1 community."""
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_named_root_communities_positive(self, key: str, status_by_key: dict) -> None:
-        """T1a: Named roots with ≥50 symbols must have ≥1 community."""
+        """T1a: Indexed roots with ≥50 symbols must have ≥1 community."""
         s = status_by_key.get(key, {})
         if s.get("symbols", 0) < _SYM_THRESHOLD:
             return  # below threshold — legitimately no communities required
@@ -69,13 +67,13 @@ class TestKnowledgeBuiltCorrectly:
             "detect_communities was skipped (JSON-race victim)"
         )
 
-    def test_astro_members_community_coverage(self, status_by_key: dict) -> None:
-        """T1b: Every astro member with ≥50 symbols must have ≥1 community.
+    def test_federation_members_community_coverage(self, status_by_key: dict) -> None:
+        """T1b: Every federation member with ≥50 symbols must have ≥1 community.
 
         Catches the composition-level gap where a single non-enriched member
         silently degrades aggregate overview/ask quality (arXiv 2606.02019).
         """
-        members = status_by_key.get("astro", {}).get("members", [])
+        members = status_by_key.get("federation", {}).get("members", [])
         violations = [
             f"{m['path']} (sym={m['symbols']}, comm={m['communities']})"
             for m in members

@@ -8,8 +8,8 @@ most of these are *guarantees*, not probabilistic checks. Methods:
   FaithLens arXiv 2512.20182, which an LLM-cited wiki can only approximate).
 - mermaid validation (mermaid-validator; MermaidSeqBench arXiv 2511.14967).
 
-Fast tests build with OSE_WIKI_LLM=0 (deterministic, no DeepSeek, zero GPU). Slow tests build with
-real DeepSeek to check narrative faithfulness + the API surface. Requires daemon at :8765 + an
+Fast tests build deterministically (no DeepSeek — wiki prose is template-based, GPU-free).
+Slow tests check narrative faithfulness + the API surface. Requires daemon at :8765 + an
 enriched project.
 """
 import os
@@ -55,20 +55,12 @@ def _federated_root() -> str | None:
 
 
 def _build(project: str, out: Path, llm: bool = False) -> int:
-    """Build a wiki into `out`; llm=False forces deterministic templated prose (no DeepSeek)."""
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "1" if llm else "0"
+    """Build a wiki into `out`. llm=False (default) uses no DeepSeek (wiki prose is template-based)."""
+    gs = GraphStore(project_graph_db(project))
     try:
-        gs = GraphStore(project_graph_db(project))
-        try:
-            return build_wiki(gs, out)
-        finally:
-            gs.close()
+        return build_wiki(gs, out)
     finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
+        gs.close()
 
 
 def _project_root(project: str) -> str:
@@ -226,7 +218,7 @@ def test_index_groups_by_semantic_type(wiki):
 
 
 def test_deterministic_build_is_byte_identical(tmp_path_factory):
-    """W10 (determinism): with OSE_WIKI_LLM=0, two builds are byte-identical (no LLM variance)."""
+    """W10 (determinism): two wiki builds are byte-identical (template-based, no LLM variance)."""
     project = _enriched_project()
     assert project
     a = tmp_path_factory.mktemp("det_a")
@@ -254,12 +246,12 @@ def test_wiki_builder_uses_no_embedder_or_local_llm():
 
 
 def test_build_without_llm_builds_successfully(tmp_path_factory):
-    """W12 (graceful degradation): wiki builds with OSE_WIKI_LLM=0 — no LLM required."""
+    """W12: wiki builds without LLM (template-based prose, always deterministic)."""
     project = _enriched_project()
     assert project
     out = tmp_path_factory.mktemp("nollm")
     n = _build(project, out, llm=False)
-    assert n > 1, "wiki must build with the LLM kill-switch on"
+    assert n > 1, "wiki must build from template prose without any cloud LLM"
     assert (out / "index.md").exists(), "index.md must always be generated"
 
 
@@ -274,7 +266,7 @@ def test_standalone_project_has_no_federation_page():
 def test_federated_root_gets_federation_index():
     """W13: a federated root (>1 member) gets federation.md naming members; rollup == union."""
     root = _federated_root()
-    assert root, "no federated root registered (expected astro-project)"
+    assert root, "no federated root registered — register a project with federation members"
     assert build_federated_index(root) == 1
     fed = (project_wiki_dir(root) / "federation.md").read_text(encoding="utf-8")
     per_member = federated_map(root, lambda gs: dict(gs._con.execute(

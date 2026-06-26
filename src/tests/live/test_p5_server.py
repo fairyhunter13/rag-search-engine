@@ -103,19 +103,14 @@ def test_live_daemon_has_mcp_route(live_client):
 def test_detect_patterns_llm_frameworks():
     """P9.2: detect_patterns() derives frameworks via LLM, not _FW static dict."""
 
-    from opencode_search.core.registry import list_projects
     from opencode_search.kb.patterns import detect_patterns
+    from tests.live._projects import federation_root
 
-    astro = next(
-        (p.path for p in list_projects()
-         if "astro-project" in p.path and "promo" not in p.path and p.enabled),
-        None,
-    )
-    assert astro is not None, "astro-project must be registered (run P8)"
-    result = detect_patterns(Path(astro))
+    proj = federation_root()
+    result = detect_patterns(Path(proj))
     assert "frameworks" in result
     assert isinstance(result["frameworks"], list)
-    # astro-project has astro + react deps → LLM should name ≥1 framework
+    # the federation root should have framework deps → LLM should name ≥1 framework
     assert len(result["frameworks"]) >= 1
 
 
@@ -156,17 +151,12 @@ def test_index_tool_e2e(safe_tmp_path):
     assert not Path(idx).exists(), "Index dir not deleted after remove"
 
 
-def test_overview_all_whats_real_astro():
-    """P10.4: every what= value returns parseable non-empty data on real astro-project."""
-    from opencode_search.core.registry import list_projects
+def test_overview_all_whats_real_federation_root():
+    """P10.4: every what= value returns parseable non-empty data on the real federation root."""
     from opencode_search.server.mcp import overview as overview_tool
+    from tests.live._projects import federation_root
 
-    astro = next(
-        (p.path for p in list_projects()
-         if "astro-project" in p.path and "promo" not in p.path and p.enabled),
-        None,
-    )
-    assert astro, "astro-project must be registered (run P8)"
+    astro = federation_root()
     whats = [
         "structure", "communities", "status", "import_cycles",
         "surprising_connections", "suggested_questions",
@@ -179,16 +169,9 @@ def test_overview_all_whats_real_astro():
 
 
 def test_service_mesh_be_nonempty():
-    """Federation service_mesh must detect gRPC services from the astro proto layer."""
-    from opencode_search.core.registry import list_projects
-    root = next(
-        (p.path for p in list_projects()
-         if "astro-project" in p.path and p.enabled and getattr(p, "federation", None)),
-        None,
-    )
-    assert root, (
-        "federated astro-project not registered — run Workstream E (re-index) first"
-    )
+    """Federation service_mesh must detect gRPC/HTTP services from the federation root."""
+    from tests.live._projects import federation_root
+    root = federation_root()
     from opencode_search.daemon.federation import expand_federation
     from opencode_search.server._overview import _detect_services
     svcs = [s for p in expand_federation(root) for s in _detect_services(p)]

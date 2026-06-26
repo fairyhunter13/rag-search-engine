@@ -40,17 +40,15 @@ python -m compileall -q src/opencode_search
 
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
 
-**Key env flags** (BPRE resolution ladder):
-- `OSE_BPRE_LLM_LINK=0` — disable Tier-2 SEA-style LLM edge linkage (default ON; DeepSeek key required)
-- `OSE_BPRE_LLM_FILE=0` — disable Tier-3 whole-file LLM on parse-error files (default ON; opt-out)
+**Key env vars** (BPRE resolution ladder):
 - `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
-- `OSE_WIKI_LLM=0` — disable wiki L2 DeepSeek narrative (deterministic rebuild)
+- All LLM lanes (Tier-2 edge linkage, Tier-3 whole-file, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
 ## GPU-only enforcement
 
-**CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (RTX 5080 / CUDA).
+**CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
 ## Project quick reference

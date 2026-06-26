@@ -8,8 +8,8 @@
 
 | Lane | Engine | Used for | CPU fallback? |
 |---|---|---|---|
-| **Embeddings + rerank** | **GPU** (FastEmbed/ONNX/CUDA, RTX 5080) | Vector search (`search`) + cross-encoder rerank ONLY | **Fatal** — raises at startup |
-| **KB enrichment** | **DeepSeek** (cloud, `deepseek-v4-flash`) | Community narration · wiki pages · BPRE process linkage — always-on; opt-out kill-switches only (`OSE_WIKI_LLM=0`) | N/A — cloud |
+| **Embeddings + rerank** | **GPU** (FastEmbed/ONNX/CUDA) | Vector search (`search`) + cross-encoder rerank ONLY | **Fatal** — raises at startup |
+| **KB enrichment** | **DeepSeek** (cloud, `deepseek-v4-flash`) | Community narration · wiki pages · BPRE process linkage — ON when `DEEPSEEK_API_KEY` present; suppressed naturally when absent | N/A — cloud |
 | **Dashboard chat** | **claude-haiku-4-5** | Interactive chat answers via `/api/chat` | N/A — cloud |
 | **Doc-tooling** | **`claude -p`** (Haiku 4.5 default / Sonnet 4.6 for synthetic pages) | `docgen` IH authoring + `okf` OKF bundle authoring | N/A — cloud |
 
@@ -44,8 +44,8 @@ Two account slots supported (primary + secondary, for rate-limit failover):
 ```python
 # vendor/docgen/src/ose_docgen/config.py
 CLAUDE_PROFILES = [
-    os.path.expanduser("~/.claude"),   # primary account (default)
-    os.path.expanduser("~/.claude1"),  # secondary (failover on 429)
+    os.path.expanduser("~/.claude"),          # primary account (default)
+    os.path.expanduser("~/.claude-account1"), # secondary (failover on 429)
 ]
 ```
 

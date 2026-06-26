@@ -3,7 +3,7 @@
 Run separately (Playwright conflicts with asyncio_mode=auto):
   .venv/bin/pytest src/tests/live/test_browser.py --browser chromium -q
 
-Depends on P8: real indexed astro-project + astro-promo-be so tiles show data.
+Requires at least one indexed project registered so tiles show data.
 Zero mocks — real daemon, real chromium, real SSE, real KB.
 """
 from __future__ import annotations

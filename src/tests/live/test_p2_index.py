@@ -91,47 +91,42 @@ def test_indexer_counts(embedder):
 
 # ── P10.1: search scopes on REAL indexed repos ────────────────────────────────
 
-def _get_project(tag: str) -> str | None:
-    from opencode_search.core.registry import list_projects
-    return next((p.path for p in list_projects() if tag in p.path and p.enabled), None)
-
-
-def test_search_code_scope_real_astro(embedder):
+def test_search_code_scope_real_federation_root(embedder):
     from tree_sitter_language_pack import has_language
 
     from opencode_search.core.config import project_vector_db
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search
-    astro = _get_project("astro-project")
-    assert astro and "promo" not in astro, "astro-project must be registered (run P8)"
-    vs = VectorStore(project_vector_db(astro))
+    from tests.live._projects import federation_root
+    proj = federation_root()
+    vs = VectorStore(project_vector_db(proj))
     results = search("component rendering", embedder, vs, scope="code", top_k=5)
     vs.close()
     assert results and all(has_language(r.get("language", "")) for r in results)
 
 
-def test_search_code_scope_real_be(embedder):
+def test_search_code_scope_real_service_member(embedder):
     from opencode_search.core.config import project_vector_db
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search
-    be = _get_project("astro-promo-be")
-    assert be, "astro-promo-be must be registered (run P8)"
-    vs = VectorStore(project_vector_db(be))
+    from tests.live._projects import service_member
+    proj = service_member()
+    vs = VectorStore(project_vector_db(proj))
     results = search("request handler routing", embedder, vs, scope="code", top_k=5)
     vs.close()
-    assert results and any(r.get("language") == "go" for r in results)
+    assert results, "search on service member returned no results"
 
 
 def test_search_all_scope_returns_results(embedder):
     from opencode_search.core.config import project_vector_db
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search
-    astro = _get_project("astro-project")
-    assert astro and "promo" not in astro, "astro-project must be registered (run P8)"
-    vs = VectorStore(project_vector_db(astro))
+    from tests.live._projects import federation_root
+    proj = federation_root()
+    vs = VectorStore(project_vector_db(proj))
     results = search("configuration", embedder, vs, scope="all", top_k=10)
     vs.close()
-    assert results, "scope=all returned no results on real indexed astro-project"
+    assert results, "scope=all returned no results on real indexed federation root"
 
 
 def test_search_top_result_relevant(embedder):

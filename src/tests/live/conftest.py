@@ -3,6 +3,10 @@ import contextlib
 import pytest
 import requests
 
+from tests.live._projects import federation_root as _federation_root
+from tests.live._projects import service_member as _service_member
+from tests.live._projects import standalone_project as _standalone_project
+
 _DAEMON = "http://127.0.0.1:8765"
 
 
@@ -85,6 +89,21 @@ def project_with_communities():
             if con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0] >= 3:
                 return p.path
     pytest.fail("No enabled project with ≥3 L1 communities — run _enrich_project first")
+
+
+@pytest.fixture(scope="session")
+def federation_root_path() -> str:
+    return _federation_root()
+
+
+@pytest.fixture(scope="session")
+def standalone_project_path() -> str:
+    return _standalone_project()
+
+
+@pytest.fixture(scope="session")
+def service_member_path() -> str:
+    return _service_member()
 
 
 @pytest.fixture()

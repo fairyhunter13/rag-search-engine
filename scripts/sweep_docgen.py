@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Sweep: remove ose-docgen-generated docs/ from all repos under common roots.
+"""Sweep: remove ose-docgen-generated docs/ from all repos under specified roots.
 
 Finds every docs/_meta/provenance.json marker and calls clean_generated() on
 that docs/ tree. Human-authored docs are preserved byte-for-byte. Idempotent.
 
 Usage:
-    python scripts/sweep_docgen.py [--dry-run]
+    python scripts/sweep_docgen.py [--root PATH ...] [--dry-run]
+
+    --root PATH   One or more directory roots to search (repeatable).
+                  Falls back to OSE_SWEEP_ROOTS env var (colon-separated), then cwd.
+
+Examples:
+    python scripts/sweep_docgen.py --root ~/git/github.com --root ~/go/src/github.com
+    OSE_SWEEP_ROOTS=/path/to/repos python scripts/sweep_docgen.py --dry-run
+    python scripts/sweep_docgen.py --dry-run  # sweeps current directory
 """
 from __future__ import annotations
 
@@ -20,18 +28,22 @@ _VENDOR = _HERE / "vendor" / "docgen" / "src"
 if _VENDOR.exists() and str(_VENDOR) not in sys.path:
     sys.path.insert(0, str(_VENDOR))
 
-_SEARCH_ROOTS = [
-    Path.home() / "git" / "github.com",
-    Path.home() / "go" / "src" / "github.com",
-]
-
 _DOCS_DIR_NAME = os.environ.get("OSE_DOCGEN_DIR", "docs")
 _META_MARKER = "_meta/provenance.json"
 
 
-def _find_generated_docs_dirs() -> list[Path]:
+def _resolve_roots(cli_roots: list[str]) -> list[Path]:
+    if cli_roots:
+        return [Path(r).expanduser().resolve() for r in cli_roots]
+    env = os.environ.get("OSE_SWEEP_ROOTS", "")
+    if env:
+        return [Path(r).expanduser().resolve() for r in env.split(":") if r.strip()]
+    return [Path.cwd()]
+
+
+def _find_generated_docs_dirs(roots: list[Path]) -> list[Path]:
     found: list[Path] = []
-    for root in _SEARCH_ROOTS:
+    for root in roots:
         if not root.exists():
             continue
         for marker in root.rglob(f"{_DOCS_DIR_NAME}/{_META_MARKER}"):
@@ -41,9 +53,12 @@ def _find_generated_docs_dirs() -> list[Path]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be removed without deleting anything.")
+    parser.add_argument("--root", dest="roots", metavar="PATH", action="append", default=[],
+                        help="Root directory to search (repeatable). Default: OSE_SWEEP_ROOTS env or cwd.")
     args = parser.parse_args()
 
     try:
@@ -52,7 +67,8 @@ def main() -> None:
         print("ERROR: vendor/docgen/src not found — run from the opencode-search-engine root.")
         sys.exit(1)
 
-    docs_dirs = _find_generated_docs_dirs()
+    roots = _resolve_roots(args.roots)
+    docs_dirs = _find_generated_docs_dirs(roots)
     if not docs_dirs:
         print("No generated docs trees found — nothing to sweep.")
         return

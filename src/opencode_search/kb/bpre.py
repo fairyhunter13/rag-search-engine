@@ -7,7 +7,7 @@ D6 synthesis (BPMN 2.0 XML + sequenceDiagram + DeepSeek narrative)
 Writes *only* to process_graph.db at the federation root (root_process_db).
 Never writes to any per-member graph.db (HR4).  Deterministic pass (D2-D4,
 BPMN, mermaid) = GPU-free.  Cloud DeepSeek only for D5 rules + D6 narrative;
-suppressed when OSE_WIKI_LLM=0 or key absent.
+suppressed when DEEPSEEK_API_KEY is absent.
 """
 from __future__ import annotations
 
@@ -136,10 +136,6 @@ def _rel_path(file: str, root: str) -> str:
         return os.path.basename(file)
 
 
-def _bpre_llm_on() -> bool:
-    return os.environ.get("OSE_WIKI_LLM", "1") != "0"
-
-
 def _proc_sig(name: str, services_json: str, steps: list) -> str:
     """Content hash over (process name, sorted services, ordered step tuples)."""
     try:
@@ -152,9 +148,7 @@ def _proc_sig(name: str, services_json: str, steps: list) -> str:
 
 
 def _narrative_incomplete(con: sqlite3.Connection) -> bool:
-    """True iff LLM is on + key present + any process_artifact has an empty narrative."""
-    if not _bpre_llm_on():
-        return False
+    """True iff DeepSeek key present + any process_artifact has an empty narrative."""
     try:
         from opencode_search.graph.llm import deepseek_key
         if not deepseek_key():
@@ -569,15 +563,6 @@ def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
     return count
 
 
-def _bpre_llm_link_on() -> bool:
-    return os.environ.get("OSE_BPRE_LLM_LINK", "1") != "0"
-
-
-def _bpre_llm_file_on() -> bool:
-    """Gate for Tier-3 whole-file LLM (parse-error files only)."""
-    return os.environ.get("OSE_BPRE_LLM_FILE", "1") != "0" and _bpre_llm_on()
-
-
 def _content_hash(content: str) -> str:
     """XXH3-compatible hash via hashlib (stable key for LLM verdict caching)."""
     return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()[:20]
@@ -675,8 +660,6 @@ def _llm_link_resolve(
 
 
 def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurface) -> None:
-    if not (_bpre_llm_link_on() and _bpre_llm_on()):
-        return
     from opencode_search.graph.llm import deepseek_key
     if not deepseek_key():
         return
@@ -843,7 +826,7 @@ def _synthesize_artifacts(con: sqlite3.Connection,
         ).fetchall()]
         procs_data.append((proc_id, name, services_json, steps))
     # Delta narration: carry over unchanged narratives; only narrate the rest.
-    if old_narr and _bpre_llm_on():
+    if old_narr:
         carried: dict[int, str] = {}
         need_narr: list[tuple] = []
         for item in procs_data:
@@ -856,7 +839,7 @@ def _synthesize_artifacts(con: sqlite3.Connection,
         new_narr = _generate_narratives_batch(need_narr) if need_narr else {}
         narratives: dict = {**carried, **new_narr}
     else:
-        narratives = _generate_narratives_batch(procs_data) if _bpre_llm_on() else {}
+        narratives = _generate_narratives_batch(procs_data)
     for proc_id, name, _sjson, steps in procs_data:
         con.execute("INSERT OR REPLACE INTO process_artifacts VALUES (?,?,?,?)",
                     (proc_id, narratives.get(proc_id, ""),

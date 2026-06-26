@@ -14,15 +14,14 @@ Cross-project knowledge-base quality audit: hierarchy depth, enrichment coverage
 3. Report a table:
 
 ```
-Project               Files    Chunks   Communities  Levels  Enriched  Storage  Watcher
-astro-project         20064    97480    1761         1-3     100%      1.2GB    watching
-opencode-search-engine  890    11200     312         1-2     100%      185MB    watching
+Project               Files    Chunks   Communities  Enriched  Storage  Watcher
+your-federation-root  ...      ...      ...          100%      ...      watching
+opencode-search-engine ...     ...      ...          100%      ...      watching
 ...
 ```
 
 4. Flag any project with:
-   - `level_max == 1`: needs `build(action="hierarchy")` then `build(action="enrich_hierarchy")`
-   - `enrichment_pct < 100%`: needs `build(action="enrich")` or `build(action="enrich_hierarchy")`
+   - `enrichment_pct < 100%`: needs KB enrichment trigger via CLI or dashboard
    - Watcher stopped: needs daemon restart or `manage(action="reload")`
    - Storage > 3GB: candidate for `manage(action="vacuum")`
 

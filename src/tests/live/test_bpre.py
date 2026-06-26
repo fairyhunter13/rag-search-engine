@@ -24,16 +24,14 @@ def _gs(project_path: str) -> GraphStore:
 
 @pytest.fixture(scope="module")
 def astro_campaign():
-    p = next((p.path for p in list_projects() if "astro-campaign-be" in p.path and p.enabled), None)
-    assert p, "astro-campaign-be must be registered and enabled"
-    return p
+    from tests.live._projects import service_member
+    return service_member()
 
 
 @pytest.fixture(scope="module")
 def astro_promo():
-    p = next((p.path for p in list_projects() if "astro-promo-be" in p.path and p.enabled), None)
-    assert p, "astro-promo-be must be registered and enabled"
-    return p
+    from tests.live._projects import service_member
+    return service_member()
 
 
 class TestPhase0VocabularyAndBackfill:
@@ -159,7 +157,7 @@ class TestClassificationCorrectness:
             ).fetchone()
         finally:
             gs.close()
-        assert row, "No community containing 'Clash' in astro-promo-be"
+        assert row, "No community containing 'Clash' in the service member"
         assert row[1] in ("business_rule", "business_process"), (
             f"'{row[0]}' classified as '{row[1]}' — expected business_rule or business_process."
         )
@@ -181,7 +179,7 @@ class TestClassificationCorrectness:
             ).fetchall()
         finally:
             gs.close()
-        assert rows, "No community containing 'Management' in astro-promo-be"
+        assert rows, "No community containing 'Management' in the service member"
         for title, stype in rows:
             assert stype in ("business_process", "business_rule", "feature", "domain", "utility"), (
                 f"'{title}' classified as '{stype}' — unexpected for a Management community; "

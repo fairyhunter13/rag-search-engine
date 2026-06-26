@@ -56,14 +56,9 @@ def test_p20_capabilities_e2e(safe_tmp_path):
         assert r.returncode == 0, f"D: --check failed:\n{r.stdout}\n{r.stderr}"
 
         # E: MCP ask returns non-empty composed context from the indexed project
-        from opencode_search.core.registry import list_projects
         from opencode_search.server.mcp import ask as ask_tool
-        real_proj = next(
-            (p.path for p in list_projects()
-             if "astro-project" in p.path and "promo" not in p.path and p.enabled),
-            None,
-        )
-        assert real_proj, "E: astro-project must be registered and enabled"
+        from tests.live._projects import federation_root
+        real_proj = federation_root()
         context = asyncio.run(ask_tool("How does authentication work?", real_proj, "all"))
         assert isinstance(context, str) and len(context) > 20, (
             f"E: MCP ask returned empty/tiny context: {context!r}"

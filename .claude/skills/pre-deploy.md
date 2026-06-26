@@ -29,12 +29,12 @@ GPU must be present. If embedding fails with "CPU fallback" — STOP, do not dep
 If any test fails — investigate and fix before proceeding.
 
 ### 4. MCP tool surface check (use opencode-search tools)
-Run these 5 checks against astro-project:
-- `search("payment handler")` → must return results
+Run these 5 checks against your indexed project:
+- `search("request handler")` → must return results
 - `ask("how does auth work", scope="all")` → must return non-empty answer
 - `graph("main", relation="callers")` → must return graph nodes
-- `overview(what="structure")` → must show 20000+ files, 4500+ communities
-- `federation("<ASTRO_PROJECT_PATH>")` → must list 24+ members
+- `overview(what="structure")` → must show non-zero files and communities
+- `overview(what="status")` → must show kb_state=ready
 
 ### 5. Lint check
 ```bash

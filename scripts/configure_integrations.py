@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Configure all system integrations for opencode-search MCP tools.
 
-Writes/verifies system prompt blocks and MCP entries across the config trees:
-  claude (main), claude-account1, claude-account2, hermes,
-  opencode-default, opencode-personal.  (Codex support removed.)
+Writes/verifies system prompt blocks and MCP entries across the config trees.
+Adapts to whatever tool ecosystem is present (claude profiles, opencode, hermes).
+(Codex support removed.)
 
 Usage:
     .venv/bin/python scripts/configure_integrations.py           # configure + verify
@@ -388,8 +388,7 @@ _BASH_ALIASES_SENTINEL_END   = "# [opencode-search-aliases:end]"
 _BASH_ALIASES_COMMENT = """\
 # opencode-search shell helpers (managed by configure_integrations.py):
 #   ocs            — opencode-search CLI entry point
-#   ocs-index PATH — index + build FULL KB (entity enrichment + hierarchy + wiki)
-#   ocp / ocd      — opencode-personal / opencode-default profiles
+#   ocs-index PATH — index + build KB (entity enrichment + wiki)
 #   ocs-dash       — open the search-engine dashboard"""
 
 
@@ -471,25 +470,51 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
 
 _H = Path.home()
 
-_SYSTEM_PROMPT_TARGETS: list[tuple[str, Path, str]] = [
-    # (type, path, label)
-    ("claude", _H / ".claude" / "CLAUDE.md", "claude(main)/CLAUDE.md"),
-    ("claude", _H / ".claude-account1" / "CLAUDE.md", "claude(account1)/CLAUDE.md"),
-    ("claude", _H / ".claude-account2" / "CLAUDE.md", "claude(account2)/CLAUDE.md"),
-    ("agents", _H / ".config" / "opencode" / "AGENTS.md", "opencode-default/AGENTS.md"),
-    ("agents", _H / ".config" / "opencode-personal" / "opencode" / "AGENTS.md", "opencode-personal/AGENTS.md"),
-    ("hermes_agent", _H / ".hermes" / "config.yaml", "hermes/agent_system_prompt"),
-]
+def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path, str]]]:
+    """Build targets dynamically — adapts to the directories present on this machine.
 
-_MCP_TARGETS: list[tuple[str, Path, str]] = [
-    ("settings", _H / ".claude" / "settings.json", "claude(main)/settings.json"),
-    ("settings", _H / ".claude-account1" / "settings.json", "claude(account1)/settings.json"),
-    ("settings", _H / ".claude-account2" / "settings.json", "claude(account2)/settings.json"),
-    ("hermes", _H / ".hermes" / "config.yaml", "hermes/config.yaml"),
-    ("opencode", _H / ".config" / "opencode" / "opencode.jsonc", "opencode-default/opencode.jsonc"),
-    ("opencode", _H / ".config" / "opencode-personal" / "opencode" / "opencode.jsonc",
-     "opencode-personal/opencode.jsonc"),
-]
+    Extra profiles can be added via OSE_INTEGRATION_EXTRA_PROFILES (colon-separated
+    CLAUDE.md paths). Run with OSE_INTEGRATION_EXTRA_PROFILES=~/.custom/CLAUDE.md to
+    include additional profiles.
+    """
+    sys_t: list[tuple[str, Path, str]] = [
+        ("claude", _H / ".claude" / "CLAUDE.md", "claude(main)/CLAUDE.md"),
+    ]
+    mcp_t: list[tuple[str, Path, str]] = [
+        ("settings", _H / ".claude" / "settings.json", "claude(main)/settings.json"),
+    ]
+    for idx in range(1, 10):
+        d = _H / f".claude-account{idx}"
+        if d.exists():
+            lbl = f"claude(account{idx})"
+            sys_t.append(("claude", d / "CLAUDE.md", f"{lbl}/CLAUDE.md"))
+            mcp_t.append(("settings", d / "settings.json", f"{lbl}/settings.json"))
+    oc_default = _H / ".config" / "opencode"
+    if oc_default.exists():
+        sys_t.append(("agents", oc_default / "AGENTS.md", "opencode-default/AGENTS.md"))
+        mcp_t.append(("opencode", oc_default / "opencode.jsonc", "opencode-default/opencode.jsonc"))
+    cfg = _H / ".config"
+    if cfg.exists():
+        for d in sorted(cfg.iterdir()):
+            if d.is_dir() and d.name.startswith("opencode-") and d.name != "opencode":
+                sys_t.append(("agents", d / "opencode" / "AGENTS.md", f"{d.name}/AGENTS.md"))
+                mcp_t.append(("opencode", d / "opencode" / "opencode.jsonc", f"{d.name}/opencode.jsonc"))
+    hermes = _H / ".hermes" / "config.yaml"
+    if hermes.parent.exists():
+        sys_t.append(("hermes_agent", hermes, "hermes/agent_system_prompt"))
+        mcp_t.append(("hermes", hermes, "hermes/config.yaml"))
+    for raw in os.environ.get("OSE_INTEGRATION_EXTRA_PROFILES", "").split(":"):
+        p = raw.strip()
+        if p:
+            path = Path(p).expanduser()
+            if path.parent.exists():
+                lbl = str(path.relative_to(_H)) if path.is_relative_to(_H) else p
+                sys_t.append(("claude", path, lbl))
+                mcp_t.append(("settings", path.parent / "settings.json", f"{lbl[:-10]}/settings.json"))
+    return sys_t, mcp_t
+
+
+_SYSTEM_PROMPT_TARGETS, _MCP_TARGETS = _build_targets()
 
 def verify_all() -> list[ConfigResult]:
     results: list[ConfigResult] = []

@@ -91,20 +91,19 @@ def test_maintenance_vacuums_bloated_project_db():
         shutil.rmtree(proj_dir, ignore_errors=True)
 
 
-def test_payment_gateway_vectors_db_not_bloated():
-    """Regression: payment-gateway vectors.db freelist must stay below threshold after reclaim."""
+def test_standalone_vectors_db_not_bloated():
+    """Regression: standalone project vectors.db freelist must stay below threshold after reclaim."""
     from opencode_search.core.config import project_vector_db
-    from opencode_search.core.registry import list_projects
+    from tests.live._projects import standalone_project
 
-    for entry in list_projects():
-        if "payment" in entry.path.lower() and entry.enabled:
-            vdb = project_vector_db(entry.path)
-            if not vdb.exists():
-                continue
-            with sqlite3.connect(str(vdb)) as con:
-                fl = con.execute("PRAGMA freelist_count").fetchone()[0]
-                ps = con.execute("PRAGMA page_size").fetchone()[0]
-            bloat_mb = fl * ps // (1024 * 1024)
-            assert fl * ps <= _THRESHOLD, (
-                f"payment-gateway vectors.db still bloated: {bloat_mb}MB freelist")
-            return
+    entry_path = standalone_project()
+    vdb = project_vector_db(entry_path)
+    if not vdb.exists():
+        return
+    with sqlite3.connect(str(vdb)) as con:
+        fl = con.execute("PRAGMA freelist_count").fetchone()[0]
+        ps = con.execute("PRAGMA page_size").fetchone()[0]
+    bloat_mb = fl * ps // (1024 * 1024)
+    assert fl * ps <= _THRESHOLD, (
+        f"standalone project vectors.db still bloated: {bloat_mb}MB freelist"
+    )

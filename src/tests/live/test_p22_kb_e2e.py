@@ -15,17 +15,14 @@ pytestmark = pytest.mark.live
 _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
 
-def _reg(substr: str, default: str = "") -> str:
-    """Resolve a registered enabled project path by substring (no hardcoded device paths)."""
-    from opencode_search.core.registry import list_projects
-    return next((e.path for e in list_projects() if substr in e.path and e.enabled), default)
+from tests.live._projects import federation_root as _federation_root
+from tests.live._projects import standalone_project as _standalone_project
 
-
-# Derive OSE root from this file's location; resolve other projects from the live registry.
+# Derive OSE root from this file's location; resolve other projects by capability.
 _PROJECTS = {
     "ose": str(Path(__file__).resolve().parents[3]),
-    "astro": _reg("astro-project"),
-    "payment": _reg("payment-gateway"),
+    "federation": _federation_root(),
+    "standalone": _standalone_project(),
 }
 
 
@@ -75,7 +72,7 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
 # S5: E2E MCP round-trip for 3 named projects
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
 def test_e2e_status_has_required_fields(live_client, proj_key):
     """S5a: overview(status) returns required fields for each named project."""
     project = _PROJECTS[proj_key]
@@ -88,7 +85,7 @@ def test_e2e_status_has_required_fields(live_client, proj_key):
     )
 
 
-@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
 def test_e2e_no_l1_placeholders(live_client, proj_key):
     """S5b: L1 communities must not contain 'Domain N' placeholder titles."""
     project = _PROJECTS[proj_key]
@@ -100,7 +97,7 @@ def test_e2e_no_l1_placeholders(live_client, proj_key):
     assert not bad, f"{proj_key}: placeholder community titles found: {bad}"
 
 
-@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
 def test_e2e_ask_global_non_empty(live_client, proj_key):
     """S5c: MCP ask scope=global returns a non-empty assembled context."""
     import asyncio
@@ -143,7 +140,7 @@ def _symlinked_project() -> str | None:
 def test_federation_indexing_prunes_symlink_targets(live_client):
     """S6a: Indexing a root with symlinked sub-repos must not wildly inflate file_count."""
     root = _symlinked_project()
-    assert root is not None, "no indexed project with external symlinked sub-dirs (expected astro-project)"
+    assert root is not None, "no indexed project with external symlinked sub-dirs — register a project that has symlinked sub-repos"
     root_path = Path(root)
     own_files = sum(
         1 for f in root_path.rglob("*")
@@ -161,7 +158,7 @@ def test_federation_indexing_prunes_symlink_targets(live_client):
 def test_federation_kb_reflects_root_only(live_client):
     """S6b: graph.db symbols must not include files from symlinked member paths."""
     root = _symlinked_project()
-    assert root is not None, "no indexed project with external symlinked sub-dirs (expected astro-project)"
+    assert root is not None, "no indexed project with external symlinked sub-dirs — register a project that has symlinked sub-repos"
     gdb = _graph_db(root)
     assert gdb.exists(), f"graph.db not found for symlinked root {root}"
     symlinked = _external_symlink_targets(Path(root))
@@ -186,7 +183,7 @@ def test_federation_kb_reflects_root_only(live_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-@pytest.mark.parametrize("proj_key", ["ose", "payment", "astro"])
+@pytest.mark.parametrize("proj_key", ["ose", "standalone", "federation"])
 def test_kb_state_ready_all_projects(live_client, proj_key):
     """T1/TC1/HR7: converge+assert kb_state='ready' and l1_enriched_pct==100 for all 3 projects."""
     _converge_ready(_PROJECTS[proj_key])
@@ -211,7 +208,7 @@ def test_kb_state_no_churn(live_client, proj_key):
 
 
 # ---------------------------------------------------------------------------
-# T6/HR4: federation fan-out on the REAL astro-project
+# T6/HR4: federation fan-out on the REAL federation root
 # ---------------------------------------------------------------------------
 
 # Fix #1: _needs_enrich detects stalled L2 summaries
@@ -244,21 +241,21 @@ def test_needs_enrich_detects_null_summaries(safe_tmp_path):
 
 
 def test_real_federation_fanout(live_client):
-    """T6/HR4: astro-project members list has ≥1 member with real symbols; search fans out."""
-    status = _overview("status", _PROJECTS["astro"])
+    """T6/HR4: federation root members list has ≥1 member with real symbols; search fans out."""
+    status = _overview("status", _PROJECTS["federation"])
     members = status.get("members", [])
-    assert members, "astro-project overview(status) returned no members (federation broken)"
+    assert members, "federation root overview(status) returned no members (federation broken)"
     with_syms = [m for m in members if m.get("symbols", 0) > 0]
     assert with_syms, (
-        f"no astro members have symbols > 0 (fan-out not working); "
+        f"no federation members have symbols > 0 (fan-out not working); "
         f"sample: {[(m['path'].split('/')[-1], m['symbols']) for m in members[:3]]}"
     )
     import asyncio
 
     from opencode_search.server.mcp import search as _mcp_search
-    data = json.loads(asyncio.run(_mcp_search("function", project_paths=[_PROJECTS["astro"]])))
+    data = json.loads(asyncio.run(_mcp_search("function", project_paths=[_PROJECTS["federation"]])))
     results = data.get("results", [])
-    assert results, "search(project_paths=[astro-project]) returned no results (fan-out broken)"
+    assert results, "search(project_paths=[federation root]) returned no results (fan-out broken)"
 
 
 # Fix #2a: _needs_index keys on indexed_at, not stray chunks
@@ -348,7 +345,7 @@ def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
 def test_federation_no_member_stuck_indexing(live_client, proj_key):
     """Fix #2: after reconcile completes, no federation member may have kb_state='indexing'.
 
@@ -377,7 +374,7 @@ def test_upsert_project_rejects_forbidden_root():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("proj_key", ["ose", "astro", "payment"])
+@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
 def test_federation_search_ask_as_logical_entity(live_client, proj_key):
     """Logical-entity e2e: search and ask both return results for real project roots."""
     import asyncio

@@ -48,15 +48,10 @@ def test_mcp_handlers_have_no_llm_generation():
 
 def test_ask_mcp_returns_structured_context():
     """P14.4 runtime: MCP ask returns pre-built artifacts (non-empty, fast, no generative LLM on query path)."""
-    from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import ask as ask_tool
+    from tests.live._projects import federation_root
 
-    astro = next(
-        (p.path for p in list_projects()
-         if "astro-project" in p.path and "promo" not in p.path and p.enabled),
-        None,
-    )
-    assert astro, "astro-project must be registered (run P8)"
+    astro = federation_root()
     result = asyncio.run(ask_tool("How does authentication work?", astro, "all"))
     assert isinstance(result, str) and len(result) > 20, (
         f"ask() returned empty/tiny response: {result!r}"
@@ -68,8 +63,8 @@ def test_impact_narrative_returns_structured_json():
     from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import graph as graph_tool
 
-    be = next((p.path for p in list_projects() if "astro-promo-be" in p.path and p.enabled), None)
-    assert be, "astro-promo-be must be registered (run P8)"
+    from tests.live._projects import service_member
+    be = service_member()
     result = asyncio.run(graph_tool("Run", be, "impact_narrative"))
     data = json.loads(result)
     assert "risk" in data, f"impact_narrative must return JSON with 'risk' key; got: {result[:200]}"
@@ -79,11 +74,10 @@ def test_impact_narrative_returns_structured_json():
 
 def test_semantic_trace_returns_structured_json():
     """P14.4 runtime: graph(semantic_trace) returns JSON with path data, no LLM prose."""
-    from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import graph as graph_tool
+    from tests.live._projects import service_member
 
-    be = next((p.path for p in list_projects() if "astro-promo-be" in p.path and p.enabled), None)
-    assert be, "astro-promo-be must be registered (run P8)"
+    be = service_member()
     result = asyncio.run(graph_tool("NewService", be, "semantic_trace", "Run"))
     data = json.loads(result)
     assert "from" in data and "to" in data, (

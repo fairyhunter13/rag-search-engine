@@ -16,15 +16,13 @@ _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
 
 
-def _reg(substr: str) -> str:
-    from opencode_search.core.registry import list_projects
-    return next((e.path for e in list_projects() if substr in e.path and e.enabled), "")
-
+from tests.live._projects import federation_root as _federation_root
+from tests.live._projects import standalone_project as _standalone_project
 
 _PROJECTS = {
     "ose": str(Path(__file__).resolve().parents[3]),
-    "astro": _reg("astro-project"),
-    "payment": _reg("payment-gateway"),
+    "federation": _federation_root(),
+    "standalone": _standalone_project(),
 }
 
 
@@ -34,12 +32,12 @@ def validate_reports() -> dict:
     all_proj = list(list_projects())
     for key, path in _PROJECTS.items():
         if not path:
-            pytest.fail(f"Project '{key}' not found in registry — run Workstream E first")
+            pytest.fail(f"Project '{key}' not found in registry — register + index it first")
         ep = next((p for p in all_proj if p.path == path and p.enabled), None)
         if ep is None:
             pytest.fail(f"Project '{key}' not enabled in registry")
         if not ep.indexed_at:
-            pytest.fail(f"Project '{key}' has no indexed_at — Workstream E incomplete")
+            pytest.fail(f"Project '{key}' has no indexed_at — index it first")
     reports: dict[str, dict] = {}
     for key, path in _PROJECTS.items():
         r = requests.post(
@@ -66,64 +64,64 @@ def _root_member_chk(reports: dict, key: str) -> dict | None:
 
 
 class TestIndexValidity:
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_verdict_valid(self, key: str, validate_reports: dict) -> None:
         r = validate_reports[key]
         failing = {k: v for k, v in r.get("checks", {}).items()
                    if (isinstance(v, int) and v != 0) or v is False}
         assert r.get("verdict") == "VALID", f"{key}: verdict={r.get('verdict')!r} failing={failing}"
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_member_count_positive(self, key: str, validate_reports: dict) -> None:
         assert validate_reports[key]["member_count"] > 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_chunk_count_positive(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("chunk_count", 0) > 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_no_orphan_chunks(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("orphan_count", 0) == 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_embedding_dim_768(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("embedding_dim") == 768
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_no_dangling_edges(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("dangling_edges", 0) == 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_no_bad_community_refs(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("bad_community_refs", 0) == 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_no_placeholder_communities(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("placeholder_communities", 0) == 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_no_path_leakage(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("path_leakage", 0) == 0
 
-    @pytest.mark.parametrize("key", ["ose", "astro", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
     def test_indexed_at_fresh(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("indexed_at_fresh") is True
 
-    def test_astro_root_has_process_graph(self, validate_reports: dict) -> None:
-        chk = _chk(validate_reports, "astro")
+    def test_federation_root_has_process_graph(self, validate_reports: dict) -> None:
+        chk = _chk(validate_reports, "federation")
         pg = chk.get("process_graph")
-        assert pg is not None, "astro aggregate should carry process_graph summary"
+        assert pg is not None, "federation root should carry process_graph summary"
         assert "error" not in pg, f"process_graph error: {pg.get('error')}"
 
-    def test_astro_process_edges_anchored(self, validate_reports: dict) -> None:
-        pg = _chk(validate_reports, "astro").get("process_graph", {})
+    def test_federation_process_edges_anchored(self, validate_reports: dict) -> None:
+        pg = _chk(validate_reports, "federation").get("process_graph", {})
         assert pg.get("unanchored", 0) == 0, f"unanchored process edges: {pg}"
 
-    def test_astro_process_edges_confidence_in_band(self, validate_reports: dict) -> None:
-        pg = _chk(validate_reports, "astro").get("process_graph", {})
+    def test_federation_process_edges_confidence_in_band(self, validate_reports: dict) -> None:
+        pg = _chk(validate_reports, "federation").get("process_graph", {})
         assert pg.get("out_of_band", 0) == 0, f"out-of-band confidence: {pg}"
 
-    @pytest.mark.parametrize("key", ["ose", "payment"])
+    @pytest.mark.parametrize("key", ["ose", "standalone"])
     def test_standalone_no_process_graph(self, key: str, validate_reports: dict) -> None:
         root_chk = _root_member_chk(validate_reports, key)
         assert root_chk is not None, f"root member not found for {key}"

@@ -111,7 +111,7 @@ def test_api_process_bpmn(live_client):
     from opencode_search.core.registry import list_projects
     root = next((e.path for e in list_projects() if e.enabled
                  and getattr(e, "federation", None)), None)
-    assert root, "Need a federated root for /api/process/bpmn — ensure astro-project registered"
+    assert root, "Need a federated root for /api/process/bpmn — register a project with federation members"
     # endpoint requires root= and id=; nonexistent id returns 404 (acceptable)
     r = live_client.get(f"/api/process/bpmn?root={root}&id=probe")
     assert r.status_code in (200, 404), f"/api/process/bpmn unexpected {r.status_code}"
