@@ -132,12 +132,12 @@ mapping table may substitute for structural analysis of user code.
   | 1 | `process()` extraction — ANY language | 1.0 `EXTRACTED` | always |
   | 1.5 | value-flow/FQN-join (`kb/valueflow.py`) | 0.9 `RESOLVED` | always |
   | 1.75 | GPU cross-encoder rerank (`kb/resolve_rerank.py`) | 0.8 `RERANKED` | always |
-  | 2 | SEA-style LLM select (`kb/llm_escalation.py`) | 0.7 `_llm` | `OSE_BPRE_LLM_LINK=1` |
-  | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | `OSE_BPRE_LLM_FILE=1` |
-- **`OSE_BPRE_LLM_LINK`** (default OFF): gates Tier-2. Off → tree-sitter-unreachable edges
-  absent, never heuristically approximated. **`OSE_BPRE_LLM_FILE`** (default OFF): gates Tier-3.
+  | 2 | SEA-style LLM select (`kb/llm_escalation.py`) | 0.7 `_llm` | default ON; opt-out: `OSE_BPRE_LLM_LINK=0` |
+  | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | default ON; opt-out: `OSE_BPRE_LLM_FILE=0` |
+- **`OSE_BPRE_LLM_LINK`** (default ON): opt-out disables Tier-2 → tree-sitter-unreachable edges
+  absent, never heuristically approximated. **`OSE_BPRE_LLM_FILE`** (default ON): opt-out disables Tier-3.
   **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`; `deepseek-chat` deprecates 2026-07-24).
-  With both OFF + `OSE_WIKI_LLM=0`: reconstruction is GPU-free and byte-identical.
+  With both set to `=0` + `OSE_WIKI_LLM=0`: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI. `test_valueflow_dynamic.py`,
   `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`, `test_deterministic_resolution.py`
@@ -161,11 +161,11 @@ mapping table may substitute for structural analysis of user code.
    Tier 1 = tree-sitter (`kb/bpre_ast.py`, reusing `graph/extractor.py`): Pass A mines generated
    `*.pb.go` to discover the gRPC API surface (real constructor/registrar names, **no hardcoded
    patterns**); Pass B detects call sites per-file against that surface (gRPC, pub/sub, HTTP,
-   status enums). Tier 2 = opt-in LLM linkage (`OSE_BPRE_LLM_LINK`, default OFF) for config-driven
+   status enums). Tier 2 = LLM linkage (default ON; opt-out: `OSE_BPRE_LLM_LINK=0`) for config-driven
    edges (JSON-topic IDs, client hosts) tree-sitter cannot resolve. Tier 3 = cloud DeepSeek for D5
    rule text + D6 narrative. D4 process traces are **handler-anchored and deduped** — keyed on the
    entry handler's reachable symbol set, not any-edge service adjacency. **GPU-free** for Tier 1 +
-   BPMN/mermaid; byte-identical with `OSE_WIKI_LLM=0` and `OSE_BPRE_LLM_LINK` unset (F1/F2).
+   BPMN/mermaid; byte-identical with `OSE_WIKI_LLM=0` + `OSE_BPRE_LLM_LINK=0` (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
 7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`opencode-search docgen <project>`).
@@ -222,13 +222,15 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
 | **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** only (Claude Code CLI); emits SSE error event when CLI unavailable | Codex removed; DeepSeek is KB-enrichment-exclusive (HR12) — no chat fallback |
 | **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-v4-flash` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
-| **E — Docgen portal** | `ose-docgen portal` (opt-in, manual) | Claude Code **Sonnet 4.6** (architect/verify) + **Haiku 4.5** (explore/write/skills) | Daemon auto-path stays $0/GPU-free; portal is OSE-independent (no `graph.db`); never invoked by daemon |
+| **E — Doc-tooling** | `opencode-search docgen/okf` (manual only; `POST /api/docgen`, `/api/okf`) | **`claude -p`** headless: **Haiku 4.5** (concept/write) + **Sonnet 4.6** (architect/discover) | LLM-native; no tree-sitter on doc path; no deterministic skeleton; kill-switches `OSE_DOCGEN=0`/`OSE_OKF=0`; never from auto-sweep or MCP (HR27/P13) |
 
-**Two-lane invariant (HR12):**
-- **LOCAL GPU lane = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking (`jinaai/jina-reranker-v1-turbo-en`) ONLY.** CPU binding is fatal; any CPU fallback raises immediately.
-- **CLOUD generative lane** = DeepSeek `deepseek-v4-flash` (KB enrichment only: summaries, symbol intents, semantic-type classification, wiki-L2 narrative; BPRE Tier-2 link resolution, Tier-3 parse-error files, D5 rule/state-machine text) **+** claude-haiku-4-5 via the Claude Code CLI (dashboard-chat only; no DeepSeek fallback — emits SSE error when CLI unavailable).
+**Four-lane invariant (HR12, HR31):**
+- **LOCAL GPU lane** = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking ONLY. CPU binding is fatal; any CPU fallback raises immediately.
+- **CLOUD KB lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, intents, semantic-type, wiki narrative; BPRE Tier-2 link resolution, Tier-3 parse-error, D5 rule text).
+- **CLOUD chat lane** = claude-haiku-4-5 (dashboard chat only; no DeepSeek fallback).
+- **DOC-TOOLING lane** = `claude -p` headless (docgen IH + OKF; Haiku/Sonnet; never KB, never chat).
 
-**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. In the 5-tier BPRE resolution ladder (HR16): Tier-1.75 (`kb/resolve_rerank.py`) is the GPU rerank lane — embedding + reranking, zero generation; Tier-2/3 are cloud DeepSeek. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9).
+**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 5-tier BPRE resolution ladder (HR16): Tier-1.75 is the GPU rerank lane; Tier-2/3 are cloud DeepSeek. Doc-tooling (`docgen`/`okf`) uses `claude -p` headless — a distinct lane from KB enrichment and chat (HR31).
 
 ## 16. Per-project config & federation inheritance
 
