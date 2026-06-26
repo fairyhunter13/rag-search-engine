@@ -1,1 +1,0 @@
-{"summary":"`ScopeValidator` has no detected callers. Safe to change without blast radius.","risk":"low","impact_count":0,"affected_domains":[],"callers":[],"symbol":"ScopeValidator","llm_used":false}
