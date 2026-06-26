@@ -50,7 +50,7 @@ def _run_claude(prompt: str, model: str, add_dirs: list[str], profile: str) -> s
     for d in add_dirs:
         cmd += ["--add-dir", d]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
+        r = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                            timeout=_TIMEOUT, env=_subprocess_env(profile))
         if r.returncode != 0:
             return None

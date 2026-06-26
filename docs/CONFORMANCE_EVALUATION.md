@@ -99,6 +99,7 @@ Additional fixes applied during this audit (beyond the 5 gaps):
 - Added `max_pages` override to `generate()`/`portal()` for test speed control
 - Fixed ose-docgen `stdin=subprocess.DEVNULL` in `run_claude_portal` (belt-and-suspenders subprocess isolation)
 - Fixed `test_ih_generate_llm_structure`: `capfd.disabled()` wrapper prevents pytest fd-level capture from blocking the claude subprocess — root cause was fd-level capture (`--capture=fd`) interfering with `subprocess.run()` when preceding tests held HTTP connections in the `requests` pool; `capfd.disabled()` temporarily restores real fds during the LLM call
+- Fixed `test_okf_llm_generate_structure`: same fd-capture root cause as IH test; added `capfd` fixture + `capfd.disabled()` wrapper, and `stdin=subprocess.DEVNULL` to `vendor/okf/src/okf/generate.py:_run_claude()`
 
 ---
 

@@ -138,10 +138,11 @@ def test_okf_index_md_no_frontmatter_in_source():
 
 
 @pytest.mark.slow
-def test_okf_llm_generate_structure(tmp_path, service_path):
+def test_okf_llm_generate_structure(tmp_path, service_path, capfd):
     """Phase 2c (@slow): LLM-native OKF generates valid v0.1 bundle structure."""
     from okf.generate import OKF_VERSION, generate
-    r = generate(project_path=service_path, out_dir=str(tmp_path / "okf"))
+    with capfd.disabled():
+        r = generate(project_path=service_path, out_dir=str(tmp_path / "okf"))
     assert r.get("mode") != "off", "OSE_OKF must not be 0 for this slow test"
     assert "no_profile" not in r.get("errors", []), "claude profile must be configured"
     assert "discover_failed" not in r.get("errors", []), f"OKF discover failed: {r.get('errors')}"
