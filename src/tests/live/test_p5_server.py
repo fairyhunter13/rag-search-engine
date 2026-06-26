@@ -361,8 +361,8 @@ def test_enrich_project_uses_summary_gate(safe_tmp_path):
     assert post > 0, "enrichment gate must use summary IS NULL, not title IS NULL"
 
 
-def test_build_hierarchy_default_action_returns_400(live_client):
-    """P28.1: POST /api/build_hierarchy without action=wiki returns 400 (only wiki supported)."""
+def test_build_wiki_default_action_succeeds(live_client):
+    """P28.1: POST /api/build_wiki without explicit action defaults to wiki and returns pages_written."""
     from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
     project = next(
@@ -370,11 +370,12 @@ def test_build_hierarchy_default_action_returns_400(live_client):
         None,
     )
     assert project, "At least one indexed project required"
-    r = live_client.post(f"/api/build_hierarchy?project={project}", data=b"")
-    assert r.status_code == 400, f"default action must return 400 (wiki-only): {r.status_code} {r.text[:80]}"
+    r = live_client.post(f"/api/build_wiki?project={project}", data=b"")
+    assert r.status_code == 200, f"default action (wiki) must succeed: {r.status_code} {r.text[:80]}"
+    assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
 
 
-def test_build_hierarchy_action_wiki(live_client):
+def test_build_wiki_action_wiki(live_client):
     """P28.2: action=wiki calls build_wiki and returns pages_written."""
     from opencode_search.core.config import project_graph_db
     from opencode_search.core.registry import list_projects
@@ -383,7 +384,7 @@ def test_build_hierarchy_action_wiki(live_client):
         None,
     )
     assert project, "At least one indexed project required"
-    r = live_client.post(f"/api/build_hierarchy?project={project}&action=wiki", data=b"")
+    r = live_client.post(f"/api/build_wiki?project={project}&action=wiki", data=b"")
     assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
     assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
 

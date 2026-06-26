@@ -295,9 +295,9 @@ def test_federated_root_gets_federation_index():
 
 @pytest.mark.slow
 def test_api_build_serve_and_export_wiki(live_client, project_with_communities):
-    """W16 (API e2e): build_hierarchy?action=wiki → page serves rich content → export bundles it."""
+    """W16 (API e2e): build_wiki?action=wiki → page serves rich content → export bundles it."""
     project = project_with_communities
-    r = live_client.post(f"/api/build_hierarchy?project={project}&action=wiki", data=b"")
+    r = live_client.post(f"/api/build_wiki?project={project}&action=wiki", data=b"")
     assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
     assert r.json().get("pages_written", 0) > 0
     pages = live_client.get(f"/api/wiki?project={project}").json().get("pages", [])

@@ -7,9 +7,9 @@ from starlette.responses import JSONResponse
 from opencode_search.core.config import project_graph_db
 
 
-async def _api_build_hierarchy(request: Request) -> JSONResponse:
+async def _api_build_wiki(request: Request) -> JSONResponse:
     project_path = request.query_params.get("project", "")
-    action = request.query_params.get("action", "hierarchy")
+    action = request.query_params.get("action", "wiki")
     if not project_path:
         try:
             body = await request.json()
@@ -56,5 +56,5 @@ async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
 
 
 def register(app) -> None:
-    app.add_route("/api/build_hierarchy", _api_build_hierarchy, methods=["POST"])
+    app.add_route("/api/build_wiki", _api_build_wiki, methods=["POST"])
     app.add_route("/api/auto_pipeline_status", _api_auto_pipeline_status, methods=["GET"])

@@ -274,7 +274,7 @@ a{color:inherit;text-decoration:none}
     <button class="vbtn" id="vbtn-graph" onclick="switchView('graph')">Graph</button>
     <button class="vbtn" id="vbtn-wiki" onclick="switchView('wiki')">Wiki</button>
     <button class="vbtn" id="vbtn-processes" onclick="switchView('processes')">Processes</button>
-    <button class="vbtn" id="vbtn-hierarchy" onclick="switchView('hierarchy')">Hierarchy</button>
+    <button class="vbtn" id="vbtn-hierarchy" onclick="switchView('hierarchy')">Knowledge</button>
   </div>
   <div class="nav-right">
     <span class="sdot" id="daemon-dot" title="Daemon status"></span>
@@ -1241,7 +1241,7 @@ async function runReindex(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Re-indexing (this may take a while)…');
   try{
-    const r=await fetchWithTimeout(`/api/build_hierarchy?project=${encodeURIComponent(_proj)}`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/build_wiki?project=${encodeURIComponent(_proj)}&action=wiki`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||'Job submitted','ok');
     toast('Re-index job started','info');
@@ -1252,7 +1252,7 @@ async function runWiki(){
   if(!_proj){toast('Select a project first','err');return;}
   opLog('Generating wiki…');
   try{
-    const r=await fetchWithTimeout(`/api/build_hierarchy?project=${encodeURIComponent(_proj)}&action=wiki`,{method:'POST'});
+    const r=await fetchWithTimeout(`/api/build_wiki?project=${encodeURIComponent(_proj)}&action=wiki`,{method:'POST'});
     const d=await r.json();
     opLog(d.message||'Job submitted','ok');
     toast('Wiki generation started','info');

@@ -15,7 +15,7 @@ New routes verified here:
   GET /api/kb_health     → 200
   GET /api/storage_health → 200
   GET /api/process/bpmn  → 200 or 404
-  POST /api/build_hierarchy → 200 or 202
+  POST /api/build_wiki → 200 or 202
 """
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ def test_api_process_bpmn(live_client):
     assert r.status_code in (200, 404), f"/api/process/bpmn unexpected {r.status_code}"
 
 
-def test_api_build_hierarchy(live_client):
-    # Use a nonexistent path → fast 404 (avoids blocking synchronous hierarchy build)
-    r = live_client.post("/api/build_hierarchy", json={"project_path": "/nonexistent"}, timeout=10)
-    assert r.status_code in (400, 404), f"/api/build_hierarchy: {r.status_code}"
+def test_api_build_wiki(live_client):
+    # Use a nonexistent path → fast 404 (avoids blocking synchronous wiki build)
+    r = live_client.post("/api/build_wiki", json={"project_path": "/nonexistent"}, timeout=10)
+    assert r.status_code in (400, 404), f"/api/build_wiki: {r.status_code}"
