@@ -23,13 +23,7 @@ def _gs(project_path: str) -> GraphStore:
 
 
 @pytest.fixture(scope="module")
-def astro_campaign():
-    from tests.live._projects import service_member
-    return service_member()
-
-
-@pytest.fixture(scope="module")
-def astro_promo():
+def svc_member():
     from tests.live._projects import service_member
     return service_member()
 
@@ -37,36 +31,23 @@ def astro_promo():
 class TestPhase0VocabularyAndBackfill:
 
     @pytest.mark.slow
-    def test_semantic_type_coverage_campaign(self, astro_campaign):
-        """P0.1: ALL L1 communities in campaign-be must have semantic_type after backfill."""
-        gs = _gs(astro_campaign)
+    def test_semantic_type_coverage(self, svc_member):
+        """P0.1: ALL L1 communities in the service member must have semantic_type after enrichment."""
+        gs = _gs(svc_member)
         try:
             total = gs._con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
             null_count = gs._con.execute(
                 "SELECT COUNT(*) FROM communities WHERE level=1 AND semantic_type IS NULL"
             ).fetchone()[0]
-            assert total > 0, "campaign-be must have L1 communities"
-            assert null_count == 0, f"{null_count}/{total} L1 communities still NULL. Run backfill_semantic_types() first."
+            assert total > 0, "service member must have L1 communities"
+            assert null_count == 0, f"{null_count}/{total} L1 communities still NULL — run enrichment first."
         finally:
             gs.close()
 
     @pytest.mark.slow
-    def test_semantic_type_coverage_promo(self, astro_promo):
-        """P0.2: ALL L1 communities in promo-be must have semantic_type."""
-        gs = _gs(astro_promo)
-        try:
-            total = gs._con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
-            null_count = gs._con.execute(
-                "SELECT COUNT(*) FROM communities WHERE level=1 AND semantic_type IS NULL"
-            ).fetchone()[0]
-            assert null_count == 0, f"{null_count}/{total} still NULL in promo-be"
-        finally:
-            gs.close()
-
-    @pytest.mark.slow
-    def test_business_process_communities_exist(self, astro_campaign):
-        """P0.3: campaign-be must have >=3 business_process communities after backfill."""
-        gs = _gs(astro_campaign)
+    def test_business_process_communities_exist(self, svc_member):
+        """P0.3: service member must have >=3 business_process communities after enrichment."""
+        gs = _gs(svc_member)
         try:
             count = gs._con.execute(
                 "SELECT COUNT(*) FROM communities WHERE semantic_type='business_process'"
@@ -76,9 +57,9 @@ class TestPhase0VocabularyAndBackfill:
             gs.close()
 
     @pytest.mark.slow
-    def test_business_rule_communities_exist(self, astro_promo):
-        """P0.4: promo-be must have >=5 business_rule communities."""
-        gs = _gs(astro_promo)
+    def test_business_rule_communities_exist(self, svc_member):
+        """P0.4: service member must have >=5 business_rule communities."""
+        gs = _gs(svc_member)
         try:
             count = gs._con.execute(
                 "SELECT COUNT(*) FROM communities WHERE semantic_type='business_rule'"
@@ -88,9 +69,9 @@ class TestPhase0VocabularyAndBackfill:
             gs.close()
 
     @pytest.mark.slow
-    def test_overview_business_rules_returns_content(self, astro_promo):
+    def test_overview_business_rules_returns_content(self, svc_member):
         """P1.1: overview(what='business_rules') must return non-empty rules with title+summary."""
-        result = asyncio.run(overview_tool(astro_promo, "business_rules"))
+        result = asyncio.run(overview_tool(svc_member, "business_rules"))
         data = json.loads(result)
         assert "rules" in data, f"Missing 'rules' key: {data}"
         rules = data["rules"]
@@ -100,25 +81,25 @@ class TestPhase0VocabularyAndBackfill:
         assert all(len(r["title"]) > 3 for r in rules), f"Empty titles: {[r['title'] for r in rules[:5]]}"
 
     @pytest.mark.slow
-    def test_overview_process_flows_returns_content(self, astro_campaign):
+    def test_overview_process_flows_returns_content(self, svc_member):
         """P1.2: overview(what='process_flows') must return non-empty flows with title+summary."""
-        result = asyncio.run(overview_tool(astro_campaign, "process_flows"))
+        result = asyncio.run(overview_tool(svc_member, "process_flows"))
         data = json.loads(result)
         assert "flows" in data, f"Missing 'flows' key: {data}"
         flows = data["flows"]
         assert len(flows) >= 3, f"overview(process_flows) returned {len(flows)} — expected >=3"
         titles = [f["title"] for f in flows]
-        bpre_kws = ["management", "campaign", "order", "workflow", "process", "orchestration",
-                    "dispatch", "queue", "service", "system"]
+        bpre_kws = ["fulfillment", "checkout", "promo", "order", "workflow", "process",
+                    "orchestration", "cart", "service", "reserve", "placement", "validation"]
         assert any(any(kw in t.lower() for kw in bpre_kws) for t in titles), \
             f"No recognizable business process title in: {titles}"
 
-    def test_overview_business_rules_matches_db(self, astro_promo):
+    def test_overview_business_rules_matches_db(self, svc_member):
         """P1.3: overview(business_rules) count must match DB count exactly."""
-        result = asyncio.run(overview_tool(astro_promo, "business_rules"))
+        result = asyncio.run(overview_tool(svc_member, "business_rules"))
         data = json.loads(result)
         rules = data.get("rules", [])
-        gs = _gs(astro_promo)
+        gs = _gs(svc_member)
         try:
             db_count = gs._con.execute(
                 "SELECT COUNT(*) FROM communities WHERE semantic_type='business_rule'"
@@ -128,66 +109,69 @@ class TestPhase0VocabularyAndBackfill:
             gs.close()
 
     @pytest.mark.slow
-    def test_ask_scope_business_returns_business_communities(self, astro_campaign):
+    def test_ask_scope_business_returns_business_communities(self, svc_member):
         """P1.4: ask(scope='business') must return context with business community content."""
-        ctx = asyncio.run(ask_tool("what are the main business processes?", astro_campaign, "business"))
+        ctx = asyncio.run(ask_tool("what are the main business processes?", svc_member, "business"))
         assert "## Business context" in ctx, f"Expected '## Business context' header: {ctx[:200]}"
         assert len(ctx) > 200, f"Business context too short ({len(ctx)} chars)"
         ctx_lower = ctx.lower()
         assert any(kw in ctx_lower for kw in
-                   ["campaign", "process", "rule", "management", "workflow", "dispatch"]), \
+                   ["promo", "checkout", "cart", "process", "rule", "workflow", "fulfillment"]), \
             f"Business context appears generic: {ctx[:300]}"
 
 
 class TestClassificationCorrectness:
 
     @pytest.mark.slow
-    def test_known_business_rule_classified_correctly(self, astro_promo):
-        """C1: 'Clash Detection' community must be a substantive business concept (ground-truth oracle).
+    def test_known_business_rule_classified_correctly(self, svc_member):
+        """C1 (structural oracle): at least one business_rule community contains a rule-related symbol.
 
-        Clash detection governs which products/campaigns can coexist — inherently a business
-        constraint; the LLM may classify it as business_rule (the constraint itself) or
-        business_process (the detection workflow) but never as infra/tooling/test.
+        The promo-svc fixture has DiscountEligibilityRule, CouponStackingLimitRule etc.
+        At least one community classified as business_rule must contain a function whose name
+        includes 'Rule', 'Eligib', 'Limit', 'Window', or 'Conflict' — verifying the LLM
+        classifies rule-bearing code as business_rule rather than infra/test.
         """
-        gs = _gs(astro_promo)
-        try:
-            row = gs._con.execute(
-                "SELECT title, semantic_type FROM communities "
-                "WHERE title LIKE '%Clash%' OR title LIKE '%clash%' LIMIT 1"
-            ).fetchone()
-        finally:
-            gs.close()
-        assert row, "No community containing 'Clash' in the service member"
-        assert row[1] in ("business_rule", "business_process"), (
-            f"'{row[0]}' classified as '{row[1]}' — expected business_rule or business_process."
+        import sqlite3
+
+        from opencode_search.core.config import project_graph_db
+        gdb = project_graph_db(svc_member)
+        rule_keywords = ("rule", "eligib", "limit", "window", "conflict", "max")
+        with sqlite3.connect(str(gdb)) as con:
+            rows = con.execute(
+                "SELECT c.id, c.semantic_type, s.name "
+                "FROM communities c JOIN symbols s ON s.community_id=c.id "
+                "WHERE c.level=1 AND c.semantic_type='business_rule' AND s.kind='function'"
+            ).fetchall()
+        assert rows, "No business_rule community with function symbols — enrichment may not have run"
+        match = any(any(kw in r[2].lower() for kw in rule_keywords) for r in rows)
+        assert match, (
+            f"No business_rule community contains a rule-related function. "
+            f"Sample functions: {[r[2] for r in rows[:5]]}"
         )
 
     @pytest.mark.slow
-    def test_known_management_community_is_substantive(self, astro_promo):
-        """C2 (ground-truth oracle, lenient): any 'Management' community is substantive domain content.
+    def test_business_rule_communities_are_substantive(self, svc_member):
+        """C2 (structural oracle): business_rule communities must not be majority test/infra.
 
-        Management communities own or orchestrate a feature area — so business_process |
-        business_rule | feature | domain are all defensible. The meaningful invariant is that
-        they are NOT misfiled as pure plumbing (test / utility / infrastructure).
+        Complements C1: once we know rule-bearing code is classified, verify the full set
+        of business_rule communities is substantively semantic (not mostly test plumbing).
         """
-        gs = _gs(astro_promo)
+        gs = _gs(svc_member)
         try:
             rows = gs._con.execute(
-                "SELECT title, semantic_type FROM communities "
-                "WHERE title LIKE '%Management%' AND level=1 "
-                "ORDER BY semantic_type LIMIT 5"
+                "SELECT title, semantic_type FROM communities WHERE level=1 AND semantic_type='business_rule'"
             ).fetchall()
         finally:
             gs.close()
-        assert rows, "No community containing 'Management' in the service member"
-        for title, stype in rows:
-            assert stype in ("business_process", "business_rule", "feature", "domain", "utility"), (
-                f"'{title}' classified as '{stype}' — unexpected for a Management community; "
-                f"expected substantive type, not test/infra."
-            )
+        assert rows, "No business_rule communities in service member"
+        test_kws = ("test", "mock", "stub", "fake", "fixture")
+        plumbing = [t for t, _ in rows if any(k in (t or "").lower() for k in test_kws)]
+        assert len(plumbing) < len(rows) * 0.3, (
+            f"{len(plumbing)}/{len(rows)} business_rule communities appear to be test plumbing: {plumbing[:3]}"
+        )
 
     @pytest.mark.slow
-    def test_test_communities_are_minority_of_business_rules(self, astro_promo):
+    def test_test_communities_are_minority_of_business_rules(self, svc_member):
         """C3 (Metamorphic, relaxed): test/mock communities must not DOMINATE business_rules.
 
         Test-vs-implementation is a structural property; a purely-semantic classifier on a
@@ -195,7 +179,7 @@ class TestClassificationCorrectness:
         The meaningful invariant is that business_rules isn't mostly tests — gross
         misclassification (everything labelled business_rule) still fails.
         """
-        result = asyncio.run(overview_tool(astro_promo, "business_rules"))
+        result = asyncio.run(overview_tool(svc_member, "business_rules"))
         rules = json.loads(result).get("rules", [])
         assert rules, "overview('business_rules') returned no communities"
         polluted = [r["title"] for r in rules if any(
@@ -208,13 +192,13 @@ class TestClassificationCorrectness:
         )
 
     @pytest.mark.slow
-    def test_test_communities_are_minority_of_process_flows(self, astro_campaign):
+    def test_test_communities_are_minority_of_process_flows(self, svc_member):
         """C4 (Metamorphic, relaxed): test/mock communities must not DOMINATE process_flows.
 
         Same accepted trade-off as C3 — pure-semantic classification mislabels a few tests;
         the invariant is that process_flows isn't mostly tests.
         """
-        result = asyncio.run(overview_tool(astro_campaign, "process_flows"))
+        result = asyncio.run(overview_tool(svc_member, "process_flows"))
         flows = json.loads(result).get("flows", [])
         assert flows, "overview('process_flows') returned no communities"
         polluted = [f["title"] for f in flows if any(
@@ -227,10 +211,10 @@ class TestClassificationCorrectness:
         )
 
     @pytest.mark.slow
-    def test_classification_stable_across_two_overview_calls(self, astro_promo):
+    def test_classification_stable_across_two_overview_calls(self, svc_member):
         """C5 (stability): Two consecutive overview('business_rules') calls return the same titles."""
-        r1 = json.loads(asyncio.run(overview_tool(astro_promo, "business_rules")))
-        r2 = json.loads(asyncio.run(overview_tool(astro_promo, "business_rules")))
+        r1 = json.loads(asyncio.run(overview_tool(svc_member, "business_rules")))
+        r2 = json.loads(asyncio.run(overview_tool(svc_member, "business_rules")))
         titles1 = sorted(r["title"] for r in r1.get("rules", []))
         titles2 = sorted(r["title"] for r in r2.get("rules", []))
         assert titles1, "overview('business_rules') returned empty"
@@ -239,9 +223,9 @@ class TestClassificationCorrectness:
         )
 
     @pytest.mark.slow
-    def test_business_rule_summaries_describe_enforcement(self, astro_promo):
+    def test_business_rule_summaries_describe_enforcement(self, svc_member):
         """C6 (semantic coherence): business_rule summaries describe constraints, not data models."""
-        rules = json.loads(asyncio.run(overview_tool(astro_promo, "business_rules"))).get("rules", [])
+        rules = json.loads(asyncio.run(overview_tool(svc_member, "business_rules"))).get("rules", [])
         assert rules, "overview('business_rules') returned no communities"
         enforcement_words = {
             "enforce", "validat", "check", "block", "reject", "eligib",
@@ -261,17 +245,17 @@ class TestClassificationCorrectness:
 class TestNegativeCases:
 
     @pytest.mark.slow
-    def test_overview_business_rules_summaries_not_empty(self, astro_promo):
+    def test_overview_business_rules_summaries_not_empty(self, svc_member):
         """N2: Each business_rule must have non-empty summary field in overview response."""
-        result = asyncio.run(overview_tool(astro_promo, "business_rules"))
+        result = asyncio.run(overview_tool(svc_member, "business_rules"))
         rules = json.loads(result).get("rules", [])
         empty = [r["title"] for r in rules if not r.get("summary", "").strip()]
         assert not empty, f"business_rules with empty summaries: {empty[:3]}"
 
     @pytest.mark.slow
-    def test_process_flows_summaries_not_empty(self, astro_campaign):
+    def test_process_flows_summaries_not_empty(self, svc_member):
         """N3: Each business_process must have non-empty summary field in overview response."""
-        result = asyncio.run(overview_tool(astro_campaign, "process_flows"))
+        result = asyncio.run(overview_tool(svc_member, "process_flows"))
         flows = json.loads(result).get("flows", [])
         empty = [f["title"] for f in flows if not f.get("summary", "").strip()]
         assert not empty, f"process_flows with empty summaries: {empty[:3]}"
@@ -280,9 +264,9 @@ class TestNegativeCases:
 class TestPipelineIdempotency:
 
     @pytest.mark.slow
-    def test_backfill_preserves_existing_summaries(self, astro_promo):
-        """I1: Running backfill on promo-be (already 100% classified) must not change any summary."""
-        gs = _gs(astro_promo)
+    def test_backfill_preserves_existing_summaries(self, svc_member):
+        """I1: Running backfill on already-classified service member must not change any summary."""
+        gs = _gs(svc_member)
         try:
             pre = {r[0]: r[1] for r in gs._con.execute(
                 "SELECT id, summary FROM communities WHERE level=1 AND summary IS NOT NULL"
@@ -290,13 +274,13 @@ class TestPipelineIdempotency:
         finally:
             gs.close()
 
-        gs2 = GraphStore(project_graph_db(astro_promo))
+        gs2 = GraphStore(project_graph_db(svc_member))
         try:
             classify_communities_semantic(gs2, lambda: False)
         finally:
             gs2.close()
 
-        gs3 = _gs(astro_promo)
+        gs3 = _gs(svc_member)
         try:
             post = {r[0]: r[1] for r in gs3._con.execute(
                 "SELECT id, summary FROM communities WHERE level=1 AND summary IS NOT NULL"
@@ -310,15 +294,15 @@ class TestPipelineIdempotency:
         assert not corrupted, f"Backfill corrupted summaries: {corrupted[:3]}"
 
     @pytest.mark.slow
-    def test_backfill_idempotent_twice(self, astro_campaign):
-        """I2: Running backfill twice on campaign-be must return 0 on 2nd run (no-op)."""
-        gs1 = GraphStore(project_graph_db(astro_campaign))
+    def test_backfill_idempotent_twice(self, svc_member):
+        """I2: Running backfill twice on service member must return 0 on 2nd run (no-op)."""
+        gs1 = GraphStore(project_graph_db(svc_member))
         try:
             classify_communities_semantic(gs1, lambda: False)
         finally:
             gs1.close()
 
-        gs2 = _gs(astro_campaign)
+        gs2 = _gs(svc_member)
         try:
             after1 = {r[0]: r[1] for r in gs2._con.execute(
                 "SELECT id, semantic_type FROM communities WHERE level=1"
@@ -326,7 +310,7 @@ class TestPipelineIdempotency:
         finally:
             gs2.close()
 
-        gs3 = GraphStore(project_graph_db(astro_campaign))
+        gs3 = GraphStore(project_graph_db(svc_member))
         try:
             count2 = classify_communities_semantic(gs3, lambda: False)
         finally:
@@ -337,7 +321,7 @@ class TestPipelineIdempotency:
             f"semantic_type IS NULL filter excludes already-classified rows)"
         )
 
-        gs4 = _gs(astro_campaign)
+        gs4 = _gs(svc_member)
         try:
             after2 = {r[0]: r[1] for r in gs4._con.execute(
                 "SELECT id, semantic_type FROM communities WHERE level=1"
@@ -349,9 +333,9 @@ class TestPipelineIdempotency:
         assert not changed, f"Semantic types changed on 2nd run: {changed[:3]}"
 
     @pytest.mark.slow
-    def test_ask_all_scope_still_works_after_vocab_fix(self, astro_campaign):
+    def test_ask_all_scope_still_works_after_vocab_fix(self, svc_member):
         """I3: ask(scope='all') must not regress after vocabulary fix deployment."""
-        ctx = asyncio.run(ask_tool("how does indexing work?", astro_campaign, "all"))
+        ctx = asyncio.run(ask_tool("how does indexing work?", svc_member, "all"))
         assert len(ctx) > 100, f"ask(scope='all') too short: {ctx[:100]}"
         assert not ctx.lower().startswith("error"), f"ask(scope='all') returned error: {ctx[:200]}"
 
@@ -359,9 +343,9 @@ class TestPipelineIdempotency:
 class TestLLMOutputStability:
 
     @pytest.mark.slow
-    def test_semantic_types_stable_between_reads(self, astro_promo):
+    def test_semantic_types_stable_between_reads(self, svc_member):
         """S1: Semantic type assignments must be identical between reads 2s apart."""
-        gs1 = _gs(astro_promo)
+        gs1 = _gs(svc_member)
         try:
             types1 = {r[0]: r[1] for r in gs1._con.execute(
                 "SELECT id, semantic_type FROM communities WHERE level=1"
@@ -369,7 +353,7 @@ class TestLLMOutputStability:
         finally:
             gs1.close()
         time.sleep(2)
-        gs2 = _gs(astro_promo)
+        gs2 = _gs(svc_member)
         try:
             types2 = {r[0]: r[1] for r in gs2._con.execute(
                 "SELECT id, semantic_type FROM communities WHERE level=1"
@@ -380,11 +364,11 @@ class TestLLMOutputStability:
         assert not changed, f"Semantic types changed between reads (churn?): {changed[:5]}"
 
     @pytest.mark.slow
-    def test_overview_business_rules_count_stable(self, astro_promo):
+    def test_overview_business_rules_count_stable(self, svc_member):
         """S2: overview(business_rules) must return same count on back-to-back reads."""
-        r1 = json.loads(asyncio.run(overview_tool(astro_promo, "business_rules")))
+        r1 = json.loads(asyncio.run(overview_tool(svc_member, "business_rules")))
         time.sleep(2)
-        r2 = json.loads(asyncio.run(overview_tool(astro_promo, "business_rules")))
+        r2 = json.loads(asyncio.run(overview_tool(svc_member, "business_rules")))
         assert len(r1["rules"]) == len(r2["rules"]), (
             f"business_rules count changed: {len(r1['rules'])} -> {len(r2['rules'])} (churn?)"
         )
@@ -392,24 +376,24 @@ class TestLLMOutputStability:
 
 class TestRegressionGuard:
 
-    def test_feature_map_still_works(self, astro_promo):
+    def test_feature_map_still_works(self, svc_member):
         """R1: overview(what='feature_map') must still work after vocab fix."""
-        result = asyncio.run(overview_tool(astro_promo, "feature_map"))
+        result = asyncio.run(overview_tool(svc_member, "feature_map"))
         data = json.loads(result)
         assert "features" in data, f"feature_map broken after vocab fix: {data}"
 
-    def test_communities_still_work(self, astro_campaign):
+    def test_communities_still_work(self, svc_member):
         """R2: overview(what='communities') must return >=10 communities."""
-        result = asyncio.run(overview_tool(astro_campaign, "communities"))
+        result = asyncio.run(overview_tool(svc_member, "communities"))
         data = json.loads(result)
         assert "communities" in data
         assert len(data["communities"]) >= 10, \
             f"communities returned only {len(data['communities'])}"
 
     @pytest.mark.slow
-    def test_business_rules_now_non_empty(self, astro_promo):
+    def test_business_rules_now_non_empty(self, svc_member):
         """R3: After Phase 0+1, business_rules must be non-empty (golden parity upgrade)."""
-        result = asyncio.run(overview_tool(astro_promo, "business_rules"))
+        result = asyncio.run(overview_tool(svc_member, "business_rules"))
         data = json.loads(result)
         rules = data.get("rules", [])
         assert rules, (
@@ -420,10 +404,10 @@ class TestRegressionGuard:
 class TestSemanticSeparation:
 
     @pytest.mark.slow
-    def test_business_rule_and_process_communities_are_disjoint(self, astro_promo):
+    def test_business_rule_and_process_communities_are_disjoint(self, svc_member):
         """D1: business_rule and business_process classify distinct communities (no overlap)."""
-        rules = json.loads(asyncio.run(overview_tool(astro_promo, "business_rules"))).get("rules", [])
-        flows = json.loads(asyncio.run(overview_tool(astro_promo, "process_flows"))).get("flows", [])
+        rules = json.loads(asyncio.run(overview_tool(svc_member, "business_rules"))).get("rules", [])
+        flows = json.loads(asyncio.run(overview_tool(svc_member, "process_flows"))).get("flows", [])
         assert rules, "overview('business_rules') returned no communities"
         assert flows, "overview('process_flows') returned no communities"
         rule_titles = {r["title"] for r in rules}
@@ -434,10 +418,10 @@ class TestSemanticSeparation:
         )
 
     @pytest.mark.slow
-    def test_ask_business_scope_returns_multi_community_context(self, astro_campaign):
+    def test_ask_business_scope_returns_multi_community_context(self, svc_member):
         """D2: ask(scope='business') assembles context from >=3 distinct communities."""
         ctx = asyncio.run(ask_tool(
-            "show me the business logic and validation rules", astro_campaign, "business"
+            "show me the business logic and validation rules", svc_member, "business"
         ))
         assert "## Business context" in ctx, f"Missing '## Business context' header: {ctx[:300]}"
         sections = [ln for ln in ctx.split("\n") if ln.startswith("## ") and "Business context" not in ln]
@@ -451,7 +435,7 @@ class TestClassificationStability:
     """Quality invariants for the direct-LLM (DeepSeek) classifier."""
 
     @pytest.mark.slow
-    def test_daemon_classification_is_stable(self, astro_campaign):
+    def test_daemon_classification_is_stable(self, svc_member):
         """D5 (no churn): the daemon path (reclassify_all=False) is idempotent.
 
         Production stability that matters: once a community is labelled, the daemon
@@ -460,12 +444,12 @@ class TestClassificationStability:
         communities (which would churn overview results each enrich). reclassify_all=True is a
         one-time migration only and may differ run-to-run since the LLM is not bit-deterministic.
         """
-        gs0 = GraphStore(project_graph_db(astro_campaign))
+        gs0 = GraphStore(project_graph_db(svc_member))
         try:
             classify_communities_semantic(gs0, lambda: False, reclassify_all=False)
         finally:
             gs0.close()
-        gs1 = GraphStore(project_graph_db(astro_campaign))
+        gs1 = GraphStore(project_graph_db(svc_member))
         try:
             changed = classify_communities_semantic(gs1, lambda: False, reclassify_all=False)
         finally:
@@ -489,10 +473,12 @@ class TestCrossProjectMetamorphic:
         is project-independent rather than overfit to one codebase [COSTELLO ACM 3643767; Cho
         ICSME '25]. Cross-project consistency guarantee for the Phase A migration.
         """
+        from pathlib import Path
+        _safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
         kw = ("test suite", "test cases", "test coverage", "unit test", "mock", "fixture")
         n_projects_test = total_clearly = total_test = 0
         per_project: list[tuple[str, int, int]] = []
-        for p in [p for p in list_projects() if p.enabled]:
+        for p in [p for p in list_projects() if p.enabled and str(_safe_base) in p.path]:
             try:
                 gs = GraphStore(project_graph_db(p.path))
             except Exception:  # skip unreadable stores — not the assertion's concern
