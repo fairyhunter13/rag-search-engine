@@ -81,15 +81,14 @@
 
 ## 5. Remaining open items
 
-Code conformance: all items resolved. One test requires Claude API quota (see note below).
+Code conformance: all items resolved.
 
 ```bash
 python scripts/check_world_model.py --all   # CONFORMS
 .venv/bin/pytest src/tests/live/test_world_model_traceability.py -q  # 1 passed
 .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -m "live and not slow" -q  # 600 passed
+.venv/bin/pytest src/tests/live/test_docgen_hierarchy_e2e.py -q  # 9 passed (includes slow test)
 ```
-
-**Note — `test_ih_generate_llm_structure` (slow, API-dependent):** This test drives the full IH generation pipeline (`explore_repo` → `architect` → `write_pages`) via real `claude -p` subprocess calls. It passes when the Claude subscription account has capacity (verified in isolation: 341s, 14 pages written). Under heavy API load (quota exhaustion from concurrent diagnostic runs), the architect subprocess times out at 180s and returns None. This is an environmental constraint, not a code bug. Run this test in isolation or in a fresh 5-hour rate-limit window.
 
 Additional fixes applied during this audit (beyond the 5 gaps):
 - Deleted `test_graph_narrative_and_trace_real_be` (was testing deleted P2-violating LLM functions)
@@ -98,6 +97,8 @@ Additional fixes applied during this audit (beyond the 5 gaps):
 - Fixed `test_process_db_created` (missing `det_db` fixture dependency)
 - Fixed ose-docgen architect tool-access: `if tools is not None:` prevents default tool use causing 180s timeout
 - Added `max_pages` override to `generate()`/`portal()` for test speed control
+- Fixed ose-docgen `stdin=subprocess.DEVNULL` in `run_claude_portal` (belt-and-suspenders subprocess isolation)
+- Fixed `test_ih_generate_llm_structure`: `capfd.disabled()` wrapper prevents pytest fd-level capture from blocking the claude subprocess — root cause was fd-level capture (`--capture=fd`) interfering with `subprocess.run()` when preceding tests held HTTP connections in the `requests` pool; `capfd.disabled()` temporarily restores real fds during the LLM call
 
 ---
 
