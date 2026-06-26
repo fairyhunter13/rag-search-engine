@@ -13,7 +13,8 @@ Critical rules that survived compaction:
 4. Push after EVERY commit (zero-unpushed policy — learned from Jun 9 2026 data loss)
 5. Never auto-index — only call build() when user explicitly asks
 6. LLM lanes: GPU = embeddings + reranking ONLY (FastEmbed/ONNX/CUDA); KB build = cloud DeepSeek-only (crash if no key); dashboard chat = claude-haiku-4-5 primary + DeepSeek fallback
-7. astro-project: 20064 files, 97480 chunks, 4599 communities, 3-level hierarchy — all healthy
+7. astro-project: 20064 files, 97480 chunks, 4599 L1 communities (flat; no L2/L3 since WS-B 2026-06-26)
+8. World model: docs/world-model/model.yaml (L1-L4); check: python scripts/check_world_model.py
 ==='''
 print(json.dumps({
     'hookSpecificOutput': {
