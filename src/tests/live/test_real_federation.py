@@ -1,8 +1,8 @@
-"""T2: real federation composed-entity validity — tests against the live redacted-name-3 root.
+"""T2: real federation composed-entity validity — tests against the live federation root.
 
 Synthetic-fixture tests (test_federation_architecture/logical_entity) prove invariants
-in isolation. This file validates that the *real* 25-member production federation holds
-the same invariants — a composition gap invisible to single-unit analysis (arXiv 2606.02019).
+in isolation. This file validates that the *real* federation root holds the same invariants
+— a composition gap invisible to single-unit analysis (arXiv 2606.02019).
 
 Metamorphic testing principle (MetaRAG arXiv 2509.09360 / MeTMaP ACM 2024):
 behavior must stay invariant under semantically-neutral transforms. Here:
@@ -20,16 +20,10 @@ pytestmark = pytest.mark.live
 _SYM_THRESHOLD = 50  # same as test_knowledge_built.py
 
 
-def _reg(substr: str) -> str:
-    from opencode_search.core.registry import list_projects
-    return next((e.path for e in list_projects() if substr in e.path and e.enabled), "")
-
-
 @pytest.fixture(scope="module")
 def acme_root() -> str:
-    path = _reg("redacted-name-3")
-    assert path, "redacted-name-3 must be registered and enabled"
-    return path
+    from tests.live._projects import federation_root
+    return federation_root()
 
 
 @pytest.fixture(scope="module")
@@ -46,7 +40,7 @@ def acme_status(acme_root) -> dict:
 
 
 class TestRealFederation:
-    """T2: real redacted-name-3 federation as one composed entity."""
+    """T2: real federation root as one composed entity."""
 
     def test_member_list_non_empty(self, acme_status: dict) -> None:
         """T2a: federation must report ≥2 members (root + at least one member)."""

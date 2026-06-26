@@ -1,8 +1,8 @@
 """Canonical configuration source of truth for opencode-search integrations.
 
-Every config tree (claude, claude-account1, claude-account2, hermes,
-opencode-default, opencode-personal) is derived from the constants here.
-Codex support removed. configure_integrations.py uses this module to verify and repair drift.
+The constants here are written into all detected config trees (claude profiles,
+opencode, hermes). configure_integrations.py uses this module to verify and repair drift.
+Codex support removed.
 """
 from __future__ import annotations
 

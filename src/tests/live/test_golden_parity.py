@@ -27,14 +27,8 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
 
 @pytest.fixture(scope="module")
 def acme_path():
-    from opencode_search.core.registry import list_projects
-    p = next(
-        (p.path for p in list_projects()
-         if "redacted-name-3" in p.path and "promo" not in p.path and p.enabled),
-        None,
-    )
-    assert p, "redacted-name-3 must be registered (run P8)"
-    return p
+    from tests.live._projects import federation_root
+    return federation_root()
 
 
 @pytest.mark.parametrize("what,required_keys,non_empty", OVERVIEW_SHAPE)

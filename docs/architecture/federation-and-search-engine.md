@@ -132,12 +132,11 @@ mapping table may substitute for structural analysis of user code.
   | 1 | `process()` extraction — ANY language | 1.0 `EXTRACTED` | always |
   | 1.5 | value-flow/FQN-join (`kb/valueflow.py`) | 0.9 `RESOLVED` | always |
   | 1.75 | GPU cross-encoder rerank (`kb/resolve_rerank.py`) | 0.8 `RERANKED` | always |
-  | 2 | SEA-style LLM select (`kb/llm_escalation.py`) | 0.7 `_llm` | default ON; opt-out: `OSE_BPRE_LLM_LINK=0` |
-  | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | default ON; opt-out: `OSE_BPRE_LLM_FILE=0` |
-- **`OSE_BPRE_LLM_LINK`** (default ON): opt-out disables Tier-2 → tree-sitter-unreachable edges
-  absent, never heuristically approximated. **`OSE_BPRE_LLM_FILE`** (default ON): opt-out disables Tier-3.
+  | 2 | SEA-style LLM select (`kb/llm_escalation.py`) | 0.7 `_llm` | ON when `DEEPSEEK_API_KEY` present |
+  | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | ON when `DEEPSEEK_API_KEY` present |
+- Tier 2/3 are **always on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
   **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`; `deepseek-chat` deprecates 2026-07-24).
-  With both set to `=0` + `OSE_WIKI_LLM=0`: reconstruction is GPU-free and byte-identical.
+  Without a key: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI. `test_valueflow_dynamic.py`,
   `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`, `test_deterministic_resolution.py`
@@ -161,11 +160,11 @@ mapping table may substitute for structural analysis of user code.
    Tier 1 = tree-sitter (`kb/bpre_ast.py`, reusing `graph/extractor.py`): Pass A mines generated
    `*.pb.go` to discover the gRPC API surface (real constructor/registrar names, **no hardcoded
    patterns**); Pass B detects call sites per-file against that surface (gRPC, pub/sub, HTTP,
-   status enums). Tier 2 = LLM linkage (default ON; opt-out: `OSE_BPRE_LLM_LINK=0`) for config-driven
+   status enums). Tier 2 = LLM linkage (ON when `DEEPSEEK_API_KEY` present) for config-driven
    edges (JSON-topic IDs, client hosts) tree-sitter cannot resolve. Tier 3 = cloud DeepSeek for D5
    rule text + D6 narrative. D4 process traces are **handler-anchored and deduped** — keyed on the
    entry handler's reachable symbol set, not any-edge service adjacency. **GPU-free** for Tier 1 +
-   BPMN/mermaid; byte-identical with `OSE_WIKI_LLM=0` + `OSE_BPRE_LLM_LINK=0` (F1/F2).
+   BPMN/mermaid; byte-identical without a DeepSeek key (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
 7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`opencode-search docgen <project>`).

@@ -2,7 +2,7 @@
 
 BSH1 — meta stamps survive the 5-table DELETE and are written after reconstruct.
 BSH2 — _bpre_algo_version() is deterministic (4-char hex, stable across calls).
-BSH3 — _narrative_incomplete returns False when OSE_WIKI_LLM=0 (allows reuse; no churn).
+BSH3 — _narrative_incomplete returns False when DeepSeek key absent (allows reuse; no churn).
 BSH4 — editing a member flips _bpre_source_sig (source-drift detection works).
 BSH5 — _synthesize_artifacts(old_narr) carries over unchanged process narratives byte-for-byte.
 SG   — reconcile_projects source contains the federation root-pass calls.
@@ -15,7 +15,7 @@ import sqlite3
 import pytest
 
 from opencode_search.core.config import root_process_db
-from opencode_search.kb.bpre import reconstruct_processes
+from opencode_search.kb.bpre import _narrative_incomplete, reconstruct_processes
 
 pytestmark = pytest.mark.live
 
@@ -29,15 +29,9 @@ def synth_fed():
 
 
 def _no_llm(root: str) -> int:
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "0"
-    try:
+    from unittest.mock import patch
+    with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
         return reconstruct_processes(root)
-    finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
 
 
 def test_bsh1_meta_stamps_survive_rebuild(synth_fed):
@@ -63,24 +57,15 @@ def test_bsh2_algo_version_is_deterministic():
     assert _bpre_algo_version() == v
 
 
-def test_bsh3_narrative_incomplete_allows_reuse_when_llm_off(synth_fed):
-    """BSH3: _narrative_incomplete returns False when OSE_WIKI_LLM=0 — no spurious rebuild."""
-    from opencode_search.kb.bpre import _narrative_incomplete
+def test_bsh3_narrative_incomplete_allows_reuse_when_key_absent(synth_fed):
+    """BSH3: _narrative_incomplete returns False when DeepSeek key absent — no spurious rebuild."""
+    from unittest.mock import patch
     _no_llm(synth_fed.root)
     db = root_process_db(synth_fed.root)
-    # Check _narrative_incomplete with the gate explicitly off.
-    prev = os.environ.get("OSE_WIKI_LLM")
-    os.environ["OSE_WIKI_LLM"] = "0"
-    try:
-        with sqlite3.connect(str(db)) as con:
-            result = _narrative_incomplete(con)
-    finally:
-        if prev is None:
-            os.environ.pop("OSE_WIKI_LLM", None)
-        else:
-            os.environ["OSE_WIKI_LLM"] = prev
+    with patch("opencode_search.graph.llm.deepseek_key", return_value=None), sqlite3.connect(str(db)) as con:
+        result = _narrative_incomplete(con)
     assert not result, (
-        "_narrative_incomplete must be False when OSE_WIKI_LLM=0 "
+        "_narrative_incomplete must be False when DeepSeek key absent "
         "(empty narratives are expected; no reuse-block needed)"
     )
 

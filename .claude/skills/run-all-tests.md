@@ -21,15 +21,13 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
    .venv/bin/pytest src/tests/live/test_browser.py -q --browser chromium
    ```
 
-## Thermal-aware execution (firmware-locked MSI RTX 5080 Laptop)
+## Thermal-aware execution (laptop GPU hosts)
 
 - **Check GPU temp before the slow suite.** If GPU > ~70°C (heat-soaked), idle-cool
-  first — a hot start makes the slow run much longer (thermal pauses) and pushes the
-  SSD toward ~79°C. Power/fan are firmware-locked; a cooling pad is the only hw lever.
+  first — a hot start makes the slow run much longer (thermal pauses).
 - **Don't run heavy suites back-to-back** without a cooldown; in "cool mode", run the
-  fast suite for iteration and defer the slow suite until the laptop has cooled.
-- Software thermal guards are 85°C (inference) / 82°C (indexing); hardware backstop is
-  100°C slowdown / 103°C shutdown. Tjmax 89°C.
+  fast suite for iteration and defer the slow suite until the GPU has cooled.
+- Software thermal guards are 85°C (inference) / 82°C (indexing); tune `OPENCODE_GPU_TEMP_MAX` for your device.
 
 ## Inference-efficiency when fixing/adding slow tests (no mocks, no coverage loss)
 

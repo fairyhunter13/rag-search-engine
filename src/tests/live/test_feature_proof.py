@@ -105,12 +105,12 @@ def test_fp9_ose_wiki(live_client):
     assert not any("domain_" in p for p in r.json().get("pages", []))
 
 
-# ── L2: redacted-name-3 (federation root) ─────────────────────────────────
+# ── L2: federation root ──────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
 def acme_root():
     r = _astro()
-    if not r: pytest.fail("no federated root registered — register redacted-name-3 first")
+    if not r: pytest.fail("no federated root registered — register a project with federation members")
     return r
 
 
