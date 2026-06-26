@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
@@ -24,9 +26,6 @@ _HDR = {"Content-Type": "application/json"}
 # Minimum symbols for a member to be expected to have communities.
 # Below this, 0 communities is legitimate (e.g. docs-only repos, thin roots).
 _SYM_THRESHOLD = 50
-
-
-from tests.live._sample_workspace import SampleWorkspace
 
 _OSE = str(Path(__file__).resolve().parents[3])
 

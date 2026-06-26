@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from ledger.accounts import ChartOfAccounts, compute_account_balance
 from ledger.entries import JournalEntry, make_credit, make_debit, validate_entry
-from ledger.accounts import Account, ChartOfAccounts, compute_account_balance
 
 
 @dataclass
