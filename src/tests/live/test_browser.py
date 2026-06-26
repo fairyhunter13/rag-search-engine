@@ -551,7 +551,7 @@ def test_journey_operator_reindex_sees_job_chip(page: Page) -> None:
     proj = page.evaluate("_proj") or ""
     assert proj, "window._proj must be set before triggering build"
     page.request.post(
-        f"http://127.0.0.1:8765/api/build_hierarchy?project={proj}&action=wiki",
+        f"http://127.0.0.1:8765/api/build_wiki?project={proj}&action=wiki",
         headers={"Content-Type": "application/json"},
     )
     page.wait_for_selector(".admin-chip", timeout=30000)

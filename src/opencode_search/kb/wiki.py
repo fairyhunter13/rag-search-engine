@@ -138,7 +138,7 @@ def _render_index(l1: list) -> str:
     parts = ["# Project Wiki", "",
              f"{len(l1)} code communities across {n_types} semantic types.", ""]
     by_type: dict[str, list] = {}
-    for cid, title, _summary, stype, _mc, _parent in l1:
+    for cid, title, _summary, stype, _mc in l1:
         by_type.setdefault(stype or "feature", []).append((cid, title))
     parts += ["## Communities by Type", ""]
     for st in _TYPE_ORDER:
@@ -162,7 +162,7 @@ def build_wiki(store: GraphStore, output_dir: Path) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     root = _project_root(store)
     l1 = store._con.execute(
-        "SELECT id, title, summary, semantic_type, member_count, parent_id FROM communities "
+        "SELECT id, title, summary, semantic_type, member_count FROM communities "
         "WHERE level=1 AND title IS NOT NULL AND title!='' AND summary IS NOT NULL AND summary!='' "
         "ORDER BY id").fetchall()
     if not l1:
@@ -170,7 +170,7 @@ def build_wiki(store: GraphStore, output_dir: Path) -> int:
     count = 0
     (output_dir / "index.md").write_text(_render_index(l1), encoding="utf-8")
     count += 1
-    for cid, title, summary, stype, mc, _parent in l1:
+    for cid, title, summary, stype, mc in l1:
         (output_dir / f"community_{cid}.md").write_text(
             _render_community(store, root, cid, title, summary, stype, mc or 0), encoding="utf-8")
         count += 1

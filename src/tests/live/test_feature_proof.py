@@ -148,3 +148,35 @@ def test_fp14_ask_flat_l1():
     result = asyncio.run(t("What is the overall architecture?", _OSE, "global"))
     assert len(result.strip()) > 100
     assert any(k in result.lower() for k in ("search","embed","graph","daemon","community","kb","query"))
+
+
+# ── L4: Phase-1b flat-KB source guards ──────────────────────────────────
+
+def test_fp15_no_set_community_parent_in_source():
+    """Phase-1b guard: set_community_parent removed from graph/store.py (no callers existed)."""
+    from opencode_search.graph.store import GraphStore
+    assert not hasattr(GraphStore, "set_community_parent"), \
+        "set_community_parent still exists on GraphStore — vestigial L2 nesting capacity"
+
+
+def test_fp16_no_level2_query_in_quality():
+    """Phase-1b guard: no WHERE level=2 query in graph/quality.py (always-0 dead metric)."""
+    import inspect
+    from opencode_search import graph
+    quality_path = Path(inspect.getfile(graph)) / "../quality.py"
+    quality_path = quality_path.resolve()
+    src = quality_path.read_text()
+    assert "WHERE level=2" not in src, \
+        "Dead WHERE level=2 query found in graph/quality.py — should have been removed"
+    assert "n_l2" not in src, \
+        "Vestigial n_l2 metric found in graph/quality.py — should have been removed"
+
+
+def test_fp17_build_wiki_route_present(live_client):
+    """Phase-1b guard: /api/build_wiki route replaces /api/build_hierarchy."""
+    # /api/build_wiki with nonexistent path returns 404, not 404-for-unknown-route
+    r = live_client.post("/api/build_wiki", json={"project_path": "/nonexistent"}, timeout=10)
+    assert r.status_code in (400, 404), f"/api/build_wiki: {r.status_code} {r.text[:80]}"
+    # old route must 404
+    r2 = live_client.post("/api/build_hierarchy", json={"project_path": "/nonexistent"}, timeout=10)
+    assert r2.status_code == 404, f"/api/build_hierarchy should be gone: {r2.status_code}"

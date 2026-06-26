@@ -61,10 +61,6 @@ def _open(db_path: Path) -> sqlite3.Connection:
             );
         """)
         con.commit()
-    # Schema migration: add parent_id for L1→L2 hierarchy links.
-    if "parent_id" not in _cols:
-        con.execute("ALTER TABLE communities ADD COLUMN parent_id INTEGER")
-        con.commit()
     # Schema migration F-G/F-D: drop write-only columns (signature, docstring, intent).
     # SQLite 3.35+ supports ALTER TABLE DROP COLUMN; current system has 3.45.1.
     _sym_cols = {r[1] for r in con.execute("PRAGMA table_info(symbols)")}
@@ -170,9 +166,6 @@ class GraphStore:
                  narrated=MAX(narrated, COALESCE(excluded.narrated, 0))""",
             (cid, level, title, summary, member_count, semantic_type, narrated),
         )
-
-    def set_community_parent(self, cid: int, parent_id: int) -> None:
-        self._con.execute("UPDATE communities SET parent_id=? WHERE id=?", (parent_id, cid))
 
     def clear(self) -> None:
         """Wipe symbols/edges/communities before a full re-index so stale rows don't persist."""

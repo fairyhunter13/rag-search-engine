@@ -12,7 +12,7 @@ from opencode_search.graph.store import GraphStore
 def partition_quality(store: GraphStore) -> dict:
     """Compute partition-quality metrics from the L1 community assignment.
 
-    Returns a dict with: n_l1, n_l2, level_max, modularity_q, coverage,
+    Returns a dict with: n_l1, level_max, modularity_q, coverage,
     singleton_ratio, degenerate.  Always cheap (SQL + igraph, zero LLM calls).
     """
     import igraph as ig
@@ -22,7 +22,7 @@ def partition_quality(store: GraphStore) -> dict:
     ).fetchall()
     if not rows:
         return {
-            "n_l1": 0, "n_l2": 0, "level_max": 0,
+            "n_l1": 0, "level_max": 0,
             "modularity_q": 0.0, "coverage": 0.0,
             "singleton_ratio": 0.0, "degenerate": False,
         }
@@ -62,9 +62,6 @@ def partition_quality(store: GraphStore) -> dict:
     singleton_ratio = (l1_singleton / l1_total) if l1_total > 0 else 0.0
 
     n_l1 = len(unique_cids)
-    n_l2 = store._con.execute(
-        "SELECT COUNT(*) FROM communities WHERE level=2"
-    ).fetchone()[0]
     level_max_row = store._con.execute(
         "SELECT MAX(level) FROM communities"
     ).fetchone()[0]
@@ -78,7 +75,7 @@ def partition_quality(store: GraphStore) -> dict:
     )
 
     return {
-        "n_l1": n_l1, "n_l2": n_l2, "level_max": level_max,
+        "n_l1": n_l1, "level_max": level_max,
         "modularity_q": round(modularity_q, 4),
         "coverage": round(coverage, 4),
         "singleton_ratio": round(singleton_ratio, 4),
