@@ -54,13 +54,11 @@ def _copy_fixtures(base: Path) -> tuple[Path, Path]:
 
 
 def _register(fed_base: Path, ledger_dir: Path) -> tuple[str, list[str], str]:
-    from opencode_search.daemon.federation import index_members
     member_paths = [str(fed_base / m) for m in _MEMBERS]
     fed_root = str(fed_base)
     upsert_project(ProjectEntry(path=fed_root, enabled=True, federation=member_paths))
     for m in member_paths:
         upsert_project(ProjectEntry(path=m, enabled=True))
-    index_members(fed_root)
     ledger = str(ledger_dir)
     upsert_project(ProjectEntry(path=ledger, enabled=True))
     return fed_root, member_paths, ledger
@@ -113,14 +111,22 @@ def _replay_golden(project_path: str, golden_path: Path) -> None:
         gs.close()
 
 
+def _cleanup_stale_workspaces(keep: Path) -> None:
+    """Remove leftover sample-ws-* dirs from crashed previous sessions."""
+    for d in _SAFE_BASE.glob("sample-ws-*"):
+        if d != keep:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def build_sample_workspace() -> SampleWorkspace:
-    from unittest.mock import patch
+    from opencode_search.graph.llm import no_deepseek
     _SAFE_BASE.mkdir(parents=True, exist_ok=True)
     base = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="sample-ws-"))
-    with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+    _cleanup_stale_workspaces(base)
+    with no_deepseek():
         fed_base, ledger_dir = _copy_fixtures(base)
         fed_root, member_paths, ledger = _register(fed_base, ledger_dir)
-        _index_members([*member_paths, ledger])
+        _index_members([fed_root, *member_paths, ledger])
         for i, mp in enumerate(member_paths):
             _replay_golden(mp, _SHOP_SRC / _MEMBERS[i] / "enrichment.json")
         _replay_golden(ledger, _LEDGER_SRC / "enrichment.json")

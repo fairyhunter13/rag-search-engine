@@ -106,3 +106,33 @@ func TestReserveAndRelease(t *testing.T) {
 	}
 	ReleasePromo("CODE_TEST", "u2")
 }
+
+func TestDefaultRuleEngine_Valid(t *testing.T) {
+	now := time.Now()
+	d := &PromoDetails{Code: "E2E", ValidFrom: now.Add(-time.Hour).Unix(),
+		ValidUntil: now.Add(time.Hour).Unix(), DiscountPct: 10, MinOrder: 0, MaxUses: 0}
+	ctx := NewRuleContext("u1", "E2E", 100.0, 1, false, 0, nil, d)
+	e := DefaultRuleEngine()
+	if e.HasViolations(ctx) {
+		t.Errorf("expected no violations, got: %v", e.RunAll(ctx))
+	}
+}
+
+func TestDefaultRuleEngine_Violation(t *testing.T) {
+	now := time.Now()
+	d := &PromoDetails{Code: "E2E", ValidFrom: now.Add(-time.Hour).Unix(),
+		ValidUntil: now.Add(time.Hour).Unix(), DiscountPct: 10, MinOrder: 200, MaxUses: 0}
+	ctx := NewRuleContext("u1", "E2E", 50.0, 1, false, 0, nil, d)
+	e := DefaultRuleEngine()
+	if !e.HasViolations(ctx) {
+		t.Error("expected violation for order below min_order")
+	}
+}
+
+func TestRuleEngine_Register(t *testing.T) {
+	e := NewRuleEngine()
+	e.Register("always_ok", func(_ RuleContext) error { return nil })
+	if e.HasViolations(RuleContext{}) {
+		t.Error("expected no violations")
+	}
+}

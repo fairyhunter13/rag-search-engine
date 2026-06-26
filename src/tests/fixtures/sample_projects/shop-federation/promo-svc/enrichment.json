@@ -1,0 +1,124 @@
+[
+  {
+    "community_id": 0,
+    "level": 1,
+    "title": "Rule Engine Tests",
+    "summary": "This community contains test cases for the default rule engine. It tests validations, violations, and registration of rules.",
+    "member_count": 8,
+    "semantic_type": "test",
+    "narrated": 1,
+    "member_signature": [
+      "HasViolations",
+      "NewRuleContext",
+      "NewRuleEngine",
+      "Register",
+      "RunAll",
+      "TestDefaultRuleEngine_Valid",
+      "TestDefaultRuleEngine_Violation",
+      "TestRuleEngine_Register"
+    ]
+  },
+  {
+    "community_id": 1,
+    "level": 1,
+    "title": "Discount Computation and Fulfillment",
+    "summary": "Implements the discount computation logic and fulfillment workflow. It includes testing for computeDiscount and integration with promo lookup.",
+    "member_count": 5,
+    "semantic_type": "business_process",
+    "narrated": 1,
+    "member_signature": [
+      "ApplyPromo",
+      "FulfillmentWorkflow",
+      "TestComputeDiscount",
+      "computeDiscount",
+      "lookupPromo"
+    ]
+  },
+  {
+    "community_id": 2,
+    "level": 1,
+    "title": "Discount and Coupon Rules",
+    "summary": "Defines and tests business rules for discount eligibility, coupon stacking limits, and minimum order. These rules constrain order value and coupon usage.",
+    "member_count": 9,
+    "semantic_type": "business_rule",
+    "narrated": 1,
+    "member_signature": [
+      "CouponStackingLimitRule",
+      "DefaultRuleEngine",
+      "DiscountEligibilityRule",
+      "GetCurrentReservation",
+      "MinOrderRule",
+      "OrderValueCapRule",
+      "TestCouponStackingLimitRule",
+      "TestDiscountEligibilityRule",
+      "TestMinOrderRule"
+    ]
+  },
+  {
+    "community_id": 3,
+    "level": 1,
+    "title": "Registerpromoserviceserver",
+    "summary": "3 symbol(s) (function) from main.go, promo.go, promo_grpc.pb.go. Primary: main.go.",
+    "member_count": 3,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "NewPromoServer",
+      "RegisterPromoServiceServer",
+      "main"
+    ]
+  },
+  {
+    "community_id": 4,
+    "level": 1,
+    "title": "Promo Window and Usage Rules",
+    "summary": "Implements promo window and max usage rules for promotions. Validates that promotions are used within allowed windows and not exceeded.",
+    "member_count": 5,
+    "semantic_type": "business_rule",
+    "narrated": 1,
+    "member_signature": [
+      "MaxUsageRule",
+      "PromoWindowRule",
+      "TestMaxUsageRule",
+      "TestPromoWindowRule",
+      "ValidatePromo"
+    ]
+  },
+  {
+    "community_id": 5,
+    "level": 1,
+    "title": "Releasepromo",
+    "summary": "6 symbol(s) (function, method) from promo_test.go, rules.go, rules_engine.go. Primary: promo_test.go.",
+    "member_count": 6,
+    "semantic_type": "",
+    "narrated": 0,
+    "member_signature": [
+      "Error",
+      "ReleasePromo",
+      "ReservationConflictRule",
+      "ReservePromo",
+      "TestReservationConflictRule",
+      "TestReserveAndRelease"
+    ]
+  },
+  {
+    "community_id": 6,
+    "level": 1,
+    "title": "Promo Service Client",
+    "summary": "Provides functions to register, validate, and track promo usage. It includes methods for applying promos and retrieving details.",
+    "member_count": 9,
+    "semantic_type": "utility",
+    "narrated": 1,
+    "member_signature": [
+      "ApplyPromo",
+      "GetPromoDetails",
+      "GetPromoDetails",
+      "NewPromoServiceClient",
+      "RegisterPromo",
+      "ValidatePromo",
+      "hasAlreadyClaimed",
+      "recordUsage",
+      "totalUsageCount"
+    ]
+  }
+]

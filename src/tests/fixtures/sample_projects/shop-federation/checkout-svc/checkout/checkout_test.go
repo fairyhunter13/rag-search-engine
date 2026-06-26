@@ -53,3 +53,49 @@ func TestOrderStore_NotFound(t *testing.T) {
 		t.Error("expected not found")
 	}
 }
+
+func TestValidateCartItems_Valid(t *testing.T) {
+	items := []*cart.CartItem{{ProductID: "p1", Price: 10.0, Quantity: 1}}
+	if err := validateCartItems(items); err != nil {
+		t.Errorf("expected valid, got %v", err)
+	}
+}
+
+func TestValidateCartItems_ZeroPrice(t *testing.T) {
+	if validateCartItems([]*cart.CartItem{{ProductID: "p1", Price: 0, Quantity: 1}}) == nil {
+		t.Error("expected error for zero price")
+	}
+}
+
+func TestValidateCartItems_ZeroQty(t *testing.T) {
+	if validateCartItems([]*cart.CartItem{{ProductID: "p1", Price: 10.0, Quantity: 0}}) == nil {
+		t.Error("expected error for zero quantity")
+	}
+}
+
+func TestEstimateShipping_Empty(t *testing.T) {
+	if estimateShipping(nil) != 0 {
+		t.Error("expected 0 shipping for empty cart")
+	}
+}
+
+func TestEstimateShipping_Items(t *testing.T) {
+	items := []*cart.CartItem{{}, {}, {}}
+	if estimateShipping(items) != 5.0+float64(3)*0.5 {
+		t.Error("unexpected shipping amount")
+	}
+}
+
+func TestPricingResult_Total(t *testing.T) {
+	pr := PricingResult{Subtotal: 100.0, Discount: 10.0, Shipping: 5.0, Total: 95.0}
+	if pr.Total != 95.0 {
+		t.Errorf("expected total 95.0, got %f", pr.Total)
+	}
+}
+
+func TestOrderResult_Confirmed(t *testing.T) {
+	r := &OrderResult{OrderID: "ord-001", Status: "confirmed"}
+	if r.Status != "confirmed" {
+		t.Errorf("expected confirmed, got %s", r.Status)
+	}
+}

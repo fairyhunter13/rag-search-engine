@@ -10,20 +10,22 @@ from pathlib import Path
 import pytest
 import requests
 
-from tests.live._projects import federation_root as _federation_root
-from tests.live._projects import standalone_project as _standalone_project
+from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
+_OSE = str(Path(__file__).resolve().parents[3])
 
-# Derive OSE root from this file's location; resolve other projects by capability.
-_PROJECTS = {
-    "ose": str(Path(__file__).resolve().parents[3]),
-    "federation": _federation_root(),
-    "standalone": _standalone_project(),
-}
+
+@pytest.fixture(scope="session")
+def projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
+    return {
+        "ose": _OSE,
+        "federation": sample_workspace.fed_root,
+        "standalone": sample_workspace.ledger,
+    }
 
 
 def _overview(what: str, project: str, timeout: int = 20) -> dict:
@@ -73,9 +75,9 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
-def test_e2e_status_has_required_fields(live_client, proj_key):
+def test_e2e_status_has_required_fields(live_client, proj_key, projects):
     """S5a: overview(status) returns required fields for each named project."""
-    project = _PROJECTS[proj_key]
+    project = projects[proj_key]
     status = _overview("status", project)
     for field in ("kb_state", "enriched_pct", "l1_enriched_pct",
                   "symbols", "communities"):
@@ -86,9 +88,9 @@ def test_e2e_status_has_required_fields(live_client, proj_key):
 
 
 @pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
-def test_e2e_no_l1_placeholders(live_client, proj_key):
+def test_e2e_no_l1_placeholders(live_client, proj_key, projects):
     """S5b: L1 communities must not contain 'Domain N' placeholder titles."""
-    project = _PROJECTS[proj_key]
+    project = projects[proj_key]
     data = _overview("communities", project)
     communities = data.get("communities", [])
     placeholder = re.compile(r"^Domain\s+\d+$", re.IGNORECASE)
@@ -98,12 +100,12 @@ def test_e2e_no_l1_placeholders(live_client, proj_key):
 
 
 @pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
-def test_e2e_ask_global_non_empty(live_client, proj_key):
+def test_e2e_ask_global_non_empty(live_client, proj_key, projects):
     """S5c: MCP ask scope=global returns a non-empty assembled context."""
     import asyncio
 
     from opencode_search.server.mcp import ask as _mcp_ask
-    project = _PROJECTS[proj_key]
+    project = projects[proj_key]
     ctx = asyncio.run(_mcp_ask("What is the overall architecture?", project, "global"))
     assert len(ctx.strip()) > 20, f"ask(global, {proj_key}): context too short: {ctx[:80]}"
 
@@ -184,22 +186,22 @@ def test_federation_kb_reflects_root_only(live_client):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["ose", "standalone", "federation"])
-def test_kb_state_ready_all_projects(live_client, proj_key):
+def test_kb_state_ready_all_projects(live_client, proj_key, projects):
     """T1/TC1/HR7: converge+assert kb_state='ready' and l1_enriched_pct==100 for all 3 projects."""
-    _converge_ready(_PROJECTS[proj_key])
+    _converge_ready(projects[proj_key])
 
 
 # ---------------------------------------------------------------------------
 # T3/HR3: overview(status) must return identical counts between reads (no churn)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("proj_key", ["ose", "payment"])
-def test_kb_state_no_churn(live_client, proj_key):
+@pytest.mark.parametrize("proj_key", ["ose", "standalone"])
+def test_kb_state_no_churn(live_client, proj_key, projects):
     """T3/HR3: symbols/communities/enriched_pct must be stable between back-to-back reads."""
     import time
-    s1 = _overview("status", _PROJECTS[proj_key])
+    s1 = _overview("status", projects[proj_key])
     time.sleep(2)
-    s2 = _overview("status", _PROJECTS[proj_key])
+    s2 = _overview("status", projects[proj_key])
     for field in ("symbols", "communities", "enriched_pct"):
         assert s1.get(field) == s2.get(field), (
             f"{proj_key}: {field} changed between reads: "
@@ -240,9 +242,9 @@ def test_needs_enrich_detects_null_summaries(safe_tmp_path):
         remove_project(str(safe_tmp_path))
 
 
-def test_real_federation_fanout(live_client):
+def test_real_federation_fanout(live_client, projects):
     """T6/HR4: federation root members list has ≥1 member with real symbols; search fans out."""
-    status = _overview("status", _PROJECTS["federation"])
+    status = _overview("status", projects["federation"])
     members = status.get("members", [])
     assert members, "federation root overview(status) returned no members (federation broken)"
     with_syms = [m for m in members if m.get("symbols", 0) > 0]
@@ -253,7 +255,7 @@ def test_real_federation_fanout(live_client):
     import asyncio
 
     from opencode_search.server.mcp import search as _mcp_search
-    data = json.loads(asyncio.run(_mcp_search("function", project_paths=[_PROJECTS["federation"]])))
+    data = json.loads(asyncio.run(_mcp_search("function", project_paths=[projects["federation"]])))
     results = data.get("results", [])
     assert results, "search(project_paths=[federation root]) returned no results (fan-out broken)"
 
@@ -346,7 +348,7 @@ def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
-def test_federation_no_member_stuck_indexing(live_client, proj_key):
+def test_federation_no_member_stuck_indexing(live_client, proj_key, projects):
     """Fix #2: after reconcile completes, no federation member may have kb_state='indexing'.
 
     Marked slow: reconcile must finish indexing all never-indexed members before this passes.
@@ -354,7 +356,7 @@ def test_federation_no_member_stuck_indexing(live_client, proj_key):
     """
     from opencode_search.daemon.sweeps import reconcile_projects
     reconcile_projects()  # ensure local state is converged before asserting
-    status = _overview("status", _PROJECTS[proj_key])
+    status = _overview("status", projects[proj_key])
     stuck = [m for m in status.get("members", []) if m.get("kb_state") == "indexing"]
     assert not stuck, (
         f"{proj_key}: {len(stuck)} member(s) still 'indexing' after reconcile — "
@@ -375,14 +377,14 @@ def test_upsert_project_rejects_forbidden_root():
 
 @pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
-def test_federation_search_ask_as_logical_entity(live_client, proj_key):
+def test_federation_search_ask_as_logical_entity(live_client, proj_key, projects):
     """Logical-entity e2e: search and ask both return results for real project roots."""
     import asyncio
 
     from opencode_search.server.mcp import ask as _mcp_ask
     from opencode_search.server.mcp import search as _mcp_search
 
-    root = _PROJECTS[proj_key]
+    root = projects[proj_key]
     sr = json.loads(asyncio.run(_mcp_search("function", project_paths=[root])))
     assert sr.get("results"), f"{proj_key}: search returned no results (fan-out broken)"
     ak = asyncio.run(_mcp_ask("What is the overall architecture?", root, "global"))
@@ -393,9 +395,9 @@ def test_federation_search_ask_as_logical_entity(live_client, proj_key):
 # Logical-entity config (E1/E2/E3)
 # ---------------------------------------------------------------------------
 
-def test_overview_status_includes_config_key(live_client):
+def test_overview_status_includes_config_key(live_client, projects):
     """E3: overview(status) must include a 'config' key with source + exclude."""
-    status = _overview("status", _PROJECTS["ose"])
+    status = _overview("status", projects["ose"])
     assert "config" in status, f"overview(status) missing 'config' key: {list(status)}"
     cfg = status["config"]
     assert "source" in cfg and "exclude" in cfg, f"config key missing fields: {cfg}"

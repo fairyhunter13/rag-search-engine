@@ -32,10 +32,11 @@ func RegisterPromoServiceServer(s *grpc.Server, srv PromoServiceServer) {}
 
 // PromoDetails holds the configuration for a promotional offer.
 type PromoDetails struct {
-	Code        string
-	DiscountPct float64
-	MinOrder    float64
-	MaxUses     int
-	ValidFrom   int64
-	ValidUntil  int64
+	Code          string
+	DiscountPct   float64
+	MinOrder      float64
+	MaxOrderValue float64
+	MaxUses       int
+	ValidFrom     int64
+	ValidUntil    int64
 }

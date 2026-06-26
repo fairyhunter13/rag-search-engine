@@ -35,8 +35,8 @@ def synth_fed():
 @pytest.fixture(scope="module")
 def det_db(synth_fed):
     """Run reconstruct_processes once on the synthetic root with DeepSeek key absent."""
-    from unittest.mock import patch
-    with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+    from opencode_search.graph.llm import no_deepseek
+    with no_deepseek():
         count = reconstruct_processes(synth_fed.root)
     db = root_process_db(synth_fed.root)
     assert db.exists(), "process_graph.db must exist after reconstruct_processes"
@@ -86,8 +86,8 @@ class TestDeterministicResolution:
 
     def test_deterministic_two_runs_same_count(self, synth_fed):
         """Two keyless runs must produce byte-identical edge counts."""
-        from unittest.mock import patch
-        with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+        from opencode_search.graph.llm import no_deepseek
+        with no_deepseek():
             reconstruct_processes(synth_fed.root)
             db = root_process_db(synth_fed.root)
             c1 = sqlite3.connect(str(db)).execute(

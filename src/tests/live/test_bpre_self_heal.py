@@ -29,8 +29,8 @@ def synth_fed():
 
 
 def _no_llm(root: str) -> int:
-    from unittest.mock import patch
-    with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
+    from opencode_search.graph.llm import no_deepseek
+    with no_deepseek():
         return reconstruct_processes(root)
 
 
@@ -59,10 +59,10 @@ def test_bsh2_algo_version_is_deterministic():
 
 def test_bsh3_narrative_incomplete_allows_reuse_when_key_absent(synth_fed):
     """BSH3: _narrative_incomplete returns False when DeepSeek key absent — no spurious rebuild."""
-    from unittest.mock import patch
+    from opencode_search.graph.llm import no_deepseek
     _no_llm(synth_fed.root)
     db = root_process_db(synth_fed.root)
-    with patch("opencode_search.graph.llm.deepseek_key", return_value=None), sqlite3.connect(str(db)) as con:
+    with no_deepseek(), sqlite3.connect(str(db)) as con:
         result = _narrative_incomplete(con)
     assert not result, (
         "_narrative_incomplete must be False when DeepSeek key absent "

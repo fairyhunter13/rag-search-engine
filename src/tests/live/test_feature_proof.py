@@ -12,11 +12,6 @@ _WHATS = ["structure","status","projects","metrics","import_cycles",
           "process_flows","suggested_questions","service_mesh","validate"]
 
 
-def _fed_root() -> str:
-    from tests.live._projects import federation_root
-    return federation_root()
-
-
 def _sym(path: str) -> str:
     from opencode_search.core.config import project_graph_db
     gdb = project_graph_db(path)
@@ -106,8 +101,10 @@ def test_fp9_ose_wiki(live_client):
 # ── L2: federation root ──────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def fed_root():
-    return _fed_root()
+def fed_root(sample_workspace) -> str:
+    from tests.live._sample_workspace import SampleWorkspace
+    assert isinstance(sample_workspace, SampleWorkspace)
+    return sample_workspace.fed_root
 
 
 def test_fp10_federation_search(fed_root):
