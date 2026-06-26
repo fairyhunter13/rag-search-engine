@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
-_OSE = str(Path(__file__).resolve().parents[3])  # repo root, no hardcoded device path
 
 
 def _graph_db(project: str) -> Path:
@@ -53,6 +54,11 @@ def _converge_ready(project: str, timeout: int = 180) -> None:
     )
 
 
+@pytest.fixture(scope="module")
+def service_path(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
+
+
 def test_orphan_l2_stamp_sets_title_and_summary(safe_tmp_path):
     """TB1/F4a: orphan-L2 stamp SQL sets title='(leaf)'+summary; pre-seeded L1 summary intact."""
     from opencode_search.graph.store import GraphStore
@@ -89,13 +95,13 @@ def test_orphan_l2_stamp_sets_title_and_summary(safe_tmp_path):
 # S1: Singleton-ratio guard (Fix 1)
 # ---------------------------------------------------------------------------
 
-def test_singleton_ratio_below_threshold(live_client):
+def test_singleton_ratio_below_threshold(live_client, service_path):
     """S1: L1 singleton ratio must be <60% after Fix 1 re-detection."""
-    con = _con(_OSE)
+    con = _con(service_path)
     try:
         total = con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
         assert total > 0, (
-            "no L1 communities in OSE graph.db — re-index must have completed before running this test"
+            "no L1 communities in sample graph.db — sample_workspace fixture must run first"
         )
         singletons = con.execute(
             "SELECT COUNT(*) FROM communities WHERE level=1 AND member_count=1"
@@ -115,19 +121,19 @@ def test_singleton_ratio_below_threshold(live_client):
 # S4: kb_state reaches ready (Fix 3)
 # ---------------------------------------------------------------------------
 
-def test_kb_state_ready_when_fully_enriched(live_client):
+def test_kb_state_ready_when_fully_enriched(live_client, service_path):
     """S4/TC1: After converge, kb_state='ready' and enriched_pct>=95."""
-    _converge_ready(_OSE)
-    status = _overview_status(_OSE)
+    _converge_ready(service_path)
+    status = _overview_status(service_path)
     assert status.get("kb_state") == "ready", (
         f"kb_state={status.get('kb_state')!r}, pct={status.get('enriched_pct')}"
     )
     assert status.get("enriched_pct", 0) >= 95.0
 
 
-def test_status_includes_level_breakdown_fields(live_client):
+def test_status_includes_level_breakdown_fields(live_client, service_path):
     """S4b: overview(status) must include l1_enriched_pct field."""
-    status = _overview_status(_OSE)
+    status = _overview_status(service_path)
     for field in ("enriched_pct", "l1_enriched_pct", "kb_state"):
         assert field in status, f"overview(status) missing field {field!r}"
 

@@ -16,13 +16,10 @@ pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
-_OSE = str(Path(__file__).resolve().parents[3])
-
-
 @pytest.fixture(scope="session")
 def projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
     return {
-        "ose": _OSE,
+        "service": sample_workspace.promo,
         "federation": sample_workspace.fed_root,
         "standalone": sample_workspace.ledger,
     }
@@ -74,7 +71,7 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
 # S5: E2E MCP round-trip for 3 named projects
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
+@pytest.mark.parametrize("proj_key", ["service", "federation", "standalone"])
 def test_e2e_status_has_required_fields(live_client, proj_key, projects):
     """S5a: overview(status) returns required fields for each named project."""
     project = projects[proj_key]
@@ -87,7 +84,7 @@ def test_e2e_status_has_required_fields(live_client, proj_key, projects):
     )
 
 
-@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
+@pytest.mark.parametrize("proj_key", ["service", "federation", "standalone"])
 def test_e2e_no_l1_placeholders(live_client, proj_key, projects):
     """S5b: L1 communities must not contain 'Domain N' placeholder titles."""
     project = projects[proj_key]
@@ -99,7 +96,7 @@ def test_e2e_no_l1_placeholders(live_client, proj_key, projects):
     assert not bad, f"{proj_key}: placeholder community titles found: {bad}"
 
 
-@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
+@pytest.mark.parametrize("proj_key", ["service", "federation", "standalone"])
 def test_e2e_ask_global_non_empty(live_client, proj_key, projects):
     """S5c: MCP ask scope=global returns a non-empty assembled context."""
     import asyncio
@@ -185,7 +182,7 @@ def test_federation_kb_reflects_root_only(live_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-@pytest.mark.parametrize("proj_key", ["ose", "standalone", "federation"])
+@pytest.mark.parametrize("proj_key", ["service", "standalone", "federation"])
 def test_kb_state_ready_all_projects(live_client, proj_key, projects):
     """T1/TC1/HR7: converge+assert kb_state='ready' and l1_enriched_pct==100 for all 3 projects."""
     _converge_ready(projects[proj_key])
@@ -195,7 +192,7 @@ def test_kb_state_ready_all_projects(live_client, proj_key, projects):
 # T3/HR3: overview(status) must return identical counts between reads (no churn)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("proj_key", ["ose", "standalone"])
+@pytest.mark.parametrize("proj_key", ["service", "standalone"])
 def test_kb_state_no_churn(live_client, proj_key, projects):
     """T3/HR3: symbols/communities/enriched_pct must be stable between back-to-back reads."""
     import time
@@ -347,7 +344,7 @@ def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
+@pytest.mark.parametrize("proj_key", ["service", "federation", "standalone"])
 def test_federation_no_member_stuck_indexing(live_client, proj_key, projects):
     """Fix #2: after reconcile completes, no federation member may have kb_state='indexing'.
 
@@ -376,7 +373,7 @@ def test_upsert_project_rejects_forbidden_root():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("proj_key", ["ose", "federation", "standalone"])
+@pytest.mark.parametrize("proj_key", ["service", "federation", "standalone"])
 def test_federation_search_ask_as_logical_entity(live_client, proj_key, projects):
     """Logical-entity e2e: search and ask both return results for real project roots."""
     import asyncio
@@ -397,7 +394,7 @@ def test_federation_search_ask_as_logical_entity(live_client, proj_key, projects
 
 def test_overview_status_includes_config_key(live_client, projects):
     """E3: overview(status) must include a 'config' key with source + exclude."""
-    status = _overview("status", projects["ose"])
+    status = _overview("status", projects["service"])
     assert "config" in status, f"overview(status) missing 'config' key: {list(status)}"
     cfg = status["config"]
     assert "source" in cfg and "exclude" in cfg, f"config key missing fields: {cfg}"

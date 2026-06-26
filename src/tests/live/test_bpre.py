@@ -9,7 +9,6 @@ import time
 import pytest
 
 from opencode_search.core.config import project_graph_db
-from opencode_search.core.registry import list_projects
 from opencode_search.graph.enrich import classify_communities_semantic
 from opencode_search.graph.store import GraphStore
 from opencode_search.server.mcp import ask as ask_tool
@@ -464,7 +463,7 @@ class TestCrossProjectMetamorphic:
     """Metamorphic: the label is a function of WHAT a community is, not WHICH project hosts it."""
 
     @pytest.mark.slow
-    def test_test_titled_communities_classify_test_across_projects(self):
+    def test_test_titled_communities_classify_test_across_projects(self, sample_workspace):
         """M1 (metamorphic, cross-project): clearly-test communities classify 'test' in >=2 repos.
 
         Metamorphic relation (label-free, model-independent): a community whose title plainly
@@ -474,14 +473,13 @@ class TestCrossProjectMetamorphic:
         is project-independent rather than overfit to one codebase [COSTELLO ACM 3643767; Cho
         ICSME '25]. Cross-project consistency guarantee for the Phase A migration.
         """
-        from pathlib import Path
-        _safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
+        from tests.live._projects import sample_project_paths
         kw = ("test suite", "test cases", "test coverage", "unit test", "mock", "fixture", " tests", " test")
         n_projects_test = total_clearly = total_test = 0
         per_project: list[tuple[str, int, int]] = []
-        for p in [p for p in list_projects() if p.enabled and str(_safe_base) in p.path]:
+        for path in sample_project_paths(sample_workspace):
             try:
-                gs = GraphStore(project_graph_db(p.path))
+                gs = GraphStore(project_graph_db(path))
             except Exception:  # skip unreadable stores — not the assertion's concern
                 continue
             try:
@@ -498,7 +496,7 @@ class TestCrossProjectMetamorphic:
             total_clearly += len(clearly)
             total_test += n_test
             n_projects_test += 1 if n_test else 0
-            per_project.append((p.path.rsplit("/", 1)[-1], n_test, len(clearly)))
+            per_project.append((path.rsplit("/", 1)[-1], n_test, len(clearly)))
         _assert_metamorphic(total_clearly, n_projects_test, total_test, per_project)
 
 

@@ -70,27 +70,13 @@ def embedder(cuda_ep):
 
 
 @pytest.fixture(scope="session")
-def project_with_communities():
-    """First enabled project that owns ≥3 L1 communities in its own graph.db.
+def project_with_communities(sample_workspace: SampleWorkspace) -> str:
+    """Sample promo-svc (7 L1 communities) — used for community diversity tests.
 
-    Requires ≥3 L1 communities so diversity-based tests (e.g. AB3 type distribution)
-    are meaningful. Skips thin federation roots (0-1 own communities — architecturally
-    correct per HR4 but unusable for per-project write-path / distribution tests).
+    Returns a sample workspace member so tests never touch a real device project.
+    promo-svc has 7 L1 communities (≥3 floor) including business_rule + test types.
     """
-    import sqlite3
-
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
-    for p in list_projects():
-        if not p.enabled:
-            continue
-        gdb = project_graph_db(p.path)
-        if not gdb.exists():
-            continue
-        with sqlite3.connect(str(gdb)) as con:
-            if con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0] >= 3:
-                return p.path
-    pytest.fail("No enabled project with ≥3 L1 communities — run _enrich_project first")
+    return sample_workspace.promo
 
 
 @pytest.fixture(scope="session")

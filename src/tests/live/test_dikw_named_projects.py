@@ -49,8 +49,15 @@ def test_dn4_narrated_column_integrity(project_with_communities):
 
 
 def test_dn5_l1_communities_have_no_invalid_parents(project_with_communities):
-    """DN5: after WS-B/WS-E, all L1 communities have NULL parent_id (no L2+ parents)."""
+    """DN5: after WS-B/WS-E, all L1 communities have no L2+ parents.
+
+    If parent_id column was fully removed (WS-B schema migration), the invariant is trivially
+    satisfied — the column's absence means no parent relationship is possible.
+    """
     with sqlite3.connect(str(project_graph_db(project_with_communities))) as con:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(communities)")}
+        if "parent_id" not in cols:
+            return  # column removed in WS-B — invariant trivially holds
         bad = con.execute(
             "SELECT COUNT(*) FROM communities l1 "
             "JOIN communities lp ON l1.parent_id=lp.id "

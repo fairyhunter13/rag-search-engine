@@ -3,6 +3,8 @@ import time
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 
@@ -534,16 +536,14 @@ def test_p22_incremental_reindex_idempotent(tmp_path):
     assert count_2 == count_1, f"idempotency: re-run changed count: {count_1} → {count_2}"
 
 
-def test_graph_no_duplicate_symbols():
-    """P16.9: live graphs must have zero duplicate (name,file,kind) symbol groups."""
+def test_graph_no_duplicate_symbols(sample_workspace: SampleWorkspace):
+    """P16.9: sample project graphs must have zero duplicate (name,file,kind) symbol groups."""
     from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import list_projects
     from opencode_search.graph.store import GraphStore
+    from tests.live._projects import sample_project_paths
 
-    projects = [p for p in list_projects() if p.enabled]
-    assert projects, "no registered projects"
-    for proj in projects:
-        gdb = project_graph_db(proj.path)
+    for path in sample_project_paths(sample_workspace):
+        gdb = project_graph_db(path)
         if not gdb.exists():
             continue
         gs = GraphStore(gdb)
@@ -553,7 +553,7 @@ def test_graph_no_duplicate_symbols():
                 "SELECT COUNT(*) FROM (SELECT 1 FROM symbols "
                 "GROUP BY name,file,kind HAVING COUNT(*)>1)"
             ).fetchone()[0]
-            assert dups == 0, f"{proj.path}: {dups} dup groups after dedup (removed={removed})"
+            assert dups == 0, f"{path}: {dups} dup groups after dedup (removed={removed})"
         finally:
             gs.close()
 
@@ -1034,15 +1034,12 @@ def test_env_thread_caps_set_at_import():
 
 # ── Gap 5 F3: BPRE metrics surface ───────────────────────────────────────────
 
-def test_bpre_metrics_surface(live_client):
+def test_bpre_metrics_surface(live_client, sample_workspace: SampleWorkspace):
     """Gap 5 F3: overview(what='metrics') returns bpre block with last_run/edge_count/last_error."""
     import asyncio
 
-    from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import overview as overview_tool
-    root = next((e.path for e in list_projects() if e.enabled), None)
-    assert root, "No enabled projects"
-    result = asyncio.run(overview_tool(root, what="metrics"))
+    result = asyncio.run(overview_tool(sample_workspace.fed_root, what="metrics"))
     import json
     data = json.loads(result)
     assert "bpre" in data, f"overview(metrics) must include 'bpre' block; got keys: {list(data)}"

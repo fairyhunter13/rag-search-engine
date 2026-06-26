@@ -11,7 +11,6 @@ Research grounding (June 2026):
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 import requests
@@ -26,9 +25,6 @@ _HDR = {"Content-Type": "application/json"}
 # Minimum symbols for a member to be expected to have communities.
 # Below this, 0 communities is legitimate (e.g. docs-only repos, thin roots).
 _SYM_THRESHOLD = 50
-
-_OSE = str(Path(__file__).resolve().parents[3])
-
 
 def _status(path: str) -> dict:
     r = requests.post(
@@ -45,7 +41,7 @@ def _status(path: str) -> dict:
 def status_by_key(sample_workspace: SampleWorkspace) -> dict[str, dict]:
     """Snapshot status for all projects (non-polling — durable structural gates only)."""
     projects = {
-        "ose": _OSE,
+        "service": sample_workspace.promo,
         "federation": sample_workspace.fed_root,
         "standalone": sample_workspace.ledger,
     }
@@ -55,7 +51,7 @@ def status_by_key(sample_workspace: SampleWorkspace) -> dict[str, dict]:
 class TestKnowledgeBuiltCorrectly:
     """T1: every sufficiently large member must have ≥1 L1 community."""
 
-    @pytest.mark.parametrize("key", ["ose", "federation", "standalone"])
+    @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
     def test_named_root_communities_positive(self, key: str, status_by_key: dict) -> None:
         """T1a: Indexed roots with ≥50 symbols must have ≥1 community."""
         s = status_by_key.get(key, {})

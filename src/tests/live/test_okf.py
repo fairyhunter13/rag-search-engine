@@ -13,7 +13,14 @@ _VENDOR = Path(__file__).resolve().parents[3] / "vendor" / "okf" / "src"
 if str(_VENDOR) not in sys.path:
     sys.path.insert(0, str(_VENDOR))
 
-_OSE = str(Path(__file__).resolve().parents[3])
+_OSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only
+
+from tests.live._sample_workspace import SampleWorkspace
+
+
+@pytest.fixture(scope="module")
+def service_path(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
 
 
 def test_okf_version_constant():
@@ -21,13 +28,13 @@ def test_okf_version_constant():
     assert OKF_VERSION == "0.1"
 
 
-def test_okf_kill_switch_off(tmp_path):
+def test_okf_kill_switch_off(tmp_path, service_path):
     """OSE_OKF=0 -> generate() returns mode=off, writes nothing."""
     from okf.generate import generate
     prev = os.environ.get("OSE_OKF")
     os.environ["OSE_OKF"] = "0"
     try:
-        r = generate(project_path=_OSE, out_dir=str(tmp_path))
+        r = generate(project_path=service_path, out_dir=str(tmp_path))
     finally:
         if prev is None:
             os.environ.pop("OSE_OKF", None)
@@ -38,13 +45,13 @@ def test_okf_kill_switch_off(tmp_path):
     assert not list(tmp_path.rglob("*.md")), "kill-switch must produce no files"
 
 
-def test_okf_adapter_kill_switch_returns_dict():
+def test_okf_adapter_kill_switch_returns_dict(service_path):
     """run_okf with OSE_OKF=0 returns dict with mode=off."""
     from opencode_search.kb.okf import run_okf
     prev = os.environ.get("OSE_OKF")
     os.environ["OSE_OKF"] = "0"
     try:
-        r = run_okf(_OSE)
+        r = run_okf(service_path)
     finally:
         if prev is None:
             os.environ.pop("OSE_OKF", None)
@@ -65,7 +72,7 @@ def test_okf_no_tree_sitter_import_in_vendor():
 
 def test_okf_no_fragment_naming_in_vendor():
     """OKF generates semantic concept names, never fragment_N.md."""
-    src = Path(_OSE) / "vendor" / "okf" / "src"
+    src = _OSE_SRC / "vendor" / "okf" / "src"
     for py in src.rglob("*.py"):
         text = py.read_text(encoding="utf-8", errors="replace")
         assert "fragment_" not in text, \
@@ -94,7 +101,7 @@ def test_okf_api_route_no_project_field(live_client):
 
 def test_okf_not_in_sweeps():
     """run_okf is not called from _enrich_project in sweeps.py."""
-    sweeps_path = Path(_OSE) / "src" / "opencode_search" / "daemon" / "sweeps.py"
+    sweeps_path = _OSE_SRC / "src" / "opencode_search" / "daemon" / "sweeps.py"
     src = sweeps_path.read_text()
     lines = src.splitlines()
     in_enrich = False
@@ -131,10 +138,10 @@ def test_okf_index_md_no_frontmatter_in_source():
 
 
 @pytest.mark.slow
-def test_okf_llm_generate_structure(tmp_path):
+def test_okf_llm_generate_structure(tmp_path, service_path):
     """Phase 2c (@slow): LLM-native OKF generates valid v0.1 bundle structure."""
     from okf.generate import OKF_VERSION, generate
-    r = generate(project_path=_OSE, out_dir=str(tmp_path / "okf"))
+    r = generate(project_path=service_path, out_dir=str(tmp_path / "okf"))
     assert r.get("mode") != "off", "OSE_OKF must not be 0 for this slow test"
     assert "no_profile" not in r.get("errors", []), "claude profile must be configured"
     assert "discover_failed" not in r.get("errors", []), f"OKF discover failed: {r.get('errors')}"

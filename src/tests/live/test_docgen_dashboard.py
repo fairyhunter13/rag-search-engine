@@ -13,18 +13,6 @@ if str(_VENDOR_SRC) not in sys.path:
     sys.path.insert(0, str(_VENDOR_SRC))
 
 
-def _any_project() -> str | None:
-    from opencode_search.core.registry import list_projects
-    for p in list_projects():
-        if not p.enabled:
-            continue
-        if "ocs-test-dirs" in p.path or Path(p.path).name.startswith(("tmp", "test-")):
-            continue
-        if Path(p.path).is_dir():
-            return p.path
-    return None
-
-
 class TestDocsApi:
     def test_traversal_blocked(self, live_client, tmp_path) -> None:
         (tmp_path / "docs").mkdir()

@@ -14,16 +14,16 @@ import json
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _ALLOWED_MODELS = {"claude-haiku-4-5"}  # chat lane is Haiku-only (EC2)
 
 
-def _any_project():
-    from opencode_search.core.registry import list_projects
-    p = next((e.path for e in list_projects() if e.enabled), None)
-    assert p, "At least one enabled project required"
-    return p
+@pytest.fixture(scope="module")
+def project(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
 
 
 def _collect_chat_events(live_client, project: str, msg: str, timeout: int = 60) -> list[dict]:
@@ -69,29 +69,26 @@ def test_events_stream_connected_event(live_client):
 
 
 @pytest.mark.slow
-def test_chat_stream_done_event_present(live_client):
+def test_chat_stream_done_event_present(live_client, project):
     """chat_stream must end with a 'done' typed event."""
-    p = _any_project()
-    events = _collect_chat_events(live_client, p, "What is this codebase?")
+    events = _collect_chat_events(live_client, project, "What is this codebase?")
     types = [e.get("type") for e in events]
     assert "done" in types, f"chat_stream must emit done; got types={types}"
 
 
 @pytest.mark.slow
-def test_chat_stream_done_not_first(live_client):
+def test_chat_stream_done_not_first(live_client, project):
     """done must not be the first event — at least one prior event (thinking or token)."""
-    p = _any_project()
-    events = _collect_chat_events(live_client, p, "What is this codebase?")
+    events = _collect_chat_events(live_client, project, "What is this codebase?")
     types = [e.get("type") for e in events]
     assert "done" in types
     assert types.index("done") > 0, "done must not be the first SSE event"
 
 
 @pytest.mark.slow
-def test_chat_stream_model_in_allowed_set(live_client):
+def test_chat_stream_model_in_allowed_set(live_client, project):
     """done event model must be claude-haiku-4-5 (chat lane is Haiku-only — EC2)."""
-    p = _any_project()
-    events = _collect_chat_events(live_client, p, "List the main packages.")
+    events = _collect_chat_events(live_client, project, "List the main packages.")
     done_evs = [e for e in events if e.get("type") == "done"]
     assert done_evs, "No done event received"
     # done event uses "model" (string)
@@ -102,10 +99,9 @@ def test_chat_stream_model_in_allowed_set(live_client):
 
 
 @pytest.mark.slow
-def test_chat_stream_done_has_sources(live_client):
+def test_chat_stream_done_has_sources(live_client, project):
     """done event must include a sources list (context provenance)."""
-    p = _any_project()
-    events = _collect_chat_events(live_client, p, "What does this project do?")
+    events = _collect_chat_events(live_client, project, "What does this project do?")
     done_evs = [e for e in events if e.get("type") == "done"]
     assert done_evs, "No done event"
     done = done_evs[0]

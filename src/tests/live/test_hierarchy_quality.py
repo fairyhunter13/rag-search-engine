@@ -5,33 +5,29 @@ No mocks; GPU-only. L2/L3 hierarchy removed (WS-B): only flat-L1 partition quali
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
 from opencode_search.core.config import project_graph_db
 from opencode_search.graph.store import GraphStore
+from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
-_OSE = str(Path(__file__).parents[3])
 
+def test_partition_quality_on_sample(sample_workspace: SampleWorkspace):
+    """HQ1: partition_quality returns structurally valid metrics for a sample project.
 
-def test_partition_quality_on_ose():
-    """HQ1: partition_quality returns structurally valid metrics for OSE.
-
-    Does NOT assert non-degenerate: OSE is a small research codebase whose
-    singleton_ratio varies as new utility/test files are added. HQ2 proves the
-    degenerate-detection mechanism works on a synthetic graph; here we only
-    verify the metric fields are well-formed numbers in their valid ranges.
+    Uses promo-svc (7 L1 communities) so results are deterministic and machine-agnostic.
+    HQ2 proves the degenerate-detection mechanism works on a synthetic graph.
     """
     from opencode_search.graph.quality import partition_quality
-    gs = GraphStore(project_graph_db(_OSE))
+    gs = GraphStore(project_graph_db(sample_workspace.promo))
     try:
         q = partition_quality(gs)
     finally:
         gs.close()
-    assert q["n_l1"] > 0, "OSE must have at least one L1 community"
+    assert q["n_l1"] > 0, "promo-svc must have at least one L1 community"
     assert 0.0 <= q["coverage"] <= 1.0, f"coverage out of range: {q['coverage']}"
     assert 0.0 <= q["singleton_ratio"] <= 1.0, f"singleton_ratio out of range: {q['singleton_ratio']}"
     assert isinstance(q["degenerate"], bool), "degenerate must be a bool"
@@ -80,9 +76,9 @@ def test_degenerate_fires_on_all_singleton_graph(tmp_path):
     assert q["degenerate"], f"all-singleton graph must be degenerate: {q}"
 
 
-def test_status_includes_hierarchy_quality(live_client):
+def test_status_includes_hierarchy_quality(live_client, sample_workspace: SampleWorkspace):
     """HQ3a: overview(status) exposes hierarchy_quality per member."""
-    r = live_client.post("/api/overview", json={"project": _OSE, "what": "status"})
+    r = live_client.post("/api/overview", json={"project": sample_workspace.promo, "what": "status"})
     assert r.status_code == 200, f"overview status failed: {r.text[:200]}"
     d = r.json()
     assert "hierarchy_quality" in d, f"hierarchy_quality missing: {list(d.keys())}"
