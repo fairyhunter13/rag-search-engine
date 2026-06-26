@@ -171,7 +171,17 @@ def test_fp16_no_level2_query_in_quality():
         "Vestigial n_l2 metric found in graph/quality.py — should have been removed"
 
 
-def test_fp17_build_wiki_route_present(live_client):
+def test_fp17_no_llm_in_graph_handler():
+    """Gap-B guard: impact_narrative + semantic_trace deleted (P2 violation — LLM in query path)."""
+    import importlib
+    mod = importlib.import_module("opencode_search.query.graph_handler")
+    assert not hasattr(mod, "impact_narrative"), \
+        "impact_narrative re-introduced in query/graph_handler (P2 violation: LLM in query path)"
+    assert not hasattr(mod, "semantic_trace"), \
+        "semantic_trace re-introduced in query/graph_handler (P2 violation: LLM in query path)"
+
+
+def test_fp18_build_wiki_route_present(live_client):
     """Phase-1b guard: /api/build_wiki route replaces /api/build_hierarchy."""
     # /api/build_wiki with nonexistent path returns 404, not 404-for-unknown-route
     r = live_client.post("/api/build_wiki", json={"project_path": "/nonexistent"}, timeout=10)
