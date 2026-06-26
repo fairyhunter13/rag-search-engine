@@ -13,7 +13,7 @@ Critical rules that survived compaction:
 4. Push after EVERY commit (zero-unpushed policy — learned from Jun 9 2026 data loss)
 5. Never auto-index — only call build() when user explicitly asks
 6. LLM lanes: GPU = embeddings + reranking ONLY (FastEmbed/ONNX/CUDA); KB build = cloud DeepSeek-only (crash if no key); dashboard chat = claude-haiku-4-5 primary + DeepSeek fallback
-7. Tests use capability-based project discovery (OSE_TEST_FEDERATION_ROOT / OSE_TEST_STANDALONE_PROJECT / OSE_TEST_SERVICE env overrides, or auto-discover from registry)
+7. Tests use the sample workspace fixture (sample_workspace session fixture builds shop-federation + ledger-standalone from src/tests/fixtures/sample_projects/)
 8. World model: docs/world-model/model.yaml (L1-L4); check: python scripts/check_world_model.py
 ==='''
 print(json.dumps({
