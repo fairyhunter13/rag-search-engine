@@ -33,17 +33,17 @@ def synth_fed():
 
 
 @pytest.fixture(scope="module")
-def acme_root():
-    """Read-only reference to the live federation root (no reconstruct_processes calls here)."""
+def fed_root():
+    """Read-only reference to the sample federation root (no reconstruct_processes calls here)."""
     from tests.live._projects import federation_root
     return federation_root()
 
 
 @pytest.fixture(scope="module")
-def acme_members(acme_root):
-    """Federation members of the live astro root — read-only, no reconstruct calls."""
+def fed_members(fed_root):
+    """Federation members of the sample root — read-only, no reconstruct calls."""
     from opencode_search.daemon.federation import expand_federation
-    return expand_federation(acme_root)
+    return expand_federation(fed_root)
 
 
 @pytest.fixture(scope="module")
@@ -287,26 +287,26 @@ class TestMermaidValidity:
 class TestMetamorphicDeterminism:
 
     @pytest.mark.slow
-    def test_F1_deterministic_rerun(self, acme_root, process_db):
+    def test_F1_deterministic_rerun(self, fed_root, process_db):
         """Full reconstruction re-run — slow because it re-calls reconstruct_processes."""
         from unittest.mock import patch
         con, _ = process_db
         with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
             before = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
-            reconstruct_processes(acme_root)
+            reconstruct_processes(fed_root)
             after = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
         assert set(before.keys()) == set(after.keys()), "Re-run produced different process IDs"
         for pid in before:
             assert before[pid] == after[pid], f"step_count changed on re-run for {pid}"
 
     @pytest.mark.slow
-    def test_F2_bpmn_idempotent(self, acme_root, process_db):
+    def test_F2_bpmn_idempotent(self, fed_root, process_db):
         """BPMN idempotency — slow because it re-calls reconstruct_processes."""
         from unittest.mock import patch
         con, _ = process_db
         with patch("opencode_search.graph.llm.deepseek_key", return_value=None):
             before = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
-            reconstruct_processes(acme_root)
+            reconstruct_processes(fed_root)
             after = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
         for pid in before:
             assert before.get(pid) == after.get(pid), f"BPMN changed on re-run for {pid}"
@@ -316,9 +316,9 @@ class TestMetamorphicDeterminism:
 
 class TestHR4AndResourceGuards:
 
-    def test_G1_hr4_no_cross_service_in_member_dbs(self, acme_members):
+    def test_G1_hr4_no_cross_service_in_member_dbs(self, fed_members):
         from opencode_search.core.config import project_graph_db
-        for member in acme_members[1:]:
+        for member in fed_members[1:]:
             gdb = project_graph_db(member)
             if not gdb.exists():
                 continue

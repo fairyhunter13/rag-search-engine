@@ -156,14 +156,14 @@ def test_overview_all_whats_real_federation_root():
     from opencode_search.server.mcp import overview as overview_tool
     from tests.live._projects import federation_root
 
-    astro = federation_root()
+    fed_root = federation_root()
     whats = [
         "structure", "communities", "status", "import_cycles",
         "surprising_connections", "suggested_questions",
         "service_mesh", "feature_map", "business_rules", "process_flows",
     ]
     for what in whats:
-        result = asyncio.run(overview_tool(astro, what))
+        result = asyncio.run(overview_tool(fed_root, what))
         data = json.loads(result)
         assert data, f"overview(what={what!r}) returned empty dict: {result[:120]}"
 

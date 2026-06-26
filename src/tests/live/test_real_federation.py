@@ -21,17 +21,17 @@ _SYM_THRESHOLD = 50  # same as test_knowledge_built.py
 
 
 @pytest.fixture(scope="module")
-def acme_root() -> str:
+def fed_root() -> str:
     from tests.live._projects import federation_root
     return federation_root()
 
 
 @pytest.fixture(scope="module")
-def acme_status(acme_root) -> dict:
+def fed_status(fed_root) -> dict:
     import requests
     r = requests.post(
         "http://127.0.0.1:8765/api/overview",
-        json={"what": "status", "project_path": acme_root},
+        json={"what": "status", "project_path": fed_root},
         headers={"Content-Type": "application/json"},
         timeout=30,
     )
@@ -42,45 +42,45 @@ def acme_status(acme_root) -> dict:
 class TestRealFederation:
     """T2: real federation root as one composed entity."""
 
-    def test_member_list_non_empty(self, acme_status: dict) -> None:
+    def test_member_list_non_empty(self, fed_status: dict) -> None:
         """T2a: federation must report ≥2 members (root + at least one member)."""
-        members = acme_status.get("members", [])
+        members = fed_status.get("members", [])
         assert len(members) >= 2, f"Expected ≥2 members, got {len(members)}"
 
-    def test_no_member_has_symbols_without_communities(self, acme_status: dict) -> None:
+    def test_no_member_has_symbols_without_communities(self, fed_status: dict) -> None:
         """T2b: composition invariant — no member with ≥50 symbols may have 0 communities.
 
         A single non-enriched member silently degrades aggregate overview/ask quality.
         """
         violations = [
             f"{m['path']} (sym={m['symbols']}, comm={m['communities']})"
-            for m in acme_status.get("members", [])
+            for m in fed_status.get("members", [])
             if m.get("symbols", 0) >= _SYM_THRESHOLD and m.get("communities", 0) == 0
         ]
         assert not violations, (
             "Members with ≥50 symbols and 0 communities:\n" + "\n".join(violations)
         )
 
-    def test_aggregate_symbols_matches_member_sum(self, acme_status: dict) -> None:
+    def test_aggregate_symbols_matches_member_sum(self, fed_status: dict) -> None:
         """T2c: overview(status) aggregate symbols == Σ member symbols."""
-        members = acme_status.get("members", [])
+        members = fed_status.get("members", [])
         member_sum = sum(m.get("symbols", 0) for m in members)
-        root_total = acme_status.get("symbols", -1)
+        root_total = fed_status.get("symbols", -1)
         assert root_total == member_sum, (
             f"Aggregate symbols={root_total} ≠ Σ member={member_sum}"
         )
 
-    def test_aggregate_communities_matches_member_sum(self, acme_status: dict) -> None:
+    def test_aggregate_communities_matches_member_sum(self, fed_status: dict) -> None:
         """T2d: overview(status) aggregate communities == Σ member communities."""
-        members = acme_status.get("members", [])
+        members = fed_status.get("members", [])
         member_sum = sum(m.get("communities", 0) for m in members)
-        root_total = acme_status.get("communities", -1)
+        root_total = fed_status.get("communities", -1)
         assert root_total == member_sum, (
             f"Aggregate communities={root_total} ≠ Σ member={member_sum}"
         )
 
     @pytest.mark.slow
-    def test_root_scoped_search_reaches_member_content(self, acme_root: str) -> None:
+    def test_root_scoped_search_reaches_member_content(self, fed_root: str) -> None:
         """T2e: metamorphic fan-out — search([root]) reaches member content.
 
         Monotonicity: root-scoped search projects_searched must include member paths.
@@ -88,11 +88,11 @@ class TestRealFederation:
         from opencode_search.daemon.federation import expand_federation
         from opencode_search.server.mcp import search as mcp_search
 
-        members = expand_federation(acme_root)
+        members = expand_federation(fed_root)
         assert len(members) >= 2, "Need ≥2 members for fan-out test"
-        data = json.loads(asyncio.run(mcp_search("function", project_paths=[acme_root])))
+        data = json.loads(asyncio.run(mcp_search("function", project_paths=[fed_root])))
         searched = data.get("projects_searched", [])
-        member_paths = [m for m in members if m != acme_root]
+        member_paths = [m for m in members if m != fed_root]
         covered = [m for m in member_paths if m in searched]
         assert covered, (
             f"search([root]) did not reach any members in projects_searched.\n"
@@ -100,11 +100,11 @@ class TestRealFederation:
         )
 
     @pytest.mark.slow
-    def test_all_members_kb_state_ready(self, acme_status: dict) -> None:
+    def test_all_members_kb_state_ready(self, fed_status: dict) -> None:
         """T2f: every federation member must be kb_state=ready."""
         not_ready = [
             f"{m['path']}: {m['kb_state']}"
-            for m in acme_status.get("members", [])
+            for m in fed_status.get("members", [])
             if m.get("kb_state") != "ready"
         ]
         assert not not_ready, "Members not ready:\n" + "\n".join(not_ready)

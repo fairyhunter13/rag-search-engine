@@ -12,11 +12,9 @@ _WHATS = ["structure","status","projects","metrics","import_cycles",
           "process_flows","suggested_questions","service_mesh","validate"]
 
 
-def _astro() -> str:
-    from opencode_search.core.registry import list_projects
-    from opencode_search.daemon.federation import expand_federation
-    return next((e.path for e in list_projects()
-                 if e.enabled and len(expand_federation(e.path)) > 1), "")
+def _fed_root() -> str:
+    from tests.live._projects import federation_root
+    return federation_root()
 
 
 def _sym(path: str) -> str:
@@ -108,34 +106,32 @@ def test_fp9_ose_wiki(live_client):
 # ── L2: federation root ──────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def acme_root():
-    r = _astro()
-    if not r: pytest.fail("no federated root registered — register a project with federation members")
-    return r
+def fed_root():
+    return _fed_root()
 
 
-def test_fp10_acme_search(acme_root):
+def test_fp10_federation_search(fed_root):
     from opencode_search.server.mcp import search as t
-    d = json.loads(asyncio.run(t("function", project_paths=[acme_root])))
+    d = json.loads(asyncio.run(t("function", project_paths=[fed_root])))
     assert d.get("total", 0) > 0
 
 
-def test_fp11_acme_status(acme_root):
+def test_fp11_federation_status(fed_root):
     from opencode_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(acme_root, "status")))
+    d = json.loads(asyncio.run(t(fed_root, "status")))
     assert "members" in d and d["members"] and "l1_enriched_pct" in d
     assert "l2_enriched_pct" not in d
 
 
 @pytest.mark.parametrize("what", ["business_rules","process_flows"])
-def test_fp12_acme_features(acme_root, what):
+def test_fp12_federation_features(fed_root, what):
     from opencode_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(acme_root, what)))
+    d = json.loads(asyncio.run(t(fed_root, what)))
     assert isinstance(d, dict) and "error" not in d
 
 
-def test_fp13_acme_wiki_no_domain(live_client, acme_root):
-    r = live_client.get(f"/api/wiki?project={acme_root}")
+def test_fp13_federation_wiki_no_domain(live_client, fed_root):
+    r = live_client.get(f"/api/wiki?project={fed_root}")
     assert r.status_code == 200
     assert not any("domain_" in p for p in r.json().get("pages", []))
 

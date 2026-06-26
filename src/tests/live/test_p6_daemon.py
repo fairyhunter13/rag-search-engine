@@ -233,7 +233,7 @@ def test_cli_safe_invocations():
     assert r.exit_code == 0, f"cli health: GPU unavailable? output={r.output!r}"
 
 
-def test_pipeline_all_stages_real_astro():
+def test_pipeline_all_stages_ose_repo():
     """P10.6: per-stage output traces on a real large indexed project.
 
     Validates: chunk+embed → tree-sitter symbols → call edges → Leiden

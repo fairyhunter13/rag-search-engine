@@ -10,13 +10,13 @@ from pathlib import Path
 import pytest
 import requests
 
+from tests.live._projects import federation_root as _federation_root
+from tests.live._projects import standalone_project as _standalone_project
+
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _HDR = {"Content-Type": "application/json"}
-
-from tests.live._projects import federation_root as _federation_root
-from tests.live._projects import standalone_project as _standalone_project
 
 # Derive OSE root from this file's location; resolve other projects by capability.
 _PROJECTS = {
@@ -317,7 +317,7 @@ def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
 
     upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True, indexed_at=None))
     try:
-        # Create a vectors.db with stray chunks (reproduces acme-loyalty-be state)
+        # Create a vectors.db with stray chunks (reproduces a stale-index state)
         vdb = project_vector_db(str(safe_tmp_path))
         vdb.parent.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(str(vdb))

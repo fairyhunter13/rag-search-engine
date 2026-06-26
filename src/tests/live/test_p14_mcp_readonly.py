@@ -51,8 +51,8 @@ def test_ask_mcp_returns_structured_context():
     from opencode_search.server.mcp import ask as ask_tool
     from tests.live._projects import federation_root
 
-    astro = federation_root()
-    result = asyncio.run(ask_tool("How does authentication work?", astro, "all"))
+    fed_root = federation_root()
+    result = asyncio.run(ask_tool("How does authentication work?", fed_root, "all"))
     assert isinstance(result, str) and len(result) > 20, (
         f"ask() returned empty/tiny response: {result!r}"
     )
@@ -60,9 +60,7 @@ def test_ask_mcp_returns_structured_context():
 
 def test_impact_narrative_returns_structured_json():
     """P14.4 runtime: graph(impact_narrative) returns JSON with risk/affected_count, no LLM prose."""
-    from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import graph as graph_tool
-
     from tests.live._projects import service_member
     be = service_member()
     result = asyncio.run(graph_tool("Run", be, "impact_narrative"))

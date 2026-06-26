@@ -26,17 +26,17 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
 
 
 @pytest.fixture(scope="module")
-def acme_path():
+def fed_root():
     from tests.live._projects import federation_root
     return federation_root()
 
 
 @pytest.mark.parametrize("what,required_keys,non_empty", OVERVIEW_SHAPE)
-def test_overview_shape(what, required_keys, non_empty, acme_path):
+def test_overview_shape(what, required_keys, non_empty, fed_root):
     """Live overview(what=X) must return the expected top-level keys."""
     from opencode_search.server.mcp import overview as overview_tool
 
-    path = "" if what == "projects" else acme_path
+    path = "" if what == "projects" else fed_root
     result = asyncio.run(overview_tool(path, what))
     data = json.loads(result)
     missing = required_keys - set(data.keys())
