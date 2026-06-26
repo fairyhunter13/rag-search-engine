@@ -75,19 +75,19 @@ L3_specs:
     test: test_p34_watcher_updates_vector_index
   - id: HR4
     spec: "Federation query-time union; no cross-repo edges; expand_federation fan-out."
-    test: test_inv1_each_member_has_own_stores
+    test: test_inv1_no_inlining
   - id: HR6
     spec: "GPU-only embed+rerank; CPU fallback fatal; assert_cuda_available at startup."
-    test: test_p32_gpu_providers_bound_to_cuda
+    test: test_select_gpu_providers_fatal_on_cpu_only
   - id: HR8
     spec: "Two-stage retrieval; rerank_score is the ranking authority; both AXIS A+B reranked."
-    test: test_il3_search_orders_by_rerank_score
+    test: test_rerank_passages_only_in_gpu_lane
   - id: HR9
     spec: "MCP query actions run no generative LLM — embed+rerank only."
-    test: test_il2_mcp_search_uses_no_llm
+    test: test_mcp_handlers_have_no_llm_generation
   - id: HR10
     spec: "Dashboard chat uses claude-haiku-4-5 only; no DeepSeek fallback."
-    test: test_kb_chat_is_haiku_only
+    test: test_chat_lane_is_haiku_only
   - id: HR11
     spec: "semantic_type assigned by DeepSeek classify batch-20; reclassify_all=False (no churn)."
     test: test_ab3_no_type_dominates
@@ -96,13 +96,13 @@ L3_specs:
     test: test_kb_enrich_is_deepseek_only
   - id: HR13
     spec: "Wiki artifacts use project-root-relative paths; no absolute device paths."
-    test: test_w2_community_page_exists
+    test: test_community_page_structure
   - id: HR15
     spec: "No re.compile/re.finditer in Category A (bpre.py, _overview.py services)."
     test: test_no_code_semantic_regex_in_category_a
   - id: HR20
     spec: "Partition quality gate: degenerate=True demotes kb_state to searchable."
-    test: test_partition_quality_on_ose
+    test: test_partition_quality_on_sample
   - id: HR25
     spec: "Docgen IH is LLM-native via claude -p; no tree-sitter import on the doc-tooling path."
     test: test_ih_no_tree_sitter_import_in_vendor
