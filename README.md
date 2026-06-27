@@ -14,6 +14,11 @@ call-graph store, and a DeepSeek-powered knowledge-base pipeline.
 | CUDA | 12.x + matching cuDNN |
 | RAM | 8 GB system; 8 GB VRAM recommended |
 
+> **TensorRT:** OSE defaults to `OPENCODE_DISABLE_TENSORRT=1` (uses the CUDA EP, which works on
+> every NVIDIA GPU). If your GPU has a compatible TensorRT installation, set
+> `OPENCODE_DISABLE_TENSORRT=0` in `~/.config/opencode-search/env` to activate the TensorRT EP
+> for faster inference.
+
 ## Install
 
 ```bash
