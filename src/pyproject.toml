@@ -65,11 +65,6 @@ browser = [
     "playwright>=1.44",
     "pytest-playwright>=0.5.0",
 ]
-graph-extras = [
-    # Entity deduplication: MinHash/LSH blocking + Jaro-Winkler verification
-    "datasketch>=1.6.0",
-    "rapidfuzz>=3.0.0",
-]
 
 [dependency-groups]
 dev = [

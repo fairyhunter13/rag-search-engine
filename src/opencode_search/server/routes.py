@@ -79,18 +79,3 @@ def create_app():
     _register_all(app)
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     return app
-
-
-def build_test_app():
-    """Plain Starlette app for testing — no FastMCP transport (session manager is single-use)."""
-    from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
-    app = Starlette(routes=[
-        Route("/healthz", _healthz, methods=["GET"]),
-        Route("/dashboard", _dashboard, methods=["GET"]),
-        Route("/api/projects", _api_projects, methods=["GET"]),
-        Route("/api/overview", _api_overview, methods=["POST"]),
-        Mount("/static", StaticFiles(directory=_STATIC_DIR), name="static"),
-    ])
-    _register_all(app)
-    return app
