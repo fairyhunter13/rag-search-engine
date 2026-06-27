@@ -7,6 +7,7 @@ Runtime smoke: ask + graph(impact_narrative) + graph(semantic_trace) return
 structured data assembled from pre-built DB artifacts, NOT prose from LLM.
 """
 import asyncio
+import inspect
 import json
 import re
 from pathlib import Path
@@ -37,12 +38,29 @@ def test_mcp_handlers_have_no_llm_generation():
     )
     # The full ask() (LLM version) must not be imported into mcp.py for tool use
     assert "from opencode_search.query.ask import ask as _ask" not in text, (
-        "server/mcp.py imports ask as _ask — MCP handler must use compose_answer() instead"
+        "server/mcp.py imports ask as _ask — MCP handler must use run_ask() instead"
     )
-    # Positive: MCP ask must call compose_answer (LLM-free context assembly, not synthesis)
-    assert "compose_answer" in text, (
-        "server/mcp.py must call compose_answer() — the LLM-free context composer; "
-        "do not replace with the synthesizing ask() regardless of import alias"
+    # Positive: MCP handlers must delegate to the shared LLM-free helpers
+    assert "run_ask" in text, (
+        "server/mcp.py must call run_ask() — the shared LLM-free context helper; "
+        "do not inline LLM generation in the MCP handler"
+    )
+    assert "run_graph" in text, (
+        "server/mcp.py must call run_graph() — the shared DB-reads-only graph helper"
+    )
+    # Verify the helpers themselves are LLM-free (inspect source, not just delegation)
+    from opencode_search.query.ask import run_ask as _run_ask
+    from opencode_search.query.graph_handler import run_graph as _run_graph
+    ask_src = inspect.getsource(_run_ask)
+    assert "compose_answer" in ask_src, (
+        "run_ask() must call compose_answer() — the LLM-free context assembler"
+    )
+    assert not re.search(r"\bchat\s*\(", ask_src), (
+        "run_ask() must not call chat() — LLM generation is forbidden on the query path"
+    )
+    graph_src = inspect.getsource(_run_graph)
+    assert not re.search(r"\bchat\s*\(", graph_src), (
+        "run_graph() must not call chat() — it is deterministic DB-reads only"
     )
 
 

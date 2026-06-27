@@ -527,7 +527,15 @@ def test_e5_mcp_query_path_no_generation():
     ask_src = (base / "query" / "ask.py").read_text()
     assert "graph.llm" not in mcp_src, "E5: mcp.py imports graph.llm (HR9 violation)"
     assert "import chat" not in mcp_src, "E5: mcp.py imports chat"
-    assert "compose_answer" in mcp_src, "E5: mcp.py must call compose_answer"
+    # After PART-3 refactor: mcp.ask delegates to run_ask(), which calls compose_answer()
+    assert "run_ask" in mcp_src, "E5: mcp.py must delegate to run_ask() (LLM-free helper)"
+    assert "run_graph" in mcp_src, "E5: mcp.py must delegate to run_graph() (DB-reads helper)"
+    import inspect
+
+    from opencode_search.query.ask import run_ask as _ra
+    assert "compose_answer" in inspect.getsource(_ra), (
+        "E5: run_ask() must call compose_answer() (LLM-free context assembler)"
+    )
     assert "graph.llm" not in ask_src, "E5: ask.py imports graph.llm (HR9 violation)"
     assert "def ask(" not in ask_src, "E5: ask.py must not have ask() (was LLM-generative)"
 
