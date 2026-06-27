@@ -17,12 +17,20 @@ call-graph store, and a DeepSeek-powered knowledge-base pipeline.
 ## Install
 
 ```bash
-git clone https://github.com/fairyhunter13/opencode-search-engine.git
+git clone --recurse-submodules https://github.com/fairyhunter13/opencode-search-engine.git
 cd opencode-search-engine
+# If you cloned without --recurse-submodules, run this to populate vendor/docgen:
+git submodule update --init --recursive
+
 python3 -m venv .venv
-.venv/bin/pip install -e src
+.venv/bin/pip install -e src         # editable install (latest deps)
+# Or install from the pinned lock file for a reproducible environment:
+# .venv/bin/pip install -r requirements-lock-py312-linux-gpu.txt && .venv/bin/pip install -e src --no-deps
 .venv/bin/python scripts/check_system.py          # must show [x] assert_gpu_available()
 ```
+
+> **`opencode-search docgen`** requires the `vendor/docgen` submodule.
+> All other features (`ocs-index`, search, chat) work without it.
 
 ## Configure secrets
 

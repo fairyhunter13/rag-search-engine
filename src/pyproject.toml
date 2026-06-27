@@ -60,10 +60,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gpu = [
-    # GPU matrix ops (L2 normalization)
-    "cupy-cuda12x>=13.0.0",
-]
 browser = [
     # Headless browser for Playwright UI tests
     "playwright>=1.44",
