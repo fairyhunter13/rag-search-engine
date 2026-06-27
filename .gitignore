@@ -32,3 +32,6 @@ Thumbs.db
 # Local scratch diagnostics (never commit; may contain local device paths)
 scratch_diag.py
 scratch_*.py
+
+# Secrets / local env overrides (use ~/.config/opencode-search/env instead)
+.env
