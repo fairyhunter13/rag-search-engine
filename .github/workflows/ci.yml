@@ -69,10 +69,18 @@ jobs:
   # Fast live tests: enforcement, config, search,
   # KB health — run on every push to main.
   # Completes in <5 minutes on GPU runner.
+  #
+  # NOTE: requires a self-hosted GitHub Actions runner with:
+  #   - NVIDIA CUDA GPU (CPU fallback is forbidden by design)
+  #   - a pre-provisioned .venv at the repo root
+  #   - a running opencode-search daemon at 127.0.0.1:8765
+  # Forks without a GPU runner will see this job queued indefinitely.
+  # Run the live suite locally instead: .venv/bin/pytest -m "live and not slow"
   # ──────────────────────────────────────────────
   live-fast:
     name: Live Tests Fast (GPU runner)
     runs-on: self-hosted
+    if: github.repository == 'fairyhunter13/opencode-search-engine'
     needs: quality
     if: github.ref == 'refs/heads/main'
 
@@ -93,6 +101,7 @@ jobs:
   # ──────────────────────────────────────────────
   # Slow live tests: full E2E, chat quality, browser
   # Run on schedule (nightly) — these take 15-30 min.
+  # Same self-hosted GPU runner requirement as live-fast.
   # ──────────────────────────────────────────────
   live-slow:
     name: Live Tests Slow (GPU runner, scheduled)
