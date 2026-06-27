@@ -2,15 +2,12 @@
 
 Scans every *.py under src/tests/ and FAILS if:
   (a) any mock/fake/stub/patch symbol appears, OR
-  (b) any test uses build_test_app outside the named allowlist below.
+  (b) any test uses build_test_app (zero-tolerance: P15.2 migration is complete).
 
-The allowlist distinguishes:
-  - PERMANENT negative/error-injection uses (4xx, empty-project): build_test_app is
-    justified here because we deliberately inject bad inputs the live daemon won't accept.
-  - PENDING P15.2 conversion: happy-path uses that must be migrated to live_client at :8765.
-    Removing them from the allowlist is the proof of P15.2 completion.
+All tests must drive real integrations through live_client at :8765 or direct MCP tool imports.
+build_test_app() has been deleted from routes.py; any attempt to re-introduce it is caught here.
 
-This test itself is excluded from the build_test_app allowlist check.
+This test itself is excluded from the build_test_app scan.
 """
 import re
 from pathlib import Path
@@ -37,15 +34,9 @@ _MOCK_PATTERNS = [
 _MOCK_RE = re.compile("|".join(_MOCK_PATTERNS))
 
 # ── (b) build_test_app allowlist ──────────────────────────────────────────────
-# Key = "module_stem::test_function_name"
-# PERMANENT: negative/error injection — build_test_app is justified (no live daemon needed)
-# PENDING P15.2: happy-path tests awaiting conversion to live_client at :8765
-_BUILD_TEST_APP_ALLOWLIST = {
-    # PERMANENT — deliberate 4xx / empty-data injection (no live daemon needed):
-    "test_p5_server::test_api_search_missing_query_returns_400",
-    "test_p5_server::test_api_search_nonexistent_project_returns_empty",
-    "test_p5_server::test_api_index_missing_path_returns_400",
-}
+# P15.2 migration complete: build_test_app() deleted from routes.py; allowlist is empty.
+# Any future re-introduction of build_test_app in a test FAILS this guard immediately.
+_BUILD_TEST_APP_ALLOWLIST: frozenset[str] = frozenset()
 
 _BUILD_TEST_APP_RE = re.compile(r"\bbuild_test_app\b")
 _DEF_RE = re.compile(r"^def (test_\w+)", re.MULTILINE)
