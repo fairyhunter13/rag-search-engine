@@ -20,6 +20,7 @@ def unit_text(exec_path: str | None = None) -> str:
         "RestartSec=3s\n"
         "StartLimitBurst=20\n"
         "Environment=OPENCODE_EMBED_DEVICE=cuda\n"
+        "EnvironmentFile=-%h/.config/opencode-search/env\n"
         "\n"
         "[Install]\n"
         "WantedBy=default.target\n"

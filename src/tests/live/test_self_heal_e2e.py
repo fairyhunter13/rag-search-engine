@@ -16,6 +16,7 @@ pytestmark = pytest.mark.live
 def _proj():
     import shutil
     import tempfile
+
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import remove_project, upsert_project
     base = Path.home() / ".local" / "share" / "ocs-test-dirs"

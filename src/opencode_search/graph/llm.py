@@ -43,9 +43,34 @@ _DEEPSEEK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-v4-flash")
 _deepseek_disabled = False
 
 
+def _ose_config_dir() -> Path:
+    """~/.config/opencode-search/ (XDG_CONFIG_HOME-aware)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "opencode-search"
+
+
+def _parse_key_from_file(path: Path) -> str | None:
+    """Read DEEPSEEK_API_KEY from a KEY=VALUE file; return stripped value or None."""
+    try:
+        for line in path.read_text().splitlines():
+            s = line.strip()
+            if s.startswith(("export DEEPSEEK_API_KEY=", "DEEPSEEK_API_KEY=")):
+                return s.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
 @lru_cache(maxsize=1)
 def deepseek_key() -> str | None:
-    """DeepSeek API key from env, else parsed from ~/.bash_env (systemd daemon lacks it).
+    """DeepSeek API key.
+
+    Resolution order:
+      1. DEEPSEEK_API_KEY environment variable (primary; set this in the systemd unit via
+         EnvironmentFile=~/.config/opencode-search/env or a secrets manager)
+      2. ~/.config/opencode-search/env  (documented per-user config file)
+      3. ~/.bash_env  (deprecated back-compat; kept so existing setups keep working)
 
     Returns None when unavailable — callers must raise, not silently swallow.
     """
@@ -54,14 +79,10 @@ def deepseek_key() -> str | None:
     k = os.environ.get("DEEPSEEK_API_KEY")
     if k:
         return k.strip()
-    try:
-        for line in (Path.home() / ".bash_env").read_text().splitlines():
-            s = line.strip()
-            if s.startswith(("export DEEPSEEK_API_KEY=", "DEEPSEEK_API_KEY=")):
-                return s.split("=", 1)[1].strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return None
+    v = _parse_key_from_file(_ose_config_dir() / "env")
+    if v:
+        return v
+    return _parse_key_from_file(Path.home() / ".bash_env")
 
 
 @contextlib.contextmanager
@@ -84,7 +105,7 @@ def deepseek_chat(
     """Generate via DeepSeek (OpenAI-compatible). Cloud lane — no local GPU. Raises if no key."""
     key = deepseek_key()
     if not key:
-        raise RuntimeError("DEEPSEEK_API_KEY not found (env or ~/.bash_env)")
+        raise RuntimeError("DEEPSEEK_API_KEY not found (env or ~/.config/opencode-search/env)")
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -108,7 +129,7 @@ def _ds_post(payload_dict: dict, timeout: int) -> dict:
     """POST to DeepSeek and return the parsed JSON response body."""
     key = deepseek_key()
     if not key:
-        raise RuntimeError("DEEPSEEK_API_KEY not found (env or ~/.bash_env)")
+        raise RuntimeError("DEEPSEEK_API_KEY not found (env or ~/.config/opencode-search/env)")
     data = json.dumps(payload_dict).encode()
     req = urllib.request.Request(
         _DEEPSEEK_URL, data=data,

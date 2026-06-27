@@ -382,7 +382,7 @@ def _enrich_project(project_path: str) -> None:
     if not deepseek_key():
         raise RuntimeError(
             "KB build requires DEEPSEEK_API_KEY — local generative LLM is decommissioned. "
-            "Set DEEPSEEK_API_KEY in env or ~/.bash_env."
+            "Set DEEPSEEK_API_KEY in env or ~/.config/opencode-search/env."
         )
 
     from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
