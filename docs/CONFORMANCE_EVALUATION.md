@@ -1,6 +1,6 @@
 # Conformance Evaluation — World Model, Architecture, Principles & Rules
 
-> **Date:** June 26 2026 (refreshed from prior mid-remediation snapshot)
+> **Date:** June 27 2026 (final verification pass; all 711 tests green)
 > **Scope:** OSE (`opencode-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/docgen/` · `vendor/okf/`
 > **Method:** `check_world_model.py --all` + static source reads + `test_world_model_traceability.py`
 > **Verdict:** CONFORMS (all checkable L1 invariants pass; 5 gaps found and remediated this session)
@@ -86,8 +86,7 @@ Code conformance: all items resolved.
 ```bash
 python scripts/check_world_model.py --all   # CONFORMS
 .venv/bin/pytest src/tests/live/test_world_model_traceability.py -q  # 1 passed
-.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -m "live and not slow" -q  # 600 passed
-.venv/bin/pytest src/tests/live/test_docgen_hierarchy_e2e.py -q  # 9 passed (includes slow test)
+.venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -x -q  # 711 passed (Jun 27 2026)
 ```
 
 Additional fixes applied during this audit (beyond the 5 gaps):
@@ -98,9 +97,15 @@ Additional fixes applied during this audit (beyond the 5 gaps):
 - Fixed ose-docgen architect tool-access: `if tools is not None:` prevents default tool use causing 180s timeout
 - Added `max_pages` override to `generate()`/`portal()` for test speed control
 - Fixed ose-docgen `stdin=subprocess.DEVNULL` in `run_claude_portal` (belt-and-suspenders subprocess isolation)
-- Fixed `test_ih_generate_llm_structure`: `capfd.disabled()` wrapper prevents pytest fd-level capture from blocking the claude subprocess — root cause was fd-level capture (`--capture=fd`) interfering with `subprocess.run()` when preceding tests held HTTP connections in the `requests` pool; `capfd.disabled()` temporarily restores real fds during the LLM call
-- Fixed `test_okf_llm_generate_structure`: same fd-capture root cause as IH test; added `capfd` fixture + `capfd.disabled()` wrapper, and `stdin=subprocess.DEVNULL` to `vendor/okf/src/okf/generate.py:_run_claude()`
-- Fixed intermittent IH + OKF slow-test failures caused by Claude API rate-limit conflicts: both tests use the same LLM account(s); when the primary account (`~/.claude`) hits 95% weekly utilization, claude subprocesses fail immediately with non-zero exit code. Root causes found and fixed: (1) `accounts.py` `_fetch_usage()` parsed a stale key format (`five_hour_utilization` flat key) — the API now returns nested `{"five_hour": {"utilization": N}}` format with 0-100 percentages; fixed to read nested format and divide by 100. (2) `pick_profile()` with correctly parsed data now selects `~/.claude-account1` (6% weekly) over `~/.claude` (95% weekly). (3) `explore_repo()` cached failed (rate-limited) explore results in `_BRIEF_CACHE` without including profile in the key — the failover's `explore_repo()` call would return the cached degraded result, causing the architect to receive empty briefs; fixed by not caching `_error:True` results. (4) Added profile failover in both `portal()` (IH) and `generate()` (OKF): if the first claude call fails, try remaining valid profiles before declaring failure.
+- Fixed `test_ih_generate_llm_structure`: `capfd.disabled()` wrapper prevents pytest fd-level capture from blocking the claude subprocess
+- Fixed `test_okf_llm_generate_structure`: same fd-capture fix; added `capfd.disabled()` + `stdin=subprocess.DEVNULL`
+- Fixed intermittent IH + OKF slow-test failures: `accounts.py` `_fetch_usage()` parsed stale key format; fixed to nested `{"five_hour": {"utilization": N}}` format; `pick_profile()` now correctly selects lowest-utilization account; `explore_repo()` no longer caches error results; profile failover added in both `portal()` and `generate()`
+- `_TIMEOUT_ARCH` 180→300s in `vendor/docgen/src/ose_docgen/portal.py` (SONNET architect times out under full-suite load; commit 30cad5c)
+- `cite_gate.py` basename fallback: LLM generates `promo.go` when real path is `promo/promo.go`; rglob fallback added (commit e027b3d)
+- `_TIMEOUT` 180→300s in `vendor/okf/src/okf/generate.py` OKF discover call (commit d8bdb2f)
+- `_converge_ready` retry: federation root's 6 head communities can fail DeepSeek batch under full-suite load, leaving l1_enriched_pct stuck at 53.8%; fixed to retry `_enrich_project` every 30s when l1 < 100% (commit 26c2908)
+- `test_self_heal_e2e.py` `_proj` fixture: changed from `tmp_path` (blocks on `/tmp/` forbidden-root guard) to home-relative tmpdir (commit 4f96ca6)
+- `test_p5_server.py` chat error-start guard: narrowed from `"error" not in al[:80]` to `not al.startswith("error")` — the broader check falsely rejects valid error-handling question answers (commit d7584fb)
 
 ---
 
