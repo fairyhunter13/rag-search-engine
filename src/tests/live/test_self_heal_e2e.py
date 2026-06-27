@@ -13,13 +13,20 @@ pytestmark = pytest.mark.live
 
 
 @pytest.fixture()
-def _proj(tmp_path):
+def _proj():
+    import shutil
+    import tempfile
     from opencode_search.core.config import ProjectEntry
     from opencode_search.core.registry import remove_project, upsert_project
-    proj = str(tmp_path)
-    upsert_project(ProjectEntry(path=proj, enabled=True))
-    yield proj
-    remove_project(proj)
+    base = Path.home() / ".local" / "share" / "ocs-test-dirs"
+    base.mkdir(parents=True, exist_ok=True)
+    d = Path(tempfile.mkdtemp(dir=base, prefix="self-heal-"))
+    try:
+        upsert_project(ProjectEntry(path=str(d), enabled=True))
+        yield str(d)
+        remove_project(str(d))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.mark.slow
