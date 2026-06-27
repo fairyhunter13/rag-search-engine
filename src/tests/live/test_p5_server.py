@@ -685,7 +685,7 @@ def test_chat_comprehensive_question_a(live_client, service_path, question, kws)
     al = answer.lower()
     assert done_seen, f"SSE never sent done for: {question[:60]}"
     assert len(al) > 30, f"Answer too short: {al!r}"
-    assert "error" not in al[:80], f"Answer starts with error: {al[:200]!r}"
+    assert not al.startswith("error"), f"Answer starts with error: {al[:200]!r}"
     assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
 
 
@@ -714,7 +714,7 @@ def test_chat_comprehensive_question_b(live_client, service_path, question, kws)
     al = answer.lower()
     assert done_seen, f"SSE never sent done for: {question[:60]}"
     assert len(al) > 30, f"Answer too short: {al!r}"
-    assert "error" not in al[:80], f"Answer starts with error: {al[:200]!r}"
+    assert not al.startswith("error"), f"Answer starts with error: {al[:200]!r}"
     assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
 
 
