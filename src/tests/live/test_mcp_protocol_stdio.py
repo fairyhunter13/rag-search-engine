@@ -1,7 +1,7 @@
 """P15.3a: MCP stdio transport round-trip — protocol only, no direct tool calls.
 
 Speaks real JSON-RPC over bridge-stdio: initialize → notifications/initialized
-→ tools/list → tools/call each tool on real indexed data.
+→ tools/list → tools/call each tool against the sample workspace.
 """
 from __future__ import annotations
 
@@ -11,9 +11,17 @@ import sys
 
 import pytest
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _EXPECTED_TOOLS = {"ask", "graph", "index", "overview", "search"}
+
+
+@pytest.fixture(scope="module")
+def sample_proj_path(sample_workspace: SampleWorkspace) -> str:
+    """promo-svc path from sample_workspace — used to scope search/ask protocol calls."""
+    return sample_workspace.promo
 
 
 class _StdioMCP:
@@ -82,20 +90,24 @@ def test_stdio_tools_list_returns_exactly_5(stdio_mcp):
     assert names == _EXPECTED_TOOLS, f"wrong tool set: {names}"
 
 
-def test_stdio_overview_projects_returns_real_projects(stdio_mcp):
-    """P15.3a: tools/call overview(projects) over stdio — >=2 real indexed projects."""
+def test_stdio_overview_projects_returns_indexed_sample_projects(stdio_mcp, sample_proj_path):
+    """P15.3a: tools/call overview(projects) over stdio — >=2 sample projects indexed."""
     r = stdio_mcp.request("tools/call", {"name": "overview", "arguments": {"what": "projects"}})
     data = json.loads(r["result"]["content"][0]["text"])
     projects = data.get("projects", [])
-    assert len(projects) >= 2, f"expected >=2 projects, got {len(projects)}"
-    assert len(projects) >= 2, f"expected >=2 real indexed projects, got {projects}"
+    assert len(projects) >= 2, f"expected >=2 sample projects, got {len(projects)}"
 
 
-def test_stdio_search_returns_real_ranked_results(stdio_mcp):
-    """P15.3a: tools/call search over stdio — ranked results from real index."""
-    r = stdio_mcp.request("tools/call", {"name": "search", "arguments": {"query": "community leiden"}})
+def test_stdio_search_returns_sample_ranked_results(stdio_mcp, sample_proj_path):
+    """P15.3a: tools/call search over stdio — ranked results from sample index."""
+    r = stdio_mcp.request("tools/call", {"name": "search", "arguments": {
+        "query": "promo apply discount",
+        "project_paths": [sample_proj_path],
+    }})
     hits = json.loads(r["result"]["content"][0]["text"])
-    assert len(hits.get("results", [])) >= 1, "search returned no results over stdio"
+    assert len(hits.get("results", [])) >= 1, (
+        f"search returned no results from sample promo-svc over stdio; hits={hits}"
+    )
 
 
 def test_no_direct_tool_calls_in_protocol_tests():

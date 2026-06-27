@@ -122,68 +122,74 @@ def test_e2e_ask_global_non_empty(live_client, proj_key, projects):
 # S6: Federation / symlink-repo invariants
 # ---------------------------------------------------------------------------
 
-def _external_symlink_targets(root: Path) -> set[str]:
-    """Resolved targets of symlinked dirs under root pointing outside it (mirrors iter_files federation prune)."""
-    from opencode_search.core.config import IGNORED_DIRS
-    root = root.resolve()
-    out: set[str] = set()
-    for dp, dirs, _ in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
-        for d in dirs:
-            p = Path(dp) / d
-            if p.is_symlink() and not p.resolve().is_relative_to(root):
-                out.add(str(p.resolve()))
-    return out
+_SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
 
 
-def _symlinked_project() -> str | None:
-    r = requests.post(f"{_BASE}/api/overview", json={"what": "projects"}, timeout=10)
-    if r.status_code != 200:
-        return None
-    for p in json.loads(r.text).get("projects", []):
-        path = Path(p["path"])
-        if path.exists() and _external_symlink_targets(path):
-            return p["path"]
-    return None
+@pytest.fixture(scope="module")
+def synth_symlink_proj():
+    """Synthetic root with one external symlinked sub-dir — used by S6a/S6b.
+
+    Layout built under ~/.local/share/ocs-test-dirs/:
+      root/own.py          — own source file (indexed)
+      root/ext-link/ → external/  — symlink to external dir (must be pruned)
+      external/leaked.py   — file that must NOT appear in root's graph.db
+    """
+    import shutil
+    import tempfile
+
+    from opencode_search.core.config import ProjectEntry
+    from opencode_search.core.registry import remove_project, upsert_project
+    from opencode_search.daemon.sweeps import _index_project
+
+    _SAFE_BASE.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="synth-symlink-root-"))
+    external = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="synth-symlink-ext-"))
+    try:
+        (root / "own.py").write_text("def own_fn():\n    pass\n")
+        (external / "leaked.py").write_text("def leaked_fn():\n    pass\n")
+        link = root / "ext-link"
+        link.symlink_to(external)
+        upsert_project(ProjectEntry(path=str(root), enabled=True))
+        _index_project(str(root))
+        yield str(root), str(external)
+        remove_project(str(root))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(external, ignore_errors=True)
 
 
-def test_federation_indexing_prunes_symlink_targets(live_client):
-    """S6a: Indexing a root with symlinked sub-repos must not wildly inflate file_count."""
-    root = _symlinked_project()
-    assert root is not None, "no indexed project with external symlinked sub-dirs — register a project that has symlinked sub-repos"
+def test_federation_indexing_prunes_symlink_targets(live_client, synth_symlink_proj):
+    """S6a: indexing a root with a symlinked external sub-dir must not inflate file_count."""
+    root, _external = synth_symlink_proj
     root_path = Path(root)
     own_files = sum(
-        1 for f in root_path.rglob("*")
-        if f.is_file() and not any(p.is_symlink() for p in f.parents)
+        1 for f in root_path.iterdir() if f.is_file()
     )
     status = _overview("status", root)
     reported = status.get("file_count", 0)
     if own_files > 0:
         assert reported <= own_files * 2, (
             f"file_count {reported} > 2× own_files {own_files} "
-            f"— symlinked targets may be inlined"
+            f"— symlinked external dir may have been inlined"
         )
 
 
-def test_federation_kb_reflects_root_only(live_client):
-    """S6b: graph.db symbols must not include files from symlinked member paths."""
-    root = _symlinked_project()
-    assert root is not None, "no indexed project with external symlinked sub-dirs — register a project that has symlinked sub-repos"
+def test_federation_kb_reflects_root_only(live_client, synth_symlink_proj):
+    """S6b: graph.db symbols must not include files from the symlinked external dir."""
+    root, external = synth_symlink_proj
     gdb = _graph_db(root)
-    assert gdb.exists(), f"graph.db not found for symlinked root {root}"
-    symlinked = _external_symlink_targets(Path(root))
+    assert gdb.exists(), f"graph.db not found for synthetic symlink root {root}"
     con = sqlite3.connect(str(gdb))
     try:
         outsiders = [
             r[0] for r in con.execute("SELECT DISTINCT file FROM symbols").fetchall()
-            if r[0] and not r[0].startswith(root)
-            and any(r[0].startswith(sd) for sd in symlinked)
+            if r[0] and r[0].startswith(external)
         ]
     finally:
         con.close()
     assert not outsiders, (
         f"graph.db for {root!r} contains {len(outsiders)} symbol files "
-        f"from symlinked member paths: {outsiders[:3]}"
+        f"from symlinked external dir {external!r}: {outsiders[:3]}"
     )
 
 

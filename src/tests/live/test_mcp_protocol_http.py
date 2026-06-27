@@ -2,7 +2,7 @@
 
 Sends real JSON-RPC requests to the live daemon's /mcp endpoint (SSE response
 format; Accept: application/json, text/event-stream). Also asserts parity with
-the stdio transport (same 5-tool set from both).
+the stdio transport (same 5-tool set from both). Data calls target sample_workspace.
 """
 from __future__ import annotations
 
@@ -13,7 +13,15 @@ import sys
 import pytest
 import requests
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
+
+
+@pytest.fixture(scope="module")
+def sample_proj_path(sample_workspace: SampleWorkspace) -> str:
+    """promo-svc path from sample_workspace — used to scope HTTP protocol search calls."""
+    return sample_workspace.promo
 
 _BASE = "http://127.0.0.1:8765"
 _MCP_URL = f"{_BASE}/mcp"
@@ -66,8 +74,8 @@ def test_http_mcp_tools_list_returns_exactly_5():
     assert names == _EXPECTED_TOOLS, f"wrong tool set over HTTP: {names}"
 
 
-def test_http_mcp_overview_projects_returns_real_projects():
-    """P15.3b: /mcp tools/call overview(projects) — >=2 real indexed projects (SSE)."""
+def test_http_mcp_overview_projects_returns_indexed_sample_projects(sample_proj_path):
+    """P15.3b: /mcp tools/call overview(projects) — >=2 sample projects indexed (SSE)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -78,16 +86,21 @@ def test_http_mcp_overview_projects_returns_real_projects():
     assert len(data.get("projects", [])) >= 2
 
 
-def test_http_mcp_search_returns_real_ranked_results():
-    """P15.3b: /mcp tools/call search — ranked real results (SSE)."""
+def test_http_mcp_search_returns_sample_ranked_results(sample_proj_path):
+    """P15.3b: /mcp tools/call search — ranked results from sample promo-svc (SSE)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 4, "method": "tools/call",
-        "params": {"name": "search", "arguments": {"query": "authentication handler"}},
+        "params": {"name": "search", "arguments": {
+            "query": "promo apply discount",
+            "project_paths": [sample_proj_path],
+        }},
     }, headers=h, timeout=15)
     assert r.status_code == 200
     hits = json.loads(_sse_json(r)["result"]["content"][0]["text"])
-    assert len(hits.get("results", [])) >= 1, "search returned no results over HTTP"
+    assert len(hits.get("results", [])) >= 1, (
+        f"search returned no results from sample promo-svc over HTTP; hits={hits}"
+    )
 
 
 def test_stdio_and_http_return_same_tool_set():

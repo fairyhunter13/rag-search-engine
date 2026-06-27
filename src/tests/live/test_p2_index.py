@@ -89,9 +89,9 @@ def test_indexer_counts(embedder):
         store.close()
 
 
-# ── P10.1: search scopes on REAL indexed repos ────────────────────────────────
+# ── P10.1: search scopes on sample indexed repos ─────────────────────────────
 
-def test_search_code_scope_real_federation_root(embedder):
+def test_search_code_scope_sample_federation_root(embedder):
     from tree_sitter_language_pack import has_language
 
     from opencode_search.core.config import project_vector_db
@@ -105,7 +105,7 @@ def test_search_code_scope_real_federation_root(embedder):
     assert results and all(has_language(r.get("language", "")) for r in results)
 
 
-def test_search_code_scope_real_service_member(embedder):
+def test_search_code_scope_sample_service_member(embedder):
     from opencode_search.core.config import project_vector_db
     from opencode_search.index.store import VectorStore
     from opencode_search.query.search import search
@@ -126,7 +126,7 @@ def test_search_all_scope_returns_results(embedder):
     vs = VectorStore(project_vector_db(proj))
     results = search("configuration", embedder, vs, scope="all", top_k=10)
     vs.close()
-    assert results, "scope=all returned no results on real indexed federation root"
+    assert results, "scope=all returned no results on sample federation root"
 
 
 def test_search_top_result_relevant(embedder):

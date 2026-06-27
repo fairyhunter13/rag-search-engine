@@ -1,8 +1,9 @@
-"""T3: all search-engine features working against the 3 canonical project roles.
+"""T3: all search-engine features working against the 3 canonical sample project roles.
 
-test_mcp_tool_matrix.py binds to 'any indexed project'; this file proves every feature
-works for ose (standalone self-index), a federation root, and a standalone project.
-Project selection is capability-based (env override via OSE_TEST_* or auto-discovery).
+test_mcp_tool_matrix.py binds to any indexed project via a single promo-svc scope.
+This file proves every feature works for the 3 roles: federation member (promo-svc),
+federation root (shop-federation), and standalone (ledger-standalone). All 3 are sourced
+from sample_workspace — no real device projects used.
 No duplication of matrix tests — focuses on per-root binding and the 15 overview what= values.
 """
 from __future__ import annotations
