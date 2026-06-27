@@ -113,43 +113,8 @@ async def ask(
 ) -> str:
     """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture|global|feature|wiki|business. LLM synthesis is the HTTP /api/ask path."""
     note_query(query)
-    from opencode_search.core.config import index_dir, project_graph_db, project_vector_db
-    from opencode_search.core.registry import list_projects
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.index.store import VectorStore
-    from opencode_search.kb.answer_cache import get as _cache_get
-    from opencode_search.kb.answer_cache import set as _cache_set
-    from opencode_search.query.ask import compose_answer
-    from opencode_search.query.search import search_federation as _search_fed
-
-    if not project_path:
-        projects = [p for p in list_projects() if p.enabled]
-        if not projects:
-            return "No indexed projects found."
-        project_path = projects[0].path
-
-    cache_dir = index_dir(project_path) / "ask_cache"
-    cached = _cache_get(cache_dir, f"{scope}:{query}")
-    if cached:
-        return cached
-
-    from opencode_search.daemon.federation import expand_federation
-    all_paths = expand_federation(project_path)
-    if not project_vector_db(project_path).exists():
-        return f"Project not indexed: {project_path}"
-    embedder = get_embedder()
-    graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
-    vector_stores = [VectorStore(project_vector_db(p)) for p in all_paths if project_vector_db(p).exists()]
-    try:
-        chunks = _search_fed(query, embedder, vector_stores, top_k=8)
-        answer = compose_answer(query, chunks, graph_stores, scope=scope)
-        _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
-        return answer
-    finally:
-        for vs in vector_stores:
-            vs.close()
-        for gs in graph_stores:
-            gs.close()
+    from opencode_search.query.ask import run_ask
+    return run_ask(query, project_path, scope)
 
 
 @mcp.tool()
@@ -161,47 +126,8 @@ async def graph(
 ) -> str:
     """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|path|semantic_trace."""
     note_activity()
-    if not project_path:
-        from opencode_search.core.registry import list_projects
-        projects = [p for p in list_projects() if p.enabled]
-        if not projects:
-            return json.dumps({"error": "No indexed projects found."})
-        project_path = projects[0].path
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.daemon.federation import expand_federation, federated_map
-    from opencode_search.query import graph_handler as gh
-
-    if not any(project_graph_db(p).exists() for p in expand_federation(project_path)):
-        return json.dumps({"error": f"Not indexed: {project_path}"})
-
-    _union = {"callers": gh.callers, "callees": gh.callees,
-              "impact": gh.impact, "definition": gh.definition}
-    if relation in _union:
-        _fn = _union[relation]
-        matches = [m for _, ms in federated_map(project_path, lambda gs: _fn(symbol, gs)) for m in ms]
-        return json.dumps({"matches": matches})
-    if relation == "impact_narrative":
-        affected = [m for _, ms in federated_map(project_path, lambda gs: gh.impact(symbol, gs)) for m in ms]
-        if not affected:
-            return json.dumps({"symbol": symbol, "risk": "low", "affected_count": 0,
-                               "summary": f"No callers found for '{symbol}' — low blast radius."})
-        names = [r["name"] for r in affected[:20]]
-        risk = "high" if len(affected) > 10 else "medium" if len(affected) > 3 else "low"
-        return json.dumps({"symbol": symbol, "risk": risk, "affected_count": len(affected), "affected": names,
-                           "summary": f"Changing '{symbol}' affects {len(affected)} symbol(s): "
-                                      f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."})
-    # path / semantic_trace — per-member; cross-repo paths are not representable
-    _note = "call paths are per-member; cross-repo paths are not represented"
-    if not to_symbol:
-        return json.dumps({"error": f"relation='{relation}' requires to_symbol"})
-    for _, path in federated_map(project_path, lambda gs: gh.path_between(symbol, to_symbol, gs)):
-        if path:
-            steps = " → ".join(p["name"] for p in path)
-            return json.dumps({"from": symbol, "to": to_symbol, "path": path, "note": _note,
-                               "summary": f"{symbol} → {to_symbol} via {len(path)} step(s): {steps}"})
-    return json.dumps({"from": symbol, "to": to_symbol, "path": [], "note": _note,
-                       "summary": f"No call path found from '{symbol}' to '{to_symbol}'."
-                       if to_symbol else f"relation='{relation}' requires to_symbol"})
+    from opencode_search.query.graph_handler import run_graph
+    return run_graph(symbol, project_path, relation, to_symbol)
 
 
 @mcp.tool()

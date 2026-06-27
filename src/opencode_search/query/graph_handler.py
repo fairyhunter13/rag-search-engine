@@ -114,3 +114,76 @@ def path_between(src: str, tgt: str, store: GraphStore, *, max_depth: int = 5) -
     return []
 
 
+def run_graph(
+    symbol: str,
+    project_path: str = "",
+    relation: str = "definition",
+    to_symbol: str = "",
+) -> str:
+    """Sync federation fan-out graph query. Shared by MCP + CLI. DB-reads only, no LLM."""
+    import json as _json
+
+    from opencode_search.core.config import project_graph_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.daemon.federation import expand_federation, federated_map
+
+    if not project_path:
+        projects = [p for p in list_projects() if p.enabled]
+        if not projects:
+            return _json.dumps({"error": "No indexed projects found."})
+        project_path = projects[0].path
+    if not any(project_graph_db(p).exists() for p in expand_federation(project_path)):
+        return _json.dumps({"error": f"Not indexed: {project_path}"})
+    _union = {
+        "callers": callers, "callees": callees,
+        "impact": impact, "definition": definition,
+    }
+    if relation in _union:
+        _fn = _union[relation]
+        matches = [
+            m
+            for _, ms in federated_map(project_path, lambda gs: _fn(symbol, gs))
+            for m in ms
+        ]
+        return _json.dumps({"matches": matches})
+    if relation == "impact_narrative":
+        affected = [
+            m
+            for _, ms in federated_map(project_path, lambda gs: impact(symbol, gs))
+            for m in ms
+        ]
+        if not affected:
+            return _json.dumps({
+                "symbol": symbol, "risk": "low", "affected_count": 0,
+                "summary": f"No callers found for '{symbol}' — low blast radius.",
+            })
+        names = [r["name"] for r in affected[:20]]
+        risk = "high" if len(affected) > 10 else "medium" if len(affected) > 3 else "low"
+        return _json.dumps({
+            "symbol": symbol, "risk": risk, "affected_count": len(affected),
+            "affected": names,
+            "summary": (
+                f"Changing '{symbol}' affects {len(affected)} symbol(s): "
+                f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."
+            ),
+        })
+    _note = "call paths are per-member; cross-repo paths are not represented"
+    if not to_symbol:
+        return _json.dumps({"error": f"relation='{relation}' requires to_symbol"})
+    for _, path in federated_map(
+        project_path, lambda gs: path_between(symbol, to_symbol, gs)
+    ):
+        if path:
+            steps = " → ".join(p["name"] for p in path)
+            return _json.dumps({
+                "from": symbol, "to": to_symbol, "path": path, "note": _note,
+                "summary": f"{symbol} → {to_symbol} via {len(path)} step(s): {steps}",
+            })
+    return _json.dumps({
+        "from": symbol, "to": to_symbol, "path": [], "note": _note,
+        "summary": (
+            f"No call path found from '{symbol}' to '{to_symbol}'."
+            if to_symbol
+            else f"relation='{relation}' requires to_symbol"
+        ),
+    })

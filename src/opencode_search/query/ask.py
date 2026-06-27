@@ -111,3 +111,41 @@ def compose_answer(query: str, chunks: list[dict], stores: list, *, scope: str =
     Used by the MCP ask handler (read-only path).
     """
     return _assemble_context(query, chunks, stores, scope)
+
+
+def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
+    """Assemble context from DB artifacts (no LLM). Shared by MCP + CLI."""
+    from opencode_search.core.config import index_dir, project_graph_db, project_vector_db
+    from opencode_search.core.registry import list_projects
+    from opencode_search.embed.embedder import get_embedder
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.index.store import VectorStore
+    from opencode_search.kb.answer_cache import get as _cache_get
+    from opencode_search.kb.answer_cache import set as _cache_set
+    from opencode_search.query.search import search_federation as _search_fed
+    if not project_path:
+        projects = [p for p in list_projects() if p.enabled]
+        if not projects:
+            return "No indexed projects found."
+        project_path = projects[0].path
+    cache_dir = index_dir(project_path) / "ask_cache"
+    cached = _cache_get(cache_dir, f"{scope}:{query}")
+    if cached:
+        return cached
+    from opencode_search.daemon.federation import expand_federation
+    all_paths = expand_federation(project_path)
+    if not project_vector_db(project_path).exists():
+        return f"Project not indexed: {project_path}"
+    embedder = get_embedder()
+    graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
+    vector_stores = [VectorStore(project_vector_db(p)) for p in all_paths if project_vector_db(p).exists()]
+    try:
+        chunks = _search_fed(query, embedder, vector_stores, top_k=8)
+        answer = compose_answer(query, chunks, graph_stores, scope=scope)
+        _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
+        return answer
+    finally:
+        for vs in vector_stores:
+            vs.close()
+        for gs in graph_stores:
+            gs.close()

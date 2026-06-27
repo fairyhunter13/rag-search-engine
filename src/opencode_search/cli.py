@@ -216,6 +216,59 @@ def okf(
 
 
 @app.command()
+def ask(
+    query: str = typer.Argument(..., help="Question to answer."),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
+    scope: str = typer.Option("all", help="Scope: all|architecture|global|feature|wiki|business."),
+) -> None:
+    """Assemble context for a codebase question (LLM-free; GPU rerank only)."""
+    from opencode_search.query.ask import run_ask
+    typer.echo(run_ask(query, project or "", scope))
+
+
+@app.command()
+def graph(
+    symbol: str = typer.Argument(..., help="Symbol to analyze."),
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
+    relation: str = typer.Option("definition", help="definition|callers|callees|impact|impact_narrative|path|semantic_trace."),
+    to_symbol: str = typer.Option("", "--to-symbol", help="Target symbol for path/semantic_trace."),
+) -> None:
+    """Analyze call graph for a symbol."""
+    from opencode_search.query.graph_handler import run_graph
+    typer.echo(run_graph(symbol, project or "", relation, to_symbol))
+
+
+@app.command()
+def overview(
+    project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
+    what: str = typer.Option("structure", help="structure|communities|status|projects|patterns|metrics|..."),
+) -> None:
+    """Overview of a project (same as MCP overview tool)."""
+    from opencode_search.server._overview import handle_overview
+    typer.echo(handle_overview(project or "", what))
+
+
+@app.command()
+def wiki(
+    path: str = typer.Argument(..., help="Project root to build wiki for."),
+) -> None:
+    """Build wiki pages for a project from its graph DB."""
+    from opencode_search.core.config import project_graph_db, project_wiki_dir
+    from opencode_search.graph.store import GraphStore
+    from opencode_search.kb.wiki import build_wiki
+    gdb = project_graph_db(path)
+    if not gdb.exists():
+        typer.echo(f"Not indexed: {path}", err=True)
+        raise typer.Exit(1)
+    gs = GraphStore(gdb)
+    try:
+        n = build_wiki(gs, project_wiki_dir(path))
+        typer.echo(f"pages_written={n}")
+    finally:
+        gs.close()
+
+
+@app.command()
 def status() -> None:
     """Show daemon status and registered projects."""
     from opencode_search.core.config import DAEMON_HOST, DAEMON_PORT
