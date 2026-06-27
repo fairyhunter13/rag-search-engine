@@ -360,19 +360,25 @@ def test_overview_unknown_what_returns_error():
     assert "structure" in data["valid"], f"'structure' missing from valid list: {data['valid']}"
 
 
-def test_graph_defaults_project_path_to_first_project():
-    """G5: graph(symbol) with no project_path resolves to first enabled project."""
+def test_graph_defaults_project_path_to_first_project(sample_workspace):
+    """G5: graph(symbol) with no project_path resolves to the first enabled registry project.
+
+    Mechanics test — proves the resolution rule (first-enabled-project fallback) rather than
+    asserting specific content from a real device project. The sample_workspace fixture ensures
+    at least one indexed project is registered (promo-svc), so the resolution always succeeds.
+    """
     from opencode_search.core.registry import list_projects
     from opencode_search.server.mcp import graph as graph_tool
 
     first = next((p.path for p in list_projects() if p.enabled), None)
-    assert first, "At least one enabled project must be registered"
-    result = asyncio.run(graph_tool("authenticate"))
+    assert first, "At least one enabled project must be registered (sample_workspace provides this)"
+    # Verify the resolution rule fires: no project_path → must resolve, not error "No indexed project"
+    result = asyncio.run(graph_tool("own_fn"))
     data = json.loads(result)
-    assert "error" not in data or "No indexed" not in data.get("error", ""), (
-        f"graph with no project_path should resolve, got: {data}"
+    assert "No indexed project" not in data.get("error", ""), (
+        f"G5: graph with no project_path must resolve to first enabled project, got: {data}"
     )
-    assert "matches" in data, f"expected matches key, got: {data}"
+    assert "matches" in data, f"G5: expected matches key in resolved graph, got: {data}"
 
 
 _OSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon

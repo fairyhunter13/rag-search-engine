@@ -1,8 +1,8 @@
-"""T2: real federation composed-entity validity — tests against the live federation root.
+"""T2: sample federation composed-entity validity — tests against the sample federation root.
 
 Synthetic-fixture tests (test_federation_architecture/logical_entity) prove invariants
-in isolation. This file validates that the *real* federation root holds the same invariants
-— a composition gap invisible to single-unit analysis (arXiv 2606.02019).
+in isolation. This file validates that the sample shop-federation root holds the same
+invariants — a composition gap invisible to single-unit analysis (arXiv 2606.02019).
 
 Metamorphic testing principle (MetaRAG arXiv 2509.09360 / MeTMaP ACM 2024):
 behavior must stay invariant under semantically-neutral transforms. Here:
@@ -40,8 +40,8 @@ def fed_status(fed_root) -> dict:
     return json.loads(r.text)
 
 
-class TestRealFederation:
-    """T2: real federation root as one composed entity."""
+class TestFederationComposedEntity:
+    """T2: sample federation root as one composed entity."""
 
     def test_member_list_non_empty(self, fed_status: dict) -> None:
         """T2a: federation must report ≥2 members (root + at least one member)."""

@@ -3,7 +3,7 @@
 Run separately (Playwright conflicts with asyncio_mode=auto):
   .venv/bin/pytest src/tests/live/test_browser.py --browser chromium -q
 
-Requires at least one indexed project registered so tiles show data.
+Uses sample_workspace (shop-federation + ledger-standalone) for all data assertions.
 Zero mocks — real daemon, real chromium, real SSE, real KB.
 """
 from __future__ import annotations
@@ -11,11 +11,42 @@ from __future__ import annotations
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.live._sample_workspace import SampleWorkspace
+
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _DASH = f"{_BASE}/dashboard"
 _VIEWS = ["pulse", "chat", "admin", "graph", "wiki"]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _browser_sample_workspace(sample_workspace: SampleWorkspace) -> SampleWorkspace:
+    """Ensure sample projects are registered + indexed before any browser test runs."""
+    return sample_workspace
+
+
+@pytest.fixture(scope="session")
+def _sample_promo(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.promo
+
+
+@pytest.fixture(scope="session")
+def _sample_fed(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.fed_root
+
+
+@pytest.fixture(scope="session")
+def _sample_cart(sample_workspace: SampleWorkspace) -> str:
+    return sample_workspace.cart
+
+
+def _select_project(page: Page, project_path: str, wait_ms: int = 2500) -> None:
+    """Select a sample project by full path in #project-sel and wait for KPI refresh."""
+    sel = page.locator("#project-sel")
+    sel.wait_for(state="visible", timeout=10000)
+    sel.select_option(value=project_path)
+    page.wait_for_timeout(wait_ms)
 
 
 # ── P12.1: load + view presence ───────────────────────────────────────────────
@@ -86,32 +117,32 @@ def test_theme_button_toggles_theme(page: Page) -> None:
     assert before != after, f"theme icon did not change: {before!r} → {after!r}"
 
 
-# ── P12.4: pulse real data ────────────────────────────────────────────────────
+# ── P12.4: pulse data ─────────────────────────────────────────────────────────
 
-def test_pulse_kpi_tiles_show_real_data(page: Page) -> None:
-    """P12.4: files + communities KPI tiles are non-zero on real indexed data."""
+def test_pulse_kpi_tiles_show_sample_data(page: Page, _sample_promo: str) -> None:
+    """P12.4: files + communities KPI tiles are non-zero on sample indexed data."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(3000)
+    _select_project(page, _sample_promo)
     files = page.locator("#kpi-files").text_content() or ""
     comms = page.locator("#kpi-communities").text_content() or ""
-    assert files not in ("", "—"), f"#kpi-files shows no data: {files!r}"
-    assert comms not in ("", "—"), f"#kpi-communities shows no data: {comms!r}"
+    assert files not in ("", "—"), f"#kpi-files shows no data for sample: {files!r}"
+    assert comms not in ("", "—"), f"#kpi-communities shows no data for sample: {comms!r}"
 
 
 def test_project_selector_populated(page: Page) -> None:
-    """P12.4: #project-sel (admin nav) has >=1 real project options after loadProjects()."""
+    """P12.4: #project-sel has >=1 sample project option after loadProjects()."""
     page.goto(_DASH, wait_until="networkidle")
     page.wait_for_timeout(2000)
     opts = page.evaluate("document.querySelectorAll('#project-sel option').length")
     assert opts >= 1, f"#project-sel has no options, got {opts}"
 
 
-def test_pulse_suggested_questions_populated(page: Page) -> None:
-    """P12.4: suggested questions list has >=1 button after pulse loads."""
+def test_pulse_suggested_questions_populated(page: Page, _sample_promo: str) -> None:
+    """P12.4: suggested questions list has >=1 button after selecting sample promo-svc."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(3000)
+    _select_project(page, _sample_promo)
     btns = page.locator("#suggested-list .sq-btn").count()
-    assert btns >= 1, f"no suggested question buttons rendered, got {btns}"
+    assert btns >= 1, f"no suggested question buttons rendered for sample, got {btns}"
 
 
 # ── P12.5: SSE live feed / daemon dot ────────────────────────────────────────
@@ -185,10 +216,10 @@ def test_cmd_palette_dispatches_view_entry(page: Page, prefix: str, view: str) -
     expect(page.locator(f"#view-{view}")).to_be_visible()
 
 
-def test_cmd_palette_refresh_pulse_op(page: Page) -> None:
+def test_cmd_palette_refresh_pulse_op(page: Page, _sample_promo: str) -> None:
     """P12.3: 'Refresh Pulse' palette op executes loadPulse; kpi-files stays populated."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(3000)
+    _select_project(page, _sample_promo)
     page.keyboard.press("Control+k")
     page.wait_for_timeout(150)
     page.locator("#cmd-input").fill("Refresh Pulse")
@@ -218,12 +249,12 @@ def test_cmd_palette_op_items_fire_via_palette(page: Page) -> None:
 
 # ── P12.4 extended: enrichment tile + admin panels ────────────────────────
 
-def test_pulse_enrichment_tile_populated(page: Page) -> None:
-    """P12.4: #kpi-enrichment tile shows % on real indexed data."""
+def test_pulse_enrichment_tile_populated(page: Page, _sample_promo: str) -> None:
+    """P12.4: #kpi-enrichment tile shows % for sample promo-svc."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(3000)
+    _select_project(page, _sample_promo)
     enrich = page.locator("#kpi-enrichment").text_content() or ""
-    assert enrich not in ("", "—"), f"#kpi-enrichment empty: {enrich!r}"
+    assert enrich not in ("", "—"), f"#kpi-enrichment empty for sample: {enrich!r}"
 
 
 def test_admin_projects_body_populated(page: Page) -> None:
@@ -307,26 +338,26 @@ def test_admin_job_chips_and_autopipeline_present(page: Page) -> None:
 
 # ── P12.8b: wiki view ─────────────────────────────────────────────────────
 
-def test_wiki_view_loads_pages(page: Page) -> None:
-    """P12.8b: switching to wiki view loads page buttons into #wiki-pages."""
+def test_wiki_view_loads_pages(page: Page, _sample_promo: str) -> None:
+    """P12.8b: switching to wiki view loads page buttons into #wiki-pages for sample promo-svc."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
+    _select_project(page, _sample_promo)
     page.locator("#vbtn-wiki").click()
     page.wait_for_timeout(3000)
     btns = page.locator("#wiki-pages button").count()
-    assert btns >= 1, f"#wiki-pages has no page buttons: {btns}"
+    assert btns >= 1, f"#wiki-pages has no page buttons for sample promo-svc: {btns}"
 
 
-def test_wiki_page_loads_content(page: Page) -> None:
-    """P12.8b: clicking a wiki page button populates #wiki-content."""
+def test_wiki_page_loads_content(page: Page, _sample_promo: str) -> None:
+    """P12.8b: clicking a wiki page button populates #wiki-content for sample promo-svc."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
+    _select_project(page, _sample_promo)
     page.locator("#vbtn-wiki").click()
     page.wait_for_timeout(3000)
     page.locator("#wiki-pages button").first.click()
     page.wait_for_timeout(3000)
     text = page.locator("#wiki-content").inner_text() or ""
-    assert text.strip(), f"#wiki-content empty after page open: {text[:80]!r}"
+    assert text.strip(), f"#wiki-content empty after page open for sample promo-svc: {text[:80]!r}"
 
 
 def test_wiki_lint_elements_attached(page: Page) -> None:
@@ -444,17 +475,16 @@ def test_graph_node_click_updates_detail(page: Page) -> None:
     assert detail.strip(), f"#graph-detail empty after canvas click: {detail!r}"
 
 
-def test_project_selector_change_reloads_data(page: Page) -> None:
-    """P35 DB4: changing #project-sel calls switchProject; KPI tiles stay populated."""
+def test_project_selector_change_reloads_data(page: Page, _sample_promo: str, _sample_cart: str) -> None:
+    """P35 DB4: switching #project-sel between 2 sample projects; KPI tiles stay populated."""
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(3000)
-    opts = page.locator("#project-sel option").count()
-    assert opts >= 2, f"need >=2 project options for switch test, got {opts} — ensure 4 projects are indexed"
-    page.locator("#project-sel").select_option(index=1)
-    page.wait_for_timeout(3000)
+    _select_project(page, _sample_promo)
+    files_first = page.locator("#kpi-files").text_content() or ""
+    assert files_first not in ("", "—"), f"#kpi-files empty for sample promo: {files_first!r}"
+    _select_project(page, _sample_cart)
     files_after = page.locator("#kpi-files").text_content() or ""
     assert files_after not in ("", "—"), (
-        f"#kpi-files empty after project switch: {files_after!r}"
+        f"#kpi-files empty after switching to sample cart-svc: {files_after!r}"
     )
 
 

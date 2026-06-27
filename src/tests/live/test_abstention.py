@@ -5,7 +5,7 @@ reject-option for node classification (NCwR arXiv 2412.03190; arXiv 2501.08397; 
 metamorphic booster MRs (MetaRAG arXiv 2509.09360; arXiv 2603.24774).
 
 AB1/AB2  tail writes true SQL NULL, not '' (the NOT IN filter load-bearing detail)
-AB3      no non-NULL bucket dominates > 50% of typed rows on a real project
+AB3      no non-NULL bucket dominates > 50% of typed rows on a sample project
 AB4      NULL fraction is majority of L1 (tail >> head by design)
 AB5/AB6  read-path: NULL-typed tail excluded; typed head included
 AB7      L2 types unaffected (non-regression — upsert_community default must stay '')

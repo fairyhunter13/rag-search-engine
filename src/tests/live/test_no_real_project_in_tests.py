@@ -5,6 +5,13 @@ sample_workspace (shop-federation + ledger-standalone). Real device projects are
 as test data to keep the suite machine-agnostic and the public repo free of real paths.
 
 This is a static source-code check — GPU-free, daemon-free, import-free.
+
+Guards:
+  1. No list_projects() picker outside registry-mechanics allowlist.
+  2. No _OSE/_OSE_SRC used as a daemon data-arg outside source-read allowlist.
+  3. No overview(what="projects") registry-walk + path picker outside mechanics allowlist.
+  4. No unscoped search/ask (project_paths absent) while asserting on results/total,
+     outside the deliberate global-fanout allowlist.
 """
 from __future__ import annotations
 
@@ -43,12 +50,40 @@ _OSE_DATA_ALLOWLIST = {
     "test_no_real_project_in_tests.py",  # this file
 }
 
+# Files allowed to call overview(projects)/api/projects because they only COUNT
+# the results — they never extract a path for data use.
+_PROJECTS_PICKER_ALLOWLIST = {
+    "test_mcp_protocol_stdio.py",    # counts ≥2, no path extraction
+    "test_mcp_protocol_http.py",     # counts ≥2, no path extraction
+    "test_golden_parity.py",         # presence check (overview key names)
+    "test_p21_capability_parity.py", # what= coverage check
+    "test_http_surface.py",          # /api/projects route status-code check
+    "test_mcp_tool_matrix.py",       # overview(metrics/projects) key presence check
+    "test_p5_server.py",             # G5 registry-mechanics: proves first-enabled-project rule
+    "conftest.py",
+    "test_no_real_project_in_tests.py",
+}
+
+# Files allowed to call search/mcp_search without project_paths while asserting results —
+# they deliberately exercise the global fan-out invariant.
+_UNSCOPED_SEARCH_ALLOWLIST = {
+    "test_federation_architecture.py",  # test_inv2: proves member searchable globally
+    "test_no_real_project_in_tests.py",
+}
+
 # Pattern: _OSE or _OSE_SRC used as a project_path= / project= / project_paths=[…] argument
 # on the same logical line as a daemon call (overview/search/ask/graph/wiki/validate/enrich/okf/docgen).
 _DATA_ARG_RE = re.compile(
     r"_OSE\b.*(?:project_path|project_paths|project)\s*[=\[]"
     r"|(?:project_path|project_paths|project)\s*[=\[]\s*[^\n]*_OSE\b",
 )
+_PROJECTS_WALK_RE = re.compile(
+    r"""(?:what\s*[=:]\s*["']projects["']|/api/projects)""",
+)
+_PATH_PICK_RE = re.compile(
+    r"""p\[["']path["']\]\s*|\.path\s+for\s+p\s+in|projects\[0\]""",
+)
+_RESULTS_ASSERT_RE = re.compile(r"""assert.*(?:results|total)\b""")
 
 
 def _iter_py_files():
@@ -85,4 +120,62 @@ def test_no_ose_as_data_arg_outside_allowlist():
     assert not violations, (
         "_OSE used as daemon data arg outside allowlist — "
         "use sample_workspace fixtures instead:\n" + "\n".join(violations)
+    )
+
+
+def test_no_registry_projects_walk_and_pick():
+    """No file may call overview(projects)/api/projects AND then extract a path for reuse.
+
+    A 'walker' reads all registered projects and picks one arbitrarily — it binds
+    to whatever real projects happen to be on the device. Count-only accesses are
+    allowlisted (they don't extract a path; the data stays opaque).
+    """
+    violations: list[str] = []
+    for f in _iter_py_files():
+        if f.name in _PROJECTS_PICKER_ALLOWLIST:
+            continue
+        src = f.read_text(encoding="utf-8")
+        if not _PROJECTS_WALK_RE.search(src):
+            continue
+        if _PATH_PICK_RE.search(src):
+            lines = [
+                f"  line {i}: {ln.strip()[:80]}"
+                for i, ln in enumerate(src.splitlines(), 1)
+                if _PATH_PICK_RE.search(ln)
+            ]
+            violations.append(
+                f"{f.name} — walks overview(projects) and picks a path:\n" + "\n".join(lines)
+            )
+    assert not violations, (
+        "Files that iterate overview(projects) and extract a path bind to arbitrary "
+        "real registry projects. Use sample_workspace fixtures instead, or add to "
+        "_PROJECTS_PICKER_ALLOWLIST with justification:\n" + "\n".join(violations)
+    )
+
+
+def test_no_unscoped_search_asserting_results():
+    """No file may call mcp_search/search_tool without project_paths while asserting results/total.
+
+    An unscoped search fans out to ALL registered projects — it binds to real-device
+    content. The deliberate global-fanout invariant tests are allowlisted.
+    """
+    violations: list[str] = []
+    for f in _iter_py_files():
+        if f.name in _UNSCOPED_SEARCH_ALLOWLIST:
+            continue
+        src = f.read_text(encoding="utf-8")
+        lines = src.splitlines()
+        for i, line in enumerate(lines):
+            if not re.search(r"""\b(?:mcp_search|search_tool)\s*\(""", line):
+                continue
+            if "project_paths" in line:
+                continue
+            window = "\n".join(lines[i:min(i + 6, len(lines))])
+            if _RESULTS_ASSERT_RE.search(window):
+                violations.append(f"{f.name}:{i + 1}: {line.strip()[:80]}")
+    assert not violations, (
+        "These calls use mcp_search/search_tool without project_paths while asserting "
+        "results — they bind to real-device projects. Scope to sample_workspace paths "
+        "or add to _UNSCOPED_SEARCH_ALLOWLIST with justification:\n"
+        + "\n".join(violations)
     )
