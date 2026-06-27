@@ -80,9 +80,8 @@ jobs:
   live-fast:
     name: Live Tests Fast (GPU runner)
     runs-on: self-hosted
-    if: github.repository == 'fairyhunter13/opencode-search-engine'
     needs: quality
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/opencode-search-engine'
 
     steps:
       - uses: actions/checkout@v4
