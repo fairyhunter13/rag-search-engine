@@ -139,7 +139,3 @@ def is_gpu_available() -> bool:
     except Exception:
         return False
 
-
-# Backward-compat aliases — callers updated in A4; kept to avoid import churn elsewhere.
-assert_cuda_available = assert_gpu_available
-is_cuda_available = is_gpu_available
