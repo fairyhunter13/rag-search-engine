@@ -64,6 +64,22 @@ def _register(fed_base: Path, ledger_dir: Path) -> tuple[str, list[str], str]:
     return fed_root, member_paths, ledger
 
 
+def _golden_path_for(member_path: str) -> Path:
+    """Return the committed enrichment.json golden for a sample member path."""
+    name = Path(member_path).name
+    if name in _MEMBERS:
+        return _SHOP_SRC / name / "enrichment.json"
+    return _LEDGER_SRC / "enrichment.json"
+
+
+def replay_member_golden(member_path: str) -> None:
+    """Re-apply the committed enrichment golden for a sample member (idempotent self-heal).
+
+    Restores golden community summaries after an in-process re-index/re-derive cleared them.
+    """
+    _replay_golden(member_path, _golden_path_for(member_path))
+
+
 def _index_members(paths: list[str]) -> None:
     from opencode_search.daemon.sweeps import _index_project
     for p in paths:
@@ -127,9 +143,9 @@ def build_sample_workspace() -> SampleWorkspace:
         fed_base, ledger_dir = _copy_fixtures(base)
         fed_root, member_paths, ledger = _register(fed_base, ledger_dir)
         _index_members([fed_root, *member_paths, ledger])
-        for i, mp in enumerate(member_paths):
-            _replay_golden(mp, _SHOP_SRC / _MEMBERS[i] / "enrichment.json")
-        _replay_golden(ledger, _LEDGER_SRC / "enrichment.json")
+        for mp in member_paths:
+            _replay_golden(mp, _golden_path_for(mp))
+        _replay_golden(ledger, _golden_path_for(ledger))
         from opencode_search.kb.bpre import reconstruct_processes
         reconstruct_processes(fed_root)
         from opencode_search.kb.wiki import build_federated_index
