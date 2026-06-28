@@ -103,6 +103,7 @@ def _bpre_algo_version() -> str:
     root = Path(__file__).resolve().parent
     modules = [
         root / "bpre.py", root / "bpre_ast.py",
+        root / "bpre_spec.py", root / "bpre_generic.py",
         root / "valueflow.py", root / "resolve_rerank.py",
     ]
     h = hashlib.sha1()
