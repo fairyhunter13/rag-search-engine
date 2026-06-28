@@ -182,6 +182,12 @@ import requests
 def get_order():
     return requests.get('/orders/status')
 """
+_RUBY_CLIENT = """\
+# Sinatra gateway: serves /ruby/status, calls svc-orders via HTTParty
+get '/ruby/status' do
+  HTTParty.get('/orders/status')
+end
+"""
 
 class SynthFederation:
     """Holds paths and connection for a synthetic federation. Teardown via .cleanup()."""
@@ -236,7 +242,8 @@ def build_polyglot_federation() -> PolyglotFederation:
     svc_php = _make_member(base, "svc-php", {"src/Client.php": _ORDER_PHP_CLIENT}, "domain")
     svc_ts = _make_member(base, "svc-ts", {"src/client.ts": _ORDER_TS_CLIENT}, "domain")
     svc_py = _make_member(base, "svc-py", {"src/client.py": _ORDER_PY_CLIENT}, "domain")
-    members = [svc_orders, svc_shipments, svc_php, svc_ts, svc_py]
+    svc_ruby = _make_member(base, "svc-ruby", {"app.rb": _RUBY_CLIENT}, "domain")
+    members = [svc_orders, svc_shipments, svc_php, svc_ts, svc_py, svc_ruby]
     root = _make_root(base, members)
     return PolyglotFederation(base, root, members)
 

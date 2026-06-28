@@ -17,6 +17,7 @@ _STR_KINDS: frozenset[str] = frozenset({
     "string",                                             # Python / PHP single-quoted
     "encapsed_string",                                    # PHP double-quoted
     "template_string", "string_fragment",                 # JS / TS
+    "line_string_literal",                                # Swift / Kotlin double-quoted
     "simple_string_literal",                              # Ruby
 })
 _ID_KINDS: frozenset[str] = frozenset({
