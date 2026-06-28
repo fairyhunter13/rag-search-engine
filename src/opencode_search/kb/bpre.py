@@ -162,7 +162,9 @@ def _narrative_incomplete(con: sqlite3.Connection) -> bool:
 
 
 def _source_files(member_path: str) -> list[Path]:
-    exts = {".go", ".java", ".py", ".ts", ".js", ".kt", ".php"}
+    exts = {".go", ".java", ".py", ".ts", ".js", ".kt", ".php",
+            ".rb", ".rs", ".cs", ".cpp", ".cc", ".cxx",
+            ".scala", ".swift", ".dart", ".ex", ".exs"}
     root = Path(member_path)
     from opencode_search.core.config import IGNORED_DIRS
     from opencode_search.core.index_config import effective_config, is_excluded

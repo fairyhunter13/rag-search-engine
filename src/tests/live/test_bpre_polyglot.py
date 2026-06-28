@@ -41,6 +41,26 @@ _LANG_SNIPPETS: dict[str, tuple[str, str]] = {
         "async function f() { return fetch('/api/items'); }",
         "javascript",
     ),
+    "ruby": (
+        "get '/api/items' do\n  HTTParty.get('/api/items')\nend",
+        "ruby",
+    ),
+    "rust": (
+        'fn f(){let c=reqwest::blocking::Client::new();c.get("/api/items").send().unwrap();}',
+        "rust",
+    ),
+    "c_sharp": (
+        'class C{async Task M(){await http.GetAsync("/api/items");}}',
+        "c_sharp",
+    ),
+    "kotlin": (
+        'fun f(){restTemplate.getForObject("/api/items",String::class.java)}',
+        "kotlin",
+    ),
+    "scala": (
+        'object S{ def f()={ http.get("/api/items") } }',
+        "scala",
+    ),
 }
 
 
@@ -116,10 +136,10 @@ def test_polyglot_non_go_member_contributes_edge(poly_db) -> None:
     callers = {r[0] for r in con.execute(
         "SELECT DISTINCT caller_service FROM cross_service_edges"
     ).fetchall()}
-    non_go = callers & {"svc-php", "svc-ts", "svc-py"}
+    non_go = callers & {"svc-php", "svc-ts", "svc-py", "svc-ruby"}
     assert non_go, (
         f"No non-Go caller in edges; all callers: {callers}. "
-        "PHP/TS/Python http_clients detection may be broken."
+        "PHP/TS/Python/Ruby http_clients detection may be broken."
     )
 
 
@@ -132,6 +152,18 @@ def test_polyglot_process_flows_nonempty(poly_fed, poly_db) -> None:
     data = json.loads(result)
     assert data.get("source") == "reconstructed", f"Unexpected source: {data.get('source')!r}"
     assert data.get("flows"), "overview(process_flows) returned empty flows for polyglot fleet"
+
+
+def test_polyglot_ruby_contributes_edge(poly_db) -> None:
+    """svc-ruby (Ruby generic engine) must contribute ≥1 cross-service edge."""
+    con, _ = poly_db
+    callers = {r[0] for r in con.execute(
+        "SELECT DISTINCT caller_service FROM cross_service_edges"
+    ).fetchall()}
+    assert "svc-ruby" in callers, (
+        f"svc-ruby not found in cross_service_edges callers: {callers}. "
+        "Ruby generic-engine extraction (bpre_generic.scan_generic) may be broken."
+    )
 
 
 def test_polyglot_no_self_edges(poly_db) -> None:
