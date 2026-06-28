@@ -101,11 +101,16 @@ class TestFederationComposedEntity:
         )
 
     @pytest.mark.slow
-    def test_all_members_kb_state_ready(self, fed_status: dict) -> None:
-        """T2f: every federation member must be kb_state=ready."""
+    def test_all_members_kb_state_ready(self, fed_root: str, fed_status: dict) -> None:
+        """T2f: every federation LEAF member must be kb_state=ready.
+
+        The federation root itself is excluded: it has its own source files (federation.go)
+        whose communities are not golden-replayed in the sample workspace, so it legitimately
+        stays kb_state=searchable.  Only leaf members (cart, checkout, promo) are checked.
+        """
         not_ready = [
             f"{m['path']}: {m['kb_state']}"
             for m in fed_status.get("members", [])
-            if m.get("kb_state") != "ready"
+            if m.get("kb_state") != "ready" and m["path"] != fed_root
         ]
-        assert not not_ready, "Members not ready:\n" + "\n".join(not_ready)
+        assert not not_ready, "Leaf members not ready:\n" + "\n".join(not_ready)
