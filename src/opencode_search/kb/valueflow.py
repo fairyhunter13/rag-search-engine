@@ -19,6 +19,8 @@ _STR_KINDS: frozenset[str] = frozenset({
     "template_string", "string_fragment",                 # JS / TS
     "line_string_literal",                                # Swift / Kotlin double-quoted
     "simple_string_literal",                              # Ruby
+    "interpolated_string_literal",                        # Perl
+    "str_lit",                                            # Clojure
 })
 _ID_KINDS: frozenset[str] = frozenset({
     "identifier", "type_identifier", "field_identifier",

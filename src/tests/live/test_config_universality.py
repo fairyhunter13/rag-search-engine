@@ -94,3 +94,30 @@ def test_hh3_bpre_exclude(safe_tmp_path):
     assert not any("credentials.go" in p for p in bpre_strs), (
         f"credentials.go must be excluded from _source_files; found: {bpre_strs}"
     )
+
+
+def test_hh4_source_files_universal_discovery(safe_tmp_path):
+    """HH4: _source_files discovers long-tail languages (lua) and excludes non-code (md/json)."""
+    from opencode_search.kb.bpre import _source_files
+    root = safe_tmp_path / "proj_hh4"
+    root.mkdir()
+    (root / "gateway.lua").write_text('http.get("/status")\n')
+    (root / "README.md").write_text("# hello\n")
+    (root / "config.json").write_text('{"k":"v"}\n')
+    (root / "app.go").write_text("package main\n")
+    found = {f.name for f in _source_files(str(root))}
+    assert "gateway.lua" in found, f"gateway.lua missing from _source_files: {found}"
+    assert "README.md" not in found, f"README.md must not be in _source_files (text): {found}"
+    assert "config.json" not in found, f"config.json must not be in _source_files (data): {found}"
+    assert "app.go" in found, f"app.go missing from _source_files: {found}"
+
+
+def test_hh5_is_code_language_contract():
+    """HH5: is_code_language returns True for code langs, False for text/data/unknown."""
+    from opencode_search.index.discover import is_code_language
+    assert is_code_language("lua"), "lua must be a code language"
+    assert is_code_language("go"), "go must be a code language"
+    assert not is_code_language("markdown"), "markdown is text, not code"
+    assert not is_code_language("json"), "json is data, not code"
+    assert not is_code_language("unknown"), "unknown is not code"
+    assert not is_code_language(""), "empty string is not code"

@@ -1,7 +1,7 @@
 """Grammar-agnostic BPRE extractor helpers for non-first-class languages."""
 from __future__ import annotations
 from opencode_search.kb.valueflow import _t as _vt, _first_str, resolve_first_arg
-from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V
+from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V, _is_call, _PARADIGM_KINDS
 
 def _gsv(t,ps):
     s=t.rsplit(".",1)[-1].rsplit("::",1)[-1]
@@ -17,13 +17,18 @@ def _ao(n):
 
 def _fs(n,b,du):
     a=_ao(n)
-    if not a or a.named_child_count()==0:return None
+    if not a:return None
+    v=_first_str(a,b)
+    if v is not None:return v
+    if a.named_child_count()==0:return None
     return _first_str(a.named_child(0),b) or resolve_first_arg(a,b,du)
 
 def _cp(n,b):
     fn=n.child_by_field_name("function") or n.child_by_field_name("method") or n.child_by_field_name("name")
     rc=n.child_by_field_name("receiver") or n.child_by_field_name("object")
     if rc and fn:return _vt(rc,b),_vt(fn,b).rsplit(".",1)[-1].rsplit("::",1)[-1]
+    if fn and n.named_child_count()>0 and n.named_child(0) is not fn:
+        return _vt(n.named_child(0),b),_vt(fn,b).rsplit(".",1)[-1].rsplit("::",1)[-1]
     nd=fn or (n.named_child(0) if n.named_child_count()>0 else None)
     if not nd:return None,None
     t=_vt(nd,b)
@@ -33,13 +38,16 @@ def _cp(n,b):
 
 def scan_generic(root,b,f,surface,du,spec):
     """Grammar-agnostic BPRE scanner driven by a _Spec (non-first-class languages)."""
+    from opencode_search.kb.bpre_paradigms import scan_paradigm
     ps=surface.proto_services;stk=[root]
     while stk:
         n=stk.pop();k=n.kind();ln=n.start_position().row+1
         if k in _NEW_KINDS:
             tn=n.child_by_field_name("type") or n.child_by_field_name("class") or (n.named_child(0) if n.named_child_count()>0 else None)
             if tn and _gsv(_vt(tn,b),ps):f.grpc_clients.append(("",_gsv(_vt(tn,b),ps),f"new {_vt(tn,b)}",ln))
-        elif k in _CALL_KINDS:
+        elif k in _PARADIGM_KINDS:
+            scan_paradigm(n,b,f,surface,du,spec);stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
+        elif _is_call(k):
             rc,meth=_cp(n,b)
             if not meth:stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
             ml=meth.lower();sv=_gsv(rc,ps) if rc else None

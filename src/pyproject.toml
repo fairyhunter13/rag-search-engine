@@ -107,7 +107,8 @@ ignore = [
 "tests/live/test_bpre_processes.py" = ["N802"]  # test method names use A1/B2 category codes (plan §A-H)
 "opencode_search/kb/bpre_ast.py" = ["E401", "E402", "E701", "E702", "I001"]  # ultra-compact 150-line budget
 "opencode_search/kb/bpre_generic.py" = ["E401", "E702", "E701", "I001"]  # ultra-compact generic engine
-"opencode_search/kb/bpre_spec.py" = ["I001"]  # import order: __future__ + dataclass in same block
+"opencode_search/kb/bpre_spec.py" = ["I001", "E731"]  # import order + inline function def
+"opencode_search/kb/bpre_paradigms.py" = ["E401", "E702", "E701", "I001"]  # ultra-compact paradigm handlers
 "tests/live/test_feature_proof.py" = ["E401", "E702", "E701", "I001"]  # ultra-compact 150-line budget (WS-F/G)
 "tests/live/test_okf.py" = ["E402"]  # sys.path.insert before vendor import is intentional
 

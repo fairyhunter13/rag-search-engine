@@ -35,6 +35,17 @@ def detect_language(path: Path) -> str:
         return "unknown"
 
 
+def is_code_language(lang: str) -> bool:
+    """True iff lang is a tree-sitter-parseable code language (not text/data/unknown)."""
+    if not lang or lang == "unknown" or lang in _TEXT_LANGS or lang in _DATA_LANGS:
+        return False
+    try:
+        from tree_sitter_language_pack import has_language
+        return bool(has_language(lang))
+    except Exception:
+        return False
+
+
 def _size_limit(lang: str) -> int:
     if lang in _TEXT_LANGS:
         return _SIZE_LIMITS["text"]
