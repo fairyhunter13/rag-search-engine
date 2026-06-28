@@ -47,6 +47,7 @@ class Embedder:
                 self_so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
                 self_so.add_session_config_entry("session.intra_op.allow_spinning", "0")
                 self_so.add_session_config_entry("session.inter_op.allow_spinning", "0")
+                self_so.log_severity_level = 3  # suppress benign VerifyEachNodeIsAssignedToAnEp (ORT places shape ops on CPU by design)
 
             ort.SessionOptions.__init__ = _no_pattern_init  # type: ignore[method-assign]
             ort.SessionOptions._ocs_no_pattern = True  # type: ignore[attr-defined]
