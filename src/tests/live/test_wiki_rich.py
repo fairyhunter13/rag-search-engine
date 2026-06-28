@@ -22,7 +22,7 @@ from opencode_search.core.config import project_graph_db, project_wiki_dir
 from opencode_search.daemon.federation import federated_map
 from opencode_search.graph.store import GraphStore
 from opencode_search.kb.wiki import build_federated_index, build_wiki
-from tests.live._sample_workspace import SampleWorkspace
+from tests.live._sample_workspace import SampleWorkspace, replay_member_golden
 
 pytestmark = pytest.mark.live
 
@@ -57,9 +57,20 @@ def _read(d: Path, name: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def wiki(tmp_path_factory, sample_workspace: SampleWorkspace):
+def enriched_promo(sample_workspace: SampleWorkspace) -> str:
+    """Re-replay promo's enrichment golden before any wiki build (idempotent self-heal).
+
+    Guards against an in-process _index_project() call from a preceding slow test clearing
+    the replayed golden summaries, which would cause build_wiki to return 0 pages.
+    """
+    replay_member_golden(sample_workspace.promo)
+    return sample_workspace.promo
+
+
+@pytest.fixture(scope="module")
+def wiki(tmp_path_factory, enriched_promo: str):
     """Build a wiki from sample promo-svc (7 enriched L1 communities)."""
-    project = sample_workspace.promo
+    project = enriched_promo
     out = tmp_path_factory.mktemp("wiki")
     n = _build(project, out, llm=False)
     assert n > 1, f"expected multiple pages, got {n}"
@@ -194,9 +205,9 @@ def test_index_groups_by_semantic_type(wiki):
     assert present >= max(1, len(types) - 1), f"index missing type sections; have {types}"
 
 
-def test_deterministic_build_is_byte_identical(tmp_path_factory, sample_workspace: SampleWorkspace):
+def test_deterministic_build_is_byte_identical(tmp_path_factory, enriched_promo: str):
     """W10 (determinism): two wiki builds are byte-identical (template-based, no LLM variance)."""
-    project = sample_workspace.promo
+    project = enriched_promo
     a = tmp_path_factory.mktemp("det_a")
     b = tmp_path_factory.mktemp("det_b")
     _build(project, a, llm=False)
@@ -221,10 +232,10 @@ def test_wiki_builder_uses_no_embedder_or_local_llm():
     assert "import chat" not in src, "wiki narrative must use cloud DeepSeek, not resident chat()"
 
 
-def test_build_without_llm_builds_successfully(tmp_path_factory, sample_workspace: SampleWorkspace):
+def test_build_without_llm_builds_successfully(tmp_path_factory, enriched_promo: str):
     """W12: wiki builds without LLM (template-based prose, always deterministic)."""
     out = tmp_path_factory.mktemp("nollm")
-    n = _build(sample_workspace.promo, out, llm=False)
+    n = _build(enriched_promo, out, llm=False)
     assert n > 1, "wiki must build from template prose without any cloud LLM"
     assert (out / "index.md").exists(), "index.md must always be generated"
 
