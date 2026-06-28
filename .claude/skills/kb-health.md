@@ -9,7 +9,7 @@ Cross-project knowledge-base quality audit: hierarchy depth, enrichment coverage
    - Total files, chunks, communities indexed
    - Hierarchy levels (level-1 only = no macro-structure; level 2+ = GraphRAG-ready)
    - Enrichment % (unenriched communities block `ask(scope=global)`)
-   - Storage size (LanceDB + graph.db combined)
+   - Storage size (sqlite-vec + graph.db combined)
    - Watcher state (watching/stopped)
 3. Report a table:
 
