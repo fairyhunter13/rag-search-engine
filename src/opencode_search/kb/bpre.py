@@ -103,7 +103,7 @@ def _bpre_algo_version() -> str:
     root = Path(__file__).resolve().parent
     modules = [
         root / "bpre.py", root / "bpre_ast.py",
-        root / "bpre_spec.py", root / "bpre_generic.py",
+        root / "bpre_spec.py", root / "bpre_generic.py", root / "bpre_paradigms.py",
         root / "valueflow.py", root / "resolve_rerank.py",
     ]
     h = hashlib.sha1()
@@ -163,12 +163,10 @@ def _narrative_incomplete(con: sqlite3.Connection) -> bool:
 
 
 def _source_files(member_path: str) -> list[Path]:
-    exts = {".go", ".java", ".py", ".ts", ".js", ".kt", ".php",
-            ".rb", ".rs", ".cs", ".cpp", ".cc", ".cxx",
-            ".scala", ".swift", ".dart", ".ex", ".exs"}
-    root = Path(member_path)
     from opencode_search.core.config import IGNORED_DIRS
     from opencode_search.core.index_config import effective_config, is_excluded
+    from opencode_search.index.discover import detect_language, is_code_language
+    root = Path(member_path)
     cfg = effective_config(root)
     out: list[Path] = []
     try:
@@ -176,7 +174,8 @@ def _source_files(member_path: str) -> list[Path]:
             dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
             for f in files:
                 p = Path(dirpath) / f
-                if (p.suffix in exts and not _is_test_file(str(p))
+                if (is_code_language(detect_language(p))
+                        and not _is_test_file(str(p))
                         and not (cfg.exclude and is_excluded(p, cfg.exclude, root))):
                     out.append(p)
     except OSError:

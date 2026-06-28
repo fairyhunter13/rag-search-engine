@@ -166,6 +166,32 @@ def test_polyglot_ruby_contributes_edge(poly_db) -> None:
     )
 
 
+_LANG_SNIPPETS_EXT: dict[str, tuple[str, str, str]] = {
+    "lua": ('http.get("/api/items")', "lua", "http_clients"),
+    "r": ('GET("/api/items")', "r", "http_clients"),
+    "julia": ('HTTP.get("/api/items")', "julia", "http_clients"),
+    "perl": ('$ua->get("/api/items");', "perl", "http_clients"),
+    "groovy": ('client.get("/api/items")', "groovy", "http_clients"),
+    "clojure": ('(client/get "/api/items")', "clojure", "http_clients"),
+    "haskell": ('f = get "/api/items"', "haskell", "http_routes"),
+    "objc": ('[client GET:@"/api/items"];', "objc", "http_clients"),
+}
+
+
+@pytest.mark.parametrize("lang", list(_LANG_SNIPPETS_EXT))
+def test_scan_file_emits_surface_extended_langs(lang: str) -> None:
+    """scan_file must emit http_clients or http_routes for long-tail/paradigm languages."""
+    content, detected_lang, expected_field = _LANG_SNIPPETS_EXT[lang]
+    surf = ApiSurface()
+    ff = scan_file(f"file.{lang}", content, detected_lang, surf)
+    assert ff is not None, f"scan_file returned None for {lang}"
+    got = getattr(ff, expected_field)
+    assert got, (
+        f"{lang}: expected {expected_field}; got empty. "
+        f"http_clients={ff.http_clients} http_routes={ff.http_routes}"
+    )
+
+
 def test_polyglot_no_self_edges(poly_db) -> None:
     """No edge may have caller_service == callee_service."""
     con, _ = poly_db
