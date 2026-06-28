@@ -32,6 +32,10 @@ class ApiSurface:
     methods:dict=field(default_factory=dict)
     proto_import_paths:set=field(default_factory=set)
     pubsub_import_paths:set=field(default_factory=set)
+    proto_services:set=field(default_factory=set)  # service names from .proto files
+
+_PHP_STR=frozenset({"string","encapsed_string"})  # PHP string literal node kinds
+_HTTP_VERBS=frozenset({"get","post","put","patch","delete","options","head","request","any","match"})
 def _t(n,b):r=n.byte_range();return b[r.start:r.end].decode("utf-8","replace")
 def _s1(a,b):return next((_t(a.named_child(i),b).strip("\"'`") for i in range(a.named_child_count()) if a.named_child(i).kind() in("interpreted_string_literal","raw_string_literal","string_literal")),None)
 def _qt(n,b):p,nm=n.child_by_field_name("package"),n.child_by_field_name("name");return(_t(p,b),_t(nm,b)) if n.kind()=="qualified_type" and p and nm else None
@@ -41,6 +45,14 @@ def _pk(n,b,pa):
     tn=n.child_by_field_name("type");r=_qt(tn,b) if tn else None
     return f"{r[0]}.{r[1]}" if r and r[0] in pa else None
 def _ss(fn,px,*sx):n=fn[len(px):];return next((n[:-len(s)] for s in sx if n.endswith(s)),n)
+
+def _php_str(node,b:bytes,du:dict)->str|None:
+    """Get a PHP expression's string value: literal or def-use lookup."""
+    if node is None:return None
+    if node.kind()=="argument" and node.named_child_count()>0:node=node.named_child(0)
+    if node.kind() in _PHP_STR:return _vt(node,b).strip("'\"")
+    if node.kind()=="variable_name":return du.get(_vt(node,b))
+    return None
 
 def _s1_or_vf(args, b: bytes, du: dict) -> str | None:
     """Get a string value from first arg: literal (_s1 fast path) OR value-flow lookup.
@@ -54,8 +66,25 @@ def _s1_or_vf(args, b: bytes, du: dict) -> str | None:
     # Value-flow: try first named child as identifier / selector
     return resolve_first_arg(args, b, du)
 
+def _discover_proto_services(members:list[str],surf:ApiSurface)->None:
+    """Seed surf.proto_services from .proto service declarations (language-neutral)."""
+    from opencode_search.core.config import IGNORED_DIRS
+    for member in members:
+        for dp,dirs,fs in os.walk(member):
+            dirs[:]=[d for d in dirs if d not in IGNORED_DIRS]
+            for fname in fs:
+                if not fname.endswith(".proto"):continue
+                try:
+                    for line in (Path(dp)/fname).read_text(errors="replace").splitlines():
+                        parts=line.strip().split()
+                        if len(parts)>=2 and parts[0]=="service":
+                            svc=parts[1].rstrip("{").strip()
+                            if svc:surf.proto_services.add(svc)
+                except OSError:pass
+
 def federation_discover(members:list[str])->ApiSurface:
     surf=ApiSurface()
+    _discover_proto_services(members,surf)
     if not _ts_has_language("go"):return surf
     try:parser=_ts_api.get_parser("go")
     except Exception as e:log.warning("bpre_ast A: %s",e);return surf
@@ -221,6 +250,10 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                     base=fn_txt.rsplit(".",1)[-1] if "." in fn_txt else fn_txt
                     if base in s.constructors:f.grpc_clients.append(("",s.constructors[base],base,ln))
                     elif base in s.registrars:f.grpc_servers.append((s.registrars[base],ln))
+                    elif fn_n.kind()=="attribute" and base.lower() in _HTTP_VERBS:
+                        # requests.get('/path'), httpx.post('/path') — plain call = HTTP client
+                        p=_s1_or_vf(an,b,du)
+                        if p and p.startswith("/"):f.http_clients.append((base.upper(),p,ln))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     elif lang in("typescript","javascript"):
         # HTTP: app.get('/path', h) or @Get('/path') decorators (structural — no keyword list)
@@ -235,7 +268,13 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         prop=fn_n.child_by_field_name("property")
                         if prop:
                             meth=_vt(prop,b);p=_s1_or_vf(an,b,du)
-                            if p and p.startswith("/"):f.http_routes.append((meth.upper(),p,ln))
+                            if p and p.startswith("/"):
+                                f.http_routes.append((meth.upper(),p,ln))
+                                if meth.lower() in _HTTP_VERBS:
+                                    f.http_clients.append((meth.upper(),p,ln))
+                    elif fn_n.kind()=="identifier" and _vt(fn_n,b)=="fetch":
+                        p=_s1_or_vf(an,b,du)
+                        if p and p.startswith("/"):f.http_clients.append(("GET",p,ln))
                     fn_txt=_vt(fn_n,b)
                     base=fn_txt.rsplit(".",1)[-1] if "." in fn_txt else fn_txt
                     if base in s.constructors:f.grpc_clients.append(("",s.constructors[base],base,ln))
@@ -248,5 +287,32 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         p=_s1_or_vf(an,b,du)
                         if p and p.startswith("/"):
                             f.http_routes.append((_vt(fn_n,b).upper(),p,n.start_position().row+1))
+            stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
+    elif lang=="php":
+        stk=[root]
+        while stk:
+            n=stk.pop();k=n.kind()
+            if k in("member_call_expression","scoped_call_expression"):
+                nm_node=n.child_by_field_name("name");args_node=n.child_by_field_name("arguments")
+                if nm_node and args_node:
+                    meth=_vt(nm_node,b).lower();ln=n.start_position().row+1;nargs=args_node.named_child_count()
+                    if meth=="request" and nargs>=2:
+                        # $client->request('POST', '/path') — verb=arg0, path=arg1
+                        v=_php_str(args_node.named_child(0),b,du)
+                        p=_php_str(args_node.named_child(1),b,du)
+                        if v and p and p.startswith("/"):f.http_clients.append((v.upper(),p,ln))
+                    elif meth in _HTTP_VERBS and nargs>=1:
+                        p=_php_str(args_node.named_child(0),b,du)
+                        if p and p.startswith("/"):
+                            if k=="scoped_call_expression":
+                                f.http_routes.append((meth.upper(),p,ln))
+                            else:
+                                f.http_clients.append((meth.upper(),p,ln))
+            elif k=="object_creation_expression":
+                # PHP: class name is first named child (no field name in this grammar)
+                if n.named_child_count()>0:
+                    cls_name=_vt(n.named_child(0),b);ln=n.start_position().row+1
+                    if cls_name.endswith("Client") and cls_name[:-6] in s.proto_services:
+                        f.grpc_clients.append(("",cls_name[:-6],f"new {cls_name}",ln))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     return f

@@ -114,6 +114,75 @@ def _make_root(base: Path, members: list[str]) -> str:
     return str(root)
 
 
+_ORDERS_PROTO = """\
+syntax = "proto3";
+package orders;
+service OrderService {
+  rpc GetOrder (GetOrderRequest) returns (GetOrderResponse);
+}
+message GetOrderRequest { string id = 1; }
+message GetOrderResponse { string status = 1; }
+"""
+_ORDER_PB_GO = """\
+package orders
+import "google.golang.org/grpc"
+type OrderServiceClient interface{ GetOrder(string) string }
+type orderServiceClient struct{ cc *grpc.ClientConn }
+func NewOrderServiceClient(cc *grpc.ClientConn) OrderServiceClient {
+    return &orderServiceClient{cc}
+}
+func (c *orderServiceClient) GetOrder(id string) string { return "" }
+type OrderServiceServer interface{ GetOrder(string) string }
+func RegisterOrderServiceServer(s *grpc.Server, srv OrderServiceServer) {}
+"""
+_ORDER_SERVER_GO = """\
+package main
+import (
+    "google.golang.org/grpc"
+    "example.com/svc-orders/orders"
+)
+type orderSvr struct{ orders.OrderServiceServer }
+func main() {
+    s := grpc.NewServer()
+    orders.RegisterOrderServiceServer(s, &orderSvr{})
+}
+"""
+_ORDER_ROUTES_GO = """\
+package main
+import "net/http"
+func register() { http.HandleFunc("/orders/status", handleOrder) }
+func handleOrder(w http.ResponseWriter, r *http.Request) {}
+"""
+_SHIPMENT_GO = """\
+package main
+import "net/http"
+func register() { http.HandleFunc("/shipments/status", handleShipment) }
+func handleShipment(w http.ResponseWriter, r *http.Request) {}
+"""
+_ORDER_PHP_CLIENT = """\
+<?php
+// PHP API gateway: serves /orders, calls Go gRPC + Go HTTP downstream
+Route::post('/orders', function() {
+    $channel = new Grpc\\Channel('localhost:50051', []);
+    $client = new OrderServiceClient($channel);
+    $resp = $client->GetOrder(new GetOrderRequest());
+    $http = new GuzzleHttp\\Client();
+    $http->get('/shipments/status');
+    return $resp;
+});
+"""
+_ORDER_TS_CLIENT = """\
+async function loadOrder() {
+    const resp = await fetch('/orders/status');
+    return resp.json();
+}
+"""
+_ORDER_PY_CLIENT = """\
+import requests
+def get_order():
+    return requests.get('/orders/status')
+"""
+
 class SynthFederation:
     """Holds paths and connection for a synthetic federation. Teardown via .cleanup()."""
 
@@ -144,9 +213,52 @@ def teardown_synth_federation(fed: SynthFederation) -> None:
     shutil.rmtree(fed.base, ignore_errors=True)
 
 
+class PolyglotFederation:
+    """Synthetic 5-service polyglot federation (Go + PHP + TS + Python)."""
+
+    def __init__(self, base: Path, root: str, members: list[str]) -> None:
+        self.base = base
+        self.root = root
+        self.members = members
+
+
+def build_polyglot_federation() -> PolyglotFederation:
+    """Synthetic polyglot federation: Go servers + PHP/TS/Python callers. No real paths."""
+    _SAFE_BASE.mkdir(parents=True, exist_ok=True)
+    base = Path(tempfile.mkdtemp(dir=_SAFE_BASE))
+    svc_orders = _make_member(base, "svc-orders", {
+        "orders/orders.proto": _ORDERS_PROTO,
+        "orders/orders.pb.go": _ORDER_PB_GO,
+        "server.go": _ORDER_SERVER_GO,
+        "routes.go": _ORDER_ROUTES_GO,
+    }, "feature")
+    svc_shipments = _make_member(base, "svc-shipments", {"routes.go": _SHIPMENT_GO}, "feature")
+    svc_php = _make_member(base, "svc-php", {"src/Client.php": _ORDER_PHP_CLIENT}, "domain")
+    svc_ts = _make_member(base, "svc-ts", {"src/client.ts": _ORDER_TS_CLIENT}, "domain")
+    svc_py = _make_member(base, "svc-py", {"src/client.py": _ORDER_PY_CLIENT}, "domain")
+    members = [svc_orders, svc_shipments, svc_php, svc_ts, svc_py]
+    root = _make_root(base, members)
+    return PolyglotFederation(base, root, members)
+
+
+def teardown_polyglot_federation(fed: PolyglotFederation) -> None:
+    for p in [fed.root, *fed.members]:
+        with contextlib.suppress(Exception):
+            remove_project(p)
+    shutil.rmtree(fed.base, ignore_errors=True)
+
+
 @pytest.fixture(scope="module")
 def synth_fed() -> Generator[SynthFederation, None, None]:
     """Module-scoped synthetic federation fixture."""
     fed = build_synth_federation()
     yield fed
     teardown_synth_federation(fed)
+
+
+@pytest.fixture(scope="module")
+def polyglot_fed() -> Generator[PolyglotFederation, None, None]:
+    """Module-scoped synthetic polyglot federation fixture."""
+    fed = build_polyglot_federation()
+    yield fed
+    teardown_polyglot_federation(fed)
