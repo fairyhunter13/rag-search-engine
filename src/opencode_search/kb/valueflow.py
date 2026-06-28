@@ -14,12 +14,14 @@ from __future__ import annotations
 _STR_KINDS: frozenset[str] = frozenset({
     "interpreted_string_literal", "raw_string_literal",  # Go
     "string_literal",                                     # Java / Kotlin
-    "string",                                             # Python
+    "string",                                             # Python / PHP single-quoted
+    "encapsed_string",                                    # PHP double-quoted
     "template_string", "string_fragment",                 # JS / TS
     "simple_string_literal",                              # Ruby
 })
 _ID_KINDS: frozenset[str] = frozenset({
     "identifier", "type_identifier", "field_identifier",
+    "variable_name",                                      # PHP $var
 })
 
 
@@ -46,7 +48,7 @@ def build_def_use(root, b: bytes) -> dict[str, str]:
 
     Intra-procedural only — does not follow calls.
     First lexical assignment wins (conservative).
-    Covers: Go const/var/:=, Python =, JS/TS const/let/var, Java/Kotlin locals.
+    Covers: Go const/var/:=, Python =, JS/TS const/let/var, Java/Kotlin locals, PHP $var =.
     """
     du: dict[str, str] = {}
     stk = [root]
@@ -89,6 +91,15 @@ def build_def_use(root, b: bytes) -> dict[str, str]:
             if nn and vn and nn.kind() in _ID_KINDS:
                 name = _t(nn, b)
                 v = _first_str(vn, b)
+                if v is not None and name not in du:
+                    du[name] = v
+
+        # PHP: $x = "v"
+        elif k == "assignment_expression":
+            ln, rn = n.child_by_field_name("left"), n.child_by_field_name("right")
+            if ln and rn and ln.kind() == "variable_name":
+                name = _t(ln, b)
+                v = _first_str(rn, b)
                 if v is not None and name not in du:
                     du[name] = v
 

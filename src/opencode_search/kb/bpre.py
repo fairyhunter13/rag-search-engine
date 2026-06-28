@@ -162,7 +162,7 @@ def _narrative_incomplete(con: sqlite3.Connection) -> bool:
 
 
 def _source_files(member_path: str) -> list[Path]:
-    exts = {".go", ".java", ".py", ".ts", ".js", ".kt"}
+    exts = {".go", ".java", ".py", ".ts", ".js", ".kt", ".php"}
     root = Path(member_path)
     from opencode_search.core.config import IGNORED_DIRS
     from opencode_search.core.index_config import effective_config, is_excluded
@@ -264,6 +264,24 @@ def _build_pubsub_registry(
     return result
 
 
+_STD_HTTP_VERBS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def _normalize_route(path: str) -> str:
+    """Collapse path params/IDs to /{*} so /orders/{id} matches /orders/123."""
+    parts = []
+    for seg in path.split("/"):
+        if (seg.startswith("{") and seg.endswith("}")) or \
+           seg.startswith(":") or \
+           (seg.startswith("<") and seg.endswith(">")) or \
+           (len(seg) == 36 and seg.count("-") == 4) or \
+           seg.isdigit():
+            parts.append("{*}")
+        else:
+            parts.append(seg)
+    return "/".join(parts)
+
+
 def _build_http_route_map(
     members: list[str], surf: ApiSurface,
 ) -> dict[str, str]:
@@ -281,7 +299,8 @@ def _build_http_route_map(
             if not ff:
                 continue
             for verb, path, _ln in ff.http_routes:
-                route_map[f"{verb} {path}"] = svc
+                norm_verb = verb if verb in _STD_HTTP_VERBS else "ANY"
+                route_map[f"{norm_verb} {_normalize_route(path)}"] = svc
     return route_map
 
 
@@ -347,7 +366,8 @@ def _resolve_http_edges(
             continue
         rel = _rel_path(str(src), member)
         for verb, path, ln in ff.http_clients:
-            callee_svc = http_routes.get(f"{verb} {path}")
+            norm_path = _normalize_route(path)
+            callee_svc = http_routes.get(f"{verb} {norm_path}") or http_routes.get(f"ANY {norm_path}")
             if not callee_svc or callee_svc == caller_svc:
                 continue
             edge_id = _hid(caller_svc, callee_svc, "http", verb, path)
