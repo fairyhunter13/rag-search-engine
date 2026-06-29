@@ -942,6 +942,9 @@ def _reconstruct_processes_locked(
                     old_narr[_proc_sig(pname, svc_json, steps)] = narr
             except Exception:
                 old_narr = {}
+            # Invalidate stamp before clearing tables: prevents a false stamp-match reuse
+            # if the process is killed after DELETE but before the final stamp commit.
+            _bpre_set_meta(con, "bpre_algo", "")
             for tbl in ("entry_points", "cross_service_edges", "processes",
                         "process_steps", "process_artifacts"):
                 con.execute(f"DELETE FROM {tbl}")
