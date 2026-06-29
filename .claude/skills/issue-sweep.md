@@ -94,7 +94,7 @@ Flag any tool returning error/empty.
 
 ### 1g. Search SLO probe (GPU isolation validation)
 ```bash
-curl -s "http://localhost:8765/api/search?q=authentication+handler&project=<astro>&top_k=5"
+curl -s "http://localhost:8765/api/search?q=authentication+handler&project=<YOUR_FEDERATION_ROOT>&top_k=5"
 ```
 Assert `elapsed_ms < 5000` (5s SLO). If > 5s while daemon is active: likely CUBLAS thrash
 resurfacing — re-investigate GPU isolation.

@@ -11,12 +11,12 @@ Comprehensive status audit of the opencode-search-engine system.
 - Flag: projects not watching (watching=false)
 - Remove any stale entries with `manage(action='remove_project', delete_index=True)`
 
-### 2. redacted-name-3 verification (canonical test target)
-- `overview(project_path='<ACME_PROJECT_PATH>', what='status')` — confirm watching=true, communities>5000
-- `search(query='payment handler', project_paths=[acme_path])` — confirm search returns real results
-- `ask(query='how does payment flow work', project_path=acme_path, scope='feature')` — confirm structured answer with entry_points
-- `graph(symbol='PaymentService', project_path=acme_path, relation='impact_narrative')` — confirm graph works
-- `GET /api/kb_health?project=<acme_path>` — confirm enrichment_pct=100.0
+### 2. Canonical test target verification
+- `overview(project_path='<TEST_PROJECT_PATH>', what='status')` — confirm watching=true, communities>5000
+- `search(query='payment handler', project_paths=[test_path])` — confirm search returns real results
+- `ask(query='how does payment flow work', project_path=test_path, scope='feature')` — confirm structured answer with entry_points
+- `graph(symbol='PaymentService', project_path=test_path, relation='impact_narrative')` — confirm graph works
+- `GET /api/kb_health?project=<test_path>` — confirm enrichment_pct=100.0
 
 ### 3. Dashboard routes
 Check all key routes return expected HTTP status:
@@ -43,7 +43,7 @@ Check all key routes return expected HTTP status:
 
 ```
 REGISTRY:   28 indexed, 2 removed (stale), 0 unenriched
-ASTRO:      search ✓  ask ✓  graph ✓  kb_health 100%
+KB:         search ✓  ask ✓  graph ✓  kb_health 100%
 DASHBOARD:  /dashboard 200  /api/projects 200  /api/jobs 200
 GPU:        Xº C  X.X GB / 16.3 GB  embedder GPU-bound ✓ (ONNX/CUDA)
 METRICS:    success=N  errors=0
