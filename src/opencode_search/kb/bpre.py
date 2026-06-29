@@ -770,7 +770,26 @@ _BPRE_NARRATIVE_SYSTEM = (
 )
 
 
-def _generate_narratives_batch(procs_data: list[tuple]) -> dict[int, str]:
+def _parse_narratives(raw: str) -> dict[str, str]:
+    """Parse a DeepSeek narrative reply into {process_id: narrative}.
+
+    process ids are hex strings (processes.id TEXT PK from _hid) — never coerce to int.
+    Tolerates ```json fences, <think> prefaces, and json_object object-wrapping.
+    """
+    t = raw.split("</think>")[-1] if "</think>" in raw else raw
+    t = t.replace("```json", "").replace("```", "")
+    if (s := t.find("[")) == -1 or (e := t.rfind("]")) <= s:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        for it in json.loads(t[s : e + 1]):
+            out[str(it["id"])] = str(it.get("narrative", "")).strip()
+    except Exception as exc:
+        log.warning("bpre narrative parse failed: %s", exc)
+    return out
+
+
+def _generate_narratives_batch(procs_data: list[tuple]) -> dict[str, str]:
     """Batch BPRE narrative generation via deepseek_extract (≤20/call). Returns {proc_id: narrative}."""
     try:
         from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_extract, deepseek_key
@@ -778,7 +797,7 @@ def _generate_narratives_batch(procs_data: list[tuple]) -> dict[int, str]:
             return {}
     except Exception:
         return {}
-    results: dict[int, str] = {}
+    results: dict[str, str] = {}
     for i in range(0, len(procs_data), 20):
         batch = procs_data[i : i + 20]
         items = []
@@ -800,15 +819,7 @@ def _generate_narratives_batch(procs_data: list[tuple]) -> dict[int, str]:
             _accumulate_llm_tokens(u, "bpre")
         except Exception:
             continue
-        t = raw.split("</think>")[-1] if "</think>" in raw else raw
-        t = t.replace("```json", "").replace("```", "")
-        if (s := t.find("[")) == -1 or (e := t.rfind("]")) <= s:
-            continue
-        try:
-            for it in json.loads(t[s : e + 1]):
-                results[int(it["id"])] = str(it.get("narrative", "")).strip()
-        except Exception:
-            pass
+        results.update(_parse_narratives(raw))
     return results
 
 
@@ -832,7 +843,7 @@ def _synthesize_artifacts(con: sqlite3.Connection,
         procs_data.append((proc_id, name, services_json, steps))
     # Delta narration: carry over unchanged narratives; only narrate the rest.
     if old_narr:
-        carried: dict[int, str] = {}
+        carried: dict[str, str] = {}
         need_narr: list[tuple] = []
         for item in procs_data:
             proc_id, name, services_json, steps = item
