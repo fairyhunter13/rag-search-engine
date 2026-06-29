@@ -119,3 +119,88 @@ def test_sg_reconcile_has_root_pass():
     from opencode_search.daemon.sweeps import reconcile_projects
     src = inspect.getsource(reconcile_projects)
     assert "reconstruct_processes(" in src
+
+
+def test_nt1_parse_narratives_preserves_hex_ids():
+    """NT1: _parse_narratives keys results by hex strings — guards against int() regression."""
+    from opencode_search.kb.bpre import _parse_narratives
+
+    got = _parse_narratives('[{"id": "01f96b457ee69eca", "narrative": "Cart calls checkout."}]')
+    assert got == {"01f96b457ee69eca": "Cart calls checkout."}, f"plain: {got}"
+
+    fenced = '```json\n{"results": [{"id": "deadbeef0000cafe", "narrative": "Order."}]}\n```'
+    assert _parse_narratives(fenced) == {"deadbeef0000cafe": "Order."}
+
+
+def test_nt4_reuse_path_does_not_wipe_tables(synth_fed):
+    """NT4: stamp-match reuse does not touch entry_points — sentinel survives.
+
+    Proves cascade fix #2 (fresh src_sig): after a rebuild the very next call hits reuse
+    (not another full rebuild that would DELETE entry_points and wipe the sentinel).
+    """
+    from opencode_search.core.config import root_process_db
+
+    _no_llm(synth_fed.root)
+    db = root_process_db(synth_fed.root)
+    sentinel = "sentinel_nt4_0000"
+    with sqlite3.connect(str(db)) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO entry_points VALUES (?,?,?,?,?,?)",
+            (sentinel, "test-svc", "test.go", 1, "http", "/sentinel"),
+        )
+        con.commit()
+    _no_llm(synth_fed.root)  # no key → narrative_incomplete=False → stamps match → reuse
+    with sqlite3.connect(str(db)) as con:
+        row = con.execute("SELECT ep_id FROM entry_points WHERE ep_id=?", (sentinel,)).fetchone()
+    assert row is not None, "SENTINEL_NT4 wiped — reuse triggered a full rebuild (cascade fix #2 regression)"
+
+
+@pytest.mark.slow
+def test_nt3_full_reconstruct_fills_all_narratives(synth_fed):
+    """NT3: reconstruct_processes fills every narrative when DeepSeek key is present.
+
+    Always runs: without a key, asserts structural count > 0.
+    With a key: additionally asserts all narratives non-empty (proves int()→str() fix).
+    """
+    from opencode_search.core.config import root_process_db
+    from opencode_search.graph.llm import deepseek_key
+    from opencode_search.kb.bpre import reconstruct_processes
+
+    count = reconstruct_processes(synth_fed.root)
+    assert count > 0, "synth_fed produced 0 processes"
+    if deepseek_key():
+        db = root_process_db(synth_fed.root)
+        with sqlite3.connect(str(db)) as con:
+            rows = con.execute("SELECT process_id, narrative FROM process_artifacts").fetchall()
+        empty = [pid for pid, narr in rows if not narr.strip()]
+        assert not empty, f"{len(empty)}/{len(rows)} narratives still empty after real reconstruct: {empty}"
+
+
+@pytest.mark.slow
+def test_nt2_re_synthesis_not_full_rebuild(synth_fed):
+    """NT2: stamps-match + incomplete narrative → re-synthesis, not full rebuild.
+
+    Sentinel-survival: entry_points is wiped only by a full rebuild.  After inserting a
+    sentinel row and zeroing one narrative, a second reconstruct must NOT wipe entry_points.
+    With a key, the narrative must also be refilled (proves int()→str() fix end-to-end).
+    """
+    from opencode_search.core.config import root_process_db
+    from opencode_search.graph.llm import deepseek_key
+    from opencode_search.kb.bpre import reconstruct_processes
+
+    reconstruct_processes(synth_fed.root)
+    db = root_process_db(synth_fed.root)
+    sentinel = "sentinel_nt2_0000"
+    with sqlite3.connect(str(db)) as con:
+        con.execute("INSERT OR REPLACE INTO entry_points VALUES (?,?,?,?,?,?)",
+                    (sentinel, "test-svc", "test.go", 1, "http", "/sentinel"))
+        pid = con.execute("SELECT process_id FROM process_artifacts LIMIT 1").fetchone()[0]
+        con.execute("UPDATE process_artifacts SET narrative='' WHERE process_id=?", (pid,))
+        con.commit()
+    reconstruct_processes(synth_fed.root)
+    with sqlite3.connect(str(db)) as con:
+        survived = con.execute("SELECT ep_id FROM entry_points WHERE ep_id=?", (sentinel,)).fetchone()
+        refilled = con.execute("SELECT narrative FROM process_artifacts WHERE process_id=?", (pid,)).fetchone()
+    assert survived, "SENTINEL_NT2 wiped — full rebuild ran instead of expected path (cascade regression)"
+    if deepseek_key():
+        assert refilled and refilled[0].strip(), f"Narrative for {pid} still empty — int()→str() fix did not work"
