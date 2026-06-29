@@ -58,8 +58,8 @@ def test_p20_capabilities_e2e(safe_tmp_path):
         # E: MCP ask returns non-empty composed context from the indexed project
         from opencode_search.server.mcp import ask as ask_tool
         from tests.live._projects import federation_root
-        real_proj = federation_root()
-        context = asyncio.run(ask_tool("How does authentication work?", real_proj, "all"))
+        sample_fed_root = federation_root()  # sample shop-federation, not a real project
+        context = asyncio.run(ask_tool("How does authentication work?", sample_fed_root, "all"))
         assert isinstance(context, str) and len(context) > 20, (
             f"E: MCP ask returned empty/tiny context: {context!r}"
         )

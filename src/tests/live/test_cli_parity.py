@@ -66,10 +66,13 @@ def test_cli_ask_matches_run_ask(sample_workspace):
 
     fed = sample_workspace.fed_root
     query = "how does federation indexing work?"
+    # Pre-warm the reranker singleton before the CliRunner invocation: the first
+    # run_ask call loads fastembed reranker model files (HF XET download, stdout).
+    # Running it in-process first ensures the CliRunner output is clean.
+    expected = run_ask(query, fed, "all")
     r = _runner().invoke(app, ["ask", query, "--project", fed, "--scope", "all"])
     assert r.exit_code == 0, f"ask exit {r.exit_code}: {r.output}"
     assert len(r.output.strip()) > 10, "ask returned too-short output"
-    expected = run_ask(query, fed, "all")
     assert r.output.strip() == expected.strip(), (
         "CLI ask output differs from run_ask() — parity broken"
     )

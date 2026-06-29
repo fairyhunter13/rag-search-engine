@@ -80,8 +80,8 @@ def test_impact_narrative_returns_structured_json():
     """P14.4 runtime: graph(impact_narrative) returns JSON with risk/affected_count, no LLM prose."""
     from opencode_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
-    be = service_member()
-    result = asyncio.run(graph_tool("Run", be, "impact_narrative"))
+    svc_member = service_member()  # sample promo-svc, not a real project
+    result = asyncio.run(graph_tool("Run", svc_member, "impact_narrative"))
     data = json.loads(result)
     assert "risk" in data, f"impact_narrative must return JSON with 'risk' key; got: {result[:200]}"
     assert "affected_count" in data, "impact_narrative must include 'affected_count'"
@@ -93,8 +93,8 @@ def test_semantic_trace_returns_structured_json():
     from opencode_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
 
-    be = service_member()
-    result = asyncio.run(graph_tool("NewService", be, "semantic_trace", "Run"))
+    svc_member = service_member()  # sample promo-svc, not a real project
+    result = asyncio.run(graph_tool("NewService", svc_member, "semantic_trace", "Run"))
     data = json.loads(result)
     assert "from" in data and "to" in data, (
         f"semantic_trace must return JSON with 'from' and 'to' keys; got: {result[:200]}"
