@@ -966,17 +966,22 @@ def _reconstruct_processes_locked(
                 _resolve_http_edges(con, member, http_routes, surf, all_facts[member])
             _llm_link_edges(con, members, surf, all_facts)
             count = _trace_processes(con, members)
+            # Recompute src_sig just before commit so the stored value reflects the fleet
+            # state at rebuild completion, not at rebuild start.  Files can change during a
+            # long rebuild; writing a stale start-of-run sig causes stamps_match=False on
+            # the very next call → infinite cascade even when no real change occurred.
+            fresh_src_sig = _bpre_source_sig(members)
             if count == 0:
                 log.info("bpre: no multi-service processes found for %s", root_path)
                 # Still stamp so reconcile doesn't rebuild a stable no-process federation.
                 _bpre_set_meta(con, "bpre_algo", algo)
-                _bpre_set_meta(con, "bpre_source_sig", src_sig)
+                _bpre_set_meta(con, "bpre_source_sig", fresh_src_sig)
                 con.commit()
                 con.close()
                 return 0
             _synthesize_artifacts(con, old_narr)
             _bpre_set_meta(con, "bpre_algo", algo)
-            _bpre_set_meta(con, "bpre_source_sig", src_sig)
+            _bpre_set_meta(con, "bpre_source_sig", fresh_src_sig)
             con.commit()
             log.info("bpre: reconstructed %d processes for %s", count, root_path)
             return count
