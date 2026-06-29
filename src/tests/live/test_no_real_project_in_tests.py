@@ -12,6 +12,8 @@ Guards:
   3. No overview(what="projects") registry-walk + path picker outside mechanics allowlist.
   4. No unscoped search/ask (project_paths absent) while asserting on results/total,
      outside the deliberate global-fanout allowlist.
+  5. No overview_tool("") or single-arg graph_tool("symbol") outside the G5-mechanics
+     allowlist — those resolve to the first-enabled real registry project.
 """
 from __future__ import annotations
 
@@ -22,7 +24,8 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-_LIVE_DIR = Path(__file__).parent
+_TESTS_ROOT = Path(__file__).parents[1]   # src/tests/ — rglob covers any future subdirs
+_LIVE_DIR = Path(__file__).parent         # kept for per-file context in error messages
 
 # Files exempt from the list_projects() check — they use it for registry mechanics,
 # not for picking arbitrary data projects.
@@ -86,8 +89,19 @@ _PATH_PICK_RE = re.compile(
 _RESULTS_ASSERT_RE = re.compile(r"""assert.*(?:results|total)\b""")
 
 
+# Files allowed to call overview_tool("") or graph_tool("symbol_only") because they
+# deliberately test the G5 first-enabled-project resolution rule (registry mechanics).
+_EMPTY_PROJ_ALLOWLIST = {
+    "test_p5_server.py",               # G5: empty project_path resolution mechanics
+    "test_no_real_project_in_tests.py",
+}
+# overview_tool("") / ask_tool("","") / graph_tool("symbol") with no project_path arg
+_EMPTY_PROJ_OVERVIEW_RE = re.compile(r'\boverview_tool\s*\(\s*(?:""|\'\')')
+_SINGLE_ARG_GRAPH_RE = re.compile(r'\bgraph_tool\s*\(\s*"[^"]*"\s*\)')
+
+
 def _iter_py_files():
-    return sorted(_LIVE_DIR.glob("*.py"))
+    return sorted(_TESTS_ROOT.rglob("*.py"))
 
 
 def test_no_list_projects_picker_outside_allowlist():
@@ -178,4 +192,26 @@ def test_no_unscoped_search_asserting_results():
         "results — they bind to real-device projects. Scope to sample_workspace paths "
         "or add to _UNSCOPED_SEARCH_ALLOWLIST with justification:\n"
         + "\n".join(violations)
+    )
+
+
+def test_no_empty_project_path_daemon_call():
+    """Guard 5: no overview_tool("") or bare graph_tool("symbol") outside the G5-mechanics allowlist.
+
+    overview_tool("") and graph_tool(symbol_only) both resolve to the first-enabled registry
+    project — a real device project.  Only the deliberate G5 resolution-mechanics tests in
+    test_p5_server.py are permitted to use this pattern.
+    """
+    violations: list[str] = []
+    for f in _iter_py_files():
+        if f.name in _EMPTY_PROJ_ALLOWLIST:
+            continue
+        src = f.read_text(encoding="utf-8")
+        for i, line in enumerate(src.splitlines(), 1):
+            if _EMPTY_PROJ_OVERVIEW_RE.search(line) or _SINGLE_ARG_GRAPH_RE.search(line):
+                violations.append(f"{f.name}:{i}: {line.strip()[:80]}")
+    assert not violations, (
+        "overview_tool('') / graph_tool(symbol_only) resolve to the first-enabled REAL registry "
+        "project — use sample_workspace fixture paths instead, or add to _EMPTY_PROJ_ALLOWLIST "
+        "with a justification comment:\n" + "\n".join(violations)
     )

@@ -121,8 +121,14 @@ def test_singleton_ratio_below_threshold(live_client, service_path):
 # S4: kb_state reaches ready (Fix 3)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_kb_state_ready_when_fully_enriched(live_client, service_path):
-    """S4/TC1: After converge, kb_state='ready' and enriched_pct>=95."""
+    """S4/TC1: After converge, kb_state='ready' and enriched_pct>=95.
+
+    Marked slow: _converge_ready calls _enrich_project which makes batched DeepSeek
+    LLM narration calls (up to 180s) and mutates promo-svc community summaries.
+    Excluded from fast smoke (-m 'live and not slow') to keep the run bounded.
+    """
     _converge_ready(service_path)
     status = _overview_status(service_path)
     assert status.get("kb_state") == "ready", (
