@@ -923,7 +923,7 @@ def _reconstruct_processes_locked(
                     pass
                 _synthesize_artifacts(con, _resyn_narr)
                 _bpre_set_meta(con, "bpre_algo", algo)
-                _bpre_set_meta(con, "bpre_source_sig", src_sig)
+                _bpre_set_meta(con, "bpre_source_sig", _bpre_source_sig(members))
                 con.commit()
                 con.close()
                 return _n
