@@ -114,7 +114,13 @@ def test_federation_discover_empty_dir(tmp_path):
     assert discover_members(str(tmp_path)) == []
 
 
+@pytest.mark.slow
 def test_sweeps_reconcile_skips_complete_project(safe_tmp_path):
+    """reconcile_projects must skip an already-indexed project.
+
+    Marked slow: reconcile_projects includes an unconditional federation-root-pass that
+    calls reconstruct_processes on ALL fleet federation roots (DeepSeek BPRE narration).
+    """
     from opencode_search.core.config import ProjectEntry, project_vector_db
     from opencode_search.core.registry import remove_project, upsert_project
     from opencode_search.daemon.sweeps import reconcile_projects
