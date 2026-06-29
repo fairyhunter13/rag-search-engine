@@ -299,10 +299,15 @@ def test_federation_index_members_registers(safe_tmp_path):
     remove_project(str(member))
 
 
+@pytest.mark.slow
 def test_api_reload_returns_reloading():
     """P10.7/P15.2: POST /api/reload on the LIVE daemon — handler sends SIGTERM
     to os.getpid() so in-process TestClient would kill the test process.
     Systemd restarts the daemon within ~1s; we wait for readiness before finishing.
+
+    Marked slow: daemon restart un-pauses sweeps (new daemon doesn't inherit
+    pause_sweeps HTTP state), triggering a full BPRE rebuild for all federation
+    roots (37+ min for large fleets). Run as part of the full suite only.
     """
     import time
     import urllib.request
