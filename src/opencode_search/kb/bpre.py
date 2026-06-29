@@ -189,26 +189,52 @@ def _source_files(member_path: str) -> list[Path]:
     return out
 
 
-# ─── D2 Entry-point detection ─────────────────────────────────────────────────
-
-def _detect_entry_points(
-    con: sqlite3.Connection, member_path: str, surf: ApiSurface,
-) -> None:
+def _iter_member_facts(member_path: str, member_facts, surf):
+    """Yield (src_path_str, FileFacts) — from cache if provided, else by scanning."""
+    if member_facts is not None:
+        yield from member_facts.items()
+        return
     from opencode_search.index.discover import detect_language
     from opencode_search.kb.bpre_ast import scan_file
-    service = _service_label(member_path)
-    rows: list[tuple] = []
     for src in _source_files(member_path):
-        if _is_test_file(str(src)):
-            continue
         try:
             content = src.read_text(errors="replace")
         except OSError:
             continue
         ff = scan_file(str(src), content, detect_language(src), surf)
-        if not ff:
-            continue
-        rel = _rel_path(str(src), member_path)
+        if ff:
+            yield str(src), ff
+
+
+def _scan_all_members(members: list[str], surf) -> dict:
+    """Scan every source file exactly once; return {member → {path → FileFacts}}."""
+    from opencode_search.index.discover import detect_language
+    from opencode_search.kb.bpre_ast import scan_file
+    all_facts: dict = {}
+    for member in members:
+        mf: dict = {}
+        for src in _source_files(member):
+            try:
+                content = src.read_text(errors="replace")
+            except OSError:
+                continue
+            ff = scan_file(str(src), content, detect_language(src), surf)
+            if ff:
+                mf[str(src)] = ff
+        all_facts[member] = mf
+    return all_facts
+
+
+# ─── D2 Entry-point detection ─────────────────────────────────────────────────
+
+def _detect_entry_points(
+    con: sqlite3.Connection, member_path: str, surf: ApiSurface,
+    member_facts=None,
+) -> None:
+    service = _service_label(member_path)
+    rows: list[tuple] = []
+    for src_path, ff in _iter_member_facts(member_path, member_facts, surf):
+        rel = _rel_path(src_path, member_path)
         for verb, path, ln in ff.http_routes:
             rows.append((_hid(service, rel, verb, path), service, rel, ln, "http", f"{verb} {path}"))
         for svc_name, ln in ff.grpc_servers:
@@ -221,21 +247,13 @@ def _detect_entry_points(
 
 # ─── D3 Service/pub-sub/HTTP registries ───────────────────────────────────────
 
-def _build_service_registry(members: list[str], surf: ApiSurface) -> dict[str, str]:
+def _build_service_registry(members: list[str], surf: ApiSurface, all_facts=None) -> dict[str, str]:
     """Map {ServiceLabel → member_path} by scanning non-proto source files for Register*Server calls."""
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
     registry: dict[str, str] = {}
     for member in members:
-        for src in _source_files(member):
-            if str(src).endswith(".pb.go"):
-                continue
-            try:
-                content = src.read_text(errors="replace")
-            except OSError:
-                continue
-            ff = scan_file(str(src), content, detect_language(src), surf)
-            if not ff:
+        mf = all_facts.get(member) if all_facts is not None else None
+        for src_path, ff in _iter_member_facts(member, mf, surf):
+            if src_path.endswith(".pb.go"):
                 continue
             for svc_name, _ln in ff.grpc_servers:
                 registry.setdefault(svc_name, member)
@@ -243,22 +261,14 @@ def _build_service_registry(members: list[str], surf: ApiSurface) -> dict[str, s
 
 
 def _build_pubsub_registry(
-    members: list[str], surf: ApiSurface,
+    members: list[str], surf: ApiSurface, all_facts=None,
 ) -> dict[str, tuple[str, str, str, int]]:
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
     publishers: dict[str, list[tuple[str, str, int]]] = {}
     consumers: dict[str, list[str]] = {}
     for member in members:
-        for src in _source_files(member):
-            try:
-                content = src.read_text(errors="replace")
-            except OSError:
-                continue
-            ff = scan_file(str(src), content, detect_language(src), surf)
-            if not ff:
-                continue
-            rel = _rel_path(str(src), member)
+        mf = all_facts.get(member) if all_facts is not None else None
+        for src_path, ff in _iter_member_facts(member, mf, surf):
+            rel = _rel_path(src_path, member)
             for tk, ln in ff.proto_marshal_types:
                 publishers.setdefault(tk, []).append((member, rel, ln))
             for tk, _ln in ff.pubsub_consumes:
@@ -291,21 +301,13 @@ def _normalize_route(path: str) -> str:
 
 
 def _build_http_route_map(
-    members: list[str], surf: ApiSurface,
+    members: list[str], surf: ApiSurface, all_facts=None,
 ) -> dict[str, str]:
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
     route_map: dict[str, str] = {}
     for member in members:
         svc = _service_label(member)
-        for src in _source_files(member):
-            try:
-                content = src.read_text(errors="replace")
-            except OSError:
-                continue
-            ff = scan_file(str(src), content, detect_language(src), surf)
-            if not ff:
-                continue
+        mf = all_facts.get(member) if all_facts is not None else None
+        for _src_path, ff in _iter_member_facts(member, mf, surf):
             for verb, path, _ln in ff.http_routes:
                 norm_verb = verb if verb in _STD_HTTP_VERBS else "ANY"
                 route_map[f"{norm_verb} {_normalize_route(path)}"] = svc
@@ -316,21 +318,12 @@ def _build_http_route_map(
 
 def _resolve_grpc_edges(
     con: sqlite3.Connection, member: str, service_registry: dict[str, str],
-    surf: ApiSurface,
+    surf: ApiSurface, member_facts=None,
 ) -> None:
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
     caller_svc = _service_label(member)
     rows: list[tuple] = []
-    for src in _source_files(member):
-        try:
-            content = src.read_text(errors="replace")
-        except OSError:
-            continue
-        ff = scan_file(str(src), content, detect_language(src), surf)
-        if not ff:
-            continue
-        rel = _rel_path(str(src), member)
+    for src_path, ff in _iter_member_facts(member, member_facts, surf):
+        rel = _rel_path(src_path, member)
         for _alias, svc_name, ctor, ln in ff.grpc_clients:
             callee_member = service_registry.get(svc_name)
             if not callee_member or callee_member == member:
@@ -358,21 +351,12 @@ def _resolve_pubsub_edges(
 
 def _resolve_http_edges(
     con: sqlite3.Connection, member: str, http_routes: dict[str, str],
-    surf: ApiSurface,
+    surf: ApiSurface, member_facts=None,
 ) -> None:
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
     caller_svc = _service_label(member)
     rows: list[tuple] = []
-    for src in _source_files(member):
-        try:
-            content = src.read_text(errors="replace")
-        except OSError:
-            continue
-        ff = scan_file(str(src), content, detect_language(src), surf)
-        if not ff:
-            continue
-        rel = _rel_path(str(src), member)
+    for src_path, ff in _iter_member_facts(member, member_facts, surf):
+        rel = _rel_path(src_path, member)
         for verb, path, ln in ff.http_clients:
             norm_path = _normalize_route(path)
             callee_svc = http_routes.get(f"{verb} {norm_path}") or http_routes.get(f"ANY {norm_path}")
@@ -599,21 +583,14 @@ def _content_hash(content: str) -> str:
 def _llm_link_scan(
     members: list[str], surf: ApiSurface,
     known_routes: set[str], known_topics: set[str],
+    all_facts=None,
 ) -> list[dict]:
-    from opencode_search.index.discover import detect_language
-    from opencode_search.kb.bpre_ast import scan_file
     seen: set[str] = set()
     items: list[dict] = []
     for member in members:
         caller_svc = _service_label(member)
-        for src in _source_files(member):
-            try:
-                content = src.read_text(errors="replace")
-            except OSError:
-                continue
-            ff = scan_file(str(src), content, detect_language(src), surf)
-            if not ff:
-                continue
+        mf = all_facts.get(member) if all_facts is not None else None
+        for _src_path, ff in _iter_member_facts(member, mf, surf):
             for tk, _ln in ff.proto_marshal_types:
                 key = f"pubsub:{caller_svc}:{tk}"
                 if tk not in known_topics and key not in seen:
@@ -687,7 +664,7 @@ def _llm_link_resolve(
         con.commit()
 
 
-def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurface) -> None:
+def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurface, all_facts=None) -> None:
     from opencode_search.graph.llm import deepseek_key
     if not deepseek_key():
         return
@@ -699,7 +676,7 @@ def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurfac
     ).fetchall()}
     known_routes: set[str] = set(known_routes_map)
     known_topics: set[str] = set(known_topics_map)
-    items = _llm_link_scan(members, surf, known_routes, known_topics)
+    items = _llm_link_scan(members, surf, known_routes, known_topics, all_facts)
     if not items:
         return
     svcs = [_service_label(m) for m in members]
@@ -951,17 +928,18 @@ def _reconstruct_processes_locked(
             con.commit()
             from opencode_search.kb.bpre_ast import federation_discover
             surf = federation_discover(members)
+            all_facts = _scan_all_members(members, surf)
             for member in members:
-                _detect_entry_points(con, member, surf)
-            svc_registry = _build_service_registry(members, surf)
-            pubsub_registry = _build_pubsub_registry(members, surf)
-            http_routes = _build_http_route_map(members, surf)
+                _detect_entry_points(con, member, surf, all_facts[member])
+            svc_registry = _build_service_registry(members, surf, all_facts)
+            pubsub_registry = _build_pubsub_registry(members, surf, all_facts)
+            http_routes = _build_http_route_map(members, surf, all_facts)
             for member in members:
-                _resolve_grpc_edges(con, member, svc_registry, surf)
+                _resolve_grpc_edges(con, member, svc_registry, surf, all_facts[member])
             _resolve_pubsub_edges(con, pubsub_registry)
             for member in members:
-                _resolve_http_edges(con, member, http_routes, surf)
-            _llm_link_edges(con, members, surf)
+                _resolve_http_edges(con, member, http_routes, surf, all_facts[member])
+            _llm_link_edges(con, members, surf, all_facts)
             count = _trace_processes(con, members)
             if count == 0:
                 log.info("bpre: no multi-service processes found for %s", root_path)

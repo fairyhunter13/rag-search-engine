@@ -405,3 +405,35 @@ def test_trace_processes_is_handler_anchored():
     assert callable(_handler_reachable_set)
     assert callable(_call_in_reachable)
     assert callable(_callee_ep)
+
+
+def test_scan_once_orchestration_guard():
+    """T3: _reconstruct_processes_locked must build all_facts via _scan_all_members
+    and thread it to every derive-pass — prevents silent regression to 7× parsing."""
+    import inspect
+
+    from opencode_search.kb.bpre import _reconstruct_processes_locked
+    src = inspect.getsource(_reconstruct_processes_locked)
+    assert "_scan_all_members(" in src, "orchestration must call _scan_all_members once"
+    assert "all_facts" in src, "orchestration must thread all_facts through derive-passes"
+    assert "all_facts[member]" in src, "per-member derives must receive all_facts[member]"
+
+
+def test_scan_once_facts_match_per_file_scan(synth_fed):
+    """T1: scan-once FileFacts must be field-identical to per-call scan (correctness guarantee)."""
+    from opencode_search.daemon.federation import expand_federation
+    from opencode_search.kb.bpre import _iter_member_facts, _scan_all_members
+    from opencode_search.kb.bpre_ast import federation_discover
+    members = [m for m in expand_federation(synth_fed.root) if m != synth_fed.root]
+    surf = federation_discover(members)
+    all_facts = _scan_all_members(members, surf)
+    for member in members:
+        slow = dict(_iter_member_facts(member, None, surf))
+        fast = all_facts.get(member, {})
+        assert set(slow.keys()) == set(fast.keys()), f"file-set mismatch for {member}"
+        for path in slow:
+            sf, ff = slow[path], fast[path]
+            assert sf.http_routes == ff.http_routes, f"{path}: http_routes differ"
+            assert sf.grpc_clients == ff.grpc_clients, f"{path}: grpc_clients differ"
+            assert sf.grpc_servers == ff.grpc_servers, f"{path}: grpc_servers differ"
+            assert sf.http_clients == ff.http_clients, f"{path}: http_clients differ"
