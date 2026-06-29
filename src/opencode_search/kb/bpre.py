@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
     from opencode_search.kb.bpre_ast import ApiSurface
 
 log = logging.getLogger(__name__)
+
+# Per-root threading locks: fcntl.flock is per-process (doesn't block same-PID callers),
+# so concurrent calls from different threads (reconcile + watcher) require a threading.Lock.
+_BPRE_LOCKS: dict[str, threading.Lock] = {}
+_BPRE_LOCKS_MU = threading.Lock()
 
 # ─── Test-file exclusion ──────────────────────────────────────────────────────
 
@@ -880,8 +886,6 @@ def reconstruct_processes(root_path: str) -> int:
     in the same burst hit matching stamps → reuse.  Watcher-triggered calls always land
     when member source actually changed (_bpre_source_sig detects it).
     """
-    import fcntl
-
     from opencode_search.core.config import root_process_db
     from opencode_search.daemon.federation import expand_federation
     members = expand_federation(root_path)
@@ -891,6 +895,18 @@ def reconstruct_processes(root_path: str) -> int:
     db_path = root_process_db(root_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = db_path.with_suffix(".bpre.lock")
+    with _BPRE_LOCKS_MU:
+        if str(lock_path) not in _BPRE_LOCKS:
+            _BPRE_LOCKS[str(lock_path)] = threading.Lock()
+        _tlock = _BPRE_LOCKS[str(lock_path)]
+    with _tlock:
+        return _reconstruct_processes_locked(root_path, members, db_path, lock_path)
+
+
+def _reconstruct_processes_locked(
+    root_path: str, members: list[str], db_path: Path, lock_path: Path
+) -> int:
+    import fcntl
     _lf = open(str(lock_path), "w")  # noqa: SIM115
     try:
         fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
