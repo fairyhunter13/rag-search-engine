@@ -898,8 +898,33 @@ def _reconstruct_processes_locked(
                 _bpre_get_meta(con, "bpre_algo") == algo
                 and _bpre_get_meta(con, "bpre_source_sig") == src_sig
             )
-            if stamps_match and (_n == 0 or not _narrative_incomplete(con)):
-                log.info("bpre: reusing stamp-matched result (%d processes) for %s", _n, root_path)
+            if stamps_match:
+                if _n == 0 or not _narrative_incomplete(con):
+                    log.info("bpre: reusing stamp-matched result (%d processes) for %s", _n, root_path)
+                    con.close()
+                    return _n
+                # Source/algo unchanged but some narratives are empty.
+                # Re-synthesize only — no table-clear, no re-scan — breaks the rebuild cascade.
+                log.info("bpre: re-synthesizing %d incomplete narratives for %s", _n, root_path)
+                _resyn_narr: dict[str, str] = {}
+                try:
+                    for _pn, _sj, _nr in con.execute(
+                        "SELECT p.name, p.services_json, pa.narrative "
+                        "FROM processes p JOIN process_artifacts pa ON pa.process_id=p.id "
+                        "WHERE pa.narrative!=''"
+                    ).fetchall():
+                        _st = con.execute(
+                            "SELECT sid_or_endpoint, service, kind, guard FROM process_steps "
+                            "WHERE process_id=(SELECT id FROM processes WHERE name=? LIMIT 1) "
+                            "ORDER BY order_index", (_pn,)
+                        ).fetchall()
+                        _resyn_narr[_proc_sig(_pn, _sj, _st)] = _nr
+                except Exception:
+                    pass
+                _synthesize_artifacts(con, _resyn_narr)
+                _bpre_set_meta(con, "bpre_algo", algo)
+                _bpre_set_meta(con, "bpre_source_sig", src_sig)
+                con.commit()
                 con.close()
                 return _n
             # Snapshot existing narratives keyed by process content (delta narration).
