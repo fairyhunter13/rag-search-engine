@@ -1,6 +1,7 @@
 """FastMCP server: 5 MCP tools — search, ask, graph, overview, index."""
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import NamedTuple
@@ -58,14 +59,7 @@ def _resolve_roots(requested: list[str]) -> list[str]:
     return resolved
 
 
-@mcp.tool()
-async def search(
-    query: str,
-    scope: str = "code",
-    project_paths: list[str] | None = None,
-) -> str:
-    """Search for code semantically. scope: code|docs|all."""
-    note_query(query)
+def _search_sync(query: str, scope: str, project_paths: list[str] | None) -> str:
     from opencode_search.core.config import project_vector_db
     from opencode_search.core.registry import list_projects
     from opencode_search.index.store import VectorStore
@@ -106,6 +100,17 @@ async def search(
 
 
 @mcp.tool()
+async def search(
+    query: str,
+    scope: str = "code",
+    project_paths: list[str] | None = None,
+) -> str:
+    """Search for code semantically. scope: code|docs|all."""
+    note_query(query)
+    return await asyncio.to_thread(_search_sync, query, scope, project_paths)
+
+
+@mcp.tool()
 async def ask(
     query: str,
     project_path: str = "",
@@ -114,7 +119,7 @@ async def ask(
     """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture|global|feature|wiki|business. LLM synthesis is the HTTP /api/ask path."""
     note_query(query)
     from opencode_search.query.ask import run_ask
-    return run_ask(query, project_path, scope)
+    return await asyncio.to_thread(run_ask, query, project_path, scope)
 
 
 @mcp.tool()
@@ -127,7 +132,7 @@ async def graph(
     """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|path|semantic_trace."""
     note_activity()
     from opencode_search.query.graph_handler import run_graph
-    return run_graph(symbol, project_path, relation, to_symbol)
+    return await asyncio.to_thread(run_graph, symbol, project_path, relation, to_symbol)
 
 
 @mcp.tool()
@@ -135,7 +140,7 @@ async def overview(project_path: str = "", what: str = "structure") -> str:
     """Overview of a project. what: structure|communities|status|projects|patterns|metrics|import_cycles|surprising_connections|feature_map|business_rules|process_flows|suggested_questions|service_mesh|validate."""
     note_activity()
     from opencode_search.server._overview import handle_overview
-    return handle_overview(project_path, what)
+    return await asyncio.to_thread(handle_overview, project_path, what)
 
 
 @mcp.tool()

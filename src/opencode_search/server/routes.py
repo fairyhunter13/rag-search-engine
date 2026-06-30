@@ -41,6 +41,7 @@ async def _api_projects(request: Request) -> JSONResponse:
 
 
 async def _api_overview(request: Request) -> JSONResponse:
+    import asyncio
     import json
     try:
         body = await request.json()
@@ -50,7 +51,8 @@ async def _api_overview(request: Request) -> JSONResponse:
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
     from opencode_search.server._overview import handle_overview
     proj = body.get("project") or body.get("project_path", "")
-    return JSONResponse(json.loads(handle_overview(proj, body.get("what", "structure"))))
+    what = body.get("what", "structure")
+    return JSONResponse(json.loads(await asyncio.to_thread(handle_overview, proj, what)))
 
 
 def _register_all(app) -> None:
