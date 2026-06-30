@@ -34,6 +34,9 @@ def discover_members(root_path: str) -> list[str]:
                 if str(target) in exclude:
                     dirs.remove(d)
                     continue
+                if "/_worktrees/" in str(target):
+                    dirs.remove(d)
+                    continue
                 if _looks_like_repo(target):
                     members.append(str(target))
                 dirs.remove(d)
@@ -48,17 +51,28 @@ def index_members(root_path: str) -> int:
     from opencode_search.core.registry import get_project, upsert_project
 
     members = discover_members(root_path)
+    member_set = set(members)
     registered = 0
     for m in members:
         if get_project(m) is None:
             upsert_project(ProjectEntry(path=m, enabled=True))
             registered += 1
     root_entry = get_project(root_path)
-    # Only overwrite when symlinks were actually found or the existing list is empty.
-    # Preserves explicitly registered federations when discovery returns nothing.
-    if root_entry is not None and root_entry.federation != members and (members or not root_entry.federation):
-        root_entry.federation = members
-        upsert_project(root_entry)
+    if root_entry is not None:
+        old_set = set(root_entry.federation or [])
+        # Disable members that discovery no longer finds (only when discovery returned
+        # something — guards against transient OSError wiping valid federations).
+        if members:
+            for removed in old_set - member_set:
+                removed_entry = get_project(removed)
+                if removed_entry is not None and removed_entry.enabled:
+                    removed_entry.enabled = False
+                    upsert_project(removed_entry)
+        # Only overwrite when symlinks were actually found or the existing list is empty.
+        # Preserves explicitly registered federations when discovery returns nothing.
+        if root_entry.federation != members and (members or not root_entry.federation):
+            root_entry.federation = members
+            upsert_project(root_entry)
     return registered
 
 

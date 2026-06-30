@@ -7,7 +7,13 @@ from pathlib import Path
 def unit_text(exec_path: str | None = None) -> str:
     if exec_path is None:
         import shutil
-        exec_path = shutil.which("opencode-search") or "opencode-search"
+        import sys
+        # Prefer the binary adjacent to the current Python interpreter (venv-aware).
+        _candidate = Path(sys.executable).parent / "opencode-search"
+        if _candidate.exists():
+            exec_path = str(_candidate)
+        else:
+            exec_path = shutil.which("opencode-search") or "opencode-search"
     return (
         "[Unit]\n"
         "Description=opencode-search singleton MCP daemon (GPU-enforced)\n"
@@ -21,6 +27,11 @@ def unit_text(exec_path: str | None = None) -> str:
         "StartLimitBurst=20\n"
         "Environment=OPENCODE_EMBED_DEVICE=cuda\n"
         "EnvironmentFile=-%h/.config/opencode-search/env\n"
+        "Nice=5\n"
+        "CPUWeight=20\n"
+        "IOWeight=20\n"
+        "MemoryHigh=3G\n"
+        "MemoryMax=6G\n"
         "\n"
         "[Install]\n"
         "WantedBy=default.target\n"

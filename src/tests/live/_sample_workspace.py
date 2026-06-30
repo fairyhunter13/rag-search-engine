@@ -127,11 +127,28 @@ def _replay_golden(project_path: str, golden_path: Path) -> None:
         gs.close()
 
 
+def _deregister_under(base: Path) -> None:
+    """Remove all registry entries whose path is under base (enabled or not)."""
+    from opencode_search.core.registry import list_projects
+    prefix = str(base) + "/"
+    for e in list_projects():
+        if e.path.startswith(prefix) or e.path == str(base):
+            with contextlib.suppress(Exception):
+                remove_project(e.path)
+
+
 def _cleanup_stale_workspaces(keep: Path) -> None:
-    """Remove leftover sample-ws-* dirs from crashed previous sessions."""
+    """Remove leftover sample-ws-* dirs and their registry entries from crashed sessions."""
     for d in _SAFE_BASE.glob("sample-ws-*"):
         if d != keep:
+            _deregister_under(d)
             shutil.rmtree(d, ignore_errors=True)
+    # Also clear any stale ocs-test-dirs entries whose filesystem path no longer exists.
+    from opencode_search.core.registry import list_projects
+    for e in list_projects():
+        if str(_SAFE_BASE) in e.path and not Path(e.path).exists():
+            with contextlib.suppress(Exception):
+                remove_project(e.path)
 
 
 def build_sample_workspace() -> SampleWorkspace:

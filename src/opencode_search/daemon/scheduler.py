@@ -31,9 +31,8 @@ class Scheduler:
 
     def start(self) -> None:
         self._stop.clear()
-        tick = min(1.0, min(j.interval_s for j in self._jobs) / 2) if self._jobs else 1.0
         self._thread = threading.Thread(
-            target=self._loop, args=(tick,), daemon=True, name="ocs-scheduler"
+            target=self._loop, daemon=True, name="ocs-scheduler"
         )
         self._thread.start()
 
@@ -42,14 +41,19 @@ class Scheduler:
         if self._thread:
             self._thread.join(timeout=timeout)
 
-    def _loop(self, tick: float) -> None:
+    def _loop(self) -> None:
         while not self._stop.is_set():
             now = time.monotonic()
+            next_deadline = now + 3600.0  # fallback: wake at most once per hour when idle
             for job in self._jobs:
-                if now - job._last_run >= job.interval_s:
+                due_at = job._last_run + job.interval_s
+                if now >= due_at:
                     job._last_run = now
                     try:
                         job.fn()
                     except Exception as exc:
                         log.warning("job %s failed: %s", job.name, exc)
-            self._stop.wait(timeout=tick)
+                    due_at = job._last_run + job.interval_s
+                next_deadline = min(next_deadline, due_at)
+            wait_s = max(0.0, next_deadline - time.monotonic())
+            self._stop.wait(timeout=wait_s)
