@@ -230,6 +230,8 @@ def reconcile_projects() -> None:
     _excluded = federation_exclude_paths()
 
     for entry in list_projects():
+        if _PAUSED:
+            return
         if not entry.enabled:
             continue
         if str(Path(entry.path).resolve()) in _excluded:
@@ -262,6 +264,8 @@ def reconcile_projects() -> None:
 
     # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet).
     for entry in list_projects():
+        if _PAUSED:
+            return
         if not entry.enabled or not entry.federation:
             continue
         if str(Path(entry.path).resolve()) in _excluded:

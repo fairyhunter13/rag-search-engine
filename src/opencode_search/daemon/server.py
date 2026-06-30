@@ -10,7 +10,15 @@ import threading
 log = logging.getLogger(__name__)
 
 _MODEL_IDLE_UNLOAD_S = float(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
+_RECONCILE_INITIAL_DELAY_S = float(os.environ.get("OPENCODE_RECONCILE_INITIAL_DELAY_S", "30"))
 _idle_unload_done = False
+
+
+def _deprioritize_current_thread(delta: int = 5) -> None:
+    """Raise the calling thread's niceness so the event loop wins CPU under contention.
+    Linux nice() applies to the calling thread (who=0 → current task); non-Linux no-ops."""
+    with contextlib.suppress(Exception):
+        os.nice(delta)
 
 
 def _idle_unload() -> None:
@@ -120,6 +128,8 @@ def _start_background() -> None:
 
     def _reconcile_loop() -> None:
         import time
+        _deprioritize_current_thread()  # de-prioritize immediately; event loop wins CPU post-restart
+        time.sleep(_RECONCILE_INITIAL_DELAY_S)  # grace: serve early requests before first sweep
         while True:
             with contextlib.suppress(Exception):
                 reconcile_projects()
