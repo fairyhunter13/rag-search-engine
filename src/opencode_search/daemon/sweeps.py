@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import shutil
+from pathlib import Path
 
 # Max DeepSeek completion tokens spent on L1 community narration per _enrich_project run.
 # Prevents runaway cost on unexpectedly large projects.  Default 50k ≈ ≤250 head communities.
@@ -212,8 +213,13 @@ def reconcile_projects() -> None:
     except Exception as exc:
         log.warning("reconcile member-discovery: %s", exc)
 
+    from opencode_search.core.config import federation_exclude_paths
+    _excluded = federation_exclude_paths()
+
     for entry in list_projects():
         if not entry.enabled:
+            continue
+        if str(Path(entry.path).resolve()) in _excluded:
             continue
         needs_idx = _needs_index(entry.path)
         needs_rederive = False
@@ -244,6 +250,8 @@ def reconcile_projects() -> None:
     # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet).
     for entry in list_projects():
         if not entry.enabled or not entry.federation:
+            continue
+        if str(Path(entry.path).resolve()) in _excluded:
             continue
         try:
             from opencode_search.kb.bpre import reconstruct_processes
