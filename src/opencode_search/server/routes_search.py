@@ -5,16 +5,21 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 
-async def _api_suggested_questions(request: Request) -> JSONResponse:
-    project = request.query_params.get("project", "")
-    if not project:
-        return JSONResponse({"error": "project required"}, status_code=400)
+def _suggested_questions_sync(project: str) -> dict:
     from opencode_search.daemon.federation import federated_map
     rows = [r for _, rs in federated_map(project, lambda gs: gs.conn.execute(
         "SELECT title FROM communities WHERE level>=1 ORDER BY member_count DESC LIMIT 5"
     ).fetchall()) for r in rs]
     qs = list(dict.fromkeys(f"How does {r[0]} work?" for r in rows if r[0]))[:5]
-    return JSONResponse({"questions": qs})
+    return {"questions": qs}
+
+
+async def _api_suggested_questions(request: Request) -> JSONResponse:
+    import asyncio
+    project = request.query_params.get("project", "")
+    if not project:
+        return JSONResponse({"error": "project required"}, status_code=400)
+    return JSONResponse(await asyncio.to_thread(_suggested_questions_sync, project))
 
 
 def register(app) -> None:

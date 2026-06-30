@@ -71,13 +71,7 @@ async def _api_wiki_lint(request: Request) -> JSONResponse:
     return JSONResponse({"issues": issues})
 
 
-async def _api_kb_health(request: Request) -> JSONResponse:
-    project = request.query_params.get("project", "")
-    if not project:
-        return JSONResponse({"error": "project required"}, status_code=400)
-    gdb = project_graph_db(project)
-    if not gdb.exists():
-        return JSONResponse({"verdict": "PENDING", "enriched_pct": 0})
+def _kb_health_sync(gdb) -> dict:  # type: ignore[no-untyped-def]
     from opencode_search.graph.store import GraphStore
     gs = GraphStore(gdb)
     try:
@@ -86,30 +80,38 @@ async def _api_kb_health(request: Request) -> JSONResponse:
             "SELECT COUNT(*) FROM communities WHERE level = 1 AND summary IS NOT NULL AND summary != ''"
         ).fetchone()[0]
         pct = (enriched / comms * 100) if comms else 0
-        return JSONResponse({"verdict": "DONE" if pct >= 95 else "PENDING",
-                             "enriched_pct": round(pct, 1),
-                             "enriched_communities": enriched,
-                             "total_communities": comms})
+        return {"verdict": "DONE" if pct >= 95 else "PENDING",
+                "enriched_pct": round(pct, 1),
+                "enriched_communities": enriched,
+                "total_communities": comms}
     finally:
         gs.close()
 
 
+async def _api_kb_health(request: Request) -> JSONResponse:
+    import asyncio
+    project = request.query_params.get("project", "")
+    if not project:
+        return JSONResponse({"error": "project required"}, status_code=400)
+    gdb = project_graph_db(project)
+    if not gdb.exists():
+        return JSONResponse({"verdict": "PENDING", "enriched_pct": 0})
+    return JSONResponse(await asyncio.to_thread(_kb_health_sync, gdb))
+
+
+def _storage_health_sync(idx: Path) -> float:
+    return sum(f.stat().st_size for f in idx.rglob("*") if f.is_file()) / 1_048_576 if idx.exists() else 0.0
+
+
 async def _api_storage_health(request: Request) -> JSONResponse:
+    import asyncio
     project = request.query_params.get("project", "")
     idx = project_vector_db(project).parent if project else Path.home() / ".local/share/opencode-search"
-    mb = sum(f.stat().st_size for f in idx.rglob("*") if f.is_file()) / 1_048_576 if idx.exists() else 0
+    mb = await asyncio.to_thread(_storage_health_sync, idx)
     return JSONResponse({"size_mb": round(mb, 1), "path": str(idx)})
 
 
-async def _api_process_bpmn(request: Request) -> JSONResponse:
-    """Return BPMN 2.0 XML for a single process.  ?root=<root_path>&id=<process_id>"""
-    root = request.query_params.get("root", "")
-    process_id = request.query_params.get("id", "")
-    if not root or not process_id:
-        return JSONResponse({"error": "root and id required"}, status_code=400)
-    pdb = root_process_db(root)
-    if not pdb.exists():
-        return JSONResponse({"error": "process_graph.db not found — run BPRE first"}, status_code=404)
+def _bpmn_query_sync(pdb, process_id: str) -> str | None:  # type: ignore[no-untyped-def]
     import sqlite3 as _sq
     con = _sq.connect(str(pdb))
     try:
@@ -118,10 +120,24 @@ async def _api_process_bpmn(request: Request) -> JSONResponse:
         ).fetchone()
     finally:
         con.close()
-    if not row or not row[0]:
+    return row[0] if row and row[0] else None
+
+
+async def _api_process_bpmn(request: Request) -> JSONResponse:
+    """Return BPMN 2.0 XML for a single process.  ?root=<root_path>&id=<process_id>"""
+    import asyncio
+    root = request.query_params.get("root", "")
+    process_id = request.query_params.get("id", "")
+    if not root or not process_id:
+        return JSONResponse({"error": "root and id required"}, status_code=400)
+    pdb = root_process_db(root)
+    if not pdb.exists():
+        return JSONResponse({"error": "process_graph.db not found — run BPRE first"}, status_code=404)
+    xml = await asyncio.to_thread(_bpmn_query_sync, pdb, process_id)
+    if not xml:
         return JSONResponse({"error": "process not found"}, status_code=404)
     from starlette.responses import Response
-    return Response(row[0], media_type="application/xml")
+    return Response(xml, media_type="application/xml")
 
 
 _C4_PREFIXES = [
