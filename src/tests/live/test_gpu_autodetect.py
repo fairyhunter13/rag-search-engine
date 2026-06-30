@@ -149,3 +149,46 @@ def test_vram_and_temp_read_selected_device():
     from opencode_search.core.gpu import gpu_temp_c, vram_free_mb
     assert vram_free_mb() >= 0
     assert 0 <= gpu_temp_c() <= 120
+
+
+# ---------------------------------------------------------------------------
+# Thermal cooldown helper unit tests — parameter injection, GPU-free, no patch libs
+# ---------------------------------------------------------------------------
+
+
+def test_thermal_cooldown_cool_gpu_is_noop():
+    """TC1: _await_thermal_headroom returns immediately when GPU is cool — zero sleeps."""
+    from opencode_search.embed.embedder import _await_thermal_headroom
+    sleep_calls: list[float] = []
+    _await_thermal_headroom(_temp_fn=lambda: 60.0, _sleep_fn=lambda s: sleep_calls.append(s))
+    assert not sleep_calls, "sleep must not be called when GPU is cool"
+
+
+def test_thermal_cooldown_transient_spike_rides_out():
+    """TC2: a transient 82°C spike resolves after two polls — no raise."""
+    from opencode_search.core.config import THERMAL_MAX_C
+    from opencode_search.embed.embedder import _await_thermal_headroom
+    temps = iter([82.0, 81.0, float(THERMAL_MAX_C - 1)])
+    sleep_calls: list[float] = []
+    _await_thermal_headroom(_temp_fn=lambda: next(temps), _sleep_fn=lambda s: sleep_calls.append(s))
+    assert len(sleep_calls) == 2, f"expected 2 sleep calls for 2 hot readings, got {sleep_calls}"
+
+
+def test_thermal_cooldown_sustained_over_temp_raises():
+    """TC3: GPU staying hot past the budget raises RuntimeError — fatal, no CPU fallback."""
+    from opencode_search.core.config import THERMAL_MAX_C
+    from opencode_search.embed.embedder import (
+        THERMAL_COOLDOWN_S,
+        THERMAL_POLL_S,
+        _await_thermal_headroom,
+    )
+    sleep_calls: list[float] = []
+    with pytest.raises(RuntimeError, match="cooldown"):
+        _await_thermal_headroom(
+            _temp_fn=lambda: float(THERMAL_MAX_C + 5),
+            _sleep_fn=lambda s: sleep_calls.append(s),
+        )
+    expected_polls = int(THERMAL_COOLDOWN_S / THERMAL_POLL_S)
+    assert len(sleep_calls) == expected_polls, (
+        f"expected {expected_polls} sleep calls before fatal raise, got {sleep_calls}"
+    )
