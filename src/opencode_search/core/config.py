@@ -15,6 +15,8 @@ EMBED_MODEL = os.environ.get("OPENCODE_EMBED_MODEL", "jinaai/jina-embeddings-v2-
 RERANK_MODEL = os.environ.get("OPENCODE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en")
 EMBED_DEVICE = os.environ.get("OPENCODE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
 THERMAL_MAX_C = int(os.environ.get("OPENCODE_GPU_TEMP_MAX", "80"))
+THERMAL_COOLDOWN_S = int(os.environ.get("OPENCODE_GPU_THERMAL_COOLDOWN_S", "30"))
+THERMAL_POLL_S = float(os.environ.get("OPENCODE_GPU_THERMAL_POLL_S", "3"))
 DISABLE_TENSORRT = int(os.environ.get("OPENCODE_DISABLE_TENSORRT", "1"))
 OPENCODE_GPU_DEVICE: str | None = os.environ.get("OPENCODE_GPU_DEVICE")  # unset = auto-pick
 

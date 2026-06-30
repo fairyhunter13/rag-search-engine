@@ -1,10 +1,11 @@
-"""BPRE self-heal tests (BSH1-BSH5 + SG) — synthetic root, GPU-free, no mocks.
+"""BPRE self-heal tests (BSH1-BSH6 + SG) — synthetic root, GPU-free, no mocks.
 
 BSH1 — meta stamps survive the 5-table DELETE and are written after reconstruct.
 BSH2 — _bpre_algo_version() is deterministic (4-char hex, stable across calls).
 BSH3 — _narrative_incomplete returns False when DeepSeek key absent (allows reuse; no churn).
 BSH4 — editing a member flips _bpre_source_sig (source-drift detection works).
 BSH5 — _synthesize_artifacts(old_narr) carries over unchanged process narratives byte-for-byte.
+BSH6 — live DB never shows procs=0 during a full rebuild (AUDIT-FINDING-012 atomic fix).
 SG   — reconcile_projects source contains the federation root-pass calls.
 """
 from __future__ import annotations
@@ -109,6 +110,49 @@ def test_bsh5_delta_carry_over(synth_fed):
         got = con.execute("SELECT narrative FROM process_artifacts").fetchall()
     assert got and all(r[0] == "SENTINEL_BSH5" for r in got), (
         f"carry-over failed; narratives: {[r[0] for r in got]}"
+    )
+
+
+def test_bsh6_atomic_swap_mechanism(tmp_path):
+    """BSH6: SQLite ATTACH+DELETE+INSERT+COMMIT atomically replaces all rows — no empty window.
+
+    Proves the mechanism used by the full-rebuild branch to fix AUDIT-FINDING-012.
+    Uses real _init_db + real SQLite WAL: a fresh-connection reader must see N (old) before
+    the publish and M (new) after, never 0 in between — which is guaranteed by the single-file
+    atomic transaction used instead of the old DELETE-then-commit pattern.
+    """
+    from opencode_search.kb.bpre import _init_db
+
+    live = tmp_path / "live.db"
+    stg = tmp_path / "staging.db"
+
+    lcon = _init_db(live)
+    lcon.execute("INSERT OR IGNORE INTO processes VALUES ('pid1','P1','svc','[]',1,'')")
+    lcon.commit()
+
+    scon = _init_db(stg)
+    scon.execute("INSERT OR IGNORE INTO processes VALUES ('pid1','P1','svc','[]',1,'')")
+    scon.execute("INSERT OR IGNORE INTO processes VALUES ('pid2','P2','svc2','[]',2,'')")
+    scon.commit()
+    scon.close()
+
+    with sqlite3.connect(str(live)) as rcon:
+        n_before = rcon.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+
+    lcon.execute("ATTACH DATABASE ? AS stg", (str(stg),))
+    lcon.execute("DELETE FROM processes")
+    lcon.execute("INSERT INTO processes SELECT * FROM stg.processes")
+    lcon.commit()
+    lcon.execute("DETACH DATABASE stg")
+    lcon.close()
+
+    with sqlite3.connect(str(live)) as rcon:
+        n_after = rcon.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+
+    assert n_before == 1, f"pre-publish fresh-connection read expected 1 process, got {n_before}"
+    assert n_after == 2, (
+        f"post-publish fresh-connection read expected 2 processes, got {n_after} "
+        f"(AUDIT-FINDING-012: ATTACH atomic swap did not replace all rows)"
     )
 
 
