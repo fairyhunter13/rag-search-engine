@@ -11,7 +11,9 @@ log = logging.getLogger(__name__)
 
 _MODEL_IDLE_UNLOAD_S = float(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
 _RECONCILE_INITIAL_DELAY_S = float(os.environ.get("OPENCODE_RECONCILE_INITIAL_DELAY_S", "30"))
+_RECONCILE_RESYNC_S = float(os.environ.get("OPENCODE_RECONCILE_RESYNC_S", "0"))
 _idle_unload_done = False
+_reconcile_park = threading.Event()  # never set; parks the reconcile thread when resync is disabled
 
 
 def _deprioritize_current_thread(delta: int = 5) -> None:
@@ -84,14 +86,18 @@ def serve(host: str | None = None, port: int | None = None) -> None:
 
 def start_watcher():
     """Build and start the file watcher for all enabled registered projects."""
+    from pathlib import Path
+
+    from opencode_search.core.config import federation_exclude_paths
     from opencode_search.core.registry import list_projects
     from opencode_search.daemon.sweeps import on_change
     from opencode_search.daemon.watcher import Watcher
 
+    _excluded = federation_exclude_paths()
     watcher = Watcher(on_change=on_change)
     watcher.POLL_INTERVAL = 5.0
     for entry in list_projects():
-        if entry.enabled:
+        if entry.enabled and str(Path(entry.path).resolve()) not in _excluded:
             watcher.watch(entry.path)
     watcher.start()
     return watcher
@@ -130,9 +136,16 @@ def _start_background() -> None:
         import time
         _deprioritize_current_thread()  # de-prioritize immediately; event loop wins CPU post-restart
         time.sleep(_RECONCILE_INITIAL_DELAY_S)  # grace: serve early requests before first sweep
-        while True:
-            with contextlib.suppress(Exception):
-                reconcile_projects()
-            time.sleep(1800.0)  # 30 min between self-heal passes
+        with contextlib.suppress(Exception):
+            reconcile_projects()  # startup-once: heals algo drift + discovers new/partial projects
+        # Opt-in periodic resync (default OFF): OPENCODE_RECONCILE_RESYNC_S > 0 enables it.
+        # Steady state is watcher-driven (on_change). The thread stays alive so nice+5 is visible.
+        if _RECONCILE_RESYNC_S > 0:
+            while True:
+                time.sleep(_RECONCILE_RESYNC_S)
+                with contextlib.suppress(Exception):
+                    reconcile_projects()
+        else:
+            _reconcile_park.wait()  # park with zero CPU; daemon threads die on process exit
 
     threading.Thread(target=_reconcile_loop, daemon=True, name="reconcile").start()

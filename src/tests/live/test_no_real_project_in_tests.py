@@ -30,11 +30,13 @@ _LIVE_DIR = Path(__file__).parent         # kept for per-file context in error m
 # Files exempt from the list_projects() check — they use it for registry mechanics,
 # not for picking arbitrary data projects.
 _LIST_PROJECTS_ALLOWLIST = {
-    "_projects.py",           # resolver module (hard-fails now, no registry fallback)
-    "conftest.py",            # sample_workspace builder
-    "test_p5_server.py",      # register/remove round-trip + G5 default-resolution
-    "test_p6_daemon.py",      # registry filter mechanics (test_tg2_unknown_key)
-    "test_index_validity.py", # registry precondition check (verifies sample paths are registered)
+    "_projects.py",            # resolver module (hard-fails now, no registry fallback)
+    "_sample_workspace.py",    # stale-workspace cleanup + safe_tmp_path teardown
+    "conftest.py",             # sample_workspace builder + safe_tmp_path teardown
+    "test_p5_server.py",       # register/remove round-trip + G5 default-resolution
+    "test_p6_daemon.py",       # registry filter mechanics (test_tg2_unknown_key)
+    "test_index_validity.py",  # registry precondition check (verifies sample paths are registered)
+    "test_idle_stability.py",  # IS2: registry health check — must see all entries to find junk
     "test_no_real_project_in_tests.py",  # this file
 }
 

@@ -97,13 +97,21 @@ def service_member_path(sample_workspace: SampleWorkspace) -> str:
 @pytest.fixture()
 def safe_tmp_path():
     """Temporary directory outside /tmp and ~/.cache — safe for registry registration tests."""
+    import contextlib
     import shutil
     import tempfile
     from pathlib import Path
+
+    from opencode_search.core.registry import list_projects, remove_project
     safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
     safe_base.mkdir(parents=True, exist_ok=True)
     d = Path(tempfile.mkdtemp(dir=safe_base))
     yield d
+    prefix = str(d) + "/"
+    for e in list_projects():
+        if e.path.startswith(prefix) or e.path == str(d):
+            with contextlib.suppress(Exception):
+                remove_project(e.path)
     shutil.rmtree(d, ignore_errors=True)
 
 
