@@ -1,11 +1,20 @@
 """GPU-only code embedding via FastEmbed-GPU + ONNX Runtime CUDA EP."""
 from __future__ import annotations
 
+import logging
 import threading
+import time
 
 import numpy as np
 
-from opencode_search.core.config import EMBED_DEVICE, EMBED_MODEL, RERANK_MODEL, THERMAL_MAX_C
+from opencode_search.core.config import (
+    EMBED_DEVICE,
+    EMBED_MODEL,
+    RERANK_MODEL,
+    THERMAL_COOLDOWN_S,
+    THERMAL_MAX_C,
+    THERMAL_POLL_S,
+)
 from opencode_search.core.gpu import (
     GPU_EP_NAMES,
     assert_gpu_available,
@@ -13,8 +22,39 @@ from opencode_search.core.gpu import (
     select_gpu_providers,
 )
 
+_log = logging.getLogger(__name__)
+
 # Prevents concurrent GPU inference races (embed + rerank on same device).
 _GPU_INFER_LOCK = threading.Lock()
+
+
+def _await_thermal_headroom(_temp_fn=None, _sleep_fn=None) -> None:
+    """Block until GPU temperature is within THERMAL_MAX_C, then return.
+
+    Polls every THERMAL_POLL_S seconds for up to THERMAL_COOLDOWN_S total.
+    Raises RuntimeError if the GPU remains over-temperature after the budget is exhausted.
+    CPU fallback is never used; the raise is always fatal on genuine cooling failure.
+
+    _temp_fn / _sleep_fn: injectable for deterministic unit tests only (default: gpu_temp_c / time.sleep).
+    """
+    _get_temp = _temp_fn if _temp_fn is not None else gpu_temp_c
+    _do_sleep = _sleep_fn if _sleep_fn is not None else time.sleep
+    temp = _get_temp()
+    if temp <= THERMAL_MAX_C:
+        return
+    waited = 0.0
+    while temp > THERMAL_MAX_C:
+        _log.warning(
+            "GPU too hot (%d°C > %d°C) — pausing %.0fs to cool (%.0fs budget remaining)",
+            int(temp), THERMAL_MAX_C, THERMAL_POLL_S, max(0.0, THERMAL_COOLDOWN_S - waited),
+        )
+        if waited >= THERMAL_COOLDOWN_S:
+            raise RuntimeError(
+                f"GPU too hot ({temp:.0f}°C > {THERMAL_MAX_C}°C) after {THERMAL_COOLDOWN_S}s cooldown."
+            )
+        _do_sleep(THERMAL_POLL_S)
+        waited += THERMAL_POLL_S
+        temp = _get_temp()
 
 
 class Embedder:
@@ -75,9 +115,7 @@ class Embedder:
         """Embed on GPU; returns normalized float16 array of shape (n, 768)."""
         if self._model is None:
             self._init()
-        temp = gpu_temp_c()
-        if temp > THERMAL_MAX_C:
-            raise RuntimeError(f"GPU too hot ({temp:.0f}°C > {THERMAL_MAX_C}°C).")
+        _await_thermal_headroom()
         raw = np.array(list(self._model.embed(texts, batch_size=batch_size)), dtype=np.float32)
         norms = np.linalg.norm(raw, axis=1, keepdims=True)
         norms[norms == 0] = 1.0

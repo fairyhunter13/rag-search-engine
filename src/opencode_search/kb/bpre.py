@@ -955,46 +955,63 @@ def _reconstruct_processes_locked(
                     old_narr[_proc_sig(pname, svc_json, steps)] = narr
             except Exception:
                 old_narr = {}
-            # Invalidate stamp before clearing tables: prevents a false stamp-match reuse
-            # if the process is killed after DELETE but before the final stamp commit.
-            _bpre_set_meta(con, "bpre_algo", "")
-            for tbl in ("entry_points", "cross_service_edges", "processes",
-                        "process_steps", "process_artifacts"):
-                con.execute(f"DELETE FROM {tbl}")
-            con.commit()
-            from opencode_search.kb.bpre_ast import federation_discover
-            surf = federation_discover(members)
-            all_facts = _scan_all_members(members, surf)
-            for member in members:
-                _detect_entry_points(con, member, surf, all_facts[member])
-            svc_registry = _build_service_registry(members, surf, all_facts)
-            pubsub_registry = _build_pubsub_registry(members, surf, all_facts)
-            http_routes = _build_http_route_map(members, surf, all_facts)
-            for member in members:
-                _resolve_grpc_edges(con, member, svc_registry, surf, all_facts[member])
-            _resolve_pubsub_edges(con, pubsub_registry)
-            for member in members:
-                _resolve_http_edges(con, member, http_routes, surf, all_facts[member])
-            _llm_link_edges(con, members, surf, all_facts)
-            count = _trace_processes(con, members)
-            # Recompute src_sig just before commit so the stored value reflects the fleet
-            # state at rebuild completion, not at rebuild start.  Files can change during a
-            # long rebuild; writing a stale start-of-run sig causes stamps_match=False on
-            # the very next call → infinite cascade even when no real change occurred.
-            fresh_src_sig = _bpre_source_sig(members)
-            if count == 0:
-                log.info("bpre: no multi-service processes found for %s", root_path)
-                # Still stamp so reconcile doesn't rebuild a stable no-process federation.
+            # Build entirely into a staging DB; publish atomically so fresh-connection readers
+            # never observe procs=0 mid-rebuild (AUDIT-FINDING-012 fix).
+            staging_path = db_path.parent / (db_path.name + ".rebuild")
+            for _suf in ("-wal", "-shm", ""):
+                _stg_side = staging_path.parent / (staging_path.name + _suf)
+                if _stg_side.exists():
+                    _stg_side.unlink()
+            scon = _init_db(staging_path)
+            try:
+                from opencode_search.kb.bpre_ast import federation_discover
+                surf = federation_discover(members)
+                all_facts = _scan_all_members(members, surf)
+                for member in members:
+                    _detect_entry_points(scon, member, surf, all_facts[member])
+                svc_registry = _build_service_registry(members, surf, all_facts)
+                pubsub_registry = _build_pubsub_registry(members, surf, all_facts)
+                http_routes = _build_http_route_map(members, surf, all_facts)
+                for member in members:
+                    _resolve_grpc_edges(scon, member, svc_registry, surf, all_facts[member])
+                _resolve_pubsub_edges(scon, pubsub_registry)
+                for member in members:
+                    _resolve_http_edges(scon, member, http_routes, surf, all_facts[member])
+                _llm_link_edges(scon, members, surf, all_facts)
+                count = _trace_processes(scon, members)
+                # Recompute src_sig at rebuild end so the stored value reflects the fleet
+                # state at completion, not start — same rationale as before.
+                fresh_src_sig = _bpre_source_sig(members)
+                if count > 0:
+                    _synthesize_artifacts(scon, old_narr)
+                scon.commit()
+            finally:
+                scon.close()
+            # Atomic publish: ATTACH + single transaction swaps all 5 tables + stamps atomically.
+            # Readers see the prior complete generation until COMMIT, then atomically the new one.
+            _SWAP_TBLS = ("entry_points", "cross_service_edges", "processes",
+                          "process_steps", "process_artifacts")
+            con.execute("ATTACH DATABASE ? AS stg", (str(staging_path),))
+            try:
+                for tbl in _SWAP_TBLS:
+                    con.execute(f"DELETE FROM {tbl}")
+                    con.execute(f"INSERT INTO {tbl} SELECT * FROM stg.{tbl}")
                 _bpre_set_meta(con, "bpre_algo", algo)
                 _bpre_set_meta(con, "bpre_source_sig", fresh_src_sig)
                 con.commit()
-                con.close()
-                return 0
-            _synthesize_artifacts(con, old_narr)
-            _bpre_set_meta(con, "bpre_algo", algo)
-            _bpre_set_meta(con, "bpre_source_sig", fresh_src_sig)
-            con.commit()
-            log.info("bpre: reconstructed %d processes for %s", count, root_path)
+            except Exception:
+                con.rollback()
+                raise
+            finally:
+                con.execute("DETACH DATABASE stg")
+            for _suf in ("-wal", "-shm", ""):
+                _stg_side = staging_path.parent / (staging_path.name + _suf)
+                if _stg_side.exists():
+                    _stg_side.unlink()
+            if count == 0:
+                log.info("bpre: no multi-service processes found for %s", root_path)
+            else:
+                log.info("bpre: reconstructed %d processes for %s", count, root_path)
             return count
         finally:
             con.close()
