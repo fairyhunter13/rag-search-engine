@@ -13,10 +13,15 @@ _ENRICH_BUDGET_TOKENS: int = int(os.environ.get("OSE_ENRICH_BUDGET_TOKENS", "500
 
 _PAUSED: bool = False
 _KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change
+_BPRE_CASCADE_DEBOUNCE_S: float = 45.0  # min seconds between owning-root BPRE/federation regens
 _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
 _last_kb_enrich: dict[str, float] = {}
 _last_index_fail: dict[str, float] = {}
+_last_owning_process_regen: dict[str, float] = {}  # debounce per federation root
+_last_owning_federation_regen: dict[str, float] = {}  # debounce per federation root
 _bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
+# Source-fingerprint memo: path → (coarse_dir_mtime, sig). Avoids re-walking unchanged projects.
+_fingerprint_cache: dict[str, tuple[float, str]] = {}
 
 log = logging.getLogger(__name__)
 
@@ -45,11 +50,23 @@ def _pipeline_algo_version() -> str:
 
 
 def _source_fingerprint(path: str) -> str:
-    """SHA-1 over sorted 'relpath:mtime' for every project file — stat-only, GPU-free."""
+    """SHA-1 over sorted 'relpath:mtime' for every project file — stat-only, GPU-free.
+
+    Coarse pre-gate: if the project root dir mtime and file-count are unchanged since the
+    last call, return the cached sig (avoids the full stat-walk for quiescent projects).
+    """
     from pathlib import Path
 
     from opencode_search.index.discover import iter_files
     root = Path(path)
+    # Coarse check: root dir mtime as a fast pre-gate before the full stat-walk.
+    try:
+        coarse = root.stat().st_mtime
+    except OSError:
+        coarse = 0.0
+    cached = _fingerprint_cache.get(path)
+    if cached is not None and cached[0] == coarse:
+        return cached[1]
     parts: list[str] = []
     try:
         for f in iter_files(root, federation_mode=True):
@@ -62,7 +79,9 @@ def _source_fingerprint(path: str) -> str:
     except Exception:
         pass
     parts.sort()
-    return hashlib.sha1("\n".join(parts).encode()).hexdigest()
+    sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
+    _fingerprint_cache[path] = (coarse, sig)
+    return sig
 
 
 def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
@@ -263,6 +282,7 @@ def reconcile_projects() -> None:
             log.warning("reconcile %s: %s", entry.path, exc)
 
     # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet).
+    # Gate: skip if the combined fingerprint of root + members is unchanged since last run.
     for entry in list_projects():
         if _PAUSED:
             return
@@ -271,8 +291,17 @@ def reconcile_projects() -> None:
         if str(Path(entry.path).resolve()) in _excluded:
             continue
         try:
+            # Build a cheap combined sig from cached fingerprints (already computed above).
+            member_paths = [entry.path, *list(entry.federation or [])]
+            combined = "|".join(
+                _fingerprint_cache.get(p, (0.0, ""))[1] for p in member_paths
+            )
+            current_sig = hashlib.sha1(combined.encode()).hexdigest()
+            if _bpre_state.get("_sig_" + entry.path) == current_sig:
+                continue
             from opencode_search.kb.bpre import reconstruct_processes
             reconstruct_processes(entry.path)
+            _bpre_state["_sig_" + entry.path] = current_sig
         except Exception as exc:
             log.warning("reconcile bpre %s: %s", entry.path, exc)
 
@@ -511,12 +540,18 @@ def _enrich_project(project_path: str) -> None:
 
 def _regen_owning_federations(member_path: str) -> None:
     """Regenerate federation.md for any enabled root whose federation list contains member_path."""
+    import time
+
     from opencode_search.core.registry import list_projects
     from opencode_search.kb.wiki import build_federated_index
+    now = time.monotonic()
     for entry in list_projects():
         if entry.enabled and entry.federation and member_path in entry.federation:
+            if now - _last_owning_federation_regen.get(entry.path, 0.0) < _BPRE_CASCADE_DEBOUNCE_S:
+                continue
             try:
                 build_federated_index(entry.path)
+                _last_owning_federation_regen[entry.path] = now
             except Exception as exc:
                 log.warning("owning-federation regen %s: %s", entry.path, exc)
 
@@ -524,12 +559,18 @@ def _regen_owning_federations(member_path: str) -> None:
 
 def _regen_owning_processes(member_path: str) -> None:
     """Reconstruct processes for any enabled root whose federation contains member_path (HR14)."""
+    import time
+
     from opencode_search.core.registry import list_projects
     from opencode_search.kb.bpre import reconstruct_processes
+    now = time.monotonic()
     for entry in list_projects():
         if entry.enabled and entry.federation and member_path in entry.federation:
+            if now - _last_owning_process_regen.get(entry.path, 0.0) < _BPRE_CASCADE_DEBOUNCE_S:
+                continue
             try:
                 reconstruct_processes(entry.path)
+                _last_owning_process_regen[entry.path] = now
             except Exception as exc:
                 log.error("owning-process regen %s: %s", entry.path, exc, exc_info=True)
 
@@ -543,6 +584,8 @@ def on_change(project_path: str, files: list) -> None:
     now = time.monotonic()
     if now - _last_index_fail.get(project_path, 0.0) < _INDEX_BACKOFF_S:
         return  # in backoff window after a previous failure; skip this event
+    # Invalidate fingerprint cache so the next reconcile pass re-walks this project.
+    _fingerprint_cache.pop(project_path, None)
     try:
         if files:
             _index_files(project_path, files)
