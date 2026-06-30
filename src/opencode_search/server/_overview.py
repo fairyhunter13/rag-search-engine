@@ -115,9 +115,10 @@ def handle_overview(project_path: str, what: str) -> str:
                 return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
             if what == "status":
                 from opencode_search.core.config import project_vector_db
-                from opencode_search.core.registry import get_project
                 from opencode_search.graph.quality import partition_quality
-                e = get_project(project_path)
+                # §2a: one registry read; reuse for all per-member get_project() calls below.
+                _by_path = {e_.path: e_ for e_ in list_projects()}
+                e = _by_path.get(project_path)
                 tot_sym, tot_comm, tot_fc = 0, 0, 0
                 members_info: list = []
                 worst_state = "ready"
@@ -129,7 +130,7 @@ def handle_overview(project_path: str, what: str) -> str:
                     l1s = c.execute("SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
                     l1p = round(l1s / l1t * 100, 1) if l1t else 100.0
                     _pct = l1p
-                    ep = get_project(p)
+                    ep = _by_path.get(p)  # §2a: cached lookup, not a fresh file read
                     _ks = ("indexing" if (ep is None or ep.indexed_at is None
                                           or not project_vector_db(p).exists()) else
                            "ready" if _pct >= 95 else "enriching" if l1p > 0 else "searchable")
@@ -141,7 +142,14 @@ def handle_overview(project_path: str, what: str) -> str:
                     # Federation roots legitimately have 0 edges (HR4: synthesis L3 rows only).
                     _is_fedroot = bool(ep and ep.federation)
                     _hollow = ((s == 0 and cm > 0) or (ec == 0 and cm > 0)) and not _is_fedroot
-                    hq = partition_quality(gs)
+                    # §2b: read cached partition-quality verdict from meta; recompute only on miss/mismatch.
+                    _pq_sig = f"{s}:{ec}:{cm}"
+                    _pq_raw = gs.get_meta("partition_quality")
+                    if _pq_raw:
+                        _pq_cached = json.loads(_pq_raw)
+                        hq = _pq_cached["q"] if _pq_cached.get("sig") == _pq_sig else partition_quality(gs)
+                    else:
+                        hq = partition_quality(gs)
                     # Degenerate partition demotes kb_state below ready (Gate kb_state, user choice).
                     if hq.get("degenerate") and _ks == "ready":
                         _ks = "searchable"
@@ -159,7 +167,7 @@ def handle_overview(project_path: str, what: str) -> str:
                 _ecfg = effective_config(project_path)
                 _pp = _P(project_path).resolve()
                 _has_own = any((_pp / n).is_file() for n in _CONFIG_NAMES)
-                _is_member = any(str(_pp) in (ep.federation or []) for ep in list_projects())
+                _is_member = any(str(_pp) in (ep_.federation or []) for ep_ in _by_path.values())  # §2a
                 _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
                 _any_hollow = any(m.get("symbol_hollow") for m in members_info)
                 _any_degenerate = any(m.get("hierarchy_quality", {}).get("degenerate") for m in members_info)

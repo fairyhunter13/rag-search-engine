@@ -132,6 +132,18 @@ def _extract_graph(gs, root) -> None:
     gs.commit()
 
 
+def _persist_partition_quality(gs) -> None:  # type: ignore[no-untyped-def]
+    """Persist partition-quality verdict to the meta table immediately after detect_communities.
+    The sig (symbol:edge:community counts) self-invalidates on any content change, so the
+    read-side (overview status) can use the cached verdict for O(1) lookup instead of a full scan."""
+    import json as _json
+
+    from opencode_search.graph.quality import partition_quality
+    hq = partition_quality(gs)
+    sig = f"{gs.symbol_count()}:{gs.edge_count()}:{gs.community_count()}"
+    gs.set_meta("partition_quality", _json.dumps({"sig": sig, "q": hq}))
+
+
 def _rederive_graph(project_path: str) -> None:
     """Re-extract symbols+edges, re-detect communities, wipe stale L2+, stamp meta."""
     from pathlib import Path
@@ -149,6 +161,7 @@ def _rederive_graph(project_path: str) -> None:
         gs.commit()
         gs.set_meta("algo_version", _pipeline_algo_version())
         gs.set_meta("source_sig", _source_fingerprint(project_path))
+        _persist_partition_quality(gs)
         gs.commit()
     finally:
         gs.close()
@@ -343,6 +356,7 @@ def _index_project(project_path: str) -> None:
         detect_communities(gs)
         gs.set_meta("algo_version", _pipeline_algo_version())
         gs.set_meta("source_sig", _source_fingerprint(project_path))
+        _persist_partition_quality(gs)
         gs.commit()
     finally:
         gs.close()
