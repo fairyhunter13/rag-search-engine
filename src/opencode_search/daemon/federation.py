@@ -17,7 +17,9 @@ def _looks_like_repo(target: Path) -> bool:
 
 def discover_members(root_path: str) -> list[str]:
     """Return resolved paths of nested symlinked dirs (any depth) that look like repos."""
+    from opencode_search.core.config import federation_exclude_paths
     root = Path(root_path).resolve()
+    exclude = federation_exclude_paths()
     members: list[str] = []
     try:
         for dirpath, dirs, _ in os.walk(str(root), followlinks=False):
@@ -28,6 +30,9 @@ def discover_members(root_path: str) -> list[str]:
                     continue
                 target = p.resolve()
                 if target == root or target.is_relative_to(root):
+                    continue
+                if str(target) in exclude:
+                    dirs.remove(d)
                     continue
                 if _looks_like_repo(target):
                     members.append(str(target))

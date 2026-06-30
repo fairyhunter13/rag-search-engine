@@ -96,6 +96,18 @@ def root_process_db(root_path: str) -> Path:
     return index_dir(root_path) / "process_graph.db"
 
 
+def federation_exclude_paths() -> frozenset[str]:
+    """Resolved absolute paths excluded from federation discovery + reconcile indexing.
+
+    Configured via OPENCODE_FEDERATION_EXCLUDE (os.pathsep-separated list of paths).
+    Paths are expanded (~ allowed) and resolved before comparison. Empty by default.
+    """
+    raw = os.environ.get("OPENCODE_FEDERATION_EXCLUDE", "")
+    return frozenset(
+        str(Path(p).expanduser().resolve()) for p in raw.split(os.pathsep) if p.strip()
+    )
+
+
 def embed_batch_size() -> int:
     try:
         from opencode_search.core.gpu import vram_free_mb
