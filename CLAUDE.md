@@ -51,19 +51,20 @@ python -m compileall -q src/opencode_search
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
-## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36/HR37)
+## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36/HR37/HR38/HR39)
 
 **Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
-in `daemon/sweeps.py:on_change` runs only when `_source_fingerprint` detects real source drift — never
-on metadata-only or non-indexed-file events. With no drift the daemon reaches true idle and
-`_idle_unload` (300 s) frees the embedder/reranker + ORT CUDA arena. **File-watching is event-driven
-via `watchfiles` (Rust `notify`) — never manual polling.** `daemon/watcher.py` runs a single
-`watchfiles.watch()` generator in one thread across ALL watched roots (one inotify instance total,
-not one per root); Rust-side debounce/step coalesces storms before crossing into Python, and
-`watch_filter` reuses the same `is_ignored_path` (HR35) resolver as the drift gate, so a churn storm
-in a hidden/gitignored dir never reaches `on_change`. There is no hand-rolled Python poll loop —
-polling, if ever needed (NFS/SMB), is the Rust library's own `force_polling` path. See
-`docs/info-hierarchy.md` "Compute-spend doctrine" and `model.yaml` P16/P17/HR32/HR33/HR37.
+in `daemon/sweeps.py:on_change` runs only when `_code_source_fingerprint` (code-only, HR38) detects
+real source drift — never on metadata-only, non-indexed-file, or non-code (docs/wiki/config/image)
+events. With no drift the daemon reaches true idle and `_idle_unload` (300 s) frees the
+embedder/reranker + ORT CUDA arena. **File-watching is event-driven via `watchfiles` (Rust `notify`) —
+never manual polling.** `daemon/watcher.py` runs a single `watchfiles.watch()` generator in one thread
+across ALL watched roots (one inotify instance total, not one per root); Rust-side debounce/step
+coalesces storms before crossing into Python, and `watch_filter` reuses the same `is_ignored_path`
+(HR35) resolver as the drift gate, so a churn storm in a hidden/gitignored dir never reaches
+`on_change`. There is no hand-rolled Python poll loop — polling, if ever needed (NFS/SMB), is the Rust
+library's own `force_polling` path. See `docs/info-hierarchy.md` "Compute-spend doctrine" and
+`model.yaml` P16/P17/HR32/HR33/HR37/HR38.
 
 **The drift gate's input must itself be gitignore/hidden-dir-aware (HR35).** `_source_fingerprint` and
 the watcher's `is_ignored_path` both route through one shared resolver in `index/discover.py`, applied
@@ -87,6 +88,29 @@ flipping the all-files stamp faster than the ~5 min BPRE federation rebuild it t
 finish, pinning a CPU core continuously even after HR35 shipped. Guarded by `test_idle_stability.py`
 BPS1-BPS4 (docs-churn/hidden-dir-churn quiescence, real-code-drift rebuild, convergence).
 
+**The `on_change` cascade gate itself must be code-only, unified with the HR36 BPRE stamp (HR38).**
+`daemon/sweeps.py` gains `_code_source_fingerprint` — same coarse-cache-plus-`iter_files`-walk shape
+as `_source_fingerprint`, filtered through `is_code_language`, mirroring `kb/bpre.py`'s
+`_bpre_code_sig` exactly. It now backs `_graph_stale`'s `source_sig` comparison, both
+`set_meta("source_sig", ...)` stamp sites, and `on_change`'s cascade-gate comparison — so non-code
+churn (docs/wiki/config/image) can no longer spuriously wake the enrich/wiki/BPRE cascade or force a
+graph re-derive, closing the gap where BPRE's own stamp (HR36) was already code-only but the gate
+feeding it wasn't. The vector-index/doc-search reindex step runs before this gate and is unaffected.
+Guarded by `test_idle_stability.py` FCG1-FCG4.
+
+**Every tree-sitter parse is bounded out-of-process, so no grammar is ever skipped (HR39).**
+In-process cancellation is unavailable in this stack (py-tree-sitter 0.25's `progress_callback` never
+fires during a stuck parse; `tree_sitter_language_pack`'s bundled parser exposes no callback at all) —
+proven this session via a `cobol`-fed-non-cobol-bytes hang that pinned a core unkillable in-process.
+`index/bounded_parse.py` routes every parse call-site (`graph/extractor.py`, `kb/bpre_ast.py`,
+including the Go fast path) through a persistent **spawn**-context (never `fork`) worker pool; a
+timed-out worker is killed and respawned, `parse_timeout_count` is exposed via
+`overview(what="metrics")`, and the timed-out file is logged by path-hash only (never the real path)
+and skipped for that pass only — never silently excluded from the language matrix. A guard test
+(`test_no_unbounded_parse.py`) bans any direct `get_parser(...).parse(` call outside
+`bounded_parse.py`. Workers never import the embedder — GPU-only doctrine is unaffected; overhead is
+indexing-time only. Guarded by `test_bounded_parse.py`.
+
 ## Extraction doctrine (P6, HR15–HR19, HR23)
 
 **No regex, no static/dynamic keyword list, no mapping table for code-semantic inference** — only
@@ -102,6 +126,16 @@ Token-frugality requirement for any new DeepSeek call site (stable prefix, batch
 context, feed
 `llm_token_stats()`): `docs/info-hierarchy.md` "Extraction / semantic-resolution ladder". Enforced by
 `src/tests/live/test_no_code_semantic_regex.py` + `model.yaml` P6.
+
+**`_provenance` (`bpre_generic.py`) is import- and type-provenance-aware, not just receiver-text
+(P6/HR15).** Beyond the original `_SCHEMES`-token receiver-text check, it now also resolves the
+receiver's def-use type binding (`build_type_use`, `valueflow.py`, gated on `_NEW_KINDS`) and its
+import-map-resolved module path (`_scan_imports`, `bpre_ast.py`, gated on a new `_IMPORT_KINDS`
+node-kind set in `bpre_spec.py`) against the same closed `_SCHEMES` set — generalizing Go's existing
+import check to every language. This closes typed-client idioms (`client = new HttpClient();
+client.GetAsync(...)`) with zero new library-name vocabulary. A bare library-name idiom with no
+scheme-bearing signal (`requests`/`axios` on a non-scheme absolute URL) still falls through to the
+DeepSeek escalate/whole-file residue tiers — recorded, never silently dropped.
 
 ## Public-release & device-neutrality invariants (P18, HR34)
 
