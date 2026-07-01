@@ -437,3 +437,47 @@ def test_scan_once_facts_match_per_file_scan(synth_fed):
             assert sf.grpc_clients == ff.grpc_clients, f"{path}: grpc_clients differ"
             assert sf.grpc_servers == ff.grpc_servers, f"{path}: grpc_servers differ"
             assert sf.http_clients == ff.http_clients, f"{path}: http_clients differ"
+
+
+def test_part_f_incremental_scan_reuses_unchanged_member_cache():
+    """Part F: editing one member re-scans only it (member_scan_cache); edge/process
+    counts stay identical to the prior full build — evidence for incremental BPRE."""
+    from pathlib import Path
+
+    from opencode_search.daemon.sweeps import _fingerprint_cache
+    from opencode_search.graph.llm import no_deepseek
+    from tests.live._bpre_fixture import build_synth_federation, teardown_synth_federation
+
+    fed = build_synth_federation()
+    try:
+        with no_deepseek():
+            reconstruct_processes(fed.root)
+        db = root_process_db(fed.root)
+        con = sqlite3.connect(str(db))
+        rows1 = dict(con.execute("SELECT member, sig FROM member_scan_cache").fetchall())
+        edges1 = con.execute("SELECT COUNT(*) FROM cross_service_edges").fetchone()[0]
+        procs1 = con.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+        con.close()
+        assert fed.cart in rows1 and fed.checkout in rows1, "both members must be cached"
+
+        import os
+
+        checkout_go = Path(fed.checkout) / "checkout.go"
+        checkout_go.write_text(checkout_go.read_text() + "\n// touched\n")
+        bumped = checkout_go.stat().st_mtime + 2  # fingerprint truncates to whole seconds
+        os.utime(checkout_go, (bumped, bumped))
+        _fingerprint_cache.pop(fed.checkout, None)  # simulate watcher on_change invalidation
+        with no_deepseek():
+            reconstruct_processes(fed.root)
+        con = sqlite3.connect(str(db))
+        rows2 = dict(con.execute("SELECT member, sig FROM member_scan_cache").fetchall())
+        edges2 = con.execute("SELECT COUNT(*) FROM cross_service_edges").fetchone()[0]
+        procs2 = con.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+        con.close()
+
+        assert rows2[fed.cart] == rows1[fed.cart], "cart re-scanned despite unchanged source"
+        assert rows2[fed.checkout] != rows1[fed.checkout], "checkout sig must change after edit"
+        assert edges2 == edges1, "edge count regressed under incremental rebuild"
+        assert procs2 == procs1, "process count regressed under incremental rebuild"
+    finally:
+        teardown_synth_federation(fed)

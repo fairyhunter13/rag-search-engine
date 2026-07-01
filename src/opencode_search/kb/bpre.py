@@ -11,6 +11,7 @@ suppressed when DEEPSEEK_API_KEY is absent.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -77,6 +78,9 @@ CREATE TABLE IF NOT EXISTS process_artifacts (
     mermaid TEXT DEFAULT '', bpmn_xml TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS member_scan_cache (
+    member TEXT PRIMARY KEY, sig TEXT NOT NULL, facts_json TEXT NOT NULL
+);
 """
 
 # ─── Tiny helpers ─────────────────────────────────────────────────────────────
@@ -218,12 +222,55 @@ def _iter_member_facts(member_path: str, member_facts, surf):
             yield str(src), ff
 
 
-def _scan_all_members(members: list[str], surf) -> dict:
-    """Scan every source file exactly once; return {member → {path → FileFacts}}."""
+def _member_scan_sig(member: str, algo: str) -> str:
+    """Per-member cache key: source content + extraction-logic version.
+
+    Must include `algo` (not just source) — a bpre_ast.py/bpre_spec.py change alters what
+    scan_file() extracts from unchanged source, so a source-only key would serve stale facts.
+    """
+    from opencode_search.daemon.sweeps import _source_fingerprint
+    return f"{algo}:{_source_fingerprint(member)}"
+
+
+def _member_scan_cache_get(con: sqlite3.Connection, member: str, sig: str) -> dict | None:
+    row = con.execute(
+        "SELECT facts_json FROM member_scan_cache WHERE member=? AND sig=?", (member, sig)
+    ).fetchone()
+    if not row:
+        return None
+    from opencode_search.kb.bpre_ast import FileFacts
+    try:
+        return {p: FileFacts(**d) for p, d in json.loads(row[0]).items()}
+    except Exception:
+        return None
+
+
+def _member_scan_cache_put(con: sqlite3.Connection, member: str, sig: str, facts: dict) -> None:
+    payload = json.dumps({p: dataclasses.asdict(ff) for p, ff in facts.items()})
+    con.execute("INSERT OR REPLACE INTO member_scan_cache VALUES (?,?,?)", (member, sig, payload))
+    con.commit()
+
+
+def _scan_all_members(
+    members: list[str], surf, con: sqlite3.Connection | None = None, algo: str = "",
+) -> dict:
+    """Scan every source file exactly once; return {member → {path → FileFacts}}.
+
+    Part F (incremental BPRE): when `con` is given, reuses a member's cached facts from
+    `member_scan_cache` iff its (algo, source) signature is unchanged — only members with
+    real source drift (or a bumped extraction algo) actually get tree-sitter re-parsed. Cross-
+    member edge resolution and process tracing still run federation-wide over the full result.
+    """
     from opencode_search.index.discover import detect_language
     from opencode_search.kb.bpre_ast import scan_file
     all_facts: dict = {}
     for member in members:
+        sig = _member_scan_sig(member, algo) if con is not None else None
+        cached = _member_scan_cache_get(con, member, sig) if con is not None else None
+        if cached is not None:
+            log.debug("bpre: reusing cached scan for %s (sig unchanged)", member)
+            all_facts[member] = cached
+            continue
         mf: dict = {}
         for src in _source_files(member):
             try:
@@ -234,6 +281,9 @@ def _scan_all_members(members: list[str], surf) -> dict:
             if ff:
                 mf[str(src)] = ff
         all_facts[member] = mf
+        if con is not None:
+            log.debug("bpre: scanning %s (%d files, cache miss)", member, len(mf))
+            _member_scan_cache_put(con, member, sig, mf)
     return all_facts
 
 
@@ -979,7 +1029,7 @@ def _reconstruct_processes_locked(
             try:
                 from opencode_search.kb.bpre_ast import federation_discover
                 surf = federation_discover(members)
-                all_facts = _scan_all_members(members, surf)
+                all_facts = _scan_all_members(members, surf, con=con, algo=algo)
                 for member in members:
                     _detect_entry_points(scon, member, surf, all_facts[member])
                 svc_registry = _build_service_registry(members, surf, all_facts)
