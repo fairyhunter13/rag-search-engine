@@ -144,16 +144,29 @@ mapping table may substitute for structural analysis of user code.
   Without a key: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI, plus a named debt registry
-  for the surviving keyword/mapping-table constructs (`bpre_spec._LANG_SPECS`/`_V`/`_GRP_SFXS`,
-  the generic-language fallback path) that may only shrink. **Protocol/framework codegen-contract
-  naming is ground truth, not debt (reclassified 2026-07-01)**: `bpre_ast.py`'s protoc
-  `New*Client`/`Register*Server`/`*Client`-receiver discovery is scoped to `.pb.go` codegen
-  output only and feeds a structural dict lookup at call sites; Spring's `*Mapping` annotation
-  vocabulary is paired with structural argument/route extraction; the PHP proto-bound `*Client`
-  check is gated on `cls_name[:-6] in s.proto_services` (an actually-discovered proto service).
-  None of these guess from surface text alone. `test_valueflow_dynamic.py`,
-  `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`, `test_deterministic_resolution.py`
-  prove the full ladder end-to-end (HR16–HR19 in Part 2).
+  for surviving keyword/mapping-table constructs — **empty as of 2026-07-01**. Its last entry,
+  `bpre_spec._LANG_SPECS`/`_DEFAULT_SPEC` (a 15-language HTTP method-name keyword table consumed
+  by the generic-language fallback path, `bpre_generic.scan_generic`/`bpre_paradigms.scan_paradigm`
+  for every language outside the five first-class bespoke extractors), was retired in favor of
+  **one universal structural classifier** covering all 299 tree-sitter code grammars by
+  construction: the URL-path anchor (unconditional), `_has_handler_arg` handler-shape
+  (route-vs-client, node-kind only), the closed `_V` HTTP-verb set, gRPC proto-binding
+  (`_GRP_SFXS` resolved against *discovered* `surface.proto_services`, regardless of method name),
+  and `_SCHEMES` — a closed RFC-grounded protocol/URI-scheme token set — as receiver-text
+  provenance for non-verb client idioms whose method name is neither a verb nor a proto binding
+  (C#'s `httpClient.GetAsync`, Elixir's `HTTPoison.get!`, Swift's `URLSession…dataTask`). One
+  honest, documented recall boundary remains: Spring's `RestTemplate.getForObject`/`exchange` is a
+  non-verb method on a non-`_SCHEMES`-named type, genuinely unresolvable without the forbidden
+  vocabulary, and correctly falls through to the residue ladder below — the Kotlin polyglot test
+  fixture was updated to a Ktor idiom (`client.get("/x")`) to keep exercising Kotlin client
+  detection structurally. **Protocol/framework codegen-contract naming is ground truth, not debt
+  (reclassified 2026-07-01)**: `bpre_ast.py`'s protoc `New*Client`/`Register*Server`/`*Client`-
+  receiver discovery is scoped to `.pb.go` codegen output only and feeds a structural dict lookup
+  at call sites; Spring's `*Mapping` annotation vocabulary is paired with structural argument/route
+  extraction; the PHP proto-bound `*Client` check and `_GRP_SFXS` are gated on
+  `cls_name[:-6] in s.proto_services` (an actually-discovered proto service), not a bare guess.
+  `test_valueflow_dynamic.py`, `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`,
+  `test_deterministic_resolution.py` prove the full ladder end-to-end (HR16–HR19 in Part 2).
 - **Token accounting (HR23)**: every DeepSeek call site in the ladder feeds
   `graph/llm.py::_accumulate_llm_tokens` so `llm_token_stats()`/`overview(what="metrics")` is a
   complete budget, not just narration. `kb/bpre.py::_llm_link_resolve` (Tier-2 edge linking) now

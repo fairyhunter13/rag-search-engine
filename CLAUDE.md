@@ -92,9 +92,14 @@ BPS1-BPS4 (docs-churn/hidden-dir-churn quiescence, real-code-drift rebuild, conv
 **No regex, no static/dynamic keyword list, no mapping table for code-semantic inference** — only
 tree-sitter structure and, for genuine residual ambiguity, a capped/cached/batched DeepSeek call
 (SEA select-not-author). Applies to Category A (`kb/bpre*.py`, `kb/patterns.py`,
-`server/_overview.py`); node-kind maps and infra/config ground-truth are exempt. Full 5-tier ladder
-+ Category A/B enumeration: `docs/architecture/federation-and-search-engine.md` §7a. Token-frugality
-requirement for any new DeepSeek call site (stable prefix, batch, cap, structural context, feed
+`server/_overview.py`); node-kind maps and infra/config ground-truth are exempt. **The debt
+registry is empty (2026-07-01)**: the last per-language HTTP method-name table
+(`bpre_spec._LANG_SPECS`) was retired for ONE universal structural classifier (URL-anchor +
+handler-shape + `_V` verb ground-truth + gRPC proto-binding + `_SCHEMES` receiver-text provenance)
+covering all 299 tree-sitter code grammars — see `bpre_generic.py`/`bpre_paradigms.py`. Full
+5-tier ladder + Category A/B enumeration: `docs/architecture/federation-and-search-engine.md` §7a.
+Token-frugality requirement for any new DeepSeek call site (stable prefix, batch, cap, structural
+context, feed
 `llm_token_stats()`): `docs/info-hierarchy.md` "Extraction / semantic-resolution ladder". Enforced by
 `src/tests/live/test_no_code_semantic_regex.py` + `model.yaml` P6.
 
