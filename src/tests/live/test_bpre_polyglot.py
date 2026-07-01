@@ -49,9 +49,9 @@ _LANG_SNIPPETS: dict[str, tuple[str, str]] = {
         'fn f(){let c=reqwest::blocking::Client::new();c.get("/api/items").send().unwrap();}',
         "rust",
     ),
-    "c_sharp": (
+    "csharp": (
         'class C{async Task M(){await http.GetAsync("/api/items");}}',
-        "c_sharp",
+        "csharp",
     ),
     "kotlin": (
         'fun f(){restTemplate.getForObject("/api/items",String::class.java)}',

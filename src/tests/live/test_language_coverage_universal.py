@@ -19,7 +19,7 @@ pytestmark = pytest.mark.live
 
 # 20-language cross-paradigm probe set — C-family, JVM, scripting, functional, systems.
 # Each entry: (tree-sitter language name, file-extension hint, minimal valid snippet).
-# All 20 are present in tree-sitter-language-pack >=1.9.1.
+# All 20 are present in tree-sitter-language-pack >=1.9.1 (c_sharp renamed "csharp" in 1.12.1).
 _LANG_PROBES: list[tuple[str, str, str]] = [
     ("go",         "go",    "package main\nfunc Hello() {}\n"),
     ("python",     "py",    "def hello():\n    pass\n"),
@@ -28,7 +28,7 @@ _LANG_PROBES: list[tuple[str, str, str]] = [
     ("php",        "php",   "<?php\nfunction hello() {}\n"),
     ("ruby",       "rb",    "def hello\nend\n"),
     ("rust",       "rs",    "fn hello() {}\n"),
-    ("c_sharp",    "cs",    "class C { void Hello() {} }\n"),
+    ("csharp",     "cs",    "class C { void Hello() {} }\n"),
     ("kotlin",     "kt",    "fun hello() {}\n"),
     ("scala",      "scala", "object S { def hello(): Unit = {} }\n"),
     ("swift",      "swift", "func hello() {}\n"),
