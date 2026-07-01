@@ -15,6 +15,11 @@ _NOT_CALL=frozenset({"call_suffix"})
 def _is_call(k):return k in _CALL_KINDS or(("call" in k or "invocation" in k)and k not in _NOT_CALL)
 _NEW_KINDS=frozenset({"object_creation_expression","new_expression","instance_creation_expression","class_instance_creation_expression","constructor_invocation"})
 _PARADIGM_KINDS=frozenset({"list_lit","apply","exp_apply","message_expression","command"})
+# Structural handler-shape node kinds (function/closure/lambda/block passed as or attached to
+# a call) — the route-registration-vs-client-call discriminator. Node-kind map, HR15-exempt,
+# same class as _CALL_KINDS/_NEW_KINDS/_PARADIGM_KINDS above (empirically verified per-grammar
+# via tree-sitter-language-pack 1.12.1, not guessed).
+_HANDLER_KINDS=frozenset({"do_block","lambda_expression","lambda_literal","closure_expression","block","anonymous_subroutine_expression","function_definition"})
 _FIRST_CLASS=frozenset({"go","python","typescript","javascript","php"})
 _GRP_SFXS=("ServiceClient","BlockingStub","FutureStub","AsyncStub","Stub","Client","Grpc")
 _LANG_SPECS:dict[str,_Spec]={
