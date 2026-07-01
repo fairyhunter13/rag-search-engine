@@ -171,13 +171,25 @@ def _narrative_incomplete(con: sqlite3.Connection) -> bool:
 def _source_files(member_path: str) -> list[Path]:
     from opencode_search.core.config import IGNORED_DIRS
     from opencode_search.core.index_config import effective_config, is_excluded
+    from opencode_search.core.registry import get_project
     from opencode_search.index.discover import detect_language, is_code_language
     root = Path(member_path)
     cfg = effective_config(root)
+    entry = get_project(member_path)
+    # Monorepo-style federations nest member subdirectories inside the root's own tree
+    # (see expand_federation, which scans root + members). Exclude sibling members here so
+    # the root's own scan doesn't re-walk them and misattribute their facts to the root's
+    # service label via _build_service_registry's first-wins setdefault.
+    nested_members = {
+        Path(m).resolve() for m in (entry.federation if entry and entry.federation else [])
+    }
     out: list[Path] = []
     try:
         for dirpath, dirs, files in os.walk(str(root)):
-            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+            dirs[:] = [
+                d for d in dirs
+                if d not in IGNORED_DIRS and (Path(dirpath) / d).resolve() not in nested_members
+            ]
             for f in files:
                 p = Path(dirpath) / f
                 if (is_code_language(detect_language(p))

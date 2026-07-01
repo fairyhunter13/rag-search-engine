@@ -1,0 +1,7 @@
+{
+  "_comment": "Hand-authored reference cross-service edges for the synthetic shop-federation fixture (src/tests/fixtures/sample_projects/shop-federation). Derived by reading source directly: checkout-svc calls cart.NewCartServiceClient (checkout.go:54, pipeline.go:41,70) and promo.NewPromoServiceClient (checkout.go:99, pipeline.go:103); cart-svc and promo-svc are pure callees (RegisterCartServiceServer / RegisterPromoServiceServer only, no outbound calls). No pubsub or cross-service HTTP calls exist in the fixture. Edges are deduped by (caller_service, callee_service, kind) — multiple call sites for the same pair count once.",
+  "edges": [
+    {"caller_service": "checkout-svc", "callee_service": "cart-svc", "kind": "grpc"},
+    {"caller_service": "checkout-svc", "callee_service": "promo-svc", "kind": "grpc"}
+  ]
+}
