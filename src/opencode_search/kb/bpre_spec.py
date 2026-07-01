@@ -26,6 +26,13 @@ _PARADIGM_KINDS=frozenset({"list_lit","apply","exp_apply","message_expression","
 _HANDLER_KINDS=frozenset({"do_block","lambda_expression","lambda_literal","closure_expression","block","anonymous_subroutine_expression","function_definition"})
 _FIRST_CLASS=frozenset({"go","python","typescript","javascript","php"})
 _GRP_SFXS=("ServiceClient","BlockingStub","FutureStub","AsyncStub","Stub","Client","Grpc")
+# Closed protocol/URI-scheme vocabulary (ground truth, same class as _V above — not a library-
+# name guess list). Each token is a standards-bound protocol/URI noun: http/https (RFC 7230),
+# ws/wss (RFC 6455), url/uri (RFC 3986), grpc (the gRPC wire protocol). Used by
+# bpre_generic._provenance as the universal non-verb HTTP-client discriminator (P6/HR15 Part B):
+# generalizes the already-accepted Go check `"http" in import_path` (bpre_ast.py) from Go's
+# import-alias text to every language's call-receiver text.
+_SCHEMES=frozenset({"http","https","ws","wss","grpc","url","uri"})
 _LANG_SPECS:dict[str,_Spec]={
     "ruby":_Spec(cli=frozenset({"request","perform","execute"}),rte=frozenset({"route","resources","match","root","scope"}),grp=frozenset({"new"}),structural=True),
     "csharp":_Spec(cli=frozenset({"getasync","postasync","putasync","patchasync","deleteasync","sendasync","getstringasync","getfromjsonasync","postasjsonasync","send","getforobject","exchange","getstring"}),rte=frozenset({"mapget","mappost","mapput","mappatch","mapdelete","map"}),dec=frozenset({"httpget","httppost","httpput","httppatch","httpdelete","route"}),grp=frozenset({"new","create"})),

@@ -258,3 +258,26 @@ def test_has_handler_arg_discriminates_route_vs_client(lang: str) -> None:
     assert client_call is not None, f"{lang}: no call node found in client snippet"
     assert _has_handler_arg(route_call) is True, f"{lang}: expected handler-shape arg in {route_src!r}"
     assert _has_handler_arg(client_call) is False, f"{lang}: unexpected handler-shape arg in {client_src!r}"
+
+
+# P6/HR15 Part B.3: _provenance is the universal non-verb HTTP-client discriminator that will
+# let the universal classifier (Part B.4) resolve calls like C#'s `httpClient.GetAsync(...)` or
+# Elixir's `HTTPoison.get!(...)` — whose method name is neither a verb nor a proto-binding —
+# without any per-language keyword table (pure closed-vocabulary _SCHEMES substring match).
+@pytest.mark.parametrize(
+    "receiver,expected",
+    [
+        ("http", True),           # Dart/Go-style bare alias
+        ("httpClient", True),     # C# idiomatic HttpClient field name
+        ("HTTPoison", True),      # Elixir HTTP client module (case-insensitive)
+        ("URLSession", True),     # Swift (matches "url")
+        ("grpcClient", True),     # gRPC-scheme receiver
+        ("client", False),        # generic, no scheme token
+        ("os", False),            # unrelated stdlib receiver
+        (None, False),            # no receiver at all (bare function call)
+    ],
+)
+def test_provenance_discriminates_scheme_receivers(receiver: str | None, expected: bool) -> None:
+    """_provenance(receiver) is the closed-_SCHEMES-vocabulary structural client discriminator."""
+    from opencode_search.kb.bpre_generic import _provenance
+    assert _provenance(receiver) is expected, f"receiver={receiver!r}"
