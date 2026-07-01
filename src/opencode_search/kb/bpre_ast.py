@@ -131,14 +131,58 @@ def _discover_proto_services(members:list[str],surf:ApiSurface)->None:
                             if svc:surf.proto_services.add(svc)
                 except OSError:pass
 
+def _scan_pb_go_file(fp_str:str)->dict:
+    """Worker-executed (bounded_parse): parse one .pb.go file, return picklable contributions."""
+    out={"constructors":{},"registrars":{},"methods":{},"proto_import_paths":[],"pubsub_import_paths":[]}
+    try:
+        c=Path(fp_str).read_text(errors="replace");root=_ts_api.get_parser("go").parse(c).root_node()
+    except Exception:
+        return out
+    b=c.encode("utf-8","replace")
+    for i in range(root.named_child_count()):
+        nd=root.named_child(i)
+        if nd.kind()=="function_declaration":
+            nn=nd.child_by_field_name("name")
+            if nn:
+                fn=_t(nn,b)
+                if fn.startswith("New") and fn.endswith("Client"):
+                    sv=_ss(fn,"New","Client")
+                    if sv:out["constructors"][fn]=sv
+                elif fn.startswith("Register") and fn.endswith("Server"):
+                    sv=_ss(fn,"Register","Server")
+                    if sv:out["registrars"][fn]=sv
+        elif nd.kind()=="method_declaration":
+            recv=nd.child_by_field_name("receiver");nm=nd.child_by_field_name("name")
+            if recv and nm:
+                fn=_t(nm,b)
+                if fn and fn[0].isupper():
+                    for ri in range(recv.named_child_count()):
+                        rp=recv.named_child(ri)
+                        if rp.kind()!="parameter_declaration":continue
+                        for ti in range(rp.named_child_count()):
+                            tp=rp.named_child(ti);actual=tp
+                            if tp.kind()=="pointer_type" and tp.named_child_count()>0:actual=tp.named_child(0)
+                            if actual.kind() in("type_identifier","identifier"):
+                                rt=_t(actual,b)
+                                if rt.endswith("Client") and len(rt)>6 and len(fn)>=9:
+                                    sv=rt[:-6];out["methods"].setdefault(fn,sv[0].upper()+sv[1:])
+        elif nd.kind()=="import_declaration":
+            for j in range(nd.named_child_count()):
+                sp=nd.named_child(j)
+                if sp.kind()!="import_spec":continue
+                pn=sp.child_by_field_name("path")
+                if not pn:continue
+                p=_t(pn,b).strip("\"'`");out["proto_import_paths"].append(p)
+                if "pubsub" in p:out["pubsub_import_paths"].append(p)
+    return out
+
 def federation_discover(members:list[str])->ApiSurface:
     surf=ApiSurface()
     _discover_proto_services(members,surf)
     if not _ts_has_language("go"):return surf
-    try:parser=_ts_api.get_parser("go")
-    except Exception as e:log.warning("bpre_ast A: %s",e);return surf
     from opencode_search.core.config import IGNORED_DIRS
     from opencode_search.core.index_config import effective_config, is_excluded
+    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     for member in members:
         _mcfg=effective_config(Path(member))
         for dp,dirs,fs in os.walk(member):
@@ -147,44 +191,13 @@ def federation_discover(members:list[str])->ApiSurface:
                 if not fname.endswith(".pb.go"):continue
                 _fp=Path(dp)/fname
                 if _mcfg.exclude and is_excluded(_fp,_mcfg.exclude,Path(member)):continue
-                try:c=_fp.read_text(errors="replace");root=parser.parse(c).root_node()
-                except Exception:continue
-                b=c.encode("utf-8","replace")
-                for i in range(root.named_child_count()):
-                    nd=root.named_child(i)
-                    if nd.kind()=="function_declaration":
-                        nn=nd.child_by_field_name("name")
-                        if nn:
-                            fn=_t(nn,b)
-                            if fn.startswith("New") and fn.endswith("Client"):
-                                sv=_ss(fn,"New","Client")
-                                if sv:surf.constructors[fn]=sv
-                            elif fn.startswith("Register") and fn.endswith("Server"):
-                                sv=_ss(fn,"Register","Server")
-                                if sv:surf.registrars[fn]=sv
-                    elif nd.kind()=="method_declaration":
-                        recv=nd.child_by_field_name("receiver");nm=nd.child_by_field_name("name")
-                        if recv and nm:
-                            fn=_t(nm,b)
-                            if fn and fn[0].isupper():
-                                for ri in range(recv.named_child_count()):
-                                    rp=recv.named_child(ri)
-                                    if rp.kind()!="parameter_declaration":continue
-                                    for ti in range(rp.named_child_count()):
-                                        tp=rp.named_child(ti);actual=tp
-                                        if tp.kind()=="pointer_type" and tp.named_child_count()>0:actual=tp.named_child(0)
-                                        if actual.kind() in("type_identifier","identifier"):
-                                            rt=_t(actual,b)
-                                            if rt.endswith("Client") and len(rt)>6 and len(fn)>=9:
-                                                sv=rt[:-6];surf.methods.setdefault(fn,sv[0].upper()+sv[1:])
-                    elif nd.kind()=="import_declaration":
-                        for j in range(nd.named_child_count()):
-                            sp=nd.named_child(j)
-                            if sp.kind()!="import_spec":continue
-                            pn=sp.child_by_field_name("path")
-                            if not pn:continue
-                            p=_t(pn,b).strip("\"'`");surf.proto_import_paths.add(p)
-                            if "pubsub" in p:surf.pubsub_import_paths.add(p)
+                contrib=run_bounded(_scan_pb_go_file,(str(_fp),),path_for_log=str(_fp))
+                if not contrib or contrib==PARSE_TIMEOUT:continue
+                surf.constructors.update(contrib["constructors"])
+                surf.registrars.update(contrib["registrars"])
+                surf.methods.update(contrib["methods"])
+                surf.proto_import_paths.update(contrib["proto_import_paths"])
+                surf.pubsub_import_paths.update(contrib["pubsub_import_paths"])
     log.debug("bpre_ast A: %d ctors %d regs",len(surf.constructors),len(surf.registrars));return surf
 def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
     if not _ts_has_language(lang):return None
