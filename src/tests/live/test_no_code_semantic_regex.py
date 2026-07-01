@@ -2,7 +2,7 @@
 
 Category-A sites (eliminated — must stay regex-free):
   kb/bpre.py, kb/bpre_ast.py         — structural BPRE detection
-  kb/bpre_spec.py                     — tree-sitter node-kind maps + closed HTTP-verb set (ground truth)
+  kb/bpre_spec.py                     — tree-sitter node-kind maps + closed HTTP-verb/scheme sets (ground truth)
   kb/bpre_generic.py, kb/bpre_paradigms.py — generic/paradigm HTTP client-vs-route classification
   kb/patterns.py                      — framework labelling (now LLM)
   server/_overview.py                 — service detection (now bpre_ast Pass A)
@@ -15,17 +15,25 @@ Category-B sites (intrinsic mechanism — explicitly exempt):
 
 HR15 bans regex AND static/dynamic keyword-list / mapping-table heuristics for semantic
 inference (surface-text guessing). Closed protocol vocabularies (e.g. the fixed HTTP method
-set `bpre_spec._V`), tree-sitter node-kind maps (`_CALL_KINDS`/`_NEW_KINDS`/etc.), and
-protocol/framework codegen-contract naming bound to structural facts are ground truth, not
-heuristics, and are allowed — e.g. `bpre_ast.py`'s protoc `New*Client`/`Register*Server`/
-`*Client`-receiver discovery (scoped to `.pb.go` codegen output only, feeding a structural
-dict lookup at call sites) and Spring's `*Mapping` annotation vocabulary (paired with
-structural argument/route extraction), plus the PHP `*Client` constructor check gated on
-`cls_name[:-6] in s.proto_services` (an actual discovered proto service, not a guess).
-`_SEMANTIC_HEURISTIC_DEBT` below pins the *known* surviving name-matching heuristics not yet
-bound to structure (e.g. `_LANG_SPECS` per-language method-name tables used by the generic
-fallback path) — it may only shrink as Part-3 structure-first migrations land; a new,
-unlisted heuristic is a regression.
+set `bpre_spec._V` and the protocol/URI-scheme set `bpre_spec._SCHEMES`), tree-sitter
+node-kind maps (`_CALL_KINDS`/`_NEW_KINDS`/`_HANDLER_KINDS`/etc.), and protocol/framework
+codegen-contract naming bound to structural facts are ground truth, not heuristics, and are
+allowed — e.g. `bpre_ast.py`'s protoc `New*Client`/`Register*Server`/`*Client`-receiver
+discovery (scoped to `.pb.go` codegen output only, feeding a structural dict lookup at call
+sites) and Spring's `*Mapping` annotation vocabulary (paired with structural argument/route
+extraction), the PHP `*Client` constructor check gated on `cls_name[:-6] in s.proto_services`
+(an actual discovered proto service, not a guess), and `_GRP_SFXS` (gRPC codegen-contract
+suffixes, likewise gated on a discovered `proto_services` match, not a bare guess).
+
+`_SEMANTIC_HEURISTIC_DEBT` below is now **empty** (2026-07-01): the last surviving entry,
+`bpre_spec._LANG_SPECS`/`_DEFAULT_SPEC` (15 per-language method-name keyword tables consumed
+by the generic fallback path for every non-first-class language), was retired in favor of ONE
+universal structural classifier — URL-path anchor + `_has_handler_arg` handler-shape + `_V`
+verb ground-truth + gRPC proto-binding (`_GRP_SFXS` against discovered `proto_services`) +
+`_SCHEMES` receiver-text provenance for non-verb client idioms (C# `GetAsync`, Elixir `get!`,
+Swift `dataTask`, …) — covering all 299 tree-sitter *code* grammars by construction, not by
+per-language enumeration. BPRE's Category-A modules are now fully structural/ground-truth; the
+registry may only ever shrink from here — a new, unlisted heuristic is a regression.
 """
 from __future__ import annotations
 
@@ -55,12 +63,13 @@ _CATEGORY_A = [
 # a heuristic must delete its entry here — the registry only shrinks, never grows.
 #
 # bpre_ast.py's protoc/Spring codegen-contract naming (New*Client/Register*Server/*Mapping/
-# proto-bound *Client) was reclassified 2026-07-01 as ground truth, not debt — see the module
-# docstring above — because each site is scoped to codegen output or paired with a structural
-# fact (proto_services / .pb.go discovery), not a bare surface-text guess.
-_SEMANTIC_HEURISTIC_DEBT: dict[str, tuple[str, ...]] = {
-    "opencode_search.kb.bpre_spec": ("_LANG_SPECS", "_GRP_SFXS", "_DEFAULT_SPEC"),
-}
+# proto-bound *Client) and bpre_spec.py's _GRP_SFXS were reclassified 2026-07-01 as ground
+# truth, not debt — see the module docstring above — because each site is scoped to codegen
+# output or paired with a structural fact (proto_services / .pb.go discovery), not a bare
+# surface-text guess. The last true entry, `_LANG_SPECS`/`_DEFAULT_SPEC` (per-language HTTP
+# method-name tables), was retired the same day by the universal structural classifier
+# (bpre_generic.py/bpre_paradigms.py) — the registry is now empty.
+_SEMANTIC_HEURISTIC_DEBT: dict[str, tuple[str, ...]] = {}
 
 _CATEGORY_B_ALLOWLIST = {
     "opencode_search.graph.extractor",
@@ -140,9 +149,10 @@ def test_semantic_heuristic_debt_registry_is_accurate() -> None:
 def test_no_new_semantic_heuristics_beyond_debt_registry() -> None:
     """bpre_generic.py / bpre_paradigms.py must not grow their own name-matching tables.
 
-    They currently classify via the shared bpre_spec._Spec (cli/rte/dec/grp) — any new
-    per-module keyword table is an unlisted heuristic and must route through structural
-    resolution + the residue ladder (resolve_rerank -> llm_escalation) instead.
+    They classify via the universal structural signals (URL-anchor, _has_handler_arg,
+    _V, _GRP_SFXS/proto_services, _SCHEMES provenance) — any new per-module keyword table
+    is an unlisted heuristic and must route through structural resolution + the residue
+    ladder (resolve_rerank -> llm_escalation) instead.
     """
     for mod_name in ("opencode_search.kb.bpre_generic", "opencode_search.kb.bpre_paradigms"):
         src = _source(mod_name)

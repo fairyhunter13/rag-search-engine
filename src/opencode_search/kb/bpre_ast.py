@@ -11,7 +11,7 @@ from pathlib import Path
 log=logging.getLogger(__name__)
 from tree_sitter_language_pack import has_language as _ts_has_language, api as _ts_api
 from opencode_search.kb.valueflow import build_def_use, resolve_first_arg, _t as _vt
-from opencode_search.kb.bpre_spec import _LANG_SPECS, _DEFAULT_SPEC, _FIRST_CLASS
+from opencode_search.kb.bpre_spec import _FIRST_CLASS
 from opencode_search.kb.bpre_generic import scan_generic
 @dataclass
 class FileFacts:
@@ -318,5 +318,5 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         f.grpc_clients.append(("",cls_name[:-6],f"new {cls_name}",ln))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     if lang not in _FIRST_CLASS:
-        scan_generic(root, b, f, s, du, _LANG_SPECS.get(lang, _DEFAULT_SPEC))
+        scan_generic(root, b, f, s, du)
     return f

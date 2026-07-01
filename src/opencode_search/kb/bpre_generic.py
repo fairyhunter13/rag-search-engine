@@ -61,8 +61,22 @@ def _cp(n,b):
         if s in t:p=t.rsplit(s,1);return p[0].strip(),p[1].strip()
     return None,t
 
-def scan_generic(root,b,f,surface,du,spec):
-    """Grammar-agnostic BPRE scanner driven by a _Spec (non-first-class languages)."""
+def scan_generic(root,b,f,surface,du):
+    """Grammar-agnostic BPRE scanner for every non-first-class language (P6/HR15 Part B): a
+    single universal structural classifier, no per-language method-name table. Four signals,
+    all structural or closed ground-truth vocabulary:
+      1. URL-path anchor  — first '/'-prefixed string arg (_fs), extracted unconditionally.
+      2. Handler-shape    — _has_handler_arg: function/closure/lambda/block arg => route
+                             registration; none => plain call (client).
+      3. _V verb ground-truth — method name (or a positional (verb,path) pair) in the fixed
+                             HTTP-verb set.
+      4. gRPC proto-binding — receiver (or bare constructor name) resolves via _gsv() against
+                             surface.proto_services (a *discovered* service) => gRPC client,
+                             regardless of method name.
+    Non-verb, non-proto client idioms (C# GetAsync, Elixir get!, Swift dataTask, …) resolve via
+    _provenance: the receiver's own text carries a _SCHEMES protocol token. Anything left over
+    (non-verb, no provenance, no handler shape) is genuine residual ambiguity — left unclassified
+    here for the existing residue ladder (kb/resolve_rerank.py -> kb/llm_escalation.py)."""
     from opencode_search.kb.bpre_paradigms import scan_paradigm
     ps=surface.proto_services;stk=[root]
     while stk:
@@ -71,35 +85,35 @@ def scan_generic(root,b,f,surface,du,spec):
             tn=n.child_by_field_name("type") or n.child_by_field_name("class") or (n.named_child(0) if n.named_child_count()>0 else None)
             if tn and _gsv(_vt(tn,b),ps):f.grpc_clients.append(("",_gsv(_vt(tn,b),ps),f"new {_vt(tn,b)}",ln))
         elif k in _PARADIGM_KINDS:
-            scan_paradigm(n,b,f,surface,du,spec);stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
+            scan_paradigm(n,b,f,surface,du);stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
         elif _is_call(k):
             rc,meth=_cp(n,b)
             if not meth:stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
             ml=meth.lower();sv=_gsv(rc,ps) if rc else None
-            if sv and ml in spec.grp:f.grpc_clients.append(("",sv,f"{rc}.{meth}",ln));stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
+            if sv:f.grpc_clients.append(("",sv,f"{rc}.{meth}",ln));stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
             if not rc and meth[:1].isupper() and _gsv(meth,ps):f.grpc_clients.append(("",_gsv(meth,ps),meth,ln));stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
-            p=(_fs(n,b,du) or "") if ml in _V or ml in spec.cli or ml in spec.rte else ""
-            if ml in _V and p.startswith("/"):
-                is_route=_has_handler_arg(n) if spec.structural else not rc
-                (f.http_routes if is_route else f.http_clients).append((ml.upper(),p,ln))
-            elif rc and ml in spec.cli:
-                a=_ao(n)
-                if a and a.named_child_count()>=2 and ml in("request","send","execute","perform"):
-                    v2=_first_str(a.named_child(0),b) or "";p2=_first_str(a.named_child(1),b) or ""
-                    if v2.upper() in{"GET","POST","PUT","PATCH","DELETE"} and p2.startswith("/"):f.http_clients.append((v2.upper(),p2,ln));stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
-                if p.startswith("/"):f.http_clients.append(("GET",p,ln))
-            elif ml in spec.rte and p.startswith("/"):f.http_routes.append(("ANY",p,ln))
-        elif k in("annotation","attribute","attribute_item","meta","meta_item") and spec.dec:
-            nm=n.child_by_field_name("name")
-            if nm:
-                ann=_vt(nm,b).lower()
-                if ann in spec.dec:
-                    an=n.child_by_field_name("arguments");p=(_first_str(an.named_child(0),b) if an and an.named_child_count()>0 else None) or ""
-                    if p.startswith("/"):f.http_routes.append((next((v for v in("get","post","put","patch","delete") if v in ann),"any").upper(),p,ln))
+            a=_ao(n)
+            if a and a.named_child_count()>=2:
+                v2=_first_str(a.named_child(0),b) or "";p2=_first_str(a.named_child(1),b) or ""
+                if v2.lower() in _V and p2.startswith("/"):
+                    (f.http_routes if _has_handler_arg(n) else f.http_clients).append((v2.upper(),p2,ln))
+                    stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
+            p=_fs(n,b,du) or ""
+            if p.startswith("/"):
+                if ml in _V:(f.http_routes if _has_handler_arg(n) else f.http_clients).append((ml.upper(),p,ln))
+                elif _has_handler_arg(n):f.http_routes.append(("ANY",p,ln))
+                elif rc and _provenance(rc):f.http_clients.append(("GET",p,ln))
+        elif k in("annotation","attribute","attribute_item","meta","meta_item"):
+            an=n.child_by_field_name("arguments")
+            p=(_first_str(an.named_child(0),b) if an and an.named_child_count()>0 else None) or ""
+            if p.startswith("/"):
+                nm=n.child_by_field_name("name");ann=_vt(nm,b).lower() if nm else ""
+                verb=next((v for v in _V if v in ann),"any").upper()
+                f.http_routes.append((verb,p,ln))
             inner=n.named_child(0) if n.named_child_count()>0 else None
             if inner and inner.kind() in _CALL_KINDS:
                 _,m2=_cp(inner,b)
-                if m2 and m2.lower() in spec.dec:
-                    p=_fs(inner,b,du) or ""
-                    if p.startswith("/"):f.http_routes.append((m2.lower().upper() if m2.lower() in _V else "ANY",p,ln))
+                if m2:
+                    p2=_fs(inner,b,du) or ""
+                    if p2.startswith("/"):f.http_routes.append((m2.lower().upper() if m2.lower() in _V else "ANY",p2,ln))
         stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))

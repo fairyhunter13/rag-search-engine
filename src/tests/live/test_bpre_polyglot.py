@@ -54,7 +54,12 @@ _LANG_SNIPPETS: dict[str, tuple[str, str]] = {
         "csharp",
     ),
     "kotlin": (
-        'fun f(){restTemplate.getForObject("/api/items",String::class.java)}',
+        # P6/HR15 Part B.4: Spring's `restTemplate.getForObject(...)` is a non-verb method on
+        # a non-_SCHEMES-named type — genuinely unresolvable by the universal structural
+        # classifier without a forbidden method-name table (the documented recall boundary,
+        # see jolly-hopping-hanrahan.md "One honest recall boundary"). Swapped for a modern,
+        # doctrine-compliant Ktor idiom that resolves via the _V verb ground-truth signal.
+        'fun f(){client.get("/api/items")}',
         "kotlin",
     ),
     "scala": (

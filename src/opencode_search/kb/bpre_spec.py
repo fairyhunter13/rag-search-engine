@@ -1,17 +1,12 @@
-"""Declarative per-language spec registry for BPRE generic engine."""
-from __future__ import annotations
-from dataclasses import dataclass
+"""Structural node-kind + ground-truth protocol vocabularies shared by the BPRE generic engine.
 
-@dataclass(frozen=True)
-class _Spec:
-    cli:frozenset=frozenset()
-    rte:frozenset=frozenset()
-    dec:frozenset=frozenset()
-    grp:frozenset=frozenset()
-    # Opt-in switch (not a vocabulary): once True, scan_generic's verb-call route-vs-client
-    # decision uses the structural handler-shape discriminator (_has_handler_arg) instead of
-    # receiver-truthiness. Per-language staged migration off cli/rte name-matching (P6/HR15).
-    structural:bool=False
+P6/HR15 Part B (universal classifier): the per-language `_LANG_SPECS` method-name keyword tables
+that used to live here were the last `_SEMANTIC_HEURISTIC_DEBT` entry. They have been retired —
+every non-first-class language now classifies via the same four structural/ground-truth signals
+(URL-path anchor, `_has_handler_arg` handler-shape, `_V` verb ground-truth, gRPC proto-binding via
+`_GRP_SFXS` + discovered `proto_services`) plus `_SCHEMES` receiver-text provenance for non-verb
+client idioms. See `bpre_generic.py`/`bpre_paradigms.py`."""
+from __future__ import annotations
 
 _V=frozenset({"get","post","put","patch","delete","head","options"})
 _CALL_KINDS=frozenset({"call","call_expression","invocation_expression","method_invocation","function_call_expression","member_call_expression","scoped_call_expression","application","method_call","send","funcall","method_call_expression"})
@@ -25,6 +20,10 @@ _PARADIGM_KINDS=frozenset({"list_lit","apply","exp_apply","message_expression","
 # via tree-sitter-language-pack 1.12.1, not guessed).
 _HANDLER_KINDS=frozenset({"do_block","lambda_expression","lambda_literal","closure_expression","block","anonymous_subroutine_expression","function_definition"})
 _FIRST_CLASS=frozenset({"go","python","typescript","javascript","php"})
+# gRPC codegen-contract suffix set — ground truth (not a library guess): a call whose receiver
+# text, stripped of one of these suffixes, names a service *discovered* elsewhere in the same
+# federation (surface.proto_services) is a gRPC client/stub by construction, regardless of method
+# name. Same class as the already-accepted Go `New*Client` / PHP `*Client` binding.
 _GRP_SFXS=("ServiceClient","BlockingStub","FutureStub","AsyncStub","Stub","Client","Grpc")
 # Closed protocol/URI-scheme vocabulary (ground truth, same class as _V above — not a library-
 # name guess list). Each token is a standards-bound protocol/URI noun: http/https (RFC 7230),
@@ -33,21 +32,3 @@ _GRP_SFXS=("ServiceClient","BlockingStub","FutureStub","AsyncStub","Stub","Clien
 # generalizes the already-accepted Go check `"http" in import_path` (bpre_ast.py) from Go's
 # import-alias text to every language's call-receiver text.
 _SCHEMES=frozenset({"http","https","ws","wss","grpc","url","uri"})
-_LANG_SPECS:dict[str,_Spec]={
-    "ruby":_Spec(cli=frozenset({"request","perform","execute"}),rte=frozenset({"route","resources","match","root","scope"}),grp=frozenset({"new"}),structural=True),
-    "csharp":_Spec(cli=frozenset({"getasync","postasync","putasync","patchasync","deleteasync","sendasync","getstringasync","getfromjsonasync","postasjsonasync","send","getforobject","exchange","getstring"}),rte=frozenset({"mapget","mappost","mapput","mappatch","mapdelete","map"}),dec=frozenset({"httpget","httppost","httpput","httppatch","httpdelete","route"}),grp=frozenset({"new","create"})),
-    "rust":_Spec(cli=frozenset({"request","execute","send","fetch","call","text","json"}),rte=frozenset({"route","nest","on","handle"}),dec=_V|frozenset({"route","any"}),grp=frozenset({"new","connect","new_client","with_origin"})),
-    "elixir":_Spec(cli=frozenset({"request","call","send_request","request!","get!","post!","put!","patch!","delete!"}),rte=frozenset({"resources","scope","match","live","forward","pipe_through"}),grp=frozenset({"new","channel","stub","connect"})),
-    "java":_Spec(cli=frozenset({"getforobject","getforentity","postforobject","postforentity","exchange","retrieve","send","getstring"}),dec=frozenset({"getmapping","postmapping","putmapping","patchmapping","deletemapping","requestmapping"}),grp=frozenset({"newblockingstub","newstub","newfuturestub","create"})),
-    "kotlin":_Spec(cli=frozenset({"getforobject","getforentity","postforobject","exchange","retrieve","send","fetch"}),dec=frozenset({"getmapping","postmapping","putmapping","patchmapping","deletemapping","requestmapping"}),grp=frozenset({"newblockingstub","newstub","newfuturestub","new"})),
-    "scala":_Spec(cli=frozenset({"request","send","execute","run","ask","singlerequest"}),rte=frozenset({"route","path","concat","nest","prefix"}),grp=frozenset({"newblockingstub","newstub","apply","new","stub"})),
-    "swift":_Spec(cli=frozenset({"data","datatask","upload","request","send","perform","download","response"}),rte=frozenset({"on","group","grouped","middleware"}),dec=_V|frozenset({"route"}),grp=frozenset({"init","create","makeclient"})),
-    "dart":_Spec(cli=frozenset({"request","send","read","fetch","call"}),rte=frozenset({"route","add","mount","handler"}),grp=frozenset({"new","create","connect"})),
-    "cpp":_Spec(cli=frozenset({"send","execute","perform","getasync","postasync","sendasync","request"}),rte=frozenset({"route","addroute","sethandler"}),grp=frozenset({"newstub","create","new_stub","make_stub"})),
-    "lua":_Spec(cli=frozenset({"request","perform","send","call"}),rte=frozenset({"match","route","use","respond_to"})),
-    "r":_Spec(cli=frozenset({"get","post","put","patch","delete","request","content"}),rte=frozenset({"get","post","put","delete","patch"})),
-    "julia":_Spec(cli=frozenset({"request","get","post","put","patch","delete","head"}),rte=frozenset({"route","register","handle"})),
-    "groovy":_Spec(cli=frozenset({"get","post","put","patch","delete","request","exchange","getforobject"}),rte=frozenset({"get","post","put","delete","patch","handle","route"})),
-    "perl":_Spec(cli=frozenset({"get","post","put","patch","delete","request","request_method"}),rte=frozenset({"get","post","put","patch","delete","any","under"})),
-}
-_DEFAULT_SPEC=_Spec(cli=frozenset({"request","fetch","send","execute","perform"}),rte=frozenset({"route","match","map","resources","any"}),grp=frozenset({"new","connect","create"}))
