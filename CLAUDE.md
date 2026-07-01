@@ -51,15 +51,19 @@ python -m compileall -q src/opencode_search
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
-## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36)
+## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36/HR37)
 
 **Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
 in `daemon/sweeps.py:on_change` runs only when `_source_fingerprint` detects real source drift — never
 on metadata-only or non-indexed-file events. With no drift the daemon reaches true idle and
 `_idle_unload` (300 s) frees the embedder/reranker + ORT CUDA arena. **File-watching is event-driven
-via OS notifications (watchdog/inotify) — never manual polling.** The poll fallback in `daemon/watcher.py`
-activates only when inotify is unavailable (NFS/SMB, `max_user_watches` exhaustion). See
-`docs/info-hierarchy.md` "Compute-spend doctrine" and `model.yaml` P16/P17/HR32/HR33.
+via `watchfiles` (Rust `notify`) — never manual polling.** `daemon/watcher.py` runs a single
+`watchfiles.watch()` generator in one thread across ALL watched roots (one inotify instance total,
+not one per root); Rust-side debounce/step coalesces storms before crossing into Python, and
+`watch_filter` reuses the same `is_ignored_path` (HR35) resolver as the drift gate, so a churn storm
+in a hidden/gitignored dir never reaches `on_change`. There is no hand-rolled Python poll loop —
+polling, if ever needed (NFS/SMB), is the Rust library's own `force_polling` path. See
+`docs/info-hierarchy.md` "Compute-spend doctrine" and `model.yaml` P16/P17/HR32/HR33/HR37.
 
 **The drift gate's input must itself be gitignore/hidden-dir-aware (HR35).** `_source_fingerprint` and
 the watcher's `is_ignored_path` both route through one shared resolver in `index/discover.py`, applied
