@@ -68,7 +68,9 @@ def scan_generic(root,b,f,surface,du,spec):
             if sv and ml in spec.grp:f.grpc_clients.append(("",sv,f"{rc}.{meth}",ln));stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
             if not rc and meth[:1].isupper() and _gsv(meth,ps):f.grpc_clients.append(("",_gsv(meth,ps),meth,ln));stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
             p=(_fs(n,b,du) or "") if ml in _V or ml in spec.cli or ml in spec.rte else ""
-            if ml in _V and p.startswith("/"):(f.http_clients if rc else f.http_routes).append((ml.upper(),p,ln))
+            if ml in _V and p.startswith("/"):
+                is_route=_has_handler_arg(n) if spec.structural else not rc
+                (f.http_routes if is_route else f.http_clients).append((ml.upper(),p,ln))
             elif rc and ml in spec.cli:
                 a=_ao(n)
                 if a and a.named_child_count()>=2 and ml in("request","send","execute","perform"):

@@ -8,6 +8,10 @@ class _Spec:
     rte:frozenset=frozenset()
     dec:frozenset=frozenset()
     grp:frozenset=frozenset()
+    # Opt-in switch (not a vocabulary): once True, scan_generic's verb-call route-vs-client
+    # decision uses the structural handler-shape discriminator (_has_handler_arg) instead of
+    # receiver-truthiness. Per-language staged migration off cli/rte name-matching (P6/HR15).
+    structural:bool=False
 
 _V=frozenset({"get","post","put","patch","delete","head","options"})
 _CALL_KINDS=frozenset({"call","call_expression","invocation_expression","method_invocation","function_call_expression","member_call_expression","scoped_call_expression","application","method_call","send","funcall","method_call_expression"})
@@ -23,7 +27,7 @@ _HANDLER_KINDS=frozenset({"do_block","lambda_expression","lambda_literal","closu
 _FIRST_CLASS=frozenset({"go","python","typescript","javascript","php"})
 _GRP_SFXS=("ServiceClient","BlockingStub","FutureStub","AsyncStub","Stub","Client","Grpc")
 _LANG_SPECS:dict[str,_Spec]={
-    "ruby":_Spec(cli=frozenset({"request","perform","execute"}),rte=frozenset({"route","resources","match","root","scope"}),grp=frozenset({"new"})),
+    "ruby":_Spec(cli=frozenset({"request","perform","execute"}),rte=frozenset({"route","resources","match","root","scope"}),grp=frozenset({"new"}),structural=True),
     "csharp":_Spec(cli=frozenset({"getasync","postasync","putasync","patchasync","deleteasync","sendasync","getstringasync","getfromjsonasync","postasjsonasync","send","getforobject","exchange","getstring"}),rte=frozenset({"mapget","mappost","mapput","mappatch","mapdelete","map"}),dec=frozenset({"httpget","httppost","httpput","httppatch","httpdelete","route"}),grp=frozenset({"new","create"})),
     "rust":_Spec(cli=frozenset({"request","execute","send","fetch","call","text","json"}),rte=frozenset({"route","nest","on","handle"}),dec=_V|frozenset({"route","any"}),grp=frozenset({"new","connect","new_client","with_origin"})),
     "elixir":_Spec(cli=frozenset({"request","call","send_request","request!","get!","post!","put!","patch!","delete!"}),rte=frozenset({"resources","scope","match","live","forward","pipe_through"}),grp=frozenset({"new","channel","stub","connect"})),
