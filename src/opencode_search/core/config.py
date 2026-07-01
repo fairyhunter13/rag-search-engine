@@ -55,6 +55,10 @@ IGNORED_DIRS: frozenset[str] = frozenset({
     # and cause FusedMatMul to request 24 GB workspace, OOMing the 16 GB GPU.
     ".playwright-profile", ".chromium", ".chrome-profile", ".playwright",
     "playwright-cache", "chrome-profile", "chromium-profile",
+    # Frontend/tool build-cache dirs — regenerated continuously by dev servers
+    # (vite/astro/svelte-kit watch mode), misread as source drift if not excluded.
+    ".svelte-kit", ".playwright-mcp", ".astro", ".turbo", ".parcel-cache",
+    ".vite", ".output", ".vitest",
 })
 
 
