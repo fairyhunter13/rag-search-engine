@@ -1,7 +1,21 @@
 """Grammar-agnostic BPRE extractor helpers for non-first-class languages."""
 from __future__ import annotations
 from opencode_search.kb.valueflow import _t as _vt, _first_str, resolve_first_arg
-from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V, _is_call, _PARADIGM_KINDS
+from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V, _is_call, _PARADIGM_KINDS, _HANDLER_KINDS
+
+def _has_handler_arg(n, max_depth: int = 4) -> bool:
+    """Structural discriminator: does this call carry a function/closure/lambda/block
+    argument (a normal arg, a trailing block, or an attached lambda)? Node-kind only —
+    no method-name vocabulary (HR15). True => route/handler registration shape;
+    False => plain call (client or otherwise)."""
+    stk = [(n, 0)]
+    while stk:
+        node, depth = stk.pop()
+        if node.kind() in _HANDLER_KINDS:
+            return True
+        if depth < max_depth:
+            stk.extend((node.named_child(i), depth + 1) for i in range(node.named_child_count()))
+    return False
 
 def _gsv(t,ps):
     s=t.rsplit(".",1)[-1].rsplit("::",1)[-1]

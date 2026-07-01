@@ -199,3 +199,49 @@ def test_polyglot_no_self_edges(poly_db) -> None:
         "SELECT COUNT(*) FROM cross_service_edges WHERE caller_service=callee_service"
     ).fetchone()[0]
     assert self_edges == 0, f"{self_edges} self-loop edges (caller=callee)"
+
+
+# P6/HR15 Part B.1: _has_handler_arg is the structural (node-kind-only) route-vs-client
+# discriminator that will replace _LANG_SPECS name-matching. Each pair below was verified
+# empirically against tree-sitter-language-pack 1.12.1 (not guessed from memory — grammar
+# node kinds have already drifted once this session, see the csharp->c_sharp rename).
+_HANDLER_ARG_CASES: dict[str, tuple[str, str, str]] = {
+    "ruby":   ("ruby",   "get '/x' do\n  1\nend\n",                          "HTTParty.get('/api/items')\n"),
+    "csharp": ("csharp", 'app.MapGet("/x", () => "ok");\n',                  'http.GetAsync("/x");\n'),
+    "rust":   ("rust",   'router.route("/x", get(|| async { "ok" }));\n',    'client.get("/x");\n'),
+    "kotlin": ("kotlin", 'route("/x") { call.respond("ok") }\n',             'restTemplate.getForObject("/x", String::class.java)\n'),
+    "swift":  ("swift",  'app.get("/x") { req, res in "ok" }\n',             'URLSession.shared.dataTask(with: url)\n'),
+    "scala":  ("scala",  'path("x") { complete("ok") }\n',                   'client.get("/x")\n'),
+    "java":   ("java",   'app.get("/x", (req, res) -> "ok");\n',             'restTemplate.getForObject("/x", String.class);\n'),
+    "cpp":    ("cpp",    'app.Get("/x", [](Request req) { return "ok"; });\n', 'client.get("/x");\n'),
+    "perl":   ("perl",   'get "/x" => sub { "ok" };\n',                      '$ua->get("/x");\n'),
+    "lua":    ("lua",    "app:get('/x', function(req) return 'ok' end)\n",   "http.get('/x')\n"),
+}
+
+
+def _outer_call_node(tsl: str, src: str):
+    """First (outermost) call-kind node in source order — the node under test."""
+    from tree_sitter_language_pack import api as _ts_api
+
+    from opencode_search.kb.bpre_spec import _is_call
+    root = _ts_api.get_parser(tsl).parse(src).root_node()
+    stk = [root]
+    while stk:
+        n = stk.pop(0)
+        if _is_call(n.kind()):
+            return n
+        stk = [n.named_child(i) for i in range(n.named_child_count())] + stk
+    return None
+
+
+@pytest.mark.parametrize("lang", list(_HANDLER_ARG_CASES))
+def test_has_handler_arg_discriminates_route_vs_client(lang: str) -> None:
+    """_has_handler_arg(call) is True for a route/handler registration, False for a plain call."""
+    from opencode_search.kb.bpre_generic import _has_handler_arg
+    tsl, route_src, client_src = _HANDLER_ARG_CASES[lang]
+    route_call = _outer_call_node(tsl, route_src)
+    client_call = _outer_call_node(tsl, client_src)
+    assert route_call is not None, f"{lang}: no call node found in route snippet"
+    assert client_call is not None, f"{lang}: no call node found in client snippet"
+    assert _has_handler_arg(route_call) is True, f"{lang}: expected handler-shape arg in {route_src!r}"
+    assert _has_handler_arg(client_call) is False, f"{lang}: unexpected handler-shape arg in {client_src!r}"
