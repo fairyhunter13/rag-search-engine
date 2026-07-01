@@ -96,13 +96,15 @@ def test_e2_recall_and_precision_at_least_baseline(extracted_edges, golden_edges
 
 def test_e3_token_min_zero_llm_spend(process_con):
     """shop-federation is fully resolvable by protoc-bound structural constructors — the
-    strongest token-min proof here is zero DeepSeek spend (bpre_link.*, HR23), not a budget."""
-    from opencode_search.graph.llm import llm_token_stats
+    strongest token-min proof here is zero DeepSeek spend, not a budget.
+
+    Checks the edge tier, not the bpre_link.calls global counter (HR23) — that counter is
+    session-wide and other live tests (e.g. TE7) legitimately exercise the same DeepSeek call
+    with synthetic data in the same pytest process, so it isn't a clean signal here.
+    """
     kinds = [r[0] for r in process_con.execute("SELECT kind FROM cross_service_edges").fetchall()]
     llm_tier = [k for k in kinds if k.endswith("_llm")]
     assert not llm_tier, f"E3: DeepSeek residue used on a fully structural fixture: {llm_tier}"
-    calls = llm_token_stats().get("bpre_link.calls", 0)
-    assert calls == 0, f"E3: bpre_link.calls={calls} — DeepSeek invoked when structure sufficed"
 
 
 def test_e4_doctrine_ratchet_conforms_live():

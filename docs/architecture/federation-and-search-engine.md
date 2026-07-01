@@ -145,7 +145,13 @@ mapping table may substitute for structural analysis of user code.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI, plus a named debt registry
   for the surviving keyword/mapping-table constructs (`bpre_spec._LANG_SPECS`/`_V`/`_GRP_SFXS`,
-  `bpre_ast.py` naming-convention checks) that may only shrink. `test_valueflow_dynamic.py`,
+  the generic-language fallback path) that may only shrink. **Protocol/framework codegen-contract
+  naming is ground truth, not debt (reclassified 2026-07-01)**: `bpre_ast.py`'s protoc
+  `New*Client`/`Register*Server`/`*Client`-receiver discovery is scoped to `.pb.go` codegen
+  output only and feeds a structural dict lookup at call sites; Spring's `*Mapping` annotation
+  vocabulary is paired with structural argument/route extraction; the PHP proto-bound `*Client`
+  check is gated on `cls_name[:-6] in s.proto_services` (an actually-discovered proto service).
+  None of these guess from surface text alone. `test_valueflow_dynamic.py`,
   `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`, `test_deterministic_resolution.py`
   prove the full ladder end-to-end (HR16–HR19 in Part 2).
 - **Token accounting (HR23)**: every DeepSeek call site in the ladder feeds

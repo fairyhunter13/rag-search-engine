@@ -27,7 +27,7 @@ L1_invariants:
     principle: "Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score."
     check: {grep: "rerank.*skip", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
   - id: P6
-    principle: "No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped)."
+    principle: "No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped). Protocol/framework codegen-contract naming bound to structural facts (e.g. protoc New*Client/Register*Server scoped to .pb.go output, Spring *Mapping annotations) is ground truth, not a heuristic — reclassified 2026-07-01, same class as the closed HTTP-verb set."
     check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/opencode_search/kb/bpre.py src/opencode_search/kb/bpre_ast.py src/opencode_search/kb/bpre_spec.py src/opencode_search/kb/bpre_generic.py src/opencode_search/kb/bpre_paradigms.py src/opencode_search/kb/patterns.py src/opencode_search/server/_overview.py", verdict_if_match: AT_RISK}
   - id: P7
     principle: "Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts."
