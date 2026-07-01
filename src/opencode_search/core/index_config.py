@@ -25,7 +25,9 @@ def _strs(v: Any) -> list[str]:
 @dataclass(frozen=True)
 class ProjectConfig:
     exclude: list[str] = field(default_factory=list)
+    include: list[str] = field(default_factory=list)
     use_default_ignores: bool = True
+    respect_gitignore: bool = True
     max_pending_files: int = 10_000
 
 
@@ -44,7 +46,9 @@ def load_project_config(root: Path) -> ProjectConfig:
         watch = data.get("watcher", {}) or {}
         return ProjectConfig(
             exclude=_strs(idx.get("exclude")),
+            include=_strs(idx.get("include")),
             use_default_ignores=bool(idx.get("use_default_ignores", True)),
+            respect_gitignore=bool(idx.get("respect_gitignore", True)),
             max_pending_files=int(watch.get("max_pending_files", 10_000)),
         )
     return ProjectConfig()
@@ -53,8 +57,9 @@ def load_project_config(root: Path) -> ProjectConfig:
 def effective_config(member_path: str | Path) -> ProjectConfig:
     """Return config for a project, inheriting from the federation root when applicable.
 
-    exclude = union(root, member); use_default_ignores + max_pending_files come from member
-    when it has its own config file, else from root. Standalone projects use load_project_config().
+    exclude/include = union(root, member); use_default_ignores + respect_gitignore +
+    max_pending_files come from member when it has its own config file, else from root.
+    Standalone projects use load_project_config().
     """
     member = Path(member_path).resolve()
     member_has_own = any((member / n).is_file() for n in _CONFIG_NAMES)
@@ -71,10 +76,13 @@ def effective_config(member_path: str | Path) -> ProjectConfig:
         return member_cfg
     root_cfg = load_project_config(root_path)
     merged_exclude = list(dict.fromkeys(root_cfg.exclude + member_cfg.exclude))
+    merged_include = list(dict.fromkeys(root_cfg.include + member_cfg.include))
     scalars = member_cfg if member_has_own else root_cfg
     return ProjectConfig(
         exclude=merged_exclude,
+        include=merged_include,
         use_default_ignores=scalars.use_default_ignores,
+        respect_gitignore=scalars.respect_gitignore,
         max_pending_files=scalars.max_pending_files,
     )
 

@@ -360,3 +360,154 @@ def test_kb_heavy_lock_serializes_concurrent_passes():
     for t in threads:
         t.join(timeout=5)
     assert max_concurrent == 1, f"KB_HEAVY_LOCK must serialize passes; max_concurrent={max_concurrent}"
+
+
+def _write_tree(root, files: dict[str, str]) -> None:
+    import os
+    for rel, content in files.items():
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(content)
+
+
+def test_gitignore_respected_root_and_nested():
+    """DIS1: root + nested .gitignore both drop matching files/dirs from iter_files."""
+    import tempfile
+    from pathlib import Path
+
+    from opencode_search.core.index_config import ProjectConfig
+    from opencode_search.index.discover import iter_files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {
+            "src/main.py": "print(1)\n",
+            ".gitignore": "rootgen\n",
+            "rootgen/out.txt": "x\n",
+            "wiki/.gitignore": "genroot\n*.tmp\n",
+            "wiki/genroot/bundle.js": "x\n",
+            "wiki/app.tmp": "x\n",
+            "wiki/index.html": "<html></html>\n",
+        })
+        got = {str(p.relative_to(tmp)) for p in iter_files(Path(tmp), cfg=ProjectConfig())}
+        assert "src/main.py" in got and "wiki/index.html" in got
+        assert not any(g.startswith("rootgen/") for g in got), "root .gitignore not honored"
+        assert not any(g.startswith("wiki/genroot/") for g in got), "nested .gitignore not honored"
+        assert "wiki/app.tmp" not in got, "nested .gitignore glob pattern not honored"
+
+
+def test_hidden_dir_skip_tool_caches():
+    """DIS2: hidden dirs (.svelte-kit, .playwright-mcp) are skipped by default, regardless
+    of gitignore — this is the actual root-cause fixture (FINDING: Jul-1 idle-CPU burn)."""
+    import tempfile
+    from pathlib import Path
+
+    from opencode_search.core.index_config import ProjectConfig
+    from opencode_search.index.discover import iter_files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {
+            "src/main.py": "print(1)\n",
+            ".svelte-kit/generated.js": "x\n",
+            ".playwright-mcp/session.yml": "x\n",
+        })
+        got = {str(p.relative_to(tmp)) for p in iter_files(Path(tmp), cfg=ProjectConfig())}
+        assert "src/main.py" in got
+        assert not any(".svelte-kit" in g for g in got)
+        assert not any(".playwright-mcp" in g for g in got)
+
+
+def test_include_overrides_gitignore_exclude_beats_include():
+    """DIS3: OSE config include re-keeps a gitignored path (config authoritative over
+    .gitignore); exclude still beats include when both name the same path."""
+    import tempfile
+    from pathlib import Path
+
+    from opencode_search.core.index_config import ProjectConfig
+    from opencode_search.index.discover import iter_files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {".gitignore": "rootgen\n", "rootgen/out.txt": "x\n"})
+        root = Path(tmp)
+        included = {
+            str(p.relative_to(tmp))
+            for p in iter_files(root, cfg=ProjectConfig(include=["rootgen/*"]))
+        }
+        assert "rootgen/out.txt" in included, "include must override .gitignore"
+
+        both = {
+            str(p.relative_to(tmp))
+            for p in iter_files(
+                root, cfg=ProjectConfig(include=["rootgen/*"], exclude=["rootgen/*"])
+            )
+        }
+        assert not any(g.startswith("rootgen/") for g in both), "exclude must beat include"
+
+
+def test_respect_gitignore_false_disables_gitignore_only():
+    """DIS4: respect_gitignore=False re-admits gitignored paths but hidden-dir/IGNORED_DIRS
+    default policy still applies (OSE config disabling gitignore is not a full opt-out)."""
+    import tempfile
+    from pathlib import Path
+
+    from opencode_search.core.index_config import ProjectConfig
+    from opencode_search.index.discover import iter_files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {
+            ".gitignore": "rootgen\n",
+            "rootgen/out.txt": "x\n",
+            ".svelte-kit/generated.js": "x\n",
+        })
+        got = {
+            str(p.relative_to(tmp))
+            for p in iter_files(Path(tmp), cfg=ProjectConfig(respect_gitignore=False))
+        }
+        assert "rootgen/out.txt" in got, "respect_gitignore=False must re-admit gitignored paths"
+        assert not any(".svelte-kit" in g for g in got), "hidden-dir skip must still apply"
+
+
+def test_drift_gate_quiescent_under_tool_cache_churn():
+    """DIS5: the exact regression this fix targets — writing into a git-ignored,
+    hidden tool-cache dir (.svelte-kit) must NOT change _source_fingerprint, so on_change
+    does not retrigger the BPRE/enrich cascade for churn that isn't real source drift."""
+    import tempfile
+
+    from opencode_search.daemon import sweeps
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {"src/main.py": "print(1)\n", ".svelte-kit/generated.js": "x\n"})
+        sig1 = sweeps._source_fingerprint(tmp)
+        sweeps._fingerprint_cache.pop(tmp, None)
+        _write_tree(tmp, {".svelte-kit/generated.js": "x\nx\nx\n" * 50})
+        sig2 = sweeps._source_fingerprint(tmp)
+        assert sig1 == sig2, "tool-cache churn under a hidden dir must not flip the drift gate"
+
+
+def test_is_ignored_path_agrees_with_iter_files():
+    """DIS6: watcher (is_ignored_path) and indexer (iter_files) must agree on every path —
+    they share the same _should_drop resolver so the drift gate and the watcher never diverge."""
+    import tempfile
+    from pathlib import Path
+
+    from opencode_search.core.index_config import ProjectConfig
+    from opencode_search.index.discover import is_ignored_path, iter_files
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {
+            "src/main.py": "print(1)\n",
+            ".svelte-kit/generated.js": "x\n",
+            ".gitignore": "rootgen\n",
+            "rootgen/out.txt": "x\n",
+        })
+        root = Path(tmp)
+        cfg = ProjectConfig()
+        kept = set(iter_files(root, cfg=cfg))
+        for candidate in [
+            root / "src" / "main.py",
+            root / ".svelte-kit" / "generated.js",
+            root / "rootgen" / "out.txt",
+        ]:
+            assert is_ignored_path(candidate, root, cfg) == (candidate not in kept), (
+                f"is_ignored_path/iter_files disagree on {candidate}"
+            )

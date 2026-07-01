@@ -428,7 +428,7 @@ def _index_files(project_path: str, files: list) -> None:
     from pathlib import Path
 
     from opencode_search.core.config import project_vector_db
-    from opencode_search.core.index_config import effective_config, is_excluded
+    from opencode_search.core.index_config import effective_config
     from opencode_search.embed.embedder import get_embedder
     from opencode_search.index.discover import is_ignored_path
     from opencode_search.index.indexer import index_files
@@ -438,8 +438,7 @@ def _index_files(project_path: str, files: list) -> None:
     cfg = effective_config(root)
     filtered = [
         Path(str(f)) for f in files
-        if not is_ignored_path(Path(str(f)), root)
-        and not (cfg.exclude and is_excluded(Path(str(f)), cfg.exclude, root))
+        if not is_ignored_path(Path(str(f)), root, cfg)
     ]
     if not filtered:
         return
