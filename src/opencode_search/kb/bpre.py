@@ -124,9 +124,12 @@ def _bpre_algo_version() -> str:
 
 
 def _bpre_source_sig(members: list[str]) -> str:
-    """sha1 over sorted per-member source fingerprints — stat-only, GPU-free."""
-    from opencode_search.daemon.sweeps import _source_fingerprint
-    parts = sorted(_source_fingerprint(m) for m in members)
+    """sha1 over sorted per-member BPRE code-file signatures — stat-only, GPU-free.
+
+    Code-only (not the all-files _source_fingerprint) so doc/config/image edits and
+    hidden-dir tool-cache churn can never flip this and trigger a federation rebuild.
+    """
+    parts = sorted(_bpre_code_sig(m) for m in members)
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()
 
 
@@ -173,12 +176,9 @@ def _narrative_incomplete(con: sqlite3.Connection) -> bool:
 
 
 def _source_files(member_path: str) -> list[Path]:
-    from opencode_search.core.config import IGNORED_DIRS
-    from opencode_search.core.index_config import effective_config, is_excluded
     from opencode_search.core.registry import get_project
-    from opencode_search.index.discover import detect_language, is_code_language
+    from opencode_search.index.discover import detect_language, is_code_language, is_ignored_path
     root = Path(member_path)
-    cfg = effective_config(root)
     entry = get_project(member_path)
     # Monorepo-style federations nest member subdirectories inside the root's own tree
     # (see expand_federation, which scans root + members). Exclude sibling members here so
@@ -190,19 +190,60 @@ def _source_files(member_path: str) -> list[Path]:
     out: list[Path] = []
     try:
         for dirpath, dirs, files in os.walk(str(root)):
+            dp = Path(dirpath)
+            # is_ignored_path shares the same HR35 resolver as iter_files/the watcher (OSE
+            # exclude/include, hidden-dir skip, .gitignore), so BPRE's scan never sees a file
+            # the indexer or the drift gate wouldn't also see.
             dirs[:] = [
                 d for d in dirs
-                if d not in IGNORED_DIRS and (Path(dirpath) / d).resolve() not in nested_members
+                if (dp / d).resolve() not in nested_members and not is_ignored_path(dp / d, root)
             ]
             for f in files:
-                p = Path(dirpath) / f
+                p = dp / f
                 if (is_code_language(detect_language(p))
                         and not _is_test_file(str(p))
-                        and not (cfg.exclude and is_excluded(p, cfg.exclude, root))):
+                        and not is_ignored_path(p, root)):
                     out.append(p)
     except OSError:
         pass
     return out
+
+
+_bpre_code_sig_cache: dict[str, tuple[float, str]] = {}
+
+
+def _bpre_code_sig(member_path: str) -> str:
+    """sha1 over sorted 'relpath:mtime' for BPRE's own code-file selection — stat-only, GPU-free.
+
+    Mirrors daemon.sweeps._source_fingerprint's coarse pre-gate (root dir mtime) so the
+    reconcile root-pass's per-root reconstruct_processes() call stays a cheap no-op when
+    quiescent. Invalidated from daemon.sweeps.on_change alongside _fingerprint_cache.
+    """
+    root = Path(member_path)
+    try:
+        coarse = root.stat().st_mtime
+    except OSError:
+        coarse = 0.0
+    cached = _bpre_code_sig_cache.get(member_path)
+    if cached is not None and cached[0] == coarse:
+        return cached[1]
+    parts: list[str] = []
+    for f in _source_files(member_path):
+        try:
+            rel = str(f.relative_to(root))
+            mtime = int(f.stat().st_mtime)
+            parts.append(f"{rel}:{mtime}")
+        except (OSError, ValueError):
+            pass
+    parts.sort()
+    sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
+    _bpre_code_sig_cache[member_path] = (coarse, sig)
+    return sig
+
+
+def _invalidate_bpre_code_sig(member_path: str) -> None:
+    """Drop the cached code-sig for member_path — called from on_change on any source event."""
+    _bpre_code_sig_cache.pop(member_path, None)
 
 
 def _iter_member_facts(member_path: str, member_facts, surf):
@@ -223,13 +264,12 @@ def _iter_member_facts(member_path: str, member_facts, surf):
 
 
 def _member_scan_sig(member: str, algo: str) -> str:
-    """Per-member cache key: source content + extraction-logic version.
+    """Per-member cache key: BPRE code-file content sig + extraction-logic version.
 
     Must include `algo` (not just source) — a bpre_ast.py/bpre_spec.py change alters what
     scan_file() extracts from unchanged source, so a source-only key would serve stale facts.
     """
-    from opencode_search.daemon.sweeps import _source_fingerprint
-    return f"{algo}:{_source_fingerprint(member)}"
+    return f"{algo}:{_bpre_code_sig(member)}"
 
 
 def _member_scan_cache_get(con: sqlite3.Connection, member: str, sig: str) -> dict | None:
@@ -997,7 +1037,7 @@ def _reconstruct_processes_locked(
                     pass
                 _synthesize_artifacts(con, _resyn_narr)
                 _bpre_set_meta(con, "bpre_algo", algo)
-                _bpre_set_meta(con, "bpre_source_sig", _bpre_source_sig(members))
+                _bpre_set_meta(con, "bpre_source_sig", src_sig)
                 con.commit()
                 con.close()
                 return _n
@@ -1042,9 +1082,6 @@ def _reconstruct_processes_locked(
                     _resolve_http_edges(scon, member, http_routes, surf, all_facts[member])
                 _llm_link_edges(scon, members, surf, all_facts)
                 count = _trace_processes(scon, members)
-                # Recompute src_sig at rebuild end so the stored value reflects the fleet
-                # state at completion, not start — same rationale as before.
-                fresh_src_sig = _bpre_source_sig(members)
                 if count > 0:
                     _synthesize_artifacts(scon, old_narr)
                 scon.commit()
@@ -1060,7 +1097,7 @@ def _reconstruct_processes_locked(
                     con.execute(f"DELETE FROM {tbl}")
                     con.execute(f"INSERT INTO {tbl} SELECT * FROM stg.{tbl}")
                 _bpre_set_meta(con, "bpre_algo", algo)
-                _bpre_set_meta(con, "bpre_source_sig", fresh_src_sig)
+                _bpre_set_meta(con, "bpre_source_sig", src_sig)
                 con.commit()
             except Exception:
                 con.rollback()

@@ -446,6 +446,7 @@ def test_part_f_incremental_scan_reuses_unchanged_member_cache():
 
     from opencode_search.daemon.sweeps import _fingerprint_cache
     from opencode_search.graph.llm import no_deepseek
+    from opencode_search.kb.bpre import _invalidate_bpre_code_sig
     from tests.live._bpre_fixture import build_synth_federation, teardown_synth_federation
 
     fed = build_synth_federation()
@@ -467,6 +468,7 @@ def test_part_f_incremental_scan_reuses_unchanged_member_cache():
         bumped = checkout_go.stat().st_mtime + 2  # fingerprint truncates to whole seconds
         os.utime(checkout_go, (bumped, bumped))
         _fingerprint_cache.pop(fed.checkout, None)  # simulate watcher on_change invalidation
+        _invalidate_bpre_code_sig(fed.checkout)  # on_change invalidates both caches (HR36)
         with no_deepseek():
             reconstruct_processes(fed.root)
         con = sqlite3.connect(str(db))

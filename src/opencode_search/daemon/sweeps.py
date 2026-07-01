@@ -612,6 +612,8 @@ def on_change(project_path: str, files: list) -> None:
         return  # in backoff window after a previous failure; skip this event
     # Invalidate fingerprint cache so the next reconcile pass re-walks this project.
     _fingerprint_cache.pop(project_path, None)
+    from opencode_search.kb.bpre import _invalidate_bpre_code_sig
+    _invalidate_bpre_code_sig(project_path)
     try:
         if files:
             _index_files(project_path, files)
