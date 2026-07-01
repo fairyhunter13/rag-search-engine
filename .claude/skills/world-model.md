@@ -25,6 +25,7 @@ Use this skill to check conformance and understand OSE's governing laws.
 | P15 | Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback. |
 | P16 | Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after OPENCODE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). |
 | P17 | File-watching is event-driven via OS filesystem notifications (watchdog/inotify); manual per-file polling is a last-resort fallback only (NFS/SMB or max_user_watches exhaustion), never the primary path. |
+| P18 | Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private ose-live-audit repo. |
 
 ## L2 Components
 
