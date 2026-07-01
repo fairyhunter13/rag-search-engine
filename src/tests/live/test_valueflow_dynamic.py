@@ -130,6 +130,45 @@ def test_no_import_re_in_valueflow():
     )
 
 
+# ─── build_type_use (P6/HR15 Part C1) ──────────────────────────────────────────
+
+def test_java_typed_client_resolves():
+    from opencode_search.kb.valueflow import build_type_use
+    src = "class C{void f(){HttpClient client = new HttpClient();}}"
+    root = _parser("java").parse(src).root_node()
+    tu = build_type_use(root, src.encode())
+    assert tu.get("client") == "HttpClient", f"Java typed-client not in type-use: {tu}"
+
+
+def test_go_bare_new_not_in_type_use():
+    """Bare factory calls without a constructor-expression node kind (e.g. Client::new()-style)
+    are intentionally NOT captured — genuine residual ambiguity, documented boundary."""
+    from opencode_search.kb.valueflow import build_type_use
+    src = 'package main\nfunc f() { c := getClient() }\n'
+    root = _parser("go").parse(src).root_node()
+    tu = build_type_use(root, src.encode())
+    assert "c" not in tu, f"Non-constructor call should not resolve a type: {tu}"
+
+
+# ─── _scan_imports (P6/HR15 Part C1) ────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "lang,src,alias,expected_path",
+    [
+        ("csharp", "using System.Net.Http;\nclass C{}", "Http", "System.Net.Http"),
+        ("rust", "use std::net::http as nethttp;\nfn f(){}", "nethttp", "std::net::http"),
+        ("java", "import java.net.http.HttpClient;\nclass C{}", "HttpClient", "java.net.http.HttpClient"),
+        ("julia", "using HTTP\nfunction f() end", "HTTP", "HTTP"),
+        ("perl", "use LWP::UserAgent;\nsub f {}", "UserAgent", "LWP::UserAgent"),
+    ],
+)
+def test_scan_imports_resolves_alias_path(lang, src, alias, expected_path):
+    from opencode_search.kb.bpre_ast import _scan_imports
+    root = _parser(lang).parse(src).root_node()
+    imports = _scan_imports(root, src.encode())
+    assert imports.get(alias) == expected_path, f"{lang}: {imports}"
+
+
 def test_no_framework_vocab_in_valueflow():
     import inspect
 

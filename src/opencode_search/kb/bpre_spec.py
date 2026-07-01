@@ -32,3 +32,9 @@ _GRP_SFXS=("ServiceClient","BlockingStub","FutureStub","AsyncStub","Stub","Clien
 # generalizes the already-accepted Go check `"http" in import_path` (bpre_ast.py) from Go's
 # import-alias text to every language's call-receiver text.
 _SCHEMES=frozenset({"http","https","ws","wss","grpc","url","uri"})
+# Import/use-declaration node kinds across non-first-class grammars (P6/HR15 Part C1) — a
+# node-kind set, same class as _CALL_KINDS/_NEW_KINDS, not a keyword/vocabulary list. Drives
+# _scan_imports (bpre_ast.py): every matched node is a genuine import/use *declaration*, never a
+# call-based import idiom (e.g. Lua/Elixir `require(...)`) — those stay receiver-text/type-use
+# territory, the documented residue boundary.
+_IMPORT_KINDS=frozenset({"import_declaration","import_statement","import_from_statement","import_header","import_or_export","use_declaration","using_directive","use_statement","using_statement","preproc_include","namespace_use_declaration"})

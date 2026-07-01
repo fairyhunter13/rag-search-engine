@@ -7,7 +7,7 @@ from opencode_search.kb.valueflow import _t as _vt,_first_str as _fs
 from opencode_search.kb.bpre_spec import _V
 from opencode_search.kb.bpre_generic import _gsv,_provenance,_has_handler_arg
 def _sc(n,b):return next((_vt(n.named_child(i),b) for i in range(n.named_child_count()) if n.named_child(i).kind()=="string_content"),None)
-def scan_paradigm(n,b,f,surf,du):
+def scan_paradigm(n,b,f,surf,du,tu=None):
     """Bespoke BPRE extraction for list_lit/apply/message_expression/command."""
     k=n.kind();ps=surf.proto_services;ln=n.start_position().row+1
     if k=="list_lit":
@@ -22,7 +22,7 @@ def scan_paradigm(n,b,f,surf,du):
         if not p.startswith("/"):return
         if ml in _V:(f.http_clients if rc else f.http_routes).append((ml.upper(),p,ln))
         elif _has_handler_arg(n):f.http_routes.append(("ANY",p,ln))
-        elif rc and _provenance(rc):f.http_clients.append(("GET",p,ln))
+        elif rc and _provenance(rc,f.imports,tu):f.http_clients.append(("GET",p,ln))
     elif k in("apply","exp_apply"):
         fn=n.child_by_field_name("function");ml=_vt(fn,b).lower() if fn else ""
         p=_fs(n,b) or ""
@@ -34,7 +34,7 @@ def scan_paradigm(n,b,f,surf,du):
         p=("/"+sc if sc and not sc.startswith("/") else (sc or (_fs(n,b) or "").lstrip("@\"'")))
         if not p.startswith("/"):return
         if ml in _V:f.http_clients.append((ml.upper(),p,ln))
-        elif _provenance(_vt(rc,b)):f.http_clients.append(("GET",p,ln))
+        elif _provenance(_vt(rc,b),f.imports,tu):f.http_clients.append(("GET",p,ln))
     elif k=="command":
         ut=n.named_child(0) if n.named_child_count()>0 else None
         if not ut:return
@@ -45,4 +45,4 @@ def scan_paradigm(n,b,f,surf,du):
         ml=_vt(mth,b).lower();p=_fs(func.named_child(1),b) if func.named_child_count()>1 else ""
         if not p or not p.startswith("/"):return
         if ml in _V:f.http_clients.append((ml.upper(),p,ln))
-        elif _provenance(_vt(mth,b)):f.http_clients.append(("GET",p,ln))
+        elif _provenance(_vt(mth,b),f.imports,tu):f.http_clients.append(("GET",p,ln))
