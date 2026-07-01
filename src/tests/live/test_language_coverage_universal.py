@@ -92,9 +92,10 @@ _SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "opencode_search"
 _ALLOWED_LANG_SETS = frozenset({
     "_TEXT_LANGS", "_DATA_LANGS",  # discover.py: exclusion lists
     "_FIRST_CLASS",                 # bpre_spec.py: bespoke opt-in tier (not a gate)
-    "_LANG_SPECS",                  # bpre_spec.py: per-language HTTP spec data
     "_CALL_KINDS", "_NEW_KINDS", "_NOT_CALL", "_PARADIGM_KINDS", "_GRP_SFXS", "_STR_KINDS",
+    "_HANDLER_KINDS",               # bpre_spec.py: structural handler-shape node kinds
     "_V",                           # bpre_spec.py: HTTP verb set (not language names)
+    "_SCHEMES",                     # bpre_spec.py: protocol/URI-scheme set (not language names)
 })
 _EXT_SET_RE = re.compile(
     r"""^\s*(_[A-Z_]+)\s*[=:]\s*frozenset\s*\(\s*\{[^}]*"\.[a-z]""", re.MULTILINE
