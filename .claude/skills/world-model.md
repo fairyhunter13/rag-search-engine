@@ -11,7 +11,7 @@ Use this skill to check conformance and understand OSE's governing laws.
 | P1 | No local generative LLM. KB=DeepSeek-only. Chat=claude-haiku-4-5 only. |
 | P2 | MCP query path (search/ask/graph/overview) runs NO generative LLM — only embed+rerank. |
 | P3 | Federation = query-time union; no cross-repo edges; members have independent stores. |
-| P4 | Indexing is event-driven (watcher); no periodic sweeps or timers. |
+| P4 | Indexing is event-driven (watcher/inotify); heavy KB cascade (enrich/wiki/BPRE) runs ONLY on source-fingerprint drift — never on metadata-only or non-indexed-file events; no periodic sweeps or timers. |
 | P5 | Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score. |
 | P6 | No heuristics — tree-sitter + LLM only. No re, no keyword maps in Category A paths. |
 | P7 | Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts. |
@@ -23,6 +23,8 @@ Use this skill to check conformance and understand OSE's governing laws.
 | P13 | Docgen + OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools. |
 | P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling. No cross-lane calls. |
 | P15 | Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback. |
+| P16 | Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after OPENCODE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). |
+| P17 | File-watching is event-driven via OS filesystem notifications (watchdog/inotify); manual per-file polling is a last-resort fallback only (NFS/SMB or max_user_watches exhaustion), never the primary path. |
 
 ## L2 Components
 

@@ -1,4 +1,4 @@
-"""Poll-based file watcher: detect changes in project dirs → trigger reindex."""
+"""Event-driven file watcher: inotify/watchdog primary, poll fallback for NFS/SMB."""
 from __future__ import annotations
 
 import logging
@@ -10,11 +10,16 @@ log = logging.getLogger(__name__)
 
 _DEBOUNCE_S: float = 2.0  # min seconds between reindex triggers per project (burst suppression)
 
+# Metadata-only watchdog event types that carry no content change.
+_METADATA_ONLY_EVENTS: frozenset[str] = frozenset({"closed", "opened"})
+
 
 class Watcher:
-    """Polls registered project directories every POLL_INTERVAL seconds."""
+    """Event-driven via OS filesystem notifications (watchdog/inotify); falls back to
+    bounded polling ONLY when inotify is unavailable (NFS/SMB or max_user_watches
+    exhaustion). POLL_INTERVAL is the fallback poll cadence, not the primary path."""
 
-    POLL_INTERVAL: float = 5.0
+    POLL_INTERVAL: float = 5.0  # fallback-only; inotify primary path uses push events
 
     def __init__(self, on_change: Callable[[str, list[Path]], None]) -> None:
         self._on_change = on_change
@@ -26,7 +31,7 @@ class Watcher:
 
     def watch(self, project_path: str) -> None:
         if project_path not in self._paths:
-            self._paths[project_path] = self._snapshot(project_path)
+            self._paths[project_path] = {}  # snapshot seeded lazily in _loop; inotify needs none
         if self._observer is not None:
             import contextlib
             with contextlib.suppress(Exception):
@@ -63,6 +68,8 @@ class Watcher:
                 def on_any_event(self, event) -> None:
                     if event.is_directory:
                         return
+                    if getattr(event, "event_type", None) in _METADATA_ONLY_EVENTS:
+                        return
                     src = str(getattr(event, "src_path", ""))
                     now = _time.monotonic()
                     for proj in list(watcher._paths):
@@ -85,7 +92,7 @@ class Watcher:
             self._observer, self._handler = obs, h
             return True
         except Exception as exc:
-            log.info("inotify unavailable (%s), using poll", exc)
+            log.warning("inotify unavailable (%s) — degrading to poll fallback", exc)
             return False
 
     def _snapshot(self, project_path: str) -> dict[Path, float]:
@@ -109,6 +116,9 @@ class Watcher:
             for project_path in list(self._paths):
                 old = self._paths[project_path]
                 new = self._snapshot(project_path)
+                if not old:
+                    self._paths[project_path] = new  # first pass: seed baseline, no on_change
+                    continue
                 changed = [f for f in new if new.get(f) != old.get(f)]
                 if changed:
                     self._paths[project_path] = new

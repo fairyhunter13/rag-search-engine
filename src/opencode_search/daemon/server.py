@@ -86,18 +86,15 @@ def serve(host: str | None = None, port: int | None = None) -> None:
 
 def start_watcher():
     """Build and start the file watcher for all enabled registered projects."""
-    from pathlib import Path
-
-    from opencode_search.core.config import federation_exclude_paths
+    from opencode_search.core.config import is_federation_excluded
     from opencode_search.core.registry import list_projects
     from opencode_search.daemon.sweeps import on_change
     from opencode_search.daemon.watcher import Watcher
 
-    _excluded = federation_exclude_paths()
     watcher = Watcher(on_change=on_change)
     watcher.POLL_INTERVAL = 5.0
     for entry in list_projects():
-        if entry.enabled and str(Path(entry.path).resolve()) not in _excluded:
+        if entry.enabled and not is_federation_excluded(entry.path):
             watcher.watch(entry.path)
     watcher.start()
     return watcher

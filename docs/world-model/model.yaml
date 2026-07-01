@@ -21,7 +21,7 @@ L1_invariants:
     principle: "Federation = query-time union; no cross-repo edges; members have independent stores."
     check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/opencode_search/graph/ src/opencode_search/index/ src/opencode_search/daemon/", verdict_if_match: AT_RISK}
   - id: P4
-    principle: "Indexing is event-driven (watcher); no periodic sweeps or timers."
+    principle: "Indexing is event-driven (watcher/inotify); heavy KB cascade (enrich/wiki/BPRE) runs ONLY on source-fingerprint drift — never on metadata-only or non-indexed-file events; no periodic sweeps or timers."
     check: {grep: "register.*kb_sweep|register.*auto_index|threading.Timer.*sweep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
   - id: P5
     principle: "Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score."
@@ -56,6 +56,12 @@ L1_invariants:
   - id: P15
     principle: "Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback."
     check: null
+  - id: P16
+    principle: "Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after OPENCODE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal)."
+    check: null
+  - id: P17
+    principle: "File-watching is event-driven via OS filesystem notifications (watchdog/inotify); manual per-file polling is a last-resort fallback only (NFS/SMB or max_user_watches exhaustion), never the primary path."
+    check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
 
 # ── L2: Components (capability → module → entry points) ─────────────────────
 L2_components:
@@ -121,6 +127,12 @@ L3_specs:
   - id: HR30
     spec: "MCP surface = index+search+ask+graph+overview only; docgen and okf absent from _MCP_TOOLS."
     test: test_api_docgen_not_in_mcp
+  - id: HR32
+    spec: "Idle-efficiency — on_change KB cascade (enrich/wiki/BPRE) is gated by source-fingerprint drift (_last_enriched_sig); metadata-only and non-source events skip the cascade entirely; idle-unload frees the ORT arena after MODEL_IDLE_UNLOAD_S; CPU < 1 % when idle."
+    test: test_drift_gate_skips_enrich_when_sig_unchanged
+  - id: HR33
+    spec: "Notification-first watcher — Watcher.start() selects the watchdog/inotify observer when available; poll fallback activates only when inotify is unavailable; both branches are mutually exclusive."
+    test: test_watcher_prefers_inotify_over_poll
 
 # ── L4: Code patterns & generation rules ─────────────────────────────────────
 L4_patterns:
@@ -130,3 +142,5 @@ L4_patterns:
   - "deepseek_extract: prefix-cached stable system prompt; dynamic user prompt only"
   - "graph.db communities: level=1 only (L2/L3 deleted WS-B 2026-06-26)"
   - "iter_files: federation_mode=True prunes symlink dirs pointing outside root"
+  - "on_change drift gate: compute _source_fingerprint(path) after index step; skip enrich if sig == _last_enriched_sig[path]; commit sig only after successful _enrich_project"
+  - "watcher selection: _try_inotify() sets self._observer; _loop() poll fallback only when self._observer is None; snapshot seeded lazily in _loop first-pass (not in watch())"

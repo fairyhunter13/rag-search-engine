@@ -40,6 +40,15 @@ DATA      Source code chunks + file tree.
 3. **Knowledge** (community summaries): DeepSeek, significance-gated, prefix-cached. `enrich_communities_batch()`. Abstain on tail (reject-option doctrine, `narrated=0`).
 4. **Wisdom** (invariants/principles): authored once, machine-checked. `check_world_model.py`.
 
+## Compute-spend doctrine (CPU / GPU / RAM)
+
+Parallel to the LLM-spend ladder above, OSE applies a **compute-spend doctrine** governing when CPU, GPU, and RAM are consumed:
+
+- **Spend compute only to re-climb the DIKW ladder on real source drift.** The heavy cascade (enrich/wiki/BPRE) runs only when `_source_fingerprint` detects that indexed source files actually changed. Metadata-only events (file close/open, CHMOD) and changes to non-indexed files are filtered at the watcher boundary and again by the source-drift gate in `on_change`.
+- **Idle ⇒ near-zero CPU + constant RAM floor.** With no queries and no source drift the daemon holds < 1 % CPU. The existing `_idle_unload` path (300 s default) nulls the ONNX session references, calls `gc.collect` + `malloc_trim`, and releases the ORT CUDA arena — the only reliable way to return GPU memory to the OS. Models reload on demand at the next real query or edit.
+- **GPU is the sole inference engine — maximized, never idle-spun.** Embedding and reranking run exclusively on CUDA; CPU fallback is fatal. The GPU is not used during idle periods; it warms up only for actual embed/rerank operations triggered by real queries or real source changes.
+- **File-watching uses kernel notifications, not CPU polling.** `watchdog`/inotify is the primary watching mechanism — push events from the OS kernel, not a polling loop. The poll fallback (`_loop`) activates only when inotify is unavailable (NFS/SMB, `max_user_watches` exhaustion) and seeds a baseline on its first pass rather than scanning eagerly.
+
 ## Hierarchy removal (WS-B, 2026-06-26)
 
 The former L2 (domain aggregations) and L3 (federation themes) layers between Knowledge and Wisdom have been **deleted**. They added 35,000+ graph.db rows per project at significant LLM cost but were not consumed by any query path that flat-L1 couldn't serve. Standalone docgen/OKF tools (WS-A/WS-C) now own deep hierarchy generation for any repo — they parse the repo directly, with no OSE graph.db input.
