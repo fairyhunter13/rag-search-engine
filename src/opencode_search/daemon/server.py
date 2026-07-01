@@ -14,6 +14,7 @@ _RECONCILE_INITIAL_DELAY_S = float(os.environ.get("OPENCODE_RECONCILE_INITIAL_DE
 _RECONCILE_RESYNC_S = float(os.environ.get("OPENCODE_RECONCILE_RESYNC_S", "0"))
 _idle_unload_done = False
 _reconcile_park = threading.Event()  # never set; parks the reconcile thread when resync is disabled
+_REQUESTED_EXIT_CODE = 0  # set by routes_ops._api_reload; non-zero makes systemd Restart=on-failure fire
 
 
 def _deprioritize_current_thread(delta: int = 5) -> None:
@@ -82,6 +83,8 @@ def serve(host: str | None = None, port: int | None = None) -> None:
         uvicorn.run(app, host=h, port=p)
     finally:
         _sd_notify("STOPPING=1")
+    if _REQUESTED_EXIT_CODE:
+        sys.exit(_REQUESTED_EXIT_CODE)  # non-zero exit -> systemd Restart=on-failure restarts (reload)
 
 
 def start_watcher():
