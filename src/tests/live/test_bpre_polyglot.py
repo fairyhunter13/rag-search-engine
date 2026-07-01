@@ -166,6 +166,19 @@ def test_polyglot_ruby_contributes_edge(poly_db) -> None:
     )
 
 
+def test_ruby_route_vs_client_golden() -> None:
+    """P6/HR15 Part B.2 golden fixture: Ruby's structural (_has_handler_arg) classification
+    must route the outer `get ... do ... end` registration to http_routes and the inner
+    `HTTParty.get(...)` call to http_clients — not double-count both as clients (the
+    pre-migration _cp() receiver-identity quirk this migration fixes)."""
+    content, detected_lang = _LANG_SNIPPETS["ruby"]
+    surf = ApiSurface()
+    ff = scan_file("app.rb", content, detected_lang, surf)
+    assert ff is not None
+    assert ff.http_routes == [("GET", "/api/items", 1)], f"http_routes={ff.http_routes}"
+    assert ff.http_clients == [("GET", "/api/items", 2)], f"http_clients={ff.http_clients}"
+
+
 _LANG_SNIPPETS_EXT: dict[str, tuple[str, str, str]] = {
     "lua": ('http.get("/api/items")', "lua", "http_clients"),
     "r": ('GET("/api/items")', "r", "http_clients"),
