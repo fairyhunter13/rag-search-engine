@@ -5,7 +5,7 @@ import hashlib
 import logging
 import os
 import shutil
-from pathlib import Path
+import threading
 
 # Max DeepSeek completion tokens spent on L1 community narration per _enrich_project run.
 # Prevents runaway cost on unexpectedly large projects.  Default 50k ≈ ≤250 head communities.
@@ -22,6 +22,17 @@ _last_owning_federation_regen: dict[str, float] = {}  # debounce per federation 
 _bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
 # Source-fingerprint memo: path → (coarse_dir_mtime, sig). Avoids re-walking unchanged projects.
 _fingerprint_cache: dict[str, tuple[float, str]] = {}
+# Drift gate: path → sig at last successful _enrich_project. Skips KB cascade when unchanged.
+_last_enriched_sig: dict[str, str] = {}
+# Set while reconcile_projects() is running a bulk pass. Suppresses per-member BPRE fan-out
+# (_regen_owning_processes / self-BPRE in _enrich_project) so the reconcile root-pass is the
+# sole BPRE trigger during bulk reconcile — avoids rebuilding the same root repeatedly on a
+# mid-pass-shifting source sig.
+_reconcile_active = threading.Event()
+# Serializes CPU-bound KB work (community recompute / wiki / BPRE / index_docs) across the
+# watcher and reconcile threads so at most one heavy pass runs at a time — caps daemon CPU at
+# ~one core instead of pinning two concurrently. Never held around index/embed or GPU queries.
+_KB_HEAVY_LOCK = threading.Lock()
 
 log = logging.getLogger(__name__)
 
@@ -232,7 +243,12 @@ def _needs_enrich(path: str) -> bool:
 
 def reconcile_projects() -> None:
     """Idempotent: discover+register members, index any unindexed/stalled project, enrich any
-    project with missing community summaries (any level).  Safe to call repeatedly."""
+    project with missing community summaries (any level).  Safe to call repeatedly.
+
+    While running, suppresses per-member BPRE fan-out (_reconcile_active) so the federation
+    root-pass below is the sole BPRE trigger for a bulk pass — see Part D / sweeps.py module
+    docstring for why (avoids rebuilding the same root repeatedly on a mid-pass-shifting sig).
+    """
     if _PAUSED:
         return
     from opencode_search.core.config import project_graph_db
@@ -240,70 +256,72 @@ def reconcile_projects() -> None:
     from opencode_search.daemon.federation import register_all_members
     from opencode_search.graph.store import GraphStore
 
+    _reconcile_active.set()
     try:
-        register_all_members()
-    except Exception as exc:
-        log.warning("reconcile member-discovery: %s", exc)
-
-    from opencode_search.core.config import federation_exclude_paths
-    _excluded = federation_exclude_paths()
-
-    for entry in list_projects():
-        if _PAUSED:
-            return
-        if not entry.enabled:
-            continue
-        if str(Path(entry.path).resolve()) in _excluded:
-            continue
-        needs_idx = _needs_index(entry.path)
-        needs_rederive = False
-        # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
-        if not needs_idx and not entry.federation:
-            gdb = project_graph_db(entry.path)
-            if gdb.exists():
-                gs = GraphStore(gdb)
-                try:
-                    if gs.community_count() == 0:
-                        needs_idx = True
-                    elif _graph_stale(entry.path, gs):
-                        needs_rederive = True
-                finally:
-                    gs.close()
         try:
-            if needs_idx:
-                _index_project(entry.path)
-                _enrich_project(entry.path)
-            elif needs_rederive:
-                _rederive_graph(entry.path)
-                _enrich_project(entry.path)
-            elif _needs_enrich(entry.path):
-                _enrich_project(entry.path)  # enrich-only; skip expensive re-index
+            register_all_members()
         except Exception as exc:
-            log.warning("reconcile %s: %s", entry.path, exc)
+            log.warning("reconcile member-discovery: %s", exc)
 
-    # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet).
-    # Gate: skip if the combined fingerprint of root + members is unchanged since last run.
-    for entry in list_projects():
-        if _PAUSED:
-            return
-        if not entry.enabled or not entry.federation:
-            continue
-        if str(Path(entry.path).resolve()) in _excluded:
-            continue
-        try:
-            # Build a cheap combined sig from cached fingerprints (already computed above).
-            member_paths = [entry.path, *list(entry.federation or [])]
-            combined = "|".join(
-                _fingerprint_cache.get(p, (0.0, ""))[1] for p in member_paths
-            )
-            current_sig = hashlib.sha1(combined.encode()).hexdigest()
-            if _bpre_state.get("_sig_" + entry.path) == current_sig:
+        from opencode_search.core.config import is_federation_excluded
+
+        for entry in list_projects():
+            if _PAUSED:
+                return
+            if not entry.enabled:
                 continue
-            from opencode_search.kb.bpre import reconstruct_processes
-            reconstruct_processes(entry.path)
-            _bpre_state["_sig_" + entry.path] = current_sig
-        except Exception as exc:
-            log.warning("reconcile bpre %s: %s", entry.path, exc)
+            if is_federation_excluded(entry.path):
+                continue
+            needs_idx = _needs_index(entry.path)
+            needs_rederive = False
+            # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
+            if not needs_idx and not entry.federation:
+                gdb = project_graph_db(entry.path)
+                if gdb.exists():
+                    gs = GraphStore(gdb)
+                    try:
+                        if gs.community_count() == 0:
+                            needs_idx = True
+                        elif _graph_stale(entry.path, gs):
+                            needs_rederive = True
+                    finally:
+                        gs.close()
+            try:
+                if needs_idx:
+                    _index_project(entry.path)
+                    _enrich_project(entry.path)
+                elif needs_rederive:
+                    _rederive_graph(entry.path)
+                    _enrich_project(entry.path)
+                elif _needs_enrich(entry.path):
+                    _enrich_project(entry.path)  # enrich-only; skip expensive re-index
+            except Exception as exc:
+                log.warning("reconcile %s: %s", entry.path, exc)
+
+        # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet;
+        # sole BPRE trigger during this bulk pass — see _reconcile_active above). Unconditional:
+        # reconstruct_processes() carries its own persistent stamp (bpre_algo/bpre_source_sig in
+        # process_graph.db) and is a cheap no-op on an unchanged root, so no extra in-memory gate
+        # is needed here — and a persistent gate survives restarts, unlike one kept in memory.
+        for entry in list_projects():
+            if _PAUSED:
+                return
+            if not entry.enabled or not entry.federation:
+                continue
+            if is_federation_excluded(entry.path):
+                continue
+            try:
+                from opencode_search.kb.bpre import reconstruct_processes
+                with _KB_HEAVY_LOCK:
+                    n = reconstruct_processes(entry.path)
+                _bpre_state["last_run"] = entry.path
+                _bpre_state["edge_count"] = n
+                _bpre_state["last_error"] = None
+            except Exception as exc:
+                log.warning("reconcile bpre %s: %s", entry.path, exc)
+                _bpre_state["last_error"] = str(exc)
+    finally:
+        _reconcile_active.clear()
 
 
 _VACUUM_BLOAT_BYTES: int = 256 * 1024 * 1024  # VACUUM when freelist > 256 MB
@@ -440,102 +458,110 @@ def _enrich_project(project_path: str) -> None:
             "Set DEEPSEEK_API_KEY in env or ~/.config/opencode-search/env."
         )
 
-    from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
-    from opencode_search.core.gpu import gpu_temp_c
-    from opencode_search.graph.community import label_community_structural
-    from opencode_search.graph.enrich import (
-        classify_communities_semantic,
-        compute_significance,
-        enrich_communities_batch,
-    )
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.kb.wiki import build_wiki
+    # Single-flight: at most one CPU-bound KB pass (this function + the reconcile BPRE
+    # root-pass) runs at a time across the watcher and reconcile threads — caps daemon CPU at
+    # ~one core instead of pinning two concurrently. Never held around index/embed or GPU
+    # queries, so search freshness and query latency are unaffected.
+    with _KB_HEAVY_LOCK:
+        from opencode_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
+        from opencode_search.core.gpu import gpu_temp_c
+        from opencode_search.graph.community import label_community_structural
+        from opencode_search.graph.enrich import (
+            classify_communities_semantic,
+            compute_significance,
+            enrich_communities_batch,
+        )
+        from opencode_search.graph.store import GraphStore
+        from opencode_search.kb.wiki import build_wiki
 
-    gs = GraphStore(project_graph_db(project_path))
-    try:
-        gs._con.execute(
-            "DELETE FROM communities WHERE level=1 AND id NOT IN "
-            "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
-        )
-        gs.commit()
-        # Head (member_count≥8 OR cross-community edges≥2): LLM narration, batched+prefix-cached.
-        # Tail (below gate): deterministic structural labels, zero tokens.
-        _head_cids, _tail_cids = compute_significance(gs)
-        for _cid in _tail_cids:
-            label_community_structural(gs, _cid)
-        gs.commit()
-        if _head_cids:
-            _enriched_ids, _usage = enrich_communities_batch(
-                gs, _head_cids,
-                thermal_guard_fn=lambda: gpu_temp_c() > THERMAL_MAX_C,
-                budget=_ENRICH_BUDGET_TOKENS,
-            )
-            log.info(
-                "_enrich_project %s: head=%d tail=%d enriched=%d "
-                "tok(hit=%d miss=%d comp=%d) calls=%d",
-                project_path, len(_head_cids), len(_tail_cids), len(_enriched_ids),
-                _usage.get("prompt_cache_hit_tokens", 0),
-                _usage.get("prompt_cache_miss_tokens", 0),
-                _usage.get("completion_tokens", 0),
-                _usage.get("calls", 0),
-            )
-        gs.commit()
-        gs._con.execute(
-            "UPDATE communities SET title='Community-' || CAST(id AS TEXT) "
-            "WHERE level=1 AND (title IS NULL OR title='')"
-        )
-        gs.commit()
-        _needs_classify = gs._con.execute(
-            "SELECT COUNT(*) FROM communities "
-            "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
-        ).fetchone()[0]
-        if _needs_classify:
-            classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
-        build_wiki(gs, project_wiki_dir(project_path))
-    finally:
-        gs.close()
-    # Federated wiki: (re)generate federation.md for this project if it is a root, and for any
-    # root that owns it as a member (a member edit refreshes the root's aggregate). HR4 holds —
-    # aggregation reads each member's own graph.db; no cross-repo edges. No-op for standalones.
-    try:
-        from opencode_search.kb.wiki import build_federated_index
-        build_federated_index(project_path)
-        _regen_owning_federations(project_path)
-    except Exception as exc:
-        log.warning("federation index %s: %s", project_path, exc)
-    # Member-edit refresh: reconstruct processes for any root that owns this project as a member.
-    try:
-        _regen_owning_processes(project_path)
-    except Exception as exc:
-        log.error("owning-process regen %s: %s", project_path, exc, exc_info=True)
-    # BPRE: reconstruct cross-service processes for federation roots (GPU-free deterministic pass).
-    try:
-        from opencode_search.daemon.federation import expand_federation
-        if len(expand_federation(project_path)) >= 2:
-            from opencode_search.kb.bpre import reconstruct_processes
-            n = reconstruct_processes(project_path)
-            _bpre_state["last_run"] = project_path
-            _bpre_state["edge_count"] = n
-            _bpre_state["last_error"] = None
-    except Exception as exc:
-        log.error("bpre reconstruct %s: %s", project_path, exc, exc_info=True)
-        _bpre_state["last_error"] = str(exc)
-    # Docgen is manual-trigger only (CLI/dashboard). Not wired into the auto-pipeline.
-    # Re-embed generated docs/ under scope=docs (HR28); no-op if no generated docs/ exists.
-    try:
-        from opencode_search.core.config import project_vector_db
-        from opencode_search.embed.embedder import get_embedder
-        from opencode_search.index.indexer import index_docs
-        from opencode_search.index.store import VectorStore
-        _vs = VectorStore(project_vector_db(project_path))
+        gs = GraphStore(project_graph_db(project_path))
         try:
-            _n = index_docs(project_path, get_embedder(), _vs)
-            if _n:
-                log.info("index_docs %s: %d doc chunks", project_path, _n)
+            gs._con.execute(
+                "DELETE FROM communities WHERE level=1 AND id NOT IN "
+                "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
+            )
+            gs.commit()
+            # Head (member_count≥8 OR cross-community edges≥2): LLM narration, batched+prefix-cached.
+            # Tail (below gate): deterministic structural labels, zero tokens.
+            _head_cids, _tail_cids = compute_significance(gs)
+            for _cid in _tail_cids:
+                label_community_structural(gs, _cid)
+            gs.commit()
+            if _head_cids:
+                _enriched_ids, _usage = enrich_communities_batch(
+                    gs, _head_cids,
+                    thermal_guard_fn=lambda: gpu_temp_c() > THERMAL_MAX_C,
+                    budget=_ENRICH_BUDGET_TOKENS,
+                )
+                log.info(
+                    "_enrich_project %s: head=%d tail=%d enriched=%d "
+                    "tok(hit=%d miss=%d comp=%d) calls=%d",
+                    project_path, len(_head_cids), len(_tail_cids), len(_enriched_ids),
+                    _usage.get("prompt_cache_hit_tokens", 0),
+                    _usage.get("prompt_cache_miss_tokens", 0),
+                    _usage.get("completion_tokens", 0),
+                    _usage.get("calls", 0),
+                )
+            gs.commit()
+            gs._con.execute(
+                "UPDATE communities SET title='Community-' || CAST(id AS TEXT) "
+                "WHERE level=1 AND (title IS NULL OR title='')"
+            )
+            gs.commit()
+            _needs_classify = gs._con.execute(
+                "SELECT COUNT(*) FROM communities "
+                "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
+            ).fetchone()[0]
+            if _needs_classify:
+                classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
+            build_wiki(gs, project_wiki_dir(project_path))
         finally:
-            _vs.close()
-    except Exception as exc:
-        log.error("index_docs %s: %s", project_path, exc, exc_info=True)
+            gs.close()
+        # Federated wiki: (re)generate federation.md for this project if it is a root, and for any
+        # root that owns it as a member (a member edit refreshes the root's aggregate). HR4 holds —
+        # aggregation reads each member's own graph.db; no cross-repo edges. No-op for standalones.
+        try:
+            from opencode_search.kb.wiki import build_federated_index
+            build_federated_index(project_path)
+            _regen_owning_federations(project_path)
+        except Exception as exc:
+            log.warning("federation index %s: %s", project_path, exc)
+        # Member-edit refresh + self-BPRE: skipped during a bulk reconcile pass (_reconcile_active)
+        # — the reconcile root-pass is the sole BPRE trigger then, so the same root is not rebuilt
+        # once per member on a mid-pass-shifting source sig (Part D). Steady-state on_change still
+        # triggers both normally.
+        if not _reconcile_active.is_set():
+            try:
+                _regen_owning_processes(project_path)
+            except Exception as exc:
+                log.error("owning-process regen %s: %s", project_path, exc, exc_info=True)
+            try:
+                from opencode_search.daemon.federation import expand_federation
+                if len(expand_federation(project_path)) >= 2:
+                    from opencode_search.kb.bpre import reconstruct_processes
+                    n = reconstruct_processes(project_path)
+                    _bpre_state["last_run"] = project_path
+                    _bpre_state["edge_count"] = n
+                    _bpre_state["last_error"] = None
+            except Exception as exc:
+                log.error("bpre reconstruct %s: %s", project_path, exc, exc_info=True)
+                _bpre_state["last_error"] = str(exc)
+        # Docgen is manual-trigger only (CLI/dashboard). Not wired into the auto-pipeline.
+        # Re-embed generated docs/ under scope=docs (HR28); no-op if no generated docs/ exists.
+        try:
+            from opencode_search.core.config import project_vector_db
+            from opencode_search.embed.embedder import get_embedder
+            from opencode_search.index.indexer import index_docs
+            from opencode_search.index.store import VectorStore
+            _vs = VectorStore(project_vector_db(project_path))
+            try:
+                _n = index_docs(project_path, get_embedder(), _vs)
+                if _n:
+                    log.info("index_docs %s: %d doc chunks", project_path, _n)
+            finally:
+                _vs.close()
+        except Exception as exc:
+            log.error("index_docs %s: %s", project_path, exc, exc_info=True)
 
 
 def _regen_owning_federations(member_path: str) -> None:
@@ -549,12 +575,12 @@ def _regen_owning_federations(member_path: str) -> None:
         if entry.enabled and entry.federation and member_path in entry.federation:
             if now - _last_owning_federation_regen.get(entry.path, 0.0) < _BPRE_CASCADE_DEBOUNCE_S:
                 continue
+            # Stamp BEFORE the long operation so concurrent triggers see the lock.
+            _last_owning_federation_regen[entry.path] = now
             try:
                 build_federated_index(entry.path)
-                _last_owning_federation_regen[entry.path] = now
             except Exception as exc:
                 log.warning("owning-federation regen %s: %s", entry.path, exc)
-
 
 
 def _regen_owning_processes(member_path: str) -> None:
@@ -568,9 +594,10 @@ def _regen_owning_processes(member_path: str) -> None:
         if entry.enabled and entry.federation and member_path in entry.federation:
             if now - _last_owning_process_regen.get(entry.path, 0.0) < _BPRE_CASCADE_DEBOUNCE_S:
                 continue
+            # Stamp BEFORE the long operation so concurrent triggers see the lock.
+            _last_owning_process_regen[entry.path] = now
             try:
                 reconstruct_processes(entry.path)
-                _last_owning_process_regen[entry.path] = now
             except Exception as exc:
                 log.error("owning-process regen %s: %s", entry.path, exc, exc_info=True)
 
@@ -595,11 +622,15 @@ def on_change(project_path: str, files: list) -> None:
         log.warning("incremental reindex %s: %s", project_path, exc)
         _last_index_fail[project_path] = now  # back off before retrying
         return
+    sig = _source_fingerprint(project_path)
+    if sig == _last_enriched_sig.get(project_path):
+        return  # source unchanged — KB/wiki/BPRE cascade not needed
     if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:
         return
     _last_kb_enrich[project_path] = now
     try:
         _enrich_project(project_path)
+        _last_enriched_sig[project_path] = sig
     except Exception as exc:
         log.warning("kb enrich on_change %s: %s", project_path, exc)
 

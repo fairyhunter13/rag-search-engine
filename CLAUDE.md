@@ -51,6 +51,16 @@ python -m compileall -q src/opencode_search
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
+## Efficiency invariants (P16/P17, HR32/HR33)
+
+**Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
+in `daemon/sweeps.py:on_change` runs only when `_source_fingerprint` detects real source drift — never
+on metadata-only or non-indexed-file events. With no drift the daemon reaches true idle and
+`_idle_unload` (300 s) frees the embedder/reranker + ORT CUDA arena. **File-watching is event-driven
+via OS notifications (watchdog/inotify) — never manual polling.** The poll fallback in `daemon/watcher.py`
+activates only when inotify is unavailable (NFS/SMB, `max_user_watches` exhaustion). See
+`docs/info-hierarchy.md` "Compute-spend doctrine" and `model.yaml` P16/P17/HR32/HR33.
+
 ## Project quick reference
 
 - Entry points: `src/opencode_search/server/mcp.py` (MCP server + routes), `src/opencode_search/daemon/` (daemon package), `src/opencode_search/cli.py` (CLI), `src/opencode_search/__main__.py` (bridge-stdio shim)

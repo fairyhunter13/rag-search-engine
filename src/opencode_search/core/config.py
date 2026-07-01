@@ -108,6 +108,46 @@ def federation_exclude_paths() -> frozenset[str]:
     )
 
 
+def _federation_exclude_entries() -> tuple[frozenset[str], tuple[str, ...]]:
+    """Split OPENCODE_FEDERATION_EXCLUDE into (exact_or_prefix_set, glob_tuple).
+
+    Entries containing * ? [ are treated as fnmatch globs (expanduser, not resolved).
+    All other entries are resolved to absolute paths for exact/prefix matching.
+    """
+    raw = os.environ.get("OPENCODE_FEDERATION_EXCLUDE", "")
+    exact: set[str] = set()
+    globs: list[str] = []
+    for p in raw.split(os.pathsep):
+        p = p.strip()
+        if not p:
+            continue
+        if any(c in p for c in ("*", "?", "[")):
+            globs.append(os.path.expanduser(p))
+        else:
+            exact.add(str(Path(p).expanduser().resolve()))
+    return frozenset(exact), tuple(globs)
+
+
+def is_federation_excluded(candidate: str) -> bool:
+    """True if candidate matches any entry in OPENCODE_FEDERATION_EXCLUDE.
+
+    Plain entries match by exact path or prefix (subtree).
+    Entries with glob chars (* ? [) are matched with fnmatch against the resolved candidate.
+    """
+    import fnmatch
+    try:
+        resolved = Path(candidate).resolve()
+    except OSError:
+        return False
+    exact_or_prefix, globs = _federation_exclude_entries()
+    for entry in exact_or_prefix:
+        entry_p = Path(entry)
+        if resolved == entry_p or resolved.is_relative_to(entry_p):
+            return True
+    resolved_str = str(resolved)
+    return any(fnmatch.fnmatch(resolved_str, pat) for pat in globs)
+
+
 def embed_batch_size() -> int:
     try:
         from opencode_search.core.gpu import vram_free_mb
