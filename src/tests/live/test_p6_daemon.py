@@ -44,7 +44,6 @@ def test_watcher_detects_new_file(tmp_path):
     (tmp_path / "init.py").write_text("x = 1\n")
     changed: list[str] = []
     w = Watcher(on_change=lambda p, fs: changed.append(p))
-    w.POLL_INTERVAL = 0.1
     w.watch(proj)
     w.start()
     time.sleep(0.15)
@@ -55,23 +54,22 @@ def test_watcher_detects_new_file(tmp_path):
 
 
 def test_watcher_inotify_fast(tmp_path):
-    """inotify must detect a new file in < 1s even with POLL_INTERVAL=5.0."""
+    """watchfiles/Rust notify must detect a new file in < 1s (kernel notification, no polling)."""
     from opencode_search.daemon.watcher import Watcher
 
     proj = str(tmp_path)
     (tmp_path / "init.py").write_text("x = 1\n")
     changed: list[str] = []
     w = Watcher(on_change=lambda p, fs: changed.append(p))
-    # leave POLL_INTERVAL at default 5.0 — if poll fires we'd wait 5s+
     w.watch(proj)
     w.start()
-    time.sleep(0.1)  # let Observer threads settle
+    time.sleep(0.1)  # let the watcher thread settle
     (tmp_path / "fast.py").write_text("y = 2\n")
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline and not changed:
         time.sleep(0.05)
     w.stop()
-    assert changed, "inotify Observer must detect new file in < 1s"
+    assert changed, "watchfiles must detect new file in < 1s"
 
 
 def test_systemd_unit_text():
@@ -725,7 +723,6 @@ def test_p34_watcher_updates_vector_index(tmp_path):
     (tmp_path / "seed.py").write_text("def seed_func(): pass\n")
     _index_project(proj)
     w = Watcher(on_change=on_change)
-    w.POLL_INTERVAL = 0.1
     w.watch(proj)
     w.start()
     time.sleep(0.15)

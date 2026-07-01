@@ -186,20 +186,19 @@ def test_drift_gate_triggers_enrich_when_sig_changes():
 
 
 def test_watcher_prefers_inotify_over_poll():
-    """IS3: Watcher.start() selects watchdog/inotify observer when watchdog is importable."""
+    """IS3: Watcher.start() runs one watchfiles (Rust notify) thread — no hand-rolled poll loop."""
     from opencode_search.daemon.watcher import Watcher
 
     w = Watcher(on_change=lambda p, f: None)
     w.start()
     try:
-        assert w._observer is not None, (
-            "inotify/watchdog observer must be selected when watchdog is importable"
+        assert w._thread is not None and w._thread.is_alive(), (
+            "watcher thread must be running"
         )
-        assert w._thread is None, (
-            "poll fallback thread must NOT start when inotify observer is active"
-        )
+        assert w._thread.name == "ocs-watcher", "single unified watchfiles thread expected"
     finally:
         w.stop()
+    assert not w._thread.is_alive(), "watcher thread must stop cleanly"
 
 
 def test_reconcile_active_flag_lifecycle():
@@ -651,3 +650,142 @@ def test_bps4_convergence_second_call_reuses(_bps_fed):
         assert not calls, "second consecutive call with no code change must reuse, not rebuild"
     finally:
         bpre_mod._trace_processes = orig
+
+
+def _wt_wait_for(pred, timeout: float = 6.0, step: float = 0.05) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(step)
+    return pred()
+
+
+def test_wt1_ignored_dir_churn_never_reaches_on_change():
+    """WT1 (Phase 6): a burst of writes into a hidden dir + a gitignored dir must
+    never invoke on_change — the exact 4th-root-cause regression (watchdog used to
+    deliver every raw event to Python before any gate could say "no drift")."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from opencode_search.daemon.watcher import Watcher
+
+    calls: list[tuple[str, list[Path]]] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {
+            "src/main.py": "print(1)\n",
+            ".gitignore": "cache/\n",
+        })
+        w = Watcher(on_change=lambda root, files: calls.append((root, files)))
+        w.watch(tmp)
+        w.start()
+        try:
+            time.sleep(0.3)  # let the watcher thread start observing
+            for i in range(20):
+                _write_tree(tmp, {f".svelte-kit/gen_{i}.js": "x\n"})
+                _write_tree(tmp, {f"cache/tmp_{i}.txt": "x\n"})
+            # No predicate to wait on (we're proving absence) — a fixed settle window
+            # longer than watchfiles' default debounce (1600ms) is the correct check.
+            time.sleep(3.0)
+            assert not calls, f"ignored-dir churn must never reach on_change; got {calls}"
+        finally:
+            w.stop()
+
+
+def test_wt2_real_edit_fires_once():
+    """WT2 (Phase 6): editing a tracked source file yields exactly one on_change
+    call for its root, carrying that file."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from opencode_search.daemon.watcher import Watcher
+
+    calls: list[tuple[str, list[Path]]] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {"src/main.py": "print(1)\n"})
+        w = Watcher(on_change=lambda root, files: calls.append((root, files)))
+        w.watch(tmp)
+        w.start()
+        try:
+            time.sleep(0.3)
+            target = Path(tmp) / "src" / "main.py"
+            with open(target, "a") as f:
+                f.write("print(2)\n")
+            assert _wt_wait_for(lambda: len(calls) >= 1), f"real edit must fire on_change; got {calls}"
+            assert len(calls) == 1, f"expected exactly one on_change call; got {calls}"
+            root, files = calls[0]
+            assert root == tmp
+            assert any(p.name == "main.py" for p in files)
+        finally:
+            w.stop()
+
+
+def test_wt3_batch_coalescing_single_call_per_burst():
+    """WT3 (Phase 6): N writes to one tracked file within a debounce window must
+    yield a single on_change for that root — Rust-side coalescing subsumes the old
+    hand-rolled per-project debounce throttle."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from opencode_search.daemon.watcher import Watcher
+
+    calls: list[tuple[str, list[Path]]] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {"src/main.py": "print(1)\n"})
+        w = Watcher(on_change=lambda root, files: calls.append((root, files)))
+        w.watch(tmp)
+        w.start()
+        try:
+            time.sleep(0.3)
+            target = Path(tmp) / "src" / "main.py"
+            # Tight loop, no inter-write sleep: keeps every write well inside the
+            # 50ms `step` window watchfiles uses to decide a burst has ended, so
+            # the whole burst coalesces into one batch (matches live storm shape).
+            for i in range(10):
+                with open(target, "a") as f:
+                    f.write(f"print({i})\n")
+            assert _wt_wait_for(lambda: len(calls) >= 1), f"burst must fire on_change; got {calls}"
+            time.sleep(2.0)  # settle window past debounce, to catch any extra calls
+            assert len(calls) == 1, f"burst of 10 writes must coalesce to 1 on_change call; got {calls}"
+        finally:
+            w.stop()
+
+
+def test_wt4_dynamic_add_restart_delivers_new_root():
+    """WT4 (Phase 6): watch(new_root) while the loop is already running must relaunch
+    and deliver the new root's edits, without dropping the original root's events."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from opencode_search.daemon.watcher import Watcher
+
+    calls: list[tuple[str, list[Path]]] = []
+    with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2:
+        _write_tree(tmp1, {"src/a.py": "print(1)\n"})
+        _write_tree(tmp2, {"src/b.py": "print(1)\n"})
+        w = Watcher(on_change=lambda root, files: calls.append((root, files)))
+        w.watch(tmp1)
+        w.start()
+        try:
+            time.sleep(0.3)  # loop is now running with only tmp1
+            w.watch(tmp2)  # dynamic add while running — must trigger a restart
+
+            with open(Path(tmp2) / "src" / "b.py", "a") as f:
+                f.write("print(2)\n")
+            assert _wt_wait_for(lambda: any(root == tmp2 for root, _ in calls)), (
+                f"dynamically added root's edits must be delivered; got {calls}"
+            )
+
+            with open(Path(tmp1) / "src" / "a.py", "a") as f:
+                f.write("print(2)\n")
+            assert _wt_wait_for(lambda: any(root == tmp1 for root, _ in calls)), (
+                f"original root's events must not be dropped after a dynamic add; got {calls}"
+            )
+        finally:
+            w.stop()

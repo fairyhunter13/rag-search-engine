@@ -29,8 +29,9 @@ dependencies = [
     # Vector database (sqlite-vec: flat ANN, perfect recall, unified store)
     "sqlite-vec>=0.1.0",
 
-    # File watching
-    "watchdog>=3.0.0",
+    # File watching (Rust `notify` backend: one thread/inotify-instance for all
+    # watched roots, Rust-side event coalescing — see daemon/watcher.py)
+    "watchfiles>=1.0.0",
 
     # Gitignore matching
     "pathspec>=0.12.0",

@@ -60,7 +60,7 @@ L1_invariants:
     principle: "Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after OPENCODE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal)."
     check: null
   - id: P17
-    principle: "File-watching is event-driven via OS filesystem notifications (watchdog/inotify); manual per-file polling is a last-resort fallback only (NFS/SMB or max_user_watches exhaustion), never the primary path."
+    principle: "File-watching is event-driven via OS filesystem notifications (watchfiles/Rust notify) — one inotify instance + one thread for all watched roots, Rust-side event coalescing; manual per-file polling is a last-resort fallback only (NFS/SMB, handled internally by the Rust notify crate's force_polling), never a hand-rolled Python poll loop."
     check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
   - id: P18
     principle: "Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private ose-live-audit repo."
@@ -137,7 +137,7 @@ L3_specs:
     spec: "Idle-efficiency — on_change KB cascade (enrich/wiki/BPRE) is gated by source-fingerprint drift (_last_enriched_sig); metadata-only and non-source events skip the cascade entirely; idle-unload frees the ORT arena after MODEL_IDLE_UNLOAD_S; CPU < 1 % when idle."
     test: test_drift_gate_skips_enrich_when_sig_unchanged
   - id: HR33
-    spec: "Notification-first watcher — Watcher.start() selects the watchdog/inotify observer when available; poll fallback activates only when inotify is unavailable; both branches are mutually exclusive."
+    spec: "Notification-first watcher — Watcher.start() runs a single watchfiles (Rust notify) thread across all watched roots; no hand-rolled poll loop exists (polling, if ever needed, is the Rust library's own force_polling path)."
     test: test_watcher_prefers_inotify_over_poll
   - id: HR34
     spec: "Public-release & device-neutrality guard (P18) — a whole-tracked-tree git-grep (src/, docs/, scripts/, vendor/*/src/, generated artifacts) fails on any absolute /home/<user>/, /root/, /Users/<user>/, or Windows C:\\Users\\<user>\\ path; removed OSE flag names must not reappear; storage-path literals in core/ and daemon/ must derive from XDG_DATA_HOME/OPENCODE_* env, never a hardcoded machine path. Device-specific name bans (company/codename/device-id) are deliberately absent from the public tree and live only in the private ose-live-audit repo."
@@ -148,6 +148,9 @@ L3_specs:
   - id: HR36
     spec: "BPRE's federation-wide reuse stamp (bpre_source_sig, kb/bpre.py) and per-member scan-cache key (_member_scan_sig) are code-only and discovery-unified: _source_files routes through the same HR35 _should_drop resolver as iter_files (is_code_language-gated, hidden-dir/gitignore/OSE-config aware), and _bpre_code_sig hashes only that file set — never the all-files _source_fingerprint. The stamp is written once from the sig computed at rebuild start (no end-of-rebuild recompute), so docs/config/image/hidden-tool-cache churn on a federation root can never trigger a process-graph rebuild, while a real member code edit still does (root-caused 2026-07-01, 3rd distinct idle-CPU cause: docs/*.yaml + .claude/*.js churn on a 170-member federation root was flipping the all-files stamp faster than the ~5min rebuild completed, pinning a core continuously)."
     test: test_bps1_docs_churn_quiescent_no_rebuild
+  - id: HR37
+    spec: "The watcher trigger surface, not only the drift gates it feeds, must be ignore-aware and storm-proof: daemon/watcher.py runs one watchfiles (Rust notify) thread + one inotify instance for ALL watched roots (not one watchdog Observer per root); watch_filter reuses the HR35 is_ignored_path resolver so a churn burst in a hidden/gitignored dir is dropped in Rust before on_change is ever called; Rust-side debounce/step coalesces a burst of writes to one file into a single on_change call; dynamic watch(new_root) while running relaunches the watch generator and blocks (bounded, via a restart-ack event) until the new root is actually armed, closing the race where an edit immediately after a dynamic add could land in the teardown/rearm gap and be silently lost (root-caused 2026-07-01 evening, 4th distinct idle-CPU cause: watchdog scheduled one recursive Observer per federation member — ~278 threads / 139 inotify instances, already over the default max_user_instances=128 — and filtered ignored paths post-hoc in Python per raw event, so an unbounded Python-side InotifyBuffer grew to 2.45GB RSS and pinned one dispatch thread at ~104% CPU for the life of the process, even after the HR35/HR36 drift-gate fixes made the gates themselves correctly report no drift)."
+    test: test_wt1_ignored_dir_churn_never_reaches_on_change
 
 # ── L4: Code patterns & generation rules ─────────────────────────────────────
 L4_patterns:
@@ -158,7 +161,7 @@ L4_patterns:
   - "graph.db communities: level=1 only (L2/L3 deleted WS-B 2026-06-26)"
   - "iter_files: federation_mode=True prunes symlink dirs pointing outside root"
   - "on_change drift gate: compute _source_fingerprint(path) after index step; skip enrich if sig == _last_enriched_sig[path]; commit sig only after successful _enrich_project"
-  - "watcher selection: _try_inotify() sets self._observer; _loop() poll fallback only when self._observer is None; snapshot seeded lazily in _loop first-pass (not in watch())"
+  - "watcher: one watchfiles.watch() generator in a single 'ocs-watcher' thread covers all roots; _filter reuses is_ignored_path; watch(new_path) while running sets a restart Event and blocks on a restart-ack Event (bounded) so the caller only returns once the new root is actually armed"
   - "code-semantic resolution ladder (HR15-19): tree-sitter extraction -> valueflow FQN-join -> resolve_rerank GPU cross-encoder -> llm_escalation.escalate (SEA, capped/cached/batched) -> whole-file DeepSeek residue; each tier sees only the prior tier's unresolved residue"
   - "any new DeepSeek call site in kb/ or graph/ must feed _accumulate_llm_tokens(usage, category) so llm_token_stats() stays a complete accounting (HR23) — no direct deepseek_extract call bypasses it"
   - "discovery decision order (index/discover.py _should_drop): OSE exclude (drop) > OSE include (force-keep) > default hidden-dir/IGNORED_DIRS policy (drop) > .gitignore (drop, supplementary) > keep — OSE config is always authoritative over .gitignore"
