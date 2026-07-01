@@ -60,7 +60,7 @@ def test_sh4_baseline_seed_no_mutation(safe_tmp_path):
     """SH4: seeding the stamp doesn't mutate symbols or communities."""
     from opencode_search.core.config import ProjectEntry, project_graph_db
     from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _pipeline_algo_version, _source_fingerprint
+    from opencode_search.daemon.sweeps import _code_source_fingerprint, _pipeline_algo_version
     from opencode_search.graph.store import GraphStore
 
     proj = str(safe_tmp_path)
@@ -78,7 +78,7 @@ def test_sh4_baseline_seed_no_mutation(safe_tmp_path):
         gs2 = GraphStore(gdb)
         try:
             gs2.set_meta("algo_version", _pipeline_algo_version())
-            gs2.set_meta("source_sig", _source_fingerprint(proj))
+            gs2.set_meta("source_sig", _code_source_fingerprint(proj))
             gs2.commit()
             n_syms = gs2._con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
             n_comm = gs2._con.execute("SELECT COUNT(*) FROM communities").fetchone()[0]

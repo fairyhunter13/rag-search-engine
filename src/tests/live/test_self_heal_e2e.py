@@ -75,8 +75,8 @@ def test_source_drift_triggers_rederive(_proj):
     """T3: adding a new source file changes the fingerprint; reconcile re-extracts it."""
     from opencode_search.core.config import project_graph_db
     from opencode_search.daemon.sweeps import (
+        _code_source_fingerprint,
         _index_project,
-        _source_fingerprint,
         reconcile_projects,
     )
     from opencode_search.graph.store import GraphStore
@@ -97,7 +97,7 @@ def test_source_drift_triggers_rederive(_proj):
         gs.close()
 
     (p / "new_module.py").write_text("def brand_new_fn():\n    pass\n")
-    sig_new = _source_fingerprint(proj)
+    sig_new = _code_source_fingerprint(proj)
     assert sig_new != sig_before, "fingerprint must change after adding a file"
 
     reconcile_projects()
