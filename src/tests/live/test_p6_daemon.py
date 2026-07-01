@@ -297,6 +297,32 @@ def test_federation_index_members_registers(safe_tmp_path):
     remove_project(str(member))
 
 
+def test_reload_exit_code_split():
+    """P10.7 unit: reload requests a non-zero exit (systemd restarts); stop requests 0 (stays down).
+
+    GPU-free, in-process — no SIGTERM sent, no daemon killed. Proves the exit-code split that
+    makes Restart=on-failure distinguish reload from daemon-stop under the same SIGTERM signal.
+    """
+    from opencode_search.daemon import server
+    from opencode_search.server.routes_ops import _reload_exit_code
+
+    assert _reload_exit_code(True) == 3
+    assert server._REQUESTED_EXIT_CODE == 3
+    assert _reload_exit_code(False) == 0
+    assert server._REQUESTED_EXIT_CODE == 0
+
+
+def test_parse_restart_param():
+    """P10.7 unit: ?restart= query-param parsing (default true; only 'false' means stop)."""
+    from opencode_search.server.routes_ops import _parse_restart_param
+
+    assert _parse_restart_param(None) is True  # no query param -> reload (documented default)
+    assert _parse_restart_param("true") is True
+    assert _parse_restart_param("false") is False
+    assert _parse_restart_param("False") is False  # case-insensitive
+    assert _parse_restart_param("anything-else") is True
+
+
 @pytest.mark.slow
 def test_api_reload_returns_reloading():
     """P10.7/P15.2: POST /api/reload on the LIVE daemon — handler sends SIGTERM
@@ -320,14 +346,23 @@ def test_api_reload_returns_reloading():
     )
     body = __import__("json").loads(r.read())
     assert r.status == 200 and body.get("status") == "reloading"
-    # Wait for systemd to restart the daemon (up to 8s)
+    # Wait for systemd to restart the daemon (up to 8s) — assert recovery, don't just poll.
+    recovered = False
     for _ in range(16):
         time.sleep(0.5)
         try:
             urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=2)
+            recovered = True
             break
         except Exception:
             continue
+    assert recovered, "daemon did not come back up after /api/reload (exit-code split regressed?)"
+    # NOTE: the restart=false ("daemon stop") path is intentionally NOT exercised as a live SIGTERM
+    # here — it requests exit 0, which systemd's Restart=on-failure will NOT auto-recover from, so
+    # sending it to the shared singleton daemon would leave it down for the rest of the suite. Its
+    # request-parsing + response-contract are covered GPU-free by test_reload_exit_code_split and
+    # test_parse_restart_param above; the systemd-level stay-down proof (NRestarts unchanged,
+    # ExecMainStatus==0, service goes inactive) belongs in the private ose-live-audit repo per plan.
 
 
 def test_no_heuristic_regression():

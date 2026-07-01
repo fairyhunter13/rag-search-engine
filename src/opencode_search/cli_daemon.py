@@ -45,13 +45,13 @@ def daemon_stop(
     host: str | None = typer.Option(None),
     port: int | None = typer.Option(None),
 ) -> None:
-    """Stop the daemon via /api/reload (systemd will not restart it if disabled)."""
+    """Stop the daemon via /api/reload?restart=false (exit 0 -> systemd will not restart it)."""
     import requests
 
     from opencode_search.core.config import DAEMON_HOST, DAEMON_PORT
     h, p = host or DAEMON_HOST, port or DAEMON_PORT
     try:
-        requests.post(f"http://{h}:{p}/api/reload", timeout=3)
+        requests.post(f"http://{h}:{p}/api/reload?restart=false", timeout=3)
         typer.echo("Stop signal sent.")
     except Exception as exc:
         typer.echo(f"Could not reach daemon: {exc}")

@@ -27,10 +27,24 @@ async def _api_metrics(request: Request) -> JSONResponse:
     return JSONResponse(_snapshot())
 
 
+def _reload_exit_code(restart: bool) -> int:
+    """Non-zero -> systemd Restart=on-failure restarts (reload); 0 -> stays down (stop)."""
+    from opencode_search.daemon import server
+    server._REQUESTED_EXIT_CODE = 3 if restart else 0
+    return server._REQUESTED_EXIT_CODE
+
+
+def _parse_restart_param(value: str | None) -> bool:
+    """?restart= query param, default true; only the literal 'false' (any case) means stop."""
+    return (value or "true").lower() != "false"
+
+
 async def _api_reload(request: Request) -> JSONResponse:
     import signal
+    restart = _parse_restart_param(request.query_params.get("restart"))
+    _reload_exit_code(restart)
     os.kill(os.getpid(), signal.SIGTERM)
-    return JSONResponse({"status": "reloading"})
+    return JSONResponse({"status": "reloading" if restart else "stopping"})
 
 
 async def _api_sweeps_pause(request: Request) -> JSONResponse:
