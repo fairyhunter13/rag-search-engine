@@ -51,7 +51,7 @@ python -m compileall -q src/opencode_search
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
-## Efficiency invariants (P16/P17, HR32/HR33)
+## Efficiency invariants (P16/P17, HR32/HR33/HR35)
 
 **Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
 in `daemon/sweeps.py:on_change` runs only when `_source_fingerprint` detects real source drift — never
@@ -60,6 +60,17 @@ on metadata-only or non-indexed-file events. With no drift the daemon reaches tr
 via OS notifications (watchdog/inotify) — never manual polling.** The poll fallback in `daemon/watcher.py`
 activates only when inotify is unavailable (NFS/SMB, `max_user_watches` exhaustion). See
 `docs/info-hierarchy.md` "Compute-spend doctrine" and `model.yaml` P16/P17/HR32/HR33.
+
+**The drift gate's input must itself be gitignore/hidden-dir-aware (HR35).** `_source_fingerprint` and
+the watcher's `is_ignored_path` both route through one shared resolver in `index/discover.py`, applied
+in strict order: OSE `.opencode-index.yaml` `exclude` (drop) > OSE `include` (force-keep, wins over
+`.gitignore`) > default hidden-dir/`IGNORED_DIRS` policy (drop) > `.gitignore` (drop, supplementary,
+gated by `respect_gitignore`, cached per-mtime) > keep. This closes the root-cause found 2026-07-01: a
+live `vite dev`/Playwright-MCP session continuously rewriting git-ignored tool-cache dirs
+(`.svelte-kit`, `.playwright-mcp`) was flipping the fingerprint on every write and re-triggering the
+full cascade every ~5 min, pinning a CPU core indefinitely. `.opencode-index.yaml` now supports
+`index.include` (force-keep globs) and `index.respect_gitignore` (default `true`) alongside the
+existing `index.exclude`.
 
 ## Extraction doctrine (P6, HR15–HR19, HR23)
 
@@ -71,6 +82,20 @@ tree-sitter structure and, for genuine residual ambiguity, a capped/cached/batch
 requirement for any new DeepSeek call site (stable prefix, batch, cap, structural context, feed
 `llm_token_stats()`): `docs/info-hierarchy.md` "Extraction / semantic-resolution ladder". Enforced by
 `src/tests/live/test_no_code_semantic_regex.py` + `model.yaml` P6.
+
+## Public-release & device-neutrality invariants (P18, HR34)
+
+This repo is **public**. Never commit secrets, real device paths, or company/project names. Every
+machine-specific value (storage paths, host, port, models, GPU device) is **env-driven with XDG
+defaults** — see `core/config.py:8-46` (`XDG_DATA_HOME`, `OPENCODE_REGISTRY_PATH`,
+`OPENCODE_INDEX_ROOT`, `OPENCODE_MCP_DAEMON_HOST/PORT`, `OPENCODE_GPU_DEVICE`, etc.). No hardcoded
+absolute paths (`/home/<user>/`, `/root/`, `/Users/<user>/`, `C:\Users\<user>\`), usernames, or
+hostnames anywhere in tracked source, tests, docs, scripts, or generated artifacts. Guards:
+`test_public_hygiene.py` (whole-tree home-path scan incl. Windows + storage-path env-driven
+assertion), `test_no_real_project_in_tests.py` (machine-agnostic test fixtures),
+`test_no_mocks_or_fakes.py`, `model.yaml` P7/P18/HR13/HR34. Device-specific *name* bans (real
+company/codename/device-id lists) deliberately stay out of this public tree — they live only in the
+private `ose-live-audit` repo.
 
 ## Project quick reference
 

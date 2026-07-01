@@ -62,6 +62,9 @@ L1_invariants:
   - id: P17
     principle: "File-watching is event-driven via OS filesystem notifications (watchdog/inotify); manual per-file polling is a last-resort fallback only (NFS/SMB or max_user_watches exhaustion), never the primary path."
     check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
+  - id: P18
+    principle: "Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private ose-live-audit repo."
+    check: {grep: "/home/[a-zA-Z0-9_.-]+/|/root/[a-zA-Z0-9_.-]+/|/Users/[a-zA-Z0-9_.-]+/|C:\\\\Users\\\\[a-zA-Z0-9_.-]+", paths: "src/opencode_search/ docs/ scripts/ vendor/*/src/", exclude_paths: "src/tests/live/test_public_hygiene.py", verdict_if_match: AT_RISK}
 
 # ── L2: Components (capability → module → entry points) ─────────────────────
 L2_components:
@@ -136,6 +139,12 @@ L3_specs:
   - id: HR33
     spec: "Notification-first watcher — Watcher.start() selects the watchdog/inotify observer when available; poll fallback activates only when inotify is unavailable; both branches are mutually exclusive."
     test: test_watcher_prefers_inotify_over_poll
+  - id: HR34
+    spec: "Public-release & device-neutrality guard (P18) — a whole-tracked-tree git-grep (src/, docs/, scripts/, vendor/*/src/, generated artifacts) fails on any absolute /home/<user>/, /root/, /Users/<user>/, or Windows C:\\Users\\<user>\\ path; removed OSE flag names must not reappear; storage-path literals in core/ and daemon/ must derive from XDG_DATA_HOME/OPENCODE_* env, never a hardcoded machine path. Device-specific name bans (company/codename/device-id) are deliberately absent from the public tree and live only in the private ose-live-audit repo."
+    test: test_no_absolute_home_paths
+  - id: HR35
+    spec: "Source-fingerprint discovery is gitignore- and hidden-dir-aware with OSE-config precedence (index/discover.py _should_drop, shared by iter_files + is_ignored_path): OSE .opencode-index.yaml exclude beats include beats default hidden-dir/IGNORED_DIRS policy beats .gitignore beats keep. Gitignored/hidden tool-cache dirs (.svelte-kit, .playwright-mcp, .astro, .turbo, .vite, etc.) never enter _source_fingerprint, so tool-cache regeneration cannot spuriously flip the P4 drift gate (root-caused 2026-07-01: a live vite/playwright session rewriting wiki/.svelte-kit + .playwright-mcp pinned a CPU core via an every-~5min false-positive BPRE/enrich cascade)."
+    test: test_drift_gate_quiescent_under_tool_cache_churn
 
 # ── L4: Code patterns & generation rules ─────────────────────────────────────
 L4_patterns:
@@ -149,3 +158,4 @@ L4_patterns:
   - "watcher selection: _try_inotify() sets self._observer; _loop() poll fallback only when self._observer is None; snapshot seeded lazily in _loop first-pass (not in watch())"
   - "code-semantic resolution ladder (HR15-19): tree-sitter extraction -> valueflow FQN-join -> resolve_rerank GPU cross-encoder -> llm_escalation.escalate (SEA, capped/cached/batched) -> whole-file DeepSeek residue; each tier sees only the prior tier's unresolved residue"
   - "any new DeepSeek call site in kb/ or graph/ must feed _accumulate_llm_tokens(usage, category) so llm_token_stats() stays a complete accounting (HR23) — no direct deepseek_extract call bypasses it"
+  - "discovery decision order (index/discover.py _should_drop): OSE exclude (drop) > OSE include (force-keep) > default hidden-dir/IGNORED_DIRS policy (drop) > .gitignore (drop, supplementary) > keep — OSE config is always authoritative over .gitignore"

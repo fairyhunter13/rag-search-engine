@@ -61,6 +61,23 @@ Parallel to the LLM-spend ladder above, OSE applies a **compute-spend doctrine**
 - **Idle ⇒ near-zero CPU + constant RAM floor.** With no queries and no source drift the daemon holds < 1 % CPU. The existing `_idle_unload` path (300 s default) nulls the ONNX session references, calls `gc.collect` + `malloc_trim`, and releases the ORT CUDA arena — the only reliable way to return GPU memory to the OS. Models reload on demand at the next real query or edit.
 - **GPU is the sole inference engine — maximized, never idle-spun.** Embedding and reranking run exclusively on CUDA; CPU fallback is fatal. The GPU is not used during idle periods; it warms up only for actual embed/rerank operations triggered by real queries or real source changes.
 - **File-watching uses kernel notifications, not CPU polling.** `watchdog`/inotify is the primary watching mechanism — push events from the OS kernel, not a polling loop. The poll fallback (`_loop`) activates only when inotify is unavailable (NFS/SMB, `max_user_watches` exhaustion) and seeds a baseline on its first pass rather than scanning eagerly.
+- **The drift gate's input must itself be trustworthy (HR35, 2026-07-01).** `_source_fingerprint` walks via `iter_files`/`is_ignored_path` (`index/discover.py`), which apply one shared discovery decision order: OSE `.opencode-index.yaml` `exclude` (drop) > OSE `include` (force-keep) > default hidden-dir/`IGNORED_DIRS` policy (drop) > `.gitignore` (drop, supplementary, cached per-mtime) > keep. Gitignored/hidden tool-cache dirs (`.svelte-kit`, `.playwright-mcp`, `.astro`, `.turbo`, `.vite`, etc.) never enter the fingerprint, so a live dev-server/tool-cache rewriting those paths cannot spuriously flip the sig and re-trigger the heavy cascade — root-caused after a live `vite dev` + Playwright-MCP session pinned a CPU core via an every-~5min false-positive BPRE/enrich rebuild.
+
+## Publishability & device-neutrality (P18, HR34)
+
+OSE is a **public repo**. Parallel to the compute-spend and extraction doctrines above, every
+tracked artifact — source, tests, docs, scripts, generated wiki/docgen/OKF output — must be safe to
+publish: no secrets, no real device paths, no company/project names. This is a whole-repo widening
+of P7/HR13 (which already banned absolute paths in generated wiki/docgen/OKF artifacts specifically).
+Device/host portability is achieved the same way efficiency is achieved elsewhere in this doctrine —
+by never hardcoding what should be resolved at the boundary: every machine-specific value (storage
+paths, host, port, embed/rerank models, GPU device) is **env-driven with an XDG-style default**
+(`core/config.py`), so the same tracked tree runs unmodified on any machine. Guarded by
+`test_public_hygiene.py` (whole tracked-tree scan for `/home/`, `/root/`, `/Users/`, and Windows
+`C:\Users\` literals, plus a structural check that `core/`/`daemon/` storage-path constants derive
+from `os.environ.get(...)` rather than a hardcoded literal) and `test_no_real_project_in_tests.py`.
+Device-specific name bans (real company/codename/device-id lists) are intentionally kept out of this
+public tree and live only in the private `ose-live-audit` repo.
 
 ## Hierarchy removal (WS-B, 2026-06-26)
 
