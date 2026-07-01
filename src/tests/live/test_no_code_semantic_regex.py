@@ -46,7 +46,7 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-_ROOT = Path(__file__).resolve().parents[3] / "opencode_search"
+_ROOT = Path(__file__).resolve().parents[2] / "opencode_search"
 
 _CATEGORY_A = [
     "opencode_search.kb.bpre",

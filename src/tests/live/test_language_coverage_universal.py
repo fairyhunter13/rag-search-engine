@@ -74,6 +74,32 @@ def test_scan_file_no_crash(lang: str, ext: str, snippet: str) -> None:
     )
 
 
+@pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
+def test_extract_symbols_bounded_parity(lang: str, ext: str, snippet: str) -> None:
+    """extract_symbols via run_bounded matches the direct call (HR39: bounded path, all grammars)."""
+    from opencode_search.graph.extractor import extract_symbols
+    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    direct = extract_symbols(Path(f"file.{ext}"), snippet, lang)
+    bounded = run_bounded(extract_symbols, (Path(f"file.{ext}"), snippet, lang), path_for_log=f"file.{ext}")
+    assert bounded != PARSE_TIMEOUT
+    assert [(s.name, s.kind) for s in bounded] == [(s.name, s.kind) for s in direct]
+
+
+@pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
+def test_scan_file_bounded_parity(lang: str, ext: str, snippet: str) -> None:
+    """scan_file via run_bounded matches the direct call (HR39: bounded path, all grammars)."""
+    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from opencode_search.kb.bpre_ast import ApiSurface, scan_file
+    direct = scan_file(f"file.{ext}", snippet, lang, ApiSurface())
+    bounded = run_bounded(scan_file, (f"file.{ext}", snippet, lang, ApiSurface()), path_for_log=f"file.{ext}")
+    assert bounded != PARSE_TIMEOUT
+    if direct is None:
+        assert bounded is None
+    else:
+        assert bounded.http_clients == direct.http_clients
+        assert bounded.http_routes == direct.http_routes
+
+
 def test_is_code_language_false_for_exclusions() -> None:
     """is_code_language must return False for text, data, and unknown/empty inputs."""
     from opencode_search.index.discover import is_code_language
