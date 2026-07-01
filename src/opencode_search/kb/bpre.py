@@ -251,6 +251,7 @@ def _iter_member_facts(member_path: str, member_facts, surf):
     if member_facts is not None:
         yield from member_facts.items()
         return
+    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     from opencode_search.index.discover import detect_language
     from opencode_search.kb.bpre_ast import scan_file
     for src in _source_files(member_path):
@@ -258,8 +259,9 @@ def _iter_member_facts(member_path: str, member_facts, surf):
             content = src.read_text(errors="replace")
         except OSError:
             continue
-        ff = scan_file(str(src), content, detect_language(src), surf)
-        if ff:
+        ff = run_bounded(scan_file, (str(src), content, detect_language(src), surf),
+                          path_for_log=str(src))
+        if ff and ff != PARSE_TIMEOUT:
             yield str(src), ff
 
 
@@ -301,6 +303,7 @@ def _scan_all_members(
     real source drift (or a bumped extraction algo) actually get tree-sitter re-parsed. Cross-
     member edge resolution and process tracing still run federation-wide over the full result.
     """
+    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     from opencode_search.index.discover import detect_language
     from opencode_search.kb.bpre_ast import scan_file
     all_facts: dict = {}
@@ -317,8 +320,9 @@ def _scan_all_members(
                 content = src.read_text(errors="replace")
             except OSError:
                 continue
-            ff = scan_file(str(src), content, detect_language(src), surf)
-            if ff:
+            ff = run_bounded(scan_file, (str(src), content, detect_language(src), surf),
+                              path_for_log=str(src))
+            if ff and ff != PARSE_TIMEOUT:
                 mf[str(src)] = ff
         all_facts[member] = mf
         if con is not None:

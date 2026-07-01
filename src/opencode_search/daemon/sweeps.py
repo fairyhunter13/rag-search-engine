@@ -110,6 +110,7 @@ def _extract_graph(gs, root) -> None:
         extract_symbols,
         symbol_id,
     )
+    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     from opencode_search.index.discover import detect_language, iter_files
     for fpath in iter_files(root, federation_mode=True):
         try:
@@ -117,7 +118,10 @@ def _extract_graph(gs, root) -> None:
         except OSError:
             continue
         lang = detect_language(fpath)
-        for sym in extract_symbols(fpath, content, lang):
+        syms = run_bounded(extract_symbols, (fpath, content, lang), path_for_log=str(fpath))
+        if not syms or syms == PARSE_TIMEOUT:
+            continue
+        for sym in syms:
             if not sym.name:
                 continue
             sid = symbol_id(sym.file, sym.name, sym.start_line)
@@ -144,8 +148,9 @@ def _extract_graph(gs, root) -> None:
             content = fpath.read_text(errors="replace") if fpath.exists() else ""
         except OSError:
             continue
-        call_sites = extract_calls_with_lines(content, detect_language(fpath))
-        if not call_sites:
+        call_sites = run_bounded(extract_calls_with_lines, (content, detect_language(fpath)),
+                                  path_for_log=fstr)
+        if not call_sites or call_sites == PARSE_TIMEOUT:
             continue
         for callee_name, call_line in call_sites:
             caller_sid, best_span = "", -1
