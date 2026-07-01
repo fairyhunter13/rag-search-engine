@@ -1,11 +1,16 @@
-"""Token economy invariants (TE1–TE4, TE6; L2/L3 hierarchy removed in WS-B).
+"""Token economy invariants (TE1–TE4, TE6–TE7; L2/L3 hierarchy removed in WS-B).
 
 TE1  llm_token_stats() returns dotted-namespace keys (enrich/classify)
 TE2  classify_communities_semantic makes 0 calls for narrated=0 tail rows (leak A gate)
 TE4  _generate_narratives_batch returns {} safely when DeepSeek key absent
 TE6  _BPRE_NARRATIVE_SYSTEM is a module-level string constant (stable prefix for caching)
+TE7  _llm_link_resolve (Tier-2 BPRE edge linking) accumulates under bpre_link.* — live,
+     real DeepSeek call, proving the HR23 token-budget gap closed 2026-07-01 is observable
+     end-to-end via llm_token_stats()/overview(what='metrics'), not just source-inspected.
 """
 from __future__ import annotations
+
+import sqlite3
 
 import pytest
 
@@ -76,3 +81,25 @@ def test_te6_bpre_narrative_system_constant():
     assert isinstance(val, str) and "JSON" in val, (
         f"TE6: constant must be a string containing 'JSON'; got: {val[:80]!r}"
     )
+
+
+def test_te7_llm_link_resolve_tokens_accounted_live():
+    """TE7: _llm_link_resolve's real DeepSeek call increments bpre_link.calls (HR23, live)."""
+    from opencode_search.graph.llm import deepseek_key, llm_token_stats
+    from opencode_search.kb.bpre import _SCHEMA, _llm_link_resolve
+    con = sqlite3.connect(":memory:")
+    try:
+        con.executescript(_SCHEMA)
+        before = llm_token_stats().get("bpre_link.calls", 0)
+        items = [{"kind": "http", "caller": "checkout", "topic_or_route": "GET /cart/items"}]
+        _llm_link_resolve(con, items, ["checkout", "cart", "inventory"])
+        after = llm_token_stats().get("bpre_link.calls", 0)
+        if deepseek_key():
+            assert after == before + 1, (
+                f"TE7: bpre_link.calls did not increment on a live _llm_link_resolve call "
+                f"(before={before}, after={after}) — HR23 token accounting gap regressed"
+            )
+        else:
+            assert after == before, "TE7: _llm_link_resolve must no-op without a key"
+    finally:
+        con.close()

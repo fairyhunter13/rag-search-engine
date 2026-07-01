@@ -119,6 +119,11 @@ mapping table may substitute for structural analysis of user code.
 - **`kb/bpre_ast.py`** is the shared structural home for BPRE (§8 bullet 8) *and*
   `server/_overview.py _detect_services` (A2) — every module that needs to classify gRPC
   service structure delegates to this single tree-sitter scanner; no module holds its own regex.
+- **Category A (explicit, 2026-07-01)**: `kb/bpre.py`, `kb/bpre_ast.py`, `kb/bpre_spec.py`,
+  `kb/bpre_generic.py`, `kb/bpre_paradigms.py`, `kb/patterns.py`, `server/_overview.py` — all
+  regex-free; `bpre_spec.py`/`bpre_generic.py`/`bpre_paradigms.py` were added to this list and to
+  `check_world_model.py` P6's grep scope (previously ungoverned since their introduction in the
+  2026-06-21 5-tier-ladder work).
 - **Category B (exempt by name)** — updated 2026-06-21: (a) `graph/extractor.py` — generic
   call-node detector (node-kind ∋ `"call"`/`"invocation"`), `_MEMBER_KINDS`/`_BRANCH_NODE_KINDS`
   frozensets, `tree_sitter_language_pack.process()` + `StructureKind`/`SymbolKind` label-space.
@@ -138,9 +143,15 @@ mapping table may substitute for structural analysis of user code.
   **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`; `deepseek-chat` deprecates 2026-07-24).
   Without a key: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
-  any new `re.compile`/`re.finditer` in Category-A paths fails CI. `test_valueflow_dynamic.py`,
+  any new `re.compile`/`re.finditer` in Category-A paths fails CI, plus a named debt registry
+  for the surviving keyword/mapping-table constructs (`bpre_spec._LANG_SPECS`/`_V`/`_GRP_SFXS`,
+  `bpre_ast.py` naming-convention checks) that may only shrink. `test_valueflow_dynamic.py`,
   `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`, `test_deterministic_resolution.py`
   prove the full ladder end-to-end (HR16–HR19 in Part 2).
+- **Token accounting (HR23)**: every DeepSeek call site in the ladder feeds
+  `graph/llm.py::_accumulate_llm_tokens` so `llm_token_stats()`/`overview(what="metrics")` is a
+  complete budget, not just narration. `kb/bpre.py::_llm_link_resolve` (Tier-2 edge linking) now
+  accumulates under the `bpre_link` namespace alongside `bpre.*` narrative generation.
 
 ## 8. Enrichment pipeline (`sweeps._enrich_project`)
 
