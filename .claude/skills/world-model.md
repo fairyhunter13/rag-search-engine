@@ -13,7 +13,7 @@ Use this skill to check conformance and understand OSE's governing laws.
 | P3 | Federation = query-time union; no cross-repo edges; members have independent stores. |
 | P4 | Indexing is event-driven (watcher/inotify); heavy KB cascade (enrich/wiki/BPRE) runs ONLY on source-fingerprint drift — never on metadata-only or non-indexed-file events; no periodic sweeps or timers. |
 | P5 | Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score. |
-| P6 | No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped). |
+| P6 | No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped). Protocol/framework codegen-contract naming bound to structural facts (e.g. protoc New*Client/Register*Server scoped to .pb.go output, Spring *Mapping annotations) is ground truth, not a heuristic — reclassified 2026-07-01, same class as the closed HTTP-verb set. |
 | P7 | Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts. |
 | P8 | No mocks in tests — real daemon at :8765, real GPU, real embedder. |
 | P9 | Flat-L1 communities only — no L2/L3 hierarchy in OSE KB (WS-B 2026-06-26). |

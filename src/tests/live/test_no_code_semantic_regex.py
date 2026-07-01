@@ -15,11 +15,17 @@ Category-B sites (intrinsic mechanism — explicitly exempt):
 
 HR15 bans regex AND static/dynamic keyword-list / mapping-table heuristics for semantic
 inference (surface-text guessing). Closed protocol vocabularies (e.g. the fixed HTTP method
-set `bpre_spec._V`) and tree-sitter node-kind maps (`_CALL_KINDS`/`_NEW_KINDS`/etc.) are
-ground truth, not heuristics, and are allowed. `_SEMANTIC_HEURISTIC_DEBT` below pins the
-*known* surviving name-matching heuristics (e.g. `_LANG_SPECS` per-language method-name
-tables, `New*Client`/`Register*Server` naming-convention checks) — it may only shrink as
-Part-3 structure-first migrations land; a new, unlisted heuristic is a regression.
+set `bpre_spec._V`), tree-sitter node-kind maps (`_CALL_KINDS`/`_NEW_KINDS`/etc.), and
+protocol/framework codegen-contract naming bound to structural facts are ground truth, not
+heuristics, and are allowed — e.g. `bpre_ast.py`'s protoc `New*Client`/`Register*Server`/
+`*Client`-receiver discovery (scoped to `.pb.go` codegen output only, feeding a structural
+dict lookup at call sites) and Spring's `*Mapping` annotation vocabulary (paired with
+structural argument/route extraction), plus the PHP `*Client` constructor check gated on
+`cls_name[:-6] in s.proto_services` (an actual discovered proto service, not a guess).
+`_SEMANTIC_HEURISTIC_DEBT` below pins the *known* surviving name-matching heuristics not yet
+bound to structure (e.g. `_LANG_SPECS` per-language method-name tables used by the generic
+fallback path) — it may only shrink as Part-3 structure-first migrations land; a new,
+unlisted heuristic is a regression.
 """
 from __future__ import annotations
 
@@ -47,15 +53,13 @@ _CATEGORY_A = [
 # Known surviving (b)-category name-matching heuristics (HR15 debt). Each entry names an
 # *exact* source substring expected to still be present. A migration (Part 3) that removes
 # a heuristic must delete its entry here — the registry only shrinks, never grows.
+#
+# bpre_ast.py's protoc/Spring codegen-contract naming (New*Client/Register*Server/*Mapping/
+# proto-bound *Client) was reclassified 2026-07-01 as ground truth, not debt — see the module
+# docstring above — because each site is scoped to codegen output or paired with a structural
+# fact (proto_services / .pb.go discovery), not a bare surface-text guess.
 _SEMANTIC_HEURISTIC_DEBT: dict[str, tuple[str, ...]] = {
     "opencode_search.kb.bpre_spec": ("_LANG_SPECS", "_GRP_SFXS", "_DEFAULT_SPEC"),
-    "opencode_search.kb.bpre_ast": (
-        'fn.startswith("New") and fn.endswith("Client")',
-        'fn.startswith("Register") and fn.endswith("Server")',
-        'rt.endswith("Client")',
-        'ann.endswith("Mapping")',
-        'cls_name.endswith("Client")',
-    ),
 }
 
 _CATEGORY_B_ALLOWLIST = {
