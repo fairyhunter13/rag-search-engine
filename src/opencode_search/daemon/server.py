@@ -92,7 +92,6 @@ def start_watcher():
     from opencode_search.daemon.watcher import Watcher
 
     watcher = Watcher(on_change=on_change)
-    watcher.POLL_INTERVAL = 5.0
     for entry in list_projects():
         if entry.enabled and not is_federation_excluded(entry.path):
             watcher.watch(entry.path)
