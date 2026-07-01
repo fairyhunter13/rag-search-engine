@@ -53,6 +53,21 @@ and its usage must feed `llm_token_stats()` (HR23) so the budget is auditable. A
 accounting covers both narration (`bpre.*`) and edge-resolution (`bpre_link`) DeepSeek calls; any new
 call site in `kb/` or `graph/` must do the same (L4 pattern in `model.yaml`).
 
+**The last surface-text keyword-table heuristic was retired 2026-07-01.** `bpre_generic.py`'s
+`scan_generic`/`bpre_paradigms.py`'s `scan_paradigm` (the fallback path for every language outside
+the five first-class bespoke extractors) previously consulted `bpre_spec._LANG_SPECS` — a
+per-language table of HTTP method-name keywords for ~15 languages, the last
+`_SEMANTIC_HEURISTIC_DEBT` entry. It was replaced by **one universal structural classifier** that
+covers all 299 tree-sitter *code* grammars by construction, not per-language enumeration: the
+URL-path anchor (unconditional), `_has_handler_arg` handler-shape (route-vs-client), the closed `_V`
+HTTP-verb set, gRPC proto-binding (`_GRP_SFXS` resolved against *discovered* `proto_services`), and
+`_SCHEMES` receiver-text provenance (a closed RFC-grounded protocol/URI-scheme token set) for
+non-verb client idioms whose method name is neither a verb nor a proto binding (C#'s `GetAsync`,
+Elixir's `get!`, Swift's `dataTask`). The one documented recall boundary — Spring's
+`RestTemplate.getForObject`/`exchange`, a non-verb method on a non-scheme-named type — is genuinely
+unresolvable without the forbidden vocabulary and correctly falls through to the residue ladder.
+`test_no_code_semantic_regex.py`'s `_SEMANTIC_HEURISTIC_DEBT` registry is now empty.
+
 ## Compute-spend doctrine (CPU / GPU / RAM)
 
 Parallel to the LLM-spend ladder above, OSE applies a **compute-spend doctrine** governing when CPU, GPU, and RAM are consumed:
