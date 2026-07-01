@@ -32,6 +32,10 @@ def unit_text(exec_path: str | None = None) -> str:
         "IOWeight=20\n"
         "MemoryHigh=3G\n"
         "MemoryMax=6G\n"
+        # CPUQuota alone does not imply CPUAccounting (systemd#9647) — both required for the
+        # kernel-enforced 1-core ceiling (HR40) to actually cap and be readable via cpu.stat.
+        "CPUAccounting=yes\n"
+        "CPUQuota=100%\n"
         "\n"
         "[Install]\n"
         "WantedBy=default.target\n"

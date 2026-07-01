@@ -51,7 +51,7 @@ python -m compileall -q src/opencode_search
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
-## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36/HR37/HR38/HR39)
+## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36/HR37/HR38/HR39/HR40)
 
 **Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
 in `daemon/sweeps.py:on_change` runs only when `_code_source_fingerprint` (code-only, HR38) detects
@@ -110,6 +110,20 @@ and skipped for that pass only — never silently excluded from the language mat
 (`test_no_unbounded_parse.py`) bans any direct `get_parser(...).parse(` call outside
 `bounded_parse.py`. Workers never import the embedder — GPU-only doctrine is unaffected; overhead is
 indexing-time only. Guarded by `test_bounded_parse.py`.
+
+**CPU budget is two-tier and kernel-enforced, not merely cooperative (HR40).** HR32-HR39 stop the
+daemon from *spuriously* doing work; HR40 physically bounds it regardless. **Idle tier**:
+`daemon/cpu_budget.py` self-measures the daemon's own cgroup-v2 `cpu.stat` usage delta (exposed via
+`/healthz` `cpu_percent_core`/`cpu_quota_cores` and `/api/metrics`'s `cpu` block), live-gated by an
+automated test asserting < 1 % of one core over a quiescent window. **Active tier**:
+`daemon/systemd.py::unit_text()` sets `CPUQuota=100%` **and** `CPUAccounting=yes` explicitly (the
+latter is NOT implied by the former — systemd issue #9647) — a cgroup-v2 kernel ceiling the daemon's
+entire service cgroup physically cannot exceed, covering `bounded_parse.py`'s spawn-context workers
+too since they're children of the same cgroup (`OPENCODE_BOUNDED_PARSE_WORKERS` defaults to `1`
+under this quota — two workers would only time-slice one capped core). The proof is `cpu.stat`'s
+`nr_throttled`/`throttled_usec` climbing under sustained real load, not just usage staying low — the
+canonical cgroup-v2 enforcement signal — cross-checked by a hermetic `systemd-run --user --scope`
+self-test independent of the daemon's own unit. Guarded by `test_cpu_budget.py` (CB1-CB6).
 
 ## Extraction doctrine (P6, HR15–HR19, HR23)
 

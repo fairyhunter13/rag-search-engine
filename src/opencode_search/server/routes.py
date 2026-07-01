@@ -15,6 +15,9 @@ _START = time.monotonic()
 
 async def _healthz(request: Request) -> JSONResponse:
     import psutil
+
+    from opencode_search.daemon.cpu_budget import cpu_percent_core, cpu_quota_cores
+    from opencode_search.daemon.runtime_state import seconds_since_activity
     la = psutil.getloadavg()
     return JSONResponse({
         "ok": True, "service": "opencode-search", "transport": "streamable-http",
@@ -22,8 +25,10 @@ async def _healthz(request: Request) -> JSONResponse:
         "load_avg": {"1m": la[0], "5m": la[1], "15m": la[2]},
         "cpu_count": os.cpu_count() or 1,
         "active_clients": 0, "client_ids": [], "active_projects": [],
-        "closing_clients": [], "idle_seconds": 0.0,
+        "closing_clients": [], "idle_seconds": round(seconds_since_activity(), 1),
         "rss_mb": round(psutil.Process().memory_info().rss / (1024 * 1024)),
+        "cpu_percent_core": round(cpu_percent_core(), 4),
+        "cpu_quota_cores": cpu_quota_cores(),
     })
 
 
