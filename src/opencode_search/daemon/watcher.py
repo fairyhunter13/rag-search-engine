@@ -1,4 +1,13 @@
-"""Event-driven file watcher: inotify/watchdog primary, poll fallback for NFS/SMB."""
+"""Event-driven file watcher: watchfiles (Rust `notify`) backend.
+
+One background thread runs a single `watchfiles.watch()` generator across all
+watched project roots — one inotify instance total, not one per root. Storms
+are coalesced in Rust (debounce/step) before crossing into Python, and
+`watch_filter` drops ignored paths using the same HR35 resolver the drift
+gate uses, so a churn storm in a git-ignored/hidden dir never reaches
+`on_change`. Polling fallback (NFS/SMB/WSL) is handled internally by the
+Rust `notify` crate (`force_polling`) — there is no hand-rolled poll loop.
+"""
 from __future__ import annotations
 
 import logging
@@ -8,121 +17,90 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_DEBOUNCE_S: float = 2.0  # min seconds between reindex triggers per project (burst suppression)
-
-# Metadata-only watchdog event types that carry no content change.
-_METADATA_ONLY_EVENTS: frozenset[str] = frozenset({"closed", "opened"})
-
 
 class Watcher:
-    """Event-driven via OS filesystem notifications (watchdog/inotify); falls back to
-    bounded polling ONLY when inotify is unavailable (NFS/SMB or max_user_watches
-    exhaustion). POLL_INTERVAL is the fallback poll cadence, not the primary path."""
-
-    POLL_INTERVAL: float = 5.0  # fallback-only; inotify primary path uses push events
+    """Event-driven via OS filesystem notifications (watchfiles/Rust `notify`)."""
 
     def __init__(self, on_change: Callable[[str, list[Path]], None]) -> None:
         self._on_change = on_change
-        self._paths: dict[str, dict[Path, float]] = {}
+        self._paths: set[str] = set()
         self._stop = threading.Event()
+        self._restart = threading.Event()
+        self._restart_ack = threading.Event()
         self._thread: threading.Thread | None = None
-        self._observer: object | None = None
-        self._handler: object | None = None
 
     def watch(self, project_path: str) -> None:
-        if project_path not in self._paths:
-            self._paths[project_path] = {}  # snapshot seeded lazily in _loop; inotify needs none
-        if self._observer is not None:
-            import contextlib
-            with contextlib.suppress(Exception):
-                self._observer.schedule(self._handler, project_path, recursive=True)  # type: ignore[attr-defined]
+        if project_path in self._paths:
+            return
+        self._paths.add(project_path)
+        if self._thread is not None and self._thread.is_alive():
+            self._restart_ack.clear()
+            self._restart.set()
+            # Block until the loop has torn down the old watch and is about to
+            # arm the new one — otherwise a write landing in that gap is lost
+            # (`notify` doesn't retroactively see events from before a watch starts).
+            self._restart_ack.wait(timeout=6.0)
 
     def start(self) -> None:
         self._stop.clear()
-        if not self._try_inotify():
-            self._thread = threading.Thread(target=self._loop, daemon=True, name="ocs-watcher")
-            self._thread.start()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="ocs-watcher")
+        self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=timeout)
-        if self._observer is not None:
-            try:
-                self._observer.stop()  # type: ignore[attr-defined]
-                self._observer.join(timeout=timeout)  # type: ignore[attr-defined]
-            except Exception:
-                pass
 
-    def _try_inotify(self) -> bool:
-        try:
-            import time as _time
+    def _owning_root(self, path: str) -> str | None:
+        for proj in self._paths:
+            if path.startswith(proj):
+                return proj
+        return None
 
-            from watchdog.events import FileSystemEventHandler
-            from watchdog.observers import Observer as _Observer
+    def _filter(self, _change: object, path: str) -> bool:
+        from opencode_search.index.discover import is_ignored_path
 
-            from opencode_search.index.discover import is_ignored_path
-            watcher = self
-            _last_fire: dict[str, float] = {}
-            class _H(FileSystemEventHandler):
-                def on_any_event(self, event) -> None:
-                    if event.is_directory:
-                        return
-                    if getattr(event, "event_type", None) in _METADATA_ONLY_EVENTS:
-                        return
-                    src = str(getattr(event, "src_path", ""))
-                    now = _time.monotonic()
-                    for proj in list(watcher._paths):
-                        if src.startswith(proj):
-                            if is_ignored_path(Path(src), Path(proj)):
-                                break
-                            if now - _last_fire.get(proj, 0.0) < _DEBOUNCE_S:
-                                break
-                            _last_fire[proj] = now
-                            try:
-                                watcher._on_change(proj, [Path(src)])
-                            except Exception as exc:
-                                log.warning("inotify %s: %s", proj, exc)
-                            break
-            obs = _Observer()
-            h = _H()
-            for path in self._paths:
-                obs.schedule(h, path, recursive=True)
-            obs.start()
-            self._observer, self._handler = obs, h
-            return True
-        except Exception as exc:
-            log.warning("inotify unavailable (%s) — degrading to poll fallback", exc)
+        root = self._owning_root(path)
+        if root is None:
             return False
-
-    def _snapshot(self, project_path: str) -> dict[Path, float]:
-        import contextlib
-
-        from opencode_search.index.discover import iter_files
-        snap: dict[Path, float] = {}
-        try:
-            for f in iter_files(Path(project_path)):
-                with contextlib.suppress(OSError):
-                    snap[f] = f.stat().st_mtime
-        except Exception:
-            pass
-        return snap
+        return not is_ignored_path(Path(path), Path(root))
 
     def _loop(self) -> None:
+        from watchfiles import watch as _watch
+
+        stop_or_restart = _StopOrRestart(self._stop, self._restart)
         while not self._stop.is_set():
-            self._stop.wait(timeout=self.POLL_INTERVAL)
-            if self._stop.is_set():
-                break
-            for project_path in list(self._paths):
-                old = self._paths[project_path]
-                new = self._snapshot(project_path)
-                if not old:
-                    self._paths[project_path] = new  # first pass: seed baseline, no on_change
-                    continue
-                changed = [f for f in new if new.get(f) != old.get(f)]
-                if changed:
-                    self._paths[project_path] = new
-                    try:
-                        self._on_change(project_path, changed)
-                    except Exception as exc:
-                        log.warning("watcher callback %s: %s", project_path, exc)
+            roots = list(self._paths)
+            if not roots:
+                self._stop.wait(timeout=1.0)
+                continue
+            self._restart.clear()
+            self._restart_ack.set()
+            try:
+                for changes in _watch(
+                    *roots, watch_filter=self._filter, stop_event=stop_or_restart, rust_timeout=5000,
+                ):
+                    by_root: dict[str, list[Path]] = {}
+                    for _kind, path in changes:
+                        root = self._owning_root(path)
+                        if root is not None:
+                            by_root.setdefault(root, []).append(Path(path))
+                    for root, files in by_root.items():
+                        try:
+                            self._on_change(root, files)
+                        except Exception as exc:
+                            log.warning("watcher %s: %s", root, exc)
+            except Exception as exc:
+                log.warning("watchfiles loop error: %s — retrying", exc)
+                self._stop.wait(timeout=1.0)
+
+
+class _StopOrRestart:
+    """Adapts (stop, restart) Events to watchfiles' `is_set()` stop_event protocol."""
+
+    def __init__(self, stop: threading.Event, restart: threading.Event) -> None:
+        self._stop = stop
+        self._restart = restart
+
+    def is_set(self) -> bool:
+        return self._stop.is_set() or self._restart.is_set()
