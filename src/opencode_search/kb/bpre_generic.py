@@ -1,7 +1,18 @@
 """Grammar-agnostic BPRE extractor helpers for non-first-class languages."""
 from __future__ import annotations
 from opencode_search.kb.valueflow import _t as _vt, _first_str, resolve_first_arg
-from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V, _is_call, _PARADIGM_KINDS, _HANDLER_KINDS
+from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V, _SCHEMES, _is_call, _PARADIGM_KINDS, _HANDLER_KINDS
+
+def _provenance(rc: str | None) -> bool:
+    """Universal non-verb HTTP-client discriminator (P6/HR15 Part B): True iff the call
+    receiver's own text carries a _SCHEMES protocol/URI-scheme token (e.g. `httpClient`,
+    `HTTPoison`, `URLSession`). Generalizes the already-accepted Go check
+    (`"http" in import_path`, bpre_ast.py) from an import alias to any receiver, for every
+    language, with zero library-name vocabulary — only the closed _SCHEMES ground-truth set."""
+    if not rc:
+        return False
+    rl = rc.lower()
+    return any(s in rl for s in _SCHEMES)
 
 def _has_handler_arg(n, max_depth: int = 4) -> bool:
     """Structural discriminator: does this call carry a function/closure/lambda/block
