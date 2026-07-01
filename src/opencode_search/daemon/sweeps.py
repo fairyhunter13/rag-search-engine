@@ -95,11 +95,50 @@ def _source_fingerprint(path: str) -> str:
     return sig
 
 
+# Code-only fingerprint memo (HR38): same 'relpath:mtime' shape as _fingerprint_cache but
+# filtered to is_code_language files only, mirroring kb.bpre._bpre_code_sig (HR36) so the
+# enrich/wiki/BPRE cascade gate and the graph re-derive gate are code-only like BPRE's own
+# reuse stamp — non-code churn (docs/wiki/config/images) never wakes either.
+_code_fingerprint_cache: dict[str, tuple[float, str]] = {}
+
+
+def _code_source_fingerprint(path: str) -> str:
+    """SHA-1 over sorted 'relpath:mtime' for CODE files only — stat-only, GPU-free."""
+    from pathlib import Path
+
+    from opencode_search.index.discover import detect_language, is_code_language, iter_files
+    root = Path(path)
+    try:
+        coarse = root.stat().st_mtime
+    except OSError:
+        coarse = 0.0
+    cached = _code_fingerprint_cache.get(path)
+    if cached is not None and cached[0] == coarse:
+        return cached[1]
+    parts: list[str] = []
+    try:
+        for f in iter_files(root, federation_mode=True):
+            if not is_code_language(detect_language(f)):
+                continue
+            try:
+                rel = str(f.relative_to(root))
+                mtime = int(f.stat().st_mtime)
+                parts.append(f"{rel}:{mtime}")
+            except (OSError, ValueError):
+                pass
+    except Exception:
+        pass
+    parts.sort()
+    sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
+    _code_fingerprint_cache[path] = (coarse, sig)
+    return sig
+
+
 def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
-    """True if algo-version or source fingerprint has drifted from stored stamps."""
+    """True if algo-version or code-only source fingerprint has drifted from stored stamps."""
     return (
         gs.get_meta("algo_version") != _pipeline_algo_version()
-        or gs.get_meta("source_sig") != _source_fingerprint(path)
+        or gs.get_meta("source_sig") != _code_source_fingerprint(path)
     )
 
 
@@ -195,7 +234,7 @@ def _rederive_graph(project_path: str) -> None:
         gs._con.execute("DELETE FROM communities WHERE level>=2")
         gs.commit()
         gs.set_meta("algo_version", _pipeline_algo_version())
-        gs.set_meta("source_sig", _source_fingerprint(project_path))
+        gs.set_meta("source_sig", _code_source_fingerprint(project_path))
         _persist_partition_quality(gs)
         gs.commit()
     finally:
@@ -411,7 +450,7 @@ def _index_project(project_path: str) -> None:
         _extract_graph(gs, root)
         detect_communities(gs)
         gs.set_meta("algo_version", _pipeline_algo_version())
-        gs.set_meta("source_sig", _source_fingerprint(project_path))
+        gs.set_meta("source_sig", _code_source_fingerprint(project_path))
         _persist_partition_quality(gs)
         gs.commit()
     finally:
@@ -615,8 +654,9 @@ def on_change(project_path: str, files: list) -> None:
     now = time.monotonic()
     if now - _last_index_fail.get(project_path, 0.0) < _INDEX_BACKOFF_S:
         return  # in backoff window after a previous failure; skip this event
-    # Invalidate fingerprint cache so the next reconcile pass re-walks this project.
+    # Invalidate fingerprint caches so the next reconcile pass re-walks this project.
     _fingerprint_cache.pop(project_path, None)
+    _code_fingerprint_cache.pop(project_path, None)
     from opencode_search.kb.bpre import _invalidate_bpre_code_sig
     _invalidate_bpre_code_sig(project_path)
     try:
@@ -628,7 +668,9 @@ def on_change(project_path: str, files: list) -> None:
         log.warning("incremental reindex %s: %s", project_path, exc)
         _last_index_fail[project_path] = now  # back off before retrying
         return
-    sig = _source_fingerprint(project_path)
+    # HR38: code-only sig (mirrors BPRE's HR36 stamp) — non-code churn (docs/wiki/config/
+    # images) never wakes the KB/wiki/BPRE cascade, only real source drift does.
+    sig = _code_source_fingerprint(project_path)
     if sig == _last_enriched_sig.get(project_path):
         return  # source unchanged — KB/wiki/BPRE cascade not needed
     if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:

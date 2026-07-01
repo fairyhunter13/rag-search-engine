@@ -93,16 +93,16 @@ def test_graph_stale_fires_on_poisoned_version(tmp_path):
     """T1f: _graph_stale returns True when meta[algo_version] is wrong."""
     from opencode_search.core.config import project_graph_db
     from opencode_search.daemon.sweeps import (
+        _code_source_fingerprint,
         _graph_stale,
         _pipeline_algo_version,
-        _source_fingerprint,
     )
     from opencode_search.graph.store import GraphStore
     (tmp_path / "a.py").write_text("def f(): pass\n")
     db = project_graph_db(str(tmp_path))
     gs = GraphStore(db)
     gs.set_meta("algo_version", _pipeline_algo_version())
-    gs.set_meta("source_sig", _source_fingerprint(str(tmp_path)))
+    gs.set_meta("source_sig", _code_source_fingerprint(str(tmp_path)))
     gs.commit()
     assert not _graph_stale(str(tmp_path), gs), "up-to-date stamps must not be stale"
     gs.set_meta("algo_version", "STALE")

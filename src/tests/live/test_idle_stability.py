@@ -146,7 +146,7 @@ def test_drift_gate_skips_enrich_when_sig_unchanged():
     calls: list[str] = []
     orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
     with tempfile.TemporaryDirectory() as tmp:
-        sig = sweeps._source_fingerprint(tmp)
+        sig = sweeps._code_source_fingerprint(tmp)
         sweeps._last_enriched_sig[tmp] = sig
         sweeps._last_index_fail.pop(tmp, None)
         sweeps._last_kb_enrich.pop(tmp, None)
@@ -183,6 +183,76 @@ def test_drift_gate_triggers_enrich_when_sig_changes():
             sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
             sweeps._last_enriched_sig.pop(tmp, None)
             sweeps._last_kb_enrich.pop(tmp, None)
+
+
+# ─── HR38: on_change's code-only cascade gate (mirrors BPS1-4 for _bpre_code_sig) ──────────
+# The 4th idle-CPU root cause the code-only fingerprint closes: on_change's own drift gate
+# was keyed on the all-files _source_fingerprint, so docs/wiki/config/image churn kept waking
+# the cascade even though HR36 already made BPRE's own reuse stamp code-only.
+
+
+@pytest.fixture
+def _fcg_project():
+    """A real tmp project, one code file, _enrich_project/_index_files stubbed to a call list."""
+    import tempfile
+
+    from opencode_search.daemon import sweeps
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_tree(tmp, {"main.py": "def f():\n    pass\n"})
+        calls: list[str] = []
+        orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
+        sweeps._enrich_project = calls.append  # type: ignore[assignment]
+        sweeps._index_files = lambda *a, **kw: None  # type: ignore[assignment]
+        sweeps._last_index_fail.pop(tmp, None)
+        sweeps._last_kb_enrich.pop(tmp, None)
+        sweeps._last_enriched_sig.pop(tmp, None)
+        try:
+            sweeps.on_change(tmp, [tmp + "/main.py"])  # baseline stamp
+            assert calls == [tmp], "baseline on_change must enrich exactly once"
+            yield tmp, calls, sweeps
+        finally:
+            sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
+            sweeps._last_enriched_sig.pop(tmp, None)
+            sweeps._last_kb_enrich.pop(tmp, None)
+            sweeps._last_index_fail.pop(tmp, None)
+
+
+def test_fcg1_docs_wiki_churn_quiescent(_fcg_project):
+    """FCG1: editing docs/*.md + generated wiki/*.md after the baseline must not re-enrich."""
+    tmp, calls, sweeps = _fcg_project
+    sweeps._last_kb_enrich.pop(tmp, None)  # bypass the 45s debounce for this scenario
+    _write_tree(tmp, {"docs/notes.md": "hello\n", "wiki/L1_overview.md": "generated\n"})
+    sweeps.on_change(tmp, [tmp + "/docs/notes.md", tmp + "/wiki/L1_overview.md"])
+    assert calls == [tmp], f"docs/wiki-only churn must not re-trigger the cascade; calls={calls}"
+
+
+def test_fcg2_config_image_churn_quiescent(_fcg_project):
+    """FCG2: editing config (*.json) + image (*.png) after the baseline must not re-enrich."""
+    tmp, calls, sweeps = _fcg_project
+    sweeps._last_kb_enrich.pop(tmp, None)
+    _write_tree(tmp, {"config/settings.json": '{"a": 1}\n', "assets/logo.png": "not-a-png\n"})
+    sweeps.on_change(tmp, [tmp + "/config/settings.json", tmp + "/assets/logo.png"])
+    assert calls == [tmp], f"config/image-only churn must not re-trigger the cascade; calls={calls}"
+
+
+def test_fcg3_real_code_drift_fires_cascade_once(_fcg_project):
+    """FCG3: editing main.py after the baseline must re-enrich exactly once — gate not inert."""
+    import time
+    tmp, calls, sweeps = _fcg_project
+    sweeps._last_kb_enrich.pop(tmp, None)
+    time.sleep(1.1)  # ensure a distinct mtime tick (sig truncates to whole seconds)
+    _write_tree(tmp, {"main.py": "def f():\n    pass\n\ndef g():\n    pass\n"})
+    sweeps.on_change(tmp, [tmp + "/main.py"])
+    assert calls == [tmp, tmp], f"real code drift must re-trigger the cascade once; calls={calls}"
+
+
+def test_fcg4_convergence_second_call_reuses(_fcg_project):
+    """FCG4: a second consecutive on_change with no change since baseline must not re-enrich."""
+    tmp, calls, sweeps = _fcg_project
+    sweeps._last_kb_enrich.pop(tmp, None)  # bypass debounce so only the sig gate is exercised
+    sweeps.on_change(tmp, [tmp + "/main.py"])
+    assert calls == [tmp], f"unchanged second call must reuse, not re-enrich; calls={calls}"
 
 
 def test_watcher_prefers_inotify_over_poll():
