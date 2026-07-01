@@ -51,7 +51,7 @@ python -m compileall -q src/opencode_search
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
 Any CPU fallback must raise a fatal error — never fall back silently.
 
-## Efficiency invariants (P16/P17, HR32/HR33/HR35)
+## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36)
 
 **Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
 in `daemon/sweeps.py:on_change` runs only when `_source_fingerprint` detects real source drift — never
@@ -71,6 +71,17 @@ live `vite dev`/Playwright-MCP session continuously rewriting git-ignored tool-c
 full cascade every ~5 min, pinning a CPU core indefinitely. `.opencode-index.yaml` now supports
 `index.include` (force-keep globs) and `index.respect_gitignore` (default `true`) alongside the
 existing `index.exclude`.
+
+**BPRE's own reuse stamp must be code-only and discovery-unified too (HR36).** `kb/bpre.py`'s
+federation-wide reuse stamp (`bpre_source_sig`) and per-member scan-cache key (`_member_scan_sig`)
+are hashed from `_bpre_code_sig`, which walks `_source_files` — routed through the same HR35
+resolver as `iter_files`, gated by `is_code_language` — never the all-files `_source_fingerprint`.
+The stamp is written once from the sig computed at rebuild start (no end-of-rebuild recompute
+chasing a moving target). This closes a 3rd, distinct root-cause found 2026-07-01: on a 170-member
+federation root, concurrent docs/config/image edits and `.claude/*.js` tool-cache churn kept
+flipping the all-files stamp faster than the ~5 min BPRE federation rebuild it triggered could
+finish, pinning a CPU core continuously even after HR35 shipped. Guarded by `test_idle_stability.py`
+BPS1-BPS4 (docs-churn/hidden-dir-churn quiescence, real-code-drift rebuild, convergence).
 
 ## Extraction doctrine (P6, HR15–HR19, HR23)
 

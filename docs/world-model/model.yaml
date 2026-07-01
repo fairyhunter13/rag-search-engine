@@ -145,6 +145,9 @@ L3_specs:
   - id: HR35
     spec: "Source-fingerprint discovery is gitignore- and hidden-dir-aware with OSE-config precedence (index/discover.py _should_drop, shared by iter_files + is_ignored_path): OSE .opencode-index.yaml exclude beats include beats default hidden-dir/IGNORED_DIRS policy beats .gitignore beats keep. Gitignored/hidden tool-cache dirs (.svelte-kit, .playwright-mcp, .astro, .turbo, .vite, etc.) never enter _source_fingerprint, so tool-cache regeneration cannot spuriously flip the P4 drift gate (root-caused 2026-07-01: a live vite/playwright session rewriting wiki/.svelte-kit + .playwright-mcp pinned a CPU core via an every-~5min false-positive BPRE/enrich cascade)."
     test: test_drift_gate_quiescent_under_tool_cache_churn
+  - id: HR36
+    spec: "BPRE's federation-wide reuse stamp (bpre_source_sig, kb/bpre.py) and per-member scan-cache key (_member_scan_sig) are code-only and discovery-unified: _source_files routes through the same HR35 _should_drop resolver as iter_files (is_code_language-gated, hidden-dir/gitignore/OSE-config aware), and _bpre_code_sig hashes only that file set — never the all-files _source_fingerprint. The stamp is written once from the sig computed at rebuild start (no end-of-rebuild recompute), so docs/config/image/hidden-tool-cache churn on a federation root can never trigger a process-graph rebuild, while a real member code edit still does (root-caused 2026-07-01, 3rd distinct idle-CPU cause: docs/*.yaml + .claude/*.js churn on a 170-member federation root was flipping the all-files stamp faster than the ~5min rebuild completed, pinning a core continuously)."
+    test: test_bps1_docs_churn_quiescent_no_rebuild
 
 # ── L4: Code patterns & generation rules ─────────────────────────────────────
 L4_patterns:

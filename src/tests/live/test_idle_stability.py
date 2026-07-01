@@ -511,3 +511,143 @@ def test_is_ignored_path_agrees_with_iter_files():
             assert is_ignored_path(candidate, root, cfg) == (candidate not in kept), (
                 f"is_ignored_path/iter_files disagree on {candidate}"
             )
+
+
+# ─── Phase 5: BPRE code-only, discovery-unified reuse signature (BPS1-BPS4) ──────
+# The 3rd idle-CPU root cause: bpre_source_sig was keyed on the all-files
+# _source_fingerprint, so unrelated docs/hidden-dir churn flipped it and forced a
+# full federation rebuild. These tests prove the code-only signature (_bpre_code_sig,
+# routed through the same HR35 resolver as iter_files) is quiescent under that churn
+# while still detecting real code drift.
+
+
+@pytest.fixture
+def _bps_fed():
+    from tests.live._bpre_fixture import build_synth_federation, teardown_synth_federation
+    fed = build_synth_federation()
+    yield fed
+    teardown_synth_federation(fed)
+
+
+def _bps_no_llm(root: str) -> int:
+    from opencode_search.graph.llm import no_deepseek
+    from opencode_search.kb.bpre import reconstruct_processes
+    with no_deepseek():
+        return reconstruct_processes(root)
+
+
+def _bps_spy_trace_processes():
+    """Wrap bpre_mod._trace_processes with a call-counting spy; caller must restore."""
+    import opencode_search.kb.bpre as bpre_mod
+    calls: list[int] = []
+    orig = bpre_mod._trace_processes
+
+    def _wrapped(*a, **k):
+        calls.append(1)
+        return orig(*a, **k)
+
+    bpre_mod._trace_processes = _wrapped
+    return calls, orig
+
+
+def test_bps1_docs_churn_quiescent_no_rebuild(_bps_fed, caplog):
+    """BPS1: touching a docs/*.yaml file inside a member must not change the code
+    sig — reconstruct_processes reuses the stamped result (logs 'reusing
+    stamp-matched'), it does not call _trace_processes again."""
+    import logging
+    import os
+    import time
+
+    import opencode_search.kb.bpre as bpre_mod
+
+    fed = _bps_fed
+    docs_file = fed.cart + "/docs/notes.yaml"
+    os.makedirs(os.path.dirname(docs_file), exist_ok=True)
+    with open(docs_file, "w") as f:
+        f.write("note: initial\n")
+    bpre_mod._invalidate_bpre_code_sig(fed.cart)
+    _bps_no_llm(fed.root)  # baseline build with the docs file already present
+
+    calls, orig = _bps_spy_trace_processes()
+    try:
+        time.sleep(1.1)  # ensure a distinct mtime tick
+        with open(docs_file, "w") as f:
+            f.write("note: edited\n")
+        bpre_mod._invalidate_bpre_code_sig(fed.cart)
+        with caplog.at_level(logging.INFO, logger="opencode_search.kb.bpre"):
+            _bps_no_llm(fed.root)
+        assert not calls, "docs-only churn must not trigger a rebuild"
+        assert any("reusing stamp-matched" in r.message for r in caplog.records), (
+            "docs-only churn must reuse the stamped result, not reconstruct"
+        )
+    finally:
+        bpre_mod._trace_processes = orig
+
+
+def test_bps2_hidden_dir_tool_cache_churn_no_rebuild(_bps_fed):
+    """BPS2: touching a .claude/**/*.js tool-cache file (the live build_docauth_flow.js
+    pattern) must not trigger a rebuild — hidden dirs are excluded by the same
+    HR35 resolver _source_files now uses."""
+    import os
+    import time
+
+    import opencode_search.kb.bpre as bpre_mod
+
+    fed = _bps_fed
+    cache_file = fed.checkout + "/.claude/skills/tool/build.js"
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+    with open(cache_file, "w") as f:
+        f.write("console.log('tool cache churn');\n")
+    bpre_mod._invalidate_bpre_code_sig(fed.checkout)
+    _bps_no_llm(fed.root)  # baseline build with the hidden-dir file already present
+
+    calls, orig = _bps_spy_trace_processes()
+    try:
+        time.sleep(1.1)
+        with open(cache_file, "w") as f:
+            f.write("console.log('tool cache churn again');\n")
+        bpre_mod._invalidate_bpre_code_sig(fed.checkout)
+        _bps_no_llm(fed.root)
+        assert not calls, "hidden-dir tool-cache churn must not trigger a rebuild"
+    finally:
+        bpre_mod._trace_processes = orig
+
+
+def test_bps3_real_code_drift_still_rebuilds(_bps_fed):
+    """BPS3: editing a real member .go service file must still flip the sig and
+    trigger a rebuild — the code-only signature must not become inert."""
+    import time
+
+    import opencode_search.kb.bpre as bpre_mod
+
+    fed = _bps_fed
+    _bps_no_llm(fed.root)  # baseline build
+
+    calls, orig = _bps_spy_trace_processes()
+    try:
+        time.sleep(1.1)
+        checkout_go = fed.checkout + "/checkout.go"
+        with open(checkout_go, "a") as f:
+            f.write("\n// drift comment\n")
+        bpre_mod._invalidate_bpre_code_sig(fed.checkout)
+        _bps_no_llm(fed.root)
+        assert calls, "real member code drift must still trigger a rebuild"
+    finally:
+        bpre_mod._trace_processes = orig
+
+
+def test_bps4_convergence_second_call_reuses(_bps_fed):
+    """BPS4: two consecutive reconstruct_processes calls with no code change in
+    between must converge — the second call reuses (stamp written at the end of
+    the first rebuild equals the stamp read at the start of the second call)."""
+    import opencode_search.kb.bpre as bpre_mod
+
+    fed = _bps_fed
+    _bps_no_llm(fed.root)  # first call: builds and stamps
+
+    calls, orig = _bps_spy_trace_processes()
+    try:
+        _bps_no_llm(fed.root)  # second call: no code change since first
+        assert not calls, "second consecutive call with no code change must reuse, not rebuild"
+    finally:
+        bpre_mod._trace_processes = orig
