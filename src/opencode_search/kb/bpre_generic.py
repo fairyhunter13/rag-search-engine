@@ -3,16 +3,31 @@ from __future__ import annotations
 from opencode_search.kb.valueflow import _t as _vt, _first_str, resolve_first_arg
 from opencode_search.kb.bpre_spec import _CALL_KINDS, _NEW_KINDS, _GRP_SFXS, _V, _SCHEMES, _is_call, _PARADIGM_KINDS, _HANDLER_KINDS
 
-def _provenance(rc: str | None) -> bool:
-    """Universal non-verb HTTP-client discriminator (P6/HR15 Part B): True iff the call
-    receiver's own text carries a _SCHEMES protocol/URI-scheme token (e.g. `httpClient`,
-    `HTTPoison`, `URLSession`). Generalizes the already-accepted Go check
-    (`"http" in import_path`, bpre_ast.py) from an import alias to any receiver, for every
-    language, with zero library-name vocabulary — only the closed _SCHEMES ground-truth set."""
+def _has_scheme(s: str | None) -> bool:
+    return bool(s) and any(tok in s.lower() for tok in _SCHEMES)
+
+def _provenance(rc: str | None, imports: dict | None = None, tu: dict | None = None) -> bool:
+    """Universal non-verb HTTP-client discriminator (P6/HR15 Part B+C1): True iff any of —
+    (a) the call receiver's own text carries a _SCHEMES protocol/URI-scheme token (e.g.
+    `httpClient`, `HTTPoison`, `URLSession`) — the original Part-B check; (b) the receiver's
+    def-use-resolved constructed type name does (`client = new HttpClient()` then
+    `client.GetAsync(...)`); (c) the receiver's import-map-resolved module path does, directly
+    or via its resolved type name (`import "net/http"`-style aliasing, generalized from the
+    already-accepted Go check `"http" in import_path`, bpre_ast.py, to every language). Zero
+    library-name vocabulary — only the closed _SCHEMES ground-truth set."""
+    if _has_scheme(rc):
+        return True
     if not rc:
         return False
-    rl = rc.lower()
-    return any(s in rl for s in _SCHEMES)
+    resolved_type = tu.get(rc) if tu else None
+    if _has_scheme(resolved_type):
+        return True
+    if imports:
+        if _has_scheme(imports.get(rc)):
+            return True
+        if resolved_type and _has_scheme(imports.get(resolved_type)):
+            return True
+    return False
 
 def _has_handler_arg(n, max_depth: int = 4) -> bool:
     """Structural discriminator: does this call carry a function/closure/lambda/block
@@ -48,11 +63,15 @@ def _fs(n,b,du):
     if a.named_child_count()==0:return None
     return _first_str(a.named_child(0),b) or resolve_first_arg(a,b,du)
 
+def _same_node(a,b_node):
+    ra,rb=a.byte_range(),b_node.byte_range()
+    return ra.start==rb.start and ra.end==rb.end
+
 def _cp(n,b):
     fn=n.child_by_field_name("function") or n.child_by_field_name("method") or n.child_by_field_name("name")
     rc=n.child_by_field_name("receiver") or n.child_by_field_name("object")
     if rc and fn:return _vt(rc,b),_vt(fn,b).rsplit(".",1)[-1].rsplit("::",1)[-1]
-    if fn and n.named_child_count()>0 and n.named_child(0) is not fn:
+    if fn and n.named_child_count()>0 and not _same_node(n.named_child(0),fn):
         return _vt(n.named_child(0),b),_vt(fn,b).rsplit(".",1)[-1].rsplit("::",1)[-1]
     nd=fn or (n.named_child(0) if n.named_child_count()>0 else None)
     if not nd:return None,None
@@ -61,7 +80,7 @@ def _cp(n,b):
         if s in t:p=t.rsplit(s,1);return p[0].strip(),p[1].strip()
     return None,t
 
-def scan_generic(root,b,f,surface,du):
+def scan_generic(root,b,f,surface,du,tu=None):
     """Grammar-agnostic BPRE scanner for every non-first-class language (P6/HR15 Part B): a
     single universal structural classifier, no per-language method-name table. Four signals,
     all structural or closed ground-truth vocabulary:
@@ -85,7 +104,7 @@ def scan_generic(root,b,f,surface,du):
             tn=n.child_by_field_name("type") or n.child_by_field_name("class") or (n.named_child(0) if n.named_child_count()>0 else None)
             if tn and _gsv(_vt(tn,b),ps):f.grpc_clients.append(("",_gsv(_vt(tn,b),ps),f"new {_vt(tn,b)}",ln))
         elif k in _PARADIGM_KINDS:
-            scan_paradigm(n,b,f,surface,du);stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
+            scan_paradigm(n,b,f,surface,du,tu);stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
         elif _is_call(k):
             rc,meth=_cp(n,b)
             if not meth:stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1));continue
@@ -102,7 +121,7 @@ def scan_generic(root,b,f,surface,du):
             if p.startswith("/"):
                 if ml in _V:(f.http_routes if _has_handler_arg(n) else f.http_clients).append((ml.upper(),p,ln))
                 elif _has_handler_arg(n):f.http_routes.append(("ANY",p,ln))
-                elif rc and _provenance(rc):f.http_clients.append(("GET",p,ln))
+                elif rc and _provenance(rc,f.imports,tu):f.http_clients.append(("GET",p,ln))
         elif k in("annotation","attribute","attribute_item","meta","meta_item"):
             an=n.child_by_field_name("arguments")
             p=(_first_str(an.named_child(0),b) if an and an.named_child_count()>0 else None) or ""

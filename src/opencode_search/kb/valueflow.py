@@ -46,67 +46,50 @@ def _first_str(node, b: bytes, depth: int = 3) -> str | None:
     return None
 
 
-def build_def_use(root, b: bytes) -> dict[str, str]:
-    """Walk the file AST; return {identifier -> string_value} for all scopes.
-
-    Intra-procedural only — does not follow calls.
-    First lexical assignment wins (conservative).
+def _iter_declarators(root, b: bytes):
+    """Yield (name_text, value_node) for every simple variable/const/field declarator across
+    supported grammars. Structural only — shared by build_def_use and build_type_use so the
+    declarator-kind patterns live in one place.
     Covers: Go const/var/:=, Python =, JS/TS const/let/var, Java/Kotlin locals, PHP $var =.
     """
-    du: dict[str, str] = {}
     stk = [root]
     while stk:
         n = stk.pop()
         k = n.kind()
 
-        # Go: const x = "v" / var x = "v"
+        # Go: const x = v / var x = v
         if k in ("const_spec", "var_spec"):
             nn, vn = n.child_by_field_name("name"), n.child_by_field_name("value")
             if nn and vn:
-                name = _t(nn, b)
-                v = _first_str(vn, b)
-                if v is not None and name not in du:
-                    du[name] = v
+                yield _t(nn, b), vn
 
-        # Go: x := "v"
+        # Go: x := v
         elif k == "short_var_declaration":
             lft, rgt = n.child_by_field_name("left"), n.child_by_field_name("right")
             if lft and rgt and lft.named_child_count() == rgt.named_child_count() == 1:
                 idn = lft.named_child(0)
                 if idn.kind() in _ID_KINDS:
-                    name = _t(idn, b)
-                    v = _first_str(rgt.named_child(0), b)
-                    if v is not None and name not in du:
-                        du[name] = v
+                    yield _t(idn, b), rgt.named_child(0)
 
-        # Python: x = "v"
+        # Python: x = v
         elif k == "assignment":
             ln, rn = n.child_by_field_name("left"), n.child_by_field_name("right")
             if ln and rn and ln.kind() in _ID_KINDS:
-                name = _t(ln, b)
-                v = _first_str(rn, b)
-                if v is not None and name not in du:
-                    du[name] = v
+                yield _t(ln, b), rn
 
-        # JS/TS: const/let/var x = "v"
+        # JS/TS: const/let/var x = v
         elif k == "variable_declarator":
             nn, vn = n.child_by_field_name("name"), n.child_by_field_name("value")
             if nn and vn and nn.kind() in _ID_KINDS:
-                name = _t(nn, b)
-                v = _first_str(vn, b)
-                if v is not None and name not in du:
-                    du[name] = v
+                yield _t(nn, b), vn
 
-        # PHP: $x = "v"
+        # PHP: $x = v
         elif k == "assignment_expression":
             ln, rn = n.child_by_field_name("left"), n.child_by_field_name("right")
             if ln and rn and ln.kind() == "variable_name":
-                name = _t(ln, b)
-                v = _first_str(rn, b)
-                if v is not None and name not in du:
-                    du[name] = v
+                yield _t(ln, b), rn
 
-        # Java/Kotlin: String x = "v"
+        # Java/Kotlin: Type x = v
         elif k in ("local_variable_declaration", "property_declaration"):
             for i in range(n.named_child_count()):
                 d = n.named_child(i)
@@ -114,13 +97,54 @@ def build_def_use(root, b: bytes) -> dict[str, str]:
                     nn = d.child_by_field_name("name")
                     vn = d.child_by_field_name("value") or d.child_by_field_name("initializer")
                     if nn and vn and nn.kind() in _ID_KINDS:
-                        name = _t(nn, b)
-                        v = _first_str(vn, b)
-                        if v is not None and name not in du:
-                            du[name] = v
+                        yield _t(nn, b), vn
 
         stk.extend(n.named_child(i) for i in range(n.named_child_count() - 1, -1, -1))
+
+
+def build_def_use(root, b: bytes) -> dict[str, str]:
+    """Walk the file AST; return {identifier -> string_value} for all scopes.
+
+    Intra-procedural only — does not follow calls. First lexical assignment wins (conservative).
+    """
+    du: dict[str, str] = {}
+    for name, vn in _iter_declarators(root, b):
+        if name in du:
+            continue
+        v = _first_str(vn, b)
+        if v is not None:
+            du[name] = v
     return du
+
+
+def _new_type(n, b: bytes) -> str | None:
+    """If *n* is a constructor/creation-expression node (`new Foo(...)`), return the constructed
+    type's own text (structural — _NEW_KINDS node-kind set, no vocabulary)."""
+    from opencode_search.kb.bpre_spec import _NEW_KINDS
+    if n.kind() not in _NEW_KINDS:
+        return None
+    tn = (n.child_by_field_name("type") or n.child_by_field_name("class")
+          or (n.named_child(0) if n.named_child_count() > 0 else None))
+    return _t(tn, b) if tn else None
+
+
+def build_type_use(root, b: bytes) -> dict[str, str]:
+    """Walk the file AST; return {identifier -> constructed_type_name} for all scopes.
+
+    Companion to build_def_use: captures explicit `x = new Foo(...)` constructor bindings (the
+    same declarator kinds), so a typed-client receiver (`client.GetAsync(...)` where
+    `client = new HttpClient()`) resolves to its constructed type for provenance (P6/HR15 Part C1).
+    Bare factory calls without `new` (e.g. Rust `Client::new()`) are not constructor-expression
+    nodes and are intentionally not captured here — genuine residual ambiguity, not a regression.
+    """
+    tu: dict[str, str] = {}
+    for name, vn in _iter_declarators(root, b):
+        if name in tu:
+            continue
+        t = _new_type(vn, b)
+        if t is not None:
+            tu[name] = t
+    return tu
 
 
 def resolve_arg(arg, b: bytes, du: dict[str, str]) -> str | None:

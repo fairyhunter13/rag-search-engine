@@ -10,8 +10,8 @@ from dataclasses import dataclass,field
 from pathlib import Path
 log=logging.getLogger(__name__)
 from tree_sitter_language_pack import has_language as _ts_has_language, api as _ts_api
-from opencode_search.kb.valueflow import build_def_use, resolve_first_arg, _t as _vt
-from opencode_search.kb.bpre_spec import _FIRST_CLASS
+from opencode_search.kb.valueflow import build_def_use, build_type_use, resolve_first_arg, _t as _vt
+from opencode_search.kb.bpre_spec import _FIRST_CLASS, _IMPORT_KINDS
 from opencode_search.kb.bpre_generic import scan_generic
 @dataclass
 class FileFacts:
@@ -27,6 +27,7 @@ class FileFacts:
     http_routes:list=field(default_factory=list)
     http_clients:list=field(default_factory=list)
     status_enums:list=field(default_factory=list)
+    imports:dict=field(default_factory=dict)  # alias -> import/module path (P6/HR15 Part C1)
 @dataclass
 class ApiSurface:
     constructors:dict=field(default_factory=dict)
@@ -56,6 +57,37 @@ def _php_str(node,b:bytes,du:dict)->str|None:
     if node.kind()=="variable_name":return du.get(_vt(node,b))
     return None
 
+_IMPORT_WRAP = "\"'`(){}<>;, "
+
+def _import_path_alias(n, b: bytes) -> list[tuple[str, str]]:
+    """Text-based (structural, no-regex) alias/path extraction for one _IMPORT_KINDS node.
+
+    Mirrors the already-accepted Go pattern (bpre_ast.py:159, `ip.rsplit("/",1)[-1]`):
+    strips the leading declaration keyword, honours an explicit ` as `/`=` alias if present,
+    else defaults the alias to the last path-separator segment. Never produces a wrong
+    (alias, path) pair — only sometimes fails to find one, which the caller tolerates."""
+    txt = _t(n, b).strip().rstrip(";").strip()
+    parts = txt.split(None, 1)
+    rest = parts[1].strip() if len(parts) == 2 else txt
+    if not rest:
+        return []
+    if " as " in rest:
+        path_part, alias_part = rest.rsplit(" as ", 1)
+        path, alias = path_part.strip(_IMPORT_WRAP), alias_part.strip(_IMPORT_WRAP)
+        return [(alias, path)] if alias and path else []
+    if "=" in rest:
+        alias_part, path_part = rest.split("=", 1)
+        alias, path = alias_part.strip(_IMPORT_WRAP), path_part.strip(_IMPORT_WRAP)
+        if alias and path and all(c.isalnum() or c == "_" for c in alias):
+            return [(alias, path)]
+    path = rest.strip(_IMPORT_WRAP)
+    seg = path
+    for sep in ("::", "/", "."):
+        if sep in seg:
+            seg = seg.rsplit(sep, 1)[-1]
+    alias = seg.strip(_IMPORT_WRAP)
+    return [(alias, path)] if alias and path else []
+
 def _s1_or_vf(args, b: bytes, du: dict) -> str | None:
     """Get a string value from first arg: literal (_s1 fast path) OR value-flow lookup.
 
@@ -67,6 +99,21 @@ def _s1_or_vf(args, b: bytes, du: dict) -> str | None:
         return v
     # Value-flow: try first named child as identifier / selector
     return resolve_first_arg(args, b, du)
+
+def _scan_imports(root, b: bytes) -> dict:
+    """Universal import/use-declaration pre-pass (P6/HR15 Part C1): alias -> module-path, for
+    every _IMPORT_KINDS node kind. First declaration wins (conservative, mirrors build_def_use).
+    Go is excluded (already has its own richer import handling in scan_file below)."""
+    imports: dict = {}
+    stk = [root]
+    while stk:
+        n = stk.pop()
+        if n.kind() in _IMPORT_KINDS:
+            for alias, path in _import_path_alias(n, b):
+                if alias not in imports:
+                    imports[alias] = path
+        stk.extend(n.named_child(i) for i in range(n.named_child_count() - 1, -1, -1))
+    return imports
 
 def _discover_proto_services(members:list[str],surf:ApiSurface)->None:
     """Seed surf.proto_services from .proto service declarations (language-neutral)."""
@@ -318,5 +365,7 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         f.grpc_clients.append(("",cls_name[:-6],f"new {cls_name}",ln))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     if lang not in _FIRST_CLASS:
-        scan_generic(root, b, f, s, du)
+        f.imports = _scan_imports(root, b)
+        tu = build_type_use(root, b)
+        scan_generic(root, b, f, s, du, tu)
     return f
