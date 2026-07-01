@@ -286,3 +286,55 @@ def test_provenance_discriminates_scheme_receivers(receiver: str | None, expecte
     """_provenance(receiver) is the closed-_SCHEMES-vocabulary structural client discriminator."""
     from opencode_search.kb.bpre_generic import _provenance
     assert _provenance(receiver) is expected, f"receiver={receiver!r}"
+
+
+# P6/HR15 Part C1: _provenance also resolves via def-use type-use and import-map lookups, not
+# just receiver text — closing the recall gap Part B left (typed clients / import aliases whose
+# own name carries no _SCHEMES token).
+def test_provenance_resolves_via_type_use_and_imports() -> None:
+    from opencode_search.kb.bpre_generic import _provenance
+    # (b) def-use-resolved constructed-type name carries a scheme, receiver name does not.
+    assert _provenance("client", None, {"client": "HttpClient"}) is True
+    # (c) import-map-resolved module path carries a scheme, alias name does not.
+    assert _provenance("Net", {"Net": "System.Net.Http"}, None) is True
+    # (c) via resolved type name: alias->type->import chain.
+    assert _provenance("c", {"HttpClient": "System.Net.Http"}, {"c": "HttpClient"}) is True
+    # Negative: neither receiver, type, nor import path carries a scheme token.
+    assert _provenance("logger", {"Logger": "com.example.Logger"}, {"logger": "Logger"}) is False
+
+
+def test_typed_client_def_use_resolves_provenance() -> None:
+    """P6/HR15 Part C1: `client = new HttpClient(); client.sendAsync('/x')` resolves via the
+    def-use-resolved constructed type ('HttpClient' carries a _SCHEMES token) — the receiver name
+    'client' alone does not, so this only passes with type-use provenance wired in."""
+    content = (
+        "class C{void f(){HttpClient client = new HttpClient();"
+        ' client.sendAsync("/api/items");}}'
+    )
+    surf = ApiSurface()
+    ff = scan_file("c.java", content, "java", surf)
+    assert ff is not None
+    assert ff.http_clients, f"typed-client provenance not resolved; http_routes={ff.http_routes}"
+
+
+def test_import_alias_resolves_provenance() -> None:
+    """P6/HR15 Part C1: `using Net = System.Net.Http;` then `Net.SendAsync('/x')` resolves via
+    the import-map-resolved module path — the alias 'Net' alone carries no _SCHEMES token."""
+    content = (
+        "using Net = System.Net.Http;\n"
+        'class C{async Task M(){await Net.SendAsync("/api/items");}}'
+    )
+    surf = ApiSurface()
+    ff = scan_file("c.cs", content, "csharp", surf)
+    assert ff is not None
+    assert ff.http_clients, f"import-alias provenance not resolved; http_routes={ff.http_routes}"
+
+
+def test_import_provenance_negative_non_scheme_stays_unresolved() -> None:
+    """Negative control: a typed client whose type/import carries no _SCHEMES token must NOT be
+    misclassified as an HTTP client (genuine residual ambiguity, not a false positive)."""
+    content = 'class C{void f(){Logger logger = new Logger(); logger.record("/api/items");}}'
+    surf = ApiSurface()
+    ff = scan_file("c.java", content, "java", surf)
+    assert ff is not None
+    assert not ff.http_clients, f"unexpected false-positive client: {ff.http_clients}"
