@@ -1,15 +1,25 @@
 """Engine-wide guard: assert no code-semantic regex/keyword/mapping in Category-A paths.
 
 Category-A sites (eliminated — must stay regex-free):
-  kb/bpre.py, kb/bpre_ast.py — structural BPRE detection
-  kb/patterns.py              — framework labelling (now LLM)
-  server/_overview.py         — service detection (now bpre_ast Pass A)
+  kb/bpre.py, kb/bpre_ast.py         — structural BPRE detection
+  kb/bpre_spec.py                     — tree-sitter node-kind maps + closed HTTP-verb set (ground truth)
+  kb/bpre_generic.py, kb/bpre_paradigms.py — generic/paradigm HTTP client-vs-route classification
+  kb/patterns.py                      — framework labelling (now LLM)
+  server/_overview.py                 — service detection (now bpre_ast Pass A)
 
 Category-B sites (intrinsic mechanism — explicitly exempt):
   graph/extractor.py          — tree-sitter grammar node-kind tables
   index/discover.py           — file-extension → language bootstrap
   core/registry.py            — registry path-slug plumbing (re.sub)
   core/config.py              — project-name slug plumbing (re.sub)
+
+HR15 bans regex AND static/dynamic keyword-list / mapping-table heuristics for semantic
+inference (surface-text guessing). Closed protocol vocabularies (e.g. the fixed HTTP method
+set `bpre_spec._V`) and tree-sitter node-kind maps (`_CALL_KINDS`/`_NEW_KINDS`/etc.) are
+ground truth, not heuristics, and are allowed. `_SEMANTIC_HEURISTIC_DEBT` below pins the
+*known* surviving name-matching heuristics (e.g. `_LANG_SPECS` per-language method-name
+tables, `New*Client`/`Register*Server` naming-convention checks) — it may only shrink as
+Part-3 structure-first migrations land; a new, unlisted heuristic is a regression.
 """
 from __future__ import annotations
 
@@ -27,9 +37,26 @@ _ROOT = Path(__file__).resolve().parents[3] / "opencode_search"
 _CATEGORY_A = [
     "opencode_search.kb.bpre",
     "opencode_search.kb.bpre_ast",
+    "opencode_search.kb.bpre_spec",
+    "opencode_search.kb.bpre_generic",
+    "opencode_search.kb.bpre_paradigms",
     "opencode_search.kb.patterns",
     "opencode_search.server._overview",
 ]
+
+# Known surviving (b)-category name-matching heuristics (HR15 debt). Each entry names an
+# *exact* source substring expected to still be present. A migration (Part 3) that removes
+# a heuristic must delete its entry here — the registry only shrinks, never grows.
+_SEMANTIC_HEURISTIC_DEBT: dict[str, tuple[str, ...]] = {
+    "opencode_search.kb.bpre_spec": ("_LANG_SPECS", "_GRP_SFXS", "_DEFAULT_SPEC"),
+    "opencode_search.kb.bpre_ast": (
+        'fn.startswith("New") and fn.endswith("Client")',
+        'fn.startswith("Register") and fn.endswith("Server")',
+        'rt.endswith("Client")',
+        'ann.endswith("Mapping")',
+        'cls_name.endswith("Client")',
+    ),
+}
 
 _CATEGORY_B_ALLOWLIST = {
     "opencode_search.graph.extractor",
@@ -91,6 +118,34 @@ def test_bpre_no_hardcoded_api_surface_patterns() -> None:
     assert '"Publish"' not in src or "bpre_ast" in src, "Hardcoded Publish verb found"
 
 
+def test_semantic_heuristic_debt_registry_is_accurate() -> None:
+    """Each pinned debt entry must still be present — proves the registry matches reality.
+
+    When a Part-3 migration removes a heuristic, delete its entry here in the same change;
+    a stale entry (heuristic gone but still pinned) fails loudly instead of silently drifting.
+    """
+    violations: list[str] = []
+    for mod_name, needles in _SEMANTIC_HEURISTIC_DEBT.items():
+        src = _source(mod_name)
+        for needle in needles:
+            if needle not in src:
+                violations.append(f"{mod_name}: pinned debt {needle!r} no longer present — remove from registry")
+    assert not violations, "\n".join(violations)
+
+
+def test_no_new_semantic_heuristics_beyond_debt_registry() -> None:
+    """bpre_generic.py / bpre_paradigms.py must not grow their own name-matching tables.
+
+    They currently classify via the shared bpre_spec._Spec (cli/rte/dec/grp) — any new
+    per-module keyword table is an unlisted heuristic and must route through structural
+    resolution + the residue ladder (resolve_rerank -> llm_escalation) instead.
+    """
+    for mod_name in ("opencode_search.kb.bpre_generic", "opencode_search.kb.bpre_paradigms"):
+        src = _source(mod_name)
+        assert "_LANG_SPECS" not in src, f"{mod_name} must not define its own language-spec table"
+        assert "frozenset({" not in src, f"{mod_name} must not define a new keyword frozenset"
+
+
 def test_bpre_ast_uses_tree_sitter_only() -> None:
     """H4 guard: bpre_ast must use pack-native has_language/get_parser; no _TS_LANG; no re."""
     src = _source("opencode_search.kb.bpre_ast")
@@ -132,6 +187,20 @@ def test_patterns_no_static_framework_map() -> None:
     assert "_KNOWN" not in src, "Static _KNOWN framework map must be removed"
     assert "deepseek" in src.lower() or "llm" in src.lower(), (
         "patterns.py must use LLM for framework labelling"
+    )
+
+
+def test_bpre_link_resolve_tokens_are_accounted() -> None:
+    """HR23 guard: bpre.py's Tier-2 edge-linking DeepSeek call must feed llm_token_stats().
+
+    _llm_link_resolve previously called deepseek_extract without accumulation, making its
+    token spend invisible to overview(what='metrics') — a gap in the DIKW token-economy
+    budget that this test prevents from regressing.
+    """
+    src = _source("opencode_search.kb.bpre")
+    assert "_accumulate_llm_tokens" in src, "bpre.py must import _accumulate_llm_tokens"
+    assert '_accumulate_llm_tokens(usage, "bpre_link")' in src, (
+        "_llm_link_resolve must accumulate its DeepSeek usage under the bpre_link namespace"
     )
 
 

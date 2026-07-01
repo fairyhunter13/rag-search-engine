@@ -38,6 +38,21 @@ DATA      Source code chunks + file tree.
 3. **Knowledge** (community summaries): DeepSeek, significance-gated, prefix-cached. `enrich_communities_batch()`. Abstain on tail (reject-option doctrine, `narrated=0`).
 4. **Wisdom** (invariants/principles): authored once, machine-checked. `check_world_model.py`.
 
+## Extraction / semantic-resolution ladder (HR15–HR19, HR23)
+
+The **Information** step above is itself a confidence-gated ladder, not a single pass: tree-sitter
+structure (token-zero) resolves the majority; GPU rerank (token-zero) resolves residual ambiguity by
+structural context; DeepSeek (capped/cached/batched, SEA select-not-author) resolves only what remains.
+No regex, static/dynamic keyword list, or mapping table may substitute for a tier — surface-text name
+matching is unsound (false positives) and is banned for semantic inference in Category A
+(`kb/bpre*.py`, `kb/patterns.py`, `server/_overview.py`; see §7a of
+`docs/architecture/federation-and-search-engine.md`). **Token frugality is the enforcement
+complement**: every DeepSeek call in this ladder must run behind a stable prefix (cache), be batched,
+be capped, receive structural context (not bare names), and select from an admitted candidate set —
+and its usage must feed `llm_token_stats()` (HR23) so the budget is auditable. As of 2026-07-01 this
+accounting covers both narration (`bpre.*`) and edge-resolution (`bpre_link`) DeepSeek calls; any new
+call site in `kb/` or `graph/` must do the same (L4 pattern in `model.yaml`).
+
 ## Compute-spend doctrine (CPU / GPU / RAM)
 
 Parallel to the LLM-spend ladder above, OSE applies a **compute-spend doctrine** governing when CPU, GPU, and RAM are consumed:

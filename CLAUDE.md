@@ -61,6 +61,17 @@ via OS notifications (watchdog/inotify) — never manual polling.** The poll fal
 activates only when inotify is unavailable (NFS/SMB, `max_user_watches` exhaustion). See
 `docs/info-hierarchy.md` "Compute-spend doctrine" and `model.yaml` P16/P17/HR32/HR33.
 
+## Extraction doctrine (P6, HR15–HR19, HR23)
+
+**No regex, no static/dynamic keyword list, no mapping table for code-semantic inference** — only
+tree-sitter structure and, for genuine residual ambiguity, a capped/cached/batched DeepSeek call
+(SEA select-not-author). Applies to Category A (`kb/bpre*.py`, `kb/patterns.py`,
+`server/_overview.py`); node-kind maps and infra/config ground-truth are exempt. Full 5-tier ladder
++ Category A/B enumeration: `docs/architecture/federation-and-search-engine.md` §7a. Token-frugality
+requirement for any new DeepSeek call site (stable prefix, batch, cap, structural context, feed
+`llm_token_stats()`): `docs/info-hierarchy.md` "Extraction / semantic-resolution ladder". Enforced by
+`src/tests/live/test_no_code_semantic_regex.py` + `model.yaml` P6.
+
 ## Project quick reference
 
 - Entry points: `src/opencode_search/server/mcp.py` (MCP server + routes), `src/opencode_search/daemon/` (daemon package), `src/opencode_search/cli.py` (CLI), `src/opencode_search/__main__.py` (bridge-stdio shim)

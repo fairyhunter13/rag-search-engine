@@ -614,7 +614,7 @@ def _llm_link_resolve(
     return callee values from that list (SEA arXiv:2408.04344: +8.1 F1).
     Verification gate: drops any edge where caller==callee.
     """
-    from opencode_search.graph.llm import deepseek_extract, deepseek_key
+    from opencode_search.graph.llm import _accumulate_llm_tokens, deepseek_extract, deepseek_key
     if not deepseek_key():
         return
     svc_set = set(svcs)
@@ -638,6 +638,7 @@ def _llm_link_resolve(
     except Exception as exc:
         log.warning("bpre _llm_link_resolve: %s", exc)
         return
+    _accumulate_llm_tokens(usage, "bpre_link")
     if usage.get("prompt_cache_hit_tokens", 0) > 0:
         log.debug("bpre llm_link: cache hit %d tokens", usage["prompt_cache_hit_tokens"])
     s, e = raw.find("["), raw.rfind("]")
