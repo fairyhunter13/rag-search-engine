@@ -2,8 +2,8 @@
 """Configure all system integrations for rag-search MCP tools.
 
 Writes/verifies system prompt blocks and MCP entries across the config trees.
-Adapts to whatever tool ecosystem is present (claude profiles, opencode, hermes).
-(Codex support removed.)
+Adapts to whatever tool ecosystem is present (claude profiles, hermes).
+(OpenCode and Codex integration removed.)
 
 Usage:
     .venv/bin/python scripts/configure_integrations.py           # configure + verify
@@ -121,41 +121,6 @@ def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
 
 
 # ---------------------------------------------------------------------------
-# AGENTS.md targets (opencode-default, opencode-personal)
-# ---------------------------------------------------------------------------
-
-def _verify_agents_md(md_path: Path, label: str) -> ConfigResult:
-    if not md_path.exists():
-        return ConfigResult(tool=label, status="missing",
-                            message=f"AGENTS.md not found at {md_path}", path=str(md_path))
-    text = md_path.read_text()
-    from integrations.canonical import CANONICAL_BODY
-    ose_ok = _verify_sentinel_block(text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
-    if ose_ok:
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"System prompt in sync: {md_path}", path=str(md_path))
-    return ConfigResult(tool=label, status="missing",
-                        message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
-
-
-def _repair_agents_md(md_path: Path, label: str, dry_run: bool = False) -> ConfigResult:
-    from integrations.canonical import CANONICAL_BODY
-    old_text = md_path.read_text() if md_path.exists() else ""
-    new_text = _replace_sentinel_block(old_text, SENTINEL_AGENTS_START, SENTINEL_AGENTS_END, CANONICAL_BODY)
-    if old_text == new_text:
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {md_path}", path=str(md_path))
-    diff = _diff(old_text, new_text, str(md_path))
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would update {md_path}", path=str(md_path), diff=diff)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(new_text)
-    return ConfigResult(tool=label, status="configured",
-                        message=f"Updated system prompt: {md_path}", path=str(md_path), diff=diff)
-
-
-# ---------------------------------------------------------------------------
 # MCP entry repair: claude settings.json (3 profiles)
 # ---------------------------------------------------------------------------
 
@@ -204,9 +169,6 @@ def _repair_settings_json(settings_path: Path, dry_run: bool = False) -> ConfigR
     settings_path.write_text(new_text)
     return ConfigResult(tool=label, status="configured",
                         message=f"Updated MCP entry: {settings_path}", path=str(settings_path), diff=diff)
-
-
-# (Codex MCP-client integration removed — rag-search no longer configures codex.)
 
 
 # ---------------------------------------------------------------------------
@@ -306,78 +268,6 @@ def _repair_hermes_agent_prompt(config_path: Path, dry_run: bool = False) -> Con
     return ConfigResult(tool=label, status=result.status,
                         message=result.message.replace("hermes config.yaml", "hermes agent_system_prompt"),
                         path=result.path, diff=result.diff)
-
-
-# ---------------------------------------------------------------------------
-# MCP entry repair: opencode jsonc (2 profiles)
-# ---------------------------------------------------------------------------
-
-def _parse_jsonc(text: str) -> dict:
-    """Parse JSONC by stripping line comments that are outside string literals."""
-    # Only strip // that appears outside double-quoted strings.
-    # Strategy: remove // ... until end-of-line, but not when inside a string.
-    cleaned_lines = []
-    for line in text.splitlines():
-        # Find // that is NOT inside a string by counting un-escaped quotes
-        in_string = False
-        result = []
-        i = 0
-        while i < len(line):
-            ch = line[i]
-            if ch == '"' and (i == 0 or line[i - 1] != "\\"):
-                in_string = not in_string
-                result.append(ch)
-            elif ch == "/" and not in_string and i + 1 < len(line) and line[i + 1] == "/":
-                break  # rest of line is a comment
-            else:
-                result.append(ch)
-            i += 1
-        cleaned_lines.append("".join(result))
-    return json.loads("\n".join(cleaned_lines))
-
-
-def _verify_opencode_jsonc(config_path: Path, label: str) -> ConfigResult:
-    if not config_path.exists():
-        return ConfigResult(tool=label, status="missing",
-                            message=f"opencode config not found: {config_path}", path=str(config_path))
-    try:
-        text = config_path.read_text()
-        data = _parse_jsonc(text)
-    except Exception as exc:
-        return ConfigResult(tool=label, status="error",
-                            message=f"Failed to parse {config_path}: {exc}", path=str(config_path))
-    entry = data.get("mcp", {}).get("rag-search", {})
-    if not entry:
-        return ConfigResult(tool=label, status="missing",
-                            message=f"mcp.rag-search missing in {config_path}", path=str(config_path))
-    if entry.get("type") == "remote" and entry.get("url") == CANONICAL_MCP_URL:
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"opencode MCP entry in sync: {config_path}", path=str(config_path))
-    return ConfigResult(tool=label, status="missing",
-                        message=f"mcp entry not HTTP remote in {config_path}", path=str(config_path))
-
-
-def _repair_opencode_jsonc(config_path: Path, label: str, dry_run: bool = False) -> ConfigResult:
-    old_text = config_path.read_text() if config_path.exists() else "{}"
-    try:
-        data = _parse_jsonc(old_text)
-    except Exception as exc:
-        return ConfigResult(tool=label, status="error",
-                            message=f"Failed to parse {config_path}: {exc}", path=str(config_path))
-    new_entry: dict = {"type": "remote", "url": CANONICAL_MCP_URL}
-    data.setdefault("mcp", {})["rag-search"] = new_entry
-    new_text = json.dumps(data, indent=2) + "\n"
-    if old_text.strip() == new_text.strip():
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {config_path}", path=str(config_path))
-    diff = _diff(old_text, new_text, str(config_path))
-    if dry_run:
-        return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would update {config_path}", path=str(config_path), diff=diff)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(new_text)
-    return ConfigResult(tool=label, status="configured",
-                        message=f"Updated opencode MCP entry: {config_path}", path=str(config_path), diff=diff)
 
 
 # ---------------------------------------------------------------------------
@@ -490,16 +380,6 @@ def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path,
             lbl = f"claude(account{idx})"
             sys_t.append(("claude", d / "CLAUDE.md", f"{lbl}/CLAUDE.md"))
             mcp_t.append(("settings", d / "settings.json", f"{lbl}/settings.json"))
-    oc_default = _H / ".config" / "opencode"
-    if oc_default.exists():
-        sys_t.append(("agents", oc_default / "AGENTS.md", "opencode-default/AGENTS.md"))
-        mcp_t.append(("opencode", oc_default / "opencode.jsonc", "opencode-default/opencode.jsonc"))
-    cfg = _H / ".config"
-    if cfg.exists():
-        for d in sorted(cfg.iterdir()):
-            if d.is_dir() and d.name.startswith("opencode-") and d.name != "opencode":
-                sys_t.append(("agents", d / "opencode" / "AGENTS.md", f"{d.name}/AGENTS.md"))
-                mcp_t.append(("opencode", d / "opencode" / "opencode.jsonc", f"{d.name}/opencode.jsonc"))
     hermes = _H / ".hermes" / "config.yaml"
     if hermes.parent.exists():
         sys_t.append(("hermes_agent", hermes, "hermes/agent_system_prompt"))
@@ -522,8 +402,6 @@ def verify_all() -> list[ConfigResult]:
     for kind, path, label in _SYSTEM_PROMPT_TARGETS:
         if kind == "claude":
             results.append(_verify_claude_md(path))
-        elif kind == "agents":
-            results.append(_verify_agents_md(path, label))
         elif kind == "hermes_agent":
             results.append(_verify_hermes_agent_prompt(path))
     for kind, path, label in _MCP_TARGETS:
@@ -531,8 +409,6 @@ def verify_all() -> list[ConfigResult]:
             results.append(_verify_settings_json(path))
         elif kind == "hermes":
             results.append(_verify_hermes_yaml(path))
-        elif kind == "opencode":
-            results.append(_verify_opencode_jsonc(path, label))
     results.append(verify_bash_aliases())
     return results
 
@@ -542,8 +418,6 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
     for kind, path, label in _SYSTEM_PROMPT_TARGETS:
         if kind == "claude":
             results.append(_repair_claude_md(path, dry_run=dry_run))
-        elif kind == "agents":
-            results.append(_repair_agents_md(path, label, dry_run=dry_run))
         elif kind == "hermes_agent":
             results.append(_repair_hermes_agent_prompt(path, dry_run=dry_run))
     for kind, path, label in _MCP_TARGETS:
@@ -551,8 +425,6 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
             results.append(_repair_settings_json(path, dry_run=dry_run))
         elif kind == "hermes":
             results.append(_repair_hermes_yaml(path, dry_run=dry_run))
-        elif kind == "opencode":
-            results.append(_repair_opencode_jsonc(path, label, dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
     return results
 
