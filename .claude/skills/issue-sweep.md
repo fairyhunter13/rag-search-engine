@@ -34,7 +34,7 @@ while dry_streak < 2:
 
 ### 1a. Runtime signals (daemon log + /api/metrics)
 ```bash
-LOG=~/.local/state/opencode-search/daemon.log
+LOG=~/.local/state/rag-search/daemon.log
 echo "embedding loads:  $(grep -c 'Loading embedding model' $LOG)"
 echo "reranker loads:   $(grep -c 'Loading reranker model' $LOG)"
 echo "CUBLAS errors:    $(grep -ic 'cublas' $LOG)"
@@ -52,14 +52,14 @@ Flag if embedding-model reload count > 10 (indicates session eviction storm).
 ### 1b. Correctness (tests + static)
 ```bash
 .venv/bin/pytest src/tests/live/ -m "live and not slow" -q   # fast live suite
-.venv/bin/ruff check src/opencode_search src/tests            # lint
-.venv/bin/python -m compileall -q src/opencode_search         # syntax
+.venv/bin/ruff check src/rag_search src/tests            # lint
+.venv/bin/python -m compileall -q src/rag_search         # syntax
 ```
 Use `/run-all-tests` for the full live suite when investigating a known failure.
 
 ### 1c. Data / KB health
 ```bash
-opencode-search kb-status --json              # per-project DONE/PENDING
+rag-search kb-status --json              # per-project DONE/PENDING
 ```
 `curl -s "http://localhost:8765/api/storage_health?project=..."` — check:
 - `stale_index_dirs > active_index_count + 2`
@@ -77,9 +77,9 @@ ask('what is the most fragile or riskiest code right now?', project_path, scope=
 
 ### 1e. Code smell grep
 ```bash
-grep -rn "except:\s*$\|except Exception:\s*pass\|# type: ignore\|TODO\|FIXME\|HACK\|cpu_fallback\|fallback.*cpu\|device.*cpu" src/opencode_search/ | head -30
+grep -rn "except:\s*$\|except Exception:\s*pass\|# type: ignore\|TODO\|FIXME\|HACK\|cpu_fallback\|fallback.*cpu\|device.*cpu" src/rag_search/ | head -30
 # CPU-fallback violations (hard rule: GPU-only)
-grep -rn "providers.*cpu\|CPUExecutionProvider\|device.*'cpu'" src/opencode_search/ | grep -v test | head
+grep -rn "providers.*cpu\|CPUExecutionProvider\|device.*'cpu'" src/rag_search/ | grep -v test | head
 ```
 
 ### 1f. MCP self-test (dogfood each of the 5 tools)

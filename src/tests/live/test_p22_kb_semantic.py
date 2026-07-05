@@ -15,7 +15,7 @@ _BASE = "http://127.0.0.1:8765"
 
 
 def _graph_db(project: str) -> Path:
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     return project_graph_db(project)
 
 
@@ -39,7 +39,7 @@ def _converge_ready(project: str, timeout: int = 180) -> None:
     """Run _enrich_project in-process, poll until kb_state==ready AND l1_enriched_pct==100."""
     import time
 
-    from opencode_search.daemon.sweeps import _enrich_project
+    from rag_search.daemon.sweeps import _enrich_project
     _enrich_project(project)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -61,7 +61,7 @@ def service_path(sample_workspace: SampleWorkspace) -> str:
 
 def test_orphan_l2_stamp_sets_title_and_summary(safe_tmp_path):
     """TB1/F4a: orphan-L2 stamp SQL sets title='(leaf)'+summary; pre-seeded L1 summary intact."""
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.store import GraphStore
 
     gdb = safe_tmp_path / "graph.db"
     gs = GraphStore(gdb)
@@ -157,8 +157,8 @@ def test_ask_synthesis_excludes_test_tooling_communities():
     import inspect
     import re
 
-    from opencode_search.graph.enrich import _TYPE_ORDER, EXCLUDED_FROM_RETRIEVAL
-    from opencode_search.query import ask as ask_mod
+    from rag_search.graph.enrich import _TYPE_ORDER, EXCLUDED_FROM_RETRIEVAL
+    from rag_search.query import ask as ask_mod
 
     valid = frozenset(_TYPE_ORDER)
     for fn_name in ("_top_communities_semantic", "_macro_community_context", "_community_context"):

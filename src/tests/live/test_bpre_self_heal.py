@@ -15,8 +15,8 @@ import sqlite3
 
 import pytest
 
-from opencode_search.core.config import root_process_db
-from opencode_search.kb.bpre import _narrative_incomplete, reconstruct_processes
+from rag_search.core.config import root_process_db
+from rag_search.kb.bpre import _narrative_incomplete, reconstruct_processes
 
 pytestmark = pytest.mark.live
 
@@ -30,7 +30,7 @@ def synth_fed():
 
 
 def _no_llm(root: str) -> int:
-    from opencode_search.graph.llm import no_deepseek
+    from rag_search.graph.llm import no_deepseek
     with no_deepseek():
         return reconstruct_processes(root)
 
@@ -52,7 +52,7 @@ def test_bsh1_meta_stamps_survive_rebuild(synth_fed):
 
 def test_bsh2_algo_version_is_deterministic():
     """BSH2: _bpre_algo_version() returns a 4-char hex string, stable across calls."""
-    from opencode_search.kb.bpre import _bpre_algo_version
+    from rag_search.kb.bpre import _bpre_algo_version
     v = _bpre_algo_version()
     assert len(v) == 4 and all(c in "0123456789abcdef" for c in v)
     assert _bpre_algo_version() == v
@@ -60,7 +60,7 @@ def test_bsh2_algo_version_is_deterministic():
 
 def test_bsh3_narrative_incomplete_allows_reuse_when_key_absent(synth_fed):
     """BSH3: _narrative_incomplete returns False when DeepSeek key absent — no spurious rebuild."""
-    from opencode_search.graph.llm import no_deepseek
+    from rag_search.graph.llm import no_deepseek
     _no_llm(synth_fed.root)
     db = root_process_db(synth_fed.root)
     with no_deepseek(), sqlite3.connect(str(db)) as con:
@@ -73,8 +73,8 @@ def test_bsh3_narrative_incomplete_allows_reuse_when_key_absent(synth_fed):
 
 def test_bsh4_source_drift_changes_sig(synth_fed):
     """BSH4: adding a file to a member changes _bpre_source_sig."""
-    from opencode_search.daemon.federation import expand_federation
-    from opencode_search.kb.bpre import _bpre_source_sig
+    from rag_search.daemon.federation import expand_federation
+    from rag_search.kb.bpre import _bpre_source_sig
     members = expand_federation(synth_fed.root)
     sig1 = _bpre_source_sig(members)
     new_file = synth_fed.cart + "/drift.go"
@@ -90,7 +90,7 @@ def test_bsh4_source_drift_changes_sig(synth_fed):
 
 def test_bsh5_delta_carry_over(synth_fed):
     """BSH5: _synthesize_artifacts(old_narr) carries sentinel narratives for unchanged processes."""
-    from opencode_search.kb.bpre import _proc_sig, _synthesize_artifacts
+    from rag_search.kb.bpre import _proc_sig, _synthesize_artifacts
     _no_llm(synth_fed.root)
     db = root_process_db(synth_fed.root)
     with sqlite3.connect(str(db)) as con:
@@ -121,7 +121,7 @@ def test_bsh6_atomic_swap_mechanism(tmp_path):
     the publish and M (new) after, never 0 in between — which is guaranteed by the single-file
     atomic transaction used instead of the old DELETE-then-commit pattern.
     """
-    from opencode_search.kb.bpre import _init_db
+    from rag_search.kb.bpre import _init_db
 
     live = tmp_path / "live.db"
     stg = tmp_path / "staging.db"
@@ -160,14 +160,14 @@ def test_sg_reconcile_has_root_pass():
     """SG: reconcile_projects source contains the BPRE root-pass call."""
     import inspect
 
-    from opencode_search.daemon.sweeps import reconcile_projects
+    from rag_search.daemon.sweeps import reconcile_projects
     src = inspect.getsource(reconcile_projects)
     assert "reconstruct_processes(" in src
 
 
 def test_nt1_parse_narratives_preserves_hex_ids():
     """NT1: _parse_narratives keys results by hex strings — guards against int() regression."""
-    from opencode_search.kb.bpre import _parse_narratives
+    from rag_search.kb.bpre import _parse_narratives
 
     got = _parse_narratives('[{"id": "01f96b457ee69eca", "narrative": "Cart calls checkout."}]')
     assert got == {"01f96b457ee69eca": "Cart calls checkout."}, f"plain: {got}"
@@ -182,7 +182,7 @@ def test_nt4_reuse_path_does_not_wipe_tables(synth_fed):
     Proves cascade fix #2 (fresh src_sig): after a rebuild the very next call hits reuse
     (not another full rebuild that would DELETE entry_points and wipe the sentinel).
     """
-    from opencode_search.core.config import root_process_db
+    from rag_search.core.config import root_process_db
 
     _no_llm(synth_fed.root)
     db = root_process_db(synth_fed.root)
@@ -206,9 +206,9 @@ def test_nt3_full_reconstruct_fills_all_narratives(synth_fed):
     Always runs: without a key, asserts structural count > 0.
     With a key: additionally asserts all narratives non-empty (proves int()→str() fix).
     """
-    from opencode_search.core.config import root_process_db
-    from opencode_search.graph.llm import deepseek_key
-    from opencode_search.kb.bpre import reconstruct_processes
+    from rag_search.core.config import root_process_db
+    from rag_search.graph.llm import deepseek_key
+    from rag_search.kb.bpre import reconstruct_processes
 
     count = reconstruct_processes(synth_fed.root)
     assert count > 0, "synth_fed produced 0 processes"
@@ -228,9 +228,9 @@ def test_nt2_re_synthesis_not_full_rebuild(synth_fed):
     sentinel row and zeroing one narrative, a second reconstruct must NOT wipe entry_points.
     With a key, the narrative must also be refilled (proves int()→str() fix end-to-end).
     """
-    from opencode_search.core.config import root_process_db
-    from opencode_search.graph.llm import deepseek_key
-    from opencode_search.kb.bpre import reconstruct_processes
+    from rag_search.core.config import root_process_db
+    from rag_search.graph.llm import deepseek_key
+    from rag_search.kb.bpre import reconstruct_processes
 
     reconstruct_processes(synth_fed.root)
     db = root_process_db(synth_fed.root)

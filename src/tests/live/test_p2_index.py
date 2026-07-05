@@ -11,7 +11,7 @@ pytestmark = pytest.mark.live
 # ── discover ──────────────────────────────────────────────────────────────────
 
 def test_iter_files_finds_source():
-    from opencode_search.index.discover import iter_files
+    from rag_search.index.discover import iter_files
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "a.py").write_text("x = 1")
@@ -21,7 +21,7 @@ def test_iter_files_finds_source():
 
 
 def test_iter_files_skips_ignored_dirs():
-    from opencode_search.index.discover import iter_files
+    from rag_search.index.discover import iter_files
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / ".git").mkdir()
@@ -37,7 +37,7 @@ def test_iter_files_skips_ignored_dirs():
 
 
 def test_iter_files_skips_oversized():
-    from opencode_search.index.discover import _SIZE_LIMITS, iter_files
+    from rag_search.index.discover import _SIZE_LIMITS, iter_files
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         big = root / "big.py"
@@ -46,7 +46,7 @@ def test_iter_files_skips_oversized():
 
 
 def test_iter_files_skips_empty():
-    from opencode_search.index.discover import iter_files
+    from rag_search.index.discover import iter_files
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "empty.py").write_text("")
@@ -58,13 +58,13 @@ def test_iter_files_skips_empty():
 # ── chunker ──────────────────────────────────────────────────────────────────
 
 def test_chunk_empty_returns_empty():
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     assert chunk_file(Path("e.py"), "", "python") == []
     assert chunk_file(Path("e.py"), "   \n", "python") == []
 
 
 def test_chunk_file_python():
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     code = "\n".join(f"def func_{i}(x): return x + {i}" for i in range(60))
     chunks = chunk_file(Path("t.py"), code, "python")
     assert len(chunks) >= 1
@@ -75,8 +75,8 @@ def test_chunk_file_python():
 # ── indexer + search (GPU) ──────────────────────────────────────────────────
 
 def test_indexer_counts(embedder):
-    from opencode_search.index.indexer import index_project
-    from opencode_search.index.store import VectorStore
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
     with tempfile.TemporaryDirectory() as proj, tempfile.TemporaryDirectory() as store_dir:
         root = Path(proj)
         (root / "a.py").write_text("def add(x, y):\n    return x + y\n")
@@ -94,9 +94,9 @@ def test_indexer_counts(embedder):
 def test_search_code_scope_sample_federation_root(embedder):
     from tree_sitter_language_pack import has_language
 
-    from opencode_search.core.config import project_vector_db
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
     from tests.live._projects import federation_root
     proj = federation_root()
     vs = VectorStore(project_vector_db(proj))
@@ -106,9 +106,9 @@ def test_search_code_scope_sample_federation_root(embedder):
 
 
 def test_search_code_scope_sample_service_member(embedder):
-    from opencode_search.core.config import project_vector_db
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
     from tests.live._projects import service_member
     proj = service_member()
     vs = VectorStore(project_vector_db(proj))
@@ -118,9 +118,9 @@ def test_search_code_scope_sample_service_member(embedder):
 
 
 def test_search_all_scope_returns_results(embedder):
-    from opencode_search.core.config import project_vector_db
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
     from tests.live._projects import federation_root
     proj = federation_root()
     vs = VectorStore(project_vector_db(proj))
@@ -130,8 +130,8 @@ def test_search_all_scope_returns_results(embedder):
 
 
 def test_search_top_result_relevant(embedder):
-    from opencode_search.index.indexer import index_project
-    from opencode_search.index.store import VectorStore
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
     with tempfile.TemporaryDirectory() as proj, tempfile.TemporaryDirectory() as store_dir:
         root = Path(proj)
         (root / "auth.py").write_text(

@@ -18,9 +18,9 @@ pytestmark = pytest.mark.live
 
 
 def _open_stores(project_with_communities):
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.daemon.federation import expand_federation
-    from opencode_search.graph.store import GraphStore
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.federation import expand_federation
+    from rag_search.graph.store import GraphStore
     paths = [p for p in expand_federation(project_with_communities)
              if project_graph_db(p).exists()]
     return [GraphStore(project_graph_db(p)) for p in paths]
@@ -28,7 +28,7 @@ def _open_stores(project_with_communities):
 
 def test_rr1_global_scope_tree_walk_header(project_with_communities):
     """RR1: global scope context contains Architecture section with flat-L1 community context."""
-    from opencode_search.query.ask import compose_answer
+    from rag_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
         ctx = compose_answer("How does the overall architecture work?", [], stores, scope="global")
@@ -43,7 +43,7 @@ def test_rr1_global_scope_tree_walk_header(project_with_communities):
 
 def test_rr2_architecture_scope_tree_walk_header(project_with_communities):
     """RR2: architecture scope context contains tree-walk header."""
-    from opencode_search.query.ask import compose_answer
+    from rag_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
         ctx = compose_answer("What are the main modules?", [], stores, scope="architecture")
@@ -57,7 +57,7 @@ def test_rr2_architecture_scope_tree_walk_header(project_with_communities):
 
 def test_rr3_feature_scope_no_tree_walk(project_with_communities):
     """RR3: feature scope does not include tree-walk header."""
-    from opencode_search.query.ask import compose_answer
+    from rag_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
         ctx = compose_answer("authenticate user token", [], stores, scope="feature")
@@ -71,7 +71,7 @@ def test_rr3_feature_scope_no_tree_walk(project_with_communities):
 
 def test_rr4_tree_walk_context_grounded(project_with_communities):
     """RR4: every community title cited in tree-walk exists in the DB."""
-    from opencode_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _tree_walk_context
     stores = _open_stores(project_with_communities)
     try:
         ctx = _tree_walk_context("architecture overview", stores)
@@ -90,7 +90,7 @@ def test_rr4_tree_walk_context_grounded(project_with_communities):
 
 def test_rr5_adaptive_mr(project_with_communities):
     """RR5: architecture query yields >= community refs as narrow pinpoint query."""
-    from opencode_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _tree_walk_context
     stores = _open_stores(project_with_communities)
     try:
         arch = len(re.findall(r"\[", _tree_walk_context("overall architecture and main domains", stores)))
@@ -103,7 +103,7 @@ def test_rr5_adaptive_mr(project_with_communities):
 
 def test_rr6_determinism_mr(project_with_communities):
     """RR6: same query produces byte-identical tree-walk context on two calls."""
-    from opencode_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _tree_walk_context
     stores = _open_stores(project_with_communities)
     try:
         q = "what are the main architectural domains?"
@@ -117,9 +117,9 @@ def test_rr6_determinism_mr(project_with_communities):
 
 def test_rr7_empty_fallback_no_summaries(safe_tmp_path):
     """RR7: _tree_walk_context returns '' when no community summaries exist."""
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.ask import _tree_walk_context
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.ask import _tree_walk_context
     fpath = safe_tmp_path / "mod.py"
     fpath.write_text("def foo(): pass\n")
     gs = GraphStore(safe_tmp_path / "g.db")

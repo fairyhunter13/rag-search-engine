@@ -31,14 +31,14 @@ Use this skill to check conformance and understand OSE's governing laws.
 
 | Package | Module | Key ops |
 |---------|--------|---------|
-| core | `opencode_search.core` | config · registry · types |
-| embed | `opencode_search.embed` | get_embedder · get_reranker |
-| index | `opencode_search.index` | index_project · VectorStore |
-| graph | `opencode_search.graph` | extract_symbols · detect_communities · GraphStore |
-| kb | `opencode_search.kb` | enrich_communities_batch · build_wiki · reconstruct_processes · run_docgen · run_okf |
-| query | `opencode_search.query` | search · compose_answer |
-| server | `opencode_search.server` | mcp · routes_pipeline · routes_project · _overview |
-| daemon | `opencode_search.daemon` | sweeps · watcher · federation · scheduler |
+| core | `rag_search.core` | config · registry · types |
+| embed | `rag_search.embed` | get_embedder · get_reranker |
+| index | `rag_search.index` | index_project · VectorStore |
+| graph | `rag_search.graph` | extract_symbols · detect_communities · GraphStore |
+| kb | `rag_search.kb` | enrich_communities_batch · build_wiki · reconstruct_processes · run_docgen · run_okf |
+| query | `rag_search.query` | search · compose_answer |
+| server | `rag_search.server` | mcp · routes_pipeline · routes_project · _overview |
+| daemon | `rag_search.daemon` | sweeps · watcher · federation · scheduler |
 
 ## How to check conformance
 

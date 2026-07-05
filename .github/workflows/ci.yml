@@ -27,10 +27,10 @@ jobs:
         run: pip install ruff
 
       - name: Ruff lint
-        run: ruff check src/opencode_search src/tests
+        run: ruff check src/rag_search src/tests
 
       - name: Compile check
-        run: python -m compileall -q src/opencode_search
+        run: python -m compileall -q src/rag_search
 
   # ──────────────────────────────────────────────
   # Job 2: Test discovery — confirm all live tests
@@ -73,7 +73,7 @@ jobs:
   # NOTE: requires a self-hosted GitHub Actions runner with:
   #   - NVIDIA CUDA GPU (CPU fallback is forbidden by design)
   #   - a pre-provisioned .venv at the repo root
-  #   - a running opencode-search daemon at 127.0.0.1:8765
+  #   - a running rag-search daemon at 127.0.0.1:8765
   # Forks without a GPU runner will see this job queued indefinitely.
   # Run the live suite locally instead: .venv/bin/pytest -m "live and not slow"
   # ──────────────────────────────────────────────
@@ -81,7 +81,7 @@ jobs:
     name: Live Tests Fast (GPU runner)
     runs-on: self-hosted
     needs: quality
-    if: github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/opencode-search-engine'
+    if: github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
 
     steps:
       - uses: actions/checkout@v4

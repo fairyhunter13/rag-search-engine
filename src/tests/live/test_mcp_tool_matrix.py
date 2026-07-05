@@ -16,7 +16,7 @@ import sqlite3
 
 import pytest
 
-from opencode_search.core.config import project_graph_db
+from rag_search.core.config import project_graph_db
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -50,24 +50,24 @@ class TestGraphRelations:
 
     @pytest.mark.parametrize("relation", _GRAPH_RELATIONS_SIMPLE)
     def test_graph_relation_returns_dict(self, graph_proj, any_symbol, relation):
-        from opencode_search.server.mcp import graph as graph_tool
+        from rag_search.server.mcp import graph as graph_tool
         result = asyncio.run(graph_tool(any_symbol, graph_proj, relation))
         data = json.loads(result)
         assert isinstance(data, dict), f"graph({relation!r}) must return JSON object"
 
     def test_graph_path_without_to_symbol_returns_error_or_empty(self, graph_proj, any_symbol):
-        from opencode_search.server.mcp import graph as graph_tool
+        from rag_search.server.mcp import graph as graph_tool
         result = asyncio.run(graph_tool(any_symbol, graph_proj, "path"))
         data = json.loads(result)
         assert "error" in data or "path" in data
 
     def test_graph_semantic_trace_without_to_symbol(self, graph_proj, any_symbol):
-        from opencode_search.server.mcp import graph as graph_tool
+        from rag_search.server.mcp import graph as graph_tool
         result = asyncio.run(graph_tool(any_symbol, graph_proj, "semantic_trace"))
         assert isinstance(json.loads(result), dict)
 
     def test_graph_nonexistent_returns_error(self):
-        from opencode_search.server.mcp import graph as graph_tool
+        from rag_search.server.mcp import graph as graph_tool
         data = json.loads(asyncio.run(graph_tool("foo", "/nonexistent", "definition")))
         assert "error" in data
 
@@ -76,7 +76,7 @@ class TestSearchScopes:
 
     @pytest.mark.parametrize("scope", ["code", "docs", "all"])
     def test_search_scope(self, indexed_proj, scope):
-        from opencode_search.server.mcp import search as search_tool
+        from rag_search.server.mcp import search as search_tool
         data = json.loads(asyncio.run(
             search_tool("function", scope=scope, project_paths=[indexed_proj])
         ))
@@ -84,7 +84,7 @@ class TestSearchScopes:
         assert isinstance(data["results"], list)
 
     def test_search_federated_project_paths(self, indexed_proj):
-        from opencode_search.server.mcp import search as search_tool
+        from rag_search.server.mcp import search as search_tool
         data = json.loads(asyncio.run(
             search_tool("function", project_paths=[indexed_proj])
         ))
@@ -96,7 +96,7 @@ class TestAskScopes:
     @pytest.mark.slow
     @pytest.mark.parametrize("scope", _ASK_SCOPES)
     def test_ask_scope_returns_string(self, indexed_proj, scope):
-        from opencode_search.server.mcp import ask as ask_tool
+        from rag_search.server.mcp import ask as ask_tool
         result = asyncio.run(ask_tool("What does this project do?", indexed_proj, scope))
         assert isinstance(result, str) and len(result) > 0, f"ask(scope={scope!r}) returned empty"
 
@@ -105,14 +105,14 @@ class TestOverviewNewWhats:
 
     @pytest.mark.parametrize("what", ["metrics", "projects"])
     def test_overview_what_returns_nonempty_dict(self, indexed_proj, what):
-        from opencode_search.server.mcp import overview as overview_tool
+        from rag_search.server.mcp import overview as overview_tool
         data = json.loads(asyncio.run(overview_tool(indexed_proj, what)))
         assert isinstance(data, dict), f"overview(what={what!r}) must return JSON object"
         assert data, f"overview(what={what!r}) must not return empty dict"
 
     @pytest.mark.slow
     def test_overview_patterns_returns_nonempty_dict(self, indexed_proj):
-        from opencode_search.server.mcp import overview as overview_tool
+        from rag_search.server.mcp import overview as overview_tool
         data = json.loads(asyncio.run(overview_tool(indexed_proj, "patterns")))
         assert isinstance(data, dict), "overview(what='patterns') must return JSON object"
         assert data, "overview(what='patterns') must not return empty dict"

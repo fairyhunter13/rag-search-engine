@@ -24,7 +24,7 @@ def _seed_docs(docs: Path) -> None:
 
 def test_gg1_include_flag_decoupling(safe_tmp_path):
     """GG1: iter_files(root) excludes generated docs/; iter_files(root, include_generated_docs=True) includes them."""
-    from opencode_search.index.discover import iter_files
+    from rag_search.index.discover import iter_files
 
     root = safe_tmp_path / "proj"
     root.mkdir()
@@ -43,9 +43,9 @@ def test_gg1_include_flag_decoupling(safe_tmp_path):
 
 def test_gg2_index_docs_round_trip(safe_tmp_path, embedder):
     """GG2: write docs → index_docs → search(scope=docs) returns a hit; idempotent on 2nd call."""
-    from opencode_search.index.indexer import index_docs
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.index.indexer import index_docs
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
 
     root = safe_tmp_path / "proj2"
     root.mkdir()
@@ -75,10 +75,10 @@ def test_gg2_index_docs_round_trip(safe_tmp_path, embedder):
 
 def test_gg3_scope_purity(safe_tmp_path, embedder):
     """GG3: scope=code returns no _TEXT_LANGS chunk; scope=docs returns only _TEXT_LANGS."""
-    from opencode_search.index.discover import _TEXT_LANGS
-    from opencode_search.index.indexer import index_docs, index_project
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.index.discover import _TEXT_LANGS
+    from rag_search.index.indexer import index_docs, index_project
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
 
     root = safe_tmp_path / "proj3"
     root.mkdir()
@@ -113,10 +113,10 @@ def test_gg3_scope_purity(safe_tmp_path, embedder):
 
 def test_gg4_churn_guard(safe_tmp_path, embedder):
     """GG4: index_docs doesn't change _source_fingerprint; is_ignored_path(docs/x.md) stays True."""
-    from opencode_search.daemon.sweeps import _source_fingerprint
-    from opencode_search.index.discover import is_ignored_path
-    from opencode_search.index.indexer import index_docs
-    from opencode_search.index.store import VectorStore
+    from rag_search.daemon.sweeps import _source_fingerprint
+    from rag_search.index.discover import is_ignored_path
+    from rag_search.index.indexer import index_docs
+    from rag_search.index.store import VectorStore
 
     root = safe_tmp_path / "proj4"
     root.mkdir()

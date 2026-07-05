@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from opencode_search.core.config import index_dir
+from rag_search.core.config import index_dir
 
 pytestmark = pytest.mark.live
 
@@ -31,7 +31,7 @@ def _federate(base):
 
 
 def _clean(paths):
-    from opencode_search.core.registry import remove_project
+    from rag_search.core.registry import remove_project
     for p in paths:
         remove_project(str(p))
         shutil.rmtree(index_dir(str(p)), ignore_errors=True)
@@ -40,9 +40,9 @@ def _clean(paths):
 @pytest.mark.slow
 def test_inv1_no_inlining(safe_tmp_path):
     """Invariant #1: root index must not contain symbols from the member path."""
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.daemon.sweeps import _index_project
-    from opencode_search.graph.store import GraphStore
+    from rag_search.daemon.federation import index_members
+    from rag_search.daemon.sweeps import _index_project
+    from rag_search.graph.store import GraphStore
 
     root, member, _marker = _federate(safe_tmp_path)
     _clean([root, member])
@@ -64,10 +64,10 @@ def test_inv1_no_inlining(safe_tmp_path):
 @pytest.mark.slow
 def test_inv2_members_first_class(safe_tmp_path):
     """Invariant #2: member registered, enabled, and searchable across all projects."""
-    from opencode_search.core.registry import get_project
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.daemon.sweeps import _index_project
-    from opencode_search.server.mcp import search as mcp_search
+    from rag_search.core.registry import get_project
+    from rag_search.daemon.federation import index_members
+    from rag_search.daemon.sweeps import _index_project
+    from rag_search.server.mcp import search as mcp_search
 
     root, member, marker = _federate(safe_tmp_path)
     _clean([root, member])
@@ -85,9 +85,9 @@ def test_inv2_members_first_class(safe_tmp_path):
 
 def test_inv3_federation_authoritative(safe_tmp_path):
     """Invariant #3: root.federation set after index_members; idempotent on rerun."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import get_project, upsert_project
-    from opencode_search.daemon.federation import index_members
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import get_project, upsert_project
+    from rag_search.daemon.federation import index_members
 
     root, member, _m = _federate(safe_tmp_path)
     _clean([root, member])
@@ -104,20 +104,20 @@ def test_inv3_federation_authoritative(safe_tmp_path):
 
 def test_inv6_forbidden_root():
     """Invariant #6: registering a /tmp root must be rejected."""
-    from opencode_search.server.mcp import index as mcp_index
+    from rag_search.server.mcp import index as mcp_index
     path = "/tmp/ocs-arch-forbid-test"
     result = json.loads(asyncio.run(mcp_index(path, enabled=True)))
     assert result.get("status") == "forbidden", f"expected forbidden, got {result}"
-    from opencode_search.core.registry import get_project
+    from rag_search.core.registry import get_project
     assert get_project(path) is None
 
 
 def test_inv8_cascade_remove(safe_tmp_path):
     """Invariant #8: index(root, False) removes root+member from registry and storage."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import get_project, upsert_project
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.server.mcp import index as mcp_index
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import get_project, upsert_project
+    from rag_search.daemon.federation import index_members
+    from rag_search.server.mcp import index as mcp_index
 
     root, member, _m = _federate(safe_tmp_path)
     _clean([root, member])

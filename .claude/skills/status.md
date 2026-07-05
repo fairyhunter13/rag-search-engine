@@ -1,6 +1,6 @@
 # status skill
 
-Comprehensive status audit of the opencode-search-engine system.
+Comprehensive status audit of the rag-search-engine system.
 
 ## What to check
 

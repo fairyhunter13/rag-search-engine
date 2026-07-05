@@ -1,6 +1,6 @@
 # Pre-Deploy Verification
 
-Run this skill before deploying any change to the local opencode-search device.
+Run this skill before deploying any change to the local rag-search device.
 It validates that all MCP surfaces, KB health, and system integrity are correct.
 
 ## When to run
@@ -28,7 +28,7 @@ GPU must be present. If embedding fails with "CPU fallback" — STOP, do not dep
 **All tests must pass. Zero failures, zero skips.**
 If any test fails — investigate and fix before proceeding.
 
-### 4. MCP tool surface check (use opencode-search tools)
+### 4. MCP tool surface check (use rag-search tools)
 Run these 5 checks against your indexed project:
 - `search("request handler")` → must return results
 - `ask("how does auth work", scope="all")` → must return non-empty answer
@@ -38,7 +38,7 @@ Run these 5 checks against your indexed project:
 
 ### 5. Lint check
 ```bash
-.venv/bin/ruff check src/opencode_search src/tests --quiet 2>&1 | head -20
+.venv/bin/ruff check src/rag_search src/tests --quiet 2>&1 | head -20
 ```
 Must be clean (or only pre-existing E501 lines ≤ 5).
 
@@ -50,7 +50,7 @@ Must be 0. If unpushed commits exist — push before deploying.
 
 ### 7. Systemd service health
 ```bash
-systemctl --user is-active opencode-search-mcp-daemon
+systemctl --user is-active rag-search-mcp-daemon
 ```
 Must output `active`.
 

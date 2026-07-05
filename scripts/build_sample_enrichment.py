@@ -26,15 +26,15 @@ _MIN_FED_L1, _MIN_BR, _MIN_BP, _MIN_TEST_MEMBERS = 10, 1, 2, 1
 
 
 def _require_key() -> None:
-    from opencode_search.graph.llm import deepseek_key
+    from rag_search.graph.llm import deepseek_key
     if not deepseek_key():
         sys.exit("ERROR: DEEPSEEK_API_KEY not set. Export it and re-run.")
 
 
 def _setup_workspace(base: Path) -> tuple[str, list[str], str]:
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
-    from opencode_search.daemon.federation import index_members
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.daemon.federation import index_members
     fed_base = base / "shop-federation"
     shutil.copytree(SHOP_FED_SRC, fed_base, ignore=shutil.ignore_patterns("enrichment.json"))
     ledger_dir = base / "ledger-standalone"
@@ -51,21 +51,21 @@ def _setup_workspace(base: Path) -> tuple[str, list[str], str]:
 
 
 def _index_all(paths: list[str]) -> None:
-    from opencode_search.daemon.sweeps import _index_project
+    from rag_search.daemon.sweeps import _index_project
     for p in paths:
         print(f"  indexing {Path(p).name}...")
         _index_project(p)
 
 
 def _enrich_all(paths: list[str]) -> None:
-    from opencode_search.daemon.sweeps import _enrich_project
+    from rag_search.daemon.sweeps import _enrich_project
     for p in paths:
         print(f"  enriching {Path(p).name}...")
         _enrich_project(p)
 
 
 def _export(project_path: str, fixture_src: Path) -> list[dict]:
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     gdb = project_graph_db(project_path)
     communities = []
     with sqlite3.connect(str(gdb)) as con:
@@ -113,7 +113,7 @@ def _assert_floors(member_exports: list[list[dict]], ledger_export: list[dict]) 
 
 
 def _teardown(fed_root: str, member_paths: list[str], ledger: str, base: Path) -> None:
-    from opencode_search.core.registry import remove_project
+    from rag_search.core.registry import remove_project
     for p in [fed_root, *member_paths, ledger]:
         with contextlib.suppress(Exception):
             remove_project(p)

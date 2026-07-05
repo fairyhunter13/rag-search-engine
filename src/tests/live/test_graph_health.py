@@ -20,9 +20,9 @@ pytestmark = pytest.mark.live
 
 def test_graph_store_clear_wipes_tables(safe_tmp_path):
     """GH1: GraphStore.clear() must delete symbols, edges, and communities."""
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
 
     gdb = safe_tmp_path / "graph.db"
     gs = GraphStore(gdb)
@@ -49,10 +49,10 @@ def test_symbol_hollow_flag_fires_on_edge_free_graph(safe_tmp_path):
     """GH2: communities>0 but edges=0 must set symbol_hollow=True in overview(status)."""
     import asyncio
 
-    from opencode_search.core.config import ProjectEntry, project_graph_db
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.core.config import ProjectEntry, project_graph_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.graph.store import GraphStore
+    from rag_search.server.mcp import overview as overview_tool
 
     proj = str(safe_tmp_path)
     upsert_project(ProjectEntry(path=proj, enabled=True))
@@ -89,7 +89,7 @@ def test_overview_status_includes_symbol_hollow_field(sample_workspace: SampleWo
     """
     import asyncio
 
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
 
     result = json.loads(asyncio.run(overview_tool(sample_workspace.promo, "status")))
     assert "symbol_hollow" in result, f"symbol_hollow missing; keys={list(result)}"
@@ -102,7 +102,7 @@ def test_reconcile_triggers_reindex_when_communities_empty():
     """GH4: reconcile_projects source-guard: community_count()==0 forces a full re-index."""
     import inspect
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
     src = inspect.getsource(sweeps.reconcile_projects)
     assert "community_count() == 0" in src, (
         "reconcile must force re-index when community_count()==0 (no graph built yet)"
@@ -113,6 +113,6 @@ def test_index_project_clears_graph_before_rebuild():
     """GH5: _index_project source-guard: gs.clear() must be called before upsert loop."""
     import inspect
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
     src = inspect.getsource(sweeps._index_project)
     assert "gs.clear()" in src, "_index_project must call gs.clear() before upserting symbols"

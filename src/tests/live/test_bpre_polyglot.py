@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from opencode_search.core.config import root_process_db
-from opencode_search.kb.bpre import reconstruct_processes
-from opencode_search.kb.bpre_ast import ApiSurface, federation_discover, scan_file
+from rag_search.core.config import root_process_db
+from rag_search.kb.bpre import reconstruct_processes
+from rag_search.kb.bpre_ast import ApiSurface, federation_discover, scan_file
 
 pytestmark = pytest.mark.live
 
@@ -115,7 +115,7 @@ def poly_fed():
 
 @pytest.fixture(scope="module")
 def poly_db(poly_fed):
-    from opencode_search.graph.llm import no_deepseek
+    from rag_search.graph.llm import no_deepseek
     with no_deepseek():
         count = reconstruct_processes(poly_fed.root)
     db = root_process_db(poly_fed.root)
@@ -152,7 +152,7 @@ def test_polyglot_process_flows_nonempty(poly_fed, poly_db) -> None:
     """overview(process_flows) must return source=reconstructed with ≥1 flow."""
     import asyncio
 
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool(poly_fed.root, what="process_flows"))
     data = json.loads(result)
     assert data.get("source") == "reconstructed", f"Unexpected source: {data.get('source')!r}"
@@ -241,7 +241,7 @@ def _outer_call_node(tsl: str, src: str):
     """First (outermost) call-kind node in source order — the node under test."""
     from tree_sitter_language_pack import api as _ts_api
 
-    from opencode_search.kb.bpre_spec import _is_call
+    from rag_search.kb.bpre_spec import _is_call
     root = _ts_api.get_parser(tsl).parse(src).root_node()
     stk = [root]
     while stk:
@@ -255,7 +255,7 @@ def _outer_call_node(tsl: str, src: str):
 @pytest.mark.parametrize("lang", list(_HANDLER_ARG_CASES))
 def test_has_handler_arg_discriminates_route_vs_client(lang: str) -> None:
     """_has_handler_arg(call) is True for a route/handler registration, False for a plain call."""
-    from opencode_search.kb.bpre_generic import _has_handler_arg
+    from rag_search.kb.bpre_generic import _has_handler_arg
     tsl, route_src, client_src = _HANDLER_ARG_CASES[lang]
     route_call = _outer_call_node(tsl, route_src)
     client_call = _outer_call_node(tsl, client_src)
@@ -284,7 +284,7 @@ def test_has_handler_arg_discriminates_route_vs_client(lang: str) -> None:
 )
 def test_provenance_discriminates_scheme_receivers(receiver: str | None, expected: bool) -> None:
     """_provenance(receiver) is the closed-_SCHEMES-vocabulary structural client discriminator."""
-    from opencode_search.kb.bpre_generic import _provenance
+    from rag_search.kb.bpre_generic import _provenance
     assert _provenance(receiver) is expected, f"receiver={receiver!r}"
 
 
@@ -292,7 +292,7 @@ def test_provenance_discriminates_scheme_receivers(receiver: str | None, expecte
 # just receiver text — closing the recall gap Part B left (typed clients / import aliases whose
 # own name carries no _SCHEMES token).
 def test_provenance_resolves_via_type_use_and_imports() -> None:
-    from opencode_search.kb.bpre_generic import _provenance
+    from rag_search.kb.bpre_generic import _provenance
     # (b) def-use-resolved constructed-type name carries a scheme, receiver name does not.
     assert _provenance("client", None, {"client": "HttpClient"}) is True
     # (c) import-map-resolved module path carries a scheme, alias name does not.

@@ -397,7 +397,7 @@ def test_p12_completeness_guard() -> None:
     import re
     from pathlib import Path
 
-    dash = (Path(__file__).parents[3] / "src/opencode_search/server/static/dashboard.html").read_text()
+    dash = (Path(__file__).parents[3] / "src/rag_search/server/static/dashboard.html").read_text()
     tests = Path(__file__).read_text()
     # ids with onclick= in the same element tag
     tagged = set(re.findall(r'id="([^"]+)"[^>]*?onclick=', dash))

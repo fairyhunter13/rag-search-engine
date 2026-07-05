@@ -18,7 +18,7 @@ def service_path(sample_workspace: SampleWorkspace) -> str:
 
 def test_mcp_has_five_tools():
     """All 5 MCP tools registered in FastMCP app."""
-    from opencode_search.server.mcp import mcp
+    from rag_search.server.mcp import mcp
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
     assert {"search", "ask", "graph", "overview", "index"} <= names
@@ -26,7 +26,7 @@ def test_mcp_has_five_tools():
 
 def test_mcp_graph_nonexistent_returns_error():
     """graph tool returns {error:...} JSON for an unindexed project."""
-    from opencode_search.server.mcp import graph as graph_tool
+    from rag_search.server.mcp import graph as graph_tool
     result = asyncio.run(graph_tool("authenticate", "/nonexistent/path", "definition"))
     data = json.loads(result)
     assert "error" in data
@@ -34,7 +34,7 @@ def test_mcp_graph_nonexistent_returns_error():
 
 def test_mcp_overview_projects_returns_list():
     """P15.4: overview(what='projects') returns ≥1 real registered project."""
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool("", "projects"))
     data = json.loads(result)
     assert "projects" in data
@@ -43,7 +43,7 @@ def test_mcp_overview_projects_returns_list():
 
 def test_mcp_overview_metrics():
     """P20.3: overview(what='metrics') returns chat_stream metrics dict."""
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool("", "metrics"))
     data = json.loads(result)
     assert "chat_stream" in data, f"metrics missing chat_stream key: {result}"
@@ -52,7 +52,7 @@ def test_mcp_overview_metrics():
 
 def test_mcp_index_register_remove(safe_tmp_path):
     """index tool registers then removes a project without crashing."""
-    from opencode_search.server.mcp import index as index_tool
+    from rag_search.server.mcp import index as index_tool
     p = str(safe_tmp_path)
     reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
     assert reg["status"] in ("flagged", "already_registered")
@@ -111,7 +111,7 @@ def test_live_daemon_has_mcp_route(live_client):
 def test_detect_patterns_llm_frameworks():
     """P9.2: detect_patterns() derives frameworks via LLM, not _FW static dict."""
 
-    from opencode_search.kb.patterns import detect_patterns
+    from rag_search.kb.patterns import detect_patterns
     from tests.live._projects import federation_root
 
     proj = federation_root()
@@ -124,8 +124,8 @@ def test_detect_patterns_llm_frameworks():
 
 def test_index_tool_rejects_forbidden_root(safe_tmp_path):
     """P24.3: index(/tmp/...) must return status='forbidden' and NOT register the path."""
-    from opencode_search.core.registry import get_project
-    from opencode_search.server.mcp import index as index_tool
+    from rag_search.core.registry import get_project
+    from rag_search.server.mcp import index as index_tool
 
     bad = "/tmp/ocs-test-forbidden-registration-check"
     result = json.loads(asyncio.run(index_tool(bad, enabled=True)))
@@ -141,9 +141,9 @@ def test_index_tool_rejects_forbidden_root(safe_tmp_path):
 def test_index_tool_e2e(safe_tmp_path):
     """P10.4b: enabled=True creates registry entry; enabled=False removes it + index dir."""
 
-    from opencode_search.core.config import index_dir
-    from opencode_search.core.registry import list_projects
-    from opencode_search.server.mcp import index as index_tool
+    from rag_search.core.config import index_dir
+    from rag_search.core.registry import list_projects
+    from rag_search.server.mcp import index as index_tool
 
     p = str(safe_tmp_path)
     reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
@@ -161,7 +161,7 @@ def test_index_tool_e2e(safe_tmp_path):
 
 def test_overview_all_whats_real_federation_root():
     """P10.4: every what= value returns parseable non-empty data on the real federation root."""
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
     from tests.live._projects import federation_root
 
     fed_root = federation_root()
@@ -180,8 +180,8 @@ def test_service_mesh_be_nonempty():
     """Federation service_mesh must detect gRPC/HTTP services from the federation root."""
     from tests.live._projects import federation_root
     root = federation_root()
-    from opencode_search.daemon.federation import expand_federation
-    from opencode_search.server._overview import _detect_services
+    from rag_search.daemon.federation import expand_federation
+    from rag_search.server._overview import _detect_services
     svcs = [s for p in expand_federation(root) for s in _detect_services(p)]
     assert svcs, "Federation must have at least one gRPC service entry"
     names = {n for s in svcs for n in s.get("services", [])}
@@ -200,7 +200,7 @@ def test_suggested_questions_and_chat_context_no_operationalerror(live_client, s
 def test_mcp_search_subdir_resolves_to_root(service_path):
     """P23.1: search with a non-root project_paths resolves to the enclosing registered root."""
 
-    from opencode_search.server.mcp import search as search_tool
+    from rag_search.server.mcp import search as search_tool
 
     subdir = str(Path(service_path) / "src")
     result = json.loads(asyncio.run(search_tool("function definition", project_paths=[subdir])))
@@ -222,8 +222,8 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
     """
     import urllib.request
 
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import remove_project, upsert_project
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import remove_project, upsert_project
 
     proj_path = str(safe_tmp_path)
     try:
@@ -263,7 +263,7 @@ def test_kb_health_measures_summary_not_title(live_client, service_path):
     """P25.1: /api/kb_health counts summary-enriched communities, not just titled ones."""
     import sqlite3
 
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
 
     gdb = project_graph_db(service_path)
     assert gdb.exists(), "promo-svc graph.db not found — sample_workspace fixture must run first"
@@ -291,11 +291,11 @@ def test_kb_health_measures_summary_not_title(live_client, service_path):
 def test_enrich_project_uses_summary_gate(safe_tmp_path):
     """P27: _enrich_project enriches titled-but-unsummarized communities."""
     import sqlite3  # noqa: I001
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.daemon.sweeps import _enrich_project
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.sweeps import _enrich_project
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
     proj = str(safe_tmp_path)
     fpath = safe_tmp_path / "auth.py"
     fpath.write_text("def authenticate(token): pass\ndef validate(t): return bool(t)\n")
@@ -338,7 +338,7 @@ def test_build_wiki_action_wiki(live_client, service_path):
 
 def test_overview_status_has_kb_state(service_path):
     """P25.2: overview(what='status') returns kb_state in 4-value set + numeric enriched_pct."""
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
 
     data = json.loads(asyncio.run(overview_tool(service_path, "status")))
     assert "kb_state" in data, f"kb_state missing from status: {data}"
@@ -352,7 +352,7 @@ def test_overview_status_has_kb_state(service_path):
 
 def test_overview_unknown_what_returns_error():
     """G4: overview(what='bogus') returns {error, valid} instead of silently falling through."""
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool("", "bogus_unknown_what"))
     data = json.loads(result)
     assert "error" in data, f"expected error key, got: {data}"
@@ -367,8 +367,8 @@ def test_graph_defaults_project_path_to_first_project(sample_workspace):
     asserting specific content from a real device project. The sample_workspace fixture ensures
     at least one indexed project is registered (promo-svc), so the resolution always succeeds.
     """
-    from opencode_search.core.registry import list_projects
-    from opencode_search.server.mcp import graph as graph_tool
+    from rag_search.core.registry import list_projects
+    from rag_search.server.mcp import graph as graph_tool
 
     first = next((p.path for p in list_projects() if p.enabled), None)
     assert first, "At least one enabled project must be registered (sample_workspace provides this)"
@@ -393,7 +393,7 @@ def test_reranking_is_query_time_only():
     all other kb/ files must call through it, never import rerank_passages directly.
     """
 
-    base = Path(__file__).parents[2] / "opencode_search"
+    base = Path(__file__).parents[2] / "rag_search"
     # Only the G1.75 bridge may import rerank_passages directly
     _DIRECT_RERANK_EXCEPTION = {"resolve_rerank.py"}
     for pkg in [base / "index", base / "kb"]:
@@ -415,8 +415,8 @@ def test_search_reranks_full_pool(mini_stores, embedder):
     new code reranks all top_k*3=6 (or fewer if scope-filtered).  Results must be
     non-empty, carry rerank_score, and be monotonic desc by that score.
     """
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
 
     vs = VectorStore(mini_stores["vdb"])
     try:
@@ -434,7 +434,7 @@ def test_search_reranks_full_pool(mini_stores, embedder):
 @pytest.mark.slow
 def test_e1_rerank_reorders_search_results(service_path):
     """E1/HR8: MCP search on sample service — rerank_score sorted desc, lift detected on ≥1 of 4 queries."""
-    from opencode_search.server.mcp import search as _mcp_search
+    from rag_search.server.mcp import search as _mcp_search
     queries = [
         "discount rule application",
         "coupon validation logic",
@@ -454,15 +454,15 @@ def test_e1_rerank_reorders_search_results(service_path):
             if vec_top.get("path") != res[0].get("path"):
                 lift_found = True
     assert lift_found, "E1: rerank never changed top-1 vs vector order (pass-through?)"
-    src = (Path(__file__).parents[2] / "opencode_search" / "server" / "mcp.py").read_text()
+    src = (Path(__file__).parents[2] / "rag_search" / "server" / "mcp.py").read_text()
     assert 'sort(key=lambda r: r.get("score"' not in src, "E1 guard: bare score sort in mcp.py"
 
 
 @pytest.mark.slow
 def test_e2_ask_context_is_rerank_ordered(service_path):
     """E2/HR8: MCP ask returns assembled context with path markers, first chunk = rerank top-1."""
-    from opencode_search.server.mcp import ask as _mcp_ask
-    from opencode_search.server.mcp import search as _mcp_search
+    from rag_search.server.mcp import ask as _mcp_ask
+    from rag_search.server.mcp import search as _mcp_search
     q = "how does the promotion rule engine apply discounts"
     ctx = asyncio.run(_mcp_ask(q, service_path, "all"))
     assert ctx and "[" in ctx, f"E2: empty or no path markers: {ctx[:80]}"
@@ -478,9 +478,9 @@ def test_e2_ask_context_is_rerank_ordered(service_path):
 @pytest.mark.slow
 def test_e3_community_context_is_reranked(service_path):
     """E3/HR8/D2: compose_answer(scope=global) top community differs between distinct queries."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.ask import compose_answer
+    from rag_search.core.config import project_graph_db
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.ask import compose_answer
     gdb = project_graph_db(service_path)
     assert gdb.exists(), (
         "sample promo-svc graph DB not found — sample_workspace fixture must run first"
@@ -496,7 +496,7 @@ def test_e3_community_context_is_reranked(service_path):
     # scope="global" always starts with structural "## Architecture (community map)";
     # compare full response content — if semantic reranking is query-aware, a != b.
     assert a != b, "E3: compose_answer identical for two distinct queries (reranking is static?)"
-    ask_src = (Path(__file__).parents[2] / "opencode_search" / "query" / "ask.py").read_text()
+    ask_src = (Path(__file__).parents[2] / "rag_search" / "query" / "ask.py").read_text()
     assert "rerank_passages" in ask_src, "E3 guard: ask.py must use rerank_passages"
     assert "argsort" not in ask_src, "E3 guard: ask.py must not use argsort"
 
@@ -504,8 +504,8 @@ def test_e3_community_context_is_reranked(service_path):
 @pytest.mark.slow
 def test_e4_rerank_lift_metric(live_client, service_path):
     """E4/D3: /api/metrics exposes rerank block; in-process search increments the counter."""
-    from opencode_search.query.search import rerank_stats
-    from opencode_search.server.mcp import search as _mcp_search
+    from rag_search.query.search import rerank_stats
+    from rag_search.server.mcp import search as _mcp_search
     # Structure check via live daemon HTTP endpoint
     daemon_data = live_client.get("/api/metrics").json()
     assert "rerank" in daemon_data, f"E4: rerank block missing: {daemon_data}"
@@ -522,7 +522,7 @@ def test_e4_rerank_lift_metric(live_client, service_path):
 
 def test_e5_mcp_query_path_no_generation():
     """E5/HR9: MCP query actions contain no generative LLM import (source guard)."""
-    base = Path(__file__).parents[2] / "opencode_search"
+    base = Path(__file__).parents[2] / "rag_search"
     mcp_src = (base / "server" / "mcp.py").read_text()
     ask_src = (base / "query" / "ask.py").read_text()
     assert "graph.llm" not in mcp_src, "E5: mcp.py imports graph.llm (HR9 violation)"
@@ -532,7 +532,7 @@ def test_e5_mcp_query_path_no_generation():
     assert "run_graph" in mcp_src, "E5: mcp.py must delegate to run_graph() (DB-reads helper)"
     import inspect
 
-    from opencode_search.query.ask import run_ask as _ra
+    from rag_search.query.ask import run_ask as _ra
     assert "compose_answer" in inspect.getsource(_ra), (
         "E5: run_ask() must call compose_answer() (LLM-free context assembler)"
     )
@@ -568,7 +568,7 @@ def test_e6_dashboard_chat_haiku_only(live_client, service_path):
     assert answer, "E6: no tokens received from /api/chat_stream"
     kws = ("promo", "coupon", "discount", "order", "rule", "checkout", "cart", "price", "community")
     assert any(k in answer.lower() for k in kws), f"E6: answer missing service concept: {answer[:200]}"
-    src = (Path(__file__).parents[2] / "opencode_search" / "server" / "routes_chat.py").read_text()
+    src = (Path(__file__).parents[2] / "rag_search" / "server" / "routes_chat.py").read_text()
     assert "QUERY_LLM_MODEL" in src, "E6 guard: routes_chat.py must reference QUERY_LLM_MODEL"
     assert "_ollama_chat" not in src, "E6 guard: routes_chat.py must not have _ollama_chat (no local generative LLM)"
     assert '"codex"' not in src and "shutil.which(\"codex\")" not in src, (
@@ -625,13 +625,13 @@ def test_e7_trimmed_http_surface(live_client):
         )
     for path in ("/healthz", "/api/projects", "/api/metrics"):
         assert live_client.get(path).status_code == 200, f"E7: {path} not 200 (KEEP broken)"
-    chat_router = Path(__file__).parents[2] / "opencode_search" / "query" / "chat_router.py"
+    chat_router = Path(__file__).parents[2] / "rag_search" / "query" / "chat_router.py"
     assert not chat_router.exists(), "E7 guard: chat_router.py must be deleted"
 
 
 def test_e8_global_prompt_tool_accuracy():
     """E8: _PROMPT is the canonical Phase-100 body — 5 tools + RESILIENCE + no drift."""
-    from opencode_search.daemon.global_prompt import _PROMPT
+    from rag_search.daemon.global_prompt import _PROMPT
 
     for tool in ("search", "ask", "graph", "overview", "index"):
         assert tool in _PROMPT, f"E8: _PROMPT missing tool '{tool}'"
@@ -642,7 +642,7 @@ def test_e8_global_prompt_tool_accuracy():
         "E8: _PROMPT missing 'whenever the current project is indexed'"
     )
     # MCP server instructions must equal _PROMPT (no separate stale copy)
-    from opencode_search.server.mcp import mcp
+    from rag_search.server.mcp import mcp
     assert mcp.instructions == _PROMPT, "E8: mcp.instructions diverged from _PROMPT"
 
 
@@ -789,7 +789,7 @@ def test_chat_done_event_metadata(live_client, service_path):
             break
     r.close()
     assert done_evt is not None, "No done event received"
-    from opencode_search.core.config import QUERY_LLM_MODEL
+    from rag_search.core.config import QUERY_LLM_MODEL
     assert done_evt.get("model") == QUERY_LLM_MODEL, f"done.model wrong: {done_evt.get('model')!r}"
     assert isinstance(done_evt.get("elapsed_ms"), int), f"done.elapsed_ms not int: {done_evt}"
     assert isinstance(done_evt.get("sources"), list), f"done.sources not list: {done_evt}"

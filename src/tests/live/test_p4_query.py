@@ -7,8 +7,8 @@ pytestmark = pytest.mark.live
 # ── query/search ──────────────────────────────────────────────────────────────
 
 def test_search_ranks_auth_first(mini_stores, embedder):
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
     vs = VectorStore(mini_stores["vdb"])
     results = search("JWT authentication token verification", embedder, vs,
                      scope="code", top_k=5)
@@ -19,8 +19,8 @@ def test_search_ranks_auth_first(mini_stores, embedder):
 
 
 def test_search_scope_docs_returns_empty_for_code_only_project(mini_stores, embedder):
-    from opencode_search.index.store import VectorStore
-    from opencode_search.query.search import search
+    from rag_search.index.store import VectorStore
+    from rag_search.query.search import search
     vs = VectorStore(mini_stores["vdb"])
     results = search("query", embedder, vs, scope="docs", top_k=5)
     vs.close()
@@ -31,8 +31,8 @@ def test_search_scope_docs_returns_empty_for_code_only_project(mini_stores, embe
 # ── query/graph_handler ───────────────────────────────────────────────────────
 
 def test_graph_definition_finds_authenticate(mini_stores):
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.graph_handler import definition
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.graph_handler import definition
     gs = GraphStore(mini_stores["gdb"])
     defs = definition("authenticate", gs)
     gs.close()
@@ -40,8 +40,8 @@ def test_graph_definition_finds_authenticate(mini_stores):
 
 
 def test_graph_callers_returns_list(mini_stores):
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.graph_handler import callers
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.graph_handler import callers
     gs = GraphStore(mini_stores["gdb"])
     result = callers("verify_jwt", gs)
     gs.close()
@@ -51,8 +51,8 @@ def test_graph_callers_returns_list(mini_stores):
 
 
 def test_graph_impact_returns_list(mini_stores):
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.graph_handler import impact
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.graph_handler import impact
     gs = GraphStore(mini_stores["gdb"])
     result = impact("authenticate", gs)
     gs.close()
@@ -65,9 +65,9 @@ def test_graph_callees_real_be(sample_workspace):
     """P10.3: callees() on sample service member graph returns ≥1 result for an edge-connected fn."""
     import sqlite3
 
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.graph_handler import callees
+    from rag_search.core.config import project_graph_db
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.graph_handler import callees
     gdb = project_graph_db(sample_workspace.promo)
     with sqlite3.connect(str(gdb)) as con:
         row = con.execute(

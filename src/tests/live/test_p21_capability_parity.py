@@ -64,8 +64,8 @@ def _mcp_overview(h: dict, what: str, timeout: int = 60) -> dict:
 
 def test_overview_docstring_matches_valid_set():
     """A1 guard: overview.__doc__ must advertise every what= supported by _overview._VALID."""
-    from opencode_search.server._overview import _VALID
-    from opencode_search.server.mcp import overview
+    from rag_search.server._overview import _VALID
+    from rag_search.server.mcp import overview
 
     doc = overview.__doc__ or ""
     # Extract tokens after "what:"
@@ -83,7 +83,7 @@ def test_overview_docstring_matches_valid_set():
 
 def test_graph_docstring_matches_supported_relations():
     """A2 guard: graph.__doc__ must list all supported relation= values."""
-    from opencode_search.server.mcp import graph
+    from rag_search.server.mcp import graph
 
     doc = graph.__doc__ or ""
     m = re.search(r"relation:\s*([\w|]+)", doc)

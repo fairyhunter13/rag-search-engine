@@ -26,7 +26,7 @@ pytestmark = pytest.mark.live
 _BASE = "http://127.0.0.1:8765"
 _MCP_URL = f"{_BASE}/mcp"
 _HDR = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-_UNIT = "opencode-search-mcp-daemon.service"
+_UNIT = "rag-search-mcp-daemon.service"
 
 _DELEGATE_HINT = (
     "cpu.max reads back as 'max' (uncapped) -- the `cpu` controller is likely not delegated "
@@ -76,9 +76,9 @@ def _cpu_snapshot() -> dict:
 def test_cb1_unit_text_has_cpu_accounting_and_quota():
     """CPUQuota= does not imply CPUAccounting= (systemd issue #9647) -- both must be explicit
     for the 1-core ceiling to be both kernel-enforced and readable via cpu.stat."""
-    from opencode_search.daemon.systemd import unit_text
+    from rag_search.daemon.systemd import unit_text
 
-    text = unit_text("/usr/bin/opencode-search")
+    text = unit_text("/usr/bin/rag-search")
     assert "CPUAccounting=yes" in text, "unit_text() missing CPUAccounting=yes (systemd#9647)"
     assert "CPUQuota=" in text, "unit_text() missing CPUQuota= (kernel-enforced 1-core ceiling)"
 
@@ -227,7 +227,7 @@ def test_cb4_active_work_capped_and_throttled(safe_tmp_path):
 
 
 def test_cb5_parse_cpu_max_synthetic():
-    from opencode_search.daemon.cpu_budget import _parse_cpu_max
+    from rag_search.daemon.cpu_budget import _parse_cpu_max
 
     assert _parse_cpu_max("100000 100000\n") == pytest.approx(1.0)
     assert _parse_cpu_max("50000 100000\n") == pytest.approx(0.5)
@@ -236,7 +236,7 @@ def test_cb5_parse_cpu_max_synthetic():
 
 
 def test_cb5_parse_cpu_stat_synthetic():
-    from opencode_search.daemon.cpu_budget import _parse_cpu_stat
+    from rag_search.daemon.cpu_budget import _parse_cpu_stat
 
     text = "usage_usec 123456\nnr_periods 10\nnr_throttled 2\nthrottled_usec 5000\n"
     assert _parse_cpu_stat(text) == {
@@ -245,7 +245,7 @@ def test_cb5_parse_cpu_stat_synthetic():
 
 
 def test_cb5_cpu_throttle_stat_shape():
-    from opencode_search.daemon.cpu_budget import cpu_throttle_stat
+    from rag_search.daemon.cpu_budget import cpu_throttle_stat
 
     stat = cpu_throttle_stat()
     assert set(stat) == {"nr_periods", "nr_throttled", "throttled_usec"}
@@ -253,7 +253,7 @@ def test_cb5_cpu_throttle_stat_shape():
 
 
 def test_cb5_cpu_percent_core_non_negative():
-    from opencode_search.daemon.cpu_budget import cpu_percent_core
+    from rag_search.daemon.cpu_budget import cpu_percent_core
 
     frac = cpu_percent_core()
     assert isinstance(frac, float) and frac >= 0.0
@@ -284,7 +284,7 @@ def test_cb6_systemd_scope_delegation_hermetic_proof(tmp_path):
     import sys
     from pathlib import Path
 
-    from opencode_search.daemon.cpu_budget import _parse_cpu_stat
+    from rag_search.daemon.cpu_budget import _parse_cpu_stat
 
     script = tmp_path / "cb6_burn.py"
     script.write_text(_CB6_BURN_PY)

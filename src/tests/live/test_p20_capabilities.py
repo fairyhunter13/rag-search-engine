@@ -13,11 +13,11 @@ pytestmark = pytest.mark.live
 @pytest.mark.slow
 def test_p20_capabilities_e2e(safe_tmp_path):
     """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, ask context."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import get_project, remove_project, upsert_project
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.daemon.sweeps import _index_project
-    from opencode_search.server._overview import handle_overview
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import get_project, remove_project, upsert_project
+    from rag_search.daemon.federation import index_members
+    from rag_search.daemon.sweeps import _index_project
+    from rag_search.server._overview import handle_overview
 
     # Setup: tmp root with a symlinked python sub-repo
     member = safe_tmp_path / "member"
@@ -56,7 +56,7 @@ def test_p20_capabilities_e2e(safe_tmp_path):
         assert r.returncode == 0, f"D: --check failed:\n{r.stdout}\n{r.stderr}"
 
         # E: MCP ask returns non-empty composed context from the indexed project
-        from opencode_search.server.mcp import ask as ask_tool
+        from rag_search.server.mcp import ask as ask_tool
         from tests.live._projects import federation_root
         sample_fed_root = federation_root()  # sample shop-federation, not a real project
         context = asyncio.run(ask_tool("How does authentication work?", sample_fed_root, "all"))

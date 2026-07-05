@@ -39,7 +39,7 @@ def live_client():
     except Exception as exc:
         pytest.fail(
             f"Live daemon not reachable at {_DAEMON} — start it with "
-            f"`opencode-search daemon serve` before running these tests. ({exc})"
+            f"`rag-search daemon serve` before running these tests. ({exc})"
         )
     return _C()
 
@@ -63,7 +63,7 @@ def cuda_ep():
 
 @pytest.fixture(scope="session")
 def embedder(cuda_ep):
-    from opencode_search.embed.embedder import Embedder
+    from rag_search.embed.embedder import Embedder
     e = Embedder()
     e.warmup()
     return e
@@ -102,7 +102,7 @@ def safe_tmp_path():
     import tempfile
     from pathlib import Path
 
-    from opencode_search.core.registry import list_projects, remove_project
+    from rag_search.core.registry import list_projects, remove_project
     safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
     safe_base.mkdir(parents=True, exist_ok=True)
     d = Path(tempfile.mkdtemp(dir=safe_base))
@@ -118,11 +118,11 @@ def safe_tmp_path():
 @pytest.fixture(scope="session")
 def mini_stores(embedder, tmp_path_factory):
     """Vector + graph store over a 3-file Python mini-project for P4 tests."""
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.index.indexer import index_project
-    from opencode_search.index.store import VectorStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
 
     _PY = {
         "auth.py": "def authenticate(token):\n    return verify_jwt(token)\n\ndef verify_jwt(t):\n    return True\n",

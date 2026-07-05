@@ -10,7 +10,7 @@ def test_source_fingerprint_is_memoized():
     """FP1: second call for a quiescent path must use the cache, not re-walk."""
     import os
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     tmp_dir = os.path.dirname(__file__)
     sig1 = sweeps._source_fingerprint(tmp_dir)
@@ -26,10 +26,10 @@ def test_bpre_cascade_debounced():
     """FP2: _regen_owning_processes must skip roots within _BPRE_CASCADE_DEBOUNCE_S."""
     import time
 
-    import opencode_search.core.registry as reg_mod
-    import opencode_search.kb.bpre as bpre_mod
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.daemon import sweeps
+    import rag_search.core.registry as reg_mod
+    import rag_search.kb.bpre as bpre_mod
+    from rag_search.core.config import ProjectEntry
+    from rag_search.daemon import sweeps
 
     calls: list[str] = []
     orig_map = sweeps._last_owning_process_regen.copy()
@@ -50,10 +50,10 @@ def test_federation_cascade_debounced():
     """FP2b: _regen_owning_federations must skip roots within _BPRE_CASCADE_DEBOUNCE_S."""
     import time
 
-    import opencode_search.core.registry as reg_mod
-    import opencode_search.kb.wiki as wiki_mod
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.daemon import sweeps
+    import rag_search.core.registry as reg_mod
+    import rag_search.kb.wiki as wiki_mod
+    from rag_search.core.config import ProjectEntry
+    from rag_search.daemon import sweeps
 
     calls: list[str] = []
     orig_map = sweeps._last_owning_federation_regen.copy()
@@ -74,7 +74,7 @@ def test_reconcile_startup_once_before_while_loop():
     """FP3: reconcile_projects() must appear before any while-True resync loop."""
     import inspect
 
-    from opencode_search.daemon import server as srv_mod
+    from rag_search.daemon import server as srv_mod
 
     src = inspect.getsource(srv_mod._start_background)
     rp_pos = src.find("reconcile_projects()")
@@ -88,7 +88,7 @@ def test_reconcile_park_event_wired():
     """FP4: _reconcile_park must exist and be referenced in _start_background."""
     import inspect
 
-    from opencode_search.daemon import server as srv_mod
+    from rag_search.daemon import server as srv_mod
 
     assert hasattr(srv_mod, "_reconcile_park")
     assert "_reconcile_park" in inspect.getsource(srv_mod._start_background)
@@ -98,7 +98,7 @@ def test_scheduler_uses_deadline_sleep():
     """IS1: Scheduler._loop must compute next-deadline wait, not a fixed tick."""
     import inspect
 
-    from opencode_search.daemon.scheduler import Scheduler
+    from rag_search.daemon.scheduler import Scheduler
 
     src = inspect.getsource(Scheduler._loop)
     assert "next_deadline" in src, "Scheduler._loop must compute a next_deadline"
@@ -110,7 +110,7 @@ def test_scheduler_start_no_fixed_tick():
     """IS1b: Scheduler.start must not compute a fixed tick constant."""
     import inspect
 
-    from opencode_search.daemon.scheduler import Scheduler
+    from rag_search.daemon.scheduler import Scheduler
 
     assert "tick" not in inspect.getsource(Scheduler.start)
 
@@ -123,7 +123,7 @@ def test_no_junk_paths_in_live_registry(live_client, sample_workspace):
     at session end.  Only entries from previous (leaked) sessions are flagged.
     Worktrees exclusion is config-driven (OPENCODE_FEDERATION_EXCLUDE), not hardcoded.
     """
-    from opencode_search.core.registry import list_projects
+    from rag_search.core.registry import list_projects
     from tests.live._projects import sample_project_paths
 
     current_session_paths = sample_project_paths(sample_workspace)
@@ -141,7 +141,7 @@ def test_drift_gate_skips_enrich_when_sig_unchanged():
     import os
     import tempfile
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     calls: list[str] = []
     orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
@@ -165,7 +165,7 @@ def test_drift_gate_triggers_enrich_when_sig_changes():
     """FP6: on_change must call _enrich_project when source fingerprint differs."""
     import tempfile
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     calls: list[str] = []
     orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
@@ -196,7 +196,7 @@ def _fcg_project():
     """A real tmp project, one code file, _enrich_project/_index_files stubbed to a call list."""
     import tempfile
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {"main.py": "def f():\n    pass\n"})
@@ -257,7 +257,7 @@ def test_fcg4_convergence_second_call_reuses(_fcg_project):
 
 def test_watcher_prefers_inotify_over_poll():
     """IS3: Watcher.start() runs one watchfiles (Rust notify) thread — no hand-rolled poll loop."""
-    from opencode_search.daemon.watcher import Watcher
+    from rag_search.daemon.watcher import Watcher
 
     w = Watcher(on_change=lambda p, f: None)
     w.start()
@@ -275,8 +275,8 @@ def test_reconcile_active_flag_lifecycle():
     """FP7: reconcile_projects() must set _reconcile_active during the pass and always clear
     it afterward (including on exception), so _enrich_project's bulk-suppression gate (see
     test_bulk_reconcile_suppresses_member_bpre_fanout) is only ever active during a real pass."""
-    import opencode_search.core.registry as reg_mod
-    from opencode_search.daemon import sweeps
+    import rag_search.core.registry as reg_mod
+    from rag_search.daemon import sweeps
 
     assert not sweeps._reconcile_active.is_set(), "flag must start clear"
     observed: list[bool] = []
@@ -309,10 +309,10 @@ def test_reconcile_bpre_root_pass_unconditional():
     """FP8: the reconcile root-pass must call reconstruct_processes on every pass — no
     in-memory sig gate suppressing a repeat call (that gate was restart-fragile; the
     persistent stamp inside reconstruct_processes is now the sole reuse guard, D3)."""
-    import opencode_search.core.registry as reg_mod
-    import opencode_search.kb.bpre as bpre_mod
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.daemon import sweeps
+    import rag_search.core.registry as reg_mod
+    import rag_search.kb.bpre as bpre_mod
+    from rag_search.core.config import ProjectEntry
+    from rag_search.daemon import sweeps
 
     calls: list[str] = []
     orig_list, orig_bpre = reg_mod.list_projects, bpre_mod.reconstruct_processes
@@ -342,15 +342,15 @@ def test_bulk_reconcile_suppresses_member_bpre_fanout():
     import shutil
     import tempfile
 
-    import opencode_search.daemon.federation as fed_mod
-    import opencode_search.embed.embedder as embed_mod
-    import opencode_search.index.indexer as indexer_mod
-    import opencode_search.index.store as store_mod
-    import opencode_search.kb.bpre as bpre_mod
-    import opencode_search.kb.wiki as wiki_mod
-    from opencode_search.core.config import index_dir
-    from opencode_search.daemon import sweeps
-    from opencode_search.graph import llm as llm_mod
+    import rag_search.daemon.federation as fed_mod
+    import rag_search.embed.embedder as embed_mod
+    import rag_search.index.indexer as indexer_mod
+    import rag_search.index.store as store_mod
+    import rag_search.kb.bpre as bpre_mod
+    import rag_search.kb.wiki as wiki_mod
+    from rag_search.core.config import index_dir
+    from rag_search.daemon import sweeps
+    from rag_search.graph import llm as llm_mod
 
     owning_calls: list[str] = []
     bpre_calls: list[str] = []
@@ -407,7 +407,7 @@ def test_kb_heavy_lock_serializes_concurrent_passes():
     import threading
     import time
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     concurrent = 0
     max_concurrent = 0
@@ -445,8 +445,8 @@ def test_gitignore_respected_root_and_nested():
     import tempfile
     from pathlib import Path
 
-    from opencode_search.core.index_config import ProjectConfig
-    from opencode_search.index.discover import iter_files
+    from rag_search.core.index_config import ProjectConfig
+    from rag_search.index.discover import iter_files
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {
@@ -471,8 +471,8 @@ def test_hidden_dir_skip_tool_caches():
     import tempfile
     from pathlib import Path
 
-    from opencode_search.core.index_config import ProjectConfig
-    from opencode_search.index.discover import iter_files
+    from rag_search.core.index_config import ProjectConfig
+    from rag_search.index.discover import iter_files
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {
@@ -492,8 +492,8 @@ def test_include_overrides_gitignore_exclude_beats_include():
     import tempfile
     from pathlib import Path
 
-    from opencode_search.core.index_config import ProjectConfig
-    from opencode_search.index.discover import iter_files
+    from rag_search.core.index_config import ProjectConfig
+    from rag_search.index.discover import iter_files
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {".gitignore": "rootgen\n", "rootgen/out.txt": "x\n"})
@@ -519,8 +519,8 @@ def test_respect_gitignore_false_disables_gitignore_only():
     import tempfile
     from pathlib import Path
 
-    from opencode_search.core.index_config import ProjectConfig
-    from opencode_search.index.discover import iter_files
+    from rag_search.core.index_config import ProjectConfig
+    from rag_search.index.discover import iter_files
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {
@@ -542,7 +542,7 @@ def test_drift_gate_quiescent_under_tool_cache_churn():
     does not retrigger the BPRE/enrich cascade for churn that isn't real source drift."""
     import tempfile
 
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {"src/main.py": "print(1)\n", ".svelte-kit/generated.js": "x\n"})
@@ -559,8 +559,8 @@ def test_is_ignored_path_agrees_with_iter_files():
     import tempfile
     from pathlib import Path
 
-    from opencode_search.core.index_config import ProjectConfig
-    from opencode_search.index.discover import is_ignored_path, iter_files
+    from rag_search.core.index_config import ProjectConfig
+    from rag_search.index.discover import is_ignored_path, iter_files
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {
@@ -599,15 +599,15 @@ def _bps_fed():
 
 
 def _bps_no_llm(root: str) -> int:
-    from opencode_search.graph.llm import no_deepseek
-    from opencode_search.kb.bpre import reconstruct_processes
+    from rag_search.graph.llm import no_deepseek
+    from rag_search.kb.bpre import reconstruct_processes
     with no_deepseek():
         return reconstruct_processes(root)
 
 
 def _bps_spy_trace_processes():
     """Wrap bpre_mod._trace_processes with a call-counting spy; caller must restore."""
-    import opencode_search.kb.bpre as bpre_mod
+    import rag_search.kb.bpre as bpre_mod
     calls: list[int] = []
     orig = bpre_mod._trace_processes
 
@@ -627,7 +627,7 @@ def test_bps1_docs_churn_quiescent_no_rebuild(_bps_fed, caplog):
     import os
     import time
 
-    import opencode_search.kb.bpre as bpre_mod
+    import rag_search.kb.bpre as bpre_mod
 
     fed = _bps_fed
     docs_file = fed.cart + "/docs/notes.yaml"
@@ -643,7 +643,7 @@ def test_bps1_docs_churn_quiescent_no_rebuild(_bps_fed, caplog):
         with open(docs_file, "w") as f:
             f.write("note: edited\n")
         bpre_mod._invalidate_bpre_code_sig(fed.cart)
-        with caplog.at_level(logging.INFO, logger="opencode_search.kb.bpre"):
+        with caplog.at_level(logging.INFO, logger="rag_search.kb.bpre"):
             _bps_no_llm(fed.root)
         assert not calls, "docs-only churn must not trigger a rebuild"
         assert any("reusing stamp-matched" in r.message for r in caplog.records), (
@@ -660,7 +660,7 @@ def test_bps2_hidden_dir_tool_cache_churn_no_rebuild(_bps_fed):
     import os
     import time
 
-    import opencode_search.kb.bpre as bpre_mod
+    import rag_search.kb.bpre as bpre_mod
 
     fed = _bps_fed
     cache_file = fed.checkout + "/.claude/skills/tool/build.js"
@@ -687,7 +687,7 @@ def test_bps3_real_code_drift_still_rebuilds(_bps_fed):
     trigger a rebuild — the code-only signature must not become inert."""
     import time
 
-    import opencode_search.kb.bpre as bpre_mod
+    import rag_search.kb.bpre as bpre_mod
 
     fed = _bps_fed
     _bps_no_llm(fed.root)  # baseline build
@@ -709,7 +709,7 @@ def test_bps4_convergence_second_call_reuses(_bps_fed):
     """BPS4: two consecutive reconstruct_processes calls with no code change in
     between must converge — the second call reuses (stamp written at the end of
     the first rebuild equals the stamp read at the start of the second call)."""
-    import opencode_search.kb.bpre as bpre_mod
+    import rag_search.kb.bpre as bpre_mod
 
     fed = _bps_fed
     _bps_no_llm(fed.root)  # first call: builds and stamps
@@ -741,7 +741,7 @@ def test_wt1_ignored_dir_churn_never_reaches_on_change():
     import time
     from pathlib import Path
 
-    from opencode_search.daemon.watcher import Watcher
+    from rag_search.daemon.watcher import Watcher
 
     calls: list[tuple[str, list[Path]]] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -772,7 +772,7 @@ def test_wt2_real_edit_fires_once():
     import time
     from pathlib import Path
 
-    from opencode_search.daemon.watcher import Watcher
+    from rag_search.daemon.watcher import Watcher
 
     calls: list[tuple[str, list[Path]]] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -802,7 +802,7 @@ def test_wt3_batch_coalescing_single_call_per_burst():
     import time
     from pathlib import Path
 
-    from opencode_search.daemon.watcher import Watcher
+    from rag_search.daemon.watcher import Watcher
 
     calls: list[tuple[str, list[Path]]] = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -833,7 +833,7 @@ def test_wt4_dynamic_add_restart_delivers_new_root():
     import time
     from pathlib import Path
 
-    from opencode_search.daemon.watcher import Watcher
+    from rag_search.daemon.watcher import Watcher
 
     calls: list[tuple[str, list[Path]]] = []
     with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2:

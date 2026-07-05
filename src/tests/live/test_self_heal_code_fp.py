@@ -16,7 +16,7 @@ pytestmark = pytest.mark.live
 
 def test_sh1_code_fingerprint_stable():
     """SH1: two calls return the same value (deterministic, byte-equal)."""
-    from opencode_search.daemon.sweeps import _code_fingerprint
+    from rag_search.daemon.sweeps import _code_fingerprint
     assert _code_fingerprint() == _code_fingerprint()
 
 
@@ -24,9 +24,9 @@ def test_sh2_code_fingerprint_changes_on_module_edit(tmp_path):
     """SH2: fingerprint differs when a tracked module's bytes differ (via file perturb)."""
     import hashlib
 
-    from opencode_search.daemon.sweeps import _code_fingerprint
+    from rag_search.daemon.sweeps import _code_fingerprint
 
-    root = Path(__file__).resolve().parents[3] / "src" / "opencode_search"
+    root = Path(__file__).resolve().parents[3] / "src" / "rag_search"
     fp_before = _code_fingerprint()
 
     # Hash the same modules but with extractor.py content perturbed
@@ -48,7 +48,7 @@ def test_sh2_code_fingerprint_changes_on_module_edit(tmp_path):
 
 def test_sh3_algo_version_includes_code_fp():
     """SH3: _pipeline_algo_version() contains the code-fingerprint component."""
-    from opencode_search.daemon.sweeps import _code_fingerprint, _pipeline_algo_version
+    from rag_search.daemon.sweeps import _code_fingerprint, _pipeline_algo_version
     ver = _pipeline_algo_version()
     fp = _code_fingerprint()
     assert fp in ver, f"code_fp {fp!r} not in algo_version {ver!r}"
@@ -58,10 +58,10 @@ def test_sh3_algo_version_includes_code_fp():
 
 def test_sh4_baseline_seed_no_mutation(safe_tmp_path):
     """SH4: seeding the stamp doesn't mutate symbols or communities."""
-    from opencode_search.core.config import ProjectEntry, project_graph_db
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _code_source_fingerprint, _pipeline_algo_version
-    from opencode_search.graph.store import GraphStore
+    from rag_search.core.config import ProjectEntry, project_graph_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon.sweeps import _code_source_fingerprint, _pipeline_algo_version
+    from rag_search.graph.store import GraphStore
 
     proj = str(safe_tmp_path)
     upsert_project(ProjectEntry(path=proj, enabled=True))

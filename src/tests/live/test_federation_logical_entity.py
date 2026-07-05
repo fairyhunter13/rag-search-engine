@@ -15,7 +15,7 @@ import shutil
 
 import pytest
 
-from opencode_search.core.config import index_dir
+from rag_search.core.config import index_dir
 
 pytestmark = pytest.mark.live
 
@@ -38,7 +38,7 @@ def _federate(base):
 
 
 def _clean(paths):
-    from opencode_search.core.registry import remove_project
+    from rag_search.core.registry import remove_project
     for p in paths:
         remove_project(str(p))
         shutil.rmtree(index_dir(str(p)), ignore_errors=True)
@@ -51,12 +51,12 @@ def _clean(paths):
 @pytest.mark.slow
 def test_inv4_root_scoped_search_fanout(safe_tmp_path):
     """Invariant #4: search([root]) and ask(root) fan out to member content."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.daemon.sweeps import _index_project
-    from opencode_search.server.mcp import ask as mcp_ask
-    from opencode_search.server.mcp import search as mcp_search
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.daemon.federation import index_members
+    from rag_search.daemon.sweeps import _index_project
+    from rag_search.server.mcp import ask as mcp_ask
+    from rag_search.server.mcp import search as mcp_search
 
     root, member, marker = _federate(safe_tmp_path)
     _clean([root, member])
@@ -89,11 +89,11 @@ def test_inv4_root_scoped_search_fanout(safe_tmp_path):
 @pytest.mark.slow
 def test_inv5_graph_definition_fanout(safe_tmp_path):
     """Invariant #5: graph(symbol, root) unions definition matches across members."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.daemon.sweeps import _index_project
-    from opencode_search.server.mcp import graph as mcp_graph
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.daemon.federation import index_members
+    from rag_search.daemon.sweeps import _index_project
+    from rag_search.server.mcp import graph as mcp_graph
 
     root, member, marker = _federate(safe_tmp_path)
     _clean([root, member])
@@ -121,11 +121,11 @@ def test_inv5_graph_definition_fanout(safe_tmp_path):
 @pytest.mark.slow
 def test_inv7_overview_status_aggregates(safe_tmp_path):
     """Invariant #7: overview(status, root) sums symbols+communities across members."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
-    from opencode_search.daemon.federation import index_members
-    from opencode_search.daemon.sweeps import _index_project
-    from opencode_search.server.mcp import overview as mcp_overview
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.daemon.federation import index_members
+    from rag_search.daemon.sweeps import _index_project
+    from rag_search.server.mcp import overview as mcp_overview
 
     root, member, _marker = _federate(safe_tmp_path)
     _clean([root, member])

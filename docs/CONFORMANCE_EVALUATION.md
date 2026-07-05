@@ -1,7 +1,7 @@
 # Conformance Evaluation — World Model, Architecture, Principles & Rules
 
 > **Date:** June 27 2026 (final verification pass; all 711 tests green)
-> **Scope:** OSE (`opencode-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/docgen/` · `vendor/okf/`
+> **Scope:** OSE (`rag-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/docgen/` · `vendor/okf/`
 > **Method:** `check_world_model.py --all` + static source reads + `test_world_model_traceability.py`
 > **Verdict:** CONFORMS (all checkable L1 invariants pass; 5 gaps found and remediated this session)
 

@@ -6,7 +6,7 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-_SRC = Path(__file__).parents[2] / "opencode_search"
+_SRC = Path(__file__).parents[2] / "rag_search"
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ _SRC = Path(__file__).parents[2] / "opencode_search"
 
 def test_kb_enrich_is_deepseek_only():
     """R6a static: enrich.py KB enrichment uses deepseek_extract (no local ollama/generative fallback)."""
-    import opencode_search.graph.enrich as enrich_mod
+    import rag_search.graph.enrich as enrich_mod
     src = inspect.getsource(enrich_mod)
     assert "deepseek_extract" in src, "enrich.py must use deepseek_extract for KB enrichment"
     assert "ollama" not in src.lower(), "enrich.py must not reference ollama"
@@ -24,7 +24,7 @@ def test_kb_enrich_is_deepseek_only():
 
 def test_enrich_project_crashes_without_key():
     """R6a static: sweeps._enrich_project precondition raises RuntimeError when DEEPSEEK_API_KEY absent."""
-    from opencode_search.daemon import sweeps
+    from rag_search.daemon import sweeps
 
     src = inspect.getsource(sweeps._enrich_project)
     assert "deepseek_key()" in src, "_enrich_project must check deepseek_key() before proceeding"
@@ -45,7 +45,7 @@ def test_enrich_project_crashes_without_key():
 
 def test_chat_lane_is_haiku_only():
     """EC2 / R6b static: routes_chat.py has no DeepSeek symbols — chat lane is Haiku-only."""
-    from opencode_search.server import routes_chat
+    from rag_search.server import routes_chat
 
     src = inspect.getsource(routes_chat)
     assert "deepseek_chat" not in src, (
@@ -63,7 +63,7 @@ def test_chat_lane_is_haiku_only():
 
 def test_chat_primary_model_is_haiku():
     """R6b static: QUERY_LLM_MODEL defaults to claude-haiku-4-5 (dashboard chat primary lane)."""
-    from opencode_search.core.config import QUERY_LLM_MODEL
+    from rag_search.core.config import QUERY_LLM_MODEL
 
     assert "haiku" in QUERY_LLM_MODEL.lower(), (
         f"QUERY_LLM_MODEL must be a haiku model; got {QUERY_LLM_MODEL!r}"
@@ -150,13 +150,13 @@ _B1_ALLOWED_CONTEXTS = (
 
 
 def test_no_local_llm_tokens_anywhere_in_src():
-    """B1 tree-wide: src/opencode_search/**/*.py must not contain any local-LLM token.
+    """B1 tree-wide: src/rag_search/**/*.py must not contain any local-LLM token.
 
     R6c only checked 4 named files; this scans the entire package so a new module
     cannot silently reintroduce Ollama, qwen3, llama.cpp, or a bare 'def chat('.
     Lines that are pure comments or name the prohibition are exempted.
     """
-    base = Path(__file__).parents[2] / "opencode_search"
+    base = Path(__file__).parents[2] / "rag_search"
     violations: list[str] = []
     for py in base.rglob("*.py"):
         text = py.read_text(errors="replace")
@@ -176,7 +176,7 @@ def test_no_local_llm_tokens_anywhere_in_src():
                     f"forbidden token {token!r}: {stripped[:80]}"
                 )
     assert not violations, (
-        "Local-LLM tokens found in src/opencode_search "
+        "Local-LLM tokens found in src/rag_search "
         "(Ollama/qwen3 decommissioned 2026-06-20):\n"
         + "\n".join(violations[:20])
     )
@@ -204,7 +204,7 @@ def test_rerank_passages_only_in_gpu_lane():
     the allowlist may call the cross-encoder, so it can never become a generative path.
     Complements test_p5_server.py::test_reranking_is_query_time_only (index/+kb/ only).
     """
-    base = Path(__file__).parents[2] / "opencode_search"
+    base = Path(__file__).parents[2] / "rag_search"
     violations: list[str] = []
     for py in base.rglob("*.py"):
         if "rerank_passages" not in py.read_text(errors="replace"):

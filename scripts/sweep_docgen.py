@@ -64,7 +64,7 @@ def main() -> None:
     try:
         from ose_docgen.cleanup import clean_generated
     except ImportError:
-        print("ERROR: vendor/docgen/src not found — run from the opencode-search-engine root.")
+        print("ERROR: vendor/docgen/src not found — run from the rag-search-engine root.")
         sys.exit(1)
 
     roots = _resolve_roots(args.roots)

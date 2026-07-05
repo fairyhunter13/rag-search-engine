@@ -19,7 +19,7 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-_ROOT = Path(__file__).resolve().parents[2] / "opencode_search"
+_ROOT = Path(__file__).resolve().parents[2] / "rag_search"
 
 _WORKER_MODULES = {"graph/extractor.py", "kb/bpre_ast.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")

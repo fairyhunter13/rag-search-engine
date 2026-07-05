@@ -1,9 +1,9 @@
 {
-  "_comment": "Install via: claude mcp add opencode-search --transport http-sse http://127.0.0.1:8765/mcp -s user (requires daemon running). Or use stdio: claude mcp add opencode-search /path/to/.venv/bin/python -- -m opencode_search daemon bridge-stdio -s user. After adding, also add the UserPromptSubmit hook to ~/.claude/settings.json (see INSTALL.md).",
+  "_comment": "Install via: claude mcp add rag-search --transport http-sse http://127.0.0.1:8765/mcp -s user (requires daemon running). Or use stdio: claude mcp add rag-search /path/to/.venv/bin/python -- -m rag_search daemon bridge-stdio -s user. After adding, also add the UserPromptSubmit hook to ~/.claude/settings.json (see INSTALL.md).",
   "mcpServers": {
-    "opencode-search": {
+    "rag-search": {
       "command": "/path/to/.venv/bin/python",
-      "args": ["-m", "opencode_search", "daemon", "bridge-stdio"],
+      "args": ["-m", "rag_search", "daemon", "bridge-stdio"],
       "env": {
         "_comment": "Optional but recommended: pin the workspace root so the bridge cannot access indexes outside the opened project.",
         "OPENCODE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"

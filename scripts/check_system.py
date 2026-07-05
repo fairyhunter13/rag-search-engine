@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""opencode-search system health + behaviour checklist.
+"""rag-search system health + behaviour checklist.
 
 Usage:
     python scripts/check_system.py            # print to stdout
@@ -51,18 +51,18 @@ def _warn(msg: str, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 
 CORE_MODULES = [
-    "opencode_search.server.mcp",
-    "opencode_search.core.config",
-    "opencode_search.core.registry",
-    "opencode_search.core.gpu",
-    "opencode_search.embed",
-    "opencode_search.index.store",
-    "opencode_search.graph.store",
-    "opencode_search.kb.wiki",
-    "opencode_search.query.search",
-    "opencode_search.daemon",
-    "opencode_search.cli",
-    "opencode_search.server._overview",
+    "rag_search.server.mcp",
+    "rag_search.core.config",
+    "rag_search.core.registry",
+    "rag_search.core.gpu",
+    "rag_search.embed",
+    "rag_search.index.store",
+    "rag_search.graph.store",
+    "rag_search.kb.wiki",
+    "rag_search.query.search",
+    "rag_search.daemon",
+    "rag_search.cli",
+    "rag_search.server._overview",
 ]
 
 
@@ -90,9 +90,9 @@ EXPECTED_CONFIG: dict[str, str] = {
 def check_config() -> None:
     print("\n### Config constants")
     try:
-        from opencode_search.core import config
+        from rag_search.core import config
     except ImportError as exc:
-        _fail("opencode_search.core.config importable", str(exc))
+        _fail("rag_search.core.config importable", str(exc))
         return
 
     for name, default_val in EXPECTED_CONFIG.items():
@@ -114,7 +114,7 @@ def check_config() -> None:
 def check_gpu() -> None:
     print("\n### GPU")
     try:
-        from opencode_search.core.gpu import assert_gpu_available
+        from rag_search.core.gpu import assert_gpu_available
         assert_gpu_available()
         _ok("assert_gpu_available() — GPU EP present")
     except SystemExit as exc:
@@ -152,7 +152,7 @@ EXPECTED_MCP_TOOLS = {"search", "ask", "graph", "overview", "index"}
 def check_mcp_tools() -> None:
     print("\n### MCP tools (server/mcp.py)")
     try:
-        from opencode_search.server.mcp import mcp as _mcp
+        from rag_search.server.mcp import mcp as _mcp
         tool_names = set(t.name for t in asyncio.run(_mcp.list_tools()))
         if tool_names == EXPECTED_MCP_TOOLS:
             _ok(f"Exactly {len(EXPECTED_MCP_TOOLS)} tools registered: {sorted(EXPECTED_MCP_TOOLS)}")
@@ -169,7 +169,7 @@ def check_mcp_tools() -> None:
 # Section: CLI commands
 # ---------------------------------------------------------------------------
 
-CLI_COMMANDS = ["opencode-search"]
+CLI_COMMANDS = ["rag-search"]
 
 VENV_BIN = Path(__file__).resolve().parent.parent / ".venv" / "bin"
 
@@ -196,10 +196,10 @@ def check_vendor() -> None:
     print("\n### Vendor submodules")
     docgen_src = Path(__file__).parent.parent / "vendor" / "docgen" / "src"
     if docgen_src.exists() and any(docgen_src.iterdir()):
-        _ok("vendor/docgen/src present — opencode-search docgen available")
+        _ok("vendor/docgen/src present — rag-search docgen available")
     else:
         _warn(
-            "vendor/docgen/src missing — opencode-search docgen will silently skip. "
+            "vendor/docgen/src missing — rag-search docgen will silently skip. "
             "Run: git submodule update --init --recursive"
         )
 
@@ -212,19 +212,19 @@ def check_vendor() -> None:
 def check_llm_provider() -> None:
     print("\n### LLM provider (GPU = embed+rerank only; chat = claude-haiku-4-5 only; DeepSeek = KB enrichment only)")
     try:
-        from opencode_search.core.config import QUERY_LLM_MODEL
+        from rag_search.core.config import QUERY_LLM_MODEL
     except ImportError as exc:
         _fail("core.config importable", str(exc))
         return
     _ok(f"QUERY_LLM_MODEL (chat, haiku-only) = {QUERY_LLM_MODEL}")
     # DeepSeek = KB-enrichment-exclusive; not a chat fallback (HR12)
     try:
-        from opencode_search.graph.llm import deepseek_key
+        from rag_search.graph.llm import deepseek_key
         key = deepseek_key()
         if key:
             _ok("DEEPSEEK_API_KEY found — KB enrichment available (KB-exclusive; no chat fallback)")
         else:
-            _fail("DEEPSEEK_API_KEY", "not found in env or ~/.config/opencode-search/env — KB build will crash", required=False)
+            _fail("DEEPSEEK_API_KEY", "not found in env or ~/.config/rag-search/env — KB build will crash", required=False)
     except Exception as exc:
         _fail("deepseek_key()", str(exc), required=False)
     # claude CLI is the sole chat lane; no DeepSeek fallback (F / HR10)
@@ -243,7 +243,7 @@ def check_llm_provider() -> None:
 
 def _render_markdown(output_file: str | None = None) -> str:
     lines: list[str] = [
-        "## opencode-search System Checklist",
+        "## rag-search System Checklist",
         f"Generated: {date.today()}",
         "",
     ]
@@ -280,7 +280,7 @@ def main() -> int:
     if src not in sys.path:
         sys.path.insert(0, src)
 
-    print("## opencode-search System Checklist")
+    print("## rag-search System Checklist")
     print(f"Generated: {date.today()}")
 
     check_imports()

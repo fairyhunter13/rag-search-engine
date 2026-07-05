@@ -40,7 +40,7 @@ class TestDocsApi:
 
 class TestDocgenPipeline:
     def test_docs_ignored_by_watcher(self, tmp_path) -> None:
-        from opencode_search.index.discover import is_ignored_path
+        from rag_search.index.discover import is_ignored_path
         # generated docs tree (has provenance.json) → ignored
         gen = tmp_path / "repo" / "docs"
         gen.mkdir(parents=True)
@@ -68,7 +68,7 @@ class TestDocgenPipeline:
 
     def test_api_docgen_not_in_mcp(self, live_client) -> None:
         """docgen and okf must NOT appear as MCP tools."""
-        from opencode_search.server.mcp import _MCP_TOOLS
+        from rag_search.server.mcp import _MCP_TOOLS
         tool_names = {t.name for t in _MCP_TOOLS}
         assert "docgen" not in tool_names
         assert "okf" not in tool_names

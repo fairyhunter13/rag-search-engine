@@ -94,9 +94,9 @@ def test_storage_paths_are_env_driven() -> None:
     (P18/HR34 device-neutrality). Paths built from other already-derived names (e.g. REGISTRY_PATH)
     are allowed."""
     targets = [
-        _REPO_ROOT / "src/opencode_search/core/config.py",
-        _REPO_ROOT / "src/opencode_search/core/registry.py",
-        *sorted((_REPO_ROOT / "src/opencode_search/daemon").glob("*.py")),
+        _REPO_ROOT / "src/rag_search/core/config.py",
+        _REPO_ROOT / "src/rag_search/core/registry.py",
+        *sorted((_REPO_ROOT / "src/rag_search/daemon").glob("*.py")),
     ]
     violations: list[str] = []
     for f in targets:

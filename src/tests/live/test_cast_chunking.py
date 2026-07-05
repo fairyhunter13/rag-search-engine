@@ -16,7 +16,7 @@ pytestmark = pytest.mark.live
 
 def test_cc1_header_prepended_chonkie_path(tmp_path):
     """CC1: chunk_file prepends '# <rel-path>\\n' when project_root given."""
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     root = tmp_path / "proj"
     root.mkdir()
     src = root / "src"
@@ -35,7 +35,7 @@ def test_cc1_header_prepended_chonkie_path(tmp_path):
 
 def test_cc2_linefallback_carries_header(tmp_path):
     """CC2: line-fallback path also carries the structural-path header."""
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     root = tmp_path / "proj"
     root.mkdir()
     fpath = root / "util.go"
@@ -51,7 +51,7 @@ def test_cc2_linefallback_carries_header(tmp_path):
 
 def test_cc3_determinism_mr(tmp_path):
     """CC3 (MR): re-chunking identical content produces byte-identical chunks."""
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     root = tmp_path / "proj"
     root.mkdir()
     fpath = root / "service.py"
@@ -70,7 +70,7 @@ def test_cc3_determinism_mr(tmp_path):
 
 def test_cc4_empty_file_returns_no_chunks(tmp_path):
     """CC4: empty file returns [] — header not prepended to nothing."""
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     root = tmp_path / "proj"
     root.mkdir()
     fpath = root / "empty.py"
@@ -81,7 +81,7 @@ def test_cc4_empty_file_returns_no_chunks(tmp_path):
 
 def test_cc5_path_outside_root_uses_basename(tmp_path):
     """CC5: path outside project_root falls back to basename (no ValueError raised)."""
-    from opencode_search.index.chunker import chunk_file
+    from rag_search.index.chunker import chunk_file
     root = tmp_path / "proj"
     root.mkdir()
     outside = tmp_path / "other" / "module.py"
@@ -98,8 +98,8 @@ def test_cc5_path_outside_root_uses_basename(tmp_path):
 
 def test_cc6_indexer_stores_chunks_with_header(embedder, tmp_path_factory):
     """CC6: index_project stores chunks carrying the structural-path header."""
-    from opencode_search.index.indexer import index_project
-    from opencode_search.index.store import VectorStore
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
     root = tmp_path_factory.mktemp("cast_proj")
     (root / "api.py").write_text("def handle(req):\n    return {'ok': True}\n" * 25)
     vdb = tmp_path_factory.mktemp("cast_stores") / "v.db"

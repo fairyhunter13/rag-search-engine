@@ -11,7 +11,7 @@ import os
 import numpy as np
 import pytest
 
-from opencode_search.core.gpu import (
+from rag_search.core.gpu import (
     _GPU_EP_ORDER,
     GPU_EP_NAMES,
     rank_gpu_providers,
@@ -100,12 +100,12 @@ def test_select_gpu_providers_fatal_on_cpu_only():
 
 
 def test_assert_gpu_available_returns():
-    from opencode_search.core.gpu import assert_gpu_available
+    from rag_search.core.gpu import assert_gpu_available
     assert_gpu_available()
 
 
 def test_is_gpu_available_true():
-    from opencode_search.core.gpu import is_gpu_available
+    from rag_search.core.gpu import is_gpu_available
     assert is_gpu_available() is True
 
 
@@ -128,7 +128,7 @@ def test_embedder_real_inference_proves_gpu(embedder):
 
 
 def test_reranker_real_inference_proves_gpu():
-    from opencode_search.embed.embedder import Reranker
+    from rag_search.embed.embedder import Reranker
     r = Reranker()
     try:
         scores = r.rerank("query", ["a", "b"])
@@ -146,7 +146,7 @@ def test_session_options_bfc_guard_applied(embedder):
 
 
 def test_vram_and_temp_read_selected_device():
-    from opencode_search.core.gpu import gpu_temp_c, vram_free_mb
+    from rag_search.core.gpu import gpu_temp_c, vram_free_mb
     assert vram_free_mb() >= 0
     assert 0 <= gpu_temp_c() <= 120
 
@@ -158,7 +158,7 @@ def test_vram_and_temp_read_selected_device():
 
 def test_thermal_cooldown_cool_gpu_is_noop():
     """TC1: _await_thermal_headroom returns immediately when GPU is cool — zero sleeps."""
-    from opencode_search.embed.embedder import _await_thermal_headroom
+    from rag_search.embed.embedder import _await_thermal_headroom
     sleep_calls: list[float] = []
     _await_thermal_headroom(_temp_fn=lambda: 60.0, _sleep_fn=lambda s: sleep_calls.append(s))
     assert not sleep_calls, "sleep must not be called when GPU is cool"
@@ -166,8 +166,8 @@ def test_thermal_cooldown_cool_gpu_is_noop():
 
 def test_thermal_cooldown_transient_spike_rides_out():
     """TC2: a transient 82°C spike resolves after two polls — no raise."""
-    from opencode_search.core.config import THERMAL_MAX_C
-    from opencode_search.embed.embedder import _await_thermal_headroom
+    from rag_search.core.config import THERMAL_MAX_C
+    from rag_search.embed.embedder import _await_thermal_headroom
     temps = iter([82.0, 81.0, float(THERMAL_MAX_C - 1)])
     sleep_calls: list[float] = []
     _await_thermal_headroom(_temp_fn=lambda: next(temps), _sleep_fn=lambda s: sleep_calls.append(s))
@@ -176,8 +176,8 @@ def test_thermal_cooldown_transient_spike_rides_out():
 
 def test_thermal_cooldown_sustained_over_temp_raises():
     """TC3: GPU staying hot past the budget raises RuntimeError — fatal, no CPU fallback."""
-    from opencode_search.core.config import THERMAL_MAX_C
-    from opencode_search.embed.embedder import (
+    from rag_search.core.config import THERMAL_MAX_C
+    from rag_search.embed.embedder import (
         THERMAL_COOLDOWN_S,
         THERMAL_POLL_S,
         _await_thermal_headroom,

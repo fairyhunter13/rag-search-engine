@@ -19,7 +19,7 @@ _CANDS = ["cart-be", "order-be", "payment-be"]
 
 
 def test_llm_cache_stats_structure():
-    from opencode_search.kb.llm_escalation import llm_cache_stats
+    from rag_search.kb.llm_escalation import llm_cache_stats
     s = llm_cache_stats()
     assert isinstance(s, dict)
     for k in ("hits", "misses", "calls"):
@@ -28,7 +28,7 @@ def test_llm_cache_stats_structure():
 
 
 def test_escalate_empty_items_returns_empty():
-    from opencode_search.kb.llm_escalation import escalate
+    from rag_search.kb.llm_escalation import escalate
     assert escalate([], stable_prefix=_PREFIX) == []
 
 
@@ -36,9 +36,9 @@ def test_escalate_empty_items_returns_empty():
 @pytest.mark.slow
 def test_escalate_sea_invariant_callee_in_candidates():
     """All non-null callees must be ∈ the admitted candidate set (SEA invariant)."""
-    from opencode_search.graph.llm import deepseek_key
+    from rag_search.graph.llm import deepseek_key
     assert deepseek_key(), "DeepSeek key required for Tier-2 test"
-    from opencode_search.kb.llm_escalation import escalate
+    from rag_search.kb.llm_escalation import escalate
     results = escalate(_ITEMS, stable_prefix=_PREFIX, candidates=_CANDS)
     for r in results:
         callee = r.get("callee")
@@ -49,9 +49,9 @@ def test_escalate_sea_invariant_callee_in_candidates():
 @pytest.mark.slow
 def test_escalate_confidence_at_most_0_7():
     """Tier-2 confidence must be ≤0.7 (LLM floor; deterministic tiers are higher)."""
-    from opencode_search.graph.llm import deepseek_key
+    from rag_search.graph.llm import deepseek_key
     assert deepseek_key(), "DeepSeek key required"
-    from opencode_search.kb.llm_escalation import escalate
+    from rag_search.kb.llm_escalation import escalate
     for r in escalate(_ITEMS, stable_prefix=_PREFIX, candidates=_CANDS):
         if r.get("callee") is not None:
             assert r.get("confidence", 0.7) <= 0.7, f"Tier-2 conf > 0.7: {r}"
@@ -60,9 +60,9 @@ def test_escalate_confidence_at_most_0_7():
 @pytest.mark.slow
 def test_escalate_calls_counter_increments():
     """calls counter must increment; hits/misses count must be consistent."""
-    from opencode_search.graph.llm import deepseek_key
+    from rag_search.graph.llm import deepseek_key
     assert deepseek_key(), "DeepSeek key required"
-    from opencode_search.kb.llm_escalation import escalate, llm_cache_stats
+    from rag_search.kb.llm_escalation import escalate, llm_cache_stats
     before = llm_cache_stats()
     escalate(_ITEMS, stable_prefix=_PREFIX, candidates=_CANDS)
     after = llm_cache_stats()
@@ -75,13 +75,13 @@ def test_escalate_calls_counter_increments():
 @pytest.mark.slow
 def test_escalate_cap_emits_warning(caplog):
     """Items > cap → truncation logged as WARNING."""
-    from opencode_search.graph.llm import deepseek_key
+    from rag_search.graph.llm import deepseek_key
     assert deepseek_key(), "DeepSeek key required"
     import logging
 
-    from opencode_search.kb.llm_escalation import escalate
+    from rag_search.kb.llm_escalation import escalate
     big = [{"kind": "grpc", "caller": f"s{i}", "topic_or_route": "X"} for i in range(35)]
-    with caplog.at_level(logging.WARNING, logger="opencode_search.kb.llm_escalation"):
+    with caplog.at_level(logging.WARNING, logger="rag_search.kb.llm_escalation"):
         escalate(big, stable_prefix=_PREFIX, candidates=_CANDS, cap=30)
     assert any("cap" in r.message.lower() for r in caplog.records), (
         "Truncation must emit WARNING"
@@ -93,7 +93,7 @@ def test_default_model_is_deepseek_v4_flash():
     """deepseek_extract uses deepseek-v4-flash (not the deprecated deepseek-chat alias)."""
     import inspect
 
-    from opencode_search.graph import llm as llm_mod
+    from rag_search.graph import llm as llm_mod
     src = inspect.getsource(llm_mod)
     assert "deepseek-v4-flash" in src, "graph/llm.py must pin deepseek-v4-flash"
     assert "deepseek-chat" not in src or "deprecat" in src.lower(), (

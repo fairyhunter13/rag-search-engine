@@ -33,7 +33,7 @@ def _overview(what: str, project: str, timeout: int = 20) -> dict:
 
 
 def _graph_db(project: str) -> Path:
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     return project_graph_db(project)
 
 
@@ -46,7 +46,7 @@ def _converge_ready(project: str, timeout: int = 240) -> None:
     """
     import time
 
-    from opencode_search.daemon.sweeps import _enrich_project, _index_project
+    from rag_search.daemon.sweeps import _enrich_project, _index_project
     _enrich_project(project)
     s = _overview("status", project)
     for m in s.get("members", []):
@@ -111,7 +111,7 @@ def test_e2e_ask_global_non_empty(live_client, proj_key, projects):
     """S5c: MCP ask scope=global returns a non-empty assembled context."""
     import asyncio
 
-    from opencode_search.server.mcp import ask as _mcp_ask
+    from rag_search.server.mcp import ask as _mcp_ask
     project = projects[proj_key]
     ctx = asyncio.run(_mcp_ask("What is the overall architecture?", project, "global"))
     assert len(ctx.strip()) > 20, f"ask(global, {proj_key}): context too short: {ctx[:80]}"
@@ -136,9 +136,9 @@ def synth_symlink_proj():
     import shutil
     import tempfile
 
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _index_project
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon.sweeps import _index_project
 
     _SAFE_BASE.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="synth-symlink-root-"))
@@ -234,9 +234,9 @@ def test_needs_enrich_detects_null_summaries(safe_tmp_path):
     """Fix #1: _needs_enrich returns True when any community has a NULL summary."""
     import sqlite3
 
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.core.registry import ProjectEntry, remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _needs_enrich
+    from rag_search.core.config import project_graph_db
+    from rag_search.core.registry import ProjectEntry, remove_project, upsert_project
+    from rag_search.daemon.sweeps import _needs_enrich
 
     upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True))
     try:
@@ -269,7 +269,7 @@ def test_real_federation_fanout(live_client, projects):
     )
     import asyncio
 
-    from opencode_search.server.mcp import search as _mcp_search
+    from rag_search.server.mcp import search as _mcp_search
     data = json.loads(asyncio.run(_mcp_search("function", project_paths=[projects["federation"]])))
     results = data.get("results", [])
     assert results, "search(project_paths=[federation root]) returned no results (fan-out broken)"
@@ -281,9 +281,9 @@ def test_needs_index_keys_on_indexed_at(safe_tmp_path):
     """Fix #2a: _needs_index returns True for indexed_at=None even with stray chunks present."""
     import sqlite3
 
-    from opencode_search.core.config import project_vector_db
-    from opencode_search.core.registry import ProjectEntry, remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _needs_index
+    from rag_search.core.config import project_vector_db
+    from rag_search.core.registry import ProjectEntry, remove_project, upsert_project
+    from rag_search.daemon.sweeps import _needs_index
 
     upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True, indexed_at=None))
     try:
@@ -306,9 +306,9 @@ def test_needs_index_keys_on_indexed_at(safe_tmp_path):
 @pytest.mark.slow
 def test_index_project_idempotent(safe_tmp_path):
     """Fix #2c: calling _index_project twice must not raise UNIQUE constraint on vec_chunks."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import get_project, remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _index_project
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import get_project, remove_project, upsert_project
+    from rag_search.daemon.sweeps import _index_project
 
     (safe_tmp_path / "a.py").write_text("def hello(): return 1\n")
     upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True))
@@ -327,10 +327,10 @@ def test_index_project_idempotent(safe_tmp_path):
 
 def test_overview_status_shows_indexing_for_never_indexed(safe_tmp_path):
     """Fix #2b: overview(status) kb_state must be 'indexing' when indexed_at is None."""
-    from opencode_search.core.config import project_graph_db, project_vector_db
-    from opencode_search.core.registry import ProjectEntry, remove_project, upsert_project
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.server._overview import handle_overview
+    from rag_search.core.config import project_graph_db, project_vector_db
+    from rag_search.core.registry import ProjectEntry, remove_project, upsert_project
+    from rag_search.graph.store import GraphStore
+    from rag_search.server._overview import handle_overview
 
     upsert_project(ProjectEntry(path=str(safe_tmp_path), enabled=True, indexed_at=None))
     try:
@@ -369,7 +369,7 @@ def test_federation_no_member_stuck_indexing(live_client, proj_key, projects):
     Marked slow: reconcile must finish indexing all never-indexed members before this passes.
     Run after `reconcile_projects()` has had time to complete for all members.
     """
-    from opencode_search.daemon.sweeps import reconcile_projects
+    from rag_search.daemon.sweeps import reconcile_projects
     reconcile_projects()  # ensure local state is converged before asserting
     status = _overview("status", projects[proj_key])
     stuck = [m for m in status.get("members", []) if m.get("kb_state") == "indexing"]
@@ -383,8 +383,8 @@ def test_upsert_project_rejects_forbidden_root():
     """Fix D1: upsert_project must raise ValueError for /tmp and ~/.cache paths."""
     import pytest
 
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
 
     with pytest.raises(ValueError, match="forbidden"):
         upsert_project(ProjectEntry(path="/tmp/should-not-register", enabled=True))
@@ -396,8 +396,8 @@ def test_federation_search_ask_as_logical_entity(live_client, proj_key, projects
     """Logical-entity e2e: search and ask both return results for real project roots."""
     import asyncio
 
-    from opencode_search.server.mcp import ask as _mcp_ask
-    from opencode_search.server.mcp import search as _mcp_search
+    from rag_search.server.mcp import ask as _mcp_ask
+    from rag_search.server.mcp import search as _mcp_search
 
     root = projects[proj_key]
     sr = json.loads(asyncio.run(_mcp_search("function", project_paths=[root])))
@@ -421,8 +421,8 @@ def test_overview_status_includes_config_key(live_client, projects):
 
 def test_iter_files_always_yields_ose_config(safe_tmp_path):
     """E2: .opencode-index.yaml must be yielded even when excluded by an exclude glob."""
-    from opencode_search.core.index_config import ProjectConfig
-    from opencode_search.index.discover import iter_files
+    from rag_search.core.index_config import ProjectConfig
+    from rag_search.index.discover import iter_files
 
     (safe_tmp_path / ".opencode-index.yaml").write_text("index:\n  exclude: []\n")
     (safe_tmp_path / "normal.yaml").write_text("key: val\n")
@@ -436,9 +436,9 @@ def test_iter_files_always_yields_ose_config(safe_tmp_path):
 
 def test_effective_config_inherits_root_excludes(safe_tmp_path):
     """E1: federation member effective_config includes root's exclude globs."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.index_config import effective_config
-    from opencode_search.core.registry import remove_project, upsert_project
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.index_config import effective_config
+    from rag_search.core.registry import remove_project, upsert_project
 
     root = safe_tmp_path / "root"
     member = safe_tmp_path / "member"
