@@ -48,13 +48,13 @@ Two transports serve the same 5 tools:
 ### 12.1 Config source-of-truth
 
 `scripts/integrations/canonical.py` + `scripts/configure_integrations.py` write MCP
-entries into 7 client configs. Canonical URL: `http://127.0.0.1:8765/mcp`.
+entries into each discovered client config (claude profile(s) + hermes; OpenCode and
+Codex are no longer configured). Canonical URL: `http://127.0.0.1:8765/mcp`.
 
 | Client family | Format |
 |---|---|
 | Claude `settings.json` | `{"type":"http","url":"http://127.0.0.1:8765/mcp"}` |
 | hermes `config.yaml` | `url: http://127.0.0.1:8765/mcp` (drop command/args/env) |
-| opencode `opencode.jsonc` | `{"type":"remote","url":"http://127.0.0.1:8765/mcp"}` |
 
 Dropping `env` is safe: `OPENCODE_ALLOW_INDEX_OUTSIDE_CWD` is unreferenced in `src/`;
 LLM vars match daemon defaults; query-LLM is never called by MCP tools.

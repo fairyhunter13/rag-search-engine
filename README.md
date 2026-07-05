@@ -64,7 +64,7 @@ rag-search daemon status           # → UP — 127.0.0.1:8765
 
 ```bash
 rag-search daemon install-global   # writes ~/.claude.json entry
-# multi-profile / opencode / Hermes:
+# multi-profile / Hermes:
 .venv/bin/python scripts/configure_integrations.py --apply-all
 .venv/bin/python scripts/configure_integrations.py --check   # verify
 ```
