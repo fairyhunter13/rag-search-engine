@@ -19,7 +19,7 @@ pytestmark = pytest.mark.live
 
 def test_mcp_handlers_have_no_llm_generation():
     """P14.4 static: server/mcp.py tool handlers must not call LLM generation."""
-    mcp_path = Path(__file__).parents[2] / "opencode_search" / "server" / "mcp.py"
+    mcp_path = Path(__file__).parents[2] / "rag_search" / "server" / "mcp.py"
     text = mcp_path.read_text()
 
     # chat() is the LLM generation function — must not appear as a call
@@ -37,7 +37,7 @@ def test_mcp_handlers_have_no_llm_generation():
         "use gh.path_between() + structured JSON instead (P14.2)"
     )
     # The full ask() (LLM version) must not be imported into mcp.py for tool use
-    assert "from opencode_search.query.ask import ask as _ask" not in text, (
+    assert "from rag_search.query.ask import ask as _ask" not in text, (
         "server/mcp.py imports ask as _ask — MCP handler must use run_ask() instead"
     )
     # Positive: MCP handlers must delegate to the shared LLM-free helpers
@@ -49,8 +49,8 @@ def test_mcp_handlers_have_no_llm_generation():
         "server/mcp.py must call run_graph() — the shared DB-reads-only graph helper"
     )
     # Verify the helpers themselves are LLM-free (inspect source, not just delegation)
-    from opencode_search.query.ask import run_ask as _run_ask
-    from opencode_search.query.graph_handler import run_graph as _run_graph
+    from rag_search.query.ask import run_ask as _run_ask
+    from rag_search.query.graph_handler import run_graph as _run_graph
     ask_src = inspect.getsource(_run_ask)
     assert "compose_answer" in ask_src, (
         "run_ask() must call compose_answer() — the LLM-free context assembler"
@@ -66,7 +66,7 @@ def test_mcp_handlers_have_no_llm_generation():
 
 def test_ask_mcp_returns_structured_context():
     """P14.4 runtime: MCP ask returns pre-built artifacts (non-empty, fast, no generative LLM on query path)."""
-    from opencode_search.server.mcp import ask as ask_tool
+    from rag_search.server.mcp import ask as ask_tool
     from tests.live._projects import federation_root
 
     fed_root = federation_root()
@@ -78,7 +78,7 @@ def test_ask_mcp_returns_structured_context():
 
 def test_impact_narrative_returns_structured_json():
     """P14.4 runtime: graph(impact_narrative) returns JSON with risk/affected_count, no LLM prose."""
-    from opencode_search.server.mcp import graph as graph_tool
+    from rag_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
     svc_member = service_member()  # sample promo-svc, not a real project
     result = asyncio.run(graph_tool("Run", svc_member, "impact_narrative"))
@@ -90,7 +90,7 @@ def test_impact_narrative_returns_structured_json():
 
 def test_semantic_trace_returns_structured_json():
     """P14.4 runtime: graph(semantic_trace) returns JSON with path data, no LLM prose."""
-    from opencode_search.server.mcp import graph as graph_tool
+    from rag_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
 
     svc_member = service_member()  # sample promo-svc, not a real project
@@ -111,7 +111,7 @@ def test_service_mesh_detect_services_uses_bpre_ast():
     """
     import inspect
 
-    from opencode_search.server import _overview
+    from rag_search.server import _overview
     src = inspect.getsource(_overview)
     assert "federation_discover" in src or "bpre_ast" in src, (
         "_detect_services must delegate to bpre_ast.federation_discover — no regex fallback"
@@ -127,7 +127,7 @@ def test_patterns_no_static_framework_map():
     """A3 source-guard: kb/patterns.py must not define a static framework-to-label dict (_KNOWN)."""
     import inspect
 
-    from opencode_search.kb import patterns
+    from rag_search.kb import patterns
     src = inspect.getsource(patterns)
     assert "_KNOWN" not in src, (
         "kb/patterns.py still has _KNOWN static framework map — A3 regression"

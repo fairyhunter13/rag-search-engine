@@ -47,7 +47,7 @@ def test_okf_kill_switch_off(tmp_path, service_path):
 
 def test_okf_adapter_kill_switch_returns_dict(service_path):
     """run_okf with OSE_OKF=0 returns dict with mode=off."""
-    from opencode_search.kb.okf import run_okf
+    from rag_search.kb.okf import run_okf
     prev = os.environ.get("OSE_OKF")
     os.environ["OSE_OKF"] = "0"
     try:
@@ -81,7 +81,7 @@ def test_okf_no_fragment_naming_in_vendor():
 
 def test_okf_not_in_mcp_tools(live_client):
     """OKF must NOT be an MCP tool; MCP = index/search/ask/graph/overview only."""
-    from opencode_search.server.mcp import _MCP_TOOLS
+    from rag_search.server.mcp import _MCP_TOOLS
     tool_names = {t.name for t in _MCP_TOOLS}
     assert "okf" not in tool_names, "okf must NOT be an MCP tool"
     assert "docgen" not in tool_names, "docgen must NOT be an MCP tool"
@@ -101,7 +101,7 @@ def test_okf_api_route_no_project_field(live_client):
 
 def test_okf_not_in_sweeps():
     """run_okf is not called from _enrich_project in sweeps.py."""
-    sweeps_path = _OSE_SRC / "src" / "opencode_search" / "daemon" / "sweeps.py"
+    sweeps_path = _OSE_SRC / "src" / "rag_search" / "daemon" / "sweeps.py"
     src = sweeps_path.read_text()
     lines = src.splitlines()
     in_enrich = False

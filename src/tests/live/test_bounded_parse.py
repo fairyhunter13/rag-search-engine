@@ -40,12 +40,12 @@ def _unpicklable():
 
 
 def _new_pool():
-    from opencode_search.index.bounded_parse import BoundedParsePool
+    from rag_search.index.bounded_parse import BoundedParsePool
     return BoundedParsePool(size=2)
 
 
 def test_run_bounded_normal_execution() -> None:
-    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     result = run_bounded(_add, (2, 3), deadline_s=5)
     assert result == 5
     assert result != PARSE_TIMEOUT
@@ -114,7 +114,7 @@ def test_idle_shutdown_frees_workers_when_no_task_in_flight() -> None:
 
 
 def test_metrics_reports_timeout_count() -> None:
-    from opencode_search.index import bounded_parse
+    from rag_search.index import bounded_parse
     pool = _new_pool()
     bounded_parse._pool = pool
     try:
@@ -127,8 +127,8 @@ def test_metrics_reports_timeout_count() -> None:
 
 def test_cobol_grammar_parity_through_bounded_path() -> None:
     """Real cobol grammar (the historically pathological one) parses correctly when bounded."""
-    from opencode_search.graph.extractor import extract_symbols
-    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.graph.extractor import extract_symbols
+    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     snippet = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. HELLO.\n"
     result = run_bounded(extract_symbols, (Path("hello.cob"), snippet, "cobol"),
                           deadline_s=10, path_for_log="hello.cob")

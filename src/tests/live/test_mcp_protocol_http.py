@@ -57,7 +57,7 @@ def test_http_mcp_initialize_returns_5_tool_serverinfo():
     }, headers=_HDR, timeout=10)
     assert r.status_code == 200
     data = _sse_json(r)
-    assert data["result"]["serverInfo"]["name"] == "opencode-search"
+    assert data["result"]["serverInfo"]["name"] == "rag-search"
     instructions = data["result"].get("instructions", "")
     assert "5-tool" in instructions
     for tool in ("search", "ask", "graph", "overview", "index"):
@@ -107,7 +107,7 @@ def test_stdio_and_http_return_same_tool_set():
     """P15.3: parity — stdio and /mcp streamable-HTTP expose the exact same 5 tools."""
     # stdio
     proc = subprocess.Popen(
-        [sys.executable, "-m", "opencode_search", "daemon", "bridge-stdio"],
+        [sys.executable, "-m", "rag_search", "daemon", "bridge-stdio"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
     try:

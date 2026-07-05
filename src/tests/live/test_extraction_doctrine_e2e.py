@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from opencode_search.core.config import root_process_db
+from rag_search.core.config import root_process_db
 
 pytestmark = pytest.mark.live
 

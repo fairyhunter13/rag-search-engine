@@ -22,8 +22,8 @@ def _runner():
 
 def test_cli_overview_matches_handle_overview(sample_workspace):
     """CLI overview --what status output equals handle_overview() return value."""
-    from opencode_search.cli import app
-    from opencode_search.server._overview import handle_overview
+    from rag_search.cli import app
+    from rag_search.server._overview import handle_overview
 
     fed = sample_workspace.fed_root
     r = _runner().invoke(app, ["overview", "--project", fed, "--what", "status"])
@@ -40,8 +40,8 @@ def test_cli_overview_matches_handle_overview(sample_workspace):
 
 def test_cli_graph_matches_run_graph(sample_workspace):
     """CLI graph output equals run_graph() return value (definition relation)."""
-    from opencode_search.cli import app
-    from opencode_search.query.graph_handler import run_graph
+    from rag_search.cli import app
+    from rag_search.query.graph_handler import run_graph
 
     member = sample_workspace.promo
     # Use a generic symbol name likely to appear; empty result is valid (index state varies)
@@ -61,8 +61,8 @@ def test_cli_graph_matches_run_graph(sample_workspace):
 
 def test_cli_ask_matches_run_ask(sample_workspace):
     """CLI ask output equals run_ask() return value."""
-    from opencode_search.cli import app
-    from opencode_search.query.ask import run_ask
+    from rag_search.cli import app
+    from rag_search.query.ask import run_ask
 
     fed = sample_workspace.fed_root
     query = "how does federation indexing work?"
@@ -82,7 +82,7 @@ def test_cli_ask_matches_run_ask(sample_workspace):
 
 def test_cli_wiki_builds_pages(sample_workspace):
     """CLI wiki runs without error and reports pages_written."""
-    from opencode_search.cli import app
+    from rag_search.cli import app
 
     fed = sample_workspace.fed_root
     r = _runner().invoke(app, ["wiki", fed])
@@ -96,7 +96,7 @@ def test_cli_wiki_builds_pages(sample_workspace):
 
 def test_new_commands_in_help():
     """ask/graph/overview/wiki appear in top-level --help."""
-    from opencode_search.cli import app
+    from rag_search.cli import app
 
     r = _runner().invoke(app, ["--help"])
     assert r.exit_code == 0

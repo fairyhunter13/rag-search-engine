@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Configure all system integrations for opencode-search MCP tools.
+"""Configure all system integrations for rag-search MCP tools.
 
 Writes/verifies system prompt blocks and MCP entries across the config trees.
 Adapts to whatever tool ecosystem is present (claude profiles, opencode, hermes).
@@ -172,10 +172,10 @@ def _verify_settings_json(settings_path: Path) -> ConfigResult:
     except Exception as exc:
         return ConfigResult(tool=label, status="error",
                             message=f"Failed to parse {settings_path}: {exc}", path=str(settings_path))
-    entry = data.get("mcpServers", {}).get("opencode-search", {})
+    entry = data.get("mcpServers", {}).get("rag-search", {})
     if not entry:
         return ConfigResult(tool=label, status="missing",
-                            message=f"mcpServers.opencode-search missing in {settings_path}", path=str(settings_path))
+                            message=f"mcpServers.rag-search missing in {settings_path}", path=str(settings_path))
     if entry.get("type") == "http" and entry.get("url") == CANONICAL_MCP_URL:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"MCP entry in sync: {settings_path}", path=str(settings_path))
@@ -191,7 +191,7 @@ def _repair_settings_json(settings_path: Path, dry_run: bool = False) -> ConfigR
     except Exception as exc:
         return ConfigResult(tool=label, status="error",
                             message=f"Failed to parse {settings_path}: {exc}", path=str(settings_path))
-    data.setdefault("mcpServers", {})["opencode-search"] = _EXPECTED_MCP_ENTRY.copy()
+    data.setdefault("mcpServers", {})["rag-search"] = _EXPECTED_MCP_ENTRY.copy()
     new_text = json.dumps(data, indent=2) + "\n"
     if old_text.strip() == new_text.strip():
         return ConfigResult(tool=label, status="already_ok",
@@ -206,7 +206,7 @@ def _repair_settings_json(settings_path: Path, dry_run: bool = False) -> ConfigR
                         message=f"Updated MCP entry: {settings_path}", path=str(settings_path), diff=diff)
 
 
-# (Codex MCP-client integration removed — opencode-search no longer configures codex.)
+# (Codex MCP-client integration removed — rag-search no longer configures codex.)
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ def _build_hermes_config_text() -> str:
     indented = "\n".join("    " + ln for ln in wrapped.splitlines())
     return (
         "mcp_servers:\n"
-        "  opencode-search:\n"
+        "  rag-search:\n"
         "    enabled: true\n"
         f"    url: {CANONICAL_MCP_URL}\n"
         "agent:\n"
@@ -240,12 +240,12 @@ def _verify_hermes_yaml(config_path: Path) -> ConfigResult:
         return ConfigResult(tool=label, status="skipped",
                             message="hermes not installed (no config.yaml)", path=str(config_path))
     text = config_path.read_text()
-    if "opencode-search" not in text:
+    if "rag-search" not in text:
         return ConfigResult(tool=label, status="missing",
-                            message="opencode-search MCP not in hermes config.yaml", path=str(config_path))
+                            message="rag-search MCP not in hermes config.yaml", path=str(config_path))
     if CANONICAL_MCP_URL not in text:
         return ConfigResult(tool=label, status="missing",
-                            message="hermes config.yaml missing HTTP URL for opencode-search", path=str(config_path))
+                            message="hermes config.yaml missing HTTP URL for rag-search", path=str(config_path))
     return ConfigResult(tool=label, status="already_ok",
                         message="hermes MCP entry in sync", path=str(config_path))
 
@@ -346,10 +346,10 @@ def _verify_opencode_jsonc(config_path: Path, label: str) -> ConfigResult:
     except Exception as exc:
         return ConfigResult(tool=label, status="error",
                             message=f"Failed to parse {config_path}: {exc}", path=str(config_path))
-    entry = data.get("mcp", {}).get("opencode-search", {})
+    entry = data.get("mcp", {}).get("rag-search", {})
     if not entry:
         return ConfigResult(tool=label, status="missing",
-                            message=f"mcp.opencode-search missing in {config_path}", path=str(config_path))
+                            message=f"mcp.rag-search missing in {config_path}", path=str(config_path))
     if entry.get("type") == "remote" and entry.get("url") == CANONICAL_MCP_URL:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"opencode MCP entry in sync: {config_path}", path=str(config_path))
@@ -365,7 +365,7 @@ def _repair_opencode_jsonc(config_path: Path, label: str, dry_run: bool = False)
         return ConfigResult(tool=label, status="error",
                             message=f"Failed to parse {config_path}: {exc}", path=str(config_path))
     new_entry: dict = {"type": "remote", "url": CANONICAL_MCP_URL}
-    data.setdefault("mcp", {})["opencode-search"] = new_entry
+    data.setdefault("mcp", {})["rag-search"] = new_entry
     new_text = json.dumps(data, indent=2) + "\n"
     if old_text.strip() == new_text.strip():
         return ConfigResult(tool=label, status="already_ok",
@@ -384,11 +384,11 @@ def _repair_opencode_jsonc(config_path: Path, label: str, dry_run: bool = False)
 # bash_aliases sentinel block
 # ---------------------------------------------------------------------------
 
-_BASH_ALIASES_SENTINEL_START = "# [opencode-search-aliases:start]"
-_BASH_ALIASES_SENTINEL_END   = "# [opencode-search-aliases:end]"
+_BASH_ALIASES_SENTINEL_START = "# [rag-search-aliases:start]"
+_BASH_ALIASES_SENTINEL_END   = "# [rag-search-aliases:end]"
 _BASH_ALIASES_COMMENT = """\
-# opencode-search shell helpers (managed by configure_integrations.py):
-#   ocs            — opencode-search CLI entry point
+# rag-search shell helpers (managed by configure_integrations.py):
+#   ocs            — rag-search CLI entry point
 #   ocs-index PATH — index + build KB (entity enrichment + wiki)
 #   ocs-dash       — open the search-engine dashboard"""
 
@@ -400,17 +400,17 @@ def verify_bash_aliases() -> ConfigResult:
                             message="~/.bash_aliases not found", path=str(aliases_path))
     text = aliases_path.read_text()
     has_sentinel = _BASH_ALIASES_SENTINEL_START in text
-    has_ocs = "opencode_search" in text
+    has_ocs = "rag_search" in text
     if has_sentinel and has_ocs:
         return ConfigResult(tool="bash_aliases", status="already_ok",
-                            message="opencode-search aliases with sentinel in ~/.bash_aliases",
+                            message="rag-search aliases with sentinel in ~/.bash_aliases",
                             path=str(aliases_path))
     if has_ocs and not has_sentinel:
         return ConfigResult(tool="bash_aliases", status="missing",
                             message="ocs aliases exist but sentinel block missing (run --apply-all)",
                             path=str(aliases_path))
     return ConfigResult(tool="bash_aliases", status="missing",
-                        message="opencode-search aliases missing from ~/.bash_aliases",
+                        message="rag-search aliases missing from ~/.bash_aliases",
                         path=str(aliases_path))
 
 
@@ -427,9 +427,9 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
         new_text = _replace_sentinel_block(
             old_text, _BASH_ALIASES_SENTINEL_START, _BASH_ALIASES_SENTINEL_END, _BASH_ALIASES_COMMENT
         )
-    elif "opencode_search" in old_text:
+    elif "rag_search" in old_text:
         # Find the ocs section header and insert sentinel block before it
-        target = "# ── opencode-search engine aliases ──"
+        target = "# ── rag-search engine aliases ──"
         if target in old_text:
             new_text = old_text.replace(
                 target,
@@ -558,7 +558,7 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Configure opencode-search integrations")
+    parser = argparse.ArgumentParser(description="Configure rag-search integrations")
     parser.add_argument("--check", action="store_true",
                         help="Verify only (no writes); exit 1 if any drift detected")
     parser.add_argument("--apply-all", action="store_true",

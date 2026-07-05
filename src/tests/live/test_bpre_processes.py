@@ -12,8 +12,8 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from opencode_search.core.config import root_process_db
-from opencode_search.kb.bpre import reconstruct_processes
+from rag_search.core.config import root_process_db
+from rag_search.kb.bpre import reconstruct_processes
 
 pytestmark = pytest.mark.live
 
@@ -43,14 +43,14 @@ def fed_root(sample_workspace) -> str:
 @pytest.fixture(scope="module")
 def fed_members(fed_root):
     """Federation members of the sample root — read-only, no reconstruct calls."""
-    from opencode_search.daemon.federation import expand_federation
+    from rag_search.daemon.federation import expand_federation
     return expand_federation(fed_root)
 
 
 @pytest.fixture(scope="module")
 def process_db(synth_fed):
     """Run reconstruct_processes once on the synthetic root (no DeepSeek key — deterministic)."""
-    from opencode_search.graph.llm import no_deepseek
+    from rag_search.graph.llm import no_deepseek
     with no_deepseek():
         count = reconstruct_processes(synth_fed.root)
     db = root_process_db(synth_fed.root)
@@ -290,7 +290,7 @@ class TestMetamorphicDeterminism:
     @pytest.mark.slow
     def test_F1_deterministic_rerun(self, fed_root, process_db):
         """Full reconstruction re-run — slow because it re-calls reconstruct_processes."""
-        from opencode_search.graph.llm import no_deepseek
+        from rag_search.graph.llm import no_deepseek
         con, _ = process_db
         with no_deepseek():
             before = {r[0]: r[1] for r in con.execute("SELECT id, step_count FROM processes").fetchall()}
@@ -303,7 +303,7 @@ class TestMetamorphicDeterminism:
     @pytest.mark.slow
     def test_F2_bpmn_idempotent(self, fed_root, process_db):
         """BPMN idempotency — slow because it re-calls reconstruct_processes."""
-        from opencode_search.graph.llm import no_deepseek
+        from rag_search.graph.llm import no_deepseek
         con, _ = process_db
         with no_deepseek():
             before = {r[0]: r[1] for r in con.execute("SELECT process_id, bpmn_xml FROM process_artifacts").fetchall()}
@@ -318,7 +318,7 @@ class TestMetamorphicDeterminism:
 class TestHR4AndResourceGuards:
 
     def test_G1_hr4_no_cross_service_in_member_dbs(self, fed_members):
-        from opencode_search.core.config import project_graph_db
+        from rag_search.core.config import project_graph_db
         for member in fed_members[1:]:
             gdb = project_graph_db(member)
             if not gdb.exists():
@@ -335,7 +335,7 @@ class TestHR4AndResourceGuards:
             )
 
     def test_G2_bpre_callable(self):
-        from opencode_search.kb.bpre import reconstruct_processes as rp
+        from rag_search.kb.bpre import reconstruct_processes as rp
         assert callable(rp)
 
 
@@ -346,7 +346,7 @@ class TestLiveSurfaces:
     def test_H1_overview_returns_reconstructed(self, synth_fed, process_db):
         import asyncio
 
-        from opencode_search.server.mcp import overview as overview_tool
+        from rag_search.server.mcp import overview as overview_tool
         loop = asyncio.new_event_loop()
         result = loop.run_until_complete(overview_tool(synth_fed.root, what="process_flows"))
         loop.close()
@@ -360,7 +360,7 @@ class TestLiveSurfaces:
     def test_H2_flows_have_mermaid(self, synth_fed, process_db):
         import asyncio
 
-        from opencode_search.server.mcp import overview as overview_tool
+        from rag_search.server.mcp import overview as overview_tool
         loop = asyncio.new_event_loop()
         result = loop.run_until_complete(overview_tool(synth_fed.root, what="process_flows"))
         loop.close()
@@ -390,7 +390,7 @@ class TestLiveSurfaces:
 def test_trace_processes_is_handler_anchored():
     import inspect
 
-    from opencode_search.kb.bpre import (
+    from rag_search.kb.bpre import (
         _call_in_reachable,
         _callee_ep,
         _handler_reachable_set,
@@ -412,7 +412,7 @@ def test_scan_once_orchestration_guard():
     and thread it to every derive-pass — prevents silent regression to 7× parsing."""
     import inspect
 
-    from opencode_search.kb.bpre import _reconstruct_processes_locked
+    from rag_search.kb.bpre import _reconstruct_processes_locked
     src = inspect.getsource(_reconstruct_processes_locked)
     assert "_scan_all_members(" in src, "orchestration must call _scan_all_members once"
     assert "all_facts" in src, "orchestration must thread all_facts through derive-passes"
@@ -421,9 +421,9 @@ def test_scan_once_orchestration_guard():
 
 def test_scan_once_facts_match_per_file_scan(synth_fed):
     """T1: scan-once FileFacts must be field-identical to per-call scan (correctness guarantee)."""
-    from opencode_search.daemon.federation import expand_federation
-    from opencode_search.kb.bpre import _iter_member_facts, _scan_all_members
-    from opencode_search.kb.bpre_ast import federation_discover
+    from rag_search.daemon.federation import expand_federation
+    from rag_search.kb.bpre import _iter_member_facts, _scan_all_members
+    from rag_search.kb.bpre_ast import federation_discover
     members = [m for m in expand_federation(synth_fed.root) if m != synth_fed.root]
     surf = federation_discover(members)
     all_facts = _scan_all_members(members, surf)
@@ -444,9 +444,9 @@ def test_part_f_incremental_scan_reuses_unchanged_member_cache():
     counts stay identical to the prior full build — evidence for incremental BPRE."""
     from pathlib import Path
 
-    from opencode_search.daemon.sweeps import _fingerprint_cache
-    from opencode_search.graph.llm import no_deepseek
-    from opencode_search.kb.bpre import _invalidate_bpre_code_sig
+    from rag_search.daemon.sweeps import _fingerprint_cache
+    from rag_search.graph.llm import no_deepseek
+    from rag_search.kb.bpre import _invalidate_bpre_code_sig
     from tests.live._bpre_fixture import build_synth_federation, teardown_synth_federation
 
     fed = build_synth_federation()

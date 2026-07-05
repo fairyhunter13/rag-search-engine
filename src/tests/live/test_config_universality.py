@@ -17,8 +17,8 @@ def _write_config(root: Path, cfg: dict) -> None:
 
 def test_hh1_full_index_baseline(safe_tmp_path, embedder):
     """HH1: excluded file is absent from vector store after full index_project."""
-    from opencode_search.index.indexer import index_project
-    from opencode_search.index.store import VectorStore
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
 
     root = safe_tmp_path / "proj_hh1"
     root.mkdir()
@@ -44,10 +44,10 @@ def test_hh1_full_index_baseline(safe_tmp_path, embedder):
 
 def test_hh2_on_change_filters_excluded(safe_tmp_path, embedder):
     """HH2: _index_files filters out files excluded by .opencode-index.yaml."""
-    from opencode_search.core.config import ProjectEntry, project_vector_db
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.sweeps import _index_files
-    from opencode_search.index.store import VectorStore
+    from rag_search.core.config import ProjectEntry, project_vector_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon.sweeps import _index_files
+    from rag_search.index.store import VectorStore
 
     root = safe_tmp_path / "proj_hh2"
     root.mkdir()
@@ -79,7 +79,7 @@ def test_hh2_on_change_filters_excluded(safe_tmp_path, embedder):
 
 def test_hh3_bpre_exclude(safe_tmp_path):
     """HH3: excluded dir absent from _source_files BPRE walk."""
-    from opencode_search.kb.bpre import _source_files
+    from rag_search.kb.bpre import _source_files
 
     root = safe_tmp_path / "proj_hh3"
     root.mkdir()
@@ -98,7 +98,7 @@ def test_hh3_bpre_exclude(safe_tmp_path):
 
 def test_hh4_source_files_universal_discovery(safe_tmp_path):
     """HH4: _source_files discovers long-tail languages (lua) and excludes non-code (md/json)."""
-    from opencode_search.kb.bpre import _source_files
+    from rag_search.kb.bpre import _source_files
     root = safe_tmp_path / "proj_hh4"
     root.mkdir()
     (root / "gateway.lua").write_text('http.get("/status")\n')
@@ -114,7 +114,7 @@ def test_hh4_source_files_universal_discovery(safe_tmp_path):
 
 def test_hh5_is_code_language_contract():
     """HH5: is_code_language returns True for code langs, False for text/data/unknown."""
-    from opencode_search.index.discover import is_code_language
+    from rag_search.index.discover import is_code_language
     assert is_code_language("lua"), "lua must be a code language"
     assert is_code_language("go"), "go must be a code language"
     assert not is_code_language("markdown"), "markdown is text, not code"

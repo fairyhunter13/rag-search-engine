@@ -45,7 +45,7 @@ _LIST_PROJECTS_ALLOWLIST = {
 _OSE_DATA_ALLOWLIST = {
     "_sample_workspace.py",  # _REPO_ROOT for vendor source reads
     "test_browser.py",       # reads dashboard.html from repo
-    "test_no_code_semantic_regex.py",  # scans opencode_search source tree
+    "test_no_code_semantic_regex.py",  # scans rag_search source tree
     "test_inference_lanes.py",         # reads scripts/*.py source
     "test_p20_capabilities.py",        # reads scripts/*.py source
     "test_okf.py",                     # _OSE_SRC for vendor/okf + sweeps.py source reads

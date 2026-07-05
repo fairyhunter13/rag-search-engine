@@ -14,8 +14,8 @@ import sqlite3
 
 import pytest
 
-from opencode_search.core.config import root_process_db
-from opencode_search.kb.bpre import reconstruct_processes
+from rag_search.core.config import root_process_db
+from rag_search.kb.bpre import reconstruct_processes
 
 pytestmark = pytest.mark.live
 
@@ -35,7 +35,7 @@ def synth_fed():
 @pytest.fixture(scope="module")
 def det_db(synth_fed):
     """Run reconstruct_processes once on the synthetic root with DeepSeek key absent."""
-    from opencode_search.graph.llm import no_deepseek
+    from rag_search.graph.llm import no_deepseek
     with no_deepseek():
         count = reconstruct_processes(synth_fed.root)
     db = root_process_db(synth_fed.root)
@@ -86,7 +86,7 @@ class TestDeterministicResolution:
 
     def test_deterministic_two_runs_same_count(self, synth_fed):
         """Two keyless runs must produce byte-identical edge counts."""
-        from opencode_search.graph.llm import no_deepseek
+        from rag_search.graph.llm import no_deepseek
         with no_deepseek():
             reconstruct_processes(synth_fed.root)
             db = root_process_db(synth_fed.root)

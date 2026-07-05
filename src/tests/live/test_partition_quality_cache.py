@@ -17,8 +17,8 @@ pytestmark = pytest.mark.live
 
 def _build_mini_store(db_path: Path):
     """Minimal GraphStore: 2 symbols, 1 cross-file edge, community-detected."""
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.store import GraphStore
 
     gs = GraphStore(db_path)
     gs.upsert_symbol("s1", "func_a", "pkg.func_a", "function", "pkg/a.py", 1, 5, "python")
@@ -31,7 +31,7 @@ def _build_mini_store(db_path: Path):
 
 def test_pqc1_persist_writes_meta(tmp_path):
     """_persist_partition_quality must write a non-null 'partition_quality' meta entry."""
-    from opencode_search.daemon.sweeps import _persist_partition_quality
+    from rag_search.daemon.sweeps import _persist_partition_quality
 
     gs = _build_mini_store(tmp_path / "graph.db")
     try:
@@ -49,8 +49,8 @@ def test_pqc1_persist_writes_meta(tmp_path):
 
 def test_pqc2_cached_equals_fresh(tmp_path):
     """Cached quality dict must be bit-identical to a fresh partition_quality() call."""
-    from opencode_search.daemon.sweeps import _persist_partition_quality
-    from opencode_search.graph.quality import partition_quality
+    from rag_search.daemon.sweeps import _persist_partition_quality
+    from rag_search.graph.quality import partition_quality
 
     gs = _build_mini_store(tmp_path / "graph.db")
     try:
@@ -78,7 +78,7 @@ def test_pqc3_sig_invalidates_on_content_change(tmp_path):
     f'{s}:{ec}:{cm}' from live counts; if it does not match the stored sig it falls
     back to partition_quality(gs), which is the correct behaviour.
     """
-    from opencode_search.daemon.sweeps import _persist_partition_quality
+    from rag_search.daemon.sweeps import _persist_partition_quality
 
     gs = _build_mini_store(tmp_path / "graph.db")
     try:

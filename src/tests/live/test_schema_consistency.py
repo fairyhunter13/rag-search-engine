@@ -26,8 +26,8 @@ pytestmark = pytest.mark.live
 
 def test_sc1_no_dead_semantic_type_predicates():
     """SC1: every semantic_type NOT IN/IN literal in ask.py is a member of _TYPE_ORDER."""
-    from opencode_search.graph.enrich import _TYPE_ORDER
-    from opencode_search.query import ask as ask_mod
+    from rag_search.graph.enrich import _TYPE_ORDER
+    from rag_search.query import ask as ask_mod
 
     valid = frozenset(_TYPE_ORDER)
     src = inspect.getsource(ask_mod)
@@ -42,7 +42,7 @@ def test_sc1_no_dead_semantic_type_predicates():
 
 def test_sc2_excluded_from_retrieval_subset_of_type_order():
     """SC2: EXCLUDED_FROM_RETRIEVAL ⊆ _TYPE_ORDER — the constant must stay self-consistent."""
-    from opencode_search.graph.enrich import _TYPE_ORDER, EXCLUDED_FROM_RETRIEVAL
+    from rag_search.graph.enrich import _TYPE_ORDER, EXCLUDED_FROM_RETRIEVAL
     valid = frozenset(_TYPE_ORDER)
     for excl in EXCLUDED_FROM_RETRIEVAL:
         assert excl in valid, (
@@ -57,7 +57,7 @@ def test_sc2_excluded_from_retrieval_subset_of_type_order():
 
 def test_sc3_community_count_excludes_structural_spine():
     """SC3: community_count() SQL must carry WHERE level>=1 (excludes level=0 spine rows)."""
-    from opencode_search.graph import store as store_mod
+    from rag_search.graph import store as store_mod
     src = inspect.getsource(store_mod.GraphStore.community_count)
     assert "level>=1" in src or "level >= 1" in src, (
         "community_count() must filter WHERE level>=1 to exclude structural spine (level=0). "
@@ -72,8 +72,8 @@ def test_sc3_community_count_excludes_structural_spine():
 
 _FIXED_SITES: list[tuple[str, str, str]] = [
     # (module dotted path, function/context description, expected substring in source)
-    ("opencode_search.server._overview", "suggested_questions", "level>=1"),
-    ("opencode_search.server.routes_search", "_api_suggested_questions", "level>=1"),
+    ("rag_search.server._overview", "suggested_questions", "level>=1"),
+    ("rag_search.server.routes_search", "_api_suggested_questions", "level>=1"),
 ]
 
 
@@ -101,9 +101,9 @@ def test_sc5_taxonomy_single_source():
     absent from it.  If enrich._TYPE_ORDER gains a new type without updating wiki, that
     type never appears in the wiki index.  This guard binds all three sources.
     """
-    from opencode_search.graph.enrich import _TYPE_ORDER as _ENRICH_TYPE_ORDER
-    from opencode_search.kb.wiki import _TYPE_LABEL
-    from opencode_search.kb.wiki import _TYPE_ORDER as _WIKI_TYPE_ORDER
+    from rag_search.graph.enrich import _TYPE_ORDER as _ENRICH_TYPE_ORDER
+    from rag_search.kb.wiki import _TYPE_LABEL
+    from rag_search.kb.wiki import _TYPE_ORDER as _WIKI_TYPE_ORDER
 
     enrich_set = frozenset(_ENRICH_TYPE_ORDER)
     wiki_order_set = frozenset(_WIKI_TYPE_ORDER)
@@ -129,9 +129,9 @@ _KNOWN_DEAD: frozenset[str] = frozenset()
 
 def test_sc6_no_dead_data_beyond_allowlist():
     """SC6: no write-only column/table outside _KNOWN_DEAD — write-amplification tripwire."""
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.store import GraphStore
 
-    _r = Path(__file__).parents[2] / "opencode_search"
+    _r = Path(__file__).parents[2] / "rag_search"
     ss = (_r / "graph/store.py").read_text()
 
     # Part A: symbols columns — parse INSERT col list; read cols from list_symbols source
@@ -169,7 +169,7 @@ def test_sc7_semantic_type_three_state_contract():
     Three sentinels: NULL=abstained/spine, ''=L2-default, <type>=head.
     feature_map must filter out NULL (IS NOT NULL), '' (!= ''), and scope to level=1.
     """
-    mod = importlib.import_module("opencode_search.server._overview")
+    mod = importlib.import_module("rag_search.server._overview")
     src = inspect.getsource(mod)
     m = re.search(r'what\s*==\s*["\']feature_map["\'](.+?)return\s+json', src, re.DOTALL)
     assert m, "SC7: feature_map handler not found in _overview.py"
@@ -183,7 +183,7 @@ def test_sc7_semantic_type_three_state_contract():
 
 def test_sc8_no_leidenalg_in_community():
     """SC8a: community.py must not import leidenalg (k-core replaced Leiden)."""
-    import opencode_search.graph.community as mod
+    import rag_search.graph.community as mod
     src = inspect.getsource(mod)
     assert "leidenalg" not in src, (
         "SC8: graph.community still imports leidenalg — Phase 2.0c k-core swap not complete"
@@ -192,9 +192,9 @@ def test_sc8_no_leidenalg_in_community():
 
 def test_sc8_detect_communities_deterministic(safe_tmp_path):
     """SC8b: detect_communities is byte-identical on two runs with the same graph."""
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
 
     fpath = safe_tmp_path / "svc.py"
     fpath.write_text(

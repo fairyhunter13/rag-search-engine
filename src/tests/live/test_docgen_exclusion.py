@@ -28,7 +28,7 @@ def _make_plain_docs(base: Path) -> Path:
 class TestMarkerExclusion:
     def test_d1_generated_ignored_plain_not(self, tmp_path):
         """D1: generated docs/ → is_ignored_path True; plain docs/ → False."""
-        from opencode_search.index.discover import is_ignored_path
+        from rag_search.index.discover import is_ignored_path
         gen_root = tmp_path / "gen"
         gen_root.mkdir()
         gen_docs = _make_generated_docs(gen_root)
@@ -41,7 +41,7 @@ class TestMarkerExclusion:
 
     def test_d2_iter_files_skips_generated_yields_plain(self, tmp_path):
         """D2: iter_files skips generated docs/*.md, yields plain docs/*.md."""
-        from opencode_search.index.discover import iter_files
+        from rag_search.index.discover import iter_files
         root = tmp_path / "project"
         root.mkdir()
         # generated
@@ -59,12 +59,12 @@ class TestMarkerExclusion:
 
     def test_d3_docs_not_in_ignored_dirs(self):
         """D3: global IGNORED_DIRS must not contain 'docs' (over-reach removed)."""
-        from opencode_search.core.config import IGNORED_DIRS
+        from rag_search.core.config import IGNORED_DIRS
         assert "docs" not in IGNORED_DIRS
 
     def test_d4_discover_members_reaches_docs_named_dirs(self, tmp_path):
         """D4: discover_members walks through dirs named 'docs' (not blocked globally)."""
-        from opencode_search.index.discover import iter_files
+        from rag_search.index.discover import iter_files
         root = tmp_path / "root"
         root.mkdir()
         plain_docs = root / "docs"
@@ -76,7 +76,7 @@ class TestMarkerExclusion:
 
     def test_d5_watcher_ignores_generated_docs_events(self, tmp_path):
         """D5: watcher is_ignored_path fires True for a file inside generated docs/, not plain."""
-        from opencode_search.index.discover import is_ignored_path
+        from rag_search.index.discover import is_ignored_path
         proj_root = tmp_path / "proj"
         proj_root.mkdir()
         gen_docs = _make_generated_docs(proj_root)
@@ -89,7 +89,7 @@ class TestMarkerExclusion:
 
     def test_d6_structure_skips_generated_docs(self, tmp_path):
         """D6: iter_files (used by kb/structure.py) skips generated docs subtree."""
-        from opencode_search.index.discover import iter_files
+        from rag_search.index.discover import iter_files
         root = tmp_path / "svc"
         root.mkdir()
         _make_generated_docs(root)

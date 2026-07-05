@@ -16,7 +16,7 @@ def test_no_cpu_fallback(cuda_ep):
 
 def test_embedder_bound_to_gpu(embedder):
     """P32.3: verify the real ONNX session bound to a GPU EP (not just compiled in), not CPU."""
-    from opencode_search.core.gpu import GPU_EP_NAMES
+    from rag_search.core.gpu import GPU_EP_NAMES
     providers = embedder._model.model.model.get_providers()
     assert providers[0] in GPU_EP_NAMES, f"Embedder not on GPU: {providers}"
     assert providers[0] != "CPUExecutionProvider", f"Embedder bound to CPU: {providers}"
@@ -26,8 +26,8 @@ def test_embedder_bound_to_gpu(embedder):
 
 def test_reranker_bound_to_gpu(embedder):
     """P32.4: Reranker ONNX session must have a GPU EP as primary (position-0)."""
-    from opencode_search.core.gpu import GPU_EP_NAMES
-    from opencode_search.embed.embedder import Reranker
+    from rag_search.core.gpu import GPU_EP_NAMES
+    from rag_search.embed.embedder import Reranker
     r = Reranker()
     r._init()
     try:
@@ -53,7 +53,7 @@ def test_embed_vectors_normalized(embedder):
 
 
 def test_vector_store_insert_search(embedder):
-    from opencode_search.index.store import VectorStore
+    from rag_search.index.store import VectorStore
 
     texts = [
         "def embed(texts): ...",
@@ -79,7 +79,7 @@ def test_vector_store_insert_search(embedder):
 
 def test_vector_store_exact_recall(embedder):
     """sqlite-vec flat search must have recall=1.0 on self-queries."""
-    from opencode_search.index.store import VectorStore
+    from rag_search.index.store import VectorStore
 
     texts = [f"code snippet number {i}" for i in range(100)]
     with tempfile.TemporaryDirectory() as tmp:

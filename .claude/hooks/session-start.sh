@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SessionStart hook: set session title + inject context as additionalContext.
 
-PROJ="opencode-search-engine"
+PROJ="rag-search-engine"
 if curl -sf http://localhost:8765/healthz 2>/dev/null | grep -q '"ok":true'; then
     DAEMON_UP="up"
 else

@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from opencode_search.core.config import project_graph_db, project_wiki_dir
-from opencode_search.daemon.federation import federated_map
-from opencode_search.graph.store import GraphStore
-from opencode_search.kb.wiki import build_federated_index, build_wiki
+from rag_search.core.config import project_graph_db, project_wiki_dir
+from rag_search.daemon.federation import federated_map
+from rag_search.graph.store import GraphStore
+from rag_search.kb.wiki import build_federated_index, build_wiki
 from tests.live._sample_workspace import SampleWorkspace, replay_member_golden
 
 pytestmark = pytest.mark.live
@@ -226,7 +226,7 @@ def test_wiki_builder_uses_no_embedder_or_local_llm():
     """
     import inspect
 
-    import opencode_search.kb.wiki as w
+    import rag_search.kb.wiki as w
     src = inspect.getsource(w)
     assert "embedder" not in src and "Embedder" not in src, "wiki must not touch the embedder"
     assert "import chat" not in src, "wiki narrative must use cloud DeepSeek, not resident chat()"

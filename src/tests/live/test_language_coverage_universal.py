@@ -48,7 +48,7 @@ _IDS = [t[0] for t in _LANG_PROBES]
 @pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
 def test_is_code_language_true(lang: str, ext: str, snippet: str) -> None:
     """is_code_language must return True for every tree-sitter code language in the probe set."""
-    from opencode_search.index.discover import is_code_language
+    from rag_search.index.discover import is_code_language
     assert is_code_language(lang), (
         f"is_code_language({lang!r}) returned False — "
         "tree_sitter_language_pack must have this grammar (require v>=1.9.1)"
@@ -58,7 +58,7 @@ def test_is_code_language_true(lang: str, ext: str, snippet: str) -> None:
 @pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
 def test_extract_symbols_no_crash(lang: str, ext: str, snippet: str) -> None:
     """extract_symbols must not raise for any supported language (empty list is valid)."""
-    from opencode_search.graph.extractor import extract_symbols
+    from rag_search.graph.extractor import extract_symbols
     result = extract_symbols(Path(f"file.{ext}"), snippet, lang)
     assert isinstance(result, list), f"extract_symbols({lang!r}) returned {type(result).__name__}"
 
@@ -66,7 +66,7 @@ def test_extract_symbols_no_crash(lang: str, ext: str, snippet: str) -> None:
 @pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
 def test_scan_file_no_crash(lang: str, ext: str, snippet: str) -> None:
     """scan_file must not raise for any supported language (None or empty surface is valid)."""
-    from opencode_search.kb.bpre_ast import ApiSurface, scan_file
+    from rag_search.kb.bpre_ast import ApiSurface, scan_file
     surf = ApiSurface()
     result = scan_file(f"file.{ext}", snippet, lang, surf)
     assert result is None or hasattr(result, "http_clients"), (
@@ -77,8 +77,8 @@ def test_scan_file_no_crash(lang: str, ext: str, snippet: str) -> None:
 @pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
 def test_extract_symbols_bounded_parity(lang: str, ext: str, snippet: str) -> None:
     """extract_symbols via run_bounded matches the direct call (HR39: bounded path, all grammars)."""
-    from opencode_search.graph.extractor import extract_symbols
-    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.graph.extractor import extract_symbols
+    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     direct = extract_symbols(Path(f"file.{ext}"), snippet, lang)
     bounded = run_bounded(extract_symbols, (Path(f"file.{ext}"), snippet, lang), path_for_log=f"file.{ext}")
     assert bounded != PARSE_TIMEOUT
@@ -88,8 +88,8 @@ def test_extract_symbols_bounded_parity(lang: str, ext: str, snippet: str) -> No
 @pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
 def test_scan_file_bounded_parity(lang: str, ext: str, snippet: str) -> None:
     """scan_file via run_bounded matches the direct call (HR39: bounded path, all grammars)."""
-    from opencode_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
-    from opencode_search.kb.bpre_ast import ApiSurface, scan_file
+    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.kb.bpre_ast import ApiSurface, scan_file
     direct = scan_file(f"file.{ext}", snippet, lang, ApiSurface())
     bounded = run_bounded(scan_file, (f"file.{ext}", snippet, lang, ApiSurface()), path_for_log=f"file.{ext}")
     assert bounded != PARSE_TIMEOUT
@@ -102,7 +102,7 @@ def test_scan_file_bounded_parity(lang: str, ext: str, snippet: str) -> None:
 
 def test_is_code_language_false_for_exclusions() -> None:
     """is_code_language must return False for text, data, and unknown/empty inputs."""
-    from opencode_search.index.discover import is_code_language
+    from rag_search.index.discover import is_code_language
     for lang in ("markdown", "rst", "text", "html", "css", "json", "yaml", "toml", "unknown", ""):
         assert not is_code_language(lang), (
             f"is_code_language({lang!r}) must be False — "
@@ -112,7 +112,7 @@ def test_is_code_language_false_for_exclusions() -> None:
 
 # ── Static anti-regression: no new hardcoded extension/language allowlist ─────────────────────
 
-_SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "opencode_search"
+_SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "rag_search"
 # Variable names that are permitted to hold language-name sets in the core discovery/BPRE files.
 # Any NEW name indicates a new gate was added — this guard fails, preventing regression.
 _ALLOWED_LANG_SETS = frozenset({

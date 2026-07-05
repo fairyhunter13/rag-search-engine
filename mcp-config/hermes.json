@@ -1,8 +1,8 @@
 {
-  "server_name": "opencode-search",
+  "server_name": "rag-search",
   "description": "GPU-accelerated local semantic code search",
   "transport": "stdio",
-  "command": "opencode-search",
+  "command": "rag-search",
   "args": ["daemon", "bridge-stdio"],
   "env": {
     "_comment": "Optional but recommended: pin the workspace root so the bridge cannot access indexes outside the opened project.",

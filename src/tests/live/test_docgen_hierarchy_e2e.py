@@ -59,7 +59,7 @@ def test_ih_no_c4_skeleton_files():
 
 def test_ih_run_docgen_off_touches_nothing(service_path):
     """Phase 2: OSE_DOCGEN=0 -> run_docgen() is a no-op (touches no files)."""
-    from opencode_search.kb.docgen import run_docgen
+    from rag_search.kb.docgen import run_docgen
     ih_dir = Path(service_path) / "docs" / "information-hierarchy"
     existed = ih_dir.exists()
     prev = os.environ.get("OSE_DOCGEN")
@@ -76,7 +76,7 @@ def test_ih_run_docgen_off_touches_nothing(service_path):
 
 def test_ih_not_in_auto_sweep(live_client):
     """Phase 2: /api/docgen is absent from MCP; MCP only has index/search/ask/graph/overview."""
-    from opencode_search.server.mcp import _MCP_TOOLS
+    from rag_search.server.mcp import _MCP_TOOLS
     tool_names = {t.name for t in _MCP_TOOLS}
     assert "docgen" not in tool_names, "docgen must NOT be an MCP tool"
     assert "okf" not in tool_names, "okf must NOT be an MCP tool"
@@ -96,7 +96,7 @@ def test_ih_api_docgen_route_no_project_field(live_client):
 
 def test_ih_docgen_not_in_sweeps():
     """Phase 2: run_docgen is not called from _enrich_project in sweeps.py."""
-    sweeps_path = _OSE_SRC / "src" / "opencode_search" / "daemon" / "sweeps.py"
+    sweeps_path = _OSE_SRC / "src" / "rag_search" / "daemon" / "sweeps.py"
     src = sweeps_path.read_text()
     lines = src.splitlines()
     in_enrich = False

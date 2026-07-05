@@ -1,4 +1,4 @@
-# opencode-search-engine (OSE)
+# rag-search-engine (OSE)
 
 Semantic code-search, knowledge-graph, and AI-assistant integration via a 5-tool MCP API
 (search / ask / graph / overview / index). Backed by GPU-accelerated embeddings, a
@@ -16,14 +16,14 @@ call-graph store, and a DeepSeek-powered knowledge-base pipeline.
 
 > **TensorRT:** OSE defaults to `OPENCODE_DISABLE_TENSORRT=1` (uses the CUDA EP, which works on
 > every NVIDIA GPU). If your GPU has a compatible TensorRT installation, set
-> `OPENCODE_DISABLE_TENSORRT=0` in `~/.config/opencode-search/env` to activate the TensorRT EP
+> `OPENCODE_DISABLE_TENSORRT=0` in `~/.config/rag-search/env` to activate the TensorRT EP
 > for faster inference.
 
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/fairyhunter13/opencode-search-engine.git
-cd opencode-search-engine
+git clone --recurse-submodules https://github.com/fairyhunter13/rag-search-engine.git
+cd rag-search-engine
 # If you cloned without --recurse-submodules, run this to populate vendor/docgen:
 git submodule update --init --recursive
 
@@ -34,19 +34,19 @@ python3 -m venv .venv
 .venv/bin/python scripts/check_system.py          # must show [x] assert_gpu_available()
 ```
 
-> **`opencode-search docgen`** requires the `vendor/docgen` submodule.
+> **`rag-search docgen`** requires the `vendor/docgen` submodule.
 > All other features (`ocs-index`, search, chat) work without it.
 
 ## Configure secrets
 
 OSE needs a [DeepSeek](https://platform.deepseek.com/) API key for KB-enrichment.
 
-Resolution order: `DEEPSEEK_API_KEY` env var → `~/.config/opencode-search/env` → (legacy `~/.bash_env`)
+Resolution order: `DEEPSEEK_API_KEY` env var → `~/.config/rag-search/env` → (legacy `~/.bash_env`)
 
 ```bash
-mkdir -p ~/.config/opencode-search
-echo "DEEPSEEK_API_KEY=sk-..." >> ~/.config/opencode-search/env
-chmod 600 ~/.config/opencode-search/env
+mkdir -p ~/.config/rag-search
+echo "DEEPSEEK_API_KEY=sk-..." >> ~/.config/rag-search/env
+chmod 600 ~/.config/rag-search/env
 ```
 
 The systemd unit reads this file automatically via `EnvironmentFile`.
@@ -54,16 +54,16 @@ The systemd unit reads this file automatically via `EnvironmentFile`.
 ## Run the daemon
 
 ```bash
-opencode-search daemon install-systemd
+rag-search daemon install-systemd
 systemctl --user daemon-reload
-systemctl --user enable --now opencode-search-mcp-daemon
-opencode-search daemon status           # → UP — 127.0.0.1:8765
+systemctl --user enable --now rag-search-mcp-daemon
+rag-search daemon status           # → UP — 127.0.0.1:8765
 ```
 
 ## Register with Claude Code (MCP)
 
 ```bash
-opencode-search daemon install-global   # writes ~/.claude.json entry
+rag-search daemon install-global   # writes ~/.claude.json entry
 # multi-profile / opencode / Hermes:
 .venv/bin/python scripts/configure_integrations.py --apply-all
 .venv/bin/python scripts/configure_integrations.py --check   # verify
@@ -74,8 +74,8 @@ opencode-search daemon install-global   # writes ~/.claude.json entry
 ```bash
 ocs-index /path/to/project             # one-shot: register + index + enrich + wiki
 # or step-by-step:
-opencode-search init /path/to/project
-opencode-search index /path/to/project
+rag-search init /path/to/project
+rag-search index /path/to/project
 ```
 
 ## MCP tool reference
@@ -100,13 +100,13 @@ All three should exit 0 with no `[ ]` failures.
 
 ## Health supervisor
 
-`health-supervisor.sh` captures crash evidence to `~/.opencode/health/crashes/` and sends
+`health-supervisor.sh` captures crash evidence to `~/.local/state/rag-search/health/crashes/` and sends
 desktop notifications on fatal failure. Optional; does not replace systemd.
 
 ## Codebase layout
 
 ```
-src/opencode_search/
+src/rag_search/
   core/    config, registry, GPU enforcement
   embed/   FastEmbed/ONNX GPU embedder + reranker
   index/   file discovery, chunking, sqlite-vec store

@@ -35,7 +35,7 @@ def fed_root(sample_workspace) -> str:
 @pytest.mark.parametrize("what,required_keys,non_empty", OVERVIEW_SHAPE)
 def test_overview_shape(what, required_keys, non_empty, fed_root):
     """Live overview(what=X) must return the expected top-level keys."""
-    from opencode_search.server.mcp import overview as overview_tool
+    from rag_search.server.mcp import overview as overview_tool
 
     path = "" if what == "projects" else fed_root
     result = asyncio.run(overview_tool(path, what))

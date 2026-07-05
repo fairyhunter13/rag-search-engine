@@ -23,9 +23,9 @@ def test_reconcile_pause_stops_mid_pass(safe_tmp_path):
     """
     import shutil
 
-    from opencode_search.core.config import ProjectEntry, project_vector_db
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon import sweeps
+    from rag_search.core.config import ProjectEntry, project_vector_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon import sweeps
 
     N = 6
     members = [safe_tmp_path / f"mid{i}" for i in range(N)]

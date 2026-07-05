@@ -1,11 +1,11 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/opencode_search/`. Last reconciled 2026-06-25. **2026-06-25**: Phase 1 — edge-free degeneracy exemption (D, HR20 `ec>0` guard on all three clauses); dashboard chat = Haiku-only (F, no DeepSeek fallback); architecture doc-sync + engineering principles register (§1a, HR27–HR29). **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 incremental self-heal via per-theme `child_sig` (Enzyme-IVM), 1800s window removed (`2380d45`)); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
+> Source-of-truth is `src/rag_search/`. Last reconciled 2026-06-25. **2026-06-25**: Phase 1 — edge-free degeneracy exemption (D, HR20 `ec>0` guard on all three clauses); dashboard chat = Haiku-only (F, no DeepSeek fallback); architecture doc-sync + engineering principles register (§1a, HR27–HR29). **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 incremental self-heal via per-theme `child_sig` (Enzyme-IVM), 1800s window removed (`2380d45`)); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
 
-opencode-search is a local, GPU-only semantic code-search and KB engine. It indexes one or
+rag-search is a local, GPU-only semantic code-search and KB engine. It indexes one or
 more project trees and serves five MCP tools (`search`, `ask`, `graph`, `overview`,
 `index`) plus an HTTP dashboard from a single daemon at `127.0.0.1:8765`.
 
@@ -56,7 +56,7 @@ RTM: §1a principles → §13b HRs → §14 test map (three layers). L3 traceabi
   dashboard routes. Boots `assert_cuda_available()` first — **CPU fallback is fatal**.
 - **Background** (`_start_background`): Scheduler → synchronous `register_all_members()` →
   `start_watcher()` → one-shot `reconcile_projects` thread.
-- **Registry** (`core/registry.py`): `~/.local/share/opencode-search/projects.json`,
+- **Registry** (`core/registry.py`): `~/.local/share/rag-search/projects.json`,
   atomically written under `fcntl` lock. Each row: `ProjectEntry` with
   `path, enabled, indexed_at, file_count, chunk_count, federation: list[str], …`.
 - **Vector store**: sqlite-vec flat `vec0`, `FLOAT[768]`, exact recall.
@@ -197,7 +197,7 @@ mapping table may substitute for structural analysis of user code.
    BPMN/mermaid; byte-identical without a DeepSeek key (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
-7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`opencode-search docgen <project>`).
+7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`rag-search docgen <project>`).
 8. **`index_docs` (scope=docs)** — embeds generated `docs/` pages into the vector store; idempotent per-path replace; runs after `run_docgen`; watcher/fingerprint exclude `docs/` from the code path (HR28).
 
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
@@ -251,7 +251,7 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
 | **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** only (Claude Code CLI); emits SSE error event when CLI unavailable | Codex removed; DeepSeek is KB-enrichment-exclusive (HR12) — no chat fallback |
 | **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-v4-flash` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
-| **E — Doc-tooling** | `opencode-search docgen/okf` (manual only; `POST /api/docgen`, `/api/okf`) | **`claude -p`** headless: **Haiku 4.5** (concept/write) + **Sonnet 4.6** (architect/discover) | LLM-native; no tree-sitter on doc path; no deterministic skeleton; kill-switches `OSE_DOCGEN=0`/`OSE_OKF=0`; never from auto-sweep or MCP (HR27/P13) |
+| **E — Doc-tooling** | `rag-search docgen/okf` (manual only; `POST /api/docgen`, `/api/okf`) | **`claude -p`** headless: **Haiku 4.5** (concept/write) + **Sonnet 4.6** (architect/discover) | LLM-native; no tree-sitter on doc path; no deterministic skeleton; kill-switches `OSE_DOCGEN=0`/`OSE_OKF=0`; never from auto-sweep or MCP (HR27/P13) |
 
 **Four-lane invariant (HR12, HR31):**
 - **LOCAL GPU lane** = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking ONLY. CPU binding is fatal; any CPU fallback raises immediately.

@@ -14,7 +14,7 @@ except Exception:
 
 # Block rm -rf targeting engine indexes
 if echo "$CMD" | grep -qE "rm[[:space:]].*-[a-zA-Z]*r[a-zA-Z]*f|rm[[:space:]].*-[a-zA-Z]*f[a-zA-Z]*r"; then
-    if echo "$CMD" | grep -qE "opencode-search/(indexes|index_[a-z]+)|local/share/opencode-search/(indexes|index_[a-z]+)"; then
+    if echo "$CMD" | grep -qE "rag-search/(indexes|index_[a-z]+)|local/share/rag-search/(indexes|index_[a-z]+)"; then
         echo '{"decision":"block","reason":"Blocked: use manage(action=vacuum) or ocs clean-orphans to remove engine indexes safely — direct rm bypasses orphan detection."}'
         exit 2
     fi

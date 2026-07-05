@@ -29,7 +29,7 @@ class TestTokenEfficiencyInvariants:
         """TEI1: _llm_link_edges must bail out when _llm_link_scan returns nothing."""
         import inspect
 
-        from opencode_search.kb.bpre import _llm_link_edges
+        from rag_search.kb.bpre import _llm_link_edges
         src = inspect.getsource(_llm_link_edges)
         assert "if not items" in src, (
             "_llm_link_edges must have 'if not items: return' guard after _llm_link_scan"
@@ -41,9 +41,9 @@ class TestTokenEfficiencyInvariants:
         The synth federation has no ambiguous HTTP/pubsub clients, so Tier-2 LLM
         link resolution never fires regardless of whether a DeepSeek key is present.
         """
-        from opencode_search.daemon.federation import expand_federation
-        from opencode_search.kb.bpre import _llm_link_scan
-        from opencode_search.kb.bpre_ast import federation_discover
+        from rag_search.daemon.federation import expand_federation
+        from rag_search.kb.bpre import _llm_link_scan
+        from rag_search.kb.bpre_ast import federation_discover
 
         members = [m for m in expand_federation(synth_fed.root) if m != synth_fed.root]
         surf = federation_discover(members)
@@ -57,9 +57,9 @@ class TestTokenEfficiencyInvariants:
         tail criteria (member_count<8 AND cross_community_edges<2), proving it is routed to
         the deterministic labeler and never to the LLM narration path.
         """
-        from opencode_search.core.config import project_graph_db
-        from opencode_search.graph.enrich import compute_significance
-        from opencode_search.graph.store import GraphStore
+        from rag_search.core.config import project_graph_db
+        from rag_search.graph.enrich import compute_significance
+        from rag_search.graph.store import GraphStore
 
         for mp in synth_fed.members:
             gdb = project_graph_db(mp)

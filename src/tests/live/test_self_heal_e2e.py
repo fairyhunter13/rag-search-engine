@@ -17,8 +17,8 @@ def _proj():
     import shutil
     import tempfile
 
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import remove_project, upsert_project
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import remove_project, upsert_project
     base = Path.home() / ".local" / "share" / "ocs-test-dirs"
     base.mkdir(parents=True, exist_ok=True)
     d = Path(tempfile.mkdtemp(dir=base, prefix="self-heal-"))
@@ -33,13 +33,13 @@ def _proj():
 @pytest.mark.slow
 def test_algo_drift_triggers_rederive(_proj):
     """T2: poisoning meta[algo_version] causes reconcile to re-derive the graph."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.daemon.sweeps import (
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.sweeps import (
         _index_project,
         _pipeline_algo_version,
         reconcile_projects,
     )
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.store import GraphStore
 
     proj = _proj
     p = Path(proj)
@@ -73,13 +73,13 @@ def test_algo_drift_triggers_rederive(_proj):
 @pytest.mark.slow
 def test_source_drift_triggers_rederive(_proj):
     """T3: adding a new source file changes the fingerprint; reconcile re-extracts it."""
-    from opencode_search.core.config import project_graph_db
-    from opencode_search.daemon.sweeps import (
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.sweeps import (
         _code_source_fingerprint,
         _index_project,
         reconcile_projects,
     )
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.store import GraphStore
 
     proj = _proj
     p = Path(proj)

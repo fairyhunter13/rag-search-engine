@@ -6,14 +6,14 @@
 
 A **structured, queryable, partially-executable** representation of what OSE is building, why, and how it MUST be built. Its defining property is **action-conditioned prediction**: given the current codebase state + a candidate change, `check_world_model.py` predicts whether the next state still satisfies the laws (L1 invariants) and behavior specs (L3 HRs).
 
-This is a development-governance artifact. It lives in `docs/` and `scripts/`; it has no MCP surface, no FEATURES.md entry, no `src/opencode_search/` code.
+This is a development-governance artifact. It lives in `docs/` and `scripts/`; it has no MCP surface, no FEATURES.md entry, no `src/rag_search/` code.
 
 ## Four-layer schema (agentic-coding, June 2026)
 
 | Layer | What | Where in OSE |
 |-------|------|-------------|
 | **L1** | Architecture invariants (laws — what changes are permitted) | §1a + `model.yaml` P0–P15 in `federation-and-search-engine.md` |
-| **L2** | Components — capability→module→operation map | `src/opencode_search/{core,embed,index,graph,kb,query,server,daemon}/` |
+| **L2** | Components — capability→module→operation map | `src/rag_search/{core,embed,index,graph,kb,query,server,daemon}/` |
 | **L3** | Behavior specs — HRs, invariants, workflows | §13b HR1–HR31 in `federation-ops-and-invariants.md` |
 | **L4** | Code patterns & generation rules | `model.yaml` L4_patterns; enforced by `test_no_code_semantic_regex.py` |
 

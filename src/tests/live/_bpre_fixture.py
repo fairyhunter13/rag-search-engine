@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
-from opencode_search.core.config import ProjectEntry, project_graph_db
-from opencode_search.core.registry import remove_project, upsert_project
-from opencode_search.graph.store import GraphStore
+from rag_search.core.config import ProjectEntry, project_graph_db
+from rag_search.core.registry import remove_project, upsert_project
+from rag_search.graph.store import GraphStore
 
 _SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
 
@@ -96,7 +96,7 @@ def _make_member(base: Path, name: str, src_files: dict[str, str],
     # Build graph.db via GPU-free _rederive_graph.
     upsert_project(ProjectEntry(path=str(d), enabled=True))
     try:
-        from opencode_search.daemon.sweeps import _rederive_graph
+        from rag_search.daemon.sweeps import _rederive_graph
         _rederive_graph(str(d))
     except Exception:
         pass  # graph.db may be empty on rare parse failure; tests tolerate

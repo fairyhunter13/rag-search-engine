@@ -24,9 +24,9 @@ pytestmark = pytest.mark.live
 
 
 def _build_tail_store(tmp: Path):
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
 
     gdb = tmp / "g.db"
     gs = GraphStore(gdb)
@@ -43,7 +43,7 @@ def _build_tail_store(tmp: Path):
 
 
 def _label(gs, cid):
-    from opencode_search.graph.community import label_community_structural
+    from rag_search.graph.community import label_community_structural
     label_community_structural(gs, cid)
     gs.commit()
 
@@ -68,7 +68,7 @@ def test_ab1_ab2_tail_is_sql_null(safe_tmp_path):
 
 def test_ab3_no_type_dominates(project_with_communities):
     """AB3: no non-NULL bucket > 50% — the anti-collapse guard (old code was ~95% 'utility')."""
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     with sqlite3.connect(str(project_graph_db(project_with_communities))) as con:
         rows = con.execute(
             "SELECT semantic_type FROM communities WHERE semantic_type IS NOT NULL"
@@ -91,7 +91,7 @@ def test_ab4_null_majority_post_reenrich(project_with_communities):
     re-enrich hasn't happened yet and the test is vacuously true — only fires once
     Phase 1.5 is active and at least one NULL-typed tail community exists.
     """
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     with sqlite3.connect(str(project_graph_db(project_with_communities))) as con:
         total = con.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
         typed = con.execute(
@@ -107,7 +107,7 @@ def test_ab4_null_majority_post_reenrich(project_with_communities):
 
 def test_ab5_null_tail_excluded_from_ask_path(safe_tmp_path):
     """AB5: NULL-typed tail absent from _top_communities_semantic / _community_context."""
-    from opencode_search.query.ask import _community_context, _top_communities_semantic
+    from rag_search.query.ask import _community_context, _top_communities_semantic
 
     gs, cid = _build_tail_store(safe_tmp_path)
     try:
@@ -131,7 +131,7 @@ def test_ab5_null_tail_excluded_from_ask_path(safe_tmp_path):
 
 def test_ab6_typed_head_in_ask_path(safe_tmp_path):
     """AB6: typed head community present in _community_context."""
-    from opencode_search.query.ask import _community_context
+    from rag_search.query.ask import _community_context
 
     gs, cid = _build_tail_store(safe_tmp_path)
     try:
@@ -149,7 +149,7 @@ def test_ab6_typed_head_in_ask_path(safe_tmp_path):
 
 def test_ab7_l2_types_unaffected(project_with_communities):
     """AB7: L2 domains still typed after tail fix (upsert_community default must stay '')."""
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     with sqlite3.connect(str(project_graph_db(project_with_communities))) as con:
         l2 = con.execute("SELECT id, semantic_type FROM communities WHERE level>=2").fetchall()
     if len(l2) < 3:
@@ -163,9 +163,9 @@ def test_ab7_l2_types_unaffected(project_with_communities):
 
 def test_ab8_opaque_names_abstain(safe_tmp_path):
     """AB8 (MR-2): opaque names => abstain, never forced to 'utility'."""
-    from opencode_search.graph.community import detect_communities, label_community_structural
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities, label_community_structural
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
 
     gdb = safe_tmp_path / "opaque.db"
     gs = GraphStore(gdb)
@@ -193,7 +193,7 @@ def test_sg1_no_utility_literal_in_community_py():
     """SG1: community.py must not assign semantic_type='utility' or contain keyword block."""
     import importlib
     import inspect
-    src = inspect.getsource(importlib.import_module("opencode_search.graph.community"))
+    src = inspect.getsource(importlib.import_module("rag_search.graph.community"))
     assert "semantic_type='utility'" not in src, "SG1: 'utility' literal regressed"
     assert 'semantic_type="utility"' not in src, "SG1: 'utility' literal regressed"
     assert "semantic_type='infrastructure'" not in src, "SG1: keyword labeling regressed"

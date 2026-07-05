@@ -8,11 +8,11 @@ import time
 
 import pytest
 
-from opencode_search.core.config import project_graph_db
-from opencode_search.graph.enrich import classify_communities_semantic
-from opencode_search.graph.store import GraphStore
-from opencode_search.server.mcp import ask as ask_tool
-from opencode_search.server.mcp import overview as overview_tool
+from rag_search.core.config import project_graph_db
+from rag_search.graph.enrich import classify_communities_semantic
+from rag_search.graph.store import GraphStore
+from rag_search.server.mcp import ask as ask_tool
+from rag_search.server.mcp import overview as overview_tool
 
 pytestmark = pytest.mark.live
 
@@ -136,7 +136,7 @@ class TestClassificationCorrectness:
         """
         import sqlite3
 
-        from opencode_search.core.config import project_graph_db
+        from rag_search.core.config import project_graph_db
         gdb = project_graph_db(svc_member)
         rule_keywords = (
             "rule", "eligib", "limit", "window", "conflict", "max",
