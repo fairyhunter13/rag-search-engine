@@ -50,7 +50,8 @@ def test_p20_capabilities_e2e(safe_tmp_path):
             f"C: chat_stream missing stream_error_count: {metrics}"
         )
 
-        # D: configure_integrations.py --check exits 0 (all 15 targets in sync)
+        # D: configure_integrations.py --check exits 0 (all discovered targets in sync —
+        # claude profile(s) + hermes; OpenCode/Codex are no longer configured)
         script = Path(__file__).parents[3] / "scripts" / "configure_integrations.py"
         r = subprocess.run([sys.executable, str(script), "--check"], capture_output=True, text=True)
         assert r.returncode == 0, f"D: --check failed:\n{r.stdout}\n{r.stderr}"

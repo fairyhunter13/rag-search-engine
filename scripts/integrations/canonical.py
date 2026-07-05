@@ -1,8 +1,8 @@
 """Canonical configuration source of truth for rag-search integrations.
 
 The constants here are written into all detected config trees (claude profiles,
-opencode, hermes). configure_integrations.py uses this module to verify and repair drift.
-Codex support removed.
+hermes). configure_integrations.py uses this module to verify and repair drift.
+OpenCode and Codex integration removed.
 """
 from __future__ import annotations
 
@@ -43,13 +43,3 @@ Rules (no exceptions):
 - If not indexed, say so and ask before indexing.\
 """
 
-# Full block including sentinels, for each file type.
-
-def claude_block() -> str:
-    """Return the canonical sentinel-wrapped block for CLAUDE.md files."""
-    return f"{SENTINEL_CLAUDE_START}\n{CANONICAL_BODY}\n{SENTINEL_CLAUDE_END}\n"
-
-
-def agents_md_block() -> str:
-    """Return the canonical sentinel-wrapped block for AGENTS.md files."""
-    return f"{SENTINEL_AGENTS_START}\n{CANONICAL_BODY}\n{SENTINEL_AGENTS_END}\n"

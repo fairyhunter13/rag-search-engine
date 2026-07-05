@@ -1,6 +1,7 @@
-"""P21: Integration-parity tests — 7-tree config drift guard.
+"""P21: Integration-parity tests — config drift guard.
 
-Puts the existing 7-tree integration system under the live test suite for the first time.
+Puts the existing integration system (claude profiles + hermes; OpenCode and
+Codex are no longer configured) under the live test suite.
 Reuses configure_integrations.py --check --json rather than reimplementing the logic.
 Skips gracefully if a target's config file does not exist (tool not installed).
 """
@@ -33,20 +34,6 @@ def _run_check_json() -> list[dict]:
             f"configure_integrations --check --json produced non-JSON output "
             f"(exit {result.returncode}):\n{result.stdout[:500]}\n{result.stderr[:200]}"
         ) from exc
-
-
-def test_integration_check_exits_zero():
-    """configure_integrations.py --check exits 0 — all installed trees canonical-in-sync."""
-    result = subprocess.run(
-        [sys.executable, str(_SCRIPT), "--check", "--json"],
-        capture_output=True, text=True, timeout=30,
-        cwd=str(_REPO),
-    )
-    assert result.returncode == 0, (
-        f"configure_integrations --check exited {result.returncode}\n"
-        f"stdout:\n{result.stdout[-2000:]}\n"
-        f"stderr:\n{result.stderr[-300:]}"
-    )
 
 
 def test_no_installed_tree_is_missing_or_error():
