@@ -42,7 +42,7 @@ class TestNamedProjectsSearch:
         (k, s) for k in ("service", "federation", "standalone") for s in _SEARCH_SCOPES
     ])
     def test_search_returns_results(self, named_projects: dict, key: str, scope: str) -> None:
-        from opencode_search.server.mcp import search as search_tool
+        from rag_search.server.mcp import search as search_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         data = json.loads(asyncio.run(search_tool("function", scope=scope, project_paths=[path])))
@@ -57,7 +57,7 @@ class TestNamedProjectsOverview:
         (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_FAST
     ])
     def test_overview_what_returns_dict(self, named_projects: dict, key: str, what: str) -> None:
-        from opencode_search.server.mcp import overview as overview_tool
+        from rag_search.server.mcp import overview as overview_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         result = asyncio.run(overview_tool(path, what))
@@ -69,7 +69,7 @@ class TestNamedProjectsOverview:
         (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_SLOW
     ])
     def test_overview_slow_what_returns_dict(self, named_projects: dict, key: str, what: str) -> None:
-        from opencode_search.server.mcp import overview as overview_tool
+        from rag_search.server.mcp import overview as overview_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         result = asyncio.run(overview_tool(path, what))
@@ -83,7 +83,7 @@ class TestNamedProjectsAsk:
     @pytest.mark.slow
     @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
     def test_ask_global_non_empty(self, named_projects: dict, key: str) -> None:
-        from opencode_search.server.mcp import ask as ask_tool
+        from rag_search.server.mcp import ask as ask_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         result = asyncio.run(ask_tool("What is the overall architecture?", path, "global"))
@@ -99,8 +99,8 @@ class TestNamedProjectsGraph:
     def test_graph_definition_returns_dict(self, named_projects: dict, key: str) -> None:
         import sqlite3
 
-        from opencode_search.core.config import project_graph_db
-        from opencode_search.server.mcp import graph as graph_tool
+        from rag_search.core.config import project_graph_db
+        from rag_search.server.mcp import graph as graph_tool
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
         gdb = project_graph_db(path)

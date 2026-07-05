@@ -86,8 +86,8 @@ class TestFederationComposedEntity:
 
         Monotonicity: root-scoped search projects_searched must include member paths.
         """
-        from opencode_search.daemon.federation import expand_federation
-        from opencode_search.server.mcp import search as mcp_search
+        from rag_search.daemon.federation import expand_federation
+        from rag_search.server.mcp import search as mcp_search
 
         members = expand_federation(fed_root)
         assert len(members) >= 2, "Need ≥2 members for fan-out test"

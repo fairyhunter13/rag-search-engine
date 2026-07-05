@@ -12,15 +12,15 @@ import sqlite3
 
 import pytest
 
-from opencode_search.core.config import project_graph_db
+from rag_search.core.config import project_graph_db
 
 pytestmark = pytest.mark.live
 
 
 def test_dn3_retrieval_selectors_exclude_spine(project_with_communities):
     """DN3: _top_communities_semantic and _community_context exclude kind='dir'/'file' nodes."""
-    from opencode_search.graph.store import GraphStore
-    from opencode_search.query.ask import _community_context, _top_communities_semantic
+    from rag_search.graph.store import GraphStore
+    from rag_search.query.ask import _community_context, _top_communities_semantic
     gdb = project_graph_db(project_with_communities)
     gs = GraphStore(gdb)
     try:

@@ -22,8 +22,8 @@ Thumbs.db
 # Stale feature-run artifacts (prerelease / QA / HPV systems removed in Phase 39)
 .prerelease_report.*
 .qa_report.*
-.opencode_verify_report.*
-.opencode_verify_state.*
+.rag_search_verify_report.*
+.rag_search_verify_state.*
 .hpv_proof.*
 
 # docgen auto-generated docs/ hierarchy (written into each repo by run_docgen — not source)
@@ -33,5 +33,5 @@ Thumbs.db
 scratch_diag.py
 scratch_*.py
 
-# Secrets / local env overrides (use ~/.config/opencode-search/env instead)
+# Secrets / local env overrides (use ~/.config/rag-search/env instead)
 .env

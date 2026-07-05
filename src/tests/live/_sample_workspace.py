@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from opencode_search.core.config import ProjectEntry, project_graph_db
-from opencode_search.core.registry import remove_project, upsert_project
-from opencode_search.graph.store import GraphStore
+from rag_search.core.config import ProjectEntry, project_graph_db
+from rag_search.core.registry import remove_project, upsert_project
+from rag_search.graph.store import GraphStore
 
 _REPO_ROOT = Path(__file__).parents[3]
 _FIXTURES = _REPO_ROOT / "src" / "tests" / "fixtures" / "sample_projects"
@@ -81,7 +81,7 @@ def replay_member_golden(member_path: str) -> None:
 
 
 def _index_members(paths: list[str]) -> None:
-    from opencode_search.daemon.sweeps import _index_project
+    from rag_search.daemon.sweeps import _index_project
     for p in paths:
         _index_project(p)
 
@@ -129,7 +129,7 @@ def _replay_golden(project_path: str, golden_path: Path) -> None:
 
 def _deregister_under(base: Path) -> None:
     """Remove all registry entries whose path is under base (enabled or not)."""
-    from opencode_search.core.registry import list_projects
+    from rag_search.core.registry import list_projects
     prefix = str(base) + "/"
     for e in list_projects():
         if e.path.startswith(prefix) or e.path == str(base):
@@ -144,7 +144,7 @@ def _cleanup_stale_workspaces(keep: Path) -> None:
             _deregister_under(d)
             shutil.rmtree(d, ignore_errors=True)
     # Also clear any stale ocs-test-dirs entries whose filesystem path no longer exists.
-    from opencode_search.core.registry import list_projects
+    from rag_search.core.registry import list_projects
     for e in list_projects():
         if str(_SAFE_BASE) in e.path and not Path(e.path).exists():
             with contextlib.suppress(Exception):
@@ -152,7 +152,7 @@ def _cleanup_stale_workspaces(keep: Path) -> None:
 
 
 def build_sample_workspace() -> SampleWorkspace:
-    from opencode_search.graph.llm import no_deepseek
+    from rag_search.graph.llm import no_deepseek
     _SAFE_BASE.mkdir(parents=True, exist_ok=True)
     base = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="sample-ws-"))
     _cleanup_stale_workspaces(base)
@@ -163,9 +163,9 @@ def build_sample_workspace() -> SampleWorkspace:
         for mp in member_paths:
             _replay_golden(mp, _golden_path_for(mp))
         _replay_golden(ledger, _golden_path_for(ledger))
-        from opencode_search.kb.bpre import reconstruct_processes
+        from rag_search.kb.bpre import reconstruct_processes
         reconstruct_processes(fed_root)
-        from opencode_search.kb.wiki import build_federated_index
+        from rag_search.kb.wiki import build_federated_index
         build_federated_index(fed_root)
     return SampleWorkspace(
         base=base,

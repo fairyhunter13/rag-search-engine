@@ -16,7 +16,7 @@ Cross-project knowledge-base quality audit: hierarchy depth, enrichment coverage
 ```
 Project               Files    Chunks   Communities  Enriched  Storage  Watcher
 your-federation-root  ...      ...      ...          100%      ...      watching
-opencode-search-engine ...     ...      ...          100%      ...      watching
+rag-search-engine ...     ...      ...          100%      ...      watching
 ...
 ```
 
@@ -30,8 +30,8 @@ opencode-search-engine ...     ...      ...          100%      ...      watching
 ## Rules
 
 - Never call `build` automatically — only report what needs attention and let the user decide.
-- Use `mcp__opencode-search__*` tools only; no Bash grep for this health check.
-- If daemon is unreachable, report "Daemon offline — run: systemctl --user status opencode-search-mcp-daemon".
+- Use `mcp__rag-search__*` tools only; no Bash grep for this health check.
+- If daemon is unreachable, report "Daemon offline — run: systemctl --user status rag-search-mcp-daemon".
 
 ## After running
 

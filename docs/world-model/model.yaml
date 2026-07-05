@@ -10,34 +10,34 @@ schema_version: "0.1"
 L1_invariants:
   - id: P0
     principle: "GPU-only inference — embed+rerank on CUDA; CPU fallback raises fatally."
-    check: {grep: "cpu_fallback|CPU_ONLY|providers.*cpu", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+    check: {grep: "cpu_fallback|CPU_ONLY|providers.*cpu", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P1
     principle: "No local generative LLM. KB=DeepSeek-only. Chat=claude-haiku-4-5 only."
-    check: {grep: "ollama|qwen3|llama|local.*model", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+    check: {grep: "ollama|qwen3|llama|local.*model", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P2
     principle: "MCP query path (search/ask/graph/overview) runs NO generative LLM — only embed+rerank."
-    check: {grep: "deepseek_extract|deepseek_chat|claude.*ask|haiku.*ask", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
+    check: {grep: "deepseek_extract|deepseek_chat|claude.*ask|haiku.*ask", paths: "src/rag_search/query/", verdict_if_match: AT_RISK}
   - id: P3
     principle: "Federation = query-time union; no cross-repo edges; members have independent stores."
-    check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/opencode_search/graph/ src/opencode_search/index/ src/opencode_search/daemon/", verdict_if_match: AT_RISK}
+    check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/rag_search/graph/ src/rag_search/index/ src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P4
     principle: "Indexing is event-driven (watcher/inotify); heavy KB cascade (enrich/wiki/BPRE) runs ONLY on source-fingerprint drift — never on metadata-only or non-indexed-file events; no periodic sweeps or timers."
-    check: {grep: "register.*kb_sweep|register.*auto_index|threading.Timer.*sweep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
+    check: {grep: "register.*kb_sweep|register.*auto_index|threading.Timer.*sweep", paths: "src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P5
     principle: "Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score."
-    check: {grep: "rerank.*skip", paths: "src/opencode_search/query/", verdict_if_match: AT_RISK}
+    check: {grep: "rerank.*skip", paths: "src/rag_search/query/", verdict_if_match: AT_RISK}
   - id: P6
     principle: "No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped) — the registry is empty as of 2026-07-01: the last entry, bpre_spec._LANG_SPECS/_DEFAULT_SPEC (15 per-language HTTP method-name tables), was retired in favor of ONE universal structural classifier (URL-path anchor + _has_handler_arg handler-shape + _V verb ground-truth + gRPC proto-binding + _SCHEMES receiver-text provenance for non-verb client idioms) covering every tree-sitter code grammar by construction. Protocol/framework codegen-contract naming bound to structural facts (e.g. protoc New*Client/Register*Server scoped to .pb.go output, Spring *Mapping annotations, _GRP_SFXS gated on a discovered proto_services match) is ground truth, not a heuristic — reclassified 2026-07-01, same class as the closed HTTP-verb set _V and the closed protocol/URI-scheme set _SCHEMES. _provenance (bpre_generic.py) was generalized 2026-07-01 (Part C1) from receiver-text-only to also resolve def-use type bindings (build_type_use, valueflow.py) and import-map aliases (_scan_imports, bpre_ast.py) against the same closed _SCHEMES set — still zero library-name vocabulary; unresolved bare library-name idioms (e.g. requests/axios on a non-scheme absolute URL) remain accounted residue-ladder territory, never silently dropped."
-    check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/opencode_search/kb/bpre.py src/opencode_search/kb/bpre_ast.py src/opencode_search/kb/bpre_spec.py src/opencode_search/kb/bpre_generic.py src/opencode_search/kb/bpre_paradigms.py src/opencode_search/kb/patterns.py src/opencode_search/server/_overview.py", verdict_if_match: AT_RISK}
+    check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/rag_search/kb/bpre.py src/rag_search/kb/bpre_ast.py src/rag_search/kb/bpre_spec.py src/rag_search/kb/bpre_generic.py src/rag_search/kb/bpre_paradigms.py src/rag_search/kb/patterns.py src/rag_search/server/_overview.py", verdict_if_match: AT_RISK}
   - id: P7
     principle: "Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts."
-    check: {grep: "/home/|/root/|/Users/", paths: "src/opencode_search/kb/wiki.py src/opencode_search/kb/bpre.py", verdict_if_match: AT_RISK}
+    check: {grep: "/home/|/root/|/Users/", paths: "src/rag_search/kb/wiki.py src/rag_search/kb/bpre.py", verdict_if_match: AT_RISK}
   - id: P8
     principle: "No mocks in tests — real daemon at :8765, real GPU, real embedder."
     check: {grep: "unittest\\.mock|MagicMock|@patch\\(", paths: "src/tests/", exclude_paths: "src/tests/live/test_no_mocks_or_fakes.py", verdict_if_match: AT_RISK}
   - id: P9
     principle: "Flat-L1 communities only — no L2/L3 hierarchy in OSE KB (WS-B 2026-06-26)."
-    check: {grep: "build_hierarchy|build_federation_hierarchy|set_community_parent", paths: "src/opencode_search/", verdict_if_match: AT_RISK}
+    check: {grep: "build_hierarchy|build_federation_hierarchy|set_community_parent", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P10
     principle: "Every line of code is a liability — prefer no change, then deletion, then smallest diff."
     check: null
@@ -49,7 +49,7 @@ L1_invariants:
     check: {grep: "import tree_sitter|from tree_sitter", paths: "vendor/docgen/src/ vendor/okf/src/", verdict_if_match: AT_RISK}
   - id: P13
     principle: "Docgen + OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools."
-    check: {grep: "run_docgen|run_okf", paths: "src/opencode_search/daemon/sweeps.py", verdict_if_match: AT_RISK}
+    check: {grep: "run_docgen|run_okf", paths: "src/rag_search/daemon/sweeps.py", verdict_if_match: AT_RISK}
   - id: P14
     principle: "LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling. No cross-lane calls."
     check: null
@@ -61,21 +61,21 @@ L1_invariants:
     check: null
   - id: P17
     principle: "File-watching is event-driven via OS filesystem notifications (watchfiles/Rust notify) — one inotify instance + one thread for all watched roots, Rust-side event coalescing; manual per-file polling is a last-resort fallback only (NFS/SMB, handled internally by the Rust notify crate's force_polling), never a hand-rolled Python poll loop. Watcher-triggered indexing/parsing work inherits the same kernel CPUQuota ceiling as the rest of the daemon (HR40), including bounded_parse.py's spawn-context workers, which are children of the daemon's own cgroup."
-    check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/opencode_search/daemon/", verdict_if_match: AT_RISK}
+    check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P18
     principle: "Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private ose-live-audit repo."
-    check: {grep: "/home/[a-zA-Z0-9_.-]+/|/root/[a-zA-Z0-9_.-]+/|/Users/[a-zA-Z0-9_.-]+/|C:\\\\Users\\\\[a-zA-Z0-9_.-]+", paths: "src/opencode_search/ docs/ scripts/ vendor/*/src/", exclude_paths: "src/tests/live/test_public_hygiene.py", verdict_if_match: AT_RISK}
+    check: {grep: "/home/[a-zA-Z0-9_.-]+/|/root/[a-zA-Z0-9_.-]+/|/Users/[a-zA-Z0-9_.-]+/|C:\\\\Users\\\\[a-zA-Z0-9_.-]+", paths: "src/rag_search/ docs/ scripts/ vendor/*/src/", exclude_paths: "src/tests/live/test_public_hygiene.py", verdict_if_match: AT_RISK}
 
 # ── L2: Components (capability → module → entry points) ─────────────────────
 L2_components:
-  core:    {module: "opencode_search.core",    ops: [config, registry, types]}
-  embed:   {module: "opencode_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
-  index:   {module: "opencode_search.index",   ops: [index_project, VectorStore]}
-  graph:   {module: "opencode_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
-  kb:      {module: "opencode_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_docgen, run_okf]}
-  query:   {module: "opencode_search.query",   ops: [search, compose_answer]}
-  server:  {module: "opencode_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
-  daemon:  {module: "opencode_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
+  core:    {module: "rag_search.core",    ops: [config, registry, types]}
+  embed:   {module: "rag_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
+  index:   {module: "rag_search.index",   ops: [index_project, VectorStore]}
+  graph:   {module: "rag_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
+  kb:      {module: "rag_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_docgen, run_okf]}
+  query:   {module: "rag_search.query",   ops: [search, compose_answer]}
+  server:  {module: "rag_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
+  daemon:  {module: "rag_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
 
 # ── L3: Behavior specs (HRs — each maps to a §14 test) ──────────────────────
 L3_specs:

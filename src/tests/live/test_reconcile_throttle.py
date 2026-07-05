@@ -18,7 +18,7 @@ def test_reconcile_initial_delay_wired():
     import inspect
     import os
 
-    from opencode_search.daemon import server as srv_mod
+    from rag_search.daemon import server as srv_mod
 
     orig = os.environ.pop("OPENCODE_RECONCILE_INITIAL_DELAY_S", None)
     try:
@@ -47,7 +47,7 @@ def test_reconcile_thread_deprioritized():
     import os
     import threading
 
-    from opencode_search.daemon import server as srv_mod
+    from rag_search.daemon import server as srv_mod
 
     assert hasattr(os, "getpriority"), "os.getpriority not available on this platform"
     result: list[tuple[int, int]] = []
@@ -80,7 +80,7 @@ def test_daemon_reconcile_thread_niced(live_client):
     from pathlib import Path
 
     r = subprocess.run(
-        ["systemctl", "--user", "show", "opencode-search-mcp-daemon.service",
+        ["systemctl", "--user", "show", "rag-search-mcp-daemon.service",
          "-p", "MainPID", "--value"],
         capture_output=True, text=True, timeout=5,
     )
@@ -112,9 +112,9 @@ def test_reconcile_pause_stops_all_members(safe_tmp_path):
     """Pause at entry must skip ALL members and the BPRE root-pass (N=3, GPU-free)."""
     import shutil
 
-    from opencode_search.core.config import ProjectEntry, project_vector_db
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon import sweeps
+    from rag_search.core.config import ProjectEntry, project_vector_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon import sweeps
 
     members = [safe_tmp_path / f"mbr{i}" for i in range(3)]
     for m in members:

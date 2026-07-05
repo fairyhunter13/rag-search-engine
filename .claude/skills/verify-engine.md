@@ -4,7 +4,7 @@ Full engine-feature coverage loop: probe every surface → fix any RED → commi
 
 ## What this skill verifies
 
-Every feature of opencode-search-engine, end-to-end, against your registered indexed projects.
+Every feature of rag-search-engine, end-to-end, against your registered indexed projects.
 
 ### MCP tool surfaces
 - `search` — code, docs, all scopes; multiple queries; non-empty results

@@ -33,7 +33,7 @@ def _seed_docs(docs: Path, *, with_human: bool = False) -> None:
 
 
 def _clean_reg(paths: list[str]) -> None:
-    from opencode_search.core.registry import remove_project
+    from rag_search.core.registry import remove_project
     for p in paths:
         remove_project(p)
 
@@ -41,9 +41,9 @@ def _clean_reg(paths: list[str]) -> None:
 class TestFederationMemberGate:
     def test_gt1a_is_federation_member_truth_table(self, safe_tmp_path):
         """GT1a: _is_federation_member True for members, False for roots and strangers."""
-        from opencode_search.core.config import ProjectEntry
-        from opencode_search.core.registry import upsert_project
-        from opencode_search.kb.docgen import _is_federation_member
+        from rag_search.core.config import ProjectEntry
+        from rag_search.core.registry import upsert_project
+        from rag_search.kb.docgen import _is_federation_member
 
         root = str(safe_tmp_path / "root")
         member = str(safe_tmp_path / "member")
@@ -60,9 +60,9 @@ class TestFederationMemberGate:
 
     def test_gt1b_run_docgen_member_cleans_not_generates(self, safe_tmp_path):
         """GT1b: run_docgen on a federation member cleans docs/ instead of generating."""
-        from opencode_search.core.config import ProjectEntry
-        from opencode_search.core.registry import upsert_project
-        from opencode_search.kb.docgen import run_docgen
+        from rag_search.core.config import ProjectEntry
+        from rag_search.core.registry import upsert_project
+        from rag_search.kb.docgen import run_docgen
 
         root = str(safe_tmp_path / "root2")
         member = str(safe_tmp_path / "member2")
@@ -86,9 +86,9 @@ class TestFederationMemberGate:
 
 def test_gt2_cleanup_member_docs_synthetic(safe_tmp_path):
     """GT2: cleanup_member_docs() cleans member docs/, leaves root plain docs/ intact."""
-    from opencode_search.core.config import ProjectEntry
-    from opencode_search.core.registry import upsert_project
-    from opencode_search.kb.docgen import cleanup_member_docs
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.kb.docgen import cleanup_member_docs
 
     root = str(safe_tmp_path / "root3")
     member = str(safe_tmp_path / "member3")

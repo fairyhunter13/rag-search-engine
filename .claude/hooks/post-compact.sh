@@ -5,7 +5,7 @@
 python3 -c "
 import json
 ctx = '''=== Post-Compaction Reminder ===
-You are working on opencode-search-engine (GPU-accelerated code intelligence MCP server).
+You are working on rag-search-engine (GPU-accelerated code intelligence MCP server).
 Critical rules that survived compaction:
 1. MANDATORY: call search()/ask()/overview() BEFORE any Bash grep/find/Read for code lookup
 2. GPU-only inference — CPU fallback is FORBIDDEN; must raise fatal error, not fall back silently

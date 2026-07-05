@@ -34,26 +34,26 @@ class Server {
 # ── extractor ────────────────────────────────────────────────────────────────
 
 def test_extract_python_symbols():
-    from opencode_search.graph.extractor import extract_symbols
+    from rag_search.graph.extractor import extract_symbols
     syms = extract_symbols(Path("calc.py"), _PY, "python")
     names = {s.name for s in syms}
     assert "add" in names and "Calculator" in names
 
 
 def test_extract_typescript_symbols():
-    from opencode_search.graph.extractor import extract_symbols
+    from rag_search.graph.extractor import extract_symbols
     syms = extract_symbols(Path("srv.ts"), _TS, "typescript")
     names = {s.name for s in syms}
     assert "greet" in names and "Server" in names
 
 
 def test_extract_unsupported_returns_empty():
-    from opencode_search.graph.extractor import extract_symbols
+    from rag_search.graph.extractor import extract_symbols
     assert extract_symbols(Path("doc.md"), "# Title\ntext", "markdown") == []
 
 
 def test_symbol_start_end_lines():
-    from opencode_search.graph.extractor import extract_symbols
+    from rag_search.graph.extractor import extract_symbols
     syms = extract_symbols(Path("f.py"), _PY, "python")
     add_sym = next(s for s in syms if s.name == "add")
     assert add_sym.start_line >= 1
@@ -63,8 +63,8 @@ def test_symbol_start_end_lines():
 # ── store ────────────────────────────────────────────────────────────────────
 
 def test_graph_store_insert_and_query():
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
     with tempfile.TemporaryDirectory() as tmp:
         store = GraphStore(Path(tmp) / "g.db")
         syms = extract_symbols(Path("calc.py"), _PY, "python")
@@ -80,7 +80,7 @@ def test_graph_store_insert_and_query():
 
 
 def test_graph_store_edge_insert():
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.store import GraphStore
     with tempfile.TemporaryDirectory() as tmp:
         store = GraphStore(Path(tmp) / "g.db")
         store.upsert_symbol("aaa", "foo", "foo", "function", "f.py", 1, 3, "python")
@@ -95,9 +95,9 @@ def test_graph_store_edge_insert():
 # ── community detection ───────────────────────────────────────────────────────
 
 def test_community_detection_assigns_ids():
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
     with tempfile.TemporaryDirectory() as tmp:
         store = GraphStore(Path(tmp) / "g.db")
         for fname, code, lang in [("a.py", _PY, "python"), ("b.ts", _TS, "typescript")]:
@@ -114,9 +114,9 @@ def test_community_detection_assigns_ids():
 
 def test_detect_communities_idempotent(tmp_path):
     """T2/F1/HR3: detect_communities re-run must NOT wipe existing L1 community summaries."""
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.extractor import extract_symbols, symbol_id
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.extractor import extract_symbols, symbol_id
+    from rag_search.graph.store import GraphStore
 
     fpath = tmp_path / "a.py"
     fpath.write_text(_PY)
@@ -151,9 +151,9 @@ def test_detect_communities_fastgreedy_no_singleton_explosion(tmp_path):
     other shells. fastgreedy keeps the graph connected — singleton_ratio must stay <0.60
     and degenerate must be False on a chain of 10+ connected symbols.
     """
-    from opencode_search.graph.community import detect_communities
-    from opencode_search.graph.quality import partition_quality
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.quality import partition_quality
+    from rag_search.graph.store import GraphStore
 
     gs = GraphStore(tmp_path / "g.db")
     try:
@@ -186,7 +186,7 @@ def test_all_project_graph_dbs_have_canonical_edges_schema(sample_workspace: Sam
     """Sample project graph.dbs must have caller_sid/callee_sid (not legacy from_id/to_id)."""
     import sqlite3
 
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     from tests.live._projects import sample_project_paths
     for path in sample_project_paths(sample_workspace):
         gdb = project_graph_db(path)
@@ -212,7 +212,7 @@ def test_index_project_attributes_edges_to_enclosing_symbol():
     """
     import inspect
 
-    from opencode_search.daemon.sweeps import _extract_graph
+    from rag_search.daemon.sweeps import _extract_graph
     src = inspect.getsource(_extract_graph)
     assert "caller_sids[0]" not in src, (
         "representative-caller shortcut detected — Gap 2 regression: "

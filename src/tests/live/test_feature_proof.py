@@ -16,7 +16,7 @@ _WHATS = ["structure","status","projects","metrics","import_cycles",
 
 
 def _sym(path: str) -> str:
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     gdb = project_graph_db(path)
     if not gdb.exists(): return ""
     with sqlite3.connect(str(gdb)) as c:
@@ -27,8 +27,8 @@ def _sym(path: str) -> str:
 # ── L1: structural guards ─────────────────────────────────────────────────
 
 def test_fp0_deleted_modules():
-    for mod in ("opencode_search.kb.hierarchy","opencode_search.kb.federation_hierarchy",
-                "opencode_search.kb.structure","opencode_search.kb.world_model"):
+    for mod in ("rag_search.kb.hierarchy","rag_search.kb.federation_hierarchy",
+                "rag_search.kb.structure","rag_search.kb.world_model"):
         with pytest.raises(ModuleNotFoundError): __import__(mod)
 
 
@@ -40,12 +40,12 @@ def test_fp1_removed_whats_error(live_client, service_path):
 
 
 def test_fp2_valid_set():
-    from opencode_search.server._overview import _VALID
+    from rag_search.server._overview import _VALID
     for w in _REMOVED: assert w not in _VALID, f"{w!r} still in _VALID"
 
 
 def test_fp3_l1_only_in_all_dbs(sample_workspace):
-    from opencode_search.core.config import project_graph_db
+    from rag_search.core.config import project_graph_db
     from tests.live._projects import sample_project_paths
     bad = []
     for path in sample_project_paths(sample_workspace):
@@ -58,7 +58,7 @@ def test_fp3_l1_only_in_all_dbs(sample_workspace):
 
 
 def test_fp4_no_domain_pages(service_path):
-    from opencode_search.core.config import project_wiki_dir
+    from rag_search.core.config import project_wiki_dir
     d = project_wiki_dir(service_path)
     # If wiki dir doesn't exist, there are trivially no domain pages — test passes.
     if d.exists():
@@ -68,13 +68,13 @@ def test_fp4_no_domain_pages(service_path):
 # ── L2: sample service member ─────────────────────────────────────────────
 
 def test_fp5_service_search(service_path):
-    from opencode_search.server.mcp import search as t
+    from rag_search.server.mcp import search as t
     d = json.loads(asyncio.run(t("function definition", project_paths=[service_path])))
     assert d.get("total", 0) > 0, f"search 0: {d}"
 
 
 def test_fp6_service_graph(service_path):
-    from opencode_search.server.mcp import graph as t
+    from rag_search.server.mcp import graph as t
     sym = _sym(service_path); assert sym
     for rel in ("callers","callees","impact","definition"):
         d = json.loads(asyncio.run(t(sym, service_path, rel)))
@@ -83,13 +83,13 @@ def test_fp6_service_graph(service_path):
 
 @pytest.mark.parametrize("what", _WHATS)
 def test_fp7_service_overview(what, service_path):
-    from opencode_search.server.mcp import overview as t
+    from rag_search.server.mcp import overview as t
     d = json.loads(asyncio.run(t(service_path, what)))
     assert isinstance(d, dict) and "error" not in d, f"{what!r}: {d}"
 
 
 def test_fp8_service_status(service_path):
-    from opencode_search.server.mcp import overview as t
+    from rag_search.server.mcp import overview as t
     d = json.loads(asyncio.run(t(service_path, "status")))
     assert "l1_enriched_pct" in d and "hierarchy_quality" in d
     assert "l2_enriched_pct" not in d
@@ -114,13 +114,13 @@ def fed_root(sample_workspace: SampleWorkspace) -> str:
 
 
 def test_fp10_federation_search(fed_root):
-    from opencode_search.server.mcp import search as t
+    from rag_search.server.mcp import search as t
     d = json.loads(asyncio.run(t("function", project_paths=[fed_root])))
     assert d.get("total", 0) > 0
 
 
 def test_fp11_federation_status(fed_root):
-    from opencode_search.server.mcp import overview as t
+    from rag_search.server.mcp import overview as t
     d = json.loads(asyncio.run(t(fed_root, "status")))
     assert "members" in d and d["members"] and "l1_enriched_pct" in d
     assert "l2_enriched_pct" not in d
@@ -128,7 +128,7 @@ def test_fp11_federation_status(fed_root):
 
 @pytest.mark.parametrize("what", ["business_rules","process_flows"])
 def test_fp12_federation_features(fed_root, what):
-    from opencode_search.server.mcp import overview as t
+    from rag_search.server.mcp import overview as t
     d = json.loads(asyncio.run(t(fed_root, what)))
     assert isinstance(d, dict) and "error" not in d
 
@@ -143,7 +143,7 @@ def test_fp13_federation_wiki_no_domain(live_client, fed_root):
 
 @pytest.mark.slow
 def test_fp14_ask_flat_l1(service_path):
-    from opencode_search.server.mcp import ask as t
+    from rag_search.server.mcp import ask as t
     result = asyncio.run(t("What is the overall architecture?", service_path, "global"))
     assert len(result.strip()) > 100
     assert any(k in result.lower() for k in ("cart","checkout","promo","order","discount","coupon","fulfillment","price","rule"))
@@ -153,7 +153,7 @@ def test_fp14_ask_flat_l1(service_path):
 
 def test_fp15_no_set_community_parent_in_source():
     """Phase-1b guard: set_community_parent removed from graph/store.py (no callers existed)."""
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.store import GraphStore
     assert not hasattr(GraphStore, "set_community_parent"), \
         "set_community_parent still exists on GraphStore — vestigial L2 nesting capacity"
 
@@ -161,7 +161,7 @@ def test_fp15_no_set_community_parent_in_source():
 def test_fp16_no_level2_query_in_quality():
     """Phase-1b guard: no WHERE level=2 query in graph/quality.py (always-0 dead metric)."""
     import inspect
-    from opencode_search import graph
+    from rag_search import graph
     quality_path = Path(inspect.getfile(graph)).parent / "quality.py"
     quality_path = quality_path.resolve()
     src = quality_path.read_text()
@@ -174,7 +174,7 @@ def test_fp16_no_level2_query_in_quality():
 def test_fp17_no_llm_in_graph_handler():
     """Gap-B guard: impact_narrative + semantic_trace deleted (P2 violation — LLM in query path)."""
     import importlib
-    mod = importlib.import_module("opencode_search.query.graph_handler")
+    mod = importlib.import_module("rag_search.query.graph_handler")
     assert not hasattr(mod, "impact_narrative"), \
         "impact_narrative re-introduced in query/graph_handler (P2 violation: LLM in query path)"
     assert not hasattr(mod, "semantic_trace"), \

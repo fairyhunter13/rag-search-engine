@@ -1,0 +1,1124 @@
+"""Business Process Reverse Engineering (BPRE) — federation-level pass.
+
+D2 entry-point detection · D3 cross-service edge resolution (gRPC/Pub-Sub/HTTP)
+D4 process tracing (ordered steps spanning services) · D5 rule/state extraction
+D6 synthesis (BPMN 2.0 XML + sequenceDiagram + DeepSeek narrative)
+
+Writes *only* to process_graph.db at the federation root (root_process_db).
+Never writes to any per-member graph.db (HR4).  Deterministic pass (D2-D4,
+BPMN, mermaid) = GPU-free.  Cloud DeepSeek only for D5 rules + D6 narrative;
+suppressed when DEEPSEEK_API_KEY is absent.
+"""
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import json
+import logging
+import os
+import sqlite3
+import threading
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rag_search.kb.bpre_ast import ApiSurface
+
+log = logging.getLogger(__name__)
+
+# Per-root threading locks: fcntl.flock is per-process (doesn't block same-PID callers),
+# so concurrent calls from different threads (reconcile + watcher) require a threading.Lock.
+_BPRE_LOCKS: dict[str, threading.Lock] = {}
+_BPRE_LOCKS_MU = threading.Lock()
+
+# ─── Test-file exclusion ──────────────────────────────────────────────────────
+
+_TEST_FILE_SUFFIXES: frozenset[str] = frozenset({
+    "_test.go", "_test.py", ".test.ts", ".spec.ts", ".test.js", ".spec.js",
+    "_test.js", "_test.ts",
+})
+_TEST_DIRS: frozenset[str] = frozenset({
+    "testdata", "mocks", "__tests__", "test_helpers", "fixtures", "test",
+})
+
+
+def _is_test_file(path: str) -> bool:
+    p = Path(path)
+    for part in p.parts:
+        if part in _TEST_DIRS:
+            return True
+    name = p.name
+    return any(name.endswith(suf) for suf in _TEST_FILE_SUFFIXES)
+
+# ─── Schema ───────────────────────────────────────────────────────────────────
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS entry_points (
+    ep_id TEXT PRIMARY KEY, service TEXT NOT NULL, file TEXT NOT NULL,
+    line INTEGER DEFAULT 0, kind TEXT NOT NULL, trigger TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS cross_service_edges (
+    id TEXT PRIMARY KEY, caller_service TEXT NOT NULL, caller_file TEXT DEFAULT '',
+    caller_line INTEGER DEFAULT 0, callee_service TEXT NOT NULL,
+    callee_endpoint TEXT NOT NULL, kind TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0, evidence TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS processes (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, entry_ep_id TEXT DEFAULT '',
+    entry_service TEXT NOT NULL, services_json TEXT DEFAULT '[]',
+    step_count INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS process_steps (
+    process_id TEXT NOT NULL, order_index INTEGER NOT NULL,
+    sid_or_endpoint TEXT DEFAULT '', service TEXT NOT NULL,
+    kind TEXT NOT NULL, guard TEXT DEFAULT '',
+    PRIMARY KEY (process_id, order_index)
+);
+CREATE TABLE IF NOT EXISTS process_artifacts (
+    process_id TEXT PRIMARY KEY, narrative TEXT DEFAULT '',
+    mermaid TEXT DEFAULT '', bpmn_xml TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS member_scan_cache (
+    member TEXT PRIMARY KEY, sig TEXT NOT NULL, facts_json TEXT NOT NULL
+);
+"""
+
+# ─── Tiny helpers ─────────────────────────────────────────────────────────────
+
+def _init_db(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(str(db_path), check_same_thread=False)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
+    con.executescript(_SCHEMA)
+    # Migration F-H/F-I: drop write-only tables removed in Phase 2a.
+    for _dead_tbl in ("process_rules", "state_machines"):
+        con.execute(f"DROP TABLE IF EXISTS {_dead_tbl}")
+    con.commit()
+    return con
+
+
+def _bpre_get_meta(con: sqlite3.Connection, key: str) -> str | None:
+    row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _bpre_set_meta(con: sqlite3.Connection, key: str, value: str) -> None:
+    con.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, value))
+
+
+def _bpre_algo_version() -> str:
+    """SHA-4 over source bytes of modules that determine BPRE output (definition fingerprint)."""
+    import contextlib
+    root = Path(__file__).resolve().parent
+    modules = [
+        root / "bpre.py", root / "bpre_ast.py",
+        root / "bpre_spec.py", root / "bpre_generic.py", root / "bpre_paradigms.py",
+        root / "valueflow.py", root / "resolve_rerank.py",
+    ]
+    h = hashlib.sha1()
+    for p in modules:
+        with contextlib.suppress(OSError):
+            h.update(p.read_bytes())
+    return h.hexdigest()[:4]
+
+
+def _bpre_source_sig(members: list[str]) -> str:
+    """sha1 over sorted per-member BPRE code-file signatures — stat-only, GPU-free.
+
+    Code-only (not the all-files _source_fingerprint) so doc/config/image edits and
+    hidden-dir tool-cache churn can never flip this and trigger a federation rebuild.
+    """
+    parts = sorted(_bpre_code_sig(m) for m in members)
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()
+
+
+def _hid(*parts: str) -> str:
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _service_label(member_path: str) -> str:
+    return Path(member_path).name
+
+
+def _rel_path(file: str, root: str) -> str:
+    if not file or not root:
+        return os.path.basename(file) if file else ""
+    try:
+        return os.path.relpath(file, root)
+    except ValueError:
+        return os.path.basename(file)
+
+
+def _proc_sig(name: str, services_json: str, steps: list) -> str:
+    """Content hash over (process name, sorted services, ordered step tuples)."""
+    try:
+        svcs = sorted(json.loads(services_json))
+    except Exception:
+        svcs = []
+    step_tuples = [(s[2], s[0], s[3]) for s in steps]  # (kind, sid_or_endpoint, guard)
+    payload = json.dumps([name, svcs, step_tuples], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(payload.encode()).hexdigest()
+
+
+def _narrative_incomplete(con: sqlite3.Connection) -> bool:
+    """True iff DeepSeek key present + any process_artifact has an empty narrative."""
+    try:
+        from rag_search.graph.llm import deepseek_key
+        if not deepseek_key():
+            return False
+    except Exception:
+        return False
+    n = con.execute(
+        "SELECT COUNT(*) FROM process_artifacts WHERE narrative=''"
+    ).fetchone()[0]
+    return n > 0
+
+
+def _source_files(member_path: str) -> list[Path]:
+    from rag_search.core.registry import get_project
+    from rag_search.index.discover import detect_language, is_code_language, is_ignored_path
+    root = Path(member_path)
+    entry = get_project(member_path)
+    # Monorepo-style federations nest member subdirectories inside the root's own tree
+    # (see expand_federation, which scans root + members). Exclude sibling members here so
+    # the root's own scan doesn't re-walk them and misattribute their facts to the root's
+    # service label via _build_service_registry's first-wins setdefault.
+    nested_members = {
+        Path(m).resolve() for m in (entry.federation if entry and entry.federation else [])
+    }
+    out: list[Path] = []
+    try:
+        for dirpath, dirs, files in os.walk(str(root)):
+            dp = Path(dirpath)
+            # is_ignored_path shares the same HR35 resolver as iter_files/the watcher (OSE
+            # exclude/include, hidden-dir skip, .gitignore), so BPRE's scan never sees a file
+            # the indexer or the drift gate wouldn't also see.
+            dirs[:] = [
+                d for d in dirs
+                if (dp / d).resolve() not in nested_members and not is_ignored_path(dp / d, root)
+            ]
+            for f in files:
+                p = dp / f
+                if (is_code_language(detect_language(p))
+                        and not _is_test_file(str(p))
+                        and not is_ignored_path(p, root)):
+                    out.append(p)
+    except OSError:
+        pass
+    return out
+
+
+_bpre_code_sig_cache: dict[str, tuple[float, str]] = {}
+
+
+def _bpre_code_sig(member_path: str) -> str:
+    """sha1 over sorted 'relpath:mtime' for BPRE's own code-file selection — stat-only, GPU-free.
+
+    Mirrors daemon.sweeps._source_fingerprint's coarse pre-gate (root dir mtime) so the
+    reconcile root-pass's per-root reconstruct_processes() call stays a cheap no-op when
+    quiescent. Invalidated from daemon.sweeps.on_change alongside _fingerprint_cache.
+    """
+    root = Path(member_path)
+    try:
+        coarse = root.stat().st_mtime
+    except OSError:
+        coarse = 0.0
+    cached = _bpre_code_sig_cache.get(member_path)
+    if cached is not None and cached[0] == coarse:
+        return cached[1]
+    parts: list[str] = []
+    for f in _source_files(member_path):
+        try:
+            rel = str(f.relative_to(root))
+            mtime = int(f.stat().st_mtime)
+            parts.append(f"{rel}:{mtime}")
+        except (OSError, ValueError):
+            pass
+    parts.sort()
+    sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
+    _bpre_code_sig_cache[member_path] = (coarse, sig)
+    return sig
+
+
+def _invalidate_bpre_code_sig(member_path: str) -> None:
+    """Drop the cached code-sig for member_path — called from on_change on any source event."""
+    _bpre_code_sig_cache.pop(member_path, None)
+
+
+def _iter_member_facts(member_path: str, member_facts, surf):
+    """Yield (src_path_str, FileFacts) — from cache if provided, else by scanning."""
+    if member_facts is not None:
+        yield from member_facts.items()
+        return
+    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.index.discover import detect_language
+    from rag_search.kb.bpre_ast import scan_file
+    for src in _source_files(member_path):
+        try:
+            content = src.read_text(errors="replace")
+        except OSError:
+            continue
+        ff = run_bounded(scan_file, (str(src), content, detect_language(src), surf),
+                          path_for_log=str(src))
+        if ff and ff != PARSE_TIMEOUT:
+            yield str(src), ff
+
+
+def _member_scan_sig(member: str, algo: str) -> str:
+    """Per-member cache key: BPRE code-file content sig + extraction-logic version.
+
+    Must include `algo` (not just source) — a bpre_ast.py/bpre_spec.py change alters what
+    scan_file() extracts from unchanged source, so a source-only key would serve stale facts.
+    """
+    return f"{algo}:{_bpre_code_sig(member)}"
+
+
+def _member_scan_cache_get(con: sqlite3.Connection, member: str, sig: str) -> dict | None:
+    row = con.execute(
+        "SELECT facts_json FROM member_scan_cache WHERE member=? AND sig=?", (member, sig)
+    ).fetchone()
+    if not row:
+        return None
+    from rag_search.kb.bpre_ast import FileFacts
+    try:
+        return {p: FileFacts(**d) for p, d in json.loads(row[0]).items()}
+    except Exception:
+        return None
+
+
+def _member_scan_cache_put(con: sqlite3.Connection, member: str, sig: str, facts: dict) -> None:
+    payload = json.dumps({p: dataclasses.asdict(ff) for p, ff in facts.items()})
+    con.execute("INSERT OR REPLACE INTO member_scan_cache VALUES (?,?,?)", (member, sig, payload))
+    con.commit()
+
+
+def _scan_all_members(
+    members: list[str], surf, con: sqlite3.Connection | None = None, algo: str = "",
+) -> dict:
+    """Scan every source file exactly once; return {member → {path → FileFacts}}.
+
+    Part F (incremental BPRE): when `con` is given, reuses a member's cached facts from
+    `member_scan_cache` iff its (algo, source) signature is unchanged — only members with
+    real source drift (or a bumped extraction algo) actually get tree-sitter re-parsed. Cross-
+    member edge resolution and process tracing still run federation-wide over the full result.
+    """
+    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.index.discover import detect_language
+    from rag_search.kb.bpre_ast import scan_file
+    all_facts: dict = {}
+    for member in members:
+        sig = _member_scan_sig(member, algo) if con is not None else None
+        cached = _member_scan_cache_get(con, member, sig) if con is not None else None
+        if cached is not None:
+            log.debug("bpre: reusing cached scan for %s (sig unchanged)", member)
+            all_facts[member] = cached
+            continue
+        mf: dict = {}
+        for src in _source_files(member):
+            try:
+                content = src.read_text(errors="replace")
+            except OSError:
+                continue
+            ff = run_bounded(scan_file, (str(src), content, detect_language(src), surf),
+                              path_for_log=str(src))
+            if ff and ff != PARSE_TIMEOUT:
+                mf[str(src)] = ff
+        all_facts[member] = mf
+        if con is not None:
+            log.debug("bpre: scanning %s (%d files, cache miss)", member, len(mf))
+            _member_scan_cache_put(con, member, sig, mf)
+    return all_facts
+
+
+# ─── D2 Entry-point detection ─────────────────────────────────────────────────
+
+def _detect_entry_points(
+    con: sqlite3.Connection, member_path: str, surf: ApiSurface,
+    member_facts=None,
+) -> None:
+    service = _service_label(member_path)
+    rows: list[tuple] = []
+    for src_path, ff in _iter_member_facts(member_path, member_facts, surf):
+        rel = _rel_path(src_path, member_path)
+        for verb, path, ln in ff.http_routes:
+            rows.append((_hid(service, rel, verb, path), service, rel, ln, "http", f"{verb} {path}"))
+        for svc_name, ln in ff.grpc_servers:
+            rows.append((_hid(service, rel, "grpc", svc_name), service, rel, ln, "grpc", svc_name))
+        if ff.has_receive_call:
+            rows.append((_hid(service, rel, "pubsub", "recv"), service, rel, 0, "pubsub", "subscriber"))
+    con.executemany("INSERT OR IGNORE INTO entry_points VALUES (?,?,?,?,?,?)", rows)
+    con.commit()
+
+
+# ─── D3 Service/pub-sub/HTTP registries ───────────────────────────────────────
+
+def _build_service_registry(members: list[str], surf: ApiSurface, all_facts=None) -> dict[str, str]:
+    """Map {ServiceLabel → member_path} by scanning non-proto source files for Register*Server calls."""
+    registry: dict[str, str] = {}
+    for member in members:
+        mf = all_facts.get(member) if all_facts is not None else None
+        for src_path, ff in _iter_member_facts(member, mf, surf):
+            if src_path.endswith(".pb.go"):
+                continue
+            for svc_name, _ln in ff.grpc_servers:
+                registry.setdefault(svc_name, member)
+    return registry
+
+
+def _build_pubsub_registry(
+    members: list[str], surf: ApiSurface, all_facts=None,
+) -> dict[str, tuple[str, str, str, int]]:
+    publishers: dict[str, list[tuple[str, str, int]]] = {}
+    consumers: dict[str, list[str]] = {}
+    for member in members:
+        mf = all_facts.get(member) if all_facts is not None else None
+        for src_path, ff in _iter_member_facts(member, mf, surf):
+            rel = _rel_path(src_path, member)
+            for tk, ln in ff.proto_marshal_types:
+                publishers.setdefault(tk, []).append((member, rel, ln))
+            for tk, _ln in ff.pubsub_consumes:
+                consumers.setdefault(tk, []).append(member)
+    result: dict[str, tuple[str, str, str, int]] = {}
+    for key in set(publishers) & set(consumers):
+        pub_member, pub_file, pub_line = publishers[key][0]
+        sub = consumers[key][0]
+        if pub_member != sub:
+            result[key] = (pub_member, sub, pub_file, pub_line)
+    return result
+
+
+_STD_HTTP_VERBS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
+def _normalize_route(path: str) -> str:
+    """Collapse path params/IDs to /{*} so /orders/{id} matches /orders/123."""
+    parts = []
+    for seg in path.split("/"):
+        if (seg.startswith("{") and seg.endswith("}")) or \
+           seg.startswith(":") or \
+           (seg.startswith("<") and seg.endswith(">")) or \
+           (len(seg) == 36 and seg.count("-") == 4) or \
+           seg.isdigit():
+            parts.append("{*}")
+        else:
+            parts.append(seg)
+    return "/".join(parts)
+
+
+def _build_http_route_map(
+    members: list[str], surf: ApiSurface, all_facts=None,
+) -> dict[str, str]:
+    route_map: dict[str, str] = {}
+    for member in members:
+        svc = _service_label(member)
+        mf = all_facts.get(member) if all_facts is not None else None
+        for _src_path, ff in _iter_member_facts(member, mf, surf):
+            for verb, path, _ln in ff.http_routes:
+                norm_verb = verb if verb in _STD_HTTP_VERBS else "ANY"
+                route_map[f"{norm_verb} {_normalize_route(path)}"] = svc
+    return route_map
+
+
+# ─── D3 Edge resolution ───────────────────────────────────────────────────────
+
+def _resolve_grpc_edges(
+    con: sqlite3.Connection, member: str, service_registry: dict[str, str],
+    surf: ApiSurface, member_facts=None,
+) -> None:
+    caller_svc = _service_label(member)
+    rows: list[tuple] = []
+    for src_path, ff in _iter_member_facts(member, member_facts, surf):
+        rel = _rel_path(src_path, member)
+        for _alias, svc_name, ctor, ln in ff.grpc_clients:
+            callee_member = service_registry.get(svc_name)
+            if not callee_member or callee_member == member:
+                continue
+            callee_svc = _service_label(callee_member)
+            edge_id = _hid(caller_svc, callee_svc, "grpc", svc_name, rel, str(ln))
+            rows.append((edge_id, caller_svc, rel, ln, callee_svc,
+                         f"{svc_name}Service", "grpc", 1.0, f"{ctor} @ {rel}:{ln}"))
+    con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+
+
+def _resolve_pubsub_edges(
+    con: sqlite3.Connection, pubsub_registry: dict[str, tuple[str, str, str, int]],
+) -> None:
+    rows = [
+        (_hid(_service_label(pub), _service_label(sub), "pubsub", msg),
+         _service_label(pub), caller_file, caller_line, _service_label(sub), msg, "pubsub", 1.0,
+         f"proto type {msg}")
+        for msg, (pub, sub, caller_file, caller_line) in pubsub_registry.items()
+    ]
+    con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+
+
+def _resolve_http_edges(
+    con: sqlite3.Connection, member: str, http_routes: dict[str, str],
+    surf: ApiSurface, member_facts=None,
+) -> None:
+    caller_svc = _service_label(member)
+    rows: list[tuple] = []
+    for src_path, ff in _iter_member_facts(member, member_facts, surf):
+        rel = _rel_path(src_path, member)
+        for verb, path, ln in ff.http_clients:
+            norm_path = _normalize_route(path)
+            callee_svc = http_routes.get(f"{verb} {norm_path}") or http_routes.get(f"ANY {norm_path}")
+            if not callee_svc or callee_svc == caller_svc:
+                continue
+            edge_id = _hid(caller_svc, callee_svc, "http", verb, path)
+            rows.append((edge_id, caller_svc, rel, ln, callee_svc,
+                         f"{verb} {path}", "http", 0.8, f"HTTP @ {rel}:{ln}"))
+    con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+
+
+def _handler_reachable_set(
+    member_path: str, ep_file: str, ep_line: int,
+) -> tuple[int | None, set[int]]:
+    from rag_search.core.config import project_graph_db
+    gdb = project_graph_db(member_path)
+    if not gdb.exists():
+        return None, set()
+    try:
+        con = sqlite3.connect(str(gdb), check_same_thread=False)
+        con.execute("PRAGMA query_only=ON")
+        try:
+            abs_ep = str((Path(member_path) / ep_file).resolve())
+            fname = Path(ep_file).name
+            rows = con.execute(
+                "SELECT sid FROM symbols WHERE (file=? OR file LIKE ?) "
+                "AND start_line<=? AND end_line>=? ORDER BY (end_line - start_line) ASC LIMIT 1",
+                (abs_ep, f"%/{fname}", ep_line, ep_line),
+            ).fetchall()
+            if not rows:
+                return None, set()
+            handler_sid: int = rows[0][0]
+            reachable: set[int] = {handler_sid}
+            frontier: list[int] = [handler_sid]
+            for _ in range(8):
+                if not frontier:
+                    break
+                ph = ",".join("?" * len(frontier))
+                nexts = [r[0] for r in con.execute(
+                    f"SELECT callee_sid FROM edges WHERE caller_sid IN ({ph})", frontier,
+                ).fetchall() if r[0] not in reachable]
+                reachable.update(nexts)
+                frontier = nexts
+            return handler_sid, reachable
+        finally:
+            con.close()
+    except Exception:
+        return None, set()
+
+
+def _precompute_caller_sids(
+    adj: dict[str, list[tuple]], svc_to_member: dict[str, str],
+) -> dict[tuple, object]:
+    """Batch-precompute (member, rel_file, line) → sid for all call sites in adj."""
+    from rag_search.core.config import project_graph_db
+    cache: dict[tuple, object] = {}
+    locs_by_member: dict[str, set[tuple[str, int]]] = {}
+    for svc, edges in adj.items():
+        m = svc_to_member.get(svc)
+        if not m:
+            continue
+        for _, _, _, cf, cl in edges:
+            if cf and cl > 0:
+                locs_by_member.setdefault(m, set()).add((cf, cl))
+    for member, locs in locs_by_member.items():
+        gdb = project_graph_db(member)
+        if not gdb.exists():
+            continue
+        try:
+            mcon = sqlite3.connect(str(gdb), check_same_thread=False)
+            mcon.execute("PRAGMA query_only=ON")
+            try:
+                for cf, cl in locs:
+                    abs_file = str((Path(member) / cf).resolve())
+                    fname = Path(cf).name
+                    rows = mcon.execute(
+                        "SELECT sid FROM symbols WHERE (file=? OR file LIKE ?) "
+                        "AND start_line<=? AND end_line>=? "
+                        "ORDER BY (end_line - start_line) ASC LIMIT 1",
+                        (abs_file, f"%/{fname}", cl, cl),
+                    ).fetchall()
+                    cache[(member, cf, cl)] = rows[0][0] if rows else None
+            finally:
+                mcon.close()
+        except Exception:
+            pass
+    return cache
+
+
+def _call_in_reachable(
+    caller_file: str, caller_line: int, member_path: str, reachable: set[int],
+    _sid_cache: dict | None = None,
+) -> bool:
+    if not reachable:
+        return True  # no handler found — honest service-level fallback
+    if _sid_cache is not None:
+        sid = _sid_cache.get((member_path, caller_file, caller_line))
+        return sid is None or sid in reachable
+    from rag_search.core.config import project_graph_db
+    gdb = project_graph_db(member_path)
+    if not gdb.exists():
+        return True
+    try:
+        con = sqlite3.connect(str(gdb), check_same_thread=False)
+        con.execute("PRAGMA query_only=ON")
+        try:
+            abs_file = str((Path(member_path) / caller_file).resolve())
+            fname = Path(caller_file).name
+            rows = con.execute(
+                "SELECT sid FROM symbols WHERE (file=? OR file LIKE ?) "
+                "AND start_line<=? AND end_line>=? ORDER BY (end_line - start_line) ASC LIMIT 1",
+                (abs_file, f"%/{fname}", caller_line, caller_line),
+            ).fetchall()
+            return bool(rows) and rows[0][0] in reachable
+        finally:
+            con.close()
+    except Exception:
+        return True  # DB error: conservative inclusion fallback
+
+
+def _callee_ep(
+    con: sqlite3.Connection, callee_svc: str, endpoint: str, kind: str,
+) -> tuple[str, int] | None:
+    rows = con.execute(
+        "SELECT file, line FROM entry_points "
+        "WHERE service=? AND kind=? AND trigger LIKE ? LIMIT 1",
+        (callee_svc, kind, f"%{endpoint}%"),
+    ).fetchall()
+    if not rows:
+        rows = con.execute(
+            "SELECT file, line FROM entry_points WHERE service=? AND kind=? LIMIT 1",
+            (callee_svc, kind),
+        ).fetchall()
+    return (rows[0][0], int(rows[0][1])) if rows else None
+
+
+# ─── D4 Handler-anchored process tracing ─────────────────────────────────────
+
+def _trace_processes(con: sqlite3.Connection, members: list[str]) -> int:
+    eps = con.execute(
+        "SELECT ep_id, service, file, line, kind, trigger FROM entry_points "
+        "WHERE kind IN ('http','grpc')"
+    ).fetchall()
+    edges_raw = con.execute(
+        "SELECT caller_service, callee_service, callee_endpoint, kind, "
+        "caller_file, caller_line FROM cross_service_edges"
+    ).fetchall()
+    svc_to_member: dict[str, str] = {_service_label(m): m for m in members}
+    adj: dict[str, list[tuple]] = {}
+    for caller_svc, callee_svc, ep, kind, cf, cl in edges_raw:
+        adj.setdefault(caller_svc, []).append((callee_svc, ep, kind, cf or "", int(cl or 0)))
+    caller_sids = _precompute_caller_sids(adj, svc_to_member)
+    reach_cache: dict[tuple, tuple] = {}
+    count = 0
+    seen_step_seqs: set[tuple] = set()
+    for ep_id, entry_svc, ep_file, ep_line, ep_kind, trigger in eps:
+        outgoing = adj.get(entry_svc)
+        if not outgoing:
+            continue
+        member_path = svc_to_member.get(entry_svc)
+        rk = (member_path or "", ep_file, int(ep_line))
+        if rk not in reach_cache:
+            reach_cache[rk] = _handler_reachable_set(member_path or "", ep_file, int(ep_line))
+        _, reachable = reach_cache[rk]
+        fired: list[tuple[str, str, str]] = []
+        for callee_svc, endpoint, kind, caller_file, caller_line in outgoing:
+            if (not caller_file or caller_line == 0) or (
+                member_path and _call_in_reachable(caller_file, caller_line, member_path, reachable, caller_sids)
+            ):
+                fired.append((callee_svc, endpoint, kind))
+        if not fired:
+            continue
+        visited: set[str] = {entry_svc}
+        steps: list[tuple] = [(ep_id, 0, f"{ep_file}:{ep_line}", entry_svc, "entry", "")]
+        order = 1
+        for callee_svc, endpoint, kind in fired:
+            if callee_svc in visited:
+                continue
+            visited.add(callee_svc)
+            steps.append((ep_id, order, endpoint, callee_svc, kind, ""))
+            order += 1
+            callee_out = adj.get(callee_svc)
+            callee_member = svc_to_member.get(callee_svc)
+            if not callee_out or not callee_member:
+                continue
+            callee_loc = _callee_ep(con, callee_svc, endpoint, kind)
+            if not callee_loc:
+                continue
+            crk = (callee_member, callee_loc[0], callee_loc[1])
+            if crk not in reach_cache:
+                reach_cache[crk] = _handler_reachable_set(callee_member, callee_loc[0], callee_loc[1])
+            _, c_reach = reach_cache[crk]
+            for c2_svc, ep2, k2, cf2, cl2 in callee_out:
+                if c2_svc in visited:
+                    continue
+                if not cf2 or cl2 == 0 or _call_in_reachable(cf2, cl2, callee_member, c_reach, caller_sids):
+                    visited.add(c2_svc)
+                    steps.append((ep_id, order, ep2, c2_svc, k2, ""))
+                    order += 1
+        if len(visited) < 2:
+            continue
+        step_seq = tuple((s[3], s[2], s[4]) for s in steps[1:])
+        if step_seq in seen_step_seqs:
+            continue
+        seen_step_seqs.add(step_seq)
+        name = f"{entry_svc}: {trigger or ep_kind}"
+        proc_id = _hid(ep_id, entry_svc, name)
+        services = sorted(visited)
+        con.execute("INSERT OR REPLACE INTO processes VALUES (?,?,?,?,?,?)",
+                    (proc_id, name, ep_id, entry_svc, json.dumps(services), len(steps)))
+        con.executemany("INSERT OR REPLACE INTO process_steps VALUES (?,?,?,?,?,?)",
+                        [(proc_id, *s[1:]) for s in steps])
+        count += 1
+    con.commit()
+    return count
+
+
+def _content_hash(content: str) -> str:
+    """XXH3-compatible hash via hashlib (stable key for LLM verdict caching)."""
+    return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()[:20]
+
+
+def _llm_link_scan(
+    members: list[str], surf: ApiSurface,
+    known_routes: set[str], known_topics: set[str],
+    all_facts=None,
+) -> list[dict]:
+    seen: set[str] = set()
+    items: list[dict] = []
+    for member in members:
+        caller_svc = _service_label(member)
+        mf = all_facts.get(member) if all_facts is not None else None
+        for _src_path, ff in _iter_member_facts(member, mf, surf):
+            for tk, _ln in ff.proto_marshal_types:
+                key = f"pubsub:{caller_svc}:{tk}"
+                if tk not in known_topics and key not in seen:
+                    seen.add(key)
+                    items.append({"kind": "pubsub", "caller": caller_svc, "topic_or_route": tk})
+            for verb, path, _ln in ff.http_clients:
+                route = f"{verb} {path}"
+                key = f"http:{caller_svc}:{route}"
+                if route not in known_routes and key not in seen:
+                    seen.add(key)
+                    items.append({"kind": "http", "caller": caller_svc, "topic_or_route": route})
+    return items
+
+
+def _llm_link_resolve(
+    con: sqlite3.Connection, items: list[dict], svcs: list[str],
+) -> None:
+    """Tier-2 SEA-style LLM resolution: SELECT from admitted candidate set only.
+
+    The LLM is given the exact list of admitted service names and may only
+    return callee values from that list (SEA arXiv:2408.04344: +8.1 F1).
+    Verification gate: drops any edge where caller==callee.
+    """
+    from rag_search.graph.llm import _accumulate_llm_tokens, deepseek_extract, deepseek_key
+    if not deepseek_key():
+        return
+    svc_set = set(svcs)
+    # Stable prefix (byte-identical → high cache hit rate)
+    stable_prefix = (
+        "You are a microservice dependency resolver. "
+        "Given a list of unresolved edges, return a JSON array where each element "
+        "has: kind, caller, topic_or_route, callee. "
+        "IMPORTANT: callee MUST be one of the admitted services listed by the user. "
+        "Use null callee if you cannot determine it confidently. "
+        "Return ONLY valid JSON — no markdown, no explanation."
+    )
+    hints = "\n".join(
+        f"- {u['kind']} '{u['topic_or_route']}' from '{u['caller']}'" for u in items[:30]
+    )
+    if len(items) > 30:
+        log.warning("bpre llm_link_resolve: cap 30 hit (had %d items)", len(items))
+    dynamic_tail = f"Admitted services: {json.dumps(svcs)}\n\nEdges to resolve:\n{hints}"
+    try:
+        raw, usage = deepseek_extract(stable_prefix, dynamic_tail, max_tokens=512)
+    except Exception as exc:
+        log.warning("bpre _llm_link_resolve: %s", exc)
+        return
+    _accumulate_llm_tokens(usage, "bpre_link")
+    if usage.get("prompt_cache_hit_tokens", 0) > 0:
+        log.debug("bpre llm_link: cache hit %d tokens", usage["prompt_cache_hit_tokens"])
+    s, e = raw.find("["), raw.rfind("]")
+    if s == -1 or e <= s:
+        return
+    try:
+        parsed = json.loads(raw[s:e + 1])
+    except Exception:
+        return
+    rows = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        callee, caller = item.get("callee"), item.get("caller")
+        # SEA invariant + structural verification: callee must be in admitted set
+        if not callee or callee not in svc_set or not caller or caller == callee:
+            continue
+        tor = item.get("topic_or_route", "")
+        kind = f"{item.get('kind', 'llm')}_llm"
+        rows.append((_hid(caller, callee, kind, tor), caller, "", 0, callee,
+                     tor, kind, 0.7, f"llm-inferred:{tor}"))
+    if rows:
+        con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        con.commit()
+
+
+def _llm_link_edges(con: sqlite3.Connection, members: list[str], surf: ApiSurface, all_facts=None) -> None:
+    from rag_search.graph.llm import deepseek_key
+    if not deepseek_key():
+        return
+    known_routes_map: dict[str, str] = {r[0]: r[1] for r in con.execute(
+        "SELECT callee_endpoint, callee_service FROM cross_service_edges WHERE kind='http'"
+    ).fetchall()}
+    known_topics_map: dict[str, str] = {r[0]: r[1] for r in con.execute(
+        "SELECT callee_endpoint, callee_service FROM cross_service_edges WHERE kind='pubsub'"
+    ).fetchall()}
+    known_routes: set[str] = set(known_routes_map)
+    known_topics: set[str] = set(known_topics_map)
+    items = _llm_link_scan(members, surf, known_routes, known_topics, all_facts)
+    if not items:
+        return
+    svcs = [_service_label(m) for m in members]
+    # Tier-1.75: try GPU rerank before calling the cloud LLM
+    try:
+        from rag_search.kb.resolve_rerank import rerank_residue
+        all_known = {**known_routes_map, **known_topics_map}
+        resolved, items = rerank_residue(items, all_known)
+        rows_175 = [
+            (_hid(r["caller"], r["callee"], f"{r['kind']}_reranked", r["topic_or_route"]),
+             r["caller"], "", 0, r["callee"], r["topic_or_route"],
+             f"{r['kind']}_reranked", 0.8, "rerank-resolved")
+            for r in resolved if r.get("callee") and r["callee"] != r["caller"]
+        ]
+        if rows_175:
+            con.executemany("INSERT OR IGNORE INTO cross_service_edges VALUES (?,?,?,?,?,?,?,?,?)", rows_175)
+            con.commit()
+    except Exception as exc:
+        log.debug("bpre Tier-1.75 rerank skipped: %s", exc)
+    if items:
+        _llm_link_resolve(con, items, svcs)
+
+
+# ─── D6 Synthesis ─────────────────────────────────────────────────────────────
+
+def _bpmn_xml(process_id: str, process_name: str,
+              steps: list[tuple[str, str, str, str]]) -> str:
+    id8 = process_id[:8]
+    services = list(dict.fromkeys(s[1] for s in steps))
+    lanes = "\n".join(
+        f'      <bpmn:lane id="lane_{i}" name="{svc}"/>' for i, svc in enumerate(services)
+    )
+    start = f'    <bpmn:startEvent id="start_{id8}" name="Start"/>'
+    end_id = f"end_{id8}"
+    end = f'    <bpmn:endEvent id="{end_id}" name="End"/>'
+    tasks: list[str] = []
+    flows: list[str] = []
+    prev_id = f"start_{id8}"
+    for i, (endpoint, _svc, kind, _guard) in enumerate(steps):
+        elem_id = f"elem_{id8}_{i}"
+        label = (endpoint.split("/")[-1] or endpoint)[:40].replace("&", "&amp;")
+        tag = "bpmn:exclusiveGateway" if kind == "decision" else "bpmn:task"
+        tasks.append(f'    <{tag} id="{elem_id}" name="{label}"/>')
+        flows.append(f'    <bpmn:sequenceFlow id="flow_{id8}_{i}" '
+                     f'sourceRef="{prev_id}" targetRef="{elem_id}"/>')
+        prev_id = elem_id
+    flows.append(f'    <bpmn:sequenceFlow id="flow_{id8}_end" '
+                 f'sourceRef="{prev_id}" targetRef="{end_id}"/>')
+    proc_body = "\n".join([
+        f'  <bpmn:process id="proc_{id8}" name="{process_name[:80]}" isExecutable="false">',
+        f'    <bpmn:laneSet id="lanes_{id8}">', lanes, "    </bpmn:laneSet>",
+        start, *tasks, end, *flows,
+        "  </bpmn:process>",
+    ])
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"\n'
+        f'    targetNamespace="http://rag-search/bpre" id="defs_{id8}">\n'
+        f'{proc_body}\n</bpmn:definitions>'
+    )
+
+
+def _mermaid_sequence(process_name: str,
+                      steps: list[tuple[str, str, str, str]]) -> str:
+    services = list(dict.fromkeys(s[1] for s in steps))
+    cap = 40
+    lines = ["sequenceDiagram"]
+    for svc in services[:cap]:
+        lines.append(f"    participant {svc}")
+    prev_svc = services[0] if services else ""
+    open_alts = 0
+    for endpoint, svc, kind, guard in steps[:cap]:
+        if kind == "decision" and guard:
+            lines.append(f"    alt {guard}")
+            open_alts += 1
+        label = (endpoint.split("/")[-1] or endpoint)[:40]
+        if svc != prev_svc:
+            lines.append(f"    {prev_svc}->>{svc}: {label}")
+        else:
+            lines.append(f"    Note over {svc}: {label}")
+        prev_svc = svc
+    for _ in range(open_alts):
+        lines.append("    end")
+    return "\n".join(lines)
+
+
+_BPRE_NARRATIVE_SYSTEM = (
+    "Describe each business process in 3-5 sentences using ONLY the facts provided. "
+    "Do not invent service names or steps. Name real services only. "
+    'Reply with JSON: [{"id": <N>, "narrative": "<3-5 sentences>"}]'
+)
+
+
+def _parse_narratives(raw: str) -> dict[str, str]:
+    """Parse a DeepSeek narrative reply into {process_id: narrative}.
+
+    process ids are hex strings (processes.id TEXT PK from _hid) — never coerce to int.
+    Tolerates ```json fences, <think> prefaces, and json_object object-wrapping.
+    """
+    t = raw.split("</think>")[-1] if "</think>" in raw else raw
+    t = t.replace("```json", "").replace("```", "")
+    if (s := t.find("[")) == -1 or (e := t.rfind("]")) <= s:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        for it in json.loads(t[s : e + 1]):
+            out[str(it["id"])] = str(it.get("narrative", "")).strip()
+    except Exception as exc:
+        log.warning("bpre narrative parse failed: %s", exc)
+    return out
+
+
+def _generate_narratives_batch(procs_data: list[tuple]) -> dict[str, str]:
+    """Batch BPRE narrative generation via deepseek_extract (≤20/call). Returns {proc_id: narrative}."""
+    try:
+        from rag_search.graph.llm import _accumulate_llm_tokens, deepseek_extract, deepseek_key
+        if not deepseek_key():
+            return {}
+    except Exception:
+        return {}
+    results: dict[str, str] = {}
+    for i in range(0, len(procs_data), 20):
+        batch = procs_data[i : i + 20]
+        items = []
+        for proc_id, name, services_json, steps in batch:
+            try:
+                services = ", ".join(json.loads(services_json))
+                items.append({"id": proc_id, "process": name, "services": services,
+                    "steps": "; ".join(f"{s[1]}:{s[0]}" for s in steps[:12])})
+            except Exception:
+                continue
+        if not items:
+            continue
+        try:
+            raw, u = deepseek_extract(
+                _BPRE_NARRATIVE_SYSTEM,
+                "Processes:\n" + json.dumps(items, ensure_ascii=False),
+                max_tokens=min(len(items) * 400 + 50, 8192),
+            )
+            _accumulate_llm_tokens(u, "bpre")
+        except Exception:
+            continue
+        results.update(_parse_narratives(raw))
+    return results
+
+
+def _synthesize_artifacts(con: sqlite3.Connection,
+                          old_narr: dict[str, str] | None = None) -> None:
+    """Build BPMN/mermaid/narrative for every process.
+
+    old_narr: {_proc_sig → narrative} snapshot from the previous build.  When provided,
+    narratives for processes whose content is unchanged are carried over byte-identically;
+    only new/changed/empty processes are sent to DeepSeek (delta narration).
+    """
+    procs = con.execute(
+        "SELECT id, name, entry_service, services_json FROM processes"
+    ).fetchall()
+    procs_data = []
+    for proc_id, name, _entry_svc, services_json in procs:
+        steps = [(r[0], r[1], r[2], r[3]) for r in con.execute(
+            "SELECT sid_or_endpoint, service, kind, guard FROM process_steps "
+            "WHERE process_id=? ORDER BY order_index", (proc_id,),
+        ).fetchall()]
+        procs_data.append((proc_id, name, services_json, steps))
+    # Delta narration: carry over unchanged narratives; only narrate the rest.
+    if old_narr:
+        carried: dict[str, str] = {}
+        need_narr: list[tuple] = []
+        for item in procs_data:
+            proc_id, name, services_json, steps = item
+            sig = _proc_sig(name, services_json, steps)
+            if sig in old_narr:
+                carried[proc_id] = old_narr[sig]
+            else:
+                need_narr.append(item)
+        new_narr = _generate_narratives_batch(need_narr) if need_narr else {}
+        narratives: dict = {**carried, **new_narr}
+    else:
+        narratives = _generate_narratives_batch(procs_data)
+    for proc_id, name, _sjson, steps in procs_data:
+        con.execute("INSERT OR REPLACE INTO process_artifacts VALUES (?,?,?,?)",
+                    (proc_id, narratives.get(proc_id, ""),
+                     _mermaid_sequence(name, steps), _bpmn_xml(proc_id, name, steps)))
+    con.commit()
+
+
+# ─── Master entry point ───────────────────────────────────────────────────────
+
+def reconstruct_processes(root_path: str) -> int:
+    """D2→D6 federation-level BPRE pass.  Returns number of reconstructed processes.
+
+    File-level mutex (process_graph.lock) serializes concurrent callers.
+    Reuse guard: stamp-based (algo + source signature), not time-based — drift decides,
+    not age.  Burst fan-out collapses: first caller rebuilds+stamps; subsequent callers
+    in the same burst hit matching stamps → reuse.  Watcher-triggered calls always land
+    when member source actually changed (_bpre_source_sig detects it).
+    """
+    from rag_search.core.config import root_process_db
+    from rag_search.daemon.federation import expand_federation
+    members = expand_federation(root_path)
+    if len(members) < 2:
+        log.debug("bpre: skip %s — fewer than 2 federation members", root_path)
+        return 0
+    db_path = root_process_db(root_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = db_path.with_suffix(".bpre.lock")
+    with _BPRE_LOCKS_MU:
+        if str(lock_path) not in _BPRE_LOCKS:
+            _BPRE_LOCKS[str(lock_path)] = threading.Lock()
+        _tlock = _BPRE_LOCKS[str(lock_path)]
+    with _tlock:
+        return _reconstruct_processes_locked(root_path, members, db_path, lock_path)
+
+
+def _reconstruct_processes_locked(
+    root_path: str, members: list[str], db_path: Path, lock_path: Path
+) -> int:
+    import fcntl
+    _lf = open(str(lock_path), "w")  # noqa: SIM115
+    try:
+        fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
+        con = _init_db(db_path)
+        try:
+            # Stamp-based full-skip: reuse iff definition + source unchanged + narratives complete.
+            # A 0-process result is also reusable when stamped (stable no-process federation).
+            algo = _bpre_algo_version()
+            src_sig = _bpre_source_sig(members)
+            _n = con.execute("SELECT COUNT(*) FROM processes").fetchone()[0]
+            stamps_match = (
+                _bpre_get_meta(con, "bpre_algo") == algo
+                and _bpre_get_meta(con, "bpre_source_sig") == src_sig
+            )
+            if stamps_match:
+                if _n == 0 or not _narrative_incomplete(con):
+                    log.info("bpre: reusing stamp-matched result (%d processes) for %s", _n, root_path)
+                    con.close()
+                    return _n
+                # Source/algo unchanged but some narratives are empty.
+                # Re-synthesize only — no table-clear, no re-scan — breaks the rebuild cascade.
+                log.info("bpre: re-synthesizing %d incomplete narratives for %s", _n, root_path)
+                _resyn_narr: dict[str, str] = {}
+                try:
+                    for _pn, _sj, _nr in con.execute(
+                        "SELECT p.name, p.services_json, pa.narrative "
+                        "FROM processes p JOIN process_artifacts pa ON pa.process_id=p.id "
+                        "WHERE pa.narrative!=''"
+                    ).fetchall():
+                        _st = con.execute(
+                            "SELECT sid_or_endpoint, service, kind, guard FROM process_steps "
+                            "WHERE process_id=(SELECT id FROM processes WHERE name=? LIMIT 1) "
+                            "ORDER BY order_index", (_pn,)
+                        ).fetchall()
+                        _resyn_narr[_proc_sig(_pn, _sj, _st)] = _nr
+                except Exception:
+                    pass
+                _synthesize_artifacts(con, _resyn_narr)
+                _bpre_set_meta(con, "bpre_algo", algo)
+                _bpre_set_meta(con, "bpre_source_sig", src_sig)
+                con.commit()
+                con.close()
+                return _n
+            # Snapshot existing narratives keyed by process content (delta narration).
+            old_narr: dict[str, str] = {}
+            try:
+                rows = con.execute(
+                    "SELECT p.name, p.services_json, pa.narrative "
+                    "FROM processes p JOIN process_artifacts pa ON pa.process_id=p.id "
+                    "WHERE pa.narrative!=''"
+                ).fetchall()
+                for pname, svc_json, narr in rows:
+                    steps = con.execute(
+                        "SELECT sid_or_endpoint, service, kind, guard FROM process_steps "
+                        "WHERE process_id=(SELECT id FROM processes WHERE name=? LIMIT 1) "
+                        "ORDER BY order_index", (pname,)
+                    ).fetchall()
+                    old_narr[_proc_sig(pname, svc_json, steps)] = narr
+            except Exception:
+                old_narr = {}
+            # Build entirely into a staging DB; publish atomically so fresh-connection readers
+            # never observe procs=0 mid-rebuild (AUDIT-FINDING-012 fix).
+            staging_path = db_path.parent / (db_path.name + ".rebuild")
+            for _suf in ("-wal", "-shm", ""):
+                _stg_side = staging_path.parent / (staging_path.name + _suf)
+                if _stg_side.exists():
+                    _stg_side.unlink()
+            scon = _init_db(staging_path)
+            try:
+                from rag_search.kb.bpre_ast import federation_discover
+                surf = federation_discover(members)
+                all_facts = _scan_all_members(members, surf, con=con, algo=algo)
+                for member in members:
+                    _detect_entry_points(scon, member, surf, all_facts[member])
+                svc_registry = _build_service_registry(members, surf, all_facts)
+                pubsub_registry = _build_pubsub_registry(members, surf, all_facts)
+                http_routes = _build_http_route_map(members, surf, all_facts)
+                for member in members:
+                    _resolve_grpc_edges(scon, member, svc_registry, surf, all_facts[member])
+                _resolve_pubsub_edges(scon, pubsub_registry)
+                for member in members:
+                    _resolve_http_edges(scon, member, http_routes, surf, all_facts[member])
+                _llm_link_edges(scon, members, surf, all_facts)
+                count = _trace_processes(scon, members)
+                if count > 0:
+                    _synthesize_artifacts(scon, old_narr)
+                scon.commit()
+            finally:
+                scon.close()
+            # Atomic publish: ATTACH + single transaction swaps all 5 tables + stamps atomically.
+            # Readers see the prior complete generation until COMMIT, then atomically the new one.
+            _SWAP_TBLS = ("entry_points", "cross_service_edges", "processes",
+                          "process_steps", "process_artifacts")
+            con.execute("ATTACH DATABASE ? AS stg", (str(staging_path),))
+            try:
+                for tbl in _SWAP_TBLS:
+                    con.execute(f"DELETE FROM {tbl}")
+                    con.execute(f"INSERT INTO {tbl} SELECT * FROM stg.{tbl}")
+                _bpre_set_meta(con, "bpre_algo", algo)
+                _bpre_set_meta(con, "bpre_source_sig", src_sig)
+                con.commit()
+            except Exception:
+                con.rollback()
+                raise
+            finally:
+                con.execute("DETACH DATABASE stg")
+            for _suf in ("-wal", "-shm", ""):
+                _stg_side = staging_path.parent / (staging_path.name + _suf)
+                if _stg_side.exists():
+                    _stg_side.unlink()
+            if count == 0:
+                log.info("bpre: no multi-service processes found for %s", root_path)
+            else:
+                log.info("bpre: reconstructed %d processes for %s", count, root_path)
+            return count
+        finally:
+            con.close()
+    finally:
+        fcntl.flock(_lf.fileno(), fcntl.LOCK_UN)
+        _lf.close()

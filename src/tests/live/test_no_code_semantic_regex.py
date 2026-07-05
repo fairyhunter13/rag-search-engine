@@ -46,16 +46,16 @@ import pytest
 
 pytestmark = pytest.mark.live
 
-_ROOT = Path(__file__).resolve().parents[2] / "opencode_search"
+_ROOT = Path(__file__).resolve().parents[2] / "rag_search"
 
 _CATEGORY_A = [
-    "opencode_search.kb.bpre",
-    "opencode_search.kb.bpre_ast",
-    "opencode_search.kb.bpre_spec",
-    "opencode_search.kb.bpre_generic",
-    "opencode_search.kb.bpre_paradigms",
-    "opencode_search.kb.patterns",
-    "opencode_search.server._overview",
+    "rag_search.kb.bpre",
+    "rag_search.kb.bpre_ast",
+    "rag_search.kb.bpre_spec",
+    "rag_search.kb.bpre_generic",
+    "rag_search.kb.bpre_paradigms",
+    "rag_search.kb.patterns",
+    "rag_search.server._overview",
 ]
 
 # Known surviving (b)-category name-matching heuristics (HR15 debt). Each entry names an
@@ -72,10 +72,10 @@ _CATEGORY_A = [
 _SEMANTIC_HEURISTIC_DEBT: dict[str, tuple[str, ...]] = {}
 
 _CATEGORY_B_ALLOWLIST = {
-    "opencode_search.graph.extractor",
-    "opencode_search.index.discover",
-    "opencode_search.core.registry",
-    "opencode_search.core.config",
+    "rag_search.graph.extractor",
+    "rag_search.index.discover",
+    "rag_search.core.registry",
+    "rag_search.core.config",
 }
 
 _RE_PATTERNS = re.compile(r"\bre\.(compile|finditer|findall|search|match|fullmatch|sub|subn)\b")
@@ -123,7 +123,7 @@ def test_category_b_allowlist_is_exhaustive() -> None:
 
 def test_bpre_no_hardcoded_api_surface_patterns() -> None:
     """kb/bpre.py must not contain hardcoded gRPC constructor patterns or method verb sets."""
-    src = _source("opencode_search.kb.bpre")
+    src = _source("rag_search.kb.bpre")
     # No hardcoded constructor prefix/suffix patterns (now discovered from pb.go)
     assert "NewCartServiceClient" not in src, "Hardcoded gRPC constructor name found"
     assert "RegisterCartServer" not in src, "Hardcoded gRPC registrar name found"
@@ -154,7 +154,7 @@ def test_no_new_semantic_heuristics_beyond_debt_registry() -> None:
     is an unlisted heuristic and must route through structural resolution + the residue
     ladder (resolve_rerank -> llm_escalation) instead.
     """
-    for mod_name in ("opencode_search.kb.bpre_generic", "opencode_search.kb.bpre_paradigms"):
+    for mod_name in ("rag_search.kb.bpre_generic", "rag_search.kb.bpre_paradigms"):
         src = _source(mod_name)
         assert "_LANG_SPECS" not in src, f"{mod_name} must not define its own language-spec table"
         assert "frozenset({" not in src, f"{mod_name} must not define a new keyword frozenset"
@@ -162,7 +162,7 @@ def test_no_new_semantic_heuristics_beyond_debt_registry() -> None:
 
 def test_bpre_ast_uses_tree_sitter_only() -> None:
     """H4 guard: bpre_ast must use pack-native has_language/get_parser; no _TS_LANG; no re."""
-    src = _source("opencode_search.kb.bpre_ast")
+    src = _source("rag_search.kb.bpre_ast")
     assert "_TS_LANG" not in src, "bpre_ast must NOT import _TS_LANG (removed in H4)"
     assert "has_language" in src, "bpre_ast must use has_language() from the pack (H4)"
     assert "get_parser" in src, "bpre_ast must use get_parser() from the pack (H4)"
@@ -172,7 +172,7 @@ def test_bpre_ast_uses_tree_sitter_only() -> None:
 
 def test_extractor_has_no_hardcoded_lang_dicts() -> None:
     """H1/H2 guard: graph/extractor.py must not contain _TS_LANG/_DEF_KINDS/_CALL_NODE."""
-    src = _source("opencode_search.graph.extractor")
+    src = _source("rag_search.graph.extractor")
     assert "_TS_LANG" not in src, "extractor must not define _TS_LANG (removed in H1)"
     assert "_DEF_KINDS" not in src, "extractor must not define _DEF_KINDS (removed in H1)"
     assert "_CALL_NODE" not in src, "extractor must not define _CALL_NODE (removed in H2)"
@@ -182,14 +182,14 @@ def test_extractor_has_no_hardcoded_lang_dicts() -> None:
 
 def test_discover_uses_pack_language_detection() -> None:
     """H3 guard: index/discover.py must use detect_language_from_path; no _EXT_LANG."""
-    src = _source("opencode_search.index.discover")
+    src = _source("rag_search.index.discover")
     assert "_EXT_LANG" not in src, "discover must not define _EXT_LANG (removed in H3)"
     assert "detect_language_from_path" in src, "discover must use detect_language_from_path (H3)"
 
 
 def test_overview_detect_services_uses_bpre_ast() -> None:
     """server/_overview.py _detect_services must delegate to bpre_ast, not re.finditer."""
-    src = _source("opencode_search.server._overview")
+    src = _source("rag_search.server._overview")
     assert "bpre_ast" in src, "_detect_services must use kb.bpre_ast"
     assert "re.finditer" not in src, "_detect_services must not use re.finditer"
     assert "import re" not in src, "_overview.py must not import re"
@@ -197,7 +197,7 @@ def test_overview_detect_services_uses_bpre_ast() -> None:
 
 def test_patterns_no_static_framework_map() -> None:
     """kb/patterns.py must not contain the _KNOWN static map; framework labels via LLM."""
-    src = _source("opencode_search.kb.patterns")
+    src = _source("rag_search.kb.patterns")
     assert "_KNOWN" not in src, "Static _KNOWN framework map must be removed"
     assert "deepseek" in src.lower() or "llm" in src.lower(), (
         "patterns.py must use LLM for framework labelling"
@@ -211,7 +211,7 @@ def test_bpre_link_resolve_tokens_are_accounted() -> None:
     token spend invisible to overview(what='metrics') — a gap in the DIKW token-economy
     budget that this test prevents from regressing.
     """
-    src = _source("opencode_search.kb.bpre")
+    src = _source("rag_search.kb.bpre")
     assert "_accumulate_llm_tokens" in src, "bpre.py must import _accumulate_llm_tokens"
     assert '_accumulate_llm_tokens(usage, "bpre_link")' in src, (
         "_llm_link_resolve must accumulate its DeepSeek usage under the bpre_link namespace"
@@ -243,9 +243,9 @@ def test_no_skip_markers_in_live_suite() -> None:
 def test_no_import_re_in_resolution_path() -> None:
     """Zero-vocab doctrine: Tier-1.5/1.75/2 resolution modules must not use re."""
     for mod_name in (
-        "opencode_search.kb.valueflow",
-        "opencode_search.kb.resolve_rerank",
-        "opencode_search.kb.llm_escalation",
+        "rag_search.kb.valueflow",
+        "rag_search.kb.resolve_rerank",
+        "rag_search.kb.llm_escalation",
     ):
         src = _source(mod_name)
         # match standalone "import re" or "import re\n" but not "import rerank_*"

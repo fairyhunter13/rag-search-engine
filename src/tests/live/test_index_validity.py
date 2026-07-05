@@ -26,7 +26,7 @@ def index_projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
 
 @pytest.fixture(scope="session")
 def validate_reports(index_projects: dict[str, str]) -> dict:
-    from opencode_search.core.registry import list_projects
+    from rag_search.core.registry import list_projects
     all_proj = list(list_projects())
     for key, path in index_projects.items():
         if not path:

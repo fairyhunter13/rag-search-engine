@@ -78,7 +78,7 @@ Non-interactive Claude usage (`claude -p`) bills against a **separate Agent-SDK 
 | Path | Tree-sitter? | Engine |
 |---|---|---|
 | `vendor/docgen/` + `vendor/okf/` (doc-tooling) | **NO** — removed | `claude -p` LLM-native |
-| `src/opencode_search/graph/extractor.py` (core retrieval) | **YES — kept** | tree-sitter (300+ grammars) + DeepSeek semantics |
+| `src/rag_search/graph/extractor.py` (core retrieval) | **YES — kept** | tree-sitter (300+ grammars) + DeepSeek semantics |
 
 ### Trade-offs (accepted)
 
@@ -117,7 +117,7 @@ This gate catches hallucinated structure *before* it enters any KB or index.
 | Property | Check |
 |---|---|
 | GPU lane: no CPU fallback | `assert_cuda_available()` called at startup; `ort.preload_dlls()` forces CUDA binding |
-| KB lane: DeepSeek only | `DEEPSEEK_API_KEY` checked at enrichment time; no ollama/qwen/local model references in `src/opencode_search/kb/` |
+| KB lane: DeepSeek only | `DEEPSEEK_API_KEY` checked at enrichment time; no ollama/qwen/local model references in `src/rag_search/kb/` |
 | Chat lane: claude-haiku-4-5 only | `MODEL_CHAT = "claude-haiku-4-5"` in `server/`; no DeepSeek in chat handler |
 | Doc-tooling: `claude -p` only | No DeepSeek imports in `vendor/docgen/` or `vendor/okf/`; config.py MODEL_HAIKU/MODEL_SONNET only |
 | No tree-sitter on doc-tooling path | `import tree_sitter` absent from `vendor/docgen/` + `vendor/okf/` |

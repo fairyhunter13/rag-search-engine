@@ -18,8 +18,8 @@ pytestmark = pytest.mark.live
 
 
 def _tail_store(tmp):
-    from opencode_search.graph.community import label_community_structural
-    from opencode_search.graph.store import GraphStore
+    from rag_search.graph.community import label_community_structural
+    from rag_search.graph.store import GraphStore
     gs = GraphStore(tmp / "g.db")
     for i in range(5):
         gs.upsert_community(i + 1, level=1, title=f"TailMod{i}", summary="", member_count=2)
@@ -31,7 +31,7 @@ def _tail_store(tmp):
 
 def test_te1_token_stats_namespace_routing():
     """TE1: _accumulate_llm_tokens routes to dotted-namespace keys in llm_token_stats()."""
-    from opencode_search.graph.llm import _accumulate_llm_tokens, llm_token_stats
+    from rag_search.graph.llm import _accumulate_llm_tokens, llm_token_stats
     _accumulate_llm_tokens(
         {"calls": 0, "completion_tokens": 0,
          "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 0},
@@ -45,8 +45,8 @@ def test_te1_token_stats_namespace_routing():
 
 def test_te2_classify_skips_narrated_zero(safe_tmp_path):
     """TE2: classify_communities_semantic makes 0 LLM calls for narrated=0 tail (leak A)."""
-    from opencode_search.graph.enrich import classify_communities_semantic
-    from opencode_search.graph.llm import llm_token_stats
+    from rag_search.graph.enrich import classify_communities_semantic
+    from rag_search.graph.llm import llm_token_stats
     gs = _tail_store(safe_tmp_path)
     try:
         before = llm_token_stats().get("classify.calls", 0)
@@ -61,8 +61,8 @@ def test_te2_classify_skips_narrated_zero(safe_tmp_path):
 
 def test_te4_bpre_batch_no_key_safe():
     """TE4: _generate_narratives_batch returns {} when DeepSeek key absent."""
-    from opencode_search.graph.llm import deepseek_key
-    from opencode_search.kb.bpre import _generate_narratives_batch
+    from rag_search.graph.llm import deepseek_key
+    from rag_search.kb.bpre import _generate_narratives_batch
     if deepseek_key():
         assert _generate_narratives_batch([]) == {}, "TE4: empty input must return {}"
         return
@@ -73,7 +73,7 @@ def test_te4_bpre_batch_no_key_safe():
 
 def test_te6_bpre_narrative_system_constant():
     """TE6: _BPRE_NARRATIVE_SYSTEM is a stable module-level string (prefix-cache anchor)."""
-    import opencode_search.kb.bpre as bpre_mod
+    import rag_search.kb.bpre as bpre_mod
     assert hasattr(bpre_mod, "_BPRE_NARRATIVE_SYSTEM"), (
         "TE6: _BPRE_NARRATIVE_SYSTEM missing — stable prefix constant deleted"
     )
@@ -85,8 +85,8 @@ def test_te6_bpre_narrative_system_constant():
 
 def test_te7_llm_link_resolve_tokens_accounted_live():
     """TE7: _llm_link_resolve's real DeepSeek call increments bpre_link.calls (HR23, live)."""
-    from opencode_search.graph.llm import deepseek_key, llm_token_stats
-    from opencode_search.kb.bpre import _SCHEMA, _llm_link_resolve
+    from rag_search.graph.llm import deepseek_key, llm_token_stats
+    from rag_search.kb.bpre import _SCHEMA, _llm_link_resolve
     con = sqlite3.connect(":memory:")
     try:
         con.executescript(_SCHEMA)

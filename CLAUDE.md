@@ -1,6 +1,6 @@
-# opencode-search-engine — Claude Code Instructions
+# rag-search-engine — Claude Code Instructions
 
-Indexed in opencode-search — global MCP doctrine lives in `~/.claude/CLAUDE.md`; project protocol below.
+Indexed in rag-search — global MCP doctrine lives in `~/.claude/CLAUDE.md`; project protocol below.
 
 ## Mandatory tool-use protocol (no exceptions)
 
@@ -24,8 +24,8 @@ This rule applies to EVERY codebase question, even ones that seem simple. Traini
 .venv/bin/pytest src/tests/live/test_browser.py -v --browser chromium
 
 # Code quality
-ruff check src/opencode_search src/tests
-python -m compileall -q src/opencode_search
+ruff check src/rag_search src/tests
+python -m compileall -q src/rag_search
 ```
 
 **Test markers**:
@@ -36,7 +36,7 @@ python -m compileall -q src/opencode_search
 
 **IMPORTANT — run tests foreground only**: never leave the live suite as an unattended background task. The in-process embedder (~1 GB RSS + a full CPU core) stacks on Chrome/Java/Node and can push the machine into swap, freezing the UI. Run pytest in the foreground, serialized, when other heavy apps are not contending.
 
-**Daemon reload** (after code changes): `POST /api/reload` or `systemctl --user restart opencode-search-mcp-daemon` — daemon restarts via systemd in ~1s. (There is no `daemon reload` CLI subcommand; only `daemon serve/status/ensure/stop/install-global/install-systemd/bridge-stdio` exist.)
+**Daemon reload** (after code changes): `POST /api/reload` or `systemctl --user restart rag-search-mcp-daemon` — daemon restarts via systemd in ~1s. (There is no `daemon reload` CLI subcommand; only `daemon serve/status/ensure/stop/install-global/install-systemd/bridge-stdio` exist.)
 
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
 
@@ -167,9 +167,9 @@ private `ose-live-audit` repo.
 
 ## Project quick reference
 
-- Entry points: `src/opencode_search/server/mcp.py` (MCP server + routes), `src/opencode_search/daemon/` (daemon package), `src/opencode_search/cli.py` (CLI), `src/opencode_search/__main__.py` (bridge-stdio shim)
-- Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/opencode_search/`
-- Registry: `~/.local/share/opencode-search/projects.json`
+- Entry points: `src/rag_search/server/mcp.py` (MCP server + routes), `src/rag_search/daemon/` (daemon package), `src/rag_search/cli.py` (CLI), `src/rag_search/__main__.py` (bridge-stdio shim)
+- Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/rag_search/`
+- Registry: `~/.local/share/rag-search/projects.json`
 - Tests: `src/tests/live/` (live suite — requires daemon at :8765, GPU; no local generative LLM)
 - LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking only); KB build = cloud DeepSeek; chat = claude-haiku-4-5 + DeepSeek fallback
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`

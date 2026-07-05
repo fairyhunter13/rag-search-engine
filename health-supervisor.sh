@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# opencode search engine health supervisor v4
+# rag search engine health supervisor v4
 # =============================================================================
-# Monitor-only supervisor for the unified opencode-search Python package.
+# Monitor-only supervisor for the unified rag-search Python package.
 #
-# The opencode-search package runs as:
+# The rag-search package runs as:
 #   • An MCP stdio child of an AI assistant (owned by the parent, no supervision
 #     needed)
-#   • A long-running `opencode-search watch <path>` daemon — THIS is what we
+#   • A long-running `rag-search watch <path>` daemon — THIS is what we
 #     monitor here.
 #
 # This supervisor captures crash evidence on fatal failures and sends desktop
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-OPENDIR="${HOME}/.opencode"
+OPENDIR="${HOME}/.local/state/rag-search"
 LOG_DIR="${OPENDIR}/health"
 mkdir -p "$LOG_DIR"
 
@@ -46,10 +46,10 @@ get_field() {
 
 # ── Health Checks ──────────────────────────────────────────────────────────
 
-check_opencode_search_watcher() {
-    # Detect any long-running `opencode-search watch` daemons.
+check_rag_search_watcher() {
+    # Detect any long-running `rag-search watch` daemons.
     # Returns 0 if at least one is running, 1 otherwise.
-    pgrep -f "opencode-search.*watch" >/dev/null 2>&1
+    pgrep -f "rag-search.*watch" >/dev/null 2>&1
 }
 
 # ── Crash Evidence ─────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ capture_crash_evidence() {
 notify() {
     local title="$1" body="$2" urgency="${3:-normal}"
     if command -v notify-send &>/dev/null; then
-        notify-send -u "$urgency" -a "opencode-health" "$title" "$body" 2>/dev/null || true
+        notify-send -u "$urgency" -a "rag-search-health" "$title" "$body" 2>/dev/null || true
     fi
 }
 
@@ -105,19 +105,19 @@ run_health_check() {
     local state watcher_ok
     state=$(read_state)
 
-    # opencode-search watch daemon
+    # rag-search watch daemon
     watcher_ok=false
-    check_opencode_search_watcher && watcher_ok=true
+    check_rag_search_watcher && watcher_ok=true
 
     local watcher_failures
     watcher_failures=$(get_field "$state" "watcher_failures" 0)
     $watcher_ok && watcher_failures=0 || watcher_failures=$((watcher_failures + 1))
 
     if [[ "$watcher_failures" -ge "$FATAL_NOTIFY_THRESHOLD" ]] && [[ "$watcher_failures" -eq "$FATAL_NOTIFY_THRESHOLD" ]]; then
-        notify "opencode-search: Watcher Down" \
-            "No opencode-search watch daemon detected for ${watcher_failures} checks." \
+        notify "rag-search: Watcher Down" \
+            "No rag-search watch daemon detected for ${watcher_failures} checks." \
             "normal"
-        capture_crash_evidence "opencode-search"
+        capture_crash_evidence "rag-search"
     fi
 
     # Persist

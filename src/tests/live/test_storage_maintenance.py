@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from opencode_search.daemon.sweeps import _VACUUM_BLOAT_BYTES, _vacuum_if_bloated
+from rag_search.daemon.sweeps import _VACUUM_BLOAT_BYTES, _vacuum_if_bloated
 
 pytestmark = pytest.mark.live
 
@@ -70,9 +70,9 @@ def test_vacuum_handles_missing_file(tmp_path):
 
 def test_maintenance_vacuums_bloated_project_db():
     """maintenance() VACUUMs a registered project's DB when it is bloated."""
-    from opencode_search.core.config import ProjectEntry, project_vector_db
-    from opencode_search.core.registry import remove_project, upsert_project
-    from opencode_search.daemon.sweeps import maintenance
+    from rag_search.core.config import ProjectEntry, project_vector_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon.sweeps import maintenance
 
     safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
     safe_base.mkdir(parents=True, exist_ok=True)
@@ -93,7 +93,7 @@ def test_maintenance_vacuums_bloated_project_db():
 
 def test_standalone_vectors_db_not_bloated():
     """Regression: standalone project vectors.db freelist must stay below threshold after reclaim."""
-    from opencode_search.core.config import project_vector_db
+    from rag_search.core.config import project_vector_db
     from tests.live._projects import standalone_project
 
     entry_path = standalone_project()

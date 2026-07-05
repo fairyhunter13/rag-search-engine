@@ -20,7 +20,7 @@ def _parser(lang):
 
 
 def _du(lang, src):
-    from opencode_search.kb.valueflow import build_def_use
+    from rag_search.kb.valueflow import build_def_use
     root = _parser(lang).parse(src).root_node()
     return build_def_use(root, src.encode()), root, src.encode()
 
@@ -37,7 +37,7 @@ def _find(node, kind, depth=0):
 # ─── Go ──────────────────────────────────────────────────────────────────────
 
 def test_go_const_resolves():
-    from opencode_search.kb.valueflow import resolve_first_arg
+    from rag_search.kb.valueflow import resolve_first_arg
     src = 'package main\nconst routeKey = "/cart"\nfunc f() { c.Get(routeKey) }\n'
     du, root, b = _du("go", src)
     assert du.get("routeKey") == "/cart", f"Go const not in def-use: {du}"
@@ -55,7 +55,7 @@ def test_go_short_var_resolves():
 
 
 def test_go_literal_fast_path():
-    from opencode_search.kb.valueflow import resolve_first_arg
+    from rag_search.kb.valueflow import resolve_first_arg
     src = 'package main\nfunc f() { c.Get("/direct") }\n'
     du, root, b = _du("go", src)
     for call in _find(root, "call_expression"):
@@ -74,7 +74,7 @@ def test_python_assignment_resolves():
 
 
 def test_python_identifier_arg_resolved():
-    from opencode_search.kb.valueflow import resolve_first_arg
+    from rag_search.kb.valueflow import resolve_first_arg
     src = 'TOPIC = "order.placed"\npublisher.emit(TOPIC)\n'
     du, root, b = _du("python", src)
     for call in _find(root, "call"):
@@ -123,7 +123,7 @@ def test_empty_source_no_crash():
 def test_no_import_re_in_valueflow():
     import inspect
 
-    from opencode_search.kb import valueflow
+    from rag_search.kb import valueflow
     src = inspect.getsource(valueflow)
     assert "import re" not in src and "re.compile" not in src, (
         "valueflow.py must not use re (zero-vocab + no-regex doctrine)"
@@ -133,7 +133,7 @@ def test_no_import_re_in_valueflow():
 # ─── build_type_use (P6/HR15 Part C1) ──────────────────────────────────────────
 
 def test_java_typed_client_resolves():
-    from opencode_search.kb.valueflow import build_type_use
+    from rag_search.kb.valueflow import build_type_use
     src = "class C{void f(){HttpClient client = new HttpClient();}}"
     root = _parser("java").parse(src).root_node()
     tu = build_type_use(root, src.encode())
@@ -143,7 +143,7 @@ def test_java_typed_client_resolves():
 def test_go_bare_new_not_in_type_use():
     """Bare factory calls without a constructor-expression node kind (e.g. Client::new()-style)
     are intentionally NOT captured — genuine residual ambiguity, documented boundary."""
-    from opencode_search.kb.valueflow import build_type_use
+    from rag_search.kb.valueflow import build_type_use
     src = 'package main\nfunc f() { c := getClient() }\n'
     root = _parser("go").parse(src).root_node()
     tu = build_type_use(root, src.encode())
@@ -163,7 +163,7 @@ def test_go_bare_new_not_in_type_use():
     ],
 )
 def test_scan_imports_resolves_alias_path(lang, src, alias, expected_path):
-    from opencode_search.kb.bpre_ast import _scan_imports
+    from rag_search.kb.bpre_ast import _scan_imports
     root = _parser(lang).parse(src).root_node()
     imports = _scan_imports(root, src.encode())
     assert imports.get(alias) == expected_path, f"{lang}: {imports}"
@@ -172,7 +172,7 @@ def test_scan_imports_resolves_alias_path(lang, src, alias, expected_path):
 def test_no_framework_vocab_in_valueflow():
     import inspect
 
-    from opencode_search.kb import valueflow
+    from rag_search.kb import valueflow
     src = inspect.getsource(valueflow)
     for name in ("Kafka", "RabbitMQ", "gRPC", "Django", "Flask", "Express"):
         assert name not in src, f"valueflow.py contains hardcoded vocab '{name}'"

@@ -22,11 +22,11 @@
       "Bash(systemctl --user is-active *)",
       "Bash(systemctl --user is-enabled *)",
       "Bash(nvidia-smi *)",
-      "mcp__opencode-search__search",
-      "mcp__opencode-search__overview",
-      "mcp__opencode-search__ask",
-      "mcp__opencode-search__graph",
-      "mcp__opencode-search__index"
+      "mcp__rag-search__search",
+      "mcp__rag-search__overview",
+      "mcp__rag-search__ask",
+      "mcp__rag-search__graph",
+      "mcp__rag-search__index"
     ]
   },
 

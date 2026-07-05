@@ -29,7 +29,7 @@ def _make_ext_repo(tmp_base: Path, root: Path, name: str) -> Path:
 
 def test_fe1_exclude_paths_empty_by_default():
     """FE1: no env var → empty frozenset."""
-    from opencode_search.core.config import federation_exclude_paths
+    from rag_search.core.config import federation_exclude_paths
     orig = os.environ.pop("OPENCODE_FEDERATION_EXCLUDE", None)
     try:
         assert federation_exclude_paths() == frozenset()
@@ -40,7 +40,7 @@ def test_fe1_exclude_paths_empty_by_default():
 
 def test_fe2_discover_members_includes_symlinked_repo(tmp_path):
     """FE2: without exclusion, discover_members returns the external symlinked repo."""
-    from opencode_search.daemon.federation import discover_members
+    from rag_search.daemon.federation import discover_members
     root = tmp_path / "fed-root"
     root.mkdir()
     ext_path = _make_ext_repo(tmp_path, root, "ext-service")
@@ -57,7 +57,7 @@ def test_fe2_discover_members_includes_symlinked_repo(tmp_path):
 
 def test_fe3_discover_members_skips_excluded_repo(tmp_path):
     """FE3: repo in OPENCODE_FEDERATION_EXCLUDE is not returned by discover_members."""
-    from opencode_search.daemon.federation import discover_members
+    from rag_search.daemon.federation import discover_members
     root = tmp_path / "fed-root"
     root.mkdir()
     ext_path = _make_ext_repo(tmp_path, root, "ext-service")
@@ -79,7 +79,7 @@ def test_fe3_discover_members_skips_excluded_repo(tmp_path):
 
 def test_fe4_exclude_paths_multi_and_blank(tmp_path):
     """FE4: ~ expansion, multiple paths joined by pathsep, blank entries all work."""
-    from opencode_search.core.config import federation_exclude_paths
+    from rag_search.core.config import federation_exclude_paths
     a = str(tmp_path / "svc-a")
     b = str(tmp_path / "svc-b")
     raw = os.pathsep.join(["", a, "", b, ""])
@@ -100,7 +100,7 @@ def test_fe4_exclude_paths_multi_and_blank(tmp_path):
 
 def test_fe5_prefix_dir_excludes_subtree(tmp_path):
     """FE5: is_federation_excluded() returns True for a child of an excluded prefix dir."""
-    from opencode_search.core.config import is_federation_excluded
+    from rag_search.core.config import is_federation_excluded
 
     parent = tmp_path / "excluded-parent"
     parent.mkdir()
@@ -123,7 +123,7 @@ def test_fe5_prefix_dir_excludes_subtree(tmp_path):
 
 def test_fe6_glob_entry_excludes_member(tmp_path):
     """FE6: discover_members() skips a member matched by a glob in OPENCODE_FEDERATION_EXCLUDE."""
-    from opencode_search.daemon.federation import discover_members
+    from rag_search.daemon.federation import discover_members
 
     root = tmp_path / "fed-root"
     root.mkdir()
@@ -150,7 +150,7 @@ def test_fe6_glob_entry_excludes_member(tmp_path):
 
 def test_fe7_is_federation_excluded_unit_table(tmp_path):
     """FE7: is_federation_excluded() truth table: empty/exact/prefix/glob/non-match."""
-    from opencode_search.core.config import is_federation_excluded
+    from rag_search.core.config import is_federation_excluded
 
     exact_dir = (tmp_path / "exact-svc").resolve()
     exact_dir.mkdir()

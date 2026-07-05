@@ -50,7 +50,7 @@ _JAVA_COMMENT = (
 
 def test_pass_a_discovers_constructor_and_registrar():
     """Pass A: federation_discover populates constructors/registrars from *.pb.go."""
-    from opencode_search.kb.bpre_ast import federation_discover
+    from rag_search.kb.bpre_ast import federation_discover
 
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "cart.pb.go").write_text(_GO_PB)
@@ -66,7 +66,7 @@ def test_pass_a_discovers_constructor_and_registrar():
 
 def test_pass_a_no_hardcoded_service_name():
     """Pass A extracts service names from constructor patterns — not a static dict."""
-    from opencode_search.kb.bpre_ast import federation_discover
+    from rag_search.kb.bpre_ast import federation_discover
 
     novel = _GO_PB.replace("Cart", "Inventory")
     with tempfile.TemporaryDirectory() as td:
@@ -82,7 +82,7 @@ def test_pass_a_no_hardcoded_service_name():
 
 def test_pass_b_detects_grpc_client():
     """Pass B: scan_file detects pbCart.NewCartServiceClient as a gRPC client."""
-    from opencode_search.kb.bpre_ast import ApiSurface, scan_file
+    from rag_search.kb.bpre_ast import ApiSurface, scan_file
 
     surf = ApiSurface()
     surf.constructors["NewCartServiceClient"] = "CartService"
@@ -95,7 +95,7 @@ def test_pass_b_detects_grpc_client():
 
 def test_pass_b_detects_spring_routes():
     """Pass B: scan_file detects @GetMapping/@PostMapping as HTTP routes."""
-    from opencode_search.kb.bpre_ast import ApiSurface, scan_file
+    from rag_search.kb.bpre_ast import ApiSurface, scan_file
 
     surf = ApiSurface()
     ff = scan_file("CartController.java", _JAVA_ROUTE, "java", surf)
@@ -110,7 +110,7 @@ def test_pass_b_detects_spring_routes():
 
 def test_go_comment_tokens_not_matched():
     """Tokens appearing only in Go comments must NOT be registered (AST, not regex)."""
-    from opencode_search.kb.bpre_ast import federation_discover
+    from rag_search.kb.bpre_ast import federation_discover
 
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "noop.pb.go").write_text(_GO_COMMENT)
@@ -123,7 +123,7 @@ def test_go_comment_tokens_not_matched():
 
 def test_java_comment_routes_not_matched():
     """Spring annotations inside Java comments must NOT produce HTTP routes."""
-    from opencode_search.kb.bpre_ast import ApiSurface, scan_file
+    from rag_search.kb.bpre_ast import ApiSurface, scan_file
 
     surf = ApiSurface()
     ff = scan_file("Docs.java", _JAVA_COMMENT, "java", surf)

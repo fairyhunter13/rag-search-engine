@@ -29,7 +29,7 @@ class _StdioMCP:
 
     def __init__(self) -> None:
         self._proc = subprocess.Popen(
-            [sys.executable, "-m", "opencode_search", "daemon", "bridge-stdio"],
+            [sys.executable, "-m", "rag_search", "daemon", "bridge-stdio"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         self._id = 0
@@ -79,7 +79,7 @@ def stdio_mcp():
 def test_stdio_initialize_returns_5_tool_serverinfo(stdio_mcp):
     """P15.3a: bridge-stdio initialize — server name + 5-tool instructions."""
     r = stdio_mcp._init_result
-    assert r["result"]["serverInfo"]["name"] == "opencode-search"
+    assert r["result"]["serverInfo"]["name"] == "rag-search"
     assert "5-tool" in r["result"].get("instructions", "")
 
 
