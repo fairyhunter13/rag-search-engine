@@ -375,8 +375,8 @@ def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path,
         ("settings", _H / ".claude" / "settings.json", "claude(main)/settings.json"),
     ]
     for idx in range(1, 10):
-        d = _H / f".claude-account{idx}"
-        if d.exists():
+        d = _H / f".claude-{idx}"
+        if d.exists() and (d / "settings.json").exists():
             lbl = f"claude(account{idx})"
             sys_t.append(("claude", d / "CLAUDE.md", f"{lbl}/CLAUDE.md"))
             mcp_t.append(("settings", d / "settings.json", f"{lbl}/settings.json"))

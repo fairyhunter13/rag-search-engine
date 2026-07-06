@@ -8,6 +8,7 @@ Skips gracefully if a target's config file does not exist (tool not installed).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,11 +22,11 @@ _SCRIPT = _REPO / "scripts" / "configure_integrations.py"
 _SCRIPTS_SRC = str(_REPO / "scripts")
 
 
-def _run_check_json() -> list[dict]:
+def _run_check_json(env: dict[str, str] | None = None) -> list[dict]:
     result = subprocess.run(
         [sys.executable, str(_SCRIPT), "--check", "--json"],
         capture_output=True, text=True, timeout=30,
-        cwd=str(_REPO),
+        cwd=str(_REPO), env=env,
     )
     try:
         return json.loads(result.stdout)
@@ -67,3 +68,41 @@ def test_canonical_body_in_main_claude_md():
     assert CANONICAL_BODY.strip() in text, (
         "CANONICAL_BODY not found verbatim in ~/.claude/CLAUDE.md — drift detected"
     )
+
+
+def test_profile_discovery_targets_numbered_dirs(tmp_path):
+    """_build_targets() must discover ~/.claude-1, ~/.claude-2, ... (real numbered
+    profile dirs), and must NOT pick up ~/.claude-shared (the profiles' shared
+    symlink target) or a ~/.claude-migration-backup-* dir, even though both
+    names start with the same ".claude-" prefix.
+
+    Regression test for the 2026-07-06 bug where discovery targeted the
+    defunct ".claude-account{idx}" naming and silently found nothing on a
+    real machine using ".claude-1"/".claude-2".
+    """
+    home = tmp_path / "home"
+    for name in (".claude", ".claude-1", ".claude-2"):
+        d = home / name
+        d.mkdir(parents=True)
+        (d / "CLAUDE.md").write_text("profile\n")
+        (d / "settings.json").write_text("{}\n")
+
+    # Shared symlink target: has its own settings.json for real, must be excluded.
+    shared = home / ".claude-shared"
+    shared.mkdir()
+    (shared / "settings.json").write_text("{}\n")
+
+    # Dated migration backup: must be excluded even though numbered-looking.
+    backup = home / ".claude-migration-backup-20260705-134458"
+    backup.mkdir()
+    (backup / "settings.json").write_text("{}\n")
+
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    results = _run_check_json(env=env)
+
+    tools = {r["tool"] for r in results}
+    assert any(".claude-1" in t for t in tools), f"expected .claude-1 discovered, got tools={tools}"
+    assert any(".claude-2" in t for t in tools), f"expected .claude-2 discovered, got tools={tools}"
+    assert not any("shared" in t.lower() for t in tools), f"shared dir leaked into targets: {tools}"
+    assert not any("backup" in t.lower() for t in tools), f"backup dir leaked into targets: {tools}"
