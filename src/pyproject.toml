@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "GPU-accelerated local semantic code search engine"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "OpenCode Team" }]
+authors = [{ name = "rag-search Team" }]
 
 dependencies = [
     # GPU-accelerated embeddings and reranking

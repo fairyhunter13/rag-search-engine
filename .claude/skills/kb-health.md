@@ -22,8 +22,8 @@ rag-search-engine ...     ...      ...          100%      ...      watching
 
 4. Flag any project with:
    - `enrichment_pct < 100%`: needs KB enrichment trigger via CLI or dashboard
-   - Watcher stopped: needs daemon restart or `manage(action="reload")`
-   - Storage > 3GB: candidate for `manage(action="vacuum")`
+   - Watcher stopped: needs daemon restart — `POST /api/reload` or `systemctl --user restart rag-search-mcp-daemon`
+   - Storage > 3GB: vacuum is automatic only (6h maintenance sweep, bloat-gated at 256MB per DB) — no manual trigger exists
 
 5. Suggest next actions for each flagged project.
 

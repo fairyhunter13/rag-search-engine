@@ -9,7 +9,7 @@ Comprehensive status audit of the rag-search-engine system.
 - Flag: projects with 0 communities (not enriched)
 - Flag: stale test artifacts (paths in /tmp or .venv)
 - Flag: projects not watching (watching=false)
-- Remove any stale entries with `manage(action='remove_project', delete_index=True)`
+- Remove any stale entries with `index(project_path=<path>, enabled=False)` (also frees the index dir)
 
 ### 2. Canonical test target verification
 - `overview(project_path='<TEST_PROJECT_PATH>', what='status')` — confirm watching=true, communities>5000
