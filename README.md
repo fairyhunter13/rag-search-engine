@@ -35,7 +35,7 @@ python3 -m venv .venv
 ```
 
 > **`rag-search docgen`** requires the `vendor/docgen` submodule.
-> All other features (`ocs-index`, search, chat) work without it.
+> All other features (`rag-search-index`, search, chat) work without it.
 
 ## Configure secrets
 
@@ -72,7 +72,7 @@ rag-search daemon install-global   # writes ~/.claude.json entry
 ## Index a project
 
 ```bash
-ocs-index /path/to/project             # one-shot: register + index + enrich + wiki
+rag-search-index /path/to/project      # one-shot: register + index + enrich + wiki
 # or step-by-step:
 rag-search init /path/to/project
 rag-search index /path/to/project

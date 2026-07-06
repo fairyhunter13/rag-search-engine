@@ -1,5 +1,5 @@
 {
-  "_comment": "Install via: claude mcp add rag-search --transport http-sse http://127.0.0.1:8765/mcp -s user (requires daemon running). Or use stdio: claude mcp add rag-search /path/to/.venv/bin/python -- -m rag_search daemon bridge-stdio -s user. After adding, also add the UserPromptSubmit hook to ~/.claude/settings.json (see INSTALL.md).",
+  "_comment": "Install via: claude mcp add rag-search --transport http-sse http://127.0.0.1:8765/mcp -s user (requires daemon running). Or use stdio: claude mcp add rag-search /path/to/.venv/bin/python -- -m rag_search daemon bridge-stdio -s user. After adding, also add the UserPromptSubmit hook to ~/.claude/settings.json (see README.md).",
   "mcpServers": {
     "rag-search": {
       "command": "/path/to/.venv/bin/python",
