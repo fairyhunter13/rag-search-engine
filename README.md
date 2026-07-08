@@ -62,9 +62,14 @@ rag-search daemon status           # → UP — 127.0.0.1:8765
 
 ## Register with Claude Code (MCP)
 
+MCP server *definitions* live only in `.claude.json` (user/local scope) — `settings.json`
+holds MCP *approval* keys, never definitions, so an entry written there is invisible to
+Claude Code. `install-global` and `configure_integrations.py` both register via the
+official `claude mcp add` CLI against every discovered profile's `.claude.json`.
+
 ```bash
-rag-search daemon install-global   # writes ~/.claude.json entry
-# multi-profile / Hermes:
+rag-search daemon install-global   # registers rag-search in every Claude Code profile
+# equivalent, or for multi-profile / Hermes explicitly:
 .venv/bin/python scripts/configure_integrations.py --apply-all
 .venv/bin/python scripts/configure_integrations.py --check   # verify
 ```

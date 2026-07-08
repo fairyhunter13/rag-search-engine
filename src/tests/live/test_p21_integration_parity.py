@@ -106,3 +106,31 @@ def test_profile_discovery_targets_numbered_dirs(tmp_path):
     assert any(".claude-2" in t for t in tools), f"expected .claude-2 discovered, got tools={tools}"
     assert not any("shared" in t.lower() for t in tools), f"shared dir leaked into targets: {tools}"
     assert not any("backup" in t.lower() for t in tools), f"backup dir leaked into targets: {tools}"
+
+
+def test_mcp_resolves_via_claude_json_not_settings_json():
+    """Regression guard for the 2026-07-08 bug: settings.json only holds MCP *approval*
+    keys (enableAllProjectMcpServers, ...), never server definitions, so an entry written
+    there is silently invisible to Claude Code. The repair/verify path must go through the
+    `claude mcp` CLI against .claude.json instead — never patch settings.json directly.
+    """
+    sys.path.insert(0, str(_REPO / "scripts"))
+    try:
+        import configure_integrations as ci
+    finally:
+        sys.path.remove(str(_REPO / "scripts"))
+    import inspect
+    src = inspect.getsource(ci._repair_claude_mcp) + inspect.getsource(ci._verify_claude_mcp)
+    assert "settings.json" not in src, "MCP repair/verify must not reference settings.json"
+
+    claude_bin = ci._claude_binary()
+    if not claude_bin:
+        pytest.skip("claude binary not on PATH")
+    result = subprocess.run(
+        [claude_bin, "mcp", "get", "rag-search"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0 and ci.CANONICAL_MCP_URL in result.stdout, (
+        "claude mcp get rag-search (main profile) did not resolve the canonical MCP entry "
+        f"from .claude.json: {result.stdout}\n{result.stderr}"
+    )
