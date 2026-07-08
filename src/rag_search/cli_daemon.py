@@ -58,25 +58,35 @@ def daemon_stop(
 
 
 @daemon_app.command("install-global")
-def daemon_install_global(transport: str = typer.Option("stdio", "--transport")) -> None:
-    """Register the MCP server in Claude Code profiles via configure_integrations.py."""
+def daemon_install_global(transport: str = typer.Option("http", "--transport")) -> None:
+    """Register the MCP server in every discovered Claude Code profile.
+
+    Delegates to scripts/configure_integrations.py --apply-all, which discovers
+    ~/.claude{,-1,-2,...} + hermes and registers the canonical HTTP entry in each
+    profile's ~/.claude.json via `claude mcp add` (the only file Claude Code reads
+    MCP definitions from — settings.json is not a valid target).
+    """
+    from pathlib import Path
+
     from rag_search.daemon.global_prompt import remove_claude_md
     remove_claude_md()  # clean up any legacy bare ~/CLAUDE.md written by older versions
-    typer.echo(
-        "Legacy ~/CLAUDE.md cleaned (if present).\n"
-        "Run: python scripts/configure_integrations.py --apply-all\n"
-        "  to write the canonical doctrine to ~/.claude{,-account1,-account2}/CLAUDE.md"
-    )
-    if transport == "http":
-        import json
-        from pathlib import Path
-        p = Path.home() / ".claude.json"
-        data = json.loads(p.read_text()) if p.exists() else {}
-        data.setdefault("mcpServers", {})["rag-search"] = {
-            "type": "http", "url": "http://127.0.0.1:8765/mcp",
-        }
-        p.write_text(json.dumps(data, indent=2) + "\n")
-        typer.echo("Registered rag-search HTTP MCP at http://127.0.0.1:8765/mcp in ~/.claude.json.")
+
+    if transport != "http":
+        typer.echo(
+            f"transport={transport!r} is not registered by install-global (only the canonical "
+            "'http' daemon endpoint is). For a stdio client, point it at: rag-search daemon bridge-stdio"
+        )
+        raise typer.Exit(1)
+
+    import subprocess
+    import sys
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "configure_integrations.py"
+    if not script.exists():
+        typer.echo(f"configure_integrations.py not found at {script} — run from a rag-search-engine checkout.")
+        raise typer.Exit(1)
+    result = subprocess.run([sys.executable, str(script), "--apply-all"], cwd=str(repo_root))
+    raise typer.Exit(result.returncode)
 
 
 @daemon_app.command("install-systemd")

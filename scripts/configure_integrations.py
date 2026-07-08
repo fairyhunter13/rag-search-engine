@@ -121,54 +121,89 @@ def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
 
 
 # ---------------------------------------------------------------------------
-# MCP entry repair: claude settings.json (3 profiles)
+# MCP entry repair: claude ~/.claude.json via `claude mcp` CLI (3 profiles)
 # ---------------------------------------------------------------------------
+#
+# MCP server *definitions* live in ~/.claude.json (user/local scope) or
+# .mcp.json (project scope) -- settings.json only holds MCP *approval* keys
+# (enableAllProjectMcpServers, enabledMcpjsonServers, ...), never a raw
+# mcpServers map, so Claude Code silently ignores an entry written there.
+# https://code.claude.com/docs/en/mcp -- "MCP installation scopes" table.
+#
+# CLAUDE_CONFIG_DIR relocates ~/.claude.json into that directory (verified:
+# claude1/claude2 write to ~/.claude-N/.claude.json). The *default* profile
+# (CLAUDE_CONFIG_DIR unset) is the one quirk: CLAUDE.md/settings.json load
+# from ~/.claude/, but ~/.claude.json for that profile stays at the home
+# root ($HOME/.claude.json), not $HOME/.claude/.claude.json -- confirmed via
+# `claude mcp add` (no CLAUDE_CONFIG_DIR) writing "File modified:
+# /home/<user>/.claude.json". So the main profile's CLAUDE_CONFIG_DIR is
+# passed as None (unset) rather than the ~/.claude directory.
+#
+# We shell out to the official `claude mcp` CLI (get/remove/add) rather than
+# hand-editing ~/.claude.json directly: that file also carries OAuth session
+# state and per-project trust settings, and the CLI is the version-specific,
+# officially blessed writer for it.
 
-_EXPECTED_MCP_ENTRY = {"type": "http", "url": CANONICAL_MCP_URL}
+def _claude_binary() -> str | None:
+    """Resolve the real claude binary, bypassing any shell alias/wrapper function."""
+    import shutil
+    return shutil.which("claude")
 
 
-def _verify_settings_json(settings_path: Path) -> ConfigResult:
-    label = f"claude({settings_path.parent.name})/settings.json"
-    if not settings_path.exists():
-        return ConfigResult(tool=label, status="missing",
-                            message=f"settings.json not found: {settings_path}", path=str(settings_path))
+def _claude_mcp_env(config_dir: Path | None) -> dict:
+    import os as _os
+    env = _os.environ.copy()
+    if config_dir is not None:
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    return env
+
+
+def _verify_claude_mcp(config_dir: Path | None, label: str) -> ConfigResult:
+    import subprocess
+    claude_bin = _claude_binary()
+    if not claude_bin:
+        return ConfigResult(tool=label, status="skipped",
+                            message="claude binary not found on PATH", path=str(config_dir or "~"))
     try:
-        data = json.loads(settings_path.read_text())
+        result = subprocess.run(
+            [claude_bin, "mcp", "get", "rag-search"],
+            capture_output=True, text=True, timeout=15, env=_claude_mcp_env(config_dir),
+        )
     except Exception as exc:
         return ConfigResult(tool=label, status="error",
-                            message=f"Failed to parse {settings_path}: {exc}", path=str(settings_path))
-    entry = data.get("mcpServers", {}).get("rag-search", {})
-    if not entry:
-        return ConfigResult(tool=label, status="missing",
-                            message=f"mcpServers.rag-search missing in {settings_path}", path=str(settings_path))
-    if entry.get("type") == "http" and entry.get("url") == CANONICAL_MCP_URL:
+                            message=f"claude mcp get failed: {exc}", path=str(config_dir or "~"))
+    if result.returncode == 0 and CANONICAL_MCP_URL in result.stdout:
         return ConfigResult(tool=label, status="already_ok",
-                            message=f"MCP entry in sync: {settings_path}", path=str(settings_path))
+                            message="MCP entry in sync (claude mcp get)", path=str(config_dir or "~"))
     return ConfigResult(tool=label, status="missing",
-                        message=f"MCP entry drifted (not HTTP) in {settings_path}", path=str(settings_path))
+                        message="rag-search MCP not registered or URL mismatch", path=str(config_dir or "~"))
 
 
-def _repair_settings_json(settings_path: Path, dry_run: bool = False) -> ConfigResult:
-    label = f"claude({settings_path.parent.name})/settings.json"
-    try:
-        old_text = settings_path.read_text() if settings_path.exists() else "{}"
-        data = json.loads(old_text)
-    except Exception as exc:
-        return ConfigResult(tool=label, status="error",
-                            message=f"Failed to parse {settings_path}: {exc}", path=str(settings_path))
-    data.setdefault("mcpServers", {})["rag-search"] = _EXPECTED_MCP_ENTRY.copy()
-    new_text = json.dumps(data, indent=2) + "\n"
-    if old_text.strip() == new_text.strip():
-        return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {settings_path}", path=str(settings_path))
-    diff = _diff(old_text, new_text, str(settings_path))
+def _repair_claude_mcp(config_dir: Path | None, label: str, dry_run: bool = False) -> ConfigResult:
+    import subprocess
+    claude_bin = _claude_binary()
+    if not claude_bin:
+        return ConfigResult(tool=label, status="skipped",
+                            message="claude binary not found on PATH — cannot repair", path=str(config_dir or "~"))
     if dry_run:
         return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would update {settings_path}", path=str(settings_path), diff=diff)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(new_text)
+                            message=f"[DRY-RUN] Would run: claude mcp add --scope user --transport http rag-search {CANONICAL_MCP_URL}",
+                            path=str(config_dir or "~"))
+    env = _claude_mcp_env(config_dir)
+    # Idempotent: drop any stale entry first (add errors if one already exists).
+    subprocess.run([claude_bin, "mcp", "remove", "rag-search", "--scope", "user"],
+                    capture_output=True, text=True, timeout=15, env=env)
+    result = subprocess.run(
+        [claude_bin, "mcp", "add", "--scope", "user", "--transport", "http", "rag-search", CANONICAL_MCP_URL],
+        capture_output=True, text=True, timeout=15, env=env,
+    )
+    if result.returncode != 0:
+        return ConfigResult(tool=label, status="error",
+                            message=f"claude mcp add failed: {result.stderr.strip()[:200]}", path=str(config_dir or "~"))
     return ConfigResult(tool=label, status="configured",
-                        message=f"Updated MCP entry: {settings_path}", path=str(settings_path), diff=diff)
+                        message="Registered rag-search via claude mcp add", path=str(config_dir or "~"))
 
 
 # ---------------------------------------------------------------------------
@@ -361,25 +396,29 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
 
 _H = Path.home()
 
-def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path, str]]]:
+def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path | None, str]]]:
     """Build targets dynamically — adapts to the directories present on this machine.
 
     Extra profiles can be added via OSE_INTEGRATION_EXTRA_PROFILES (colon-separated
     CLAUDE.md paths). Run with OSE_INTEGRATION_EXTRA_PROFILES=~/.custom/CLAUDE.md to
     include additional profiles.
+
+    mcp_t's Path element for kind "claude_mcp" is the CLAUDE_CONFIG_DIR to export when
+    shelling out to `claude mcp` (None = unset/default profile — see the quirk noted
+    above _claude_binary()).
     """
     sys_t: list[tuple[str, Path, str]] = [
         ("claude", _H / ".claude" / "CLAUDE.md", "claude(main)/CLAUDE.md"),
     ]
-    mcp_t: list[tuple[str, Path, str]] = [
-        ("settings", _H / ".claude" / "settings.json", "claude(main)/settings.json"),
+    mcp_t: list[tuple[str, Path | None, str]] = [
+        ("claude_mcp", None, "claude(main)/.claude.json"),
     ]
     for idx in range(1, 10):
         d = _H / f".claude-{idx}"
         if d.exists() and (d / "settings.json").exists():
             lbl = f"claude(account{idx})"
             sys_t.append(("claude", d / "CLAUDE.md", f"{lbl}/CLAUDE.md"))
-            mcp_t.append(("settings", d / "settings.json", f"{lbl}/settings.json"))
+            mcp_t.append(("claude_mcp", d, f"{lbl}/.claude.json"))
     hermes = _H / ".hermes" / "config.yaml"
     if hermes.parent.exists():
         sys_t.append(("hermes_agent", hermes, "hermes/agent_system_prompt"))
@@ -391,7 +430,7 @@ def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path,
             if path.parent.exists():
                 lbl = str(path.relative_to(_H)) if path.is_relative_to(_H) else p
                 sys_t.append(("claude", path, lbl))
-                mcp_t.append(("settings", path.parent / "settings.json", f"{lbl[:-10]}/settings.json"))
+                mcp_t.append(("claude_mcp", path.parent, f"{lbl[:-10]}/.claude.json"))
     return sys_t, mcp_t
 
 
@@ -405,8 +444,8 @@ def verify_all() -> list[ConfigResult]:
         elif kind == "hermes_agent":
             results.append(_verify_hermes_agent_prompt(path))
     for kind, path, label in _MCP_TARGETS:
-        if kind == "settings":
-            results.append(_verify_settings_json(path))
+        if kind == "claude_mcp":
+            results.append(_verify_claude_mcp(path, label))
         elif kind == "hermes":
             results.append(_verify_hermes_yaml(path))
     results.append(verify_bash_aliases())
@@ -421,8 +460,8 @@ def repair_all(dry_run: bool = False) -> list[ConfigResult]:
         elif kind == "hermes_agent":
             results.append(_repair_hermes_agent_prompt(path, dry_run=dry_run))
     for kind, path, label in _MCP_TARGETS:
-        if kind == "settings":
-            results.append(_repair_settings_json(path, dry_run=dry_run))
+        if kind == "claude_mcp":
+            results.append(_repair_claude_mcp(path, label, dry_run=dry_run))
         elif kind == "hermes":
             results.append(_repair_hermes_yaml(path, dry_run=dry_run))
     results.append(repair_bash_aliases(dry_run=dry_run))
