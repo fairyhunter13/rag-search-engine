@@ -124,8 +124,7 @@ def test_mcp_resolves_via_claude_json_not_settings_json():
     assert "settings.json" not in src, "MCP repair/verify must not reference settings.json"
 
     claude_bin = ci._claude_binary()
-    if not claude_bin:
-        pytest.skip("claude binary not on PATH")
+    assert claude_bin, "claude binary not on PATH — required for the live suite"
     result = subprocess.run(
         [claude_bin, "mcp", "get", "rag-search"],
         capture_output=True, text=True, timeout=15,
