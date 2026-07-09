@@ -151,21 +151,28 @@ mapping table may substitute for structural analysis of user code.
   documented here. `kb/valueflow.py::resolve_first_arg` (Tier-1.5's value-flow resolution) feeds
   candidates into Tier 1 extraction and Tier-1.75 reranking; it stamps no confidence of its own, and
   no code path anywhere in the tree stamps 0.9. Tier 3 (whole-file LLM on parse-error files,
-  `_llm_file`) was never implemented — `graph/extractor.py`'s only parse-error/empty-structure
-  fallback is the deterministic `_generic_walk` (no LLM call; `H1` in the coverage table above), and
-  neither `graph/extractor.py` nor `kb/bpre.py` contains a `deepseek_extract` call site for whole-file
-  reconstruction. Confirmed independently by `test_deterministic_resolution.py`'s own invariants:
-  non-LLM confidence ∈ `[0.8, 1.0]` as a single band (not two), and `_llm_file` is allowlisted nowhere
-  (`test_no_llm_file_edges_when_key_absent` only ever asserts it is absent — there is no with-key
-  counterpart proving it can appear).
+  `_llm_file`) is **RETIRED** — a research-backed 2026-07-09 decision, not merely deferred: whole-file
+  reconstruction sends each parse-error file's entire source as the dynamic tail, so it has no stable
+  shared prefix and DeepSeek's prefix-caching cannot apply (~$0.14/M cache-miss vs. ~$0.0028/M
+  cache-hit token pricing) — one to two orders of magnitude above Tier-2's SEA-select cost per rebuild,
+  recurring on every code drift, and structurally in violation of the token-frugality doctrine (HR23).
+  It is also **less accurate**: July-2026 evidence shows static/structural extraction beats LLM-based
+  extraction on completeness and soundness (PyCG arXiv 2402.17679: 93.3%/86.7% vs. fine-tuned GPT-3.5's
+  57.8%/61.9%, ~190× faster; corroborated by HeaderGen arXiv 2410.00603). `graph/extractor.py`'s only
+  parse-error/empty-structure fallback remains the deterministic `_generic_walk` (no LLM call; `H1` in
+  the coverage table above), and neither `graph/extractor.py` nor `kb/bpre.py` contains a
+  `deepseek_extract` call site for whole-file reconstruction. Confirmed independently by
+  `test_deterministic_resolution.py`'s own invariants: non-LLM confidence ∈ `[0.8, 1.0]` as a single
+  band (not two), and `_llm_file` is allowlisted nowhere (`test_no_llm_file_edges_when_key_absent`
+  only ever asserts it is absent — there is no with-key counterpart proving it can appear).
   | Tier | Mechanism | Conf | Gate |
   |---|---|---|---|
   | 1 | `process()` extraction, incl. gRPC/pubsub proto-registry match (`_resolve_grpc_edges`/`_resolve_pubsub_edges`) | 1.0 `EXTRACTED` | always |
   | 1.5 → 1.75 | HTTP route match, whether literal, value-flow-resolved, or GPU-rerank residue (`_resolve_http_edges`, `resolve_rerank.py::rerank_residue`) — distinguished only by `kind` suffix (`http` vs `http_reranked`), not by confidence | 0.8 `RERANKED` | always |
   | 2 | SEA-style LLM select (`kb/bpre.py::_llm_link_resolve`) | 0.7 `_llm` | ON when `DEEPSEEK_API_KEY` present |
-  | 3 | **DEFERRED** — whole-file LLM on parse-error files (documented, not built; no `_llm_file` code path exists) | n/a | n/a |
-- Tier 2 is **on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent (Tier 3 does not
-  exist, so it has no gate). **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`;
+  | 3 | **RETIRED** — whole-file LLM on parse-error files; decisively rejected on token-cost + accuracy grounds (documented, never built; no `_llm_file` code path exists) | n/a | n/a |
+- Tier 2 is **on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent (Tier 3 is retired,
+  so it has no gate). **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`;
   `deepseek-chat` deprecates 2026-07-24). Without a key: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI, plus a named debt registry
@@ -211,15 +218,18 @@ mapping table may substitute for structural analysis of user code.
    `federation.md` (aggregation of each member's own graph.db; no cross-repo edges, HR4). No-op
    for standalone projects. (See Part 2 §13b HR13.)
 6. `reconstruct_processes(root_path)` (Phase D BPRE) — runs ONLY for federation roots (≥2 members).
-   Writes `{index_dir}/process_graph.db`. **Three-tier extraction** (see §7a + **HR14/HR15** in Part 2):
-   Tier 1 = tree-sitter (`kb/bpre_ast.py`, reusing `graph/extractor.py`): Pass A mines generated
-   `*.pb.go` to discover the gRPC API surface (real constructor/registrar names, **no hardcoded
-   patterns**); Pass B detects call sites per-file against that surface (gRPC, pub/sub, HTTP,
-   status enums). Tier 2 = LLM linkage (ON when `DEEPSEEK_API_KEY` present) for config-driven
-   edges (JSON-topic IDs, client hosts) tree-sitter cannot resolve. Tier 3 = cloud DeepSeek for D5
-   rule text + D6 narrative. D4 process traces are **handler-anchored and deduped** — keyed on the
-   entry handler's reachable symbol set, not any-edge service adjacency. **GPU-free** for Tier 1 +
-   BPMN/mermaid; byte-identical without a DeepSeek key (F1/F2).
+   Writes `{index_dir}/process_graph.db`. **Three-tier extraction** (see §7a + **HR14/HR15** in Part 2;
+   this is BPRE's own tier numbering for process reconstruction — a distinct scheme from the
+   resolution ladder's Tier 1/1.5/1.75/2/[3-retired] confidence tiers above, which resolve individual
+   cross-service edges, not whole processes): Tier 1 = tree-sitter (`kb/bpre_ast.py`, reusing
+   `graph/extractor.py`): Pass A mines generated `*.pb.go` to discover the gRPC API surface (real
+   constructor/registrar names, **no hardcoded patterns**); Pass B detects call sites per-file against
+   that surface (gRPC, pub/sub, HTTP, status enums). Tier 2 = LLM linkage (ON when `DEEPSEEK_API_KEY`
+   present) for config-driven edges (JSON-topic IDs, client hosts) tree-sitter cannot resolve. Tier 3 =
+   cloud DeepSeek for D5 rule text + D6 narrative (built and active — unrelated to the resolution
+   ladder's retired whole-file Tier 3). D4 process traces are **handler-anchored and deduped** — keyed
+   on the entry handler's reachable symbol set, not any-edge service adjacency. **GPU-free** for Tier 1
+   + BPMN/mermaid; byte-identical without a DeepSeek key (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
 7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`rag-search docgen <project>`).
@@ -280,11 +290,11 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 
 **Four-lane invariant (HR12, HR31):**
 - **LOCAL GPU lane** = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking ONLY. CPU binding is fatal; any CPU fallback raises immediately.
-- **CLOUD KB lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, intents, semantic-type, wiki narrative; BPRE Tier-2 link resolution, Tier-3 parse-error, D5 rule text).
+- **CLOUD KB lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, intents, semantic-type, wiki narrative; BPRE Tier-2 link resolution, D5 rule text; the resolution ladder's Tier-3 parse-error whole-file resolution is RETIRED, never built — see HR16).
 - **CLOUD chat lane** = claude-haiku-4-5 (dashboard chat only; no DeepSeek fallback).
 - **DOC-TOOLING lane** = `claude -p` headless (docgen IH + OKF; Haiku/Sonnet; never KB, never chat).
 
-**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 5-tier BPRE resolution ladder (HR16): Tier-1.75 is the GPU rerank lane; Tier-2/3 are cloud DeepSeek. Doc-tooling (`docgen`/`okf`) uses `claude -p` headless — a distinct lane from KB enrichment and chat (HR31).
+**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 3-tier BPRE resolution ladder (HR16, corrected 2026-07-09): Tier-1.75 is the GPU rerank lane; Tier-2 is cloud DeepSeek (Tier-3 is RETIRED, never built — see the Tier-3 recommendation in `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`). Doc-tooling (`docgen`/`okf`) uses `claude -p` headless — a distinct lane from KB enrichment and chat (HR31).
 
 ## 16. Per-project config & federation inheritance
 

@@ -114,3 +114,30 @@ def test_storage_paths_are_env_driven() -> None:
     assert not violations, (
         f"Hardcoded storage-root literal(s) found ({len(violations)}):\n" + "\n".join(violations[:5])
     )
+
+
+# Runnable-by-anyone contract (P18/HR34): every one of these module-level config.py names is a
+# machine/deployment-specific value (model, host, port, device, timeout) that a fresh clone must be
+# able to override without a source edit — each must be produced by an `os.environ.get(...)` call.
+_ENV_DRIVEN_CONFIG_NAMES = [
+    "EMBED_MODEL", "RERANK_MODEL", "EMBED_DEVICE",
+    "DAEMON_HOST", "DAEMON_PORT",
+    "QUERY_LLM_PROVIDER", "QUERY_LLM_MODEL",
+    "OPENCODE_GPU_DEVICE",
+]
+
+
+def test_runtime_config_is_env_driven() -> None:
+    """Model/host/port/device constants in core/config.py must derive from os.environ.get(...) —
+    a fresh clone should need zero source edits to point at a different model, host, port, or GPU
+    (P18/HR34 runnable-by-anyone contract)."""
+    src = (_REPO_ROOT / "src/rag_search/core/config.py").read_text()
+    lines = src.splitlines()
+    missing: list[str] = []
+    for name in _ENV_DRIVEN_CONFIG_NAMES:
+        assign_lines = [ln for ln in lines if ln.strip().startswith(f"{name} ") or ln.strip().startswith(f"{name}:")]
+        if not assign_lines or not any("os.environ.get(" in ln for ln in assign_lines):
+            missing.append(name)
+    assert not missing, (
+        f"Config name(s) not env-driven via os.environ.get(...) in core/config.py: {missing}"
+    )
