@@ -37,6 +37,31 @@ def _clean(paths):
         shutil.rmtree(index_dir(str(p)), ignore_errors=True)
 
 
+def test_gdup_duplicate_symlink_members_deduped(safe_tmp_path):
+    """G-DUP: two symlinks resolving to the same target must not double-count that
+    member in the federation union — discover_members has no dedup guard and can
+    append the same resolved target twice, so expand_federation must dedup instead."""
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.daemon.federation import expand_federation, index_members
+
+    root = safe_tmp_path / "root"
+    member = safe_tmp_path / "member-repo"
+    root.mkdir()
+    member.mkdir()
+    (member / "a.py").write_text("def f(): pass\n")
+    (root / "link_one").symlink_to(member)
+    (root / "link_two").symlink_to(member)
+    _clean([root, member])
+    try:
+        upsert_project(ProjectEntry(path=str(root), enabled=True))
+        index_members(str(root))
+        union = expand_federation(str(root))
+        assert union.count(str(member)) == 1, f"member counted more than once: {union}"
+    finally:
+        _clean([root, member])
+
+
 @pytest.mark.slow
 def test_inv1_no_inlining(safe_tmp_path):
     """Invariant #1: root index must not contain symbols from the member path."""
