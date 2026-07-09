@@ -859,3 +859,31 @@ def test_wt4_dynamic_add_restart_delivers_new_root():
             )
         finally:
             w.stop()
+
+
+def test_wt5_prefix_sibling_roots_no_misattribution():
+    """WT5: root name that is a string-prefix of a sibling's (`foo` vs `foo-bar`) must
+    never misattribute events — raw `str.startswith` has no path boundary check."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from rag_search.daemon.watcher import Watcher
+
+    calls: list[tuple[str, list[Path]]] = []
+    with tempfile.TemporaryDirectory() as base:
+        short, long_ = str(Path(base) / "foo"), str(Path(base) / "foo-bar")
+        _write_tree(short, {"src/a.py": "print(1)\n"})
+        _write_tree(long_, {"src/b.py": "print(1)\n"})
+        w = Watcher(on_change=lambda root, files: calls.append((root, files)))
+        w.watch(short)
+        w.watch(long_)
+        w.start()
+        try:
+            time.sleep(0.3)
+            with open(Path(long_) / "src" / "b.py", "a") as f:
+                f.write("print(2)\n")
+            assert _wt_wait_for(lambda: any(r == long_ for r, _ in calls)), calls
+            assert not any(r == short for r, _ in calls), f"misattributed to foo: {calls}"
+        finally:
+            w.stop()
