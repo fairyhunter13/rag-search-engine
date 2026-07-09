@@ -1,4 +1,4 @@
-"""OKF generator tests — GPU-free, OSE-free, no daemon required."""
+"""OKF generator tests — GPU-free, RSE-free, no daemon required."""
 from __future__ import annotations
 
 import sys

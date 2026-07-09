@@ -1,7 +1,7 @@
 """OKF v0.1 generator -- LLM-native via claude -p.
 
 generate(project_path, out_dir=None) -> dict
-Kill-switch: OSE_OKF=0 -> returns empty dict immediately (no output).
+Kill-switch: RSE_OKF=0 -> returns empty dict immediately (no output).
 No deterministic skeleton. claude -p reads repo source, identifies semantic
 concepts, infers type, synthesizes bodies with [code: file:line] citations.
 """
@@ -19,7 +19,7 @@ MODEL_SONNET = "claude-sonnet-4-6"
 _TIMEOUT = 300  # SONNET can exceed 180s under full-suite system load
 
 _raw_profiles = os.environ.get(
-    "OSE_OKF_CLAUDE_PROFILES",
+    "RSE_OKF_CLAUDE_PROFILES",
     f"{os.path.expanduser('~/.claude')},{os.path.expanduser('~/.claude-account1')}",
 )
 _PROFILES: list[str] = [p.strip() for p in _raw_profiles.split(",") if p.strip()]
@@ -123,8 +123,8 @@ def generate(
     project_path: str | Path,
     out_dir: str | Path | None = None,
 ) -> dict:
-    """Generate OKF v0.1 bundle via claude -p. Kill-switch: OSE_OKF=0 -> no output."""
-    if os.environ.get("OSE_OKF", "1") == "0":
+    """Generate OKF v0.1 bundle via claude -p. Kill-switch: RSE_OKF=0 -> no output."""
+    if os.environ.get("RSE_OKF", "1") == "0":
         return {"written": [], "skipped": [], "version": OKF_VERSION, "mode": "off"}
 
     root = Path(project_path).resolve()

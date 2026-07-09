@@ -1,6 +1,6 @@
 """Standalone repo walker for OKF generator.
 
-No OSE import. No tree-sitter. Derives top-level modules from file tree.
+No RSE import. No tree-sitter. Derives top-level modules from file tree.
 """
 from __future__ import annotations
 
