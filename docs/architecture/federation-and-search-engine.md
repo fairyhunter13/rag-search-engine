@@ -21,23 +21,23 @@ an independent unit.
 
 ## 1a. Engineering principles (doctrine)
 
-The governing principle is **P0: most efficient + most effective, for *everything* in OSE**. Every component, lane, and algorithm is chosen and tuned for maximum efficiency *and* effectiveness; all principles below are corollaries (§9b per-workload engine assignment, no cross-lane bleed; HR6, HR9, HR10, HR12, HR26).
+The governing principle is **P0: most efficient + most effective, for *everything* in RSE**. Every component, lane, and algorithm is chosen and tuned for maximum efficiency *and* effectiveness; all principles below are corollaries (§9b per-workload engine assignment, no cross-lane bleed; HR6, HR9, HR10, HR12, HR26).
 
 1. **DeepSeek = least/minimum token usage (DIKW token economy).** The cloud generative lane spends the *fewest possible* tokens: significance-gated head only, prefix-cached, abstention on the tail, child-reuse roll-ups; `$0` when quiescent; spend only to climb Information→Knowledge→Wisdom, and only at the nodes/queries actually read (HR22–HR24).
 2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR14, HR15, HR16 resolution ladder, HR17, HR18, §7a).
-3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26, HR32, P16). Idle target: < 1 % CPU, constant RAM floor (models unload after `OPENCODE_MODEL_IDLE_UNLOAD_S`). The heavy KB cascade runs only on real source-fingerprint drift (`_last_enriched_sig` gate in `on_change`). File-watching is event-driven via `watchfiles`/Rust `notify` — one thread + one inotify instance for all roots, `watch_filter` ignore-aware via the same HR35 resolver as the drift gate (P17, HR33, HR37); polling, if ever needed, is the Rust library's own `force_polling` path, never a hand-rolled loop.
+3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26, HR32, P16). Idle target: < 1 % CPU, constant RAM floor (models unload after `RSE_MODEL_IDLE_UNLOAD_S`). The heavy KB cascade runs only on real source-fingerprint drift (`_last_enriched_sig` gate in `on_change`). File-watching is event-driven via `watchfiles`/Rust `notify` — one thread + one inotify instance for all roots, `watch_filter` ignore-aware via the same HR35 resolver as the drift gate (P17, HR33, HR37); polling, if ever needed, is the Rust library's own `force_polling` path, never a hand-rolled loop.
 4. **No local generative LLM** — cloud DeepSeek for KB, Claude Code for chat/docgen (HR12).
 5. **Determinism + idempotence** — byte-identical reruns with LLM off; enrichment gated on `summary IS NULL`, never re-labels settled rows (HR3, HR11, HR13, HR20, HR21, HR24, HR25).
 6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`ask`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval; all generative spend (DeepSeek) is **enrichment-time**, pre-built into the KB the read-path serves (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
 7. **Self-healing** — event-driven (watcher) + reconcile re-derive on algo/source drift (HR1, HR2, HR25, §10).
-8. **Root-only docgen + universal config** — one root-owned `docs/`; `.opencode-index.yaml` honored by every enumerator (HR27, HR28, HR29).
+8. **Root-only docgen + universal config** — one root-owned `docs/`; `.rse-index.yaml` honored by every enumerator (HR27, HR28, HR29).
 9. **Two-stage retrieval; rerank is the relevance authority.** Query = bi-encoder vector recall (`sqlite-vec`) → cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU); results ordered by `rerank_score`, **never the bare vector `score`**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
 10. **Public-repo hygiene.** Every emitted artifact (wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN, docgen pages, citations) is **project-root-relative**; absolute device paths and company/device names never leak — `symbols.file` stores absolute paths, so strip to root-relative before any artifact (HR13).
 11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU). Machine-verified Concept→Spec→Impl→Test traceability closes the V&V loop (HR30).
 
 ## 1b. World model & governance/spec WM *(updated Phase 1 2026-06-26)*
 
-OSE's world model is a **governance/spec WM** (see `docs/world-model/` + `docs/reference/world-model.md`):
+RSE's world model is a **governance/spec WM** (see `docs/world-model/` + `docs/reference/world-model.md`):
 - **State** = codebase + invariants/laws (P0–P15 in §1a + `model.yaml`)
 - **Action** = a diff/change
 - **Guard** = does the diff satisfy the preconditions?
@@ -156,7 +156,7 @@ mapping table may substitute for structural analysis of user code.
   | 1 | `process()` extraction, incl. gRPC/pubsub proto-registry match (`_resolve_grpc_edges`/`_resolve_pubsub_edges`) | 1.0 `EXTRACTED` | always |
   | 1.5 → 1.75 | HTTP route match, whether literal, value-flow-resolved, or GPU-rerank residue (`_resolve_http_edges`, `resolve_rerank.py::rerank_residue`) — distinguished only by `kind` suffix (`http` vs `http_reranked`), not by confidence | 0.8 `RERANKED` | always |
   | 2 | SEA-style LLM select (`kb/bpre.py::_llm_link_resolve`) | 0.7 `_llm` | ON when `DEEPSEEK_API_KEY` present |
-- Tier 2 is **on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent. **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`;
+- Tier 2 is **on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent. **`RSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`;
   `deepseek-chat` deprecates 2026-07-24). Without a key: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI, plus a named debt registry
@@ -269,7 +269,7 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
 | **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** only (Claude Code CLI); emits SSE error event when CLI unavailable | Codex removed; DeepSeek is KB-enrichment-exclusive (HR12) — no chat fallback |
 | **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-v4-flash` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
-| **E — Doc-tooling** | `rag-search docgen/okf` (manual only; `POST /api/docgen`, `/api/okf`) | **`claude -p`** headless: **Haiku 4.5** (concept/write) + **Sonnet 4.6** (architect/discover) | LLM-native; no tree-sitter on doc path; no deterministic skeleton; kill-switches `OSE_DOCGEN=0`/`OSE_OKF=0`; never from auto-sweep or MCP (HR27/P13) |
+| **E — Doc-tooling** | `rag-search docgen/okf` (manual only; `POST /api/docgen`, `/api/okf`) | **`claude -p`** headless: **Haiku 4.5** (concept/write) + **Sonnet 4.6** (architect/discover) | LLM-native; no tree-sitter on doc path; no deterministic skeleton; kill-switches `RSE_DOCGEN=0`/`RSE_OKF=0`; never from auto-sweep or MCP (HR27/P13) |
 
 **Four-lane invariant (HR12, HR31):**
 - **LOCAL GPU lane** = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking ONLY. CPU binding is fatal; any CPU fallback raises immediately.
@@ -281,7 +281,7 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 
 ## 16. Per-project config & federation inheritance
 
-Each project may carry an optional `.opencode-index.yaml` (or `.yml`) at its root.
+Each project may carry an optional `.rse-index.yaml` (or `.yml`) at its root.
 `core/index_config.py` governs config loading and resolution.
 
 ### 16.1 `ProjectConfig` fields
@@ -295,7 +295,7 @@ Each project may carry an optional `.opencode-index.yaml` (or `.yml`) at its roo
 ### 16.2 `effective_config(path)` — inheritance model
 
 `iter_files(root)` resolves config via `effective_config(root)` instead of loading
-`.opencode-index.yaml` in isolation. Resolution rules:
+`.rse-index.yaml` in isolation. Resolution rules:
 
 1. **Standalone project** (no owning root in registry): `load_project_config(path)` — own file or defaults.
 2. **Federation member** (path appears in some root's `federation` list):
@@ -303,9 +303,9 @@ Each project may carry an optional `.opencode-index.yaml` (or `.yml`) at its roo
    - `use_default_ignores`, `max_pending_files` = member's value when member has own config file, **else root's**.
 3. Source label exposed in `overview(status).config.source`: `"own"` | `"inherited"` | `"default"`.
 
-### 16.3 OSE config files are always indexed
+### 16.3 RSE config files are always indexed
 
-`.opencode-index.yaml` and `.opencode-index.yml` **bypass** `exclude` patterns and
+`.rse-index.yaml` and `.rse-index.yml` **bypass** `exclude` patterns and
 file-size limits in `iter_files()`. A user `exclude: ["*.yaml"]` rule never silently
 drops the engine's own config from the index.
 
@@ -324,12 +324,12 @@ drops the engine's own config from the index.
 }
 ```
 
-`source` values: `"own"` (project has its own `.opencode-index.yaml`),
+`source` values: `"own"` (project has its own `.rse-index.yaml`),
 `"inherited"` (federation member using root's config), `"default"` (standalone, no config file).
 
 ### 16.5 Config honored by every enumerator (HR29)
 
-`.opencode-index.yaml` is enforced not only in `iter_files` but in **every** project-source enumerator:
+`.rse-index.yaml` is enforced not only in `iter_files` but in **every** project-source enumerator:
 
 - **Incremental/watcher path** (`daemon/sweeps.py::on_change`): changed-file list filtered through `is_excluded(path, effective_config(project).exclude, project)` before embedding.
 - *(Structural spine `kb/structure.py` deleted WS-B 2026-06-26.)*

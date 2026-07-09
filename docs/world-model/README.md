@@ -1,16 +1,16 @@
-# OSE World Model
+# RSE World Model
 
-> OSE *fulfills* this model. Code is a side-effect; this is the normative target.
+> RSE *fulfills* this model. Code is a side-effect; this is the normative target.
 
 ## What this is
 
-A **structured, queryable, partially-executable** representation of what OSE is building, why, and how it MUST be built. Its defining property is **action-conditioned prediction**: given the current codebase state + a candidate change, `check_world_model.py` predicts whether the next state still satisfies the laws (L1 invariants) and behavior specs (L3 HRs).
+A **structured, queryable, partially-executable** representation of what RSE is building, why, and how it MUST be built. Its defining property is **action-conditioned prediction**: given the current codebase state + a candidate change, `check_world_model.py` predicts whether the next state still satisfies the laws (L1 invariants) and behavior specs (L3 HRs).
 
 This is a development-governance artifact. It lives in `docs/` and `scripts/`; it has no MCP surface, no FEATURES.md entry, no `src/rag_search/` code.
 
 ## Four-layer schema (agentic-coding, June 2026)
 
-| Layer | What | Where in OSE |
+| Layer | What | Where in RSE |
 |-------|------|-------------|
 | **L1** | Architecture invariants (laws — what changes are permitted) | §1a + `model.yaml` P0–P15 in `federation-and-search-engine.md` |
 | **L2** | Components — capability→module→operation map | `src/rag_search/{core,embed,index,graph,kb,query,server,daemon}/` |
@@ -38,7 +38,7 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 | P12 | Doc-tooling (docgen + OKF) is LLM-native via `claude -p`; no tree-sitter on the doc-tooling path |
 | P13 | Docgen + OKF = manual-trigger only; never from auto-sweep or MCP tools |
 | P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling |
-| P15 | Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback |
+| P15 | Kill-switches (RSE_DOCGEN=0, RSE_OKF=0) → no output; no deterministic skeleton fallback |
 
 ## Tools
 

@@ -121,14 +121,14 @@ def test_e2e_ask_global_non_empty(live_client, proj_key, projects):
 # S6: Federation / symlink-repo invariants
 # ---------------------------------------------------------------------------
 
-_SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
+_SAFE_BASE = Path.home() / ".local" / "share" / "rse-test-dirs"
 
 
 @pytest.fixture(scope="module")
 def synth_symlink_proj():
     """Synthetic root with one external symlinked sub-dir — used by S6a/S6b.
 
-    Layout built under ~/.local/share/ocs-test-dirs/:
+    Layout built under ~/.local/share/rse-test-dirs/:
       root/own.py          — own source file (indexed)
       root/ext-link/ → external/  — symlink to external dir (must be pruned)
       external/leaked.py   — file that must NOT appear in root's graph.db
@@ -419,17 +419,17 @@ def test_overview_status_includes_config_key(live_client, projects):
     assert cfg["source"] in ("own", "inherited", "default"), f"unexpected config.source: {cfg['source']}"
 
 
-def test_iter_files_always_yields_ose_config(safe_tmp_path):
-    """E2: .opencode-index.yaml must be yielded even when excluded by an exclude glob."""
+def test_iter_files_always_yields_rse_config(safe_tmp_path):
+    """E2: .rse-index.yaml must be yielded even when excluded by an exclude glob."""
     from rag_search.core.index_config import ProjectConfig
     from rag_search.index.discover import iter_files
 
-    (safe_tmp_path / ".opencode-index.yaml").write_text("index:\n  exclude: []\n")
+    (safe_tmp_path / ".rse-index.yaml").write_text("index:\n  exclude: []\n")
     (safe_tmp_path / "normal.yaml").write_text("key: val\n")
     cfg = ProjectConfig(exclude=["*.yaml"])
     found = {p.name for p in iter_files(safe_tmp_path, cfg=cfg)}
-    assert ".opencode-index.yaml" in found, (
-        ".opencode-index.yaml must be yielded even when *.yaml is excluded"
+    assert ".rse-index.yaml" in found, (
+        ".rse-index.yaml must be yielded even when *.yaml is excluded"
     )
     assert "normal.yaml" not in found, "normal.yaml must be excluded by *.yaml glob"
 
@@ -444,7 +444,7 @@ def test_effective_config_inherits_root_excludes(safe_tmp_path):
     member = safe_tmp_path / "member"
     root.mkdir()
     member.mkdir()
-    (root / ".opencode-index.yaml").write_text("index:\n  exclude:\n    - '*.gen.py'\n")
+    (root / ".rse-index.yaml").write_text("index:\n  exclude:\n    - '*.gen.py'\n")
     root_path, member_path = str(root), str(member)
     upsert_project(ProjectEntry(path=root_path, enabled=True, federation=[member_path]))
     upsert_project(ProjectEntry(path=member_path, enabled=True))

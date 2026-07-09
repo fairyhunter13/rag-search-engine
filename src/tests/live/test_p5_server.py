@@ -127,7 +127,7 @@ def test_index_tool_rejects_forbidden_root(safe_tmp_path):
     from rag_search.core.registry import get_project
     from rag_search.server.mcp import index as index_tool
 
-    bad = "/tmp/ocs-test-forbidden-registration-check"
+    bad = "/tmp/rse-test-forbidden-registration-check"
     result = json.loads(asyncio.run(index_tool(bad, enabled=True)))
     assert result["status"] == "forbidden", f"expected forbidden, got {result}"
     assert get_project(bad) is None, "forbidden path must NOT be registered"
@@ -159,7 +159,7 @@ def test_index_tool_e2e(safe_tmp_path):
     assert not Path(idx).exists(), "Index dir not deleted after remove"
 
 
-def test_overview_all_whats_real_federation_root():
+def test_overview_all_whats_real_federation_root(sample_workspace):
     """P10.4: every what= value returns parseable non-empty data on the real federation root."""
     from rag_search.server.mcp import overview as overview_tool
     from tests.live._projects import federation_root
@@ -176,7 +176,7 @@ def test_overview_all_whats_real_federation_root():
         assert data, f"overview(what={what!r}) returned empty dict: {result[:120]}"
 
 
-def test_service_mesh_be_nonempty():
+def test_service_mesh_be_nonempty(sample_workspace):
     """Federation service_mesh must detect gRPC/HTTP services from the federation root."""
     from tests.live._projects import federation_root
     root = federation_root()
@@ -379,9 +379,39 @@ def test_graph_defaults_project_path_to_first_project(sample_workspace):
         f"G5: graph with no project_path must resolve to first enabled project, got: {data}"
     )
     assert "matches" in data, f"G5: expected matches key in resolved graph, got: {data}"
+    assert data.get("resolved_project") == first, (
+        f"G5: graph() must disclose which project it fell back to, got: {data}"
+    )
 
 
-_OSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
+def test_ask_and_overview_disclose_auto_selected_project(sample_workspace):
+    """G5b: ask()/overview() must disclose which project an empty project_path fell back to.
+
+    Regression guard for the 2026-07-09 audit transparency gap: search() already reports
+    projects_searched even for its (safe) all-projects fallback, but ask/graph/overview's
+    single-project first-enabled-project fallback used to return no signal of which project
+    actually answered — a caller with no project_path in scope could silently receive an
+    arbitrary project's data without any way to tell that project wasn't the one they meant.
+    """
+    from rag_search.core.registry import list_projects
+    from rag_search.server.mcp import ask as ask_tool
+    from rag_search.server.mcp import overview as overview_tool
+
+    first = next((p.path for p in list_projects() if p.enabled), None)
+    assert first, "At least one enabled project must be registered (sample_workspace provides this)"
+
+    overview_data = json.loads(asyncio.run(overview_tool("", "structure")))
+    assert overview_data.get("resolved_project") == first, (
+        f"overview() must disclose resolved_project={first!r}, got: {overview_data}"
+    )
+
+    ask_result = asyncio.run(ask_tool("what does this do?", ""))
+    assert first in ask_result, (
+        f"ask() must disclose which project ({first!r}) it fell back to, got: {ask_result[:160]!r}"
+    )
+
+
+_RSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
 
 
 
@@ -584,7 +614,7 @@ def test_e6b_chat_model_is_haiku(live_client):
     """E6b/HR10: done.model is claude-haiku-4-5 — the only chat model (codex removed).
 
     Asserts the literal model the daemon serves, not config QUERY_LLM_MODEL (which a stray
-    OPENCODE_QUERY_LLM_MODEL env in the test process could shadow); the live daemon is the
+    RSE_QUERY_LLM_MODEL env in the test process could shadow); the live daemon is the
     source of truth and is pinned to claude-haiku-4-5 via its systemd drop-in.
     """
     r = live_client.post(

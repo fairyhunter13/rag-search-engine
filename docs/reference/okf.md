@@ -82,14 +82,14 @@ Producers may freely extend frontmatter. Consumers MUST:
 
 ---
 
-## 4. OSE's OKF implementation (`vendor/okf`)
+## 4. RSE's OKF implementation (`vendor/okf`)
 
 | Property | Implementation |
 |---|---|
 | Generator | `vendor/okf/src/okf/generate.py` — `generate(project_path, out_dir=None) → dict` |
 | Driver | `claude -p` (LLM-native; no tree-sitter; no regex) — reads repo source directly, identifies semantic concept units, infers `type`, synthesizes body with `[code: file:line]` citations |
 | Output path | `<project>/docs/okf/` |
-| OSE adapter | `src/rag_search/kb/okf.py` — thin wrapper; kill-switch: `OSE_OKF=0` (off ⇒ no output) |
+| RSE adapter | `src/rag_search/kb/okf.py` — thin wrapper; kill-switch: `RSE_OKF=0` (off ⇒ no output) |
 | Trigger | CLI `rag-search okf <project>` or dashboard; **never** MCP, never auto-enrich sweep |
 | CI/offline | No deterministic generator; golden fixture bundles in `src/tests/live/fixtures/okf_golden/` |
 
@@ -108,14 +108,14 @@ Producers may freely extend frontmatter. Consumers MUST:
 | Unknown-field round-trip preserved | Re-parsing a serialized bundle preserves unknown frontmatter fields |
 | No absolute paths or company names | `Path.home()` not present in any artifact |
 | No tree-sitter import on doc-tooling path | `import tree_sitter` / `from tree_sitter` absent from `vendor/okf/` |
-| Kill-switch works | `OSE_OKF=0` → `run_okf()` returns without generating any files |
+| Kill-switch works | `RSE_OKF=0` → `run_okf()` returns without generating any files |
 
 ---
 
 ## See also
 
 - `vendor/okf/src/okf/generate.py` — OKF generator
-- `src/rag_search/kb/okf.py` — OSE adapter
+- `src/rag_search/kb/okf.py` — RSE adapter
 - `src/tests/live/test_okf.py` — live conformance tests
 - `docs/reference/llm-drivers.md` — `claude -p` driver doctrine
 - `docs/reference/information-hierarchy.md` — docgen IH (distinct from OKF concept-graph)

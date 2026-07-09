@@ -74,7 +74,7 @@ class Embedder:
         # Patch ort.SessionOptions.__init__ directly so every session in this process
         # gets enable_mem_pattern=False, stopping BFC arena from pre-allocating 24GB
         # (exceeds the 16GB GPU) on the first FusedMatMul call.
-        if not getattr(ort.SessionOptions, "_ocs_no_pattern", False):
+        if not getattr(ort.SessionOptions, "_rse_no_pattern", False):
             _orig_so_init = ort.SessionOptions.__init__
 
             def _no_pattern_init(self_so: ort.SessionOptions) -> None:
@@ -90,7 +90,7 @@ class Embedder:
                 self_so.log_severity_level = 3  # suppress benign VerifyEachNodeIsAssignedToAnEp (ORT places shape ops on CPU by design)
 
             ort.SessionOptions.__init__ = _no_pattern_init  # type: ignore[method-assign]
-            ort.SessionOptions._ocs_no_pattern = True  # type: ignore[attr-defined]
+            ort.SessionOptions._rse_no_pattern = True  # type: ignore[attr-defined]
 
         self._model = TextEmbedding(
             model_name=self._model_name,

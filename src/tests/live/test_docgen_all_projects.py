@@ -27,16 +27,16 @@ _STATIC_DIRS = [
 
 @pytest.mark.parametrize("project_path", _STATIC_DIRS, ids=[d.name for d in _STATIC_DIRS])
 def test_kill_switch_produces_no_output(project_path: Path, tmp_path):
-    """OSE_DOCGEN=0 -> generate() returns mode=off and writes zero files."""
-    prev = os.environ.get("OSE_DOCGEN")
-    os.environ["OSE_DOCGEN"] = "0"
+    """RSE_DOCGEN=0 -> generate() returns mode=off and writes zero files."""
+    prev = os.environ.get("RSE_DOCGEN")
+    os.environ["RSE_DOCGEN"] = "0"
     try:
         r = generate(project_path=str(project_path), docs_dir=str(tmp_path))
     finally:
         if prev is None:
-            os.environ.pop("OSE_DOCGEN", None)
+            os.environ.pop("RSE_DOCGEN", None)
         else:
-            os.environ["OSE_DOCGEN"] = prev
+            os.environ["RSE_DOCGEN"] = prev
     assert r.get("mode") == "off", f"{project_path.name}: expected mode=off, got {r}"
     assert r["written"] == []
     assert not list(tmp_path.rglob("*.md")), f"{project_path.name}: kill-switch produced files"

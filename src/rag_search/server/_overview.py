@@ -90,7 +90,7 @@ def handle_overview(project_path: str, what: str) -> str:
             _ps = [p for p in list_projects() if p.enabled]
             project_path = _ps[0].path if _ps else ""
         from rag_search.index.validate import validate_index
-        return json.dumps(validate_index(project_path))
+        return json.dumps({**validate_index(project_path), "resolved_project": project_path})
     if not project_path:
         ps = [p for p in list_projects() if p.enabled]
         project_path = ps[0].path if ps else ""
@@ -98,14 +98,15 @@ def handle_overview(project_path: str, what: str) -> str:
         from pathlib import Path
 
         from rag_search.kb.patterns import detect_patterns
-        return json.dumps(detect_patterns(Path(project_path)))
+        return json.dumps({**detect_patterns(Path(project_path)), "resolved_project": project_path})
     if project_path:
         from rag_search.core.config import project_graph_db
         from rag_search.daemon.federation import expand_federation
         from rag_search.graph.store import GraphStore
 
         if what == "service_mesh":
-            return json.dumps({"services": [s for p in expand_federation(project_path) for s in _detect_services(p)]})
+            return json.dumps({"services": [s for p in expand_federation(project_path) for s in _detect_services(p)],
+                                "resolved_project": project_path})
         _paths = [p for p in expand_federation(project_path) if project_graph_db(p).exists()]
         if not _paths:
             return json.dumps({"what": what, "status": "no project available"})
@@ -113,7 +114,8 @@ def handle_overview(project_path: str, what: str) -> str:
         try:
             if what == "communities":
                 rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities WHERE level>=1 ORDER BY level,id LIMIT 50").fetchall()]
-                return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows]})
+                return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows],
+                                    "resolved_project": project_path})
             if what == "status":
                 from rag_search.core.config import project_vector_db
                 from rag_search.graph.quality import partition_quality
@@ -184,24 +186,28 @@ def handle_overview(project_path: str, what: str) -> str:
                                    "config": {"exclude": _ecfg.exclude,
                                               "use_default_ignores": _ecfg.use_default_ignores,
                                               "max_pending_files": _ecfg.max_pending_files,
-                                              "source": _cfg_src}})
+                                              "source": _cfg_src},
+                                   "resolved_project": project_path})
             if what == "import_cycles":
                 cycs = [cy for gs in _gstores for cy in _find_import_cycles(gs.conn)][:20]
                 cnt = sum(gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] for gs in _gstores)
-                return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "has_cycles": bool(cycs), "edge_count": cnt})
+                return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "has_cycles": bool(cycs),
+                                    "edge_count": cnt, "resolved_project": project_path})
             if what == "surprising_connections":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT s.name,t.name FROM edges e "
                     "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
                     "WHERE s.community_id != t.community_id LIMIT 20"
                 ).fetchall()]
-                return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]]})
+                return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]],
+                                    "resolved_project": project_path})
             if what == "feature_map":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT id,title,semantic_type FROM communities "
                     "WHERE semantic_type IS NOT NULL AND semantic_type != '' AND level=1"
                 ).fetchall()]
-                return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows]})
+                return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows],
+                                    "resolved_project": project_path})
             if what == "business_rules":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT id,title,summary,member_count FROM communities "
@@ -210,7 +216,7 @@ def handle_overview(project_path: str, what: str) -> str:
                 return json.dumps({"rules": [
                     {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
                     for r in rows
-                ]})
+                ], "resolved_project": project_path})
             if what == "process_flows":
                 from rag_search.core.config import root_process_db
                 pdb = root_process_db(project_path)
@@ -230,7 +236,7 @@ def handle_overview(project_path: str, what: str) -> str:
                          "services": json.loads(r[3] or "[]"),
                          "step_count": r[4], "mermaid": r[5] or ""}
                         for r in procs
-                    ]})
+                    ], "resolved_project": project_path})
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT id,title,summary,member_count FROM communities "
                     "WHERE semantic_type='business_process' ORDER BY member_count DESC"
@@ -238,7 +244,7 @@ def handle_overview(project_path: str, what: str) -> str:
                 return json.dumps({"source": "communities", "flows": [
                     {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
                     for r in rows
-                ]})
+                ], "resolved_project": project_path})
             if what == "suggested_questions":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT title FROM communities WHERE title IS NOT NULL AND level>=1 ORDER BY member_count DESC LIMIT 5"
@@ -246,11 +252,12 @@ def handle_overview(project_path: str, what: str) -> str:
                 qs = list(dict.fromkeys(f"How does {r[0]} work?" for r in rows if r[0]))[:5]
                 if not qs:
                     qs = ["What is the overall architecture?", "What are the main modules?"]
-                return json.dumps({"questions": qs})
+                return json.dumps({"questions": qs, "resolved_project": project_path})
             # default: structure
             fc = sum(gs.conn.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0] for gs in _gstores)
             return json.dumps({"path": project_path, "symbols": sum(gs.symbol_count() for gs in _gstores),
-                               "communities": sum(gs.community_count() for gs in _gstores), "files_with_symbols": fc})
+                               "communities": sum(gs.community_count() for gs in _gstores), "files_with_symbols": fc,
+                               "resolved_project": project_path})
         finally:
             for gs in _gstores:
                 gs.close()

@@ -94,8 +94,8 @@ def _verify_claude_md(md_path: Path) -> ConfigResult:
                             message=f"CLAUDE.md not found at {md_path}", path=str(md_path))
     text = md_path.read_text()
     from integrations.canonical import CANONICAL_BODY
-    ose_ok = _verify_sentinel_block(text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
-    if ose_ok:
+    rse_ok = _verify_sentinel_block(text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
+    if rse_ok:
         return ConfigResult(tool=label, status="already_ok",
                             message=f"System prompt in sync: {md_path}", path=str(md_path))
     return ConfigResult(tool=label, status="missing",
@@ -313,9 +313,9 @@ _BASH_ALIASES_SENTINEL_START = "# [rag-search-aliases:start]"
 _BASH_ALIASES_SENTINEL_END   = "# [rag-search-aliases:end]"
 _BASH_ALIASES_COMMENT = """\
 # rag-search shell helpers (managed by configure_integrations.py):
-#   ocs            — rag-search CLI entry point
-#   ocs-index PATH — index + build KB (entity enrichment + wiki)
-#   ocs-dash       — open the search-engine dashboard"""
+#   rse            — rag-search CLI entry point
+#   rse-index PATH — index + build KB (entity enrichment + wiki)
+#   rse-dash       — open the search-engine dashboard"""
 
 
 def verify_bash_aliases() -> ConfigResult:
@@ -325,14 +325,14 @@ def verify_bash_aliases() -> ConfigResult:
                             message="~/.bash_aliases not found", path=str(aliases_path))
     text = aliases_path.read_text()
     has_sentinel = _BASH_ALIASES_SENTINEL_START in text
-    has_ocs = "rag_search" in text
-    if has_sentinel and has_ocs:
+    has_rse = "rag_search" in text
+    if has_sentinel and has_rse:
         return ConfigResult(tool="bash_aliases", status="already_ok",
                             message="rag-search aliases with sentinel in ~/.bash_aliases",
                             path=str(aliases_path))
-    if has_ocs and not has_sentinel:
+    if has_rse and not has_sentinel:
         return ConfigResult(tool="bash_aliases", status="missing",
-                            message="ocs aliases exist but sentinel block missing (run --apply-all)",
+                            message="rse aliases exist but sentinel block missing (run --apply-all)",
                             path=str(aliases_path))
     return ConfigResult(tool="bash_aliases", status="missing",
                         message="rag-search aliases missing from ~/.bash_aliases",
@@ -353,7 +353,7 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
             old_text, _BASH_ALIASES_SENTINEL_START, _BASH_ALIASES_SENTINEL_END, _BASH_ALIASES_COMMENT
         )
     elif "rag_search" in old_text:
-        # Find the ocs section header and insert sentinel block before it
+        # Find the rse section header and insert sentinel block before it
         target = "# ── rag-search engine aliases ──"
         if target in old_text:
             new_text = old_text.replace(
@@ -362,17 +362,17 @@ def repair_bash_aliases(dry_run: bool = False) -> ConfigResult:
                 1,
             )
         else:
-            # Fallback: insert before first ocs alias
+            # Fallback: insert before first rse alias
             import re
             new_text = re.sub(
-                r"(alias ocs=)",
+                r"(alias rse=)",
                 f"{_BASH_ALIASES_SENTINEL_START}\n{_BASH_ALIASES_COMMENT}\n{_BASH_ALIASES_SENTINEL_END}\n\\1",
                 old_text,
                 count=1,
             )
     else:
         return ConfigResult(tool="bash_aliases", status="skipped",
-                            message="No ocs aliases found — cannot insert sentinel",
+                            message="No rse aliases found — cannot insert sentinel",
                             path=str(aliases_path))
 
     if old_text == new_text:
@@ -399,8 +399,8 @@ _H = Path.home()
 def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path | None, str]]]:
     """Build targets dynamically — adapts to the directories present on this machine.
 
-    Extra profiles can be added via OSE_INTEGRATION_EXTRA_PROFILES (colon-separated
-    CLAUDE.md paths). Run with OSE_INTEGRATION_EXTRA_PROFILES=~/.custom/CLAUDE.md to
+    Extra profiles can be added via RSE_INTEGRATION_EXTRA_PROFILES (colon-separated
+    CLAUDE.md paths). Run with RSE_INTEGRATION_EXTRA_PROFILES=~/.custom/CLAUDE.md to
     include additional profiles.
 
     mcp_t's Path element for kind "claude_mcp" is the CLAUDE_CONFIG_DIR to export when
@@ -423,7 +423,7 @@ def _build_targets() -> tuple[list[tuple[str, Path, str]], list[tuple[str, Path 
     if hermes.parent.exists():
         sys_t.append(("hermes_agent", hermes, "hermes/agent_system_prompt"))
         mcp_t.append(("hermes", hermes, "hermes/config.yaml"))
-    for raw in os.environ.get("OSE_INTEGRATION_EXTRA_PROFILES", "").split(":"):
+    for raw in os.environ.get("RSE_INTEGRATION_EXTRA_PROFILES", "").split(":"):
         p = raw.strip()
         if p:
             path = Path(p).expanduser()

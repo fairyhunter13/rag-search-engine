@@ -1,4 +1,4 @@
-# rag-search-engine (OSE)
+# rag-search-engine (RSE)
 
 Semantic code-search, knowledge-graph, and AI-assistant integration via a 5-tool MCP API
 (search / ask / graph / overview / index). Backed by GPU-accelerated embeddings, a
@@ -14,9 +14,9 @@ call-graph store, and a DeepSeek-powered knowledge-base pipeline.
 | CUDA | 12.x + matching cuDNN |
 | RAM | 8 GB system; 8 GB VRAM recommended |
 
-> **TensorRT:** OSE defaults to `OPENCODE_DISABLE_TENSORRT=1` (uses the CUDA EP, which works on
+> **TensorRT:** RSE defaults to `RSE_DISABLE_TENSORRT=1` (uses the CUDA EP, which works on
 > every NVIDIA GPU). If your GPU has a compatible TensorRT installation, set
-> `OPENCODE_DISABLE_TENSORRT=0` in `~/.config/rag-search/env` to activate the TensorRT EP
+> `RSE_DISABLE_TENSORRT=0` in `~/.config/rag-search/env` to activate the TensorRT EP
 > for faster inference.
 
 ## Install
@@ -39,7 +39,7 @@ python3 -m venv .venv
 
 ## Configure secrets
 
-OSE needs a [DeepSeek](https://platform.deepseek.com/) API key for KB-enrichment.
+RSE needs a [DeepSeek](https://platform.deepseek.com/) API key for KB-enrichment.
 
 Resolution order: `DEEPSEEK_API_KEY` env var → `~/.config/rag-search/env` → (legacy `~/.bash_env`)
 

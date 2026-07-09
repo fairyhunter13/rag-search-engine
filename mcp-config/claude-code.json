@@ -6,7 +6,7 @@
       "args": ["-m", "rag_search", "daemon", "bridge-stdio"],
       "env": {
         "_comment": "Optional but recommended: pin the workspace root so the bridge cannot access indexes outside the opened project.",
-        "OPENCODE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"
+        "RSE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"
       },
       "description": "GPU-accelerated local semantic code search. Index your projects and search with natural language.",
       "alwaysAllow": [

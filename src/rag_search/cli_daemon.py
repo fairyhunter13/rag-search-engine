@@ -107,7 +107,7 @@ def daemon_bridge_stdio() -> None:
 
     from rag_search.server.mcp import mcp
 
-    idle_s = float(os.environ.get("OPENCODE_BRIDGE_IDLE_S", "600"))
+    idle_s = float(os.environ.get("RSE_BRIDGE_IDLE_S", "600"))
 
     async def _run() -> None:
         with contextlib.suppress(TimeoutError):

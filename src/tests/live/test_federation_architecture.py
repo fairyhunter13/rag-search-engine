@@ -19,7 +19,7 @@ pytestmark = pytest.mark.live
 
 def _federate(base):
     uid = str(id(base))[-6:]
-    marker = f"ocs_arch_{uid}"
+    marker = f"rse_arch_{uid}"
     root = base / "root"
     member = base / "member-repo"
     root.mkdir()
@@ -130,7 +130,7 @@ def test_inv3_federation_authoritative(safe_tmp_path):
 def test_inv6_forbidden_root():
     """Invariant #6: registering a /tmp root must be rejected."""
     from rag_search.server.mcp import index as mcp_index
-    path = "/tmp/ocs-arch-forbid-test"
+    path = "/tmp/rse-arch-forbid-test"
     result = json.loads(asyncio.run(mcp_index(path, enabled=True)))
     assert result.get("status") == "forbidden", f"expected forbidden, got {result}"
     from rag_search.core.registry import get_project

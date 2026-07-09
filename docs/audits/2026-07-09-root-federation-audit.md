@@ -120,13 +120,13 @@ session's read + live verification, not just prior test-suite state.
 | HR26 | GPU execution-provider autodetect | Pass |
 | HR27 | Docgen root-only + member cleanup | Pass |
 | HR28 | Docgen output re-indexed under `scope=docs` | Pass |
-| HR29 | `.opencode-index.yaml` honored by every enumerator | Pass |
+| HR29 | `.rse-index.yaml` honored by every enumerator | Pass |
 | HR30 | MCP surface = exactly 5 tools | Pass |
 | HR31 | Four-lane LLM separation, no cross-lane calls | Pass |
 | HR32 | Idle-efficiency drift gate + idle-unload + bulkification | Pass |
 | HR33 | Notification-first watcher contract | Pass |
 | HR34 | Public-release & device-neutrality guard | Pass |
-| HR35 | Gitignore/hidden-dir-aware discovery, OSE-config precedence | Pass |
+| HR35 | Gitignore/hidden-dir-aware discovery, RSE-config precedence | Pass |
 | HR36 | BPRE code-only, discovery-unified reuse signature | Pass |
 | HR37 | Watcher ignore-aware + storm-proof + root-boundary-safe | Pass — **F1 found in the root-boundary clause, fixed; WT5 is the new guard** (§3) |
 | HR38 | Code-only enrich-cascade drift gate, unified with HR36 | Pass |

@@ -1,7 +1,7 @@
 # World Model
 
-OSE fulfills the four-layer world model defined in `docs/world-model/model.yaml`.
-Use this skill to check conformance and understand OSE's governing laws.
+RSE fulfills the four-layer world model defined in `docs/world-model/model.yaml`.
+Use this skill to check conformance and understand RSE's governing laws.
 
 ## Quick reference — L1 Invariants
 
@@ -16,16 +16,16 @@ Use this skill to check conformance and understand OSE's governing laws.
 | P6 | No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped) — the registry is empty as of 2026-07-01: the last entry, bpre_spec._LANG_SPECS/_DEFAULT_SPEC (15 per-language HTTP method-name tables), was retired in favor of ONE universal structural classifier (URL-path anchor + _has_handler_arg handler-shape + _V verb ground-truth + gRPC proto-binding + _SCHEMES receiver-text provenance for non-verb client idioms) covering every tree-sitter code grammar by construction. Protocol/framework codegen-contract naming bound to structural facts (e.g. protoc New*Client/Register*Server scoped to .pb.go output, Spring *Mapping annotations, _GRP_SFXS gated on a discovered proto_services match) is ground truth, not a heuristic — reclassified 2026-07-01, same class as the closed HTTP-verb set _V and the closed protocol/URI-scheme set _SCHEMES. _provenance (bpre_generic.py) was generalized 2026-07-01 (Part C1) from receiver-text-only to also resolve def-use type bindings (build_type_use, valueflow.py) and import-map aliases (_scan_imports, bpre_ast.py) against the same closed _SCHEMES set — still zero library-name vocabulary; unresolved bare library-name idioms (e.g. requests/axios on a non-scheme absolute URL) remain accounted residue-ladder territory, never silently dropped. |
 | P7 | Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts. |
 | P8 | No mocks in tests — real daemon at :8765, real GPU, real embedder. |
-| P9 | Flat-L1 communities only — no L2/L3 hierarchy in OSE KB (WS-B 2026-06-26). |
+| P9 | Flat-L1 communities only — no L2/L3 hierarchy in RSE KB (WS-B 2026-06-26). |
 | P10 | Every line of code is a liability — prefer no change, then deletion, then smallest diff. |
 | P11 | Push after every commit — zero unpushed is the policy. |
 | P12 | Doc-tooling (docgen + OKF) is LLM-native via claude -p; no tree-sitter on the doc-tooling path. |
 | P13 | Docgen + OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools. |
 | P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling. No cross-lane calls. |
-| P15 | Kill-switches (OSE_DOCGEN=0, OSE_OKF=0) → no output; no deterministic skeleton fallback. |
-| P16 | Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after OPENCODE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). CPU budget is two-tier and kernel-enforced, not merely cooperative (HR40): idle/steady-state < 1 % of one core is a live-measured automated gate; active work (indexing, BPRE, parsing) is bounded ≤ 1 core by a cgroup-v2 CPUQuota on the daemon's systemd unit that it physically cannot exceed. |
+| P15 | Kill-switches (RSE_DOCGEN=0, RSE_OKF=0) → no output; no deterministic skeleton fallback. |
+| P16 | Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after RSE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). CPU budget is two-tier and kernel-enforced, not merely cooperative (HR40): idle/steady-state < 1 % of one core is a live-measured automated gate; active work (indexing, BPRE, parsing) is bounded ≤ 1 core by a cgroup-v2 CPUQuota on the daemon's systemd unit that it physically cannot exceed. |
 | P17 | File-watching is event-driven via OS filesystem notifications (watchfiles/Rust notify) — one inotify instance + one thread for all watched roots, Rust-side event coalescing; manual per-file polling is a last-resort fallback only (NFS/SMB, handled internally by the Rust notify crate's force_polling), never a hand-rolled Python poll loop. Watcher-triggered indexing/parsing work inherits the same kernel CPUQuota ceiling as the rest of the daemon (HR40), including bounded_parse.py's spawn-context workers, which are children of the daemon's own cgroup. |
-| P18 | Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private ose-live-audit repo. |
+| P18 | Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Permanent brand lock (2026-07-09): the legacy OSE/OPENCODE/ocs branding was fully retired in favor of RSE — no OPENCODE_, OSE_, bare OSE, opencode, ocs[-_]/ose[-_], or opencode-index token may ever reappear, outside a narrow external-product allowlist (the external OpenCode CLI product, the vendored ose-docgen package/repo). Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private rse-live-audit repo. |
 
 ## L2 Components
 

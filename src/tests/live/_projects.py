@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-_SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
+_SAFE_BASE = Path.home() / ".local" / "share" / "rse-test-dirs"
 
 
 def _sample_ws() -> Path | None:
