@@ -71,6 +71,7 @@ class ProjectEntry:
     chunk_count: int = 0
     dims: int = 768
     last_active: str | None = None
+    last_change_seen: str | None = None
     federation: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
 

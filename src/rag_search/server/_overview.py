@@ -78,7 +78,8 @@ def handle_overview(project_path: str, what: str) -> str:
         return json.dumps({"error": f"unknown what={what!r}", "valid": sorted(_VALID)})
     if what == "projects":
         return json.dumps({"projects": [
-            {"path": p.path, "enabled": p.enabled, "indexed_at": p.indexed_at}
+            {"path": p.path, "enabled": p.enabled, "indexed_at": p.indexed_at,
+             "last_change_seen": p.last_change_seen}
             for p in list_projects()
         ]})
     if what == "metrics":
@@ -172,6 +173,7 @@ def handle_overview(project_path: str, what: str) -> str:
                 _any_hollow = any(m.get("symbol_hollow") for m in members_info)
                 _any_degenerate = any(m.get("hierarchy_quality", {}).get("degenerate") for m in members_info)
                 return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
+                                   "last_change_seen": e.last_change_seen if e else None,
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
                                    "kb_state": worst_state, "enriched_pct": root_pct[0],

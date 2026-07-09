@@ -176,6 +176,79 @@ def _scan_pb_go_file(fp_str:str)->dict:
                 if "pubsub" in p:out["pubsub_import_paths"].append(p)
     return out
 
+def _scan_ts_js(root,b:bytes,f:FileFacts,s:ApiSurface,du:dict,*,line_offset:int=0)->None:
+    """HTTP: app.get('/path', h) or @Get('/path') decorators (structural — no keyword list).
+
+    F2: shared by scan_file's typescript/javascript branch and the Vue/Svelte <script>
+    sub-parse below; line_offset remaps sub-parsed line numbers back to the host file.
+    """
+    stk=[root]
+    while stk:
+        n=stk.pop();k=n.kind()
+        if k=="call_expression":
+            fn_n=n.child_by_field_name("function");an=n.child_by_field_name("arguments")
+            ln=n.start_position().row+1+line_offset
+            if fn_n and an:
+                if fn_n.kind()=="member_expression":
+                    prop=fn_n.child_by_field_name("property")
+                    if prop:
+                        meth=_vt(prop,b);p=_s1_or_vf(an,b,du)
+                        if p and p.startswith("/"):
+                            f.http_routes.append((meth.upper(),p,ln))
+                            if meth.lower() in _HTTP_VERBS:
+                                f.http_clients.append((meth.upper(),p,ln))
+                elif fn_n.kind()=="identifier" and _vt(fn_n,b)=="fetch":
+                    p=_s1_or_vf(an,b,du)
+                    if p and p.startswith("/"):f.http_clients.append(("GET",p,ln))
+                fn_txt=_vt(fn_n,b)
+                base=fn_txt.rsplit(".",1)[-1] if "." in fn_txt else fn_txt
+                if base in s.constructors:f.grpc_clients.append(("",s.constructors[base],base,ln))
+                elif base in s.registrars:f.grpc_servers.append((s.registrars[base],ln))
+        elif k=="decorator":
+            inner=n.named_child(0) if n.named_child_count()>0 else None
+            if inner and inner.kind()=="call_expression":
+                fn_n=inner.child_by_field_name("function");an=inner.child_by_field_name("arguments")
+                if fn_n and an:
+                    p=_s1_or_vf(an,b,du)
+                    if p and p.startswith("/"):
+                        f.http_routes.append((_vt(fn_n,b).upper(),p,n.start_position().row+1+line_offset))
+        stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
+
+def _attr_lang(start_tag,b:bytes)->str:
+    """Value of a start_tag's lang="..." attribute (Vue/Svelte <script lang=...>), if any."""
+    if start_tag is None:return ""
+    for i in range(start_tag.named_child_count()):
+        attr=start_tag.named_child(i)
+        if attr.kind()!="attribute":continue
+        name_node=next((attr.named_child(j) for j in range(attr.named_child_count()) if attr.named_child(j).kind()=="attribute_name"),None)
+        if name_node is None or _t(name_node,b)!="lang":continue
+        for j in range(attr.named_child_count()):
+            vn=attr.named_child(j)
+            if vn.kind()=="attribute_value":return _t(vn,b)
+            if vn.kind()=="quoted_attribute_value":
+                inner=next((vn.named_child(k) for k in range(vn.named_child_count()) if vn.named_child(k).kind()=="attribute_value"),None)
+                return _t(inner if inner is not None else vn,b).strip("\"'")
+    return ""
+
+def _script_blocks(root,b:bytes)->list[tuple[str,str,int]]:
+    """Vue/Svelte <script> blocks: (inner_lang, inner_source, line_offset). Structural only —
+    mirrors graph/extractor.py's locator; kept independent per-module (HR39 whitelist is
+    per-file, and the plan deliberately avoids a shared cross-package .parse-adjacent module)."""
+    out:list[tuple[str,str,int]]=[]
+    stk=[root]
+    while stk:
+        n=stk.pop()
+        if n.kind()=="script_element":
+            raw=next((n.named_child(i) for i in range(n.named_child_count()) if n.named_child(i).kind()=="raw_text"),None)
+            if raw is not None:
+                start_tag=next((n.named_child(i) for i in range(n.named_child_count()) if n.named_child(i).kind()=="start_tag"),None)
+                lang_attr=_attr_lang(start_tag,b).lower()
+                inner_lang="typescript" if lang_attr in("ts","tsx","typescript") else "javascript"
+                out.append((inner_lang,_t(raw,b),raw.start_position().row))
+            continue
+        stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
+    return out
+
 def federation_discover(members:list[str])->ApiSurface:
     surf=ApiSurface()
     _discover_proto_services(members,surf)
@@ -318,38 +391,15 @@ def scan_file(path:str,content:str,lang:str,surface:ApiSurface)->FileFacts|None:
                         if p and p.startswith("/"):f.http_clients.append((base.upper(),p,ln))
             stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
     elif lang in("typescript","javascript"):
-        # HTTP: app.get('/path', h) or @Get('/path') decorators (structural — no keyword list)
-        stk=[root]
-        while stk:
-            n=stk.pop();k=n.kind()
-            if k=="call_expression":
-                fn_n=n.child_by_field_name("function");an=n.child_by_field_name("arguments")
-                ln=n.start_position().row+1
-                if fn_n and an:
-                    if fn_n.kind()=="member_expression":
-                        prop=fn_n.child_by_field_name("property")
-                        if prop:
-                            meth=_vt(prop,b);p=_s1_or_vf(an,b,du)
-                            if p and p.startswith("/"):
-                                f.http_routes.append((meth.upper(),p,ln))
-                                if meth.lower() in _HTTP_VERBS:
-                                    f.http_clients.append((meth.upper(),p,ln))
-                    elif fn_n.kind()=="identifier" and _vt(fn_n,b)=="fetch":
-                        p=_s1_or_vf(an,b,du)
-                        if p and p.startswith("/"):f.http_clients.append(("GET",p,ln))
-                    fn_txt=_vt(fn_n,b)
-                    base=fn_txt.rsplit(".",1)[-1] if "." in fn_txt else fn_txt
-                    if base in s.constructors:f.grpc_clients.append(("",s.constructors[base],base,ln))
-                    elif base in s.registrars:f.grpc_servers.append((s.registrars[base],ln))
-            elif k=="decorator":
-                inner=n.named_child(0) if n.named_child_count()>0 else None
-                if inner and inner.kind()=="call_expression":
-                    fn_n=inner.child_by_field_name("function");an=inner.child_by_field_name("arguments")
-                    if fn_n and an:
-                        p=_s1_or_vf(an,b,du)
-                        if p and p.startswith("/"):
-                            f.http_routes.append((_vt(fn_n,b).upper(),p,n.start_position().row+1))
-            stk.extend(n.named_child(i) for i in range(n.named_child_count()-1,-1,-1))
+        _scan_ts_js(root,b,f,s,du)
+    elif lang in("vue","svelte"):
+        for inner_lang,inner_src,line_offset in _script_blocks(root,b):
+            if not _ts_has_language(inner_lang):continue
+            try:sub_root=_ts_api.get_parser(inner_lang).parse(inner_src).root_node()
+            except Exception:continue
+            b_inner=inner_src.encode("utf-8","replace")
+            du_inner=build_def_use(sub_root,b_inner)
+            _scan_ts_js(sub_root,b_inner,f,s,du_inner,line_offset=line_offset)
     elif lang=="php":
         stk=[root]
         while stk:

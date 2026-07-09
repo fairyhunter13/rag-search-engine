@@ -114,7 +114,7 @@ L3_specs:
     test: test_bpre_link_resolve_tokens_are_accounted
   - id: HR20
     spec: "Partition quality gate: degenerate=True demotes kb_state to searchable."
-    test: test_partition_quality_on_sample
+    test: test_kb_state_demoted_when_degenerate
   - id: HR25
     spec: "Docgen IH is LLM-native via claude -p; no tree-sitter import on the doc-tooling path."
     test: test_ih_no_tree_sitter_import_in_vendor
@@ -172,7 +172,7 @@ L4_patterns:
   - "on_change drift gate: compute _code_source_fingerprint(path) after index step (code-only, HR38); skip enrich if sig == _last_enriched_sig[path]; commit sig only after successful _enrich_project"
   - "all tree-sitter parses route through index/bounded_parse.py's spawn-context worker pool (HR39) — never a direct get_parser(...).parse() call"
   - "watcher: one watchfiles.watch() generator in a single 'ocs-watcher' thread covers all roots; _filter reuses is_ignored_path; watch(new_path) while running sets a restart Event and blocks on a restart-ack Event (bounded) so the caller only returns once the new root is actually armed"
-  - "code-semantic resolution ladder (HR15-19): tree-sitter extraction -> valueflow FQN-join -> resolve_rerank GPU cross-encoder -> llm_escalation.escalate (SEA, capped/cached/batched) -> whole-file DeepSeek residue; each tier sees only the prior tier's unresolved residue"
+  - "code-semantic resolution ladder (HR15-19): tree-sitter extraction -> valueflow FQN-join -> resolve_rerank GPU cross-encoder -> bpre._llm_link_resolve (SEA, capped/cached/batched, accounted under bpre_link.*) -> whole-file DeepSeek residue; each tier sees only the prior tier's unresolved residue"
   - "any new DeepSeek call site in kb/ or graph/ must feed _accumulate_llm_tokens(usage, category) so llm_token_stats() stays a complete accounting (HR23) — no direct deepseek_extract call bypasses it"
   - "discovery decision order (index/discover.py _should_drop): OSE exclude (drop) > OSE include (force-keep) > default hidden-dir/IGNORED_DIRS policy (drop) > .gitignore (drop, supplementary) > keep — OSE config is always authoritative over .gitignore"
   - "CPU quota proof (HR40): daemon/cpu_budget.py resolves the caller's own cgroup-v2 dir via /proc/self/cgroup (unified hierarchy only); cpu.max's first field is the cores ceiling, cpu.stat's nr_throttled/throttled_usec climbing under load is the enforcement proof — both must be read from inside the daemon process (its own HTTP route handlers), never from a foreign PID"
