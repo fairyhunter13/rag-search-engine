@@ -42,7 +42,7 @@ python -m compileall -q src/rag_search
 
 **Key env vars** (BPRE resolution ladder):
 - `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
-- All LLM lanes (Tier-2 edge linkage, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent. Tier-3 whole-file resolution is **RETIRED** (research-backed 2026-07-09 decision, never built — see `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`).
+- All LLM lanes (Tier-2 edge linkage, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
