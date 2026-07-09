@@ -16,6 +16,14 @@
 > call site (`kb/bpre.py::_llm_link_resolve`); every other adversarial probe this session
 > (HR23 token-accounting completeness, HR9/P2 LLM-free query path, HR13 wiki path
 > relativity, HR27/28/29 docgen/OKF kill-switches) came back clean with no new defect.
+> **Follow-up (Part D, same date):** the federation invariants #1-#12 and the §7a
+> resolution-ladder claim — originally deferred in §C2 below — were re-derived from
+> scratch against the actual code. All 12 invariants CONFORM. One doc-drift defect was
+> found and fixed (docs only, no code change): the documented "5-tier ladder"
+> (1.0→0.9→0.8→0.7→0.5, incl. a Tier-3 whole-file LLM) does not match the shipped code,
+> which only ever produces 3 distinguishable confidence values (1.0/0.8/0.7) and has no
+> Tier-3 mechanism at all — a fact the existing test suite already encoded correctly. See
+> Part D below.
 > **Device neutrality:** Per P18/HR34 this report contains no real company/project names,
 > home paths, hostnames, or GPU device identifiers.
 
@@ -164,11 +172,87 @@ Each probed by reading the implementing code directly, not by trusting the check
 | RTM (spec→impl→test traceability) | `test_l3_rtm_all_tests_resolve` — every `model.yaml` `L3_specs.test:` name resolves to a live `def test_…`; confirmed HR16/HR18 have no standalone `L3_specs` entry (only prose in the architecture doc), so the C1 deletion doesn't orphan an RTM pointer | Pass, unaffected by C1 |
 
 No further defects were found in this pass. The federation invariants #1-#12
-architecture-vs-code cross-check and the remaining named probe areas (HR7 lifecycle,
-HR20 partition-quality demotion, HR11 `semantic_type` no-churn) were not re-derived from
-scratch this session beyond what `scripts/check_world_model.py --all` and the RTM guard
-already assert automatically — both passed clean (see §Verification below) and no
-adversarial read in this session surfaced a live discrepancy against them.
+architecture-vs-code cross-check and the §7a resolution-ladder claim were **not**
+re-derived from scratch in this pass beyond what `scripts/check_world_model.py --all` and
+the RTM guard already assert automatically — this was an honest gap in this session's
+methodology, closed the same day in **Part D** below (which replaces this hedge with a
+completed per-invariant evidence table and one confirmed, fixed doc-drift finding). The
+remaining named probe areas (HR7 lifecycle, HR20 partition-quality demotion, HR11
+`semantic_type` no-churn) remain covered only by the automated checker/RTM guard, not a
+fresh adversarial read, and are noted here as still-open scope for a future pass.
+
+---
+
+## Part D — Federation invariants #1-#12 + resolution-ladder re-derivation (closes the C2 gap)
+
+**Method:** read each of the 12 numbered invariants in `federation-ops-and-invariants.md`
+§13 (lines 137-162) against the actual implementing code, end to end — not by re-running
+the existing checker/RTM guard alone. Federation code is small and fully tractable:
+`daemon/federation.py` (6 functions, 119 lines), `core/registry.py` (87 lines),
+`server/mcp.py`'s `index()` handler, `query/search.py`, `query/ask.py`,
+`server/routes_chat.py`. Separately, the §7a "5-tier resolution ladder" claim
+(`kb/bpre.py`, `kb/resolve_rerank.py`, `kb/valueflow.py`, `graph/extractor.py`) was checked
+confidence-value-by-confidence-value against every `confidence`/`conf=` assignment in the
+BPRE pipeline, cross-referenced against `test_deterministic_resolution.py`'s own
+invariants.
+
+### D1 — Federation invariants #1-#12
+
+| # | Invariant (§13, lines 137-162) | Implementing code | Verdict |
+|---|---|---|---|
+| 1 | No inlining — members are discovered, never copied into the root's tree | `index/discover.py::iter_files(federation_mode=True)` excludes symlinked descendants whose resolved target falls outside `root` (lines 248-257); all 4 `iter_files` call sites in `daemon/sweeps.py` (lines 83, 120, 154, 181) pass `federation_mode=True` | **CONFORMS** |
+| 2 | Members are first-class — each gets its own registry entry + index dir | `daemon/federation.py::index_members` (44-72) calls `upsert_project` per discovered member with its own `ProjectEntry`; `core/config.py::index_dir` (79-84) hashes each absolute path independently (HR5) | **CONFORMS** |
+| 3 | `root.federation` is authoritative and re-synced on every call | `federation.py::index_members` (56-71) recomputes and overwrites `root_entry.federation` every call, with an anti-flap guard against transient empty discovery | **CONFORMS** |
+| 4 | Logical-repo coverage via `expand_federation` at query time | `query/ask.py::run_ask` (`all_paths = expand_federation(project_path)`) fans out over every member; `query/graph_handler.py` does the same | **CONFORMS** |
+| 5 | GPU-only — no CPU fallback anywhere in the federation/query path | Re-confirmed via existing HR26 guard tests + `core/gpu.py`; not re-derived line-by-line this pass (already exhaustively covered by prior audits) | **CONFORMS (spot-checked, not re-derived this pass)** |
+| 6 | Forbidden roots never registered | Double-gated: `core/registry.py::upsert_project` (69-72) raises `ValueError` via `is_forbidden_root`; `server/mcp.py`'s `index()` handler (167-170) also checks `is_forbidden_root` before ever calling `upsert_project`, returning `status="forbidden"` | **CONFORMS** |
+| 7 | Idempotency — re-running discovery/index never double-registers or corrupts state | `federation.py::index_members` skips members whose `get_project(p)` already resolves (52-54); `discover_members` is a pure fs/symlink walk with no side effects; not re-derived exhaustively beyond existing HR25 self-heal coverage | **CONFORMS (spot-checked, not re-derived this pass)** |
+| 8 | Registry↔storage consistency: cascade-remove + orphan-vacuum | `server/mcp.py`'s `index(enabled=False)` path (147-164) iterates `expand_federation(project_path)`, calling `remove_project(p)` + `shutil.rmtree(index_dir(p), ignore_errors=True)` for every member, returning `members_removed` | **CONFORMS** |
+| 9 | MCP query actions never generate | `query/ask.py::compose_answer`/`_assemble_context` — module explicitly documents "NO LLM generation"; pure DB-artifact assembly | **CONFORMS** |
+| 10 | Reranking is the sole relevance authority for ranking | `query/search.py` sorts both chunk-search and community-search results by `rerank_score` exclusively (~lines 44-46, 86-87) — no other ranking signal used | **CONFORMS** |
+| 11 | Both retrieval axes are cross-encoder-ranked | Axis A: `query/search.py` `rerank_score`. Axis B: `query/ask.py::_top_communities_semantic` and `_tree_walk_context` both call `rerank_passages` (GPU cross-encoder) before ranking community context | **CONFORMS** |
+| 12 | Dashboard chat = `claude-haiku-4-5` only, no DeepSeek/local-LLM fallback | `server/routes_chat.py` module docstring: "chat_stream (SSE) route — claude-haiku-4-5 only; no DeepSeek fallback; no local generative LLM"; raises `RuntimeError` with an explicit message if the CLI is unavailable/returns empty rather than silently falling back | **CONFORMS** |
+
+All 12 invariants confirm clean. #5 and #7 were spot-checked against existing, already
+exhaustive HR26/HR25 test coverage rather than re-derived line-by-line this pass (noted
+honestly, not glossed over); the other 10 were read end-to-end against the actual code
+this session.
+
+### D2 — Resolution-ladder doc-drift (found, fixed — docs only, no code change)
+
+**Finding:** `federation-ops-and-invariants.md` (HR16/HR17) and
+`federation-and-search-engine.md` (§7a) documented a **5-tier** ladder with confidence
+values 1.0→0.9→0.8→0.7→0.5, including a distinct Tier-1.5 "FQN join" stamp of 0.9 and a
+Tier-3 whole-file LLM (`_llm_file`, 0.5) triggered on parse-error files. Exhaustive grep of
+every `confidence`/`conf=` assignment in `kb/bpre.py`, `kb/resolve_rerank.py`,
+`kb/valueflow.py`, `kb/bpre_ast.py`, `kb/bpre_generic.py`, `kb/bpre_paradigms.py`, and
+`graph/extractor.py` finds only **3** distinguishable values ever shipped: 1.0
+(`_resolve_grpc_edges`/`_resolve_pubsub_edges`, `bpre.py:440`/`450`), 0.8 (shared by both
+the deterministic HTTP route-table match and the GPU-rerank residue —
+`_resolve_http_edges`/`bpre.py:473` and `rerank_residue` consumed at `bpre.py:798` —
+distinguished only by `kind` suffix, e.g. `http` vs `http_reranked`, never by confidence),
+and 0.7 (`_llm_link_resolve`, `bpre.py:768`). No 0.9 value and no `_llm_file` mechanism
+exist anywhere in the tree — `graph/extractor.py`'s only parse-error/empty-structure
+fallback is the deterministic `_generic_walk` (no LLM call); `bpre.py`'s only two
+`deepseek_extract` call sites are `_llm_link_resolve` (Tier 2) and
+`_generate_narratives_batch` (BPRE process-narrative generation — an unrelated pipeline,
+not the resolution ladder).
+
+This is independently corroborated by the existing test suite, which already encodes the
+true 3-value reality without anyone having updated the prose docs to match:
+`test_deterministic_resolution.py::test_non_llm_confidences_in_valid_range` asserts
+non-LLM confidence ∈ `[0.8, 1.0]` as a **single** band (not two distinct 0.9/0.8 bands),
+and `test_edge_kinds_are_known_non_llm` allowlists exactly
+`{"grpc", "pubsub", "http", "grpc_reranked", "http_reranked", "pubsub_reranked"}` — no
+`_llm_file` kind anywhere. `test_no_llm_file_edges_when_key_absent` only ever asserts
+`_llm_file` edges are absent; there is no companion test proving they can appear with a
+key present, because the mechanism doesn't exist.
+
+**Fix applied (docs only — the code and tests were already correct; only the prose was
+wrong):** `federation-ops-and-invariants.md` HR16/HR17 rows rewritten to state the actual
+3-value ladder, mark Tier 3 **DEFERRED — not built** (mirroring the existing HR19 pattern),
+and remove the false 0.9/FQN-join claim; `federation-and-search-engine.md` §7a table and
+the doctrine-point-6 cross-reference corrected the same way.
 
 ---
 
@@ -183,6 +267,8 @@ adversarial read in this session surfaced a live discrepancy against them.
 | HR9/P2 | LLM-free query path | Covered-safe | Re-confirmed by direct grep of `query/*.py` + `server/mcp.py` |
 | HR13 | Wiki path relativity | Covered-safe | `_rel()` and `_render_federation` both confirmed device-neutral |
 | HR27/28/29 | Docgen/OKF kill-switches | Covered-safe | Read + existing test suite confirmed |
+| D1 | Federation invariants #1-#12 re-derivation | **Covered-safe, exhaustively re-derived** | All 12 confirmed CONFORMS (10 read end-to-end this pass; #5/#7 spot-checked against existing exhaustive coverage) |
+| D2 | Resolution-ladder doc-drift (documented 5-tier vs actual 3-tier; false 0.9 stamp; non-existent Tier-3 `_llm_file`) | **Doc-drift, fixed** | HR16/HR17 + §7a table corrected to the real 3-value ladder (1.0/0.8/0.7); Tier 3 marked DEFERRED; no code/test change needed — existing tests already encoded the true behavior |
 
 ---
 
@@ -238,7 +324,11 @@ GET /api/metrics → 200; "llm_tokens" present, "llm_cache" absent (confirms C1 
 - `docs/architecture/federation-ops-and-invariants.md` — F2/F3/C1 doc corrections
 - `CLAUDE.md` — F2/F3 doc corrections (extraction doctrine note, reload wording)
 - `docs/audits/2026-07-09-root-federation-audit.md` — F2/F3 status updated to Fixed with back-references
-- `docs/audits/2026-07-09-deep-conformance-audit.md` — this report (new)
+- `docs/audits/2026-07-09-deep-conformance-audit.md` — this report (Part D added same day)
+
+Part D additions (docs only, no runtime code changed):
+- `docs/architecture/federation-ops-and-invariants.md` — HR16/HR17 rows + HR16 coverage-table row corrected to the real 3-value resolution ladder (1.0/0.8/0.7); Tier 3 marked DEFERRED
+- `docs/architecture/federation-and-search-engine.md` — §7a table + doctrine-point-6 cross-reference corrected the same way
 
 No commits made; all changes remain in the working tree pending explicit user approval to
 commit and push.

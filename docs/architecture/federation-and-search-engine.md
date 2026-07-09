@@ -24,7 +24,7 @@ an independent unit.
 The governing principle is **P0: most efficient + most effective, for *everything* in OSE**. Every component, lane, and algorithm is chosen and tuned for maximum efficiency *and* effectiveness; all principles below are corollaries (§9b per-workload engine assignment, no cross-lane bleed; HR6, HR9, HR10, HR12, HR26).
 
 1. **DeepSeek = least/minimum token usage (DIKW token economy).** The cloud generative lane spends the *fewest possible* tokens: significance-gated head only, prefix-cached, abstention on the tail, child-reuse roll-ups; `$0` when quiescent; spend only to climb Information→Knowledge→Wisdom, and only at the nodes/queries actually read (HR22–HR24).
-2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR14, HR15, HR16 5-tier ladder, HR17, HR18, §7a).
+2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR14, HR15, HR16 resolution ladder, HR17, HR18, §7a).
 3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26, HR32, P16). Idle target: < 1 % CPU, constant RAM floor (models unload after `OPENCODE_MODEL_IDLE_UNLOAD_S`). The heavy KB cascade runs only on real source-fingerprint drift (`_last_enriched_sig` gate in `on_change`). File-watching is event-driven via `watchfiles`/Rust `notify` — one thread + one inotify instance for all roots, `watch_filter` ignore-aware via the same HR35 resolver as the drift gate (P17, HR33, HR37); polling, if ever needed, is the Rust library's own `force_polling` path, never a hand-rolled loop.
 4. **No local generative LLM** — cloud DeepSeek for KB, Claude Code for chat/docgen (HR12).
 5. **Determinism + idempotence** — byte-identical reruns with LLM off; enrichment gated on `summary IS NULL`, never re-labels settled rows (HR3, HR11, HR13, HR20, HR21, HR24, HR25).
@@ -145,18 +145,28 @@ mapping table may substitute for structural analysis of user code.
   spot for Vue/Svelte SFCs; `.html` files never reach these functions (`is_code_language("html")`
   is `False`), so the generic detector only ever fires on real SFC files. Guarded by
   `test_embedded_script_extraction.py`.
-- **Universal 5-tier resolution ladder** (HR16–HR19, 2026-06-21): strictly monotone
-  1.0→0.9→0.8→0.7→0.5; language-agnostic by construction; each tier sees only prior residue.
+- **Resolution ladder** (HR16–HR19, 2026-06-21; **corrected 2026-07-09** — see
+  `docs/audits/2026-07-09-deep-conformance-audit.md` Part D): the shipped ladder produces **3**
+  distinguishable confidence values — 1.0→0.8→0.7 — not the 5-value 1.0→0.9→0.8→0.7→0.5 originally
+  documented here. `kb/valueflow.py::resolve_first_arg` (Tier-1.5's value-flow resolution) feeds
+  candidates into Tier 1 extraction and Tier-1.75 reranking; it stamps no confidence of its own, and
+  no code path anywhere in the tree stamps 0.9. Tier 3 (whole-file LLM on parse-error files,
+  `_llm_file`) was never implemented — `graph/extractor.py`'s only parse-error/empty-structure
+  fallback is the deterministic `_generic_walk` (no LLM call; `H1` in the coverage table above), and
+  neither `graph/extractor.py` nor `kb/bpre.py` contains a `deepseek_extract` call site for whole-file
+  reconstruction. Confirmed independently by `test_deterministic_resolution.py`'s own invariants:
+  non-LLM confidence ∈ `[0.8, 1.0]` as a single band (not two), and `_llm_file` is allowlisted nowhere
+  (`test_no_llm_file_edges_when_key_absent` only ever asserts it is absent — there is no with-key
+  counterpart proving it can appear).
   | Tier | Mechanism | Conf | Gate |
   |---|---|---|---|
-  | 1 | `process()` extraction — ANY language | 1.0 `EXTRACTED` | always |
-  | 1.5 | value-flow/FQN-join (`kb/valueflow.py`) | 0.9 `RESOLVED` | always |
-  | 1.75 | GPU cross-encoder rerank (`kb/resolve_rerank.py`) | 0.8 `RERANKED` | always |
+  | 1 | `process()` extraction, incl. gRPC/pubsub proto-registry match (`_resolve_grpc_edges`/`_resolve_pubsub_edges`) | 1.0 `EXTRACTED` | always |
+  | 1.5 → 1.75 | HTTP route match, whether literal, value-flow-resolved, or GPU-rerank residue (`_resolve_http_edges`, `resolve_rerank.py::rerank_residue`) — distinguished only by `kind` suffix (`http` vs `http_reranked`), not by confidence | 0.8 `RERANKED` | always |
   | 2 | SEA-style LLM select (`kb/bpre.py::_llm_link_resolve`) | 0.7 `_llm` | ON when `DEEPSEEK_API_KEY` present |
-  | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | ON when `DEEPSEEK_API_KEY` present |
-- Tier 2/3 are **always on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
-  **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`; `deepseek-chat` deprecates 2026-07-24).
-  Without a key: reconstruction is GPU-free and byte-identical.
+  | 3 | **DEFERRED** — whole-file LLM on parse-error files (documented, not built; no `_llm_file` code path exists) | n/a | n/a |
+- Tier 2 is **on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent (Tier 3 does not
+  exist, so it has no gate). **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`;
+  `deepseek-chat` deprecates 2026-07-24). Without a key: reconstruction is GPU-free and byte-identical.
 - **Guard test**: `test_no_code_semantic_regex.py` enforces the Category-A/B boundary;
   any new `re.compile`/`re.finditer` in Category-A paths fails CI, plus a named debt registry
   for surviving keyword/mapping-table constructs — **empty as of 2026-07-01**. Its last entry,
