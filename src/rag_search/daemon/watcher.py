@@ -52,10 +52,21 @@ class Watcher:
             self._thread.join(timeout=timeout)
 
     def _owning_root(self, path: str) -> str | None:
+        """Boundary-aware, longest-match root lookup (mirrors server/mcp.py::_resolve_roots).
+
+        A raw string-prefix match would misattribute events for a root whose name is a
+        string extension of a sibling root's (e.g. `foo` vs `foo-bar`) to the shorter root.
+        """
+        p = Path(path)
+        best: str | None = None
         for proj in self._paths:
-            if path.startswith(proj):
-                return proj
-        return None
+            try:
+                p.relative_to(proj)
+            except ValueError:
+                continue
+            if best is None or len(proj) > len(best):
+                best = proj
+        return best
 
     def _filter(self, _change: object, path: str) -> bool:
         from rag_search.index.discover import is_ignored_path

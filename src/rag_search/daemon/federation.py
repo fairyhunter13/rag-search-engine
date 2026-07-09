@@ -85,10 +85,15 @@ def register_all_members() -> None:
 
 
 def expand_federation(path: str) -> list[str]:
-    """Return [path] + its registered federation members (empty list for standalones)."""
+    """Return [path] + its registered federation members, deduped, order-preserved.
+
+    Two symlinks resolving to the same target (or stale duplicate registry state) could
+    otherwise put the same member path in the union twice, double-processing its store.
+    """
     from rag_search.core.registry import get_project
     entry = get_project(path)
-    return [path] + (entry.federation if entry and entry.federation else [])
+    members = entry.federation if entry and entry.federation else []
+    return list(dict.fromkeys([path, *members]))
 
 
 def federated_map(project_path: str, fn):  # type: ignore[no-untyped-def]

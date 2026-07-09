@@ -4,7 +4,14 @@ Tests:
   GH1: GraphStore.clear() wipes symbols/edges/communities
   GH2: symbol_hollow flag fires on edge-free graph (communities>0, edges=0)
   GH3: overview(status) includes symbol_hollow field on healthy projects
-  GH4: reconcile source-guard: checks edge_count() == 0 to detect stale graphs
+  GH4: reconcile source-guard: checks community_count() == 0 (no graph built yet) to
+       force a full re-index. This is narrower than symbol_hollow (GH2): a graph with
+       communities>0 but edges=0 does NOT re-trigger automatically, by design — the
+       extraction gap that produces a hollow graph (e.g. an embedded-script SFC format
+       whose call sites tree-sitter can't see) would reproduce on every re-index, so
+       reconcile does not spin retrying it on unchanged source. symbol_hollow is a
+       diagnostic signal for operators, not an automatic self-heal trigger. See the
+       2026-07-09 root-federation audit for the confirmed root cause and rationale.
   GH5: _index_project source-guard: calls gs.clear() before rebuild
 """
 from __future__ import annotations
