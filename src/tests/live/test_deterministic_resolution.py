@@ -2,7 +2,7 @@
 
 Validates:
   - reconstruct_processes is deterministic (two runs, same edge count)
-  - without DeepSeek key: zero _llm / _llm_file / *_llm* edges
+  - without DeepSeek key: zero *_llm* edges
   - all non-LLM edges have confidence ∈ [0.8, 1.0] (strict ladder invariant)
   - no edge below the Tier-2 LLM floor (0.7)
 
@@ -57,13 +57,6 @@ class TestDeterministicResolution:
             "SELECT COUNT(*) FROM cross_service_edges WHERE kind LIKE '%_llm%'"
         ).fetchone()[0]
         assert n == 0, f"Expected 0 LLM edges without DeepSeek key; got {n}"
-
-    def test_no_llm_file_edges_when_key_absent(self, det_db):
-        con, _ = det_db
-        n = con.execute(
-            "SELECT COUNT(*) FROM cross_service_edges WHERE kind='_llm_file'"
-        ).fetchone()[0]
-        assert n == 0, f"Expected 0 _llm_file edges without DeepSeek key; got {n}"
 
     def test_non_llm_confidences_in_valid_range(self, det_db):
         """Without LLM tiers all edges must have confidence ∈ [0.8, 1.0]."""
