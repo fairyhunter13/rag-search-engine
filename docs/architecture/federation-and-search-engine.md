@@ -1,6 +1,12 @@
 # Federation & Search-Engine Architecture — Part 1: Core
 
-> Source-of-truth is `src/rag_search/`. Last reconciled 2026-06-25. **2026-06-25**: Phase 1 — edge-free degeneracy exemption (D, HR20 `ec>0` guard on all three clauses); dashboard chat = Haiku-only (F, no DeepSeek fallback); architecture doc-sync + engineering principles register (§1a, HR27–HR29). **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 incremental self-heal via per-theme `child_sig` (Enzyme-IVM), 1800s window removed (`2380d45`)); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
+> Source-of-truth is `src/rag_search/`. Last reconciled 2026-07-09. **2026-07-09**: removed
+> `kb/llm_escalation.py` (`escalate()`) as confirmed dead code — never called in production;
+> `kb/bpre.py::_llm_link_resolve` is and always was the real, live, correctly-token-accounted
+> Tier-2 SEA-select implementation (see `docs/audits/2026-07-09-deep-conformance-audit.md`).
+> HR16/HR18 and the ladder pattern in `model.yaml` now cite `_llm_link_resolve` directly; the
+> now-meaningless `/api/metrics` `llm_cache` key (fed only by the removed module) was dropped in
+> favor of the already-complete `llm_tokens.bpre_link.*` telemetry. **2026-06-25**: Phase 1 — edge-free degeneracy exemption (D, HR20 `ec>0` guard on all three clauses); dashboard chat = Haiku-only (F, no DeepSeek fallback); architecture doc-sync + engineering principles register (§1a, HR27–HR29). **2026-06-23**: Phase 4A–F token-economy closes six LLM leaks (A=tail-classify guard `narrated=1`, B=batch L2 narration `enrich_communities_l2_batch`, C=full `llm_token_stats` instrumentation `classify/l2/bpre/l3.*`, D=narrated backfill `semantic_type IS NOT NULL`, E=batch BPRE narrative `_generate_narratives_batch` ≤20/call, F=L3 incremental self-heal via per-theme `child_sig` (Enzyme-IVM), 1800s window removed (`2380d45`)); cAST structural-path header prepended to every chunk (`chunk_file(project_root=...)`, arXiv 2506.15655); 3 stale Leiden refs corrected to k-core (HR24, shipped 2026-06-23). **2026-06-21**: H1–H3 universal symbol backbone (`tree-sitter-language-pack==1.9.1`, `process()` API, 306 langs, deleted `_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE`/`_EXT_LANG`); G0–G5 5-tier resolution ladder (`kb/valueflow.py` Tier-1.5, `kb/resolve_rerank.py` Tier-1.75, `kb/llm_escalation.py` Tier-2, `deepseek-v4-flash` pin); HR15 Category B updated; HR16–HR19 added; §7a expanded. **2026-06-20**: BPRE Phase D + HR14; codex removed → haiku-only HR10; direct-DeepSeek classifier HR11; `think=False` HR12; regex→tree-sitter HR15.
 > Continued in [federation-ops-and-invariants.md](federation-ops-and-invariants.md).
 
 ## 1. Purpose & scope
@@ -130,6 +136,15 @@ mapping table may substitute for structural analysis of user code.
   (`_TS_LANG`/`_DEF_KINDS`/`_CALL_NODE` **deleted** by H1–H3.) (b) `index/discover.py` —
   `detect_language_from_path` (replaces deleted `_EXT_LANG`/`detect_language`). (c) LLM output-
   vocabulary tables in `graph/enrich.py`/`kb/wiki.py`. (d) `server/_overview.py _VALID` API enum.
+- **Embedded-`<script>` sub-parsing (F2, 2026-07-09)**: Vue/Svelte/Astro/HTML host grammars all
+  parse `<script>...</script>` as one opaque `raw_text` leaf — the grammar never descends into the
+  embedded JS/TS as call/function/class nodes. `graph/extractor.py::_iter_script_blocks` and
+  `kb/bpre_ast.py::_script_blocks` locate that leaf plus its `lang="ts"|"js"` attribute (pure
+  node-kind/attribute reads, no vocabulary) and sub-parse it with the js/ts grammar, remapping line
+  numbers by the block's start row. This closes the symbol/call-graph and BPRE HTTP-client blind
+  spot for Vue/Svelte SFCs; `.html` files never reach these functions (`is_code_language("html")`
+  is `False`), so the generic detector only ever fires on real SFC files. Guarded by
+  `test_embedded_script_extraction.py`.
 - **Universal 5-tier resolution ladder** (HR16–HR19, 2026-06-21): strictly monotone
   1.0→0.9→0.8→0.7→0.5; language-agnostic by construction; each tier sees only prior residue.
   | Tier | Mechanism | Conf | Gate |
@@ -137,7 +152,7 @@ mapping table may substitute for structural analysis of user code.
   | 1 | `process()` extraction — ANY language | 1.0 `EXTRACTED` | always |
   | 1.5 | value-flow/FQN-join (`kb/valueflow.py`) | 0.9 `RESOLVED` | always |
   | 1.75 | GPU cross-encoder rerank (`kb/resolve_rerank.py`) | 0.8 `RERANKED` | always |
-  | 2 | SEA-style LLM select (`kb/llm_escalation.py`) | 0.7 `_llm` | ON when `DEEPSEEK_API_KEY` present |
+  | 2 | SEA-style LLM select (`kb/bpre.py::_llm_link_resolve`) | 0.7 `_llm` | ON when `DEEPSEEK_API_KEY` present |
   | 3 | Whole-file LLM on parse-error files | 0.5 `_llm_file` | ON when `DEEPSEEK_API_KEY` present |
 - Tier 2/3 are **always on by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
   **`OSE_DEEPSEEK_MODEL`**: override (default `deepseek-v4-flash`; `deepseek-chat` deprecates 2026-07-24).
@@ -165,7 +180,7 @@ mapping table may substitute for structural analysis of user code.
   at call sites; Spring's `*Mapping` annotation vocabulary is paired with structural argument/route
   extraction; the PHP proto-bound `*Client` check and `_GRP_SFXS` are gated on
   `cls_name[:-6] in s.proto_services` (an actually-discovered proto service), not a bare guess.
-  `test_valueflow_dynamic.py`, `test_rerank_resolution.py`, `test_llm_escalation_ladder.py`,
+  `test_valueflow_dynamic.py`, `test_rerank_resolution.py`, `test_token_economy.py` (TE7/TE8),
   `test_deterministic_resolution.py` prove the full ladder end-to-end (HR16–HR19 in Part 2).
 - **Token accounting (HR23)**: every DeepSeek call site in the ladder feeds
   `graph/llm.py::_accumulate_llm_tokens` so `llm_token_stats()`/`overview(what="metrics")` is a

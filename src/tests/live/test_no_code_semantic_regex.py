@@ -152,7 +152,7 @@ def test_no_new_semantic_heuristics_beyond_debt_registry() -> None:
     They classify via the universal structural signals (URL-anchor, _has_handler_arg,
     _V, _GRP_SFXS/proto_services, _SCHEMES provenance) — any new per-module keyword table
     is an unlisted heuristic and must route through structural resolution + the residue
-    ladder (resolve_rerank -> llm_escalation) instead.
+    ladder (resolve_rerank -> bpre._llm_link_resolve) instead.
     """
     for mod_name in ("rag_search.kb.bpre_generic", "rag_search.kb.bpre_paradigms"):
         src = _source(mod_name)
@@ -245,7 +245,7 @@ def test_no_import_re_in_resolution_path() -> None:
     for mod_name in (
         "rag_search.kb.valueflow",
         "rag_search.kb.resolve_rerank",
-        "rag_search.kb.llm_escalation",
+        "rag_search.kb.bpre",
     ):
         src = _source(mod_name)
         # match standalone "import re" or "import re\n" but not "import rerank_*"

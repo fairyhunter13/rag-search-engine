@@ -14,9 +14,11 @@
 > verified in this session, one is root-caused but deliberately left unfixed pending a
 > larger design decision (see F2).
 > **Verdict:** CONFORMS — all checkable L1 invariants pass; two confirmed defects (F1,
-> G-DUP) fixed and regression-tested; one confirmed structural extraction gap (F2)
-> documented with root cause, not fixed this session; one observability gap (F3)
-> documented, no code change needed.
+> G-DUP) fixed and regression-tested; the confirmed structural extraction gap (F2) is now
+> also fixed (embedded-`<script>` sub-parsing, see follow-up session below); F3 is fixed
+> (`last_change_seen` registry field). See
+> `docs/audits/2026-07-09-deep-conformance-audit.md` for the follow-up deep adversarial
+> pass that closed F2/F3 and re-verified the whole doctrine ladder.
 > **Device neutrality:** Per P18/HR34 this report contains no real company/project names,
 > home paths, hostnames, or GPU device identifiers. Example paths use placeholders
 > (`<root>`, `member-a`, `member-b`, `foo`/`foo-bar`).
@@ -219,7 +221,14 @@ disable-on-removal diff) where duplicates are harmless.
 **Verified:** `test_federation_architecture.py` → all 6 tests pass (the new test plus
 the 5 pre-existing invariant tests, confirming no regression to inv#1/#2/#3/#6/#8).
 
-### F2 — Vue SFC extraction blind spot (confirmed root cause; not fixed this session)
+### F2 — Vue SFC extraction blind spot (confirmed root cause; fixed in follow-up session)
+
+> **Update (follow-up session, same date):** fixed. See
+> `docs/audits/2026-07-09-deep-conformance-audit.md` Part A for the implementation
+> (`graph/extractor.py::_iter_script_blocks` + `kb/bpre_ast.py::_script_blocks`/`_scan_ts_js`,
+> covering Vue **and** Svelte, both the symbol/call graph and the BPRE process graph) and
+> its regression tests (`test_embedded_script_extraction.py`). The root-cause analysis
+> below is kept verbatim as the historical record of how the defect was found.
 
 **Original suspicion (from the approved plan):** two federation members with substantial
 Vue/JS source showed `symbol_hollow: true, edges: 0` in `overview(what='status')` —
@@ -258,7 +267,7 @@ small bug fix, so it is recorded as a finding rather than implemented this sessi
 "every line of code is a liability" / "smallest sufficient diff" / "extraction changes
 require evidence + explicit scope."
 
-### F3 — `indexed_at` freshness signal gap (observability only, documented)
+### F3 — `indexed_at` freshness signal gap (observability only; fixed in follow-up session)
 
 `indexed_at` is stamped only by a full `_index_project` run, never by the incremental
 `_index_files`/`_enrich_project` path the watcher actually drives in steady state. An
@@ -267,6 +276,16 @@ alone, even though its content is current. This is an observability gap, not a
 correctness violation — no query result is wrong, only the freshness *signal* is
 misleading. No code change proposed; a future `last_change_seen` registry field (stamped
 by the watcher's incremental path too) would close it if the user wants that improvement.
+
+**Update (follow-up session, same date):** fixed — see
+`docs/audits/2026-07-09-deep-conformance-audit.md` Part B. `ProjectEntry.last_change_seen`
+(`core/config.py`) is now stamped by both `daemon/sweeps.py::_index_project` (full
+re-index) and `_index_files` (the incremental watcher path, which previously touched the
+registry not at all), and surfaced alongside `indexed_at` in `server/_overview.py`'s
+`what="projects"` and `what="status"` branches. Root cause and original recommendation
+above are preserved as the historical record. Guarded by an extended assertion in
+`test_p20_indexed_at_stamped` and `test_p22_incremental_reindex_idempotent`
+(`test_p6_daemon.py`).
 
 ### Reconcile self-heal guard vs. `symbol_hollow` (resolved as a doc fix, not a behavior change)
 
@@ -293,8 +312,8 @@ the actual (correct) behavior, not to change the guard condition. Verified:
 |---|---|---|---|
 | F1 | Watcher root attribution (HR5/HR37) | **Defect, confirmed live, fixed** | `_owning_root` made boundary-aware; WT5 added; HR37 doc corrected |
 | G-DUP | Federation member dedup (inv#1, HR4/HR5) | **Defect, confirmed latent, fixed** | Dedup at `expand_federation`; regression test added |
-| F2 | Vue SFC extraction depth (graph/BPRE) | **Defect, root cause confirmed, not fixed** | Documented; sub-parsing flagged as future work needing explicit scope |
-| F3 | `indexed_at` freshness signal | **Observability gap, not a violation** | Documented only |
+| F2 | Vue/Svelte SFC extraction depth (graph/BPRE) | **Defect, fixed** | Embedded-`<script>` sub-parsing added to both worker modules; regression test added |
+| F3 | `indexed_at` freshness signal | **Observability gap, fixed** | `last_change_seen` field added, stamped by the incremental watcher path |
 | Reconcile guard vs. `symbol_hollow` | HR25 self-heal | **Doc/runtime mismatch, resolved as doc fix** | Docstring corrected; behavior kept (avoids futile retry loop) |
 | HR4 no-cross-repo-edges | BPRE write sites | Covered-safe | Writes only to `root_process_db`; existing guards sufficient |
 | HR9/P2 LLM-free query tools | All 5 MCP handlers | Covered-safe | Re-confirmed by direct read + grep |
@@ -312,8 +331,8 @@ the actual (correct) behavior, not to change the guard condition. Verified:
 |---|---|---|---|
 | **F1** — watcher prefix-collision root misattribution | High | **Fixed** | WT5 passes; fast-smoke suite green; HR37 doc corrected |
 | **G-DUP** — duplicate-symlink member double-counting | Medium (latent) | **Fixed** | New regression test passes; full federation-architecture suite green |
-| **F2** — Vue SFC `<script>` block opaque to extraction | Medium (systemic) | **Root-caused, not fixed** | Confirmed via direct parse probe; recommendation recorded, scope deferred |
-| **F3** — `indexed_at` not a reliable freshness signal | Low (observability) | **Documented** | No action taken |
+| **F2** — Vue/Svelte SFC `<script>` block opaque to extraction | Medium (systemic) | **Fixed** | `test_embedded_script_extraction.py` passes; see deep-conformance-audit report |
+| **F3** — `indexed_at` not a reliable freshness signal | Low (observability) | **Fixed** | `last_change_seen` registry field; round-trip test extended |
 | Reconcile-guard vs. `symbol_hollow` docstring mismatch | Low (doc accuracy) | **Fixed (doc only)** | Docstring corrected; runtime behavior intentionally unchanged |
 
 ---
@@ -359,6 +378,13 @@ world-model conformance finding — `CLAUDE.md` documents `/api/reload` as resta
 systemd in ~1s," which held for the `restart` path but not the bare reload-endpoint path
 under this unit's current restart policy.
 
+**Update (follow-up session, same date):** doc nit fixed. `routes_ops.py::_api_reload`
+exits non-zero on the default (`restart=true`) path — which *does* trigger
+`Restart=on-failure` and come back in ~1s — and exits 0 only on the explicit
+`?restart=false` path used by `daemon stop`, which intentionally stays down and needs a
+manual `systemctl --user restart`. `CLAUDE.md`'s daemon-reload line now states both cases
+explicitly instead of one blanket claim.
+
 ---
 
 ## Files changed this session
@@ -372,3 +398,8 @@ under this unit's current restart policy.
 - `docs/audits/2026-07-09-root-federation-audit.md` — this report (new)
 
 No commits made; all changes remain in the working tree pending explicit request.
+
+**Follow-up session (same date):** F2 and F3 were subsequently fixed and a fresh deep
+adversarial review + gap analysis was run — see
+`docs/audits/2026-07-09-deep-conformance-audit.md` for the file list, fixes, and
+verification of that follow-up work.
