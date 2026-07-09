@@ -42,7 +42,7 @@ python -m compileall -q src/rag_search
 
 **Key env vars** (BPRE resolution ladder):
 - `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
-- All LLM lanes (Tier-2 edge linkage, Tier-3 whole-file, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
+- All LLM lanes (Tier-2 edge linkage, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent. Tier-3 whole-file resolution is **RETIRED** (research-backed 2026-07-09 decision, never built — see `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`).
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
 
@@ -173,13 +173,24 @@ assertion), `test_no_real_project_in_tests.py` (machine-agnostic test fixtures),
 company/codename/device-id lists) deliberately stay out of this public tree — they live only in the
 private `ose-live-audit` repo.
 
+**Runnable-by-anyone contract (hardened 2026-07-09).** Public-release readiness is more than path
+hygiene: a fresh clone must run with zero source edits given only env vars and the README setup
+steps. `test_public_hygiene.py::test_runtime_config_is_env_driven` asserts every machine/deployment
+constant in `core/config.py` — embed/rerank model, embed device, daemon host/port, query LLM
+provider/model, GPU device override — is produced by `os.environ.get(...)`, not a hardcoded literal.
+`.gitmodules`' `vendor/docgen` submodule URL and the CI `live-fast` job's `github.repository` guard
+were audited and found already fork-safe by design (the submodule repo is public; the CI guard exists
+specifically so forks lacking a self-hosted GPU runner skip the job instead of queuing indefinitely —
+see the comment above that job in `.github/workflows/ci.yml`) — **no change needed**, recorded here so
+a future pass doesn't re-flag them. See `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`.
+
 ## Project quick reference
 
 - Entry points: `src/rag_search/server/mcp.py` (MCP server + routes), `src/rag_search/daemon/` (daemon package), `src/rag_search/cli.py` (CLI), `src/rag_search/__main__.py` (bridge-stdio shim)
 - Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/rag_search/`
 - Registry: `~/.local/share/rag-search/projects.json`
 - Tests: `src/tests/live/` (live suite — requires daemon at :8765, GPU; no local generative LLM)
-- LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking only); KB build = cloud DeepSeek; chat = claude-haiku-4-5 + DeepSeek fallback
+- LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking only); KB build = cloud DeepSeek; chat = claude-haiku-4-5 only (no DeepSeek fallback, HR12)
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 - Architecture: `docs/architecture/federation-and-search-engine.md` + `docs/architecture/federation-ops-and-invariants.md`
 
