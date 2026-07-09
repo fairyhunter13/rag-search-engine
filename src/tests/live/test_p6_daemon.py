@@ -495,6 +495,7 @@ def test_p20_indexed_at_stamped(safe_tmp_path):
         entry = get_project(proj_path)
         assert entry is not None
         assert entry.indexed_at is not None, "indexed_at must be stamped after _index_project"
+        assert entry.last_change_seen is not None, "last_change_seen must be stamped after _index_project"
         assert entry.file_count > 0, f"file_count must be >0, got {entry.file_count}"
     finally:
         remove_project(proj_path)
@@ -553,28 +554,36 @@ def test_daemon_startup_imports_resolve():
 
 
 @pytest.mark.slow
-def test_p22_incremental_reindex_idempotent(tmp_path):
+def test_p22_incremental_reindex_idempotent(safe_tmp_path):
     """P22.3: incremental reindex is idempotent — chunk count stable, no UNIQUE constraint error."""
-    from rag_search.core.config import project_vector_db
+    from rag_search.core.config import ProjectEntry, project_vector_db
+    from rag_search.core.registry import get_project, upsert_project
     from rag_search.daemon.sweeps import _index_files, _index_project
     from rag_search.index.store import VectorStore
 
-    (tmp_path / "a.py").write_text("def foo(): pass\n")
-    _index_project(str(tmp_path))
-    vs = VectorStore(project_vector_db(str(tmp_path)))
+    proj_path = str(safe_tmp_path)
+    upsert_project(ProjectEntry(path=proj_path, enabled=True))
+    (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
+    _index_project(proj_path)
+    vs = VectorStore(project_vector_db(proj_path))
     count_0 = vs.count()
     vs.close()
     assert count_0 > 0, "initial index must produce chunks"
 
-    (tmp_path / "a.py").write_text("def foo(): return 42\n")
-    _index_files(str(tmp_path), [tmp_path / "a.py"])
-    vs = VectorStore(project_vector_db(str(tmp_path)))
+    (safe_tmp_path / "a.py").write_text("def foo(): return 42\n")
+    _index_files(proj_path, [safe_tmp_path / "a.py"])
+    entry = get_project(proj_path)
+    assert entry is not None
+    assert entry.last_change_seen is not None, (
+        "last_change_seen must be stamped after the incremental _index_files path"
+    )
+    vs = VectorStore(project_vector_db(proj_path))
     count_1 = vs.count()
     vs.close()
     assert count_1 == count_0, f"chunk count drifted after incremental reindex: {count_0} → {count_1}"
 
-    _index_files(str(tmp_path), [tmp_path / "a.py"])
-    vs = VectorStore(project_vector_db(str(tmp_path)))
+    _index_files(proj_path, [safe_tmp_path / "a.py"])
+    vs = VectorStore(project_vector_db(proj_path))
     count_2 = vs.count()
     vs.close()
     assert count_2 == count_1, f"idempotency: re-run changed count: {count_1} → {count_2}"

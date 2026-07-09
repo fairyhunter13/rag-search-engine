@@ -24,6 +24,14 @@ _MEMBER_KINDS: frozenset[str] = frozenset({
     "member_expression", "attribute", "selector_expression", "field_access",
 })
 
+# F2: embedded-<script> host grammars (vue/svelte/astro/html) all expose the same
+# `script_element` -> `raw_text` shape; the <script lang="..."> attribute (if any)
+# picks the inner grammar. Structural only — no filename/vocabulary heuristic.
+_EMBEDDED_SCRIPT_LANG: dict[str, str] = {
+    "ts": "typescript", "tsx": "typescript", "typescript": "typescript",
+    "js": "javascript", "jsx": "javascript", "javascript": "javascript",
+}
+
 
 @dataclass(slots=True)
 class Symbol:
@@ -123,6 +131,63 @@ def _get_parser_for(language: str):  # type: ignore[return]
         return None, False
 
 
+def _child_of_kind(node, kind: str):  # type: ignore[return]
+    """First named child of node whose kind() == kind, else None."""
+    return next(
+        (node.named_child(i) for i in range(node.named_child_count())
+         if node.named_child(i).kind() == kind), None,
+    )
+
+
+def _attr_value_text(attr_node, code_bytes: bytes) -> str:
+    """Unquoted text of an HTML/SFC `attribute` node's value (e.g. lang="ts" -> "ts")."""
+    vn = _child_of_kind(attr_node, "attribute_value")
+    if vn is not None:
+        br = vn.byte_range()
+        return code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+    qvn = _child_of_kind(attr_node, "quoted_attribute_value")
+    if qvn is not None:
+        inner = _child_of_kind(qvn, "attribute_value")
+        target = inner if inner is not None else qvn
+        br = target.byte_range()
+        return code_bytes[br.start:br.end].decode("utf-8", errors="replace").strip("\"'")
+    return ""
+
+
+def _iter_script_blocks(node, code_bytes: bytes) -> list[tuple[str, bytes, int]]:
+    """Find `script_element` nodes (Vue/Svelte/Astro/HTML host grammars) and return
+    (inner_language, inner_source_bytes, line_offset) for each embedded <script> block.
+
+    F2: these grammars parse <script> content as one opaque `raw_text` leaf — this walk
+    locates that leaf plus its `lang` attribute so callers can sub-parse it with the
+    js/ts grammar and remap line numbers by `line_offset`.
+    """
+    out: list[tuple[str, bytes, int]] = []
+    if node.kind() == "script_element":
+        start_tag = _child_of_kind(node, "start_tag")
+        raw = _child_of_kind(node, "raw_text")
+        if raw is not None:
+            lang_attr = ""
+            for i in range(start_tag.named_child_count() if start_tag else 0):
+                attr = start_tag.named_child(i)
+                if attr.kind() != "attribute":
+                    continue
+                name_node = _child_of_kind(attr, "attribute_name")
+                if name_node is None:
+                    continue
+                nbr = name_node.byte_range()
+                if code_bytes[nbr.start:nbr.end].decode("utf-8", "replace") == "lang":
+                    lang_attr = _attr_value_text(attr, code_bytes)
+                    break
+            inner_lang = _EMBEDDED_SCRIPT_LANG.get(lang_attr.lower(), "javascript")
+            br = raw.byte_range()
+            out.append((inner_lang, code_bytes[br.start:br.end], raw.start_position().row))
+        return out  # script_element never nests another script_element
+    for i in range(node.named_child_count()):
+        out.extend(_iter_script_blocks(node.named_child(i), code_bytes))
+    return out
+
+
 def extract_calls(content: str, language: str) -> list[str]:
     """Return called function/method names (H2: generic call-node detection, any language)."""
     parser, ok = _get_parser_for(language)
@@ -132,8 +197,11 @@ def extract_calls(content: str, language: str) -> list[str]:
         root = parser.parse(content).root_node()
     except Exception:
         return []
+    code_bytes = content.encode("utf-8", errors="replace")
     out: list[str] = []
-    _collect_call_names(root, content.encode("utf-8", errors="replace"), out)
+    _collect_call_names(root, code_bytes, out)
+    for inner_lang, inner_bytes, _offset in _iter_script_blocks(root, code_bytes):
+        out.extend(extract_calls(inner_bytes.decode("utf-8", errors="replace"), inner_lang))
     return out
 
 
@@ -154,11 +222,34 @@ def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:
     if not has_language(language):
         return []
     file_str = str(path)
+    code_bytes = content.encode("utf-8", errors="replace")
+    outer_parser, outer_ok = _get_parser_for(language)
+    outer_root = None
+    if outer_ok:
+        try:
+            outer_root = outer_parser.parse(content).root_node()
+        except Exception:
+            outer_root = None
     try:
         r = ts_process(content, ProcessConfig(structure=True, language=language))
     except Exception:
-        return []
-    if r.structure:
+        r = None
+    syms = _extract_symbols_from(r, outer_root, code_bytes, file_str, language)
+    if outer_root is not None:
+        for inner_lang, inner_bytes, line_offset in _iter_script_blocks(outer_root, code_bytes):
+            inner_src = inner_bytes.decode("utf-8", errors="replace")
+            for s in extract_symbols(path, inner_src, inner_lang):
+                syms.append(Symbol(
+                    file=s.file, name=s.name, qualified_name=s.qualified_name, kind=s.kind,
+                    start_line=s.start_line + line_offset, end_line=s.end_line + line_offset,
+                    language=s.language, signature=s.signature, docstring=s.docstring,
+                ))
+    return syms
+
+
+def _extract_symbols_from(r, outer_root, code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
+    """Shared structure/generic-walk logic for extract_symbols, split out to keep sub-parse merge separate."""
+    if r is not None and r.structure:
         syms: list[Symbol] = []
         for s in r.structure:
             kind = _STRUCTURE_KIND_MAP.get(str(s.kind).lower())
@@ -171,31 +262,17 @@ def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:
             ))
         # process() may yield only class/module nodes (e.g. Java, Kotlin) with no methods.
         # Supplement via _generic_walk so method names enter the symbol table for call-edge resolution.
-        if not any(s.kind in ("function", "method") for s in syms):
-            try:
-                parser, ok = _get_parser_for(language)
-                if ok:
-                    gw_root = parser.parse(content).root_node()
-                    code_bytes = content.encode("utf-8", errors="replace")
-                    known = {s.name for s in syms}
-                    syms.extend(
-                        s for s in _generic_walk(gw_root, code_bytes, file_str, language)
-                        if s.name not in known
-                    )
-            except Exception:
-                pass
+        if not any(s.kind in ("function", "method") for s in syms) and outer_root is not None:
+            known = {s.name for s in syms}
+            syms.extend(
+                s for s in _generic_walk(outer_root, code_bytes, file_str, language)
+                if s.name not in known
+            )
         return syms
     # process() returned no structure — fall back to generic AST walk
-    parser, ok = _get_parser_for(language)
-    if not ok:
+    if outer_root is None:
         return []
-    try:
-        root = parser.parse(content).root_node()
-        return _generic_walk(
-            root, content.encode("utf-8", errors="replace"), file_str, language,
-        )
-    except Exception:
-        return []
+    return _generic_walk(outer_root, code_bytes, file_str, language)
 
 
 # ─── Ordered call sites (BPRE D1) ────────────────────────────────────────────
@@ -250,8 +327,15 @@ def extract_calls_with_lines(content: str, language: str) -> list[tuple[str, int
         root = parser.parse(content).root_node()
     except Exception:
         return []
+    code_bytes = content.encode("utf-8", errors="replace")
     out: list[tuple[str, int]] = []
-    _collect_calls_with_lines(root, content.encode("utf-8", errors="replace"), out)
+    _collect_calls_with_lines(root, code_bytes, out)
+    for inner_lang, inner_bytes, line_offset in _iter_script_blocks(root, code_bytes):
+        inner_src = inner_bytes.decode("utf-8", errors="replace")
+        out.extend(
+            (name, line + line_offset)
+            for name, line in extract_calls_with_lines(inner_src, inner_lang)
+        )
     return out
 
 
@@ -267,6 +351,16 @@ def extract_call_sites(content: str, language: str) -> list[CallSite]:
         root = parser.parse(content).root_node()
     except Exception:
         return []
+    code_bytes = content.encode("utf-8", errors="replace")
     out: list[CallSite] = []
-    _collect_sites(root, content.encode("utf-8", errors="replace"), out, [0], 0, "")
+    counter = [0]
+    _collect_sites(root, code_bytes, out, counter, 0, "")
+    for inner_lang, inner_bytes, _offset in _iter_script_blocks(root, code_bytes):
+        inner_src = inner_bytes.decode("utf-8", errors="replace")
+        for site in extract_call_sites(inner_src, inner_lang):
+            out.append(CallSite(
+                site.caller_qualified_name, site.callee_name,
+                counter[0], site.branch_id, site.guard,
+            ))
+            counter[0] += 1
     return out

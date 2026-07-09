@@ -5,7 +5,7 @@ Routes excluded (already in test_p5): /healthz, /dashboard, /api/projects,
 
 New routes verified here:
   GET /               → 200 or redirect
-  GET /api/metrics    → 200 + llm_cache keys
+  GET /api/metrics    → 200 + llm_tokens keys
   POST /api/sweeps/*  → 200
   GET /api/events/stream → 200, text/event-stream
   GET /api/graph_export  → 200, node/edge structure
@@ -41,13 +41,12 @@ def test_root_not_500(live_client):
     assert r.status_code < 500, f"GET / returned server error {r.status_code}"
 
 
-def test_api_metrics_llm_cache_keys(live_client):
+def test_api_metrics_llm_tokens_keys(live_client):
     r = live_client.get("/api/metrics")
     assert r.status_code == 200
     data = r.json()
-    assert "llm_cache" in data, f"/api/metrics must expose llm_cache; got keys={list(data)}"
-    for k in ("hits", "misses", "calls"):
-        assert k in data["llm_cache"], f"llm_cache missing '{k}'"
+    assert "llm_tokens" in data, f"/api/metrics must expose llm_tokens; got keys={list(data)}"
+    assert isinstance(data["llm_tokens"], dict)
 
 
 def test_api_sweeps_pause_resume(live_client):

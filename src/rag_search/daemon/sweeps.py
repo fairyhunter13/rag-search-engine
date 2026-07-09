@@ -462,6 +462,7 @@ def _index_project(project_path: str) -> None:
     entry = get_project(project_path)
     if entry is not None:
         entry.indexed_at = datetime.now(UTC).isoformat()
+        entry.last_change_seen = entry.indexed_at
         entry.file_count = file_count
         entry.chunk_count = chunk_count
         upsert_project(entry)
@@ -491,6 +492,14 @@ def _index_files(project_path: str, files: list) -> None:
         index_files(filtered, get_embedder(), vs, project_root=root)
     finally:
         vs.close()
+
+    from datetime import UTC, datetime
+
+    from rag_search.core.registry import get_project, upsert_project
+    entry = get_project(project_path)
+    if entry is not None:
+        entry.last_change_seen = datetime.now(UTC).isoformat()
+        upsert_project(entry)
 
 
 def _enrich_project(project_path: str) -> None:

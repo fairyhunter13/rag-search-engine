@@ -1,4 +1,4 @@
-"""Token economy invariants (TE1–TE4, TE6–TE7; L2/L3 hierarchy removed in WS-B).
+"""Token economy invariants (TE1–TE4, TE6–TE8; L2/L3 hierarchy removed in WS-B).
 
 TE1  llm_token_stats() returns dotted-namespace keys (enrich/classify)
 TE2  classify_communities_semantic makes 0 calls for narrated=0 tail rows (leak A gate)
@@ -7,6 +7,11 @@ TE6  _BPRE_NARRATIVE_SYSTEM is a module-level string constant (stable prefix for
 TE7  _llm_link_resolve (Tier-2 BPRE edge linking) accumulates under bpre_link.* — live,
      real DeepSeek call, proving the HR23 token-budget gap closed 2026-07-01 is observable
      end-to-end via llm_token_stats()/overview(what='metrics'), not just source-inspected.
+TE8  _llm_link_resolve's real DeepSeek call obeys the HR18 SEA invariant (callee only ever
+     drawn from the admitted service set) and the Tier-2 confidence floor (0.7) end-to-end
+     against the live production edge-linker (kb/llm_escalation.py's parallel, never-wired
+     escalate() helper was removed 2026-07-09 as confirmed dead code — this replaces its
+     isolated unit-test coverage with a live proof against the real call site).
 """
 from __future__ import annotations
 
@@ -103,3 +108,47 @@ def test_te7_llm_link_resolve_tokens_accounted_live():
             assert after == before, "TE7: _llm_link_resolve must no-op without a key"
     finally:
         con.close()
+
+
+def test_te8_llm_link_resolve_sea_invariant_live():
+    """TE8: real _llm_link_resolve output obeys the HR18 SEA invariant + conf-0.7 floor."""
+    from rag_search.graph.llm import deepseek_key
+    from rag_search.kb.bpre import _SCHEMA, _llm_link_resolve
+    con = sqlite3.connect(":memory:")
+    try:
+        con.executescript(_SCHEMA)
+        svcs = ["checkout", "cart", "inventory"]
+        items = [
+            {"kind": "http", "caller": "checkout", "topic_or_route": "GET /cart/items"},
+            {"kind": "pubsub", "caller": "cart", "topic_or_route": "order.created"},
+        ]
+        _llm_link_resolve(con, items, svcs)
+        rows = con.execute(
+            "SELECT caller_service, callee_service, confidence FROM cross_service_edges "
+            "WHERE kind LIKE '%_llm'"
+        ).fetchall()
+        if not deepseek_key():
+            assert rows == [], "TE8: no _llm edges may be written without a DeepSeek key"
+            return
+        for caller, callee, confidence in rows:
+            assert callee in svcs, f"TE8: SEA violated — callee {callee!r} not in {svcs}"
+            assert caller != callee, f"TE8: verification gate violated — self-loop {caller!r}"
+            assert confidence == 0.7, f"TE8: Tier-2 confidence must be 0.7, got {confidence}"
+    finally:
+        con.close()
+
+
+def test_default_model_is_deepseek_v4_flash():
+    """graph/llm.py must pin deepseek-v4-flash, not the deprecated deepseek-chat alias.
+
+    Relocated from the removed test_llm_escalation_ladder.py (2026-07-09): this is a static
+    check on graph/llm.py itself, independent of which caller invokes deepseek_extract.
+    """
+    import inspect
+
+    from rag_search.graph import llm as llm_mod
+    src = inspect.getsource(llm_mod)
+    assert "deepseek-v4-flash" in src, "graph/llm.py must pin deepseek-v4-flash"
+    assert "deepseek-chat" not in src or "deprecat" in src.lower(), (
+        "deepseek-chat alias must not be used (deprecates 2026-07-24)"
+    )

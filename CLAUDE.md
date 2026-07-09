@@ -36,7 +36,7 @@ python -m compileall -q src/rag_search
 
 **IMPORTANT — run tests foreground only**: never leave the live suite as an unattended background task. The in-process embedder (~1 GB RSS + a full CPU core) stacks on Chrome/Java/Node and can push the machine into swap, freezing the UI. Run pytest in the foreground, serialized, when other heavy apps are not contending.
 
-**Daemon reload** (after code changes): `POST /api/reload` or `systemctl --user restart rag-search-mcp-daemon` — daemon restarts via systemd in ~1s. (There is no `daemon reload` CLI subcommand; only `daemon serve/status/ensure/stop/install-global/install-systemd/bridge-stdio` exist.)
+**Daemon reload** (after code changes): `POST /api/reload` (default, or explicit `?restart=true`) exits non-zero, so the unit's `Restart=on-failure` policy restarts it via systemd in ~1s. `POST /api/reload?restart=false` exits cleanly (0) and intentionally stays down (used by `daemon stop`) — that path needs a manual `systemctl --user restart rag-search-mcp-daemon` to bring it back up. (There is no `daemon reload` CLI subcommand; only `daemon serve/status/ensure/stop/install-global/install-systemd/bridge-stdio` exist.)
 
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
 
@@ -150,6 +150,14 @@ import check to every language. This closes typed-client idioms (`client = new H
 client.GetAsync(...)`) with zero new library-name vocabulary. A bare library-name idiom with no
 scheme-bearing signal (`requests`/`axios` on a non-scheme absolute URL) still falls through to the
 DeepSeek escalate/whole-file residue tiers — recorded, never silently dropped.
+
+**Embedded-`<script>` sub-parsing (F2, 2026-07-09).** Vue/Svelte/Astro/HTML host grammars parse
+`<script>` content as one opaque `raw_text` leaf — structurally blind to embedded JS/TS calls and
+symbols. `graph/extractor.py::_iter_script_blocks` and `kb/bpre_ast.py::_script_blocks` locate that
+leaf plus its `lang` attribute (node-kind/attribute reads, no vocabulary) and sub-parse it with the
+js/ts grammar, remapping line numbers by the block's start row — covering both the symbol/call
+graph and BPRE's HTTP-client detection for Vue and Svelte SFCs. Guarded by
+`test_embedded_script_extraction.py`.
 
 ## Public-release & device-neutrality invariants (P18, HR34)
 

@@ -94,8 +94,11 @@ def scan_generic(root,b,f,surface,du,tu=None):
                              regardless of method name.
     Non-verb, non-proto client idioms (C# GetAsync, Elixir get!, Swift dataTask, …) resolve via
     _provenance: the receiver's own text carries a _SCHEMES protocol token. Anything left over
-    (non-verb, no provenance, no handler shape) is genuine residual ambiguity — left unclassified
-    here for the existing residue ladder (kb/resolve_rerank.py -> kb/llm_escalation.py)."""
+    (non-verb, no provenance, no handler shape) is an ordinary non-HTTP/gRPC call — left
+    unclassified here; it is not itself residue fed to a further resolution tier. The Tier-2
+    residue ladder (kb/resolve_rerank.py -> kb/bpre.py::_llm_link_resolve) instead operates one
+    level up, on calls this scanner DID classify as http_clients/proto_marshal_types whose callee
+    service still can't be matched to a known route/topic (see kb/bpre.py::_llm_link_scan)."""
     from rag_search.kb.bpre_paradigms import scan_paradigm
     ps=surface.proto_services;stk=[root]
     while stk:

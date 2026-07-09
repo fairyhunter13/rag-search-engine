@@ -23,10 +23,9 @@ def _snapshot() -> dict:
     )
     from rag_search.daemon.sweeps import _bpre_state
     from rag_search.graph.llm import llm_token_stats
-    from rag_search.kb.llm_escalation import llm_cache_stats
     from rag_search.query.search import rerank_stats
     return {**_metrics, "rerank": rerank_stats(), "bpre": dict(_bpre_state),
-            "llm_cache": llm_cache_stats(), "llm_tokens": llm_token_stats(),
+            "llm_tokens": llm_token_stats(),
             "cpu": {"percent_core": round(cpu_percent_core(), 4),
                     "quota_cores": cpu_quota_cores(), "usage_nsec": cpu_usage_nsec(),
                     **cpu_throttle_stat()}}
