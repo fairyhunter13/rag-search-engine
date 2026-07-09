@@ -147,14 +147,9 @@ mapping table may substitute for structural analysis of user code.
   `test_embedded_script_extraction.py`.
 - **Resolution ladder** (HR16–HR19, 2026-06-21; **corrected 2026-07-09** — see
   `docs/audits/2026-07-09-deep-conformance-audit.md` Part D): the shipped ladder is **3 tiers**,
-  1.0→0.8→0.7, full stop — no 0.9, no 0.5, no whole-file-LLM tier exists anywhere in the tree.
-  `kb/valueflow.py::resolve_first_arg` (Tier-1.5's value-flow resolution) feeds candidates into
-  Tier 1 extraction and Tier-1.75 reranking; it stamps no confidence of its own. A whole-file-LLM
-  tier was considered and rejected 2026-07-09 on token-cost/accuracy grounds — no stable prefix
-  means no DeepSeek prompt-cache hit, 1-2 orders of magnitude costlier per rebuild than Tier-2, and
-  static extraction beats LLM extraction anyway (see
-  `docs/audits/2026-07-09-whole-engine-conformance-and-research.md` for the derivation).
-  `graph/extractor.py`'s only parse-error/empty-structure fallback is the deterministic
+  1.0→0.8→0.7, full stop. `kb/valueflow.py::resolve_first_arg` (Tier-1.5's value-flow resolution)
+  feeds candidates into Tier 1 extraction and Tier-1.75 reranking; it stamps no confidence of its
+  own. `graph/extractor.py`'s only parse-error/empty-structure fallback is the deterministic
   `_generic_walk` (`H1` in the coverage table above; no LLM call).
   | Tier | Mechanism | Conf | Gate |
   |---|---|---|---|
@@ -282,7 +277,7 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 - **CLOUD chat lane** = claude-haiku-4-5 (dashboard chat only; no DeepSeek fallback).
 - **DOC-TOOLING lane** = `claude -p` headless (docgen IH + OKF; Haiku/Sonnet; never KB, never chat).
 
-**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 3-tier BPRE resolution ladder (HR16, corrected 2026-07-09): Tier-1.75 is the GPU rerank lane; Tier-2 is cloud DeepSeek — there is no Tier-3 (a whole-file-LLM tier was considered and rejected 2026-07-09, see `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`). Doc-tooling (`docgen`/`okf`) uses `claude -p` headless — a distinct lane from KB enrichment and chat (HR31).
+**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 3-tier BPRE resolution ladder (HR16, corrected 2026-07-09): Tier-1.75 is the GPU rerank lane; Tier-2 is cloud DeepSeek. Doc-tooling (`docgen`/`okf`) uses `claude -p` headless — a distinct lane from KB enrichment and chat (HR31).
 
 ## 16. Per-project config & federation inheritance
 
