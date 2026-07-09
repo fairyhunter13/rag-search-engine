@@ -1,7 +1,7 @@
 # Conformance Evaluation — World Model, Architecture, Principles & Rules
 
 > **Date:** June 27 2026 (final verification pass; all 711 tests green)
-> **Scope:** OSE (`rag-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/docgen/` · `vendor/okf/`
+> **Scope:** RSE (`rag-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/docgen/` · `vendor/okf/`
 > **Method:** `check_world_model.py --all` + static source reads + `test_world_model_traceability.py`
 > **Verdict:** CONFORMS (all checkable L1 invariants pass; 5 gaps found and remediated this session)
 
@@ -26,7 +26,7 @@
 | P12 | Doc-tooling LLM-native via `claude -p`; no tree-sitter on doc path | Pass | `test_ih_no_tree_sitter_import_in_vendor` passes |
 | P13 | Docgen + OKF = manual-trigger only | Pass | `test_ih_docgen_not_in_sweeps` passes |
 | P14 | Four LLM lanes; no cross-lane calls | Pass (MANUAL) | `test_inference_lanes.py` lane guards pass |
-| P15 | Kill-switches OSE_DOCGEN=0/OSE_OKF=0 to no output | Pass | `test_ih_kill_switch_off` + `test_okf_kill_switch_off` pass |
+| P15 | Kill-switches RSE_DOCGEN=0/RSE_OKF=0 to no output | Pass | `test_ih_kill_switch_off` + `test_okf_kill_switch_off` pass |
 
 ---
 
@@ -49,9 +49,9 @@
 | HR20 | Partition quality gate | `test_partition_quality_on_sample` | Pass (was broken) |
 | HR25 | Docgen LLM-native; no tree-sitter | `test_ih_no_tree_sitter_import_in_vendor` | Pass |
 | HR26 | Docgen + OKF manual-trigger only | `test_ih_docgen_not_in_sweeps` | Pass |
-| HR27 | Kill-switch OSE_DOCGEN=0 | `test_ih_kill_switch_off` | Pass |
+| HR27 | Kill-switch RSE_DOCGEN=0 | `test_ih_kill_switch_off` | Pass |
 | HR28 | OKF v0.1 bundle structure | `test_okf_llm_generate_structure` | Pass |
-| HR29 | Kill-switch OSE_OKF=0 | `test_okf_kill_switch_off` | Pass |
+| HR29 | Kill-switch RSE_OKF=0 | `test_okf_kill_switch_off` | Pass |
 | HR30 | MCP surface = 5 tools only | `test_api_docgen_not_in_mcp` | Pass |
 
 ---

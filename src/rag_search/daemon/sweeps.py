@@ -9,7 +9,7 @@ import threading
 
 # Max DeepSeek completion tokens spent on L1 community narration per _enrich_project run.
 # Prevents runaway cost on unexpectedly large projects.  Default 50k ≈ ≤250 head communities.
-_ENRICH_BUDGET_TOKENS: int = int(os.environ.get("OSE_ENRICH_BUDGET_TOKENS", "50000"))
+_ENRICH_BUDGET_TOKENS: int = int(os.environ.get("RSE_ENRICH_BUDGET_TOKENS", "50000"))
 
 _PAUSED: bool = False
 _KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change

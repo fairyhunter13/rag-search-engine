@@ -25,8 +25,8 @@ def _render_world_model(yaml_raw: str) -> str:
     lines = [
         "# World Model",
         "",
-        "OSE fulfills the four-layer world model defined in `docs/world-model/model.yaml`.",
-        "Use this skill to check conformance and understand OSE's governing laws.",
+        "RSE fulfills the four-layer world model defined in `docs/world-model/model.yaml`.",
+        "Use this skill to check conformance and understand RSE's governing laws.",
         "",
         "## Quick reference — L1 Invariants",
         "",
@@ -81,7 +81,7 @@ def _render_info_hierarchy(info_raw: str) -> str:
     header = [
         "# Info Hierarchy",
         "",
-        "OSE's DIKW doctrine ladder — how data climbs to wisdom and what each rung costs.",
+        "RSE's DIKW doctrine ladder — how data climbs to wisdom and what each rung costs.",
         "",
     ]
     body = info_raw.split("\n", 1)[1] if info_raw.startswith("#") else info_raw

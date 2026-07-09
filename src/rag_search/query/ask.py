@@ -123,15 +123,23 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     from rag_search.kb.answer_cache import get as _cache_get
     from rag_search.kb.answer_cache import set as _cache_set
     from rag_search.query.search import search_federation as _search_fed
+    _auto_selected = not project_path
     if not project_path:
         projects = [p for p in list_projects() if p.enabled]
         if not projects:
             return "No indexed projects found."
         project_path = projects[0].path
+    # Disclose the fallback so a caller who omitted project_path can't mistake this
+    # answer for a different, intended project (no equivalent of search()'s projects_searched here).
+    _prefix = (
+        f"[project auto-selected: {project_path} — pass project_path to target a specific project]\n\n"
+        if _auto_selected else ""
+    )
     cache_dir = index_dir(project_path) / "ask_cache"
-    cached = _cache_get(cache_dir, f"{scope}:{query}")
+    cache_key = f"{scope}:{query}"
+    cached = _cache_get(cache_dir, cache_key)
     if cached:
-        return cached
+        return _prefix + cached
     from rag_search.daemon.federation import expand_federation
     all_paths = expand_federation(project_path)
     if not project_vector_db(project_path).exists():
@@ -142,8 +150,8 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     try:
         chunks = _search_fed(query, embedder, vector_stores, top_k=8)
         answer = compose_answer(query, chunks, graph_stores, scope=scope)
-        _cache_set(cache_dir, f"{scope}:{query}", answer, ttl_s=3600)
-        return answer
+        _cache_set(cache_dir, cache_key, answer, ttl_s=3600)
+        return _prefix + answer
     finally:
         for vs in vector_stores:
             vs.close()

@@ -36,14 +36,14 @@ def llm_token_stats() -> dict[str, int]:
 _DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 # Pin to deepseek-v4-flash: the `deepseek-chat` alias deprecates 2026-07-24 15:59 UTC.
 # 1M context, 384K output, MoE 284B/13B-active, automatic prefix caching.
-# Override with OSE_DEEPSEEK_MODEL env var for testing.
-_DEEPSEEK_MODEL = os.environ.get("OSE_DEEPSEEK_MODEL", "deepseek-v4-flash")
+# Override with RSE_DEEPSEEK_MODEL env var for testing.
+_DEEPSEEK_MODEL = os.environ.get("RSE_DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 _deepseek_disabled = False
 
 
-def _ose_config_dir() -> Path:
+def _rse_config_dir() -> Path:
     """~/.config/rag-search/ (XDG_CONFIG_HOME-aware)."""
     xdg = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg) if xdg else Path.home() / ".config"
@@ -79,7 +79,7 @@ def deepseek_key() -> str | None:
     k = os.environ.get("DEEPSEEK_API_KEY")
     if k:
         return k.strip()
-    v = _parse_key_from_file(_ose_config_dir() / "env")
+    v = _parse_key_from_file(_rse_config_dir() / "env")
     if v:
         return v
     return _parse_key_from_file(Path.home() / ".bash_env")

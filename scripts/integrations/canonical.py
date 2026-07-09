@@ -36,7 +36,7 @@ See MCP tool schemas for full parameter reference (scope/relation/what variants,
 Rules (no exceptions):
 - Call search/ask/graph/overview BEFORE any Bash grep/find, Glob, or Grep tool call.
 - Never delegate codebase questions to sub-agents via the Agent tool.
-- GPU-only inference — CPU fallback is forbidden for all OSE operations.
+- GPU-only inference — CPU fallback is forbidden for all RSE operations.
 - RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs/errors,
   immediately fall back to native Read/Grep/Glob/Bash — never wait or retry the MCP call.
 - NEVER auto-index. Only call index(enabled=True) when the user explicitly asks.

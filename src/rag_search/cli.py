@@ -278,7 +278,7 @@ def status() -> None:
     list_projects_cmd()
 
 
-def ocs_index_main() -> None:
+def rse_index_main() -> None:
     """One-shot onboarding: index → enrich → wiki."""
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "."

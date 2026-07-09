@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WS-D: GPU-free, daemon-free OSE world-model fulfillment checker.
+"""WS-D: GPU-free, daemon-free RSE world-model fulfillment checker.
 
 Evaluates L1 invariant check predicates from docs/world-model/model.yaml
 against the working tree (default) or a specific git diff.
@@ -94,7 +94,7 @@ def _check_one(inv: dict, changed_files: list[str]) -> tuple[str, str | None]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="OSE world-model fulfillment checker")
+    ap = argparse.ArgumentParser(description="RSE world-model fulfillment checker")
     ap.add_argument("--base", default=None, help="git base ref (default: HEAD)")
     ap.add_argument("--head", default=None, help="git head ref (default: working tree)")
     ap.add_argument("--all", action="store_true", help="check all source files, not just diff")

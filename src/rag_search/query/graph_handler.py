@@ -132,8 +132,13 @@ def run_graph(
         if not projects:
             return _json.dumps({"error": "No indexed projects found."})
         project_path = projects[0].path
+
+    def _dump(payload: dict) -> str:
+        """Every response after resolution discloses which project answered it (no silent fallback)."""
+        return _json.dumps({**payload, "resolved_project": project_path})
+
     if not any(project_graph_db(p).exists() for p in expand_federation(project_path)):
-        return _json.dumps({"error": f"Not indexed: {project_path}"})
+        return _dump({"error": f"Not indexed: {project_path}"})
     _union = {
         "callers": callers, "callees": callees,
         "impact": impact, "definition": definition,
@@ -145,7 +150,7 @@ def run_graph(
             for _, ms in federated_map(project_path, lambda gs: _fn(symbol, gs))
             for m in ms
         ]
-        return _json.dumps({"matches": matches})
+        return _dump({"matches": matches})
     if relation == "impact_narrative":
         affected = [
             m
@@ -153,13 +158,13 @@ def run_graph(
             for m in ms
         ]
         if not affected:
-            return _json.dumps({
+            return _dump({
                 "symbol": symbol, "risk": "low", "affected_count": 0,
                 "summary": f"No callers found for '{symbol}' — low blast radius.",
             })
         names = [r["name"] for r in affected[:20]]
         risk = "high" if len(affected) > 10 else "medium" if len(affected) > 3 else "low"
-        return _json.dumps({
+        return _dump({
             "symbol": symbol, "risk": risk, "affected_count": len(affected),
             "affected": names,
             "summary": (
@@ -169,17 +174,17 @@ def run_graph(
         })
     _note = "call paths are per-member; cross-repo paths are not represented"
     if not to_symbol:
-        return _json.dumps({"error": f"relation='{relation}' requires to_symbol"})
+        return _dump({"error": f"relation='{relation}' requires to_symbol"})
     for _, path in federated_map(
         project_path, lambda gs: path_between(symbol, to_symbol, gs)
     ):
         if path:
             steps = " → ".join(p["name"] for p in path)
-            return _json.dumps({
+            return _dump({
                 "from": symbol, "to": to_symbol, "path": path, "note": _note,
                 "summary": f"{symbol} → {to_symbol} via {len(path)} step(s): {steps}",
             })
-    return _json.dumps({
+    return _dump({
         "from": symbol, "to": to_symbol, "path": [], "note": _note,
         "summary": (
             f"No call path found from '{symbol}' to '{to_symbol}'."

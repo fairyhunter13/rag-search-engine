@@ -28,7 +28,7 @@ _FIXTURES = _REPO_ROOT / "src" / "tests" / "fixtures" / "sample_projects"
 _SHOP_SRC = _FIXTURES / "shop-federation"
 _LEDGER_SRC = _FIXTURES / "ledger-standalone"
 _MEMBERS = ["cart-svc", "checkout-svc", "promo-svc"]
-_SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
+_SAFE_BASE = Path.home() / ".local" / "share" / "rse-test-dirs"
 
 
 @dataclass
@@ -143,7 +143,7 @@ def _cleanup_stale_workspaces(keep: Path) -> None:
         if d != keep:
             _deregister_under(d)
             shutil.rmtree(d, ignore_errors=True)
-    # Also clear any stale ocs-test-dirs entries whose filesystem path no longer exists.
+    # Also clear any stale rse-test-dirs entries whose filesystem path no longer exists.
     from rag_search.core.registry import list_projects
     for e in list_projects():
         if str(_SAFE_BASE) in e.path and not Path(e.path).exists():

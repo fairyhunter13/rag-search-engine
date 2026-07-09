@@ -1,6 +1,6 @@
 """Live E2E tests for the rich wiki bundle (Phase B). No mocks; June 2026 research-backed.
 
-OSE's edge over an LLM-authored wiki: diagrams and citations are DETERMINISTIC from real data, so
+RSE's edge over an LLM-authored wiki: diagrams and citations are DETERMINISTIC from real data, so
 most of these are *guarantees*, not probabilistic checks. Methods:
 - recursive ecosystem testing — discover links → follow → validate cross-document consistency
   (glama PRD#28, recursive documentation testing).

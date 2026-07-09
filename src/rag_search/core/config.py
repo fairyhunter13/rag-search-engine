@@ -6,44 +6,44 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-_OCS_ROOT = _DATA_HOME / "rag-search"
+_RSE_ROOT = _DATA_HOME / "rag-search"
 
-REGISTRY_PATH = Path(os.environ.get("OPENCODE_REGISTRY_PATH", str(_OCS_ROOT / "projects.json")))
-INDEX_ROOT = Path(os.environ.get("OPENCODE_INDEX_ROOT", str(_OCS_ROOT / "indexes")))
+REGISTRY_PATH = Path(os.environ.get("RSE_REGISTRY_PATH", str(_RSE_ROOT / "projects.json")))
+INDEX_ROOT = Path(os.environ.get("RSE_INDEX_ROOT", str(_RSE_ROOT / "indexes")))
 
-EMBED_MODEL = os.environ.get("OPENCODE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
-RERANK_MODEL = os.environ.get("OPENCODE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en")
-EMBED_DEVICE = os.environ.get("OPENCODE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
-THERMAL_MAX_C = int(os.environ.get("OPENCODE_GPU_TEMP_MAX", "80"))
-THERMAL_COOLDOWN_S = int(os.environ.get("OPENCODE_GPU_THERMAL_COOLDOWN_S", "30"))
-THERMAL_POLL_S = float(os.environ.get("OPENCODE_GPU_THERMAL_POLL_S", "3"))
-DISABLE_TENSORRT = int(os.environ.get("OPENCODE_DISABLE_TENSORRT", "1"))
-OPENCODE_GPU_DEVICE: str | None = os.environ.get("OPENCODE_GPU_DEVICE")  # unset = auto-pick
+EMBED_MODEL = os.environ.get("RSE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
+RERANK_MODEL = os.environ.get("RSE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en")
+EMBED_DEVICE = os.environ.get("RSE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
+THERMAL_MAX_C = int(os.environ.get("RSE_GPU_TEMP_MAX", "80"))
+THERMAL_COOLDOWN_S = int(os.environ.get("RSE_GPU_THERMAL_COOLDOWN_S", "30"))
+THERMAL_POLL_S = float(os.environ.get("RSE_GPU_THERMAL_POLL_S", "3"))
+DISABLE_TENSORRT = int(os.environ.get("RSE_DISABLE_TENSORRT", "1"))
+RSE_GPU_DEVICE: str | None = os.environ.get("RSE_GPU_DEVICE")  # unset = auto-pick
 
-DAEMON_HOST = os.environ.get("OPENCODE_MCP_DAEMON_HOST", "127.0.0.1")
-DAEMON_PORT = int(os.environ.get("OPENCODE_MCP_DAEMON_PORT", "8765"))
-IDLE_SHUTDOWN_S = int(os.environ.get("OPENCODE_MCP_IDLE_SHUTDOWN_S", "900"))
-CLIENT_STALE_S = int(os.environ.get("OPENCODE_MCP_CLIENT_STALE_S", "60"))
-MODEL_IDLE_UNLOAD_S = int(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
+DAEMON_HOST = os.environ.get("RSE_MCP_DAEMON_HOST", "127.0.0.1")
+DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
+IDLE_SHUTDOWN_S = int(os.environ.get("RSE_MCP_IDLE_SHUTDOWN_S", "900"))
+CLIENT_STALE_S = int(os.environ.get("RSE_MCP_CLIENT_STALE_S", "60"))
+MODEL_IDLE_UNLOAD_S = int(os.environ.get("RSE_MODEL_IDLE_UNLOAD_S", "300"))
 
 # Dashboard chat: claude-haiku-4-5 only. No DeepSeek fallback, no local generative LLM.
-QUERY_LLM_PROVIDER = os.environ.get("OPENCODE_QUERY_LLM_PROVIDER", "claude")
-QUERY_LLM_MODEL = os.environ.get("OPENCODE_QUERY_LLM_MODEL", "claude-haiku-4-5")
-QUERY_LLM_NUM_CTX = int(os.environ.get("OPENCODE_QUERY_LLM_NUM_CTX", "4096"))
-QUERY_LLM_TIMEOUT = int(os.environ.get("OPENCODE_QUERY_LLM_TIMEOUT", "180"))
+QUERY_LLM_PROVIDER = os.environ.get("RSE_QUERY_LLM_PROVIDER", "claude")
+QUERY_LLM_MODEL = os.environ.get("RSE_QUERY_LLM_MODEL", "claude-haiku-4-5")
+QUERY_LLM_NUM_CTX = int(os.environ.get("RSE_QUERY_LLM_NUM_CTX", "4096"))
+QUERY_LLM_TIMEOUT = int(os.environ.get("RSE_QUERY_LLM_TIMEOUT", "180"))
 
-FINAL_TOP_K = int(os.environ.get("OPENCODE_FINAL_TOP_K", "10"))
+FINAL_TOP_K = int(os.environ.get("RSE_FINAL_TOP_K", "10"))
 
-DEBOUNCE_DELAY_MS = int(os.environ.get("OPENCODE_DEBOUNCE_DELAY_MS", "1000"))
-MIN_FLUSH_INTERVAL_S = int(os.environ.get("OPENCODE_MIN_FLUSH_INTERVAL_S", "5"))
-DEFAULT_SOURCE_FILE_SIZE_KB = int(os.environ.get("OPENCODE_DEFAULT_SOURCE_FILE_SIZE_KB", "2048"))
-DEFAULT_TEXT_FILE_SIZE_KB = int(os.environ.get("OPENCODE_DEFAULT_TEXT_FILE_SIZE_KB", "1024"))
-DEFAULT_UNKNOWN_FILE_SIZE_KB = int(os.environ.get("OPENCODE_DEFAULT_UNKNOWN_FILE_SIZE_KB", "512"))
-EMBED_PASSAGES_MAX_TEXTS = int(os.environ.get("OPENCODE_EMBED_PASSAGES_MAX_TEXTS", "256"))
-MAX_INLINE_BYTES = int(os.environ.get("OPENCODE_MAX_INLINE_BYTES", str(8 * 1024 * 1024)))
-MAX_BYTES = int(os.environ.get("OPENCODE_MAX_BYTES", str(24 * 1024 * 1024)))
+DEBOUNCE_DELAY_MS = int(os.environ.get("RSE_DEBOUNCE_DELAY_MS", "1000"))
+MIN_FLUSH_INTERVAL_S = int(os.environ.get("RSE_MIN_FLUSH_INTERVAL_S", "5"))
+DEFAULT_SOURCE_FILE_SIZE_KB = int(os.environ.get("RSE_DEFAULT_SOURCE_FILE_SIZE_KB", "2048"))
+DEFAULT_TEXT_FILE_SIZE_KB = int(os.environ.get("RSE_DEFAULT_TEXT_FILE_SIZE_KB", "1024"))
+DEFAULT_UNKNOWN_FILE_SIZE_KB = int(os.environ.get("RSE_DEFAULT_UNKNOWN_FILE_SIZE_KB", "512"))
+EMBED_PASSAGES_MAX_TEXTS = int(os.environ.get("RSE_EMBED_PASSAGES_MAX_TEXTS", "256"))
+MAX_INLINE_BYTES = int(os.environ.get("RSE_MAX_INLINE_BYTES", str(8 * 1024 * 1024)))
+MAX_BYTES = int(os.environ.get("RSE_MAX_BYTES", str(24 * 1024 * 1024)))
 
-SCHEMA_VERSION = os.environ.get("OPENCODE_SCHEMA_VERSION", "2")
+SCHEMA_VERSION = os.environ.get("RSE_SCHEMA_VERSION", "2")
 
 IGNORED_DIRS: frozenset[str] = frozenset({
     ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".ruff_cache",
@@ -104,22 +104,22 @@ def root_process_db(root_path: str) -> Path:
 def federation_exclude_paths() -> frozenset[str]:
     """Resolved absolute paths excluded from federation discovery + reconcile indexing.
 
-    Configured via OPENCODE_FEDERATION_EXCLUDE (os.pathsep-separated list of paths).
+    Configured via RSE_FEDERATION_EXCLUDE (os.pathsep-separated list of paths).
     Paths are expanded (~ allowed) and resolved before comparison. Empty by default.
     """
-    raw = os.environ.get("OPENCODE_FEDERATION_EXCLUDE", "")
+    raw = os.environ.get("RSE_FEDERATION_EXCLUDE", "")
     return frozenset(
         str(Path(p).expanduser().resolve()) for p in raw.split(os.pathsep) if p.strip()
     )
 
 
 def _federation_exclude_entries() -> tuple[frozenset[str], tuple[str, ...]]:
-    """Split OPENCODE_FEDERATION_EXCLUDE into (exact_or_prefix_set, glob_tuple).
+    """Split RSE_FEDERATION_EXCLUDE into (exact_or_prefix_set, glob_tuple).
 
     Entries containing * ? [ are treated as fnmatch globs (expanduser, not resolved).
     All other entries are resolved to absolute paths for exact/prefix matching.
     """
-    raw = os.environ.get("OPENCODE_FEDERATION_EXCLUDE", "")
+    raw = os.environ.get("RSE_FEDERATION_EXCLUDE", "")
     exact: set[str] = set()
     globs: list[str] = []
     for p in raw.split(os.pathsep):
@@ -134,7 +134,7 @@ def _federation_exclude_entries() -> tuple[frozenset[str], tuple[str, ...]]:
 
 
 def is_federation_excluded(candidate: str) -> bool:
-    """True if candidate matches any entry in OPENCODE_FEDERATION_EXCLUDE.
+    """True if candidate matches any entry in RSE_FEDERATION_EXCLUDE.
 
     Plain entries match by exact path or prefix (subtree).
     Entries with glob chars (* ? [) are matched with fnmatch against the resolved candidate.

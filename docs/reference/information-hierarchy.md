@@ -75,7 +75,7 @@ IA's labeling, navigation, and search systems appear **once**, under §4, as sup
 
 ## See also
 
-- `docs/info-hierarchy.md` — OSE's DIKW doctrine ladder (how OSE spends LLM tokens at each rung)
+- `docs/info-hierarchy.md` — RSE's DIKW doctrine ladder (how RSE spends LLM tokens at each rung)
 - `docs/reference/world-model.md` — canonical WM definition
 - `docs/reference/llm-drivers.md` — doc-tooling LLM driver doctrine
 - `docs/CONFORMANCE_EVALUATION.md` — current-state scorecard + gap map for this repo

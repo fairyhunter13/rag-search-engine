@@ -127,7 +127,7 @@ def check_gpu() -> None:
 # Section: Daemon
 # ---------------------------------------------------------------------------
 
-DAEMON_URL = os.environ.get("OPENCODE_DAEMON_URL", "http://127.0.0.1:8765")
+DAEMON_URL = os.environ.get("RSE_DAEMON_URL", "http://127.0.0.1:8765")
 
 
 def check_daemon() -> None:

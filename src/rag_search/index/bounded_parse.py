@@ -15,9 +15,9 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 PARSE_TIMEOUT = "PARSE_TIMEOUT"  # sentinel result, distinct from any real return value
-_DEADLINE_S = float(os.environ.get("OPENCODE_BOUNDED_PARSE_DEADLINE_S", "10"))
-_POOL_SIZE = int(os.environ.get("OPENCODE_BOUNDED_PARSE_WORKERS", "1"))  # HR40: 1-core quota
-_IDLE_SHUTDOWN_S = float(os.environ.get("OPENCODE_BOUNDED_PARSE_IDLE_S", "120"))
+_DEADLINE_S = float(os.environ.get("RSE_BOUNDED_PARSE_DEADLINE_S", "10"))
+_POOL_SIZE = int(os.environ.get("RSE_BOUNDED_PARSE_WORKERS", "1"))  # HR40: 1-core quota
+_IDLE_SHUTDOWN_S = float(os.environ.get("RSE_BOUNDED_PARSE_IDLE_S", "120"))
 _CTX = mp.get_context("spawn")
 
 

@@ -26,7 +26,7 @@ pytestmark = pytest.mark.live
 
 def _federate(base):
     uid = str(id(base))[-6:]
-    marker = f"ocs_le_{uid}"
+    marker = f"rse_le_{uid}"
     root = base / "root"
     member = base / "member-repo"
     root.mkdir()

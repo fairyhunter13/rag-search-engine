@@ -12,7 +12,7 @@ _EXCLUDE_CFG = {"index": {"exclude": ["secret", "secret/**"]}}
 
 
 def _write_config(root: Path, cfg: dict) -> None:
-    (root / ".opencode-index.yaml").write_text(yaml.dump(cfg))
+    (root / ".rse-index.yaml").write_text(yaml.dump(cfg))
 
 
 def test_hh1_full_index_baseline(safe_tmp_path, embedder):
@@ -38,12 +38,12 @@ def test_hh1_full_index_baseline(safe_tmp_path, embedder):
 
     assert any("keep.py" in p for p in all_paths), "keep.py must be indexed"
     assert not any("secret" in p for p in all_paths), (
-        f"secret/ must be excluded by .opencode-index.yaml; found: {[p for p in all_paths if 'secret' in p]}"
+        f"secret/ must be excluded by .rse-index.yaml; found: {[p for p in all_paths if 'secret' in p]}"
     )
 
 
 def test_hh2_on_change_filters_excluded(safe_tmp_path, embedder):
-    """HH2: _index_files filters out files excluded by .opencode-index.yaml."""
+    """HH2: _index_files filters out files excluded by .rse-index.yaml."""
     from rag_search.core.config import ProjectEntry, project_vector_db
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon.sweeps import _index_files

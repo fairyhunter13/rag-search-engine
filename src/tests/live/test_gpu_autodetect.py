@@ -140,7 +140,7 @@ def test_reranker_real_inference_proves_gpu():
 def test_session_options_bfc_guard_applied(embedder):
     """The SessionOptions BFC-arena + spin guard init override must have been applied."""
     import onnxruntime as ort
-    assert getattr(ort.SessionOptions, "_ocs_no_pattern", False), (
+    assert getattr(ort.SessionOptions, "_rse_no_pattern", False), (
         "SessionOptions BFC guard not applied — enable_mem_pattern/allow_spinning not set"
     )
 

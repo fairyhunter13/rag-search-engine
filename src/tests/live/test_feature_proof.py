@@ -8,7 +8,7 @@ from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
-_OSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
+_RSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
 _REMOVED = ["hierarchy", "architecture_domains", "world_model"]
 _WHATS = ["structure","status","projects","metrics","import_cycles",
           "surprising_connections","feature_map","business_rules",

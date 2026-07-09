@@ -1,6 +1,6 @@
 # World Model — Canonical Definition (June 2026)
 
-> **Status:** reference — repo-agnostic. This document defines *what a world model is* (independent of any specific repo). For OSE's governance/spec world model see `docs/world-model/`. For companion repo's governance+execution world model see `companion-governance-repo/docs/world-model/`.
+> **Status:** reference — repo-agnostic. This document defines *what a world model is* (independent of any specific repo). For RSE's governance/spec world model see `docs/world-model/`. For companion repo's governance+execution world model see `companion-governance-repo/docs/world-model/`.
 
 ---
 
@@ -33,10 +33,10 @@ A **validator is mandatory** (2026 CWM finding): multi-step rollout degrades via
 
 | Repo | Regime | Executor |
 |---|---|---|
-| **OSE (rag-search-engine)** | **Governance/spec only** — the "domain" of OSE *is* the development rules; no separate business domain to simulate. State = codebase + invariants/laws. Action = a diff/change. Guard = does the diff satisfy the preconditions (P0–P11)? Delta = resulting conformance verdict. Planner = which change-sequences are permitted. Validator = `check_world_model.py` (rejects diffs that violate L1 invariants). | `scripts/check_world_model.py` |
+| **RSE (rag-search-engine)** | **Governance/spec only** — the "domain" of RSE *is* the development rules; no separate business domain to simulate. State = codebase + invariants/laws. Action = a diff/change. Guard = does the diff satisfy the preconditions (P0–P11)? Delta = resulting conformance verdict. Planner = which change-sequences are permitted. Validator = `check_world_model.py` (rejects diffs that violate L1 invariants). | `scripts/check_world_model.py` |
 | **companion-governance-repo** | **Governance/spec + execution** — governance/spec layer (repo invariants) **plus** an executable domain world model. State = `SimState` (commitments/call-offs/returns/transfers/inspections/invoices/SOH). Actions = domain commands (CreateCommitment, PostCallOff, …). Planner = BFS `plan(state, goal)`. Validator = `--validate` mode in `simulate.py`. | `docs/world-model/simulate.py` |
 
-**One shared `model.yaml` schema, two profiles.** `scripts/gen_world_model_skills.py` and `scripts/check_world_model.py` are parameterized per repo (governance-only profile for OSE; governance+execution profile for companion repo) — one tool, two profiles, not two separate generators.
+**One shared `model.yaml` schema, two profiles.** `scripts/gen_world_model_skills.py` and `scripts/check_world_model.py` are parameterized per repo (governance-only profile for RSE; governance+execution profile for companion repo) — one tool, two profiles, not two separate generators.
 
 ---
 
@@ -70,8 +70,8 @@ A **validator is mandatory** (2026 CWM finding): multi-step rollout degrades via
 
 ## See also
 
-- `docs/world-model/model.yaml` — OSE machine-readable governance/spec WM (L1–L4 layers)
-- `docs/world-model/README.md` — OSE WM narrative + tools
+- `docs/world-model/model.yaml` — RSE machine-readable governance/spec WM (L1–L4 layers)
+- `docs/world-model/README.md` — RSE WM narrative + tools
 - `companion-governance-repo/docs/world-model/SPEC.md` — companion repo governance+execution WM narrative
 - `companion-governance-repo/docs/world-model/simulate.py` — companion repo executable planner + validator
 - `scripts/check_world_model.py` — conformance checker (both profiles)

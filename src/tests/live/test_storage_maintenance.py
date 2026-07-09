@@ -74,7 +74,7 @@ def test_maintenance_vacuums_bloated_project_db():
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon.sweeps import maintenance
 
-    safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
+    safe_base = Path.home() / ".local" / "share" / "rse-test-dirs"
     safe_base.mkdir(parents=True, exist_ok=True)
     proj_dir = Path(tempfile.mkdtemp(dir=safe_base))
     try:

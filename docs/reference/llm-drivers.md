@@ -53,7 +53,7 @@ Pick the profile with the most headroom; retry the next on HTTP 429.
 
 ### Subprocess IPC (daemon context)
 
-When spawning `claude -p` as a subprocess from within OSE's daemon:
+When spawning `claude -p` as a subprocess from within RSE's daemon:
 - **Always set `CLAUDE_CODE_SAFE_MODE=1`** in `subprocess_env()` — prevents nested Claude Code from inheriting the parent's IPC socket and causing deadlock.
 - **Do NOT set `SIMPLE=1`** — breaks OAuth token exchange.
 

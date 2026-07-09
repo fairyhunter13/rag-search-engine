@@ -136,7 +136,7 @@ def index_docs(
     from rag_search.index.discover import _TEXT_LANGS, _is_generated_docs_dir
 
     root = Path(project_path).resolve()
-    docs_dir = root / os.environ.get("OSE_DOCGEN_DIR", "docs")
+    docs_dir = root / os.environ.get("RSE_DOCGEN_DIR", "docs")
     if not _is_generated_docs_dir(docs_dir):
         return 0
     pr = project_root or root

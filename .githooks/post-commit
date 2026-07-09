@@ -1,6 +1,6 @@
 #!/bin/bash
-# Auto-deploy opencode-indexer + health-supervisor after commit.
-# Builds release binary, copies to ~/.opencode/bin/, then restarts daemon
+# Auto-deploy rse-indexer + health-supervisor after commit.
+# Builds release binary, copies to ~/.rse/bin/, then restarts daemon
 # and ensures the health supervisor is running.
 #
 # Supports both onefile (single binary) and onedir (PyInstaller directory)
@@ -12,8 +12,8 @@ set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 INDEXER_DIR="$REPO_ROOT/indexer"
-DEPLOY_DIR="$HOME/.opencode/bin"
-BINARY_NAME="opencode-indexer"
+DEPLOY_DIR="$HOME/.rse/bin"
+BINARY_NAME="rse-indexer"
 SUPERVISOR_NAME="health-supervisor.sh"
 
 # Only build if indexer source files changed in this commit
@@ -40,7 +40,7 @@ else
         mv -f "$DEPLOY_DIR/$BINARY_NAME.new" "$DEPLOY_DIR/$BINARY_NAME"
         echo "[post-commit] Deployed to $DEPLOY_DIR/$BINARY_NAME"
 
-        # Kill old daemon — opencode will respawn it automatically
+        # Kill old daemon — rse will respawn it automatically
         pkill -f "$BINARY_NAME" 2>/dev/null && echo "[post-commit] Restarting daemon..." || true
     else
         echo "[post-commit] Deploy dir $DEPLOY_DIR not found or build absent, skipping."

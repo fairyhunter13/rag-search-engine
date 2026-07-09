@@ -1,6 +1,6 @@
 """Synthetic 2-service Go gRPC federation fixture for BPRE isolation.
 
-Builds a minimal but real multi-service mesh under ~/.local/share/ocs-test-dirs:
+Builds a minimal but real multi-service mesh under ~/.local/share/rse-test-dirs:
   svc-cart   — cart.pb.go with NewCartServiceClient / RegisterCartServiceServer / GetCart
   svc-checkout — checkout.go with HTTP route + NewCartServiceClient(conn).GetCart(...) call
 
@@ -26,7 +26,7 @@ from rag_search.core.config import ProjectEntry, project_graph_db
 from rag_search.core.registry import remove_project, upsert_project
 from rag_search.graph.store import GraphStore
 
-_SAFE_BASE = Path.home() / ".local" / "share" / "ocs-test-dirs"
+_SAFE_BASE = Path.home() / ".local" / "share" / "rse-test-dirs"
 
 _CART_PB_GO = '''\
 package cart

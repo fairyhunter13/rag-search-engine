@@ -1,4 +1,4 @@
-"""Per-project indexing config (.opencode-index.yaml|yml)."""
+"""Per-project indexing config (.rse-index.yaml|yml)."""
 from __future__ import annotations
 
 import fnmatch
@@ -11,7 +11,7 @@ import yaml
 
 log = logging.getLogger(__name__)
 
-_CONFIG_NAMES = (".opencode-index.yaml", ".opencode-index.yml")
+_CONFIG_NAMES = (".rse-index.yaml", ".rse-index.yml")
 
 
 def _strs(v: Any) -> list[str]:
@@ -32,7 +32,7 @@ class ProjectConfig:
 
 
 def load_project_config(root: Path) -> ProjectConfig:
-    """Load .opencode-index.yaml from root; return defaults if absent or bad."""
+    """Load .rse-index.yaml from root; return defaults if absent or bad."""
     for name in _CONFIG_NAMES:
         path = root / name
         if not path.is_file():
@@ -40,7 +40,7 @@ def load_project_config(root: Path) -> ProjectConfig:
         try:
             data = yaml.safe_load(path.read_text()) or {}
         except Exception:
-            log.warning("opencode-index: bad YAML at %s, using defaults", path)
+            log.warning("rse-index: bad YAML at %s, using defaults", path)
             return ProjectConfig()
         idx = data.get("index", {}) or {}
         watch = data.get("watcher", {}) or {}

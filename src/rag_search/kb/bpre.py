@@ -191,7 +191,7 @@ def _source_files(member_path: str) -> list[Path]:
     try:
         for dirpath, dirs, files in os.walk(str(root)):
             dp = Path(dirpath)
-            # is_ignored_path shares the same HR35 resolver as iter_files/the watcher (OSE
+            # is_ignored_path shares the same HR35 resolver as iter_files/the watcher (RSE
             # exclude/include, hidden-dir skip, .gitignore), so BPRE's scan never sees a file
             # the indexer or the drift gate wouldn't also see.
             dirs[:] = [

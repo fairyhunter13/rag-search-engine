@@ -44,10 +44,10 @@ def select_gpu_device() -> int:
 
     Sets CUDA_DEVICE_ORDER=PCI_BUS_ID before any CUDA init so NVML index ==
     ORT/CUDA device_id (onnxruntime #26705/#17546).
-    Honors OPENCODE_GPU_DEVICE override; falls back to 0 when pynvml unavailable.
+    Honors RSE_GPU_DEVICE override; falls back to 0 when pynvml unavailable.
     """
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    env_dev = os.environ.get("OPENCODE_GPU_DEVICE")
+    env_dev = os.environ.get("RSE_GPU_DEVICE")
     if env_dev is not None:
         return int(env_dev)
     try:

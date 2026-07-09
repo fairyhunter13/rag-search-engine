@@ -135,7 +135,7 @@ print(json.dumps(d))
 # ── Entry Point ────────────────────────────────────────────────────────────
 
 ONEShot=false
-INTERVAL="${OPENCODE_HEALTH_INTERVAL:-60}"
+INTERVAL="${RSE_HEALTH_INTERVAL:-60}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
