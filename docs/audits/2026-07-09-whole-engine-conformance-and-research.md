@@ -121,3 +121,39 @@ No code changes required — shipped code/tests were already correct; only prose
 `CLAUDE.md`, `docs/world-model/model.yaml`, `docs/architecture/federation-and-search-engine.md`,
 `docs/architecture/federation-ops-and-invariants.md`, `src/tests/live/test_public_hygiene.py`,
 this report (new).
+
+## Addendum (2026-07-09, research refresh)
+
+Follow-up pass re-checking Part 2's Tier-3 retirement and HR19's DEFERRED status against
+July-2026 literature, prompted by a request for the two items still worth watching (DeepSeek
+pricing as the one input that could change the Tier-3 call; HR19 as legitimately open future
+work). No code or spec change resulted — both calls are reaffirmed, one caveat is retired.
+
+**Tier-3 retirement — reaffirmed and strengthened, not weakened.** "Less Is More"
+(arXiv 2604.21746, Apr 2026) shows aggressive LLM involvement in static-analysis tasks is both
+*least* accurate (15–25% for the most agentic approach, vs 55–58% for structured/constrained) and
+*8× costlier* in tokens — whole-file LLM sits at that aggressive end. Static call-graph SOTA is
+unchanged (PyCG 93.3/86.7 vs GPT-3.5 57.8/61.9, arXiv 2402.17679; HeaderGen 91.7/93.3 vs
+38.8/39.6, arXiv 2410.00603). The 2026 direction for hybrid extraction is structure-first +
+LLM-augment (arXiv 2603.24837), i.e. the shipped tree-sitter-first + Tier-2 SEA-select design —
+not whole-file LLM. DeepSeek pricing today: V4 Flash $0.14/M miss vs $0.003/M hit (~47×,
+api-docs.deepseek.com) — Part 2's cost argument still holds. **Consequence: the retire call is
+over-determined** — pricing only affects the cost leg, and the accuracy leg is price-independent,
+so a DeepSeek price change cannot flip the decision on its own. The pricing assumption needs no
+further tracking.
+
+**HR19 — reaffirmed DEFERRED; design matches 2026 SOTA; sharpened revisit trigger.** Static
+microservice architecture recovery has a real, now-quantified ceiling: best single tool F1 0.86,
+4-tool ensemble F1 0.91 (arXiv 2412.08352) — roughly 9–14% of inter-service edges are genuinely
+unreachable statically. That paper stays static specifically because static integrates into fast
+CI/CD, the same posture this engine holds. Modern microservice-dependency graphs explicitly model
+static + dynamic edge types, with runtime tracing (servicegraph, gRPC reflection, cross-service
+span correlation — e.g. CrossTrace, arXiv 2508.11342) as the recognized complement — matching
+HR19's documented design exactly. Building it, however, adds a runtime-trace dependency
+(target system running under load, reflection enabled, a trace-ingestion/reconciliation pipeline,
+plus the mandatory anti-hallucination gate) to an engine that is deliberately static, GPU-free,
+and CI-friendly — an operational-posture shift, not just more code. **Revisit trigger: a measured
+cross-service recall miss on a live federation, not a date.**
+
+Sources: arXiv 2402.17679, 2410.00603, 2604.21746, 2603.24837, 2412.08352, 2508.11342;
+api-docs.deepseek.com pricing (July 2026).
