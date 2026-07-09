@@ -43,7 +43,7 @@ class Watcher:
 
     def start(self) -> None:
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="ocs-watcher")
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="rse-watcher")
         self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:

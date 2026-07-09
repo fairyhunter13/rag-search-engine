@@ -1,10 +1,13 @@
-"""Public-repo hygiene guard: removed env-flag names and absolute home paths must not reappear.
+"""Public-repo hygiene guard: legacy brand tokens and absolute home paths must not reappear.
 
-Checks removed OSE flag names (renames that would be breaking) and generic home-path patterns.
+Permanent brand-lock (P18/HR34): the pre-2026-07-09 OSE/OPENCODE/ocs branding was fully retired
+in favor of RSE. This guard bans every legacy self-reference token from ever reappearing in the
+tracked tree, with a narrow allowlist for genuine external-product references (the external
+"OpenCode" CLI product, the vendored ose-docgen package/repo) that must never be renamed.
 Device-specific name bans (company names, project codenames, device ids) live in the private
-ose-live-audit repo to avoid shipping the ban-list in the public tree.
+rse-live-audit repo to avoid shipping the ban-list in the public tree.
 
-Runs git grep (case-insensitive) over the tracked tree and fails on any match.
+Runs git grep over the tracked tree and fails on any match.
 Guard file and .gitmodules are allowlisted automatically.
 """
 from __future__ import annotations
@@ -20,38 +23,65 @@ pytestmark = pytest.mark.live
 _REPO_ROOT = Path(__file__).parents[3]
 _THIS_FILE = Path(__file__).name
 
-# Removed OSE flag names that must not reappear (would break existing deployments if re-added
-# under the old name after they were intentionally removed/renamed).
-_FORBIDDEN_FLAGS = [
-    "OSE_WIKI_LLM",
-    "OSE_BPRE_LLM_LINK",
-    "OSE_BPRE_LLM_FILE",
+# Legacy self-reference token forms (case-sensitive), retired 2026-07-09 in favor of RSE.
+# Each must never reappear in the tracked tree outside the allowlists below.
+_LEGACY_TOKEN_PATTERNS = [
+    r"OPENCODE_",
+    r"\bOSE_",
+    r"\bOSE\b",
+    r"\bopencode\b",
+    r"\bocs[-_]",
+    r"[-_]ocs\b",
+    r"\bose[-_]",
+    r"[-_]ose\b",
+    r"opencode-index",
+]
+
+# Files exempt from the legacy-token ban entirely (this guard file + generated skills, which
+# are regenerated from already-renamed sources via scripts/gen_world_model_skills.py).
+_LEGACY_TOKEN_ALLOWLIST_FILES = {
+    f"src/tests/live/{_THIS_FILE}",
+    ".claude/skills/world-model.md",
+    ".claude/skills/info-hierarchy.md",
+}
+
+# Substrings that legitimately contain a legacy-looking token but are genuine external-product
+# references, not this project's own branding — any matching line is exempt from the ban.
+_EXTERNAL_PRODUCT_ALLOWLIST_SUBSTRINGS = [
+    "OpenCode",    # Title-case: the external OpenCode CLI product (integration removed, still named in prose/tests)
+    "ose_docgen",  # vendored ose-docgen package import (vendor/docgen submodule)
+    "ose-docgen",  # vendored ose-docgen repo/dir name
 ]
 
 
-def _git_grep(pattern: str) -> list[str]:
+def _git_grep_legacy(pattern: str) -> list[str]:
     result = subprocess.run(
         [
-            "git", "grep", "-niF", pattern,
+            "git", "grep", "-nE", pattern,
             "--",
             ".",
             ":(exclude).gitmodules",
-            f":(exclude)src/tests/live/{_THIS_FILE}",
+            ":(exclude)vendor",
+            *[f":(exclude){f}" for f in _LEGACY_TOKEN_ALLOWLIST_FILES],
         ],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
     )
-    return [ln for ln in result.stdout.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    return [
+        ln for ln in lines
+        if not any(allowed in ln for allowed in _EXTERNAL_PRODUCT_ALLOWLIST_SUBSTRINGS)
+    ]
 
 
-@pytest.mark.parametrize("token", _FORBIDDEN_FLAGS)
-def test_removed_flag_absent(token: str) -> None:
-    """Removed OSE flag name must not reappear in any tracked file (case-insensitive)."""
-    hits = _git_grep(token)
+@pytest.mark.parametrize("pattern", _LEGACY_TOKEN_PATTERNS)
+def test_no_legacy_ose_opencode_tokens_reappear(pattern: str) -> None:
+    """Legacy OSE/OPENCODE/ocs brand tokens must never reappear (permanent brand lock)."""
+    hits = _git_grep_legacy(pattern)
     assert not hits, (
-        f"Removed flag {token!r} found in tracked files "
-        f"({len(hits)} occurrence(s)):\n" + "\n".join(hits[:5])
+        f"Legacy token pattern {pattern!r} found in tracked files "
+        f"({len(hits)} occurrence(s)) — rename to the RSE brand:\n" + "\n".join(hits[:5])
     )
 
 
@@ -90,7 +120,7 @@ _PATH_LITERAL_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*\S+)?\s*=\s*Pat
 
 def test_storage_paths_are_env_driven() -> None:
     """Module-level Path(...) storage-root constants in core/ and daemon/ must derive from
-    os.environ.get(...) (XDG_DATA_HOME / OPENCODE_*) — never a hardcoded machine-specific literal
+    os.environ.get(...) (XDG_DATA_HOME / RSE_*) — never a hardcoded machine-specific literal
     (P18/HR34 device-neutrality). Paths built from other already-derived names (e.g. REGISTRY_PATH)
     are allowed."""
     targets = [
@@ -123,7 +153,7 @@ _ENV_DRIVEN_CONFIG_NAMES = [
     "EMBED_MODEL", "RERANK_MODEL", "EMBED_DEVICE",
     "DAEMON_HOST", "DAEMON_PORT",
     "QUERY_LLM_PROVIDER", "QUERY_LLM_MODEL",
-    "OPENCODE_GPU_DEVICE",
+    "RSE_GPU_DEVICE",
 ]
 
 

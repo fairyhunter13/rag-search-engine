@@ -78,7 +78,7 @@ dev = [
 
 [project.scripts]
 rag-search = "rag_search.cli:app"
-rag-search-index = "rag_search.cli:ocs_index_main"
+rag-search-index = "rag_search.cli:rse_index_main"
 
 [build-system]
 requires = ["hatchling"]

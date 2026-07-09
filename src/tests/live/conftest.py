@@ -103,7 +103,7 @@ def safe_tmp_path():
     from pathlib import Path
 
     from rag_search.core.registry import list_projects, remove_project
-    safe_base = Path.home() / ".local" / "share" / "ocs-test-dirs"
+    safe_base = Path.home() / ".local" / "share" / "rse-test-dirs"
     safe_base.mkdir(parents=True, exist_ok=True)
     d = Path(tempfile.mkdtemp(dir=safe_base))
     yield d
@@ -157,7 +157,7 @@ def sample_workspace() -> SampleWorkspace:
     """Session-scoped sample workspace: GPU-indexed fixture projects + replayed enrichment golden.
 
     Builds shop-federation (cart/checkout/promo) + ledger-standalone under
-    ~/.local/share/ocs-test-dirs. DeepSeek is suppressed; enrichment.json
+    ~/.local/share/rse-test-dirs. DeepSeek is suppressed; enrichment.json
     goldens are replayed from src/tests/fixtures/sample_projects/.
     Teardown removes all registry entries and the temp directory.
     """

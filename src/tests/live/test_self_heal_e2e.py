@@ -19,7 +19,7 @@ def _proj():
 
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import remove_project, upsert_project
-    base = Path.home() / ".local" / "share" / "ocs-test-dirs"
+    base = Path.home() / ".local" / "share" / "rse-test-dirs"
     base.mkdir(parents=True, exist_ok=True)
     d = Path(tempfile.mkdtemp(dir=base, prefix="self-heal-"))
     try:

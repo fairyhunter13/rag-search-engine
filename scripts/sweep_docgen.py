@@ -8,11 +8,11 @@ Usage:
     python scripts/sweep_docgen.py [--root PATH ...] [--dry-run]
 
     --root PATH   One or more directory roots to search (repeatable).
-                  Falls back to OSE_SWEEP_ROOTS env var (colon-separated), then cwd.
+                  Falls back to RSE_SWEEP_ROOTS env var (colon-separated), then cwd.
 
 Examples:
     python scripts/sweep_docgen.py --root ~/git/github.com --root ~/go/src/github.com
-    OSE_SWEEP_ROOTS=/path/to/repos python scripts/sweep_docgen.py --dry-run
+    RSE_SWEEP_ROOTS=/path/to/repos python scripts/sweep_docgen.py --dry-run
     python scripts/sweep_docgen.py --dry-run  # sweeps current directory
 """
 from __future__ import annotations
@@ -28,14 +28,14 @@ _VENDOR = _HERE / "vendor" / "docgen" / "src"
 if _VENDOR.exists() and str(_VENDOR) not in sys.path:
     sys.path.insert(0, str(_VENDOR))
 
-_DOCS_DIR_NAME = os.environ.get("OSE_DOCGEN_DIR", "docs")
+_DOCS_DIR_NAME = os.environ.get("RSE_DOCGEN_DIR", "docs")
 _META_MARKER = "_meta/provenance.json"
 
 
 def _resolve_roots(cli_roots: list[str]) -> list[Path]:
     if cli_roots:
         return [Path(r).expanduser().resolve() for r in cli_roots]
-    env = os.environ.get("OSE_SWEEP_ROOTS", "")
+    env = os.environ.get("RSE_SWEEP_ROOTS", "")
     if env:
         return [Path(r).expanduser().resolve() for r in env.split(":") if r.strip()]
     return [Path.cwd()]
@@ -58,7 +58,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be removed without deleting anything.")
     parser.add_argument("--root", dest="roots", metavar="PATH", action="append", default=[],
-                        help="Root directory to search (repeatable). Default: OSE_SWEEP_ROOTS env or cwd.")
+                        help="Root directory to search (repeatable). Default: RSE_SWEEP_ROOTS env or cwd.")
     args = parser.parse_args()
 
     try:

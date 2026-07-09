@@ -8,7 +8,7 @@ This is a static source-code check — GPU-free, daemon-free, import-free.
 
 Guards:
   1. No list_projects() picker outside registry-mechanics allowlist.
-  2. No _OSE/_OSE_SRC used as a daemon data-arg outside source-read allowlist.
+  2. No _RSE/_RSE_SRC used as a daemon data-arg outside source-read allowlist.
   3. No overview(what="projects") registry-walk + path picker outside mechanics allowlist.
   4. No unscoped search/ask (project_paths absent) while asserting on results/total,
      outside the deliberate global-fanout allowlist.
@@ -40,18 +40,18 @@ _LIST_PROJECTS_ALLOWLIST = {
     "test_no_real_project_in_tests.py",  # this file
 }
 
-# Files exempt from the _OSE-as-data-arg check — they use _OSE/_OSE_SRC only for
+# Files exempt from the _RSE-as-data-arg check — they use _RSE/_RSE_SRC only for
 # source-file reads (vendor/, source inspect, scripts/).
-_OSE_DATA_ALLOWLIST = {
+_RSE_DATA_ALLOWLIST = {
     "_sample_workspace.py",  # _REPO_ROOT for vendor source reads
     "test_browser.py",       # reads dashboard.html from repo
     "test_no_code_semantic_regex.py",  # scans rag_search source tree
     "test_inference_lanes.py",         # reads scripts/*.py source
     "test_p20_capabilities.py",        # reads scripts/*.py source
-    "test_okf.py",                     # _OSE_SRC for vendor/okf + sweeps.py source reads
-    "test_docgen_hierarchy_e2e.py",    # _OSE_SRC for vendor/docgen + sweeps.py source reads
-    "test_feature_proof.py",           # _OSE_SRC for quality.py inspect read (fp16)
-    "test_p5_server.py",               # _OSE_SRC for mcp.py/ask.py/routes_chat.py source reads
+    "test_okf.py",                     # _RSE_SRC for vendor/okf + sweeps.py source reads
+    "test_docgen_hierarchy_e2e.py",    # _RSE_SRC for vendor/docgen + sweeps.py source reads
+    "test_feature_proof.py",           # _RSE_SRC for quality.py inspect read (fp16)
+    "test_p5_server.py",               # _RSE_SRC for mcp.py/ask.py/routes_chat.py source reads
     "test_no_real_project_in_tests.py",  # this file
 }
 
@@ -76,11 +76,11 @@ _UNSCOPED_SEARCH_ALLOWLIST = {
     "test_no_real_project_in_tests.py",
 }
 
-# Pattern: _OSE or _OSE_SRC used as a project_path= / project= / project_paths=[…] argument
+# Pattern: _RSE or _RSE_SRC used as a project_path= / project= / project_paths=[…] argument
 # on the same logical line as a daemon call (overview/search/ask/graph/wiki/validate/enrich/okf/docgen).
 _DATA_ARG_RE = re.compile(
-    r"_OSE\b.*(?:project_path|project_paths|project)\s*[=\[]"
-    r"|(?:project_path|project_paths|project)\s*[=\[]\s*[^\n]*_OSE\b",
+    r"_RSE\b.*(?:project_path|project_paths|project)\s*[=\[]"
+    r"|(?:project_path|project_paths|project)\s*[=\[]\s*[^\n]*_RSE\b",
 )
 _PROJECTS_WALK_RE = re.compile(
     r"""(?:what\s*[=:]\s*["']projects["']|/api/projects)""",
@@ -123,18 +123,18 @@ def test_no_list_projects_picker_outside_allowlist():
     )
 
 
-def test_no_ose_as_data_arg_outside_allowlist():
-    """_OSE must not be passed as a project_path/project arg to daemon endpoints outside the allowlist."""
+def test_no_rse_as_data_arg_outside_allowlist():
+    """_RSE must not be passed as a project_path/project arg to daemon endpoints outside the allowlist."""
     violations: list[str] = []
     for f in _iter_py_files():
-        if f.name in _OSE_DATA_ALLOWLIST:
+        if f.name in _RSE_DATA_ALLOWLIST:
             continue
         src = f.read_text(encoding="utf-8")
         for i, line in enumerate(src.splitlines(), 1):
-            if "_OSE" in line and _DATA_ARG_RE.search(line):
+            if "_RSE" in line and _DATA_ARG_RE.search(line):
                 violations.append(f"{f.name}:{i}: {line.strip()[:80]}")
     assert not violations, (
-        "_OSE used as daemon data arg outside allowlist — "
+        "_RSE used as daemon data arg outside allowlist — "
         "use sample_workspace fixtures instead:\n" + "\n".join(violations)
     )
 

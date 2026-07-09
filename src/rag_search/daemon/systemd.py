@@ -25,7 +25,7 @@ def unit_text(exec_path: str | None = None) -> str:
         "Restart=on-failure\n"
         "RestartSec=3s\n"
         "StartLimitBurst=20\n"
-        "Environment=OPENCODE_EMBED_DEVICE=cuda\n"
+        "Environment=RSE_EMBED_DEVICE=cuda\n"
         "EnvironmentFile=-%h/.config/rag-search/env\n"
         "Nice=5\n"
         "CPUWeight=20\n"

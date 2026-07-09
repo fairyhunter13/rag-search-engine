@@ -32,7 +32,7 @@ class Scheduler:
     def start(self) -> None:
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._loop, daemon=True, name="ocs-scheduler"
+            target=self._loop, daemon=True, name="rse-scheduler"
         )
         self._thread.start()
 

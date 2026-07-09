@@ -9,9 +9,9 @@ import threading
 
 log = logging.getLogger(__name__)
 
-_MODEL_IDLE_UNLOAD_S = float(os.environ.get("OPENCODE_MODEL_IDLE_UNLOAD_S", "300"))
-_RECONCILE_INITIAL_DELAY_S = float(os.environ.get("OPENCODE_RECONCILE_INITIAL_DELAY_S", "30"))
-_RECONCILE_RESYNC_S = float(os.environ.get("OPENCODE_RECONCILE_RESYNC_S", "0"))
+_MODEL_IDLE_UNLOAD_S = float(os.environ.get("RSE_MODEL_IDLE_UNLOAD_S", "300"))
+_RECONCILE_INITIAL_DELAY_S = float(os.environ.get("RSE_RECONCILE_INITIAL_DELAY_S", "30"))
+_RECONCILE_RESYNC_S = float(os.environ.get("RSE_RECONCILE_RESYNC_S", "0"))
 _idle_unload_done = False
 _reconcile_park = threading.Event()  # never set; parks the reconcile thread when resync is disabled
 _REQUESTED_EXIT_CODE = 0  # set by routes_ops._api_reload; non-zero makes systemd Restart=on-failure fire
@@ -137,7 +137,7 @@ def _start_background() -> None:
         time.sleep(_RECONCILE_INITIAL_DELAY_S)  # grace: serve early requests before first sweep
         with contextlib.suppress(Exception):
             reconcile_projects()  # startup-once: heals algo drift + discovers new/partial projects
-        # Opt-in periodic resync (default OFF): OPENCODE_RECONCILE_RESYNC_S > 0 enables it.
+        # Opt-in periodic resync (default OFF): RSE_RECONCILE_RESYNC_S > 0 enables it.
         # Steady state is watcher-driven (on_change). The thread stays alive so nice+5 is visible.
         if _RECONCILE_RESYNC_S > 0:
             while True:

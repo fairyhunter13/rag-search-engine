@@ -41,7 +41,7 @@ python -m compileall -q src/rag_search
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
 
 **Key env vars** (BPRE resolution ladder):
-- `OSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
+- `RSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
 - All LLM lanes (Tier-2 edge linkage, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
 
 **CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
@@ -68,12 +68,12 @@ library's own `force_polling` path. See `docs/info-hierarchy.md` "Compute-spend 
 
 **The drift gate's input must itself be gitignore/hidden-dir-aware (HR35).** `_source_fingerprint` and
 the watcher's `is_ignored_path` both route through one shared resolver in `index/discover.py`, applied
-in strict order: OSE `.opencode-index.yaml` `exclude` (drop) > OSE `include` (force-keep, wins over
+in strict order: RSE `.rse-index.yaml` `exclude` (drop) > RSE `include` (force-keep, wins over
 `.gitignore`) > default hidden-dir/`IGNORED_DIRS` policy (drop) > `.gitignore` (drop, supplementary,
 gated by `respect_gitignore`, cached per-mtime) > keep. This closes the root-cause found 2026-07-01: a
 live `vite dev`/Playwright-MCP session continuously rewriting git-ignored tool-cache dirs
 (`.svelte-kit`, `.playwright-mcp`) was flipping the fingerprint on every write and re-triggering the
-full cascade every ~5 min, pinning a CPU core indefinitely. `.opencode-index.yaml` now supports
+full cascade every ~5 min, pinning a CPU core indefinitely. `.rse-index.yaml` now supports
 `index.include` (force-keep globs) and `index.respect_gitignore` (default `true`) alongside the
 existing `index.exclude`.
 
@@ -119,7 +119,7 @@ automated test asserting < 1 % of one core over a quiescent window. **Active tie
 `daemon/systemd.py::unit_text()` sets `CPUQuota=100%` **and** `CPUAccounting=yes` explicitly (the
 latter is NOT implied by the former — systemd issue #9647) — a cgroup-v2 kernel ceiling the daemon's
 entire service cgroup physically cannot exceed, covering `bounded_parse.py`'s spawn-context workers
-too since they're children of the same cgroup (`OPENCODE_BOUNDED_PARSE_WORKERS` defaults to `1`
+too since they're children of the same cgroup (`RSE_BOUNDED_PARSE_WORKERS` defaults to `1`
 under this quota — two workers would only time-slice one capped core). The proof is `cpu.stat`'s
 `nr_throttled`/`throttled_usec` climbing under sustained real load, not just usage staying low — the
 canonical cgroup-v2 enforcement signal — cross-checked by a hermetic `systemd-run --user --scope`
@@ -163,15 +163,15 @@ graph and BPRE's HTTP-client detection for Vue and Svelte SFCs. Guarded by
 
 This repo is **public**. Never commit secrets, real device paths, or company/project names. Every
 machine-specific value (storage paths, host, port, models, GPU device) is **env-driven with XDG
-defaults** — see `core/config.py:8-46` (`XDG_DATA_HOME`, `OPENCODE_REGISTRY_PATH`,
-`OPENCODE_INDEX_ROOT`, `OPENCODE_MCP_DAEMON_HOST/PORT`, `OPENCODE_GPU_DEVICE`, etc.). No hardcoded
+defaults** — see `core/config.py:8-46` (`XDG_DATA_HOME`, `RSE_REGISTRY_PATH`,
+`RSE_INDEX_ROOT`, `RSE_MCP_DAEMON_HOST/PORT`, `RSE_GPU_DEVICE`, etc.). No hardcoded
 absolute paths (`/home/<user>/`, `/root/`, `/Users/<user>/`, `C:\Users\<user>\`), usernames, or
 hostnames anywhere in tracked source, tests, docs, scripts, or generated artifacts. Guards:
 `test_public_hygiene.py` (whole-tree home-path scan incl. Windows + storage-path env-driven
 assertion), `test_no_real_project_in_tests.py` (machine-agnostic test fixtures),
 `test_no_mocks_or_fakes.py`, `model.yaml` P7/P18/HR13/HR34. Device-specific *name* bans (real
 company/codename/device-id lists) deliberately stay out of this public tree — they live only in the
-private `ose-live-audit` repo.
+private `rse-live-audit` repo.
 
 **Runnable-by-anyone contract (hardened 2026-07-09).** Public-release readiness is more than path
 hygiene: a fresh clone must run with zero source edits given only env vars and the README setup
@@ -196,7 +196,7 @@ a future pass doesn't re-flag them. See `docs/audits/2026-07-09-whole-engine-con
 
 ## World model & info-hierarchy
 
-The OSE world model (governing laws, component map, behavior specs) lives in `docs/world-model/`.
+The RSE world model (governing laws, component map, behavior specs) lives in `docs/world-model/`.
 The DIKW doctrine ladder lives in `docs/info-hierarchy.md`.
 Generated Claude Code skills: `.claude/skills/world-model.md` + `.claude/skills/info-hierarchy.md`.
 

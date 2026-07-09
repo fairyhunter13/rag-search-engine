@@ -1,6 +1,6 @@
-"""Thin OSE adapter: run OKF v0.1 generate() for a project.
+"""Thin RSE adapter: run OKF v0.1 generate() for a project.
 
-Kill-switch: OSE_OKF=0 skips (default=1). LLM-native via claude -p.
+Kill-switch: RSE_OKF=0 skips (default=1). LLM-native via claude -p.
 Manual-trigger only — never wired into the auto-enrich sweep.
 """
 from __future__ import annotations
@@ -26,8 +26,8 @@ def _inject_vendor() -> bool:
 
 
 def run_okf(project_path: str) -> dict:
-    """Generate OKF v0.1 bundle for project_path. Kill-switch: OSE_OKF=0 → no output."""
-    if os.environ.get("OSE_OKF", "1") == "0":
+    """Generate OKF v0.1 bundle for project_path. Kill-switch: RSE_OKF=0 → no output."""
+    if os.environ.get("RSE_OKF", "1") == "0":
         return {"written": [], "skipped": [], "mode": "off"}
     if not _inject_vendor():
         log.warning("okf: vendor/okf/src not found at %s — skipping", _VENDOR_SRC)

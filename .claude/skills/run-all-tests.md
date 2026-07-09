@@ -27,7 +27,7 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
   first — a hot start makes the slow run much longer (thermal pauses).
 - **Don't run heavy suites back-to-back** without a cooldown; in "cool mode", run the
   fast suite for iteration and defer the slow suite until the GPU has cooled.
-- Software thermal guards are 85°C (inference) / 82°C (indexing); tune `OPENCODE_GPU_TEMP_MAX` for your device.
+- Software thermal guards are 85°C (inference) / 82°C (indexing); tune `RSE_GPU_TEMP_MAX` for your device.
 
 ## Inference-efficiency when fixing/adding slow tests (no mocks, no coverage loss)
 

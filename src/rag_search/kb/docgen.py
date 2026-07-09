@@ -1,7 +1,7 @@
-"""Thin OSE adapter: run ose-docgen generate() for a project.
+"""Thin RSE adapter: run ose-docgen generate() for a project.
 
-Injects vendor/docgen/src so OSE calls the tool without import coupling.
-Kill-switch: OSE_DOCGEN=0 → no output; always LLM-native (claude -p).
+Injects vendor/docgen/src so RSE calls the tool without import coupling.
+Kill-switch: RSE_DOCGEN=0 → no output; always LLM-native (claude -p).
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _is_federation_member(project_path: str) -> bool:
 
 def _cleanup_generated_docs(project_path: str) -> None:
     """Remove generated docs/ from a federation member (R5 self-heal). O(1) if no marker."""
-    docs_dir = Path(project_path) / os.environ.get("OSE_DOCGEN_DIR", "docs")
+    docs_dir = Path(project_path) / os.environ.get("RSE_DOCGEN_DIR", "docs")
     if not (docs_dir / "_meta" / "provenance.json").exists():
         return
     if not _inject_vendor():
@@ -66,7 +66,7 @@ def cleanup_member_docs() -> dict:
 
     report: list[dict] = []
     for member in sorted(members):
-        docs_dir = Path(member) / os.environ.get("OSE_DOCGEN_DIR", "docs")
+        docs_dir = Path(member) / os.environ.get("RSE_DOCGEN_DIR", "docs")
         if not (docs_dir / "_meta" / "provenance.json").exists():
             continue
         if not _inject_vendor():
@@ -89,10 +89,10 @@ def cleanup_member_docs() -> dict:
 def run_docgen(project_path: str) -> None:
     """Generate Information Hierarchy docs for project_path via claude -p.
 
-    Kill-switch: OSE_DOCGEN=0 → no output. Manual trigger only.
+    Kill-switch: RSE_DOCGEN=0 → no output. Manual trigger only.
     Federation members are cleaned (not generated) per HR27. Never raises.
     """
-    if os.environ.get("OSE_DOCGEN", "1") == "0":
+    if os.environ.get("RSE_DOCGEN", "1") == "0":
         return
     if not _inject_vendor():
         log.warning("docgen: vendor/docgen/src not found at %s — skipping", _VENDOR_SRC)
@@ -109,7 +109,7 @@ def run_docgen(project_path: str) -> None:
         members = expand_federation(project_path)
         member_dirs = [m for m in members if m != project_path]
         docs_dir = str(
-            Path(project_path) / os.environ.get("OSE_DOCGEN_DIR", "docs")
+            Path(project_path) / os.environ.get("RSE_DOCGEN_DIR", "docs")
         )
 
         result = generate(

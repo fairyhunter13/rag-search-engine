@@ -14,10 +14,10 @@ _EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
 # Public alias used by registry path filtering.
 _REGISTRY_EXCLUDE_SEGMENTS = _EXCLUDE
 
-_OSE_CFG_NAMES = (".opencode-index.yaml", ".opencode-index.yml")
+_RSE_CFG_NAMES = (".rse-index.yaml", ".rse-index.yml")
 
 # Discovery decision order (shared by iter_files + is_ignored_path so the drift gate and
-# the watcher always agree): OSE exclude (drop) > OSE include (force-keep) > default policy
+# the watcher always agree): RSE exclude (drop) > RSE include (force-keep) > default policy
 # (IGNORED_DIRS + hidden-dir, dirs only) > .gitignore (supplementary) > keep.
 _GitignoreChain = tuple[tuple[Path, "pathspec.PathSpec"], ...]
 
@@ -79,7 +79,7 @@ def _gitignore_match(full: Path, is_dir: bool, chain: _GitignoreChain) -> bool:
 def _cached_effective_config(root: Path) -> ProjectConfig:
     """effective_config(root), cached and invalidated on the project's own config-file mtime."""
     stamps = tuple(sorted(
-        (root / n).stat().st_mtime for n in _OSE_CFG_NAMES if (root / n).is_file()
+        (root / n).stat().st_mtime for n in _RSE_CFG_NAMES if (root / n).is_file()
     ))
     cached = _CFG_CACHE.get(root)
     if cached is not None and cached[0] == stamps:
@@ -255,8 +255,8 @@ def iter_files(
             p = dp / fname
             if federation_mode and p.is_symlink() and not p.resolve().is_relative_to(root):
                 continue
-            is_ose_cfg = fname in _OSE_CFG_NAMES
-            if not is_ose_cfg and _should_drop(
+            is_rse_cfg = fname in _RSE_CFG_NAMES
+            if not is_rse_cfg and _should_drop(
                 p, root, (*rel_dp_parts, fname), False, cfg, cur_chain
             ):
                 continue
@@ -265,6 +265,6 @@ def iter_files(
                 size = p.stat().st_size
             except OSError:
                 continue
-            if not is_ose_cfg and (size == 0 or size > _size_limit(lang)):
+            if not is_rse_cfg and (size == 0 or size > _size_limit(lang)):
                 continue
             yield p

@@ -78,7 +78,7 @@ def test_systemd_unit_text():
     text = unit_text("/usr/bin/rag-search")
     assert "ExecStart=/usr/bin/rag-search daemon serve" in text
     assert "Restart=on-failure" in text
-    assert "OPENCODE_EMBED_DEVICE=cuda" in text
+    assert "RSE_EMBED_DEVICE=cuda" in text
 
 
 def test_systemd_install_writes_file(tmp_path):
@@ -239,13 +239,13 @@ def test_cli_safe_invocations():
     assert r.exit_code == 0, f"cli health: GPU unavailable? output={r.output!r}"
 
 
-def test_pipeline_all_stages_ose_repo():
+def test_pipeline_all_stages_rse_repo():
     """P10.6: per-stage output traces on a real large indexed project.
 
     Validates: chunk+embed → tree-sitter symbols → call edges → Leiden
     communities → LLM-enriched symbols+communities → wiki pages.
 
-    Uses OSE (this repo) — always registered, has all 6 stages. L2 hierarchy
+    Uses RSE (this repo) — always registered, has all 6 stages. L2 hierarchy
     removed in WS-B; wiki now generates community pages (flat-L1 only).
     """
     import sqlite3
@@ -362,7 +362,7 @@ def test_api_reload_returns_reloading():
     # sending it to the shared singleton daemon would leave it down for the rest of the suite. Its
     # request-parsing + response-contract are covered GPU-free by test_reload_exit_code_split and
     # test_parse_restart_param above; the systemd-level stay-down proof (NRestarts unchanged,
-    # ExecMainStatus==0, service goes inactive) belongs in the private ose-live-audit repo per plan.
+    # ExecMainStatus==0, service goes inactive) belongs in the private rse-live-audit repo per plan.
 
 
 def test_no_heuristic_regression():

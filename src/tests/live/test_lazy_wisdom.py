@@ -71,7 +71,7 @@ def test_lw3_narrate_community_lazy_sets_narrated(safe_tmp_path):
     from rag_search.graph.enrich import narrate_community_lazy
     from rag_search.graph.llm import deepseek_key
     if not deepseek_key():
-        pytest.fail("LW3 requires OPENCODE_DEEPSEEK_API_KEY — set the key to test lazy narration")
+        pytest.fail("LW3 requires RSE_DEEPSEEK_API_KEY — set the key to test lazy narration")
     gs, cid = _make_store(safe_tmp_path)
     try:
         before = gs._con.execute("SELECT narrated FROM communities WHERE id=?", (cid,)).fetchone()[0]

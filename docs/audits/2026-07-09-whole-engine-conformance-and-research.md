@@ -94,7 +94,7 @@ No code changes required — shipped code/tests were already correct; only prose
   was warranted.
 - New `test_public_hygiene.py::test_runtime_config_is_env_driven` machine-checks the
   runnable-by-anyone contract for `EMBED_MODEL`/`RERANK_MODEL`/`EMBED_DEVICE`/`DAEMON_HOST`/
-  `DAEMON_PORT`/`QUERY_LLM_PROVIDER`/`QUERY_LLM_MODEL`/`OPENCODE_GPU_DEVICE`. Wired into HR34.
+  `DAEMON_PORT`/`QUERY_LLM_PROVIDER`/`QUERY_LLM_MODEL`/`RSE_GPU_DEVICE`. Wired into HR34.
 - `README.md` setup path (install → secrets → daemon → MCP register → index → verify health)
   and `scripts/check_system.py`/`configure_integrations.py` already give a clean first run.
 

@@ -10,7 +10,7 @@ CB4  live, slow        active-cap gate: sustained real indexing work never excee
                        and cpu.stat's throttle counters prove the cap physically bit
 CB5  unit, fast        cpu_budget.py parsing helpers against synthetic cgroup-v2 text
 CB6  live, slow        hermetic systemd-run --scope delegation self-test, independent of
-                       the OSE daemon/unit entirely
+                       the RSE daemon/unit entirely
 """
 from __future__ import annotations
 
@@ -276,10 +276,10 @@ _CB6_BURN_PY = (
 
 @pytest.mark.slow
 def test_cb6_systemd_scope_delegation_hermetic_proof(tmp_path):
-    """Independent of the OSE daemon: a fresh `systemd-run --user --scope` with
+    """Independent of the RSE daemon: a fresh `systemd-run --user --scope` with
     CPUQuota=100% must actually throttle a 4-process CPU burn -- proves the `cpu`
     controller is genuinely delegated and kernel-enforcing on this host (the precondition
-    CB2 depends on), without touching the running OSE unit."""
+    CB2 depends on), without touching the running RSE unit."""
     import contextlib
     import sys
     from pathlib import Path
@@ -288,7 +288,7 @@ def test_cb6_systemd_scope_delegation_hermetic_proof(tmp_path):
 
     script = tmp_path / "cb6_burn.py"
     script.write_text(_CB6_BURN_PY)
-    scope_name = f"ose-cb6-{int(time.time())}.scope"
+    scope_name = f"rse-cb6-{int(time.time())}.scope"
 
     proc = subprocess.Popen(
         ["systemd-run", "--user", "--scope", "--unit", scope_name,

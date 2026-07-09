@@ -116,12 +116,12 @@ def test_scheduler_start_no_fixed_tick():
 
 
 def test_no_junk_paths_in_live_registry(live_client, sample_workspace):
-    """IS2: no stale ocs-test-dirs entries may be enabled in the live registry.
+    """IS2: no stale rse-test-dirs entries may be enabled in the live registry.
 
     The current session's sample_workspace paths are excluded — they are
     legitimately registered for the duration of the test session and torn down
     at session end.  Only entries from previous (leaked) sessions are flagged.
-    Worktrees exclusion is config-driven (OPENCODE_FEDERATION_EXCLUDE), not hardcoded.
+    Worktrees exclusion is config-driven (RSE_FEDERATION_EXCLUDE), not hardcoded.
     """
     from rag_search.core.registry import list_projects
     from tests.live._projects import sample_project_paths
@@ -129,7 +129,7 @@ def test_no_junk_paths_in_live_registry(live_client, sample_workspace):
     current_session_paths = sample_project_paths(sample_workspace)
     junk = [
         e.path for e in list_projects()
-        if e.enabled and "/ocs-test-dirs/" in e.path and e.path not in current_session_paths
+        if e.enabled and "/rse-test-dirs/" in e.path and e.path not in current_session_paths
     ]
     assert not junk, (
         f"{len(junk)} junk entries still enabled: {junk[:3]!r}. Prune and restart the daemon."
@@ -265,7 +265,7 @@ def test_watcher_prefers_inotify_over_poll():
         assert w._thread is not None and w._thread.is_alive(), (
             "watcher thread must be running"
         )
-        assert w._thread.name == "ocs-watcher", "single unified watchfiles thread expected"
+        assert w._thread.name == "rse-watcher", "single unified watchfiles thread expected"
     finally:
         w.stop()
     assert not w._thread.is_alive(), "watcher thread must stop cleanly"
@@ -487,7 +487,7 @@ def test_hidden_dir_skip_tool_caches():
 
 
 def test_include_overrides_gitignore_exclude_beats_include():
-    """DIS3: OSE config include re-keeps a gitignored path (config authoritative over
+    """DIS3: RSE config include re-keeps a gitignored path (config authoritative over
     .gitignore); exclude still beats include when both name the same path."""
     import tempfile
     from pathlib import Path
@@ -515,7 +515,7 @@ def test_include_overrides_gitignore_exclude_beats_include():
 
 def test_respect_gitignore_false_disables_gitignore_only():
     """DIS4: respect_gitignore=False re-admits gitignored paths but hidden-dir/IGNORED_DIRS
-    default policy still applies (OSE config disabling gitignore is not a full opt-out)."""
+    default policy still applies (RSE config disabling gitignore is not a full opt-out)."""
     import tempfile
     from pathlib import Path
 

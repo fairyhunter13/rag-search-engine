@@ -20,16 +20,16 @@ def test_reconcile_initial_delay_wired():
 
     from rag_search.daemon import server as srv_mod
 
-    orig = os.environ.pop("OPENCODE_RECONCILE_INITIAL_DELAY_S", None)
+    orig = os.environ.pop("RSE_RECONCILE_INITIAL_DELAY_S", None)
     try:
-        os.environ["OPENCODE_RECONCILE_INITIAL_DELAY_S"] = "99"
+        os.environ["RSE_RECONCILE_INITIAL_DELAY_S"] = "99"
         importlib.reload(srv_mod)
         assert srv_mod._RECONCILE_INITIAL_DELAY_S == 99.0, (
             f"env knob must set _RECONCILE_INITIAL_DELAY_S; got {srv_mod._RECONCILE_INITIAL_DELAY_S}"
         )
     finally:
-        os.environ.pop("OPENCODE_RECONCILE_INITIAL_DELAY_S", None) if orig is None else \
-            os.environ.__setitem__("OPENCODE_RECONCILE_INITIAL_DELAY_S", orig)
+        os.environ.pop("RSE_RECONCILE_INITIAL_DELAY_S", None) if orig is None else \
+            os.environ.__setitem__("RSE_RECONCILE_INITIAL_DELAY_S", orig)
         importlib.reload(srv_mod)
 
     src = inspect.getsource(srv_mod._start_background)
