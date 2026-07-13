@@ -37,6 +37,7 @@ _LIST_PROJECTS_ALLOWLIST = {
     "test_p6_daemon.py",       # registry filter mechanics (test_tg2_unknown_key)
     "test_index_validity.py",  # registry precondition check (verifies sample paths are registered)
     "test_idle_stability.py",  # IS2: registry health check — must see all entries to find junk
+    "test_path_resolution.py",  # self-heal test: list_projects() triggers _migrate() re-keying
     "test_no_real_project_in_tests.py",  # this file
 }
 

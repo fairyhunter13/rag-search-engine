@@ -76,6 +76,9 @@ def handle_overview(project_path: str, what: str) -> str:
 
     if what not in _VALID:
         return json.dumps({"error": f"unknown what={what!r}", "valid": sorted(_VALID)})
+    if project_path:
+        from rag_search.core.registry import resolve_registered_root
+        project_path = resolve_registered_root(project_path)
     if what == "projects":
         return json.dumps({"projects": [
             {"path": p.path, "enabled": p.enabled, "indexed_at": p.indexed_at,

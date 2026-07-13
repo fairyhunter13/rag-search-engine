@@ -127,6 +127,9 @@ def run_graph(
     from rag_search.core.registry import list_projects
     from rag_search.daemon.federation import expand_federation, federated_map
 
+    if project_path:
+        from rag_search.core.registry import resolve_registered_root
+        project_path = resolve_registered_root(project_path)
     if not project_path:
         projects = [p for p in list_projects() if p.enabled]
         if not projects:
