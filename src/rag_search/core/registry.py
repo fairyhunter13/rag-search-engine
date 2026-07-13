@@ -30,8 +30,47 @@ def _save(data: dict) -> None:
 _TIER_SUFFIX = _re.compile(r"-tier\d+$")
 
 
+def canonicalize_path(path: str) -> str:
+    """Expand ~ and resolve symlinks/.. to a real absolute path. Identity on empty/OSError."""
+    if not path:
+        return path
+    try:
+        return str(Path(path).expanduser().resolve())
+    except OSError:
+        return path
+
+
+def resolve_registered_root(path: str) -> str:
+    """Map an arbitrary path to the registered project it belongs to.
+
+    Order matters: canonicalize first, then exact registry hit, then longest enclosing
+    enabled root, else the canonicalized string. Canonicalizing before the enclosing-root
+    match makes a symlinked federation member resolve to its OWN registry key (scoping
+    queries to itself) rather than lexically matching the enclosing root and pulling in
+    the whole federation.
+    """
+    if not path:
+        return path
+    canon = canonicalize_path(path)
+    enabled = [e.path for e in list_projects() if e.enabled]
+    if canon in enabled:
+        return canon
+    best: str | None = None
+    cp = Path(canon)
+    for root in enabled:
+        try:
+            cp.relative_to(root)
+            if best is None or len(root) > len(best):
+                best = root
+        except ValueError:
+            pass
+    return best if best is not None else canon
+
+
 def _migrate(data: dict) -> dict:
-    """Normalize legacy registry format: strip tier-suffix paths, ensure required fields."""
+    """Normalize legacy registry format: strip tier-suffix paths, ensure required fields,
+    re-key entries to their canonical real path (repairs registrations made from a raw
+    symlink/relative path before query-time resolution existed)."""
     changed = False
     migrated: dict = {}
     for path, meta in data.items():
@@ -41,6 +80,10 @@ def _migrate(data: dict) -> dict:
         if "enabled" not in meta:
             meta = dict(meta, enabled=True, indexed_at=None)
             changed = True
+        canon = canonicalize_path(clean)
+        if canon != clean and canon not in migrated and canon not in data and Path(canon).exists():
+            changed = True
+            clean = canon
         migrated[clean] = meta
     if changed:
         _save(migrated)

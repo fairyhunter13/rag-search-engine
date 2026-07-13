@@ -123,6 +123,9 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     from rag_search.kb.answer_cache import get as _cache_get
     from rag_search.kb.answer_cache import set as _cache_set
     from rag_search.query.search import search_federation as _search_fed
+    if project_path:
+        from rag_search.core.registry import resolve_registered_root
+        project_path = resolve_registered_root(project_path)
     _auto_selected = not project_path
     if not project_path:
         projects = [p for p in list_projects() if p.enabled]
