@@ -6,7 +6,9 @@ from starlette.responses import JSONResponse
 
 
 def _suggested_questions_sync(project: str) -> dict:
+    from rag_search.core.registry import resolve_registered_root
     from rag_search.daemon.federation import federated_map
+    project = resolve_registered_root(project)
     rows = [r for _, rs in federated_map(project, lambda gs: gs.conn.execute(
         "SELECT title FROM communities WHERE level>=1 ORDER BY member_count DESC LIMIT 5"
     ).fetchall()) for r in rs]

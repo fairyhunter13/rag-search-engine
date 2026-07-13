@@ -4,10 +4,6 @@
   "transport": "stdio",
   "command": "rag-search",
   "args": ["daemon", "bridge-stdio"],
-  "env": {
-    "_comment": "Optional but recommended: pin the workspace root so the bridge cannot access indexes outside the opened project.",
-    "RSE_BRIDGE_WORKSPACE_ROOT": "/path/to/your/project/root"
-  },
   "tools": {
     "search": {
       "description": "Find specific code, files, or functions with natural language",

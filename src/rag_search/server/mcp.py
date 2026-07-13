@@ -29,30 +29,16 @@ _MCP_TOOLS: list[_ToolInfo] = [
 
 
 def _resolve_roots(requested: list[str]) -> list[str]:
-    """Map each requested path to its enclosing registered project root (longest match wins)."""
-    from pathlib import Path
+    """Map each requested path to its registered project (self if it's a registered
+    member/root, else its longest enclosing registered root). Canonicalizes first so a
+    symlinked federation member scopes to itself rather than fanning out to its parent
+    root's whole federation."""
+    from rag_search.core.registry import resolve_registered_root
 
-    from rag_search.core.registry import list_projects
-
-    roots = [e.path for e in list_projects() if e.enabled]
     resolved: list[str] = []
     seen: set[str] = set()
     for req in requested:
-        if req in roots:
-            if req not in seen:
-                seen.add(req)
-                resolved.append(req)
-            continue
-        req_p = Path(req)
-        best: str | None = None
-        for root in roots:
-            try:
-                req_p.relative_to(root)
-                if best is None or len(root) > len(best):
-                    best = root
-            except ValueError:
-                pass
-        target = best if best is not None else req
+        target = resolve_registered_root(req)
         if target not in seen:
             seen.add(target)
             resolved.append(target)
@@ -148,7 +134,11 @@ async def index(project_path: str, enabled: bool = True) -> str:
     """Register (enabled=True) or remove (enabled=False) a project."""
     note_activity()
     from rag_search.core.config import ProjectEntry
-    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.core.registry import canonicalize_path, remove_project, upsert_project
+
+    # Canonicalize only (never enclosing-root-resolve): a write must key the exact
+    # target, matching what CLI `init` does, never mis-registering a child under a parent.
+    project_path = canonicalize_path(project_path)
 
     if not enabled:
         import shutil
