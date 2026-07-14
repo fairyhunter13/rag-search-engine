@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
 
       - uses: actions/setup-python@v5
         with:
@@ -45,6 +47,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
 
       - uses: actions/setup-python@v5
         with:
@@ -111,6 +115,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
 
       # The runner checks out a fresh clone (no .venv). Provision a persistent
       # venv from the CHECKED-OUT source (editable install -> tests the checkout,
@@ -154,6 +160,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
 
       # Same env-driven persistent venv as live-fast (see that job for rationale).
       - name: Provision GPU test venv
