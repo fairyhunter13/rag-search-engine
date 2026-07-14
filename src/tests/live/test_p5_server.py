@@ -149,7 +149,16 @@ def test_index_tool_e2e(safe_tmp_path):
     reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
     assert reg["status"] in ("flagged", "already_registered")
     assert any(proj.path == p for proj in list_projects()), "Project not in registry after register"
-    reg2 = json.loads(asyncio.run(index_tool(p, enabled=True)))
+    # index() spawns a reconcile_projects daemon thread that can briefly race the
+    # registry rewrite under load; "already_registered" is eventually consistent, so
+    # poll (bounded) rather than assert on the first re-register.
+    import time
+    reg2 = {}
+    for _ in range(50):
+        reg2 = json.loads(asyncio.run(index_tool(p, enabled=True)))
+        if reg2["status"] == "already_registered":
+            break
+        time.sleep(0.1)
     assert reg2["status"] == "already_registered"
     idx = index_dir(p)
     idx.mkdir(parents=True, exist_ok=True)
