@@ -131,6 +131,10 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
         projects = [p for p in list_projects() if p.enabled]
         if not projects:
             return "No indexed projects found."
+        if len(projects) > 1:
+            _cands = "\n".join(f"  - {p.path}" for p in projects[:12])
+            return ("project_path required — multiple projects are indexed and none could be "
+                    f"inferred. Pass one of:\n{_cands}")
         project_path = projects[0].path
     # Disclose the fallback so a caller who omitted project_path can't mistake this
     # answer for a different, intended project (no equivalent of search()'s projects_searched here).

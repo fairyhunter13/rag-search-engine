@@ -134,6 +134,12 @@ def run_graph(
         projects = [p for p in list_projects() if p.enabled]
         if not projects:
             return _json.dumps({"error": "No indexed projects found."})
+        if len(projects) > 1:
+            return _json.dumps({
+                "error": "project_path required — multiple projects indexed; none could be "
+                         "inferred. Pass project_path.",
+                "candidates": [p.path for p in projects[:12]],
+            })
         project_path = projects[0].path
 
     def _dump(payload: dict) -> str:

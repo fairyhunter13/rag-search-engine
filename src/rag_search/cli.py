@@ -1,6 +1,8 @@
 """CLI entry point: rag-search <command>."""
 from __future__ import annotations
 
+import os
+
 import typer
 
 from rag_search.cli_daemon import daemon_app
@@ -223,7 +225,8 @@ def ask(
 ) -> None:
     """Assemble context for a codebase question (LLM-free; GPU rerank only)."""
     from rag_search.query.ask import run_ask
-    typer.echo(run_ask(query, project or "", scope))
+    # The CLI (unlike the shared daemon) has a real cwd — default to the repo the user stands in.
+    typer.echo(run_ask(query, project or os.getcwd(), scope))
 
 
 @app.command()
@@ -235,7 +238,7 @@ def graph(
 ) -> None:
     """Analyze call graph for a symbol."""
     from rag_search.query.graph_handler import run_graph
-    typer.echo(run_graph(symbol, project or "", relation, to_symbol))
+    typer.echo(run_graph(symbol, project or os.getcwd(), relation, to_symbol))
 
 
 @app.command()
@@ -245,7 +248,7 @@ def overview(
 ) -> None:
     """Overview of a project (same as MCP overview tool)."""
     from rag_search.server._overview import handle_overview
-    typer.echo(handle_overview(project or "", what))
+    typer.echo(handle_overview(project or os.getcwd(), what))
 
 
 @app.command()

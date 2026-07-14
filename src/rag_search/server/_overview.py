@@ -71,6 +71,21 @@ _VALID = {
 }
 
 
+def _require_project(projects) -> tuple[str, str | None]:  # type: ignore[no-untyped-def]
+    """Resolve an omitted project for a project-scoped overview. One enabled project → use it;
+    several → fail loud with candidates rather than silently answering about projects[0]."""
+    ps = [p for p in projects if p.enabled]
+    if len(ps) == 1:
+        return ps[0].path, None
+    if not ps:
+        return "", None  # downstream reports 'no project available'
+    return "", json.dumps({
+        "error": "project_path required — multiple projects indexed; none could be inferred. "
+                 "Pass project_path.",
+        "candidates": [p.path for p in ps[:12]],
+    })
+
+
 def handle_overview(project_path: str, what: str) -> str:
     from rag_search.core.registry import list_projects
 
@@ -90,13 +105,15 @@ def handle_overview(project_path: str, what: str) -> str:
         return json.dumps(_snapshot())
     if what == "validate":
         if not project_path:
-            _ps = [p for p in list_projects() if p.enabled]
-            project_path = _ps[0].path if _ps else ""
+            project_path, _verr = _require_project(list_projects())
+            if _verr:
+                return _verr
         from rag_search.index.validate import validate_index
         return json.dumps({**validate_index(project_path), "resolved_project": project_path})
     if not project_path:
-        ps = [p for p in list_projects() if p.enabled]
-        project_path = ps[0].path if ps else ""
+        project_path, _err = _require_project(list_projects())
+        if _err:
+            return _err
     if what == "patterns" and project_path:
         from pathlib import Path
 
