@@ -17,6 +17,40 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: LLM-heavy (>30s)")
 
 
+_session_exitstatus: int | None = None
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # Stash pytest's real exit code; the hard-exit itself happens in
+    # pytest_unconfigure (below) so the terminal summary — printed by the
+    # terminalreporter's own sessionfinish hookwrapper, i.e. AFTER this hook — still
+    # lands before we skip finalization.
+    global _session_exitstatus
+    _session_exitstatus = int(exitstatus)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config):
+    """Dodge the onnxruntime/CUDA teardown abort by skipping CPython finalization.
+
+    The CUDA EP frees device memory from C++ static destructors that run during
+    interpreter shutdown, after the CUDA runtime is unloaded (cudaErrorCudartUnloading)
+    -> abort() (exit 134), AFTER a clean pass summary. os._exit skips all finalization
+    so that teardown never runs. unconfigure runs after sessionfinish (summary printed)
+    and after session-scoped fixture teardown (registry cleanup, pause_sweeps resume),
+    so nothing is skipped; the stashed status is pytest's real code, so a genuine
+    failure still fails CI. Gated on onnxruntime actually being imported so
+    pure-CPU/non-GPU runs are unaffected.
+    """
+    import sys
+    if _session_exitstatus is None or "onnxruntime" not in sys.modules:
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    import os
+    os._exit(_session_exitstatus)
+
+
 @pytest.fixture(scope="session")
 def live_client():
     """Thin HTTP client targeting the live daemon at :8765.

@@ -56,6 +56,24 @@ def _sd_notify(msg: str) -> None:
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s, contextlib.suppress(OSError):
         s.sendto(msg.encode(), sock)
 
+
+def _shutdown_exit(code: int) -> None:
+    """Free CUDA sessions, then os._exit(code) — skip finalization to dodge the
+    onnxruntime teardown abort so `daemon stop` (restart=false) delivers exit 0
+    exactly, never a spurious 134 that would trip systemd Restart=on-failure."""
+    import gc
+    try:
+        import rag_search.server.mcp as mcp_mod
+        mcp_mod._embedder = None
+        import rag_search.query.search as search_mod
+        search_mod._reranker = None
+        import rag_search.embed.embedder as _emb_mod
+        _emb_mod._default = None
+        gc.collect()
+    except Exception:
+        pass
+    os._exit(code)
+
 def serve(host: str | None = None, port: int | None = None) -> None:
     """Run uvicorn at host:port; also start scheduler and watcher."""
     import sys
@@ -83,8 +101,10 @@ def serve(host: str | None = None, port: int | None = None) -> None:
         uvicorn.run(app, host=h, port=p)
     finally:
         _sd_notify("STOPPING=1")
-    if _REQUESTED_EXIT_CODE:
-        sys.exit(_REQUESTED_EXIT_CODE)  # non-zero exit -> systemd Restart=on-failure restarts (reload)
+    # os._exit (not sys.exit) so the CUDA-EP static dtors never run at CPython
+    # finalization: they abort (exit 134) after the runtime unloads, which would
+    # turn a requested exit 0 (daemon stop) into a spurious systemd restart.
+    _shutdown_exit(_REQUESTED_EXIT_CODE)  # reload -> 3 (systemd restarts); stop -> 0 (stays down)
 
 
 def start_watcher():
