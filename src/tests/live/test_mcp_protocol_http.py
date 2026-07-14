@@ -152,8 +152,9 @@ def test_http_overview_unknown_what_returns_error_and_valid():
     assert "structure" in data["valid"], f"G4: 'structure' missing from valid: {data['valid']}"
 
 
-def test_http_graph_no_project_path_resolves():
-    """G5 e2e: /mcp graph{symbol} with no project_path resolves to first project."""
+def test_http_graph_no_project_path_no_roots_fails_loud():
+    """Empty project_path from a client advertising no roots must FAIL LOUD with candidates —
+    never silently answer about the arbitrary first registry project (payment-gateway bug)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 11, "method": "tools/call",
@@ -161,15 +162,16 @@ def test_http_graph_no_project_path_resolves():
     }, headers=h, timeout=15)
     assert r.status_code == 200
     data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
-    assert "matches" in data, f"G5: expected matches key (resolved to first project), got: {data}"
+    assert "project_path required" in data.get("error", ""), f"expected fail-loud, got: {data}"
+    assert isinstance(data.get("candidates"), list) and data["candidates"], data
 
 
-def test_http_overview_structure_has_files_with_symbols():
+def test_http_overview_structure_has_files_with_symbols(sample_proj_path):
     """G3 e2e: /mcp overview{what:'structure'} exposes files_with_symbols (not file_count)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 12, "method": "tools/call",
-        "params": {"name": "overview", "arguments": {"what": "structure"}},
+        "params": {"name": "overview", "arguments": {"what": "structure", "project_path": sample_proj_path}},
     }, headers=h, timeout=10)
     assert r.status_code == 200
     data = json.loads(_sse_json(r)["result"]["content"][0]["text"])
@@ -177,12 +179,12 @@ def test_http_overview_structure_has_files_with_symbols():
     assert "file_count" not in data, f"G3: old file_count key must be gone, got: {list(data)}"
 
 
-def test_http_overview_status_keeps_file_count():
+def test_http_overview_status_keeps_file_count(sample_proj_path):
     """G3 e2e: /mcp overview{what:'status'} keeps file_count (registry value, canonical)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 13, "method": "tools/call",
-        "params": {"name": "overview", "arguments": {"what": "status"}},
+        "params": {"name": "overview", "arguments": {"what": "status", "project_path": sample_proj_path}},
     }, headers=h, timeout=10)
     assert r.status_code == 200
     data = json.loads(_sse_json(r)["result"]["content"][0]["text"])

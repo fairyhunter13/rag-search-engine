@@ -76,7 +76,7 @@ non-clobbering (no attempt to "merge" duplicate entries).
 ## §3 — Disproven hypothesis / unrelated defect found in the same sweep
 
 - **Env-var rebrand drift — disproven.** `config.py` and the rest of `src/` use `RSE_*`
-  consistently (75 occurrences); zero leftover `OPENCODE_*` references.
+  consistently (75 occurrences); zero leftover legacy `OPENCODE`-prefixed env-var references.
 - **`RSE_BRIDGE_WORKSPACE_ROOT` — confirmed phantom security feature, removed.** Both
   `mcp-config/claude-code.json` and `mcp-config/hermes.json` advertised this env var as
   confinement ("pin the workspace root so the bridge cannot access indexes outside the opened

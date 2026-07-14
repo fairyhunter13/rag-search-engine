@@ -115,6 +115,41 @@ def test_s3_index_tool_canonicalizes_symlink(safe_tmp_path):
 
 
 @pytest.mark.slow
+def test_infer_default_project(safe_tmp_path):
+    """infer_default_project: a root that is/encloses exactly one registered project -> that
+    project; an unregistered root -> (None, candidates); two distinct registered roots ->
+    (None, ...). This is the fix for the empty-project_path -> arbitrary projects[0] bug."""
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import infer_default_project, upsert_project
+
+    root, member, sub, _marker = _federate(safe_tmp_path)
+    _clean([root, member])
+    try:
+        upsert_project(ProjectEntry(path=str(root), enabled=True))
+        upsert_project(ProjectEntry(path=str(member), enabled=True))
+        assert infer_default_project([str(root)])[0] == str(root)
+        assert infer_default_project([str(sub)])[0] == str(member)            # subdir -> member
+        assert infer_default_project([str(root / "link")])[0] == str(member)  # symlink -> member
+        chosen, cands = infer_default_project([str(safe_tmp_path / "nope")])  # unregistered
+        assert chosen is None and str(root) in cands and str(member) in cands
+        assert infer_default_project([str(root), str(member)])[0] is None     # ambiguous
+    finally:
+        _clean([root, member])
+
+
+def test_migrate_prunes_nonexistent_entry(safe_tmp_path):
+    """_migrate self-heals: a registered path that no longer exists on disk is dropped on load."""
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import list_projects, upsert_project
+
+    ghost = safe_tmp_path / "ghost-repo"
+    ghost.mkdir()
+    upsert_project(ProjectEntry(path=str(ghost), enabled=True))
+    assert any(p.path == str(ghost) for p in list_projects())
+    shutil.rmtree(ghost)
+    assert not any(p.path == str(ghost) for p in list_projects())
+
+
 def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_path):
     """S1: overview/ask/graph on a symlinked member, a subdir inside it, or a trailing-slash
     path must all resolve to the member's own KB — never 'no project available'/'not indexed'."""

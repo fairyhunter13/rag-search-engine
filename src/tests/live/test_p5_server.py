@@ -360,54 +360,46 @@ def test_overview_unknown_what_returns_error():
     assert "structure" in data["valid"], f"'structure' missing from valid list: {data['valid']}"
 
 
-def test_graph_defaults_project_path_to_first_project(sample_workspace):
-    """G5: graph(symbol) with no project_path resolves to the first enabled registry project.
-
-    Mechanics test — proves the resolution rule (first-enabled-project fallback) rather than
-    asserting specific content from a real device project. The sample_workspace fixture ensures
-    at least one indexed project is registered (promo-svc), so the resolution always succeeds.
+def test_graph_no_project_path_no_roots_fails_loud(sample_workspace):
+    """G5 (updated 2026-07-14): graph(symbol) with no project_path and no client roots must FAIL
+    LOUD with candidates — never silently resolve to the arbitrary first enabled project (that
+    silent fallback mis-answered about unrelated projects, e.g. payment-gateway). Correct
+    cwd-aware auto-resolution now comes from MCP client roots — see test_roots_default_project.py.
     """
     from rag_search.core.registry import list_projects
     from rag_search.server.mcp import graph as graph_tool
 
-    first = next((p.path for p in list_projects() if p.enabled), None)
-    assert first, "At least one enabled project must be registered (sample_workspace provides this)"
-    # Verify the resolution rule fires: no project_path → must resolve, not error "No indexed project"
-    result = asyncio.run(graph_tool("own_fn"))
-    data = json.loads(result)
-    assert "No indexed project" not in data.get("error", ""), (
-        f"G5: graph with no project_path must resolve to first enabled project, got: {data}"
+    assert len([p for p in list_projects() if p.enabled]) > 1, (
+        "test presumes multiple enabled projects (sample_workspace + live registry)"
     )
-    assert "matches" in data, f"G5: expected matches key in resolved graph, got: {data}"
-    assert data.get("resolved_project") == first, (
-        f"G5: graph() must disclose which project it fell back to, got: {data}"
+    data = json.loads(asyncio.run(graph_tool("own_fn")))  # ctx=None → no roots
+    assert "project_path required" in data.get("error", ""), (
+        f"G5: expected fail-loud on empty project_path, got: {data}"
     )
+    assert isinstance(data.get("candidates"), list) and data["candidates"], data
 
 
-def test_ask_and_overview_disclose_auto_selected_project(sample_workspace):
-    """G5b: ask()/overview() must disclose which project an empty project_path fell back to.
-
-    Regression guard for the 2026-07-09 audit transparency gap: search() already reports
-    projects_searched even for its (safe) all-projects fallback, but ask/graph/overview's
-    single-project first-enabled-project fallback used to return no signal of which project
-    actually answered — a caller with no project_path in scope could silently receive an
-    arbitrary project's data without any way to tell that project wasn't the one they meant.
+def test_ask_and_overview_no_project_path_fail_loud(sample_workspace):
+    """G5b (updated 2026-07-14): ask()/overview() with an empty project_path and no client roots
+    must fail loud (listing candidates), not silently answer about an arbitrary first-enabled
+    project. This closes the transparency gap the old disclosure-prefix only papered over: a
+    silent projects[0] pick mis-answered about unrelated projects (e.g. payment-gateway). Correct
+    cwd-aware auto-resolution now comes from MCP client roots — see test_roots_default_project.py.
     """
     from rag_search.core.registry import list_projects
     from rag_search.server.mcp import ask as ask_tool
     from rag_search.server.mcp import overview as overview_tool
 
-    first = next((p.path for p in list_projects() if p.enabled), None)
-    assert first, "At least one enabled project must be registered (sample_workspace provides this)"
-
-    overview_data = json.loads(asyncio.run(overview_tool("", "structure")))
-    assert overview_data.get("resolved_project") == first, (
-        f"overview() must disclose resolved_project={first!r}, got: {overview_data}"
+    assert len([p for p in list_projects() if p.enabled]) > 1, (
+        "test presumes multiple enabled projects (sample_workspace + live registry)"
     )
+    overview_data = json.loads(asyncio.run(overview_tool("", "structure")))  # ctx=None → no roots
+    assert "project_path required" in overview_data.get("error", ""), overview_data
+    assert overview_data.get("candidates"), overview_data
 
     ask_result = asyncio.run(ask_tool("what does this do?", ""))
-    assert first in ask_result, (
-        f"ask() must disclose which project ({first!r}) it fell back to, got: {ask_result[:160]!r}"
+    assert "project_path required" in ask_result, (
+        f"ask() must fail loud on empty project_path, got: {ask_result[:200]!r}"
     )
 
 

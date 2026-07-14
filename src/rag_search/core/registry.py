@@ -67,10 +67,34 @@ def resolve_registered_root(path: str) -> str:
     return best if best is not None else canon
 
 
+def infer_default_project(root_paths: list[str]) -> tuple[str | None, list[str]]:
+    """Infer the project a caller is in from its advertised root paths (MCP roots / cwd).
+
+    Returns (chosen_project | None, enabled_candidates). `chosen` is set only when the roots
+    imply exactly ONE enabled registered project (or only one project is enabled overall);
+    otherwise None, so the caller fails loud / disambiguates rather than silently answering
+    about an arbitrary projects[0]. This is what lets an unscoped tool call target the project
+    the client is actually in instead of the first registry entry."""
+    enabled = [e.path for e in list_projects() if e.enabled]
+    cands: list[str] = []
+    for rp in root_paths:
+        if not rp:
+            continue
+        r = resolve_registered_root(rp)
+        if r in enabled and r not in cands:
+            cands.append(r)
+    if len(cands) == 1:
+        return cands[0], enabled
+    if not cands and len(enabled) == 1:
+        return enabled[0], enabled
+    return None, enabled
+
+
 def _migrate(data: dict) -> dict:
     """Normalize legacy registry format: strip tier-suffix paths, ensure required fields,
     re-key entries to their canonical real path (repairs registrations made from a raw
-    symlink/relative path before query-time resolution existed)."""
+    symlink/relative path before query-time resolution existed), and prune entries whose
+    path no longer exists on disk (self-heal dead registrations)."""
     changed = False
     migrated: dict = {}
     for path, meta in data.items():
@@ -84,6 +108,12 @@ def _migrate(data: dict) -> dict:
         if canon != clean and canon not in migrated and canon not in data and Path(canon).exists():
             changed = True
             clean = canon
+        if not Path(clean).exists():
+            # Registered path is gone (repo deleted/moved) — drop it instead of surfacing a
+            # dead project that can never be searched. Only top-level keys are pruned here;
+            # `federation` member lists are untouched.
+            changed = True
+            continue
         migrated[clean] = meta
     if changed:
         _save(migrated)
