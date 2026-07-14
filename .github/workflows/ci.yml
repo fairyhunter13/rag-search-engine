@@ -97,11 +97,13 @@ jobs:
   # KB health — run on every push to main.
   # Completes in <5 minutes on GPU runner.
   #
-  # NOTE: requires a self-hosted GitHub Actions runner with:
-  #   - NVIDIA CUDA GPU (CPU fallback is forbidden by design)
-  #   - a running rag-search daemon at 127.0.0.1:8765
-  # The test venv is auto-provisioned from the GPU lock (see the step below).
-  # Forks are skipped by the `if` guard (github.repository / github.actor).
+  # Runs IN the maintainer's registered + indexed working tree ($RSE_DEV_REPO,
+  # set in the runner's .env — device path kept out of this public file). The
+  # suite assumes "this repo" is a live, indexed project (e.g.
+  # test_pipeline_all_stages_rse_repo) and uses that tree's .venv as the canonical
+  # GPU env, so there is deliberately NO fresh checkout here.
+  # NOTE: requires a self-hosted runner with a CUDA GPU (no CPU fallback) and a
+  # running rag-search daemon at 127.0.0.1:8765. Forks are skipped by the `if`.
   # Run the live suite locally instead: .venv/bin/pytest -m "live and not slow"
   # ──────────────────────────────────────────────
   live-fast:
@@ -114,32 +116,17 @@ jobs:
     if: github.actor == 'fairyhunter13' && github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
-
-      # The runner checks out a fresh clone (no .venv). Provision a persistent
-      # venv from the CHECKED-OUT source (editable install -> tests the checkout,
-      # not any dev tree). Path is env-driven ($HOME) — device-neutral, and lives
-      # outside the workspace so checkout's git-clean never wipes it. First run
-      # installs GPU deps + caches; later runs are fast (pip sees them satisfied).
-      - name: Provision GPU test venv
-        run: |
-          VENV="$HOME/.cache/rse-ci-venv"
-          test -x "$VENV/bin/python" || python3 -m venv "$VENV"
-          "$VENV/bin/pip" install -q -r requirements-lock-py312-linux-gpu.txt
-          "$VENV/bin/pip" install -q -e src --no-deps
-          echo "RSE_CI_VENV=$VENV" >> "$GITHUB_ENV"
-
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
       - name: Run fast live tests (all non-slow)
-        # Flags mirror the documented CLAUDE.md fast smoke command. No --timeout:
-        # pytest-timeout is not a project dependency; the job-level timeout-minutes
-        # above bounds runaway/hung runs instead.
+        # In the indexed dev tree ($RSE_DEV_REPO) with its .venv. Flags mirror the
+        # documented CLAUDE.md fast smoke command; job-level timeout-minutes bounds
+        # runaway runs (pytest-timeout is not a project dep).
         run: |
-          "$RSE_CI_VENV/bin/pytest" \
+          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
+          cd "$RSE_DEV_REPO"
+          .venv/bin/pytest \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live and not slow" \
@@ -159,26 +146,15 @@ jobs:
     if: github.actor == 'fairyhunter13' && (github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]')))
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
-
-      # Same env-driven persistent venv as live-fast (see that job for rationale).
-      - name: Provision GPU test venv
-        run: |
-          VENV="$HOME/.cache/rse-ci-venv"
-          test -x "$VENV/bin/python" || python3 -m venv "$VENV"
-          "$VENV/bin/pip" install -q -r requirements-lock-py312-linux-gpu.txt
-          "$VENV/bin/pip" install -q -e src --no-deps
-          echo "RSE_CI_VENV=$VENV" >> "$GITHUB_ENV"
-
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
       - name: Run full live suite (all tests including slow)
-        # No --timeout (see live-fast); job-level timeout-minutes bounds the run.
+        # Same indexed-dev-tree model as live-fast; job-level timeout-minutes bounds the run.
         run: |
-          "$RSE_CI_VENV/bin/pytest" \
+          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
+          cd "$RSE_DEV_REPO"
+          .venv/bin/pytest \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live" \
@@ -186,5 +162,7 @@ jobs:
 
       - name: Run browser tests
         run: |
-          "$RSE_CI_VENV/bin/pytest" src/tests/live/test_browser.py \
-            --browser chromium --tb=short --timeout=300
+          : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
+          cd "$RSE_DEV_REPO"
+          .venv/bin/pytest src/tests/live/test_browser.py \
+            --browser chromium --tb=short
