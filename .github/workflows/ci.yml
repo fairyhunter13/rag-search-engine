@@ -83,7 +83,9 @@ jobs:
     name: Live Tests Fast (GPU runner)
     runs-on: self-hosted
     needs: quality
-    if: github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
+    # Self-hosted runner = the maintainer's device. Hard-gate to the owner account:
+    # this job may only ever execute when fairyhunter13 is the triggering actor.
+    if: github.actor == 'fairyhunter13' && github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
 
     steps:
       - uses: actions/checkout@v4
@@ -108,7 +110,8 @@ jobs:
     name: Live Tests Slow (GPU runner, scheduled)
     runs-on: self-hosted
     needs: quality
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]'))
+    # Same owner-account hard-gate as live-fast (self-hosted = maintainer's device).
+    if: github.actor == 'fairyhunter13' && (github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]')))
 
     steps:
       - uses: actions/checkout@v4
