@@ -126,22 +126,11 @@ jobs:
         run: |
           : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
           cd "$RSE_DEV_REPO"
-          log="${RUNNER_TEMP:-/tmp}/live-fast.log"
           .venv/bin/pytest \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live and not slow" \
-            -x --strict-markers --strict-config -ra -q --tb=short 2>&1 | tee "$log"
-          rc=${PIPESTATUS[0]}
-          if [ "$rc" -eq 0 ]; then exit 0; fi
-          # onnxruntime/CUDA can SIGABRT (exit 134) during interpreter teardown, AFTER
-          # pytest prints its clean summary. Tolerate 134 ONLY when the run reported a
-          # pass with no failures/errors — never mask a real failure or a mid-run abort.
-          if [ "$rc" -eq 134 ] && grep -qE '[0-9]+ passed' "$log" && ! grep -qE '[0-9]+ (failed|error)' "$log"; then
-            echo "NOTE: tests passed; process SIGABRT at teardown (exit 134) — treated as success"
-            exit 0
-          fi
-          exit "$rc"
+            -x --strict-markers --strict-config -ra -q --tb=short
 
   # ──────────────────────────────────────────────
   # Slow live tests: full E2E, chat quality, browser
@@ -165,20 +154,11 @@ jobs:
         run: |
           : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
           cd "$RSE_DEV_REPO"
-          log="${RUNNER_TEMP:-/tmp}/live-slow.log"
           .venv/bin/pytest \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live" \
-            -x --strict-markers --strict-config -ra -q --tb=short 2>&1 | tee "$log"
-          rc=${PIPESTATUS[0]}
-          if [ "$rc" -eq 0 ]; then exit 0; fi
-          # Tolerate teardown-only SIGABRT (see live-fast) — never a real failure/mid-run abort.
-          if [ "$rc" -eq 134 ] && grep -qE '[0-9]+ passed' "$log" && ! grep -qE '[0-9]+ (failed|error)' "$log"; then
-            echo "NOTE: tests passed; process SIGABRT at teardown (exit 134) — treated as success"
-            exit 0
-          fi
-          exit "$rc"
+            -x --strict-markers --strict-config -ra -q --tb=short
 
       - name: Run browser tests
         run: |

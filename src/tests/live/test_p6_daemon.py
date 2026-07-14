@@ -418,6 +418,33 @@ def test_p22_idle_unload_clears_embed_singleton():
     assert "rag_search.embed.embedder" in src, "_idle_unload must import embed.embedder to clear its singleton"
 
 
+def test_conftest_hard_exits_at_teardown():
+    """The onnxruntime/CUDA teardown-abort dodge: live conftest must os._exit in
+    pytest_unconfigure (gated on onnxruntime) so the CI 134-tolerance can stay removed.
+    The exit lives in unconfigure, not sessionfinish, so the terminal summary prints first."""
+    import inspect
+
+    from tests.live import conftest
+    src = inspect.getsource(conftest.pytest_unconfigure)
+    assert "os._exit" in src, "conftest pytest_unconfigure must os._exit to skip CUDA-EP teardown abort"
+    assert "onnxruntime" in src, "hard-exit must be gated on onnxruntime being loaded"
+
+
+def test_daemon_shutdown_exit_frees_models_and_hard_exits():
+    """serve() must exit via _shutdown_exit (frees CUDA sessions + os._exit) so a
+    requested exit 0 (daemon stop) is never turned into 134 by the teardown abort."""
+    import inspect
+
+    from rag_search.daemon import server
+    src = inspect.getsource(server._shutdown_exit)
+    assert "os._exit" in src and "_emb_mod._default = None" in src, (
+        "_shutdown_exit must free the embed singleton then os._exit(code)"
+    )
+    assert "_shutdown_exit" in inspect.getsource(server.serve), (
+        "serve() must route its exit through _shutdown_exit, not a finalizing sys.exit"
+    )
+
+
 def test_p22_watcher_ignores_cache_dirs(tmp_path):
     """P22.2: inotify must NOT fire on writes under IGNORED_DIRS (__pycache__, .ruff_cache, etc.)."""
     import time
