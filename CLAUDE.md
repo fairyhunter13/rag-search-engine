@@ -44,7 +44,12 @@ python -m compileall -q src/rag_search
 - `RSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
 - All LLM lanes (Tier-2 edge linkage, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
 
-**CI**: `.github/workflows/ci.yml` — runs on every push (quality → tests → contracts → property tests)
+**CI**: `.github/workflows/ci.yml` — **owner-triggered only** (quality → tests → contracts → property
+tests). Because this is a public repo whose GPU jobs run on a **self-hosted** runner (this device),
+there is deliberately **no `pull_request` trigger** — a fork PR must never reach the runner. Triggers
+are `push` to main (owner), manual `workflow_dispatch` (owner), and the nightly `schedule` (owner's
+own cron). Fork-PR workflow approval is set to `all_external_contributors`, so nothing external runs
+without explicit owner approval.
 
 ## GPU-only enforcement
 
@@ -183,6 +188,9 @@ were audited and found already fork-safe by design (the submodule repo is public
 specifically so forks lacking a self-hosted GPU runner skip the job instead of queuing indefinitely —
 see the comment above that job in `.github/workflows/ci.yml`) — **no change needed**, recorded here so
 a future pass doesn't re-flag them. See `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`.
+Self-hosted-runner hardening (2026-07-14): the `pull_request` trigger was removed and the fork-PR
+workflow-approval policy tightened to `all_external_contributors`, so a fork PR can no longer trigger
+CI on the self-hosted runner — the `github.repository`/ref `if` guards now stand as defense-in-depth.
 
 ## Project quick reference
 
