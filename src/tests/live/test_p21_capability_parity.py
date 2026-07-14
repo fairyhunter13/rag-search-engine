@@ -49,10 +49,13 @@ def _http_session() -> tuple[dict, str]:
     return h, sid
 
 
-def _mcp_overview(h: dict, what: str, timeout: int = 60) -> dict:
+def _mcp_overview(h: dict, what: str, project_path: str = "", timeout: int = 60) -> dict:
+    args: dict = {"what": what}
+    if project_path:
+        args["project_path"] = project_path
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 99, "method": "tools/call",
-        "params": {"name": "overview", "arguments": {"what": what}},
+        "params": {"name": "overview", "arguments": args},
     }, headers=h, timeout=timeout)
     assert r.status_code == 200, f"HTTP {r.status_code} for overview({what})"
     return json.loads(_sse_json(r)["result"]["content"][0]["text"])
@@ -105,9 +108,18 @@ def test_graph_docstring_matches_supported_relations():
     "process_flows", "suggested_questions", "service_mesh",
 ]))
 def test_overview_what_round_trip(what):
-    """B3: overview({what}) over real /mcp transport returns non-error JSON."""
+    """B3: overview({what}) over real /mcp transport returns non-error JSON.
+
+    Project-scoped `what`s now require an explicit project_path (an omitted one with no client
+    roots fails loud by design), so scope them to the first enabled project; 'projects'/'metrics'
+    are global and need none."""
     h, _ = _http_session()
-    data = _mcp_overview(h, what)
+    proj = ""
+    if what not in ("projects", "metrics"):
+        enabled = [p["path"] for p in _mcp_overview(h, "projects").get("projects", []) if p.get("enabled")]
+        assert enabled, "no enabled project to scope overview round-trip"
+        proj = enabled[0]
+    data = _mcp_overview(h, what, project_path=proj)
     assert "error" not in data or data.get("error") is None, (
         f"overview({what}) returned error: {data}"
     )

@@ -192,7 +192,11 @@ def test_overview_detect_services_uses_bpre_ast() -> None:
     src = _source("rag_search.server._overview")
     assert "bpre_ast" in src, "_detect_services must use kb.bpre_ast"
     assert "re.finditer" not in src, "_detect_services must not use re.finditer"
-    assert "import re" not in src, "_overview.py must not import re"
+    # Match the actual `re` module import, not the substring — otherwise legitimate lines like
+    # `from ...registry import resolve_registered_root` ("import re"solve) false-positive.
+    assert not any(ln.strip() in ("import re", "import re as re") for ln in src.splitlines()), (
+        "_overview.py must not import re"
+    )
 
 
 def test_patterns_no_static_framework_map() -> None:
