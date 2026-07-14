@@ -90,12 +90,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The runner checks out a fresh clone (no .venv). Provision a persistent
+      # venv from the CHECKED-OUT source (editable install -> tests the checkout,
+      # not any dev tree). Path is env-driven ($HOME) — device-neutral, and lives
+      # outside the workspace so checkout's git-clean never wipes it. First run
+      # installs GPU deps + caches; later runs are fast (pip sees them satisfied).
+      - name: Provision GPU test venv
+        run: |
+          VENV="$HOME/.cache/rse-ci-venv"
+          test -x "$VENV/bin/python" || python3 -m venv "$VENV"
+          "$VENV/bin/pip" install -e 'src[dev]' --quiet
+          echo "RSE_CI_VENV=$VENV" >> "$GITHUB_ENV"
+
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
       - name: Run fast live tests (all non-slow)
         run: |
-          .venv/bin/pytest \
+          "$RSE_CI_VENV/bin/pytest" \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live and not slow" \
@@ -116,12 +128,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same env-driven persistent venv as live-fast (see that job for rationale).
+      - name: Provision GPU test venv
+        run: |
+          VENV="$HOME/.cache/rse-ci-venv"
+          test -x "$VENV/bin/python" || python3 -m venv "$VENV"
+          "$VENV/bin/pip" install -e 'src[dev]' --quiet
+          echo "RSE_CI_VENV=$VENV" >> "$GITHUB_ENV"
+
       - name: Verify daemon is running
         run: curl -sf http://localhost:8765/api/projects > /dev/null
 
       - name: Run full live suite (all tests including slow)
         run: |
-          .venv/bin/pytest \
+          "$RSE_CI_VENV/bin/pytest" \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live" \
@@ -129,5 +149,5 @@ jobs:
 
       - name: Run browser tests
         run: |
-          .venv/bin/pytest src/tests/live/test_browser.py \
+          "$RSE_CI_VENV/bin/pytest" src/tests/live/test_browser.py \
             --browser chromium --tb=short --timeout=300
