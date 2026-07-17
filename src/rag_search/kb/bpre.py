@@ -475,6 +475,18 @@ def _resolve_http_edges(
     con.commit()
 
 
+# Reachability is only used to decide which cross-service call sites are reachable from a
+# handler (_call_in_reachable). A handler that already reaches this many symbols is, for that
+# include/exclude decision, indistinguishable from "reaches everything" — which is exactly the
+# empty-reachable fallback (_call_in_reachable returns True). So once the set passes this cap we
+# bail to that fallback instead of running an 8-hop BFS whose IN-list scans blow up on large,
+# dense member graphs (e.g. a 189-member federation with multi-million-edge graphs pegging a
+# core for minutes on the watcher thread). _IN_CHUNK keeps each IN-list well under SQLite's
+# variable limit.
+_REACH_CAP = 4000
+_IN_CHUNK = 900
+
+
 def _handler_reachable_set(
     member_path: str, ep_file: str, ep_line: int,
 ) -> tuple[int | None, set[int]]:
@@ -501,10 +513,23 @@ def _handler_reachable_set(
             for _ in range(8):
                 if not frontier:
                     break
-                ph = ",".join("?" * len(frontier))
-                nexts = [r[0] for r in con.execute(
-                    f"SELECT callee_sid FROM edges WHERE caller_sid IN ({ph})", frontier,
-                ).fetchall() if r[0] not in reachable]
+                nexts: list[int] = []
+                nexts_seen: set[int] = set()
+                for i in range(0, len(frontier), _IN_CHUNK):
+                    chunk = frontier[i:i + _IN_CHUNK]
+                    ph = ",".join("?" * len(chunk))
+                    # Iterate the cursor lazily (not fetchall) so we can bail the moment the
+                    # reachable set passes the cap, without materializing millions of rows.
+                    for (cs,) in con.execute(
+                        f"SELECT callee_sid FROM edges WHERE caller_sid IN ({ph})", chunk,
+                    ):
+                        if cs in reachable or cs in nexts_seen:
+                            continue
+                        nexts.append(cs)
+                        nexts_seen.add(cs)
+                        if len(reachable) + len(nexts) > _REACH_CAP:
+                            # Too large to trace precisely → include-all fallback.
+                            return handler_sid, set()
                 reachable.update(nexts)
                 frontier = nexts
             return handler_sid, reachable
