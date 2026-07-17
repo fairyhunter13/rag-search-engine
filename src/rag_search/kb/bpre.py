@@ -227,8 +227,11 @@ def _bpre_code_sig(member_path: str) -> str:
     cached = _bpre_code_sig_cache.get(member_path)
     if cached is not None and cached[0] == coarse:
         return cached[1]
+    from rag_search.index.discover import is_generated_path
     parts: list[str] = []
     for f in _source_files(member_path):
+        if is_generated_path(f.name):
+            continue  # derived codegen output — regen must not flip the BPRE reuse stamp
         try:
             rel = str(f.relative_to(root))
             mtime = int(f.stat().st_mtime)
