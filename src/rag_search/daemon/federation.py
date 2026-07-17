@@ -16,7 +16,13 @@ def _looks_like_repo(target: Path) -> bool:
 
 
 def discover_members(root_path: str) -> list[str]:
-    """Return resolved paths of nested symlinked dirs (any depth) that look like repos."""
+    """Return resolved paths of nested symlinked dirs (any depth) that look like repos.
+
+    Deduped (order-preserved): the same repo is often symlinked from several locations
+    under the root, which would otherwise store the member N times in root.federation and
+    make every consumer that walks it (index_members, sweeps burst-enrich, _bpre_source_sig
+    via expand_federation) do N× the work. expand_federation also dedups, as defense.
+    """
     from rag_search.core.config import is_federation_excluded
     root = Path(root_path).resolve()
     members: list[str] = []
@@ -38,7 +44,7 @@ def discover_members(root_path: str) -> list[str]:
                 dirs.remove(d)
     except OSError:
         pass
-    return members
+    return list(dict.fromkeys(members))  # dedup, order-preserved
 
 
 def index_members(root_path: str) -> int:
