@@ -73,6 +73,26 @@ def test_gen2_code_source_fingerprint_ignores_generated_churn(safe_tmp_path):
     assert sig() != base, "editing real source MUST change the code-drift sig"
 
 
+def test_gen4_is_ignored_path_drops_generated_files(safe_tmp_path):
+    """GEN4: generated files are dropped by the shared resolver (watcher + indexer + _index_files),
+    so regenerating them never triggers a re-embed; hand-written source is kept."""
+    from rag_search.index.discover import is_ignored_path
+
+    root = safe_tmp_path
+    (root / "wiki" / "src" / "lib").mkdir(parents=True)
+    (root / "src").mkdir()
+    gen = root / "wiki" / "src" / "lib" / "diagram.generated.js"
+    gen.write_text("export const d = 1;\n")
+    real = root / "src" / "main.py"
+    real.write_text("def x():\n    return 1\n")
+    svelte = root / "wiki" / "src" / "lib" / "Diagram.svelte"
+    svelte.write_text("<script>export let d;</script>\n")
+
+    assert is_ignored_path(gen, root), "generated file must be dropped (no watch/index/embed)"
+    assert not is_ignored_path(real, root), "real source must be kept"
+    assert not is_ignored_path(svelte, root), "hand-written renderer must be kept"
+
+
 def test_gen3_bpre_code_sig_ignores_generated_churn(safe_tmp_path):
     """GEN3: regenerating a *.generated.js does not flip BPRE's per-member reuse stamp."""
     from rag_search.kb import bpre
