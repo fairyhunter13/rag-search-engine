@@ -171,3 +171,39 @@ regression. Convergence + no-overhead are verified by the targeted tests above, 
 - Live single-call convergence: `infra` `missing=5 → 0` (100%) in **one** `enrich_communities_batch`
   call; the earlier 4-pass hand-loop drove a 27-head project to `67/67`, confirmed by the daemon's
   own `overview(status)` reporting `kb_state=ready`, `enriched_pct=100.0`.
+
+## §7 — Follow-up (2026-07-17): closing the three caveats the fix left open
+
+The fix above shipped green, but three loose ends remained. Each is now addressed.
+
+**7a — The convergence path now has a push-level gate (was: nightly-only).**
+The full e2e proof (`test_kb_state_ready_all_projects`) is `@slow`/nightly and, as §6 notes, is not a
+usable local gate. A regression could therefore ship and sit unnoticed until the next nightly. Added
+`test_converge_smoke_standalone` (NOT `@slow`) in `test_p22_kb_e2e.py`: it converges the **smallest**
+sample project (standalone ledger, fewest communities → one DeepSeek round) to `ready`/`l1==100`
+within a bounded 180s, so it runs in the every-push `live-fast` job (`-m "live and not slow"`). This
+is the exact behavior §6 fixed — a dropped narration chunk leaving a project short of `ready` — so the
+smoke would have caught the original bug. Precedent for real-DeepSeek in the fast gate already exists
+(`test_lazy_wisdom`). The full 3-project sweep stays `@slow`/nightly. Process rule added to
+`CLAUDE.md`: changes touching `graph/enrich.py` or the converge loop **MUST** be pushed with
+`[slow-ci]` so the full sweep runs on that same push (the `ci.yml:146` trigger already exists).
+
+**7b — Registry pollution now self-heals (was: manual prune after every killed run).**
+Live fixtures register temp projects under `~/.local/share/rse-test-dirs` and deregister in teardown.
+A *killed* run (CI `timeout-minutes` kill, SIGKILL, crash, Ctrl-C) never runs teardown, leaking
+registrations that `registry._migrate()` cannot drop (it only prunes paths **gone from disk**; the
+leaked dir still exists). The next run's `test_no_junk_paths_in_live_registry` (IS2) then fails — the
+cause of the red scheduled run that previously needed a manual prune of 8 entries. Added a
+session-scoped `autouse` fixture `_purge_leaked_test_state` (`conftest.py`) that, at session start,
+removes every `rse-test-dirs` registry entry + stale child dir before the workspace builds. Idempotent
+and runs regardless of how the prior session died. (2 orphaned dirs from Jul-14 were also swept.)
+
+**7c — Fleet convergence verified (read-only, was: "in progress in the background").**
+Confirmed via the daemon's own `overview(status)` that the deployed fix converges real
+previously-parked projects:
+- `payment-gateway` (105 communities): `kb_state=ready`, `enriched_pct=100.0` — **converged from
+  parked**, the end-to-end proof on the live fleet.
+- `rag-search-engine` (this repo, 58 communities): `ready`, `100.0`.
+- `ts_fleet` (19 communities): `enriching`, `52.6%` — mid-convergence, awaiting its next daemon
+  reconcile/enrich pass (daemon idle at check time); consistent with §6 resumability, not a
+  regression. Will converge when enrich next runs, as `payment-gateway` did.

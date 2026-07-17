@@ -79,6 +79,39 @@ def live_client():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _purge_leaked_test_state():
+    """Self-heal any test state a *killed* prior session leaked, before this run starts.
+
+    Every live fixture that registers a temp project builds it under
+    ~/.local/share/rse-test-dirs and deregisters it in teardown. A run that is killed
+    (CI timeout-minutes kill, SIGKILL, crash, Ctrl-C) never runs teardown, so those
+    registrations survive — and registry._migrate() can't drop them because the dir
+    still exists on disk. The next session's IS2 guard
+    (test_no_junk_paths_in_live_registry) then fails on that leaked junk.
+
+    At session START the current run hasn't built its own workspace yet, so anything
+    under rse-test-dirs belongs to a dead prior session: purge every such registry
+    entry and stale child dir. Idempotent, and the fix's whole point is that it runs
+    regardless of how the prior session died.
+    """
+    import os
+    import shutil
+
+    from rag_search.core.registry import list_projects, remove_project
+    from tests.live._projects import _SAFE_BASE
+
+    for e in list_projects():
+        if e.path == str(_SAFE_BASE) or e.path.startswith(str(_SAFE_BASE) + os.sep):
+            with contextlib.suppress(Exception):
+                remove_project(e.path)
+    if _SAFE_BASE.exists():
+        for child in _SAFE_BASE.iterdir():
+            with contextlib.suppress(Exception):
+                shutil.rmtree(child, ignore_errors=True)
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
 def pause_sweeps():
     """Pause background sweeps for the whole session to avoid GPU contention."""
     with contextlib.suppress(Exception):
@@ -187,7 +220,7 @@ def mini_stores(embedder, tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def sample_workspace() -> SampleWorkspace:
+def sample_workspace(_purge_leaked_test_state) -> SampleWorkspace:
     """Session-scoped sample workspace: GPU-indexed fixture projects + replayed enrichment golden.
 
     Builds shop-federation (cart/checkout/promo) + ledger-standalone under
