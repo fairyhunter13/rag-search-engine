@@ -151,6 +151,10 @@ jobs:
 
       - name: Run full live suite (all tests including slow)
         # Same indexed-dev-tree model as live-fast; job-level timeout-minutes bounds the run.
+        # NO `-x` here (unlike live-fast): this is the full/convergence sweep, and an
+        # environment-sensitive @slow test (e.g. test_cb3 idle-CPU, which needs a quiescent
+        # daemon) must not abort the run before the convergence sweep reports. Run everything,
+        # let `-ra` summarize; per-test failures still fail the job.
         run: |
           : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
           cd "$RSE_DEV_REPO"
@@ -158,7 +162,7 @@ jobs:
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live" \
-            -x --strict-markers --strict-config -ra -q --tb=short
+            --strict-markers --strict-config -ra -q --tb=short
 
       - name: Run browser tests
         run: |
