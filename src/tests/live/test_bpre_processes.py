@@ -485,7 +485,7 @@ def test_part_f_incremental_scan_reuses_unchanged_member_cache():
         teardown_synth_federation(fed)
 
 
-def test_handler_reachable_set_caps_runaway(safe_tmp_path, monkeypatch):
+def test_handler_reachable_set_caps_runaway(safe_tmp_path):
     """The reachable-set BFS must bail to the include-all fallback (empty set) once it
     exceeds _REACH_CAP, instead of scanning a runaway graph.
 
@@ -493,7 +493,8 @@ def test_handler_reachable_set_caps_runaway(safe_tmp_path, monkeypatch):
     multi-million-edge graphs) the un-capped 8-hop BFS pegged a core for minutes on the
     watcher thread. A reachable set past the cap is, for the include/exclude decision in
     _call_in_reachable, indistinguishable from "reaches everything" — exactly the
-    empty-reachable fallback — so bailing there is semantically safe.
+    empty-reachable fallback — so bailing there is semantically safe. Builds a real
+    over-cap graph and drives the real function — no test doubles (real-integration rule).
     """
     import contextlib
     import shutil
@@ -501,37 +502,39 @@ def test_handler_reachable_set_caps_runaway(safe_tmp_path, monkeypatch):
 
     from rag_search.core.config import project_graph_db
     from rag_search.graph.store import GraphStore
-    from rag_search.kb import bpre
+    from rag_search.kb.bpre import _REACH_CAP, _handler_reachable_set
 
     member = str(safe_tmp_path)
     gdb = project_graph_db(member)
     gdb.parent.mkdir(parents=True, exist_ok=True)
-    handler_file = str((Path(member) / "handler.py").resolve())
-    callee_file = str((Path(member) / "callees.py").resolve())
-    fanout = 12
+    big_file = str((Path(member) / "big.py").resolve())
+    small_file = str((Path(member) / "small.py").resolve())
+    over = _REACH_CAP + 100  # one hop reaches more than the cap → must bail
+    small_fanout = 12
     gs = GraphStore(gdb)
     try:
-        gs.upsert_symbol("h", "handler", "handler", "function", handler_file, 1, 100, "python")
-        for i in range(fanout):
-            gs.upsert_symbol(f"c{i}", f"c{i}", f"c{i}", "function", callee_file, i + 1, i + 1, "python")
-            gs.upsert_edge("h", f"c{i}")
+        # Handler symbols must be locatable by (file, line); callees need only edge rows.
+        gs.upsert_symbol("big", "big", "big", "function", big_file, 1, 100, "python")
+        for i in range(over):
+            gs.upsert_edge("big", f"b{i}")
+        gs.upsert_symbol("small", "small", "small", "function", small_file, 1, 100, "python")
+        for i in range(small_fanout):
+            gs.upsert_edge("small", f"s{i}")
         gs.commit()
         gs.close()
 
-        # Cap below the fan-out → runaway: must bail to include-all (empty set).
-        monkeypatch.setattr(bpre, "_REACH_CAP", 5)
-        sid, reachable = bpre._handler_reachable_set(member, "handler.py", 10)
-        assert sid == "h", f"handler must be located, got {sid!r}"
+        # Over-cap handler → runaway: must bail to include-all (empty set).
+        sid, reachable = _handler_reachable_set(member, "big.py", 10)
+        assert sid == "big", f"handler must be located, got {sid!r}"
         assert reachable == set(), (
-            f"runaway reachable set must bail to include-all (empty), got {len(reachable)}"
+            f"runaway set (> {_REACH_CAP}) must bail to include-all (empty), got {len(reachable)}"
         )
 
-        # Cap above the fan-out → the guard is not inert: real reachable set is returned.
-        monkeypatch.setattr(bpre, "_REACH_CAP", 10_000)
-        sid2, reachable2 = bpre._handler_reachable_set(member, "handler.py", 10)
-        assert sid2 == "h"
-        assert len(reachable2) == fanout + 1, (
-            f"expected handler + {fanout} reachable, got {len(reachable2)}"
+        # Under-cap handler → guard not inert: the real reachable set is returned.
+        sid2, reachable2 = _handler_reachable_set(member, "small.py", 10)
+        assert sid2 == "small"
+        assert len(reachable2) == small_fanout + 1, (
+            f"expected handler + {small_fanout} reachable, got {len(reachable2)}"
         )
     finally:
         with contextlib.suppress(Exception):
