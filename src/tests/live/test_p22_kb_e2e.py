@@ -197,6 +197,17 @@ def test_federation_kb_reflects_root_only(live_client, synth_symlink_proj):
 # T1/HR7: all 3 projects must reach kb_state='ready'
 # ---------------------------------------------------------------------------
 
+# NOT @slow — the every-push gate (live-fast, `-m "live and not slow"`). Converges the
+# SMALLEST sample project (standalone ledger, fewest communities → typically one DeepSeek
+# round) so the enrich→converge path is a real tripwire on every push. This is the exact
+# regression 2f0a580 fixed (a dropped narration chunk left a project stuck short of ready);
+# a single tiny converge here would have caught it. The full 3-project sweep below stays
+# @slow/nightly. Real DeepSeek, like the fast-gate test_lazy_wisdom tests (zero-fake policy).
+def test_converge_smoke_standalone(live_client, projects):
+    """Convergence smoke: the standalone project reaches kb_state='ready', l1==100 fast."""
+    _converge_ready(projects["standalone"], timeout=180)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("proj_key", ["service", "standalone", "federation"])
 def test_kb_state_ready_all_projects(live_client, proj_key, projects):

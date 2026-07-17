@@ -51,6 +51,13 @@ are `push` to main (owner), manual `workflow_dispatch` (owner), and the nightly 
 own cron). Fork-PR workflow approval is set to `all_external_contributors`, so nothing external runs
 without explicit owner approval.
 
+**`live-fast` vs `live-slow`**: every push runs `live-fast` (`-m "live and not slow"`, <5 min); the
+full `@slow` sweep (`live-slow`, ~15–30 min) runs only on the nightly `schedule` **or** on a push
+whose commit message contains `[slow-ci]`. The convergence path is guarded on every push by the fast
+`test_converge_smoke_standalone` tripwire, but any change touching `src/rag_search/graph/enrich.py` or
+the enrich→converge loop **MUST be pushed with `[slow-ci]`** so the full multi-project convergence
+sweep (`test_kb_state_ready_all_projects`) runs on that same push, not a day later.
+
 ## GPU-only enforcement
 
 **CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
