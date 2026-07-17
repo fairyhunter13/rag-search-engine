@@ -118,6 +118,11 @@ def _should_drop(
         return False
     if cfg.include and is_dir and _include_reaches(rel_parts, cfg.include):
         return False
+    # Machine-generated code files are derived build/codegen output: never index or watch them,
+    # so regenerating them can't wake the indexer/embedder or the drift gate (mirrors the
+    # generated-docs/ tree skip in iter_files). Explicit RSE `include` above still wins.
+    if not is_dir and is_generated_path(full.name):
+        return True
     if cfg.use_default_ignores:
         # Hidden-dir skip applies to directory segments only, never to a file's own name,
         # so tracked dotfiles (.gitignore, .eslintrc) below a visible dir still index.
