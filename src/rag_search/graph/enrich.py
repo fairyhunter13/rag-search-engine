@@ -157,16 +157,20 @@ def _enrich_one_batch(
             max_tokens=min(len(items) * 200 + 50, 4096),
         )
         _accumulate_llm_tokens(usage, "enrich")
-    except Exception:
+    except Exception as exc:
+        log.warning("enrich: deepseek_extract failed for %d communities: %s", len(items), exc)
         return [], {}
     text = raw.split("</think>")[-1] if "</think>" in raw else raw
     text = text.replace("```json", "").replace("```", "")
     s, e = text.find("["), text.rfind("]")
     if s == -1 or e <= s:
+        log.warning("enrich: no JSON array in %d-char response for %d communities (retryable)",
+                    len(text), len(batch_ids))
         return [], usage
     try:
         parsed = json.loads(text[s:e + 1])
-    except Exception:
+    except Exception as exc:
+        log.warning("enrich: JSON parse failed for %d communities (retryable): %s", len(batch_ids), exc)
         return [], usage
     enriched: list[int] = []
     for item in (parsed if isinstance(parsed, list) else []):
@@ -248,37 +252,73 @@ def classify_communities_semantic(
 
 def enrich_communities_batch(
     store: GraphStore, community_ids: list[int], *,
-    thermal_guard_fn=None, budget: int = 50_000,
+    thermal_guard_fn=None, budget: int = 50_000, max_rounds: int = 6,
+    max_seconds: float = 120.0,
 ) -> tuple[list[int], dict]:
     """Narrate a list of L1 communities via batched prefix-cached DeepSeek calls.
 
     Each chunk of 20 is one deepseek_extract call.  System prompt is byte-identical
     across all chunks → high prompt_cache_hit_tokens from chunk 2 onward.
     budget: max completion tokens before stopping (safety cap, default 50k).
+
+    DeepSeek narration is intermittently lossy: a transient malformed / unparseable
+    response silently drops a whole 20-chunk (the same chunk that yields nothing on one
+    attempt narrates cleanly on the next). Without a retry this leaves a project a few
+    communities short of `ready` on every pass. So re-attempt the still-unnarrated subset,
+    bounded by THREE independent caps so it can never spin: `max_rounds` (iterations),
+    `budget` (tokens), and `max_seconds` (wall-clock — the real latency guard, so a slow /
+    throttled DeepSeek can't make one call run for minutes). Whatever is still unnarrated when
+    a cap trips is left for the next trigger (the pipeline is resumable — `compute_significance`
+    re-selects it), not spun on forever.
     Returns (enriched_ids, aggregate_usage).
     """
     import time
 
     if not community_ids:
         return [], {}
+    deadline = time.monotonic() + max_seconds
     agg: dict[str, int] = {
         "prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 0,
         "completion_tokens": 0, "calls": 0,
     }
     valid = frozenset(_TYPE_ORDER)
     enriched: list[int] = []
-    for i in range(0, len(community_ids), 20):
-        if agg["completion_tokens"] >= budget:
-            log.warning("enrich_communities_batch: budget %d tokens reached, stopping", budget)
+    enriched_set: set[int] = set()
+    pending = list(community_ids)
+    for _round in range(max_rounds):
+        if not pending or agg["completion_tokens"] >= budget or time.monotonic() >= deadline:
             break
-        if thermal_guard_fn and thermal_guard_fn():
-            time.sleep(5)
-        batch_enriched, usage = _enrich_one_batch(store, community_ids[i:i + 20], valid)
-        enriched.extend(batch_enriched)
-        for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_tokens"):
-            agg[k] = agg.get(k, 0) + usage.get(k, 0)
-        if usage:
-            agg["calls"] += 1
+        progressed = False
+        for i in range(0, len(pending), 20):
+            if agg["completion_tokens"] >= budget:
+                log.warning("enrich_communities_batch: budget %d tokens reached, stopping", budget)
+                break
+            if time.monotonic() >= deadline:
+                log.warning("enrich_communities_batch: %.0fs time budget reached, stopping", max_seconds)
+                break
+            if thermal_guard_fn and thermal_guard_fn():
+                time.sleep(5)
+            chunk = pending[i:i + 20]
+            batch_enriched, usage = _enrich_one_batch(store, chunk, valid)
+            for cid in batch_enriched:
+                if cid not in enriched_set:
+                    enriched_set.add(cid)
+                    enriched.append(cid)
+                    progressed = True
+            for k in ("prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "completion_tokens"):
+                agg[k] = agg.get(k, 0) + usage.get(k, 0)
+            if usage:
+                agg["calls"] += 1
+            if len(batch_enriched) < len(chunk):
+                log.warning("enrich chunk: %d/%d narrated, %d dropped (transient) — will retry",
+                            len(batch_enriched), len(chunk), len(chunk) - len(batch_enriched))
+        pending = [cid for cid in community_ids if cid not in enriched_set]
+        if pending and not progressed:
+            log.warning("enrich_communities_batch: round %d made no progress, %d still pending",
+                        _round + 1, len(pending))
+    if pending:
+        log.warning("enrich_communities_batch: %d/%d left un-narrated (cap reached: rounds/tokens/"
+                    "time) — next trigger retries", len(pending), len(community_ids))
     return enriched, agg
 
 
