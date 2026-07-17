@@ -13,6 +13,10 @@
 > **Verdict:** EXPECTED — both symptoms are the intended, internally-consistent behavior of the
 > current design (unchanged through HEAD `40279d6`, 2026-07-15). One *non-blocking semantic
 > enhancement* is recorded in §4; it is **not** a defect and is **not** implemented here.
+> **Follow-up (2026-07-17, later):** driving a project to `ready` surfaced a *real* robustness gap
+> in the enrichment path — DeepSeek narration is intermittently lossy and the loss was silently
+> swallowed, so each pass plateaus a few communities short of `ready` (see §6). That **is** a bug
+> and **has** been fixed (bounded in-call retry + failure logging in `graph/enrich.py`).
 > **Device neutrality:** paths use placeholders (`<root>`); no secrets included.
 
 ---
@@ -66,11 +70,16 @@ communities with a non-empty `summary`. This is a background-quality signal, **n
   (≥ 95%) is architecturally reachable** — the tail does not block the ceiling.
 - Each pass is capped at **`RSE_ENRICH_BUDGET_TOKENS` = 50,000** completion tokens
   (`sweeps.py:12`; `graph/enrich.py:271–273`). One pass narrates until the budget is hit, then
-  stops — so a fresh re-index parks partway.
+  stops.
 - **Resumable & non-wasteful:** `compute_significance` selects only
   `WHERE (summary IS NULL OR summary = '') AND level = 1` (`graph/enrich.py:113–116`), so each
-  subsequent pass advances the *unenriched* frontier by another 50k. No re-narration, no wasted
-  budget, no architectural stall — enrichment climbs monotonically toward `ready`.
+  subsequent pass advances the *unenriched* frontier. No re-narration, no wasted budget.
+- **CORRECTION (see §6):** the original draft claimed enrichment "climbs monotonically toward
+  `ready`." That was wrong. Empirically, a *single* pass does **not** reach `ready` — DeepSeek
+  narration is intermittently lossy (a transient malformed/unparseable response silently dropped a
+  whole 20-community chunk), so a project plateaus a few short every pass and only a *sequence* of
+  passes converges. That silent drop was a genuine bug; it is fixed in §6. The token budget is a
+  secondary factor — for small projects the miss is the flakiness, not the 50k cap.
 
 ## §3 — What re-triggers enrichment (so a parked KB reaches `ready`)
 
@@ -114,3 +123,51 @@ recommended unless the misread proves costly, and it is deliberately left unimpl
   frontier query (`enrich.py:113–116`), and all four enrichment triggers (§3).
 - History: `git log -L 147,159:src/rag_search/server/_overview.py` — ladder semantics last modified
   2026-06-30 (`2554973`); unchanged through HEAD `40279d6` (2026-07-15). Not a regression.
+
+## §6 — Real bug found while driving a project to `ready`, and its fix
+
+Attempting to push a project from `enriching` to `ready` exposed that enrichment silently loses
+communities each pass. Root cause in `graph/enrich.py`:
+
+- `_enrich_one_batch` sends a chunk of ≤20 communities in one `deepseek_extract` call, parses the
+  JSON array, and upserts each. On a **transient** malformed/unparseable/`</think>`-truncated
+  response it returned `[], usage` — the **entire chunk dropped**, with no log. Same for a
+  swallowed per-item `except: continue`.
+- `enrich_communities_batch` iterated the chunks **once** and returned. So any chunk that flaked
+  on its single attempt was simply lost for that pass.
+
+**Observed:** the *same* chunk narrates 0 on one attempt and all of it on the next — purely
+intermittent. Example convergence trace for a 27-head-community project (`RSE_ENRICH_BUDGET_TOKENS`
+never approached):
+
+```
+pass1: head=27 narrated=0      pass2: head=27 narrated=20
+pass3: head=7  narrated=0      pass4: head=7  narrated=7  -> 67/67 READY
+```
+
+Every parked project matched this shape (e.g. cx-be `head=51 enriched=40`, 11 silently dropped).
+
+**Fix (this change):**
+- `enrich_communities_batch` now re-attempts the still-unnarrated subset, bounded by **three
+  independent caps** so it can never spin: `max_rounds` (iterations), `budget` (tokens), and
+  `max_seconds=120` (**wall-clock** — the real latency guard, so a slow/throttled DeepSeek cannot
+  make one call run for minutes). Whatever is unnarrated when a cap trips is left for the next
+  trigger (the pipeline is resumable). Common case (no drops) is a single round — **zero added
+  overhead**, verified on `infra` (5→0, `calls=1`).
+- `_enrich_one_batch` now **logs** each silent-drop path (deepseek call failure, no JSON array,
+  JSON parse failure) at `WARNING` with the community count — observability instead of a black hole.
+
+**Note on the wall-clock cap — why it matters:** an early draft of the retry used only round/token
+caps. Under a slow/throttled DeepSeek that let one call stretch for many minutes. The live
+full-pipeline test (`test_p22_kb_e2e.py`) is `@pytest.mark.slow` and does **not** complete within a
+short timeout **even on unmodified HEAD** (both HEAD and this change hit a 600–900s `timeout` on a
+loaded dev box; it is CI-only, 60-min budget), so it is not a usable local gate — the wall-clock cap
+was added defensively to bound worst-case latency rather than in response to a reproduced local
+regression. Convergence + no-overhead are verified by the targeted tests above, not the slow e2e.
+
+**Verification of the fix:**
+- Offline suite green (15 passed); live enrichment tests green (`test_lazy_wisdom.py`, 8 passed,
+  real DeepSeek).
+- Live single-call convergence: `infra` `missing=5 → 0` (100%) in **one** `enrich_communities_batch`
+  call; the earlier 4-pass hand-loop drove a 27-head project to `67/67`, confirmed by the daemon's
+  own `overview(status)` reporting `kb_state=ready`, `enriched_pct=100.0`.
