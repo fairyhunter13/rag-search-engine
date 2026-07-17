@@ -107,7 +107,10 @@ def _code_source_fingerprint(path: str) -> str:
     from pathlib import Path
 
     from rag_search.index.discover import (
-        detect_language, is_code_language, is_generated_path, iter_files,
+        detect_language,
+        is_code_language,
+        is_generated_path,
+        iter_files,
     )
     root = Path(path)
     try:
