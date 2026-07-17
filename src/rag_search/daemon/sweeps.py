@@ -106,7 +106,9 @@ def _code_source_fingerprint(path: str) -> str:
     """SHA-1 over sorted 'relpath:mtime' for CODE files only — stat-only, GPU-free."""
     from pathlib import Path
 
-    from rag_search.index.discover import detect_language, is_code_language, iter_files
+    from rag_search.index.discover import (
+        detect_language, is_code_language, is_generated_path, iter_files,
+    )
     root = Path(path)
     try:
         coarse = root.stat().st_mtime
@@ -120,6 +122,8 @@ def _code_source_fingerprint(path: str) -> str:
         for f in iter_files(root, federation_mode=True):
             if not is_code_language(detect_language(f)):
                 continue
+            if is_generated_path(f.name):
+                continue  # derived codegen output — regen is not source drift (HR38)
             try:
                 rel = str(f.relative_to(root))
                 mtime = int(f.stat().st_mtime)

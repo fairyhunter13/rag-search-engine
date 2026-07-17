@@ -161,6 +161,31 @@ def is_code_language(lang: str) -> bool:
         return False
 
 
+# Machine-generated code files: derived build/codegen output (protobuf stubs, dart codegen,
+# SvelteKit dashboards, *.generated.*). tree-sitter parses them as real code, but regenerating
+# them is NOT source drift — treating it as such wakes the enrich/wiki/BPRE cascade for nothing.
+# This is what drove inosoft-project's wiki/src/lib/*.generated.js reconstruct loop. Mirrors
+# _is_generated_docs_dir, which already keeps generated docs/ trees out of the drift signals.
+_GENERATED_SUFFIXES: tuple[str, ...] = (
+    "_pb2.py", "_pb2_grpc.py", ".pb.go", ".pb.gw.go", ".pb.cc", ".pb.h",
+    ".g.dart", ".freezed.dart",
+)
+
+
+def is_generated_path(rel: str | os.PathLike) -> bool:
+    """True iff rel names a machine-generated code file (codegen/build output).
+
+    Conservative — matches only unambiguous generated markers (``*.generated.*``, ``*.gen.*``,
+    protobuf/dart codegen suffixes) so hand-written source is never misclassified. Used by the
+    code-drift signals (sweeps._code_source_fingerprint, bpre._bpre_code_sig) so regenerating a
+    derived file never wakes the KB/wiki/BPRE cascade.
+    """
+    name = os.path.basename(str(rel))
+    if ".generated." in name or ".gen." in name:
+        return True
+    return name.endswith(_GENERATED_SUFFIXES)
+
+
 def _size_limit(lang: str) -> int:
     if lang in _TEXT_LANGS:
         return _SIZE_LIMITS["text"]
