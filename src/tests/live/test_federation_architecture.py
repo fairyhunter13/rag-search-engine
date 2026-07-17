@@ -38,12 +38,16 @@ def _clean(paths):
 
 
 def test_gdup_duplicate_symlink_members_deduped(safe_tmp_path):
-    """G-DUP: two symlinks resolving to the same target must not double-count that
-    member in the federation union — discover_members has no dedup guard and can
-    append the same resolved target twice, so expand_federation must dedup instead."""
+    """G-DUP: a member symlinked from several locations must be counted once at every
+    layer: discover_members dedups at the source, index_members therefore stores a
+    dedup'd root.federation (no N× bloat), and expand_federation dedups as defense."""
     from rag_search.core.config import ProjectEntry
-    from rag_search.core.registry import upsert_project
-    from rag_search.daemon.federation import expand_federation, index_members
+    from rag_search.core.registry import get_project, upsert_project
+    from rag_search.daemon.federation import (
+        discover_members,
+        expand_federation,
+        index_members,
+    )
 
     root = safe_tmp_path / "root"
     member = safe_tmp_path / "member-repo"
@@ -52,10 +56,18 @@ def test_gdup_duplicate_symlink_members_deduped(safe_tmp_path):
     (member / "a.py").write_text("def f(): pass\n")
     (root / "link_one").symlink_to(member)
     (root / "link_two").symlink_to(member)
+    (root / "link_three").symlink_to(member)
     _clean([root, member])
     try:
+        # Source dedup: three symlinks → one member, not three.
+        assert discover_members(str(root)).count(str(member)) == 1, "discover_members must dedup"
+
         upsert_project(ProjectEntry(path=str(root), enabled=True))
         index_members(str(root))
+        # Stored federation must not be N× bloated.
+        stored = get_project(str(root)).federation
+        assert stored.count(str(member)) == 1, f"stored federation bloated: {stored}"
+        # Union deduped too (defense in depth).
         union = expand_federation(str(root))
         assert union.count(str(member)) == 1, f"member counted more than once: {union}"
     finally:
