@@ -483,3 +483,56 @@ def test_part_f_incremental_scan_reuses_unchanged_member_cache():
         assert procs2 == procs1, "process count regressed under incremental rebuild"
     finally:
         teardown_synth_federation(fed)
+
+
+def test_handler_reachable_set_caps_runaway(safe_tmp_path, monkeypatch):
+    """The reachable-set BFS must bail to the include-all fallback (empty set) once it
+    exceeds _REACH_CAP, instead of scanning a runaway graph.
+
+    Idle-CPU guard: on a large/dense member graph (e.g. a 189-member federation with
+    multi-million-edge graphs) the un-capped 8-hop BFS pegged a core for minutes on the
+    watcher thread. A reachable set past the cap is, for the include/exclude decision in
+    _call_in_reachable, indistinguishable from "reaches everything" — exactly the
+    empty-reachable fallback — so bailing there is semantically safe.
+    """
+    import contextlib
+    import shutil
+    from pathlib import Path
+
+    from rag_search.core.config import project_graph_db
+    from rag_search.graph.store import GraphStore
+    from rag_search.kb import bpre
+
+    member = str(safe_tmp_path)
+    gdb = project_graph_db(member)
+    gdb.parent.mkdir(parents=True, exist_ok=True)
+    handler_file = str((Path(member) / "handler.py").resolve())
+    callee_file = str((Path(member) / "callees.py").resolve())
+    fanout = 12
+    gs = GraphStore(gdb)
+    try:
+        gs.upsert_symbol("h", "handler", "handler", "function", handler_file, 1, 100, "python")
+        for i in range(fanout):
+            gs.upsert_symbol(f"c{i}", f"c{i}", f"c{i}", "function", callee_file, i + 1, i + 1, "python")
+            gs.upsert_edge("h", f"c{i}")
+        gs.commit()
+        gs.close()
+
+        # Cap below the fan-out → runaway: must bail to include-all (empty set).
+        monkeypatch.setattr(bpre, "_REACH_CAP", 5)
+        sid, reachable = bpre._handler_reachable_set(member, "handler.py", 10)
+        assert sid == "h", f"handler must be located, got {sid!r}"
+        assert reachable == set(), (
+            f"runaway reachable set must bail to include-all (empty), got {len(reachable)}"
+        )
+
+        # Cap above the fan-out → the guard is not inert: real reachable set is returned.
+        monkeypatch.setattr(bpre, "_REACH_CAP", 10_000)
+        sid2, reachable2 = bpre._handler_reachable_set(member, "handler.py", 10)
+        assert sid2 == "h"
+        assert len(reachable2) == fanout + 1, (
+            f"expected handler + {fanout} reachable, got {len(reachable2)}"
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            shutil.rmtree(gdb.parent, ignore_errors=True)
