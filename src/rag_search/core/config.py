@@ -22,7 +22,6 @@ RSE_GPU_DEVICE: str | None = os.environ.get("RSE_GPU_DEVICE")  # unset = auto-pi
 
 DAEMON_HOST = os.environ.get("RSE_MCP_DAEMON_HOST", "127.0.0.1")
 DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
-IDLE_SHUTDOWN_S = int(os.environ.get("RSE_MCP_IDLE_SHUTDOWN_S", "900"))
 CLIENT_STALE_S = int(os.environ.get("RSE_MCP_CLIENT_STALE_S", "60"))
 MODEL_IDLE_UNLOAD_S = int(os.environ.get("RSE_MODEL_IDLE_UNLOAD_S", "300"))
 
