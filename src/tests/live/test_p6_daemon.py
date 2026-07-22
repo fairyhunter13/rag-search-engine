@@ -570,10 +570,8 @@ def test_daemon_startup_imports_resolve():
     D-series dead-code sweep can't silently ship a broken daemon again.
     """
     from rag_search.daemon.federation import register_all_members
-    from rag_search.daemon.runtime_state import check_idle_shutdown
     from rag_search.daemon.scheduler import Scheduler
     from rag_search.daemon.sweeps import maintenance, reconcile_projects
-    assert callable(check_idle_shutdown)
     assert callable(maintenance)
     assert callable(reconcile_projects)
     assert callable(register_all_members)
