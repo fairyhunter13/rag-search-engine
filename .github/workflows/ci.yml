@@ -10,8 +10,8 @@ on:
   # NOTE: no `schedule` trigger either. A nightly cron fired BOTH live jobs unattended
   # (on a schedule event `github.ref` is refs/heads/main, so live-fast's gate passed too),
   # spending the maintainer's Claude session quota mid-workday. The live suite calls real
-  # models, so it now only ever runs when a human asks: `workflow_dispatch`, or a push
-  # whose commit message contains [slow-ci].
+  # models, so live-slow now only ever runs when a human asks for it explicitly:
+  # `workflow_dispatch`. See the live-slow job for why a commit-message tag is not a trigger.
 
 jobs:
   # ──────────────────────────────────────────────
@@ -138,8 +138,14 @@ jobs:
   # ──────────────────────────────────────────────
   # Slow live tests: full E2E, chat quality, browser
   # MANUAL ONLY — these take 15-30 min and burn real Claude session quota, so they are
-  # never scheduled. Trigger with the "Run workflow" button, `gh workflow run CI`, or a
-  # commit message containing [slow-ci].
+  # never scheduled and never triggered by a push. Trigger with the "Run workflow" button
+  # or `gh workflow run CI`.
+  #
+  # There used to be a second path: a push whose commit message contained a slow-ci tag.
+  # It was removed because `contains()` matches the WHOLE message including the body, so a
+  # commit that merely *mentioned* the tag in prose fired a 60-minute real-model run. That
+  # misfire happened. workflow_dispatch already covers "run it deliberately" and cannot be
+  # triggered by accident, so the tag path was pure footgun.
   # Same self-hosted GPU runner requirement as live-fast.
   # ──────────────────────────────────────────────
   live-slow:
@@ -148,7 +154,7 @@ jobs:
     needs: quality
     timeout-minutes: 60  # full suite + browser; bounds runaway/hung runs
     # Same owner-account hard-gate as live-fast (self-hosted = maintainer's device).
-    if: github.actor == 'fairyhunter13' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]')))
+    if: github.actor == 'fairyhunter13' && github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Verify daemon is running

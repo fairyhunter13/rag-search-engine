@@ -47,16 +47,19 @@ python -m compileall -q src/rag_search
 **CI**: `.github/workflows/ci.yml` — **owner-triggered only** (quality → tests → contracts → property
 tests). Because this is a public repo whose GPU jobs run on a **self-hosted** runner (this device),
 there is deliberately **no `pull_request` trigger** — a fork PR must never reach the runner. Triggers
-are `push` to main (owner), manual `workflow_dispatch` (owner), and the nightly `schedule` (owner's
-own cron). Fork-PR workflow approval is set to `all_external_contributors`, so nothing external runs
-without explicit owner approval.
+are `push` to main (owner) and manual `workflow_dispatch` (owner). There is deliberately **no
+`schedule` trigger**: a nightly cron fired both live jobs unattended and drained the owner's Claude
+session quota mid-workday. Fork-PR workflow approval is set to `all_external_contributors`, so
+nothing external runs without explicit owner approval.
 
 **`live-fast` vs `live-slow`**: every push runs `live-fast` (`-m "live and not slow"`, <5 min); the
-full `@slow` sweep (`live-slow`, ~15–30 min) runs only on the nightly `schedule` **or** on a push
-whose commit message contains `[slow-ci]`. The convergence path is guarded on every push by the fast
-`test_converge_smoke_standalone` tripwire, but any change touching `src/rag_search/graph/enrich.py` or
-the enrich→converge loop **MUST be pushed with `[slow-ci]`** so the full multi-project convergence
-sweep (`test_kb_state_ready_all_projects`) runs on that same push, not a day later.
+full `@slow` sweep (`live-slow`, ~15–30 min) is **manual only** — `gh workflow run CI`, or the "Run
+workflow" button. There is no commit-message trigger: `contains()` matches the whole message
+including the body, so a commit that merely mentioned the tag in prose fired a 60-minute real-model
+run. The convergence path is guarded on every push by the fast `test_converge_smoke_standalone`
+tripwire, but any change touching `src/rag_search/graph/enrich.py` or the enrich→converge loop
+**MUST be followed by `gh workflow run CI`** so the full multi-project convergence sweep
+(`test_kb_state_ready_all_projects`) runs against that change rather than being discovered later.
 
 ## GPU-only enforcement
 
