@@ -4,11 +4,14 @@ on:
   push:
     branches: ["main", "master"]
   workflow_dispatch:  # manual "Run workflow" — requires write access (owner-only)
-  schedule:
-    - cron: "0 2 * * *"  # nightly at 02:00 UTC
   # NOTE: no `pull_request` trigger. This is a PUBLIC repo whose GPU jobs run on a
   # self-hosted runner (the maintainer's device); a fork PR must never be able to
-  # trigger CI. Every trigger above requires write access or is the owner's own cron.
+  # trigger CI. Every trigger above requires write access.
+  # NOTE: no `schedule` trigger either. A nightly cron fired BOTH live jobs unattended
+  # (on a schedule event `github.ref` is refs/heads/main, so live-fast's gate passed too),
+  # spending the maintainer's Claude session quota mid-workday. The live suite calls real
+  # models, so it now only ever runs when a human asks: `workflow_dispatch`, or a push
+  # whose commit message contains [slow-ci].
 
 jobs:
   # ──────────────────────────────────────────────
@@ -134,16 +137,18 @@ jobs:
 
   # ──────────────────────────────────────────────
   # Slow live tests: full E2E, chat quality, browser
-  # Run on schedule (nightly) — these take 15-30 min.
+  # MANUAL ONLY — these take 15-30 min and burn real Claude session quota, so they are
+  # never scheduled. Trigger with the "Run workflow" button, `gh workflow run CI`, or a
+  # commit message containing [slow-ci].
   # Same self-hosted GPU runner requirement as live-fast.
   # ──────────────────────────────────────────────
   live-slow:
-    name: Live Tests Slow (GPU runner, scheduled)
+    name: Live Tests Slow (GPU runner, manual)
     runs-on: self-hosted
     needs: quality
     timeout-minutes: 60  # full suite + browser; bounds runaway/hung runs
     # Same owner-account hard-gate as live-fast (self-hosted = maintainer's device).
-    if: github.actor == 'fairyhunter13' && (github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]')))
+    if: github.actor == 'fairyhunter13' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slow-ci]')))
 
     steps:
       - name: Verify daemon is running
