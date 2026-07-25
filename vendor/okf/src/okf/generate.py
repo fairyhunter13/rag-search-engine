@@ -18,9 +18,13 @@ MODEL_HAIKU = "claude-haiku-4-5"
 MODEL_SONNET = "claude-sonnet-4-6"
 _TIMEOUT = 300  # SONNET can exceed 180s under full-suite system load
 
+# NOTE: the second entry is `~/.claude-1`, the real profile-directory naming convention
+# (`~/.claude`, `~/.claude-1`, `~/.claude-2`, ...). It was `~/.claude-account1` -- a path
+# that never existed on any machine -- so the `.credentials.json` filter in _valid_profiles()
+# silently reduced the list to one profile and every run landed on the primary account.
 _raw_profiles = os.environ.get(
     "RSE_OKF_CLAUDE_PROFILES",
-    f"{os.path.expanduser('~/.claude')},{os.path.expanduser('~/.claude-account1')}",
+    f"{os.path.expanduser('~/.claude')},{os.path.expanduser('~/.claude-1')}",
 )
 _PROFILES: list[str] = [p.strip() for p in _raw_profiles.split(",") if p.strip()]
 
