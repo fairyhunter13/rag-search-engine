@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 
 from starlette.requests import Request
@@ -10,7 +11,38 @@ from starlette.responses import Response, StreamingResponse
 
 from rag_search.core.config import QUERY_LLM_MODEL
 
+log = logging.getLogger(__name__)
+
 _CLAUDE = shutil.which("claude")
+
+
+def _pick_claude_env() -> dict[str, str] | None:
+    """Pick the subscription profile with the most headroom for this chat call.
+
+    Returns an env mapping with CLAUDE_CONFIG_DIR set, or None to inherit the
+    ambient environment. None is the historical behaviour (always the default
+    profile) and stays the fallback whenever selection is unavailable, so chat
+    never breaks just because the vendored selector is missing.
+
+    BLOCKING: on a cache miss this reads the usage endpoint (urlopen, 8s timeout,
+    per-profile 5-minute cache). Callers on the event loop MUST run it in an
+    executor — see _stream_answer.
+    """
+    try:
+        # _inject_vendor owns the vendor/docgen/src path arithmetic; reuse it
+        # rather than recomputing the relative path in a second place.
+        from rag_search.kb.docgen import _inject_vendor
+        if not _inject_vendor():
+            return None
+        from ose_docgen.accounts import pick_profile, subprocess_env  # type: ignore[import]
+        from ose_docgen.config import CLAUDE_PROFILES  # type: ignore[import]
+        chosen = pick_profile(CLAUDE_PROFILES)
+        if not chosen:
+            return None
+        return subprocess_env(chosen)
+    except Exception as exc:
+        log.warning("chat profile selection unavailable (%s); using default profile", exc)
+        return None
 
 
 def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
@@ -63,9 +95,15 @@ async def _stream_answer(prompt: str, model_used: list[str]):
             "(DeepSeek is KB-enrichment-only)"
         )
     model_used[0] = QUERY_LLM_MODEL
+    # Spread chat load across subscription profiles instead of always billing the
+    # default one. _pick_claude_env blocks on a usage lookup, so keep it off the
+    # event loop; env=None means "inherit", i.e. the previous behaviour.
+    loop = asyncio.get_running_loop()
+    env = await loop.run_in_executor(None, _pick_claude_env)
     proc = await asyncio.create_subprocess_exec(
         _CLAUDE, "-p", "--model", QUERY_LLM_MODEL, prompt,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        env=env,
     )
     output_bytes = b""
     while chunk := await proc.stdout.read(512):
