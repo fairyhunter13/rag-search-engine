@@ -14,6 +14,22 @@ INDEX_ROOT = Path(os.environ.get("RSE_INDEX_ROOT", str(_RSE_ROOT / "indexes")))
 EMBED_MODEL = os.environ.get("RSE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
 RERANK_MODEL = os.environ.get("RSE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en")
 EMBED_DEVICE = os.environ.get("RSE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
+# Token budget shared by the chunker and the embedder, so a chunk can never be
+# larger than the window that embeds it.  Was effectively 512 with 100-line
+# chunks, which silently truncated ~51% of all indexed code away.
+#
+# 768 is measured, not chosen: swept against the 40-query golden set on
+# claude-code-workflows (deterministic — 768 reproduced bit-identically), the
+# reranked gnDCG@10 curve is unimodal and peaks here, so bigger is NOT better.
+#     512 -> 0.9144   768 -> 0.9498   896 -> 0.9323   1024 -> 0.8979
+# vs 0.9160 for the old truncating pipeline. Past the peak, a chunk covers so
+# much unrelated code that any single concept in it is diluted out of the
+# embedding — the opposite failure from truncation, and just as costly.
+EMBED_MAX_TOKENS = int(os.environ.get("RSE_EMBED_MAX_TOKENS", "768"))
+# Off by default: changing EMBED_MODEL or EMBED_MAX_TOKENS invalidates every vector
+# in every project at once, so acting on that drift means reindexing the whole fleet.
+# Drift is always logged; opting in is what makes the fleet migrate itself.
+AUTO_MIGRATE_VECTORS = int(os.environ.get("RSE_AUTO_MIGRATE_VECTORS", "0"))
 THERMAL_MAX_C = int(os.environ.get("RSE_GPU_TEMP_MAX", "80"))
 THERMAL_COOLDOWN_S = int(os.environ.get("RSE_GPU_THERMAL_COOLDOWN_S", "30"))
 THERMAL_POLL_S = float(os.environ.get("RSE_GPU_THERMAL_POLL_S", "3"))
