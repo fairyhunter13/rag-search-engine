@@ -9,6 +9,7 @@ import numpy as np
 
 from rag_search.core.config import (
     EMBED_DEVICE,
+    EMBED_MAX_TOKENS,
     EMBED_MODEL,
     RERANK_MODEL,
     THERMAL_COOLDOWN_S,
@@ -95,13 +96,15 @@ class Embedder:
         self._model = TextEmbedding(
             model_name=self._model_name,
             providers=select_gpu_providers(),
-            max_length=512,
+            max_length=EMBED_MAX_TOKENS,
         )
         # FastEmbed reads model_max_length=8192 from tokenizer_config.json and
-        # silently ignores the max_length=512 kwarg above.  Force it here so
-        # no batch ever produces sequences longer than 512 tokens — 8192-token
-        # sequences cause FusedMatMul to request 24 GB workspace on a 16 GB GPU.
-        self._model.model.tokenizer.enable_truncation(max_length=512)
+        # silently ignores the max_length kwarg above.  Force it here so no batch
+        # ever exceeds EMBED_MAX_TOKENS — 8192-token sequences cause FusedMatMul
+        # to request 24 GB workspace on a 16 GB GPU.  This is a backstop, not the
+        # normal path: the chunker targets the same budget, so a chunk that
+        # reaches here should already fit.
+        self._model.model.tokenizer.enable_truncation(max_length=EMBED_MAX_TOKENS)
         providers = self._model.model.model.get_providers()
         if not providers or providers[0] not in GPU_EP_NAMES:
             raise RuntimeError(f"Embedder not bound to a GPU EP (providers={providers}). CPU inference is forbidden.")

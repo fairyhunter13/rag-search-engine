@@ -79,6 +79,7 @@ def index_project(
             content=chunk.content,
             vector=vec,
         )
+    store.stamp()
     store.flush()
     return file_count, len(chunks)
 

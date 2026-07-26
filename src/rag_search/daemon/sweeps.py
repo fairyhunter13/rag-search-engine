@@ -141,6 +141,28 @@ def _code_source_fingerprint(path: str) -> str:
     return sig
 
 
+def _vectors_stale(path: str) -> str | None:
+    """The index's recorded embed signature if it disagrees with the running config.
+
+    Mirrors _graph_stale for the vector side. Vectors are only comparable to a query
+    embedded the same way, so a model or token-budget change silently invalidates
+    every stored vector — this is what makes that visible instead of permanent.
+    """
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+
+    vdb = project_vector_db(path)
+    if not vdb.exists():
+        return None
+    vs = VectorStore(vdb)
+    try:
+        return vs.stale_signature()
+    except Exception:
+        return None
+    finally:
+        vs.close()
+
+
 def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
     """True if algo-version or code-only source fingerprint has drifted from stored stamps."""
     return (
@@ -325,6 +347,16 @@ def reconcile_projects() -> None:
                 continue
             needs_idx = _needs_index(entry.path)
             needs_rederive = False
+            if not needs_idx and (drifted := _vectors_stale(entry.path)):
+                from rag_search.core.config import AUTO_MIGRATE_VECTORS
+                from rag_search.index.store import embed_signature
+                log.warning(
+                    "%s: vectors built by %r, config is now %r — %s",
+                    entry.path, drifted, embed_signature(),
+                    "reindexing" if AUTO_MIGRATE_VECTORS
+                    else "set RSE_AUTO_MIGRATE_VECTORS=1 to migrate",
+                )
+                needs_idx = bool(AUTO_MIGRATE_VECTORS)
             # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
             if not needs_idx and not entry.federation:
                 gdb = project_graph_db(entry.path)
