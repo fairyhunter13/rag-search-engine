@@ -27,27 +27,35 @@ def _tokenizer():
     return Tokenizer.from_pretrained(EMBED_MODEL)
 
 
-@lru_cache(maxsize=256)
-def _chonkie_supports(language: str) -> bool:
-    """Whether chonkie has a grammar for this language name.
+@lru_cache(maxsize=64)
+def _code_chunker(language: str, chunk_size: int):
+    """One CodeChunker per language, built once and reused across every file.
 
-    Cached per language because the answer cannot vary per file, and asking is not
-    free. chonkie raises on a name it has no grammar for (e.g. "text"), and the
-    obvious recovery — retrying with language="auto" — makes it brute-force parse
-    the file against every grammar it owns: 0.50s per file and rising with file
-    size, against 0.02s for a named language. On a repo whose files chonkie rejects
-    that turned a minutes-long reindex into an hours-long one, so rediscovering an
-    unsupported language must cost nothing. A name chonkie spells differently than
-    we do is a mapping problem, not something to pay per-file parsing to guess.
+    Constructing costs 19.7ms against 6.3ms to actually chunk — every __init__
+    re-runs AutoTokenizer, downloaded_languages() (a filesystem scan) and
+    has_language(). Building one per file spent 76% of all chunking CPU on a
+    chunker it then threw away; caching measured 3.26x over 40 real files with
+    byte-identical output. chunk() assigns to no attribute (it only reads
+    self.language), so one instance is safe to share across the reconcile and
+    watcher threads. Keyed on chunk_size too, so an EMBED_MAX_TOKENS change can
+    never be served a chunker built for the old budget.
+
+    Returns None when chonkie has no grammar for the name (e.g. "text"), cached
+    the same way: chonkie raises on such a name, and the obvious recovery —
+    retrying with language="auto" — makes it brute-force parse the file against
+    every grammar it owns, 0.50s per file and rising with file size against 0.02s
+    for a named language. On a repo whose files chonkie rejects that turned a
+    minutes-long reindex into an hours-long one, so rediscovering an unsupported
+    language must cost nothing. A name chonkie spells differently than we do is a
+    mapping problem, not something to pay per-file parsing to guess.
     """
     from chonkie import CodeChunker
     try:
-        CodeChunker(tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language=language)
-        return True
+        return CodeChunker(tokenizer=_tokenizer(), chunk_size=chunk_size, language=language)
     except Exception as exc:
         log.info("chonkie has no grammar for %r (%s) — line-window fallback for these files",
                  language, type(exc).__name__)
-        return False
+        return None
 
 
 def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
@@ -132,12 +140,10 @@ def chunk_file(
     except ValueError:
         rel = path.name
     header = f"# {rel}\n"
-    if _chonkie_supports(language):
+    chunker = _code_chunker(language, EMBED_MAX_TOKENS)
+    if chunker is not None:
         try:
-            from chonkie import CodeChunker
-            raw = CodeChunker(
-                tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language=language,
-            ).chunk(content)
+            raw = chunker.chunk(content)
         except Exception as exc:
             log.debug("CodeChunker(language=%r) failed on %s: %s: %s",
                       language, rel, type(exc).__name__, exc)

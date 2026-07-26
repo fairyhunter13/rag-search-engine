@@ -11,6 +11,7 @@ CC8  chunks fit the embedder's token budget (nothing truncated away)
 CC9  a full index stamps its embed signature, and drift is detectable
 CC10 migrating drifted vectors re-embeds without destroying the graph
 CC11 an unsupported language falls back cheaply, never by brute-force parsing
+CC12 the CodeChunker is built once per language, not once per file
 """
 from __future__ import annotations
 
@@ -216,10 +217,11 @@ def test_cc11_unsupported_language_falls_back_cheaply(tmp_path):
     """
     import time
 
-    from rag_search.index.chunker import _chonkie_supports, chunk_file
+    from rag_search.core.config import EMBED_MAX_TOKENS
+    from rag_search.index.chunker import _code_chunker, chunk_file
     root = tmp_path / "proj"
     root.mkdir()
-    assert not _chonkie_supports("text"), (
+    assert _code_chunker("text", EMBED_MAX_TOKENS) is None, (
         "CC11: 'text' is the unsupported language this test relies on; pick another"
     )
     content = "".join(f"some prose line number {i} with words in it\n" for i in range(400))
@@ -234,6 +236,44 @@ def test_cc11_unsupported_language_falls_back_cheaply(tmp_path):
     assert worst < 0.20, (
         f"CC11: {worst:.2f}s to chunk one unsupported-language file — the brute-force "
         f"'auto' detection path is back; a fleet reindex will not finish"
+    )
+
+
+def test_cc12_chunker_built_once_per_language_not_per_file():
+    """CC12: one CodeChunker per language, and caching must not alter output.
+
+    Construction re-runs AutoTokenizer, downloaded_languages() and has_language()
+    — 19.7ms against 6.3ms to chunk — so building one per file spent 76% of all
+    chunking CPU on a chunker it threw away. Output is byte-identical either way,
+    so correctness alone cannot see a regression here: the cache counters are the
+    discriminator, and they go red the moment chunk_file constructs its own again.
+    """
+    from pathlib import Path
+
+    from rag_search.index.chunker import _code_chunker, chunk_file
+    root = Path(__file__).resolve().parents[2] / "rag_search"
+    files = [f for f in sorted(root.rglob("*.py"))[:25] if f.read_text().strip()]
+    assert len(files) >= 10, f"CC12: need a corpus, found {len(files)} under {root}"
+
+    fresh = []
+    for f in files:
+        _code_chunker.cache_clear()  # a construction per file, exactly as before the fix
+        fresh.append([c.content for c in chunk_file(f, f.read_text(), "python", project_root=root)])
+
+    _code_chunker.cache_clear()
+    cached = [
+        [c.content for c in chunk_file(f, f.read_text(), "python", project_root=root)]
+        for f in files
+    ]
+    info = _code_chunker.cache_info()
+
+    assert cached == fresh, "CC12: reusing the chunker changed chunk content"
+    assert info.misses == 1, (
+        f"CC12: {info.misses} chunkers built for {len(files)} files of one language"
+    )
+    assert info.hits == len(files) - 1, (
+        f"CC12: cache served {info.hits} of {len(files)} files — chunk_file is building "
+        f"its own CodeChunker again"
     )
 
 
