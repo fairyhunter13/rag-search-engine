@@ -51,6 +51,12 @@ def _open(db_path: Path, dim: int) -> sqlite3.Connection:
         )
     """)
     con.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    # Content hash of each file whose chunks are currently embedded here, so an incremental
+    # reindex can skip a file that was rewritten with identical bytes (generators and
+    # save-on-format rewrite constantly; embedding them again buys nothing).
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS file_hashes (path TEXT PRIMARY KEY, hash TEXT NOT NULL)"
+    )
     con.commit()
     return con
 
@@ -96,6 +102,23 @@ class VectorStore:
             (chunk_id, v),
         )
 
+    def file_hash(self, path: str) -> str | None:
+        """The content hash whose chunks are currently embedded for path, if any."""
+        row = self._con.execute(
+            "SELECT hash FROM file_hashes WHERE path=?", (path,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_file_hash(self, path: str, digest: str) -> None:
+        """Record that path's chunks in this store were built from content hashing to digest.
+
+        Only ever written after that file's chunks are inserted, and dropped by
+        delete_by_path/clear, so a hash row always describes what is really stored.
+        """
+        self._con.execute(
+            "INSERT OR REPLACE INTO file_hashes VALUES (?,?)", (path, digest)
+        )
+
     def flush(self) -> None:
         self._con.commit()
 
@@ -125,6 +148,7 @@ class VectorStore:
         """Drop all chunk metadata + vectors (for idempotent full reindex)."""
         self._con.execute("DELETE FROM vec_chunks")
         self._con.execute("DELETE FROM chunks")
+        self._con.execute("DELETE FROM file_hashes")
 
     def delete_by_path(self, path: str) -> None:
         """Remove all chunks (metadata + vectors) for a single file path."""
@@ -132,6 +156,7 @@ class VectorStore:
         for cid in ids:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
         self._con.execute("DELETE FROM chunks WHERE path=?", (path,))
+        self._con.execute("DELETE FROM file_hashes WHERE path=?", (path,))
 
     def close(self) -> None:
         self._con.close()
