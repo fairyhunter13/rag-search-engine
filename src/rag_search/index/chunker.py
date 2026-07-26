@@ -27,6 +27,29 @@ def _tokenizer():
     return Tokenizer.from_pretrained(EMBED_MODEL)
 
 
+@lru_cache(maxsize=256)
+def _chonkie_supports(language: str) -> bool:
+    """Whether chonkie has a grammar for this language name.
+
+    Cached per language because the answer cannot vary per file, and asking is not
+    free. chonkie raises on a name it has no grammar for (e.g. "text"), and the
+    obvious recovery — retrying with language="auto" — makes it brute-force parse
+    the file against every grammar it owns: 0.50s per file and rising with file
+    size, against 0.02s for a named language. On a repo whose files chonkie rejects
+    that turned a minutes-long reindex into an hours-long one, so rediscovering an
+    unsupported language must cost nothing. A name chonkie spells differently than
+    we do is a mapping problem, not something to pay per-file parsing to guess.
+    """
+    from chonkie import CodeChunker
+    try:
+        CodeChunker(tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language=language)
+        return True
+    except Exception as exc:
+        log.info("chonkie has no grammar for %r (%s) — line-window fallback for these files",
+                 language, type(exc).__name__)
+        return False
+
+
 def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
     """Convert chonkie's *character* offsets into 1-based inclusive line numbers."""
     return text.count("\n", 0, start) + 1, text.count("\n", 0, end) + 1
@@ -109,26 +132,23 @@ def chunk_file(
     except ValueError:
         rel = path.name
     header = f"# {rel}\n"
-    # "auto" is retried because chonkie raises on any language name it has no
-    # grammar for (e.g. "text"), and that would otherwise cost us AST chunking
-    # on every file of that language.
-    for lang in dict.fromkeys((language, "auto")):
+    if _chonkie_supports(language):
         try:
             from chonkie import CodeChunker
             raw = CodeChunker(
-                tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language=lang,
+                tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language=language,
             ).chunk(content)
         except Exception as exc:
             log.debug("CodeChunker(language=%r) failed on %s: %s: %s",
-                      lang, rel, type(exc).__name__, exc)
-            continue
+                      language, rel, type(exc).__name__, exc)
+            raw = None
         if raw:
             out: list[Chunk] = []
             for c in raw:
                 start, _ = _line_span(content, c.start_index, c.end_index)
                 out.extend(_fit_budget(header, c.text, str(path), language, start))
             return out
-    log.warning("chonkie unusable for %s (language=%r) — line-window fallback", rel, language)
+    log.debug("chonkie unusable for %s (language=%r) — line-window fallback", rel, language)
     chunks = _line_chunks(content, str(path), language)
     for c in chunks:
         c.content = header + c.content

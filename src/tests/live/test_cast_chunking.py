@@ -10,6 +10,7 @@ CC7  chonkie accepts the kwargs chunk_file actually passes
 CC8  chunks fit the embedder's token budget (nothing truncated away)
 CC9  a full index stamps its embed signature, and drift is detectable
 CC10 migrating drifted vectors re-embeds without destroying the graph
+CC11 an unsupported language falls back cheaply, never by brute-force parsing
 """
 from __future__ import annotations
 
@@ -202,6 +203,38 @@ def test_cc9_index_records_its_embed_signature(embedder, tmp_path_factory):
         )
     finally:
         vs.close()
+
+
+def test_cc11_unsupported_language_falls_back_cheaply(tmp_path):
+    """CC11: a language chonkie has no grammar for must not cost per-file parsing.
+
+    Recovering from chonkie's raise by retrying with language="auto" makes it parse
+    the file against every grammar it owns — 0.50s/file against 0.02s named, and
+    worse on bigger files. That is invisible in output (the chunks are identical
+    either way) and only shows up as a fleet reindex that never finishes, so the
+    assertion has to be on time, not on chunks.
+    """
+    import time
+
+    from rag_search.index.chunker import _chonkie_supports, chunk_file
+    root = tmp_path / "proj"
+    root.mkdir()
+    assert not _chonkie_supports("text"), (
+        "CC11: 'text' is the unsupported language this test relies on; pick another"
+    )
+    content = "".join(f"some prose line number {i} with words in it\n" for i in range(400))
+    elapsed = []
+    for i in range(5):
+        f = root / f"doc{i}.txt"
+        f.write_text(content)
+        t = time.perf_counter()
+        assert chunk_file(f, content, "text", project_root=root), "CC11: no chunks produced"
+        elapsed.append(time.perf_counter() - t)
+    worst = max(elapsed)
+    assert worst < 0.20, (
+        f"CC11: {worst:.2f}s to chunk one unsupported-language file — the brute-force "
+        f"'auto' detection path is back; a fleet reindex will not finish"
+    )
 
 
 def test_cc10_vector_migration_leaves_the_graph_alone(embedder, standalone_project_path):
