@@ -9,6 +9,7 @@ CC6  index_project stores chunks with the header in the vector store
 CC7  chonkie accepts the kwargs chunk_file actually passes
 CC8  chunks fit the embedder's token budget (nothing truncated away)
 CC9  a full index stamps its embed signature, and drift is detectable
+CC10 migrating drifted vectors re-embeds without destroying the graph
 """
 from __future__ import annotations
 
@@ -198,6 +199,39 @@ def test_cc9_index_records_its_embed_signature(embedder, tmp_path_factory):
         )
         assert vs.stale_signature() == "old|512|768|pre", (
             "CC9: a config change must be detectable, not silent"
+        )
+    finally:
+        vs.close()
+
+
+def test_cc10_vector_migration_leaves_the_graph_alone(embedder, standalone_project_path):
+    """CC10: re-embedding drifted vectors must not touch graph.db.
+
+    Drift was first wired to _index_project, which opens with gs.clear() — so
+    migrating a chunk-size change would have wiped every project's communities and
+    forced the whole fleet's LLM narration to be bought again. Chunk shape has no
+    bearing on the tree-sitter graph, so the two must stay independent.
+    """
+    import hashlib
+
+    from rag_search.core.config import project_graph_db, project_vector_db
+    from rag_search.daemon.sweeps import _reindex_vectors
+    from rag_search.index.store import VectorStore
+
+    gdb = project_graph_db(standalone_project_path)
+    assert gdb.exists(), f"CC10: fixture has no graph to protect at {gdb}"
+    before = hashlib.sha256(gdb.read_bytes()).hexdigest()
+
+    _reindex_vectors(standalone_project_path)
+
+    assert hashlib.sha256(gdb.read_bytes()).hexdigest() == before, (
+        "CC10: vector migration rewrote graph.db — community summaries are collateral"
+    )
+    vs = VectorStore(project_vector_db(standalone_project_path))
+    try:
+        assert vs.count() > 0, "CC10: migration left the vector index empty"
+        assert vs.stale_signature() is None, (
+            "CC10: migrated vectors still report stale — the pass would repeat forever"
         )
     finally:
         vs.close()
