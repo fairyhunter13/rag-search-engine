@@ -1,11 +1,14 @@
 """cAST structural-path header tests (CC1–CC6, arXiv 2506.15655).
 
-CC1  chunk_file (chonkie path) prepends '# <rel>\\n' when project_root given
+CC1  chonkie AST path actually runs (not the fallback) + header + real line numbers
 CC2  line-fallback path also carries the header
 CC3  byte-identical re-chunk (determinism MR)
 CC4  empty file returns [] — header not prepended to nothing
 CC5  path outside project_root → basename fallback (no ValueError)
 CC6  index_project stores chunks with the header in the vector store
+CC7  chonkie accepts the kwargs chunk_file actually passes
+CC8  chunks fit the embedder's token budget (nothing truncated away)
+CC9  a full index stamps its embed signature, and drift is detectable
 """
 from __future__ import annotations
 
@@ -14,23 +17,44 @@ import pytest
 pytestmark = pytest.mark.live
 
 
-def test_cc1_header_prepended_chonkie_path(tmp_path):
-    """CC1: chunk_file prepends '# <rel-path>\\n' when project_root given."""
-    from rag_search.index.chunker import chunk_file
+def test_cc1_chonkie_path_actually_runs(tmp_path):
+    """CC1: the AST chunker runs — the line-window fallback must not be reached.
+
+    The previous assertion only checked the '# <rel>' header, which *both*
+    branches prepend, so it stayed green while chonkie raised TypeError on every
+    single call and 100% of chunks came from blind 100-line windows.
+
+    The discriminator is real output, not a mock: when chonkie fails, chunk_file
+    returns the fallback's chunks verbatim, so the two span lists are identical.
+    Comparing against _line_chunks directly cannot be confused by _fit_budget
+    re-splitting an oversized AST node (which reintroduces overlap legitimately).
+    """
+    from rag_search.index.chunker import _line_chunks, chunk_file
     root = tmp_path / "proj"
-    root.mkdir()
-    src = root / "src"
-    src.mkdir()
-    fpath = src / "main.py"
-    content = "def foo(): pass\n" * 50
+    (root / "src").mkdir(parents=True)
+    fpath = root / "src" / "main.py"
+    content = "".join(
+        f"class C{i}:\n    def m{i}(self, a, b):\n        return a + b + {i}\n\n"
+        for i in range(60)
+    )
     fpath.write_text(content)
     chunks = chunk_file(fpath, content, "python", project_root=root)
-    assert chunks, "CC1: no chunks produced"
-    expected = "# src/main.py\n"
+    spans = [(c.start_line, c.end_line) for c in chunks]
+    fallback = [(c.start_line, c.end_line) for c in _line_chunks(content, str(fpath), "python")]
+    assert len(chunks) > 1, f"CC1: need >1 chunk to compare, got {len(chunks)}"
+    assert spans != fallback, (
+        f"CC1: chunk_file returned exactly the line-window fallback's spans {spans} "
+        f"— chonkie did not run"
+    )
     for c in chunks:
-        assert c.content.startswith(expected), (
+        assert c.content.startswith("# src/main.py\n"), (
             f"CC1: chunk missing header; starts: {c.content[:40]!r}"
         )
+    # chonkie reports *character* offsets; storing them raw would put a 5674 in a
+    # field every search result prints as `path:line`.
+    assert max(c.end_line for c in chunks) <= content.count("\n") + 1, (
+        "CC1: end_line exceeds the file's line count — character offsets leaked in"
+    )
 
 
 def test_cc2_linefallback_carries_header(tmp_path):
@@ -114,3 +138,66 @@ def test_cc6_indexer_stores_chunks_with_header(embedder, tmp_path_factory):
         assert row[0].startswith("# api.py\n"), (
             f"CC6: indexed chunk missing cAST header; starts: {row[0][:50]!r}"
         )
+
+
+def test_cc7_chonkie_accepts_the_kwargs_we_pass():
+    """CC7: constructing CodeChunker the way chunk_file does must not raise.
+
+    Guards Finding 1 at its root: `chunk_overlap=` is not in chonkie's signature,
+    and a bare `except Exception: pass` turned that TypeError into silence.
+    """
+    from chonkie import CodeChunker
+
+    from rag_search.core.config import EMBED_MAX_TOKENS
+    from rag_search.index.chunker import _tokenizer
+    CodeChunker(tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language="python")
+
+
+def test_cc8_chunks_fit_the_embedder_token_budget():
+    """CC8: ≥95% of chunks from real source must fit EMBED_MAX_TOKENS.
+
+    Direct guard for Finding 2. With 100-line windows against a 512-token cap,
+    78.4% of chunks overflowed and 51% of all tokens were never embedded at all —
+    a chunk larger than the window that embeds it loses its tail silently.
+    """
+    from pathlib import Path
+
+    from rag_search.core.config import EMBED_MAX_TOKENS
+    from rag_search.index.chunker import _tokenizer, chunk_file
+    root = Path(__file__).resolve().parents[2] / "rag_search"
+    files = sorted(root.rglob("*.py"))[:40]
+    assert files, f"CC8: no source files found under {root}"
+    tok = _tokenizer()
+    chunks = [
+        c for f in files
+        for c in chunk_file(f, f.read_text(), "python", project_root=root)
+    ]
+    over = [c for c in chunks if len(tok.encode(c.content).ids) > EMBED_MAX_TOKENS]
+    assert len(over) / len(chunks) <= 0.05, (
+        f"CC8: {len(over)}/{len(chunks)} chunks ({len(over) / len(chunks):.1%}) exceed "
+        f"EMBED_MAX_TOKENS={EMBED_MAX_TOKENS}; their tails never reach the index"
+    )
+
+
+def test_cc9_index_records_its_embed_signature(embedder, tmp_path_factory):
+    """CC9: a full index stamps the pipeline that built it, and drift is detectable.
+
+    Without the stamp, changing the model or token budget leaves old and new chunk
+    shapes coexisting in one index with nothing able to tell them apart.
+    """
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
+    root = tmp_path_factory.mktemp("stamp_proj")
+    (root / "api.py").write_text("def handle(req):\n    return {'ok': True}\n" * 25)
+    vs = VectorStore(tmp_path_factory.mktemp("stamp_stores") / "v.db")
+    try:
+        index_project(root, embedder, vs, federation_mode=False)
+        assert vs.stale_signature() is None, "CC9: a freshly built index reports itself stale"
+        vs._con.execute(
+            "INSERT OR REPLACE INTO meta VALUES ('embed_signature','old|512|768|pre')"
+        )
+        assert vs.stale_signature() == "old|512|768|pre", (
+            "CC9: a config change must be detectable, not silent"
+        )
+    finally:
+        vs.close()

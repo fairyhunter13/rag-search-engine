@@ -7,6 +7,24 @@ from pathlib import Path
 import numpy as np
 import sqlite_vec
 
+from rag_search.core.config import EMBED_MAX_TOKENS, EMBED_MODEL
+
+# Bump by hand whenever chunk *shape* changes (boundaries, headers, overlap) in a
+# way that makes old vectors incomparable to new ones.
+CHUNKER_REV = "cast-1"
+
+
+def embed_signature(dim: int = 768) -> str:
+    """Identity of the pipeline that produced a set of vectors.
+
+    A stored vector is only comparable to a query embedded the same way, so any
+    change here invalidates the whole index. Recording it is what lets a stale
+    index announce itself: without it, a config change leaves old and new chunk
+    shapes coexisting silently and forever — which is how a 512-token truncation
+    went unnoticed while discarding half of every indexed repo.
+    """
+    return f"{EMBED_MODEL}|{EMBED_MAX_TOKENS}|{dim}|{CHUNKER_REV}"
+
 
 def _open(db_path: Path, dim: int) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +50,7 @@ def _open(db_path: Path, dim: int) -> sqlite3.Connection:
             embedding FLOAT[{dim}]
         )
     """)
+    con.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
     con.commit()
     return con
 
@@ -41,6 +60,27 @@ class VectorStore:
 
     def __init__(self, db_path: Path, dim: int = 768):
         self._con = _open(db_path, dim)
+        self._dim = dim
+
+    def stamp(self) -> None:
+        """Record which pipeline built the vectors now held here. Call after a full reindex."""
+        self._con.execute(
+            "INSERT OR REPLACE INTO meta VALUES ('embed_signature', ?)",
+            (embed_signature(self._dim),),
+        )
+
+    def stale_signature(self) -> str | None:
+        """The recorded signature, if it disagrees with the running config; else None.
+
+        A populated index with no stamp predates stamping, so it is stale too.
+        An empty index is never stale — there is nothing to be inconsistent with.
+        """
+        row = self._con.execute(
+            "SELECT value FROM meta WHERE key='embed_signature'"
+        ).fetchone()
+        if row is None:
+            return "<unstamped>" if self.count() else None
+        return None if row[0] == embed_signature(self._dim) else row[0]
 
     def insert(
         self, chunk_id: int, path: str, start: int, end: int,

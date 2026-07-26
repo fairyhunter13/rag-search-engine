@@ -1,8 +1,14 @@
 """Code chunking: chonkie CodeChunker for code, line-based fallback."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+
+from rag_search.core.config import EMBED_MAX_TOKENS, EMBED_MODEL
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -14,19 +20,76 @@ class Chunk:
     content: str
 
 
+@lru_cache(maxsize=1)
+def _tokenizer():
+    """The embed model's own tokenizer, so a chunk budget counts the same units the embedder does."""
+    from tokenizers import Tokenizer
+    return Tokenizer.from_pretrained(EMBED_MODEL)
+
+
+def _line_span(text: str, start: int, end: int) -> tuple[int, int]:
+    """Convert chonkie's *character* offsets into 1-based inclusive line numbers."""
+    return text.count("\n", 0, start) + 1, text.count("\n", 0, end) + 1
+
+
+def _fit_budget(header: str, text: str, path: str, lang: str, start: int) -> list[Chunk]:
+    """One chonkie chunk → chunks that actually fit the embed budget.
+
+    chonkie treats chunk_size as a target, not a cap: an indivisible AST node
+    overshoots it (measured up to 1210 against a 1024 budget), and the header adds
+    a few tokens more. The excess would be truncated at embed time rather than
+    stored, so split it by lines instead of losing the tail — the same silent loss
+    this whole change exists to remove, just smaller.
+    """
+    tok = _tokenizer()
+    body = header + text
+    if len(tok.encode(body).ids) <= EMBED_MAX_TOKENS:
+        return [Chunk(path, start, start + text.count("\n"), lang, body)]
+    parts = _line_chunks(
+        text, path, lang, max_tokens=EMBED_MAX_TOKENS - len(tok.encode(header).ids),
+    )
+    for p in parts:
+        p.start_line += start - 1
+        p.end_line += start - 1
+        p.content = header + p.content
+    return parts
+
+
 def _line_chunks(
     text: str, path: str, lang: str,
-    size: int = 100, overlap: int = 10,
+    *, max_tokens: int = EMBED_MAX_TOKENS, overlap: int = 10,
 ) -> list[Chunk]:
+    """Sliding-window fallback, bounded by TOKENS rather than a fixed line count.
+
+    A fixed 100-line window overflowed the embedder's budget on 78% of chunks,
+    so their tails were silently truncated away before ever being embedded.
+    Growing the window by measured token cost keeps every chunk inside the
+    window that will embed it.
+    """
     lines = text.splitlines()
+    if not lines:
+        return []
+    try:
+        counts = [len(e.ids) for e in _tokenizer().encode_batch(lines)]
+    except Exception:  # tokenizer unavailable (offline first run) — estimate instead
+        counts = [max(1, len(ln) // 4) for ln in lines]
     chunks, i = [], 0
     while i < len(lines):
-        block = lines[i : i + size]
+        total = n = 0
+        while i + n < len(lines) and (n == 0 or total + counts[i + n] <= max_tokens):
+            total += counts[i + n]
+            n += 1
+        block = lines[i : i + n]
         chunks.append(Chunk(
             path=path, start_line=i + 1, end_line=i + len(block),
             language=lang, content="\n".join(block),
         ))
-        i += size - overlap
+        # Stop once a window reaches the last line. Without this, a tail shorter
+        # than `overlap` makes the stride collapse to 1 and emits one near-duplicate
+        # chunk per remaining line — a fixed stride could never underflow this way.
+        if i + n >= len(lines):
+            break
+        i += max(n - overlap, 1)
     return chunks
 
 
@@ -46,23 +109,26 @@ def chunk_file(
     except ValueError:
         rel = path.name
     header = f"# {rel}\n"
-    try:
-        from chonkie import CodeChunker
-        chunker = CodeChunker(chunk_size=512, chunk_overlap=64)
-        raw = chunker.chunk(content)
+    # "auto" is retried because chonkie raises on any language name it has no
+    # grammar for (e.g. "text"), and that would otherwise cost us AST chunking
+    # on every file of that language.
+    for lang in dict.fromkeys((language, "auto")):
+        try:
+            from chonkie import CodeChunker
+            raw = CodeChunker(
+                tokenizer=_tokenizer(), chunk_size=EMBED_MAX_TOKENS, language=lang,
+            ).chunk(content)
+        except Exception as exc:
+            log.debug("CodeChunker(language=%r) failed on %s: %s: %s",
+                      lang, rel, type(exc).__name__, exc)
+            continue
         if raw:
-            return [
-                Chunk(
-                    path=str(path),
-                    start_line=getattr(c, "start_index", 0),
-                    end_line=getattr(c, "end_index", 0),
-                    language=language,
-                    content=header + c.text,
-                )
-                for c in raw
-            ]
-    except Exception:
-        pass
+            out: list[Chunk] = []
+            for c in raw:
+                start, _ = _line_span(content, c.start_index, c.end_index)
+                out.extend(_fit_budget(header, c.text, str(path), language, start))
+            return out
+    log.warning("chonkie unusable for %s (language=%r) — line-window fallback", rel, language)
     chunks = _line_chunks(content, str(path), language)
     for c in chunks:
         c.content = header + c.content
