@@ -103,10 +103,14 @@ python scripts/check_world_model.py               # architecture invariants (GPU
 
 All three should exit 0 with no `[ ]` failures.
 
-## Health supervisor
+## Health monitoring
 
-`health-supervisor.sh` captures crash evidence to `~/.local/state/rag-search/health/crashes/` and sends
-desktop notifications on fatal failure. Optional; does not replace systemd.
+`journalctl --user -u rag-search-mcp-daemon` and `systemctl --user status` are the supervision
+story. A `health-supervisor.sh` sidecar was deleted in July 2026: it looked for a `rag-search
+watch` process, but the daemon's cmdline is `rag-search daemon serve`, so its check returned false
+for its entire life — 161k identical `watcher=false` log lines, a false "Watcher Down" desktop
+alert 5 minutes after every start, and 99 crash-evidence directories that contain no service log
+because the file they read (`~/.local/state/rag-search/rag-search.log`) never existed.
 
 ## Codebase layout
 
