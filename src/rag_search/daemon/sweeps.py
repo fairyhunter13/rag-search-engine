@@ -271,6 +271,36 @@ def _rederive_graph(project_path: str) -> None:
     log.info("_rederive_graph %s: re-extracted and re-detected", project_path)
 
 
+def _reindex_vectors(project_path: str) -> None:
+    """Rebuild only the vector index, leaving the graph and its summaries intact.
+
+    An embed-signature drift invalidates vectors and nothing else — chunk shape has
+    no bearing on the tree-sitter graph or the LLM narration derived from it. Routing
+    drift through _index_project would gs.clear() the graph and force every community
+    to be re-narrated, spending a fleet's worth of DeepSeek calls to fix a chunking bug.
+    """
+    from pathlib import Path
+
+    from rag_search.core.config import project_vector_db
+    from rag_search.core.registry import get_project, upsert_project
+    from rag_search.embed.embedder import get_embedder
+    from rag_search.index.indexer import index_project
+    from rag_search.index.store import VectorStore
+
+    vs = VectorStore(project_vector_db(project_path))
+    try:
+        file_count, chunk_count = index_project(Path(project_path), get_embedder(), vs)
+    finally:
+        vs.close()
+    # indexed_at is deliberately left alone: it marks graph+vector completeness for
+    # _needs_index, and this pass rebuilt only half of that.
+    if (entry := get_project(project_path)) is not None:
+        entry.file_count = file_count
+        entry.chunk_count = chunk_count
+        upsert_project(entry)
+    log.info("_reindex_vectors %s: %d files -> %d chunks", project_path, file_count, chunk_count)
+
+
 def _needs_index(path: str) -> bool:
     """True if this project's index is absent or never completed.
 
@@ -346,17 +376,17 @@ def reconcile_projects() -> None:
             if is_federation_excluded(entry.path):
                 continue
             needs_idx = _needs_index(entry.path)
-            needs_rederive = False
+            needs_rederive = needs_vectors = False
             if not needs_idx and (drifted := _vectors_stale(entry.path)):
                 from rag_search.core.config import AUTO_MIGRATE_VECTORS
                 from rag_search.index.store import embed_signature
                 log.warning(
                     "%s: vectors built by %r, config is now %r — %s",
                     entry.path, drifted, embed_signature(),
-                    "reindexing" if AUTO_MIGRATE_VECTORS
+                    "re-embedding" if AUTO_MIGRATE_VECTORS
                     else "set RSE_AUTO_MIGRATE_VECTORS=1 to migrate",
                 )
-                needs_idx = bool(AUTO_MIGRATE_VECTORS)
+                needs_vectors = bool(AUTO_MIGRATE_VECTORS)
             # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
             if not needs_idx and not entry.federation:
                 gdb = project_graph_db(entry.path)
@@ -370,6 +400,12 @@ def reconcile_projects() -> None:
                     finally:
                         gs.close()
             try:
+                # Orthogonal to the chain below, not a branch of it: re-embedding touches
+                # only vectors.db, so it neither satisfies nor preempts a graph rederive.
+                # needs_vectors is only ever set when needs_idx is False, so the two can
+                # never both rebuild the same vectors.
+                if needs_vectors:
+                    _reindex_vectors(entry.path)
                 if needs_idx:
                     _index_project(entry.path)
                     _enrich_project(entry.path)
