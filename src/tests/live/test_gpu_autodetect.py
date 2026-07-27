@@ -122,9 +122,14 @@ def test_embedder_bound_to_gpu_ep_after_inference(embedder):
 
 
 def test_embedder_real_inference_proves_gpu(embedder):
-    """embed() returning (n,768) float16 proves GPU compute ran (CPU being fatal)."""
+    """Real inference returning (n,768) proves compute ran — and _init() already refused to
+    return an embedder whose primary EP wasn't a GPU one, so that compute was on the GPU.
+
+    The dtype is not part of that proof: it comes from our own cast in embed(), not from the
+    execution provider. It is asserted here only to pin the float32 contract store.insert wants.
+    """
     vecs = embedder.embed(["hello world", "def foo():"])
-    assert vecs.dtype == np.float16 and vecs.shape == (2, 768)
+    assert vecs.dtype == np.float32 and vecs.shape == (2, 768)
 
 
 def test_reranker_real_inference_proves_gpu():
