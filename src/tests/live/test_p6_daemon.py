@@ -832,8 +832,13 @@ def test_on_change_wires_kb_enrich():
 
     from rag_search.daemon import sweeps
     src = inspect.getsource(sweeps.on_change)
-    assert "_enrich_project" in src, (
-        "on_change must call _enrich_project — KB enrichment must be event-driven via the watcher"
+    # on_change hands the heavy half to the KB lane rather than running it inline, so follow the
+    # one hop. The invariant is unchanged: a file event, and nothing on a clock, drives enrich.
+    assert "_kb_lane_submit" in src, (
+        "on_change must submit to the KB lane — KB enrichment must be event-driven via the watcher"
+    )
+    assert "_enrich_project" in inspect.getsource(sweeps._kb_lane_pass), (
+        "the KB lane must call _enrich_project — otherwise on_change's hand-off reaches nothing"
     )
 
 
