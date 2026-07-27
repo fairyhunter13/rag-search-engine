@@ -72,6 +72,10 @@ def _fire(proj: str, files: list) -> None:
     sweeps._last_enriched_sig.pop(proj, None)
     sweeps._last_index_fail.pop(proj, None)
     sweeps.on_change(proj, [str(f) for f in files])
+    # on_change now hands the heavy half to the KB lane so a dispatch worker never blocks on
+    # _KB_HEAVY_LOCK. Joining restores exactly the guarantee these gates were written against —
+    # every assertion below is unchanged — rather than turning them into timing tests.
+    assert sweeps._kb_lane_join(timeout=180.0), "KB lane did not finish its pass"
 
 
 def test_wg1_new_symbol_reaches_the_graph(safe_tmp_path):

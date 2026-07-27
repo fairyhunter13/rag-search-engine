@@ -136,6 +136,17 @@ def test_no_junk_paths_in_live_registry(live_client, sample_workspace):
     )
 
 
+def _settle(sweeps) -> None:
+    """Wait out the KB lane, which now runs on_change's heavy half off the caller's thread.
+
+    Two reasons, and the second is the load-bearing one. The gates below assert on _enrich_project
+    calls, and without this they would be assertions about scheduling rather than about the drift
+    gate. More importantly the fixtures restore the real _enrich_project in `finally`, so a pass
+    that landed after teardown would run it against a TemporaryDirectory that no longer exists.
+    """
+    assert sweeps._kb_lane_join(timeout=180.0), "KB lane did not finish its pass"
+
+
 def test_drift_gate_skips_enrich_when_sig_unchanged():
     """FP5: on_change must not call _enrich_project when source fingerprint is unchanged."""
     import os
@@ -154,6 +165,7 @@ def test_drift_gate_skips_enrich_when_sig_unchanged():
         sweeps._index_files = lambda *a, **kw: None  # type: ignore[assignment]
         try:
             sweeps.on_change(tmp, [os.path.join(tmp, "app.log")])
+            _settle(sweeps)  # else "no enrich yet" and "no enrich ever" look identical
             assert not calls, f"drift gate must suppress enrich when sig unchanged; calls={calls}"
         finally:
             sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
@@ -177,6 +189,7 @@ def test_drift_gate_triggers_enrich_when_sig_changes():
         sweeps._index_files = lambda *a, **kw: None  # type: ignore[assignment]
         try:
             sweeps.on_change(tmp, [tmp + "/main.go"])
+            _settle(sweeps)
             assert calls, f"enrich must fire when sig differs; calls={calls}"
             assert sweeps._last_enriched_sig.get(tmp) != "stale-sig-will-never-match"
         finally:
@@ -209,9 +222,14 @@ def _fcg_project():
         sweeps._last_enriched_sig.pop(tmp, None)
         try:
             sweeps.on_change(tmp, [tmp + "/main.py"])  # baseline stamp
+            _settle(sweeps)
             assert calls == [tmp], "baseline on_change must enrich exactly once"
             yield tmp, calls, sweeps
         finally:
+            # Unasserted on purpose: a test that already failed must report its own reason, not a
+            # join timeout. Still required — restoring the real _enrich_project under a running
+            # lane pass points it at a directory this `with` block is about to delete.
+            sweeps._kb_lane_join(timeout=180.0)
             sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
             sweeps._last_enriched_sig.pop(tmp, None)
             sweeps._last_kb_enrich.pop(tmp, None)
@@ -224,6 +242,7 @@ def test_fcg1_docs_wiki_churn_quiescent(_fcg_project):
     sweeps._last_kb_enrich.pop(tmp, None)  # bypass the 45s debounce for this scenario
     _write_tree(tmp, {"docs/notes.md": "hello\n", "wiki/L1_overview.md": "generated\n"})
     sweeps.on_change(tmp, [tmp + "/docs/notes.md", tmp + "/wiki/L1_overview.md"])
+    _settle(sweeps)
     assert calls == [tmp], f"docs/wiki-only churn must not re-trigger the cascade; calls={calls}"
 
 
@@ -233,6 +252,7 @@ def test_fcg2_config_image_churn_quiescent(_fcg_project):
     sweeps._last_kb_enrich.pop(tmp, None)
     _write_tree(tmp, {"config/settings.json": '{"a": 1}\n', "assets/logo.png": "not-a-png\n"})
     sweeps.on_change(tmp, [tmp + "/config/settings.json", tmp + "/assets/logo.png"])
+    _settle(sweeps)
     assert calls == [tmp], f"config/image-only churn must not re-trigger the cascade; calls={calls}"
 
 
@@ -244,6 +264,7 @@ def test_fcg3_real_code_drift_fires_cascade_once(_fcg_project):
     time.sleep(1.1)  # ensure a distinct mtime tick (sig truncates to whole seconds)
     _write_tree(tmp, {"main.py": "def f():\n    pass\n\ndef g():\n    pass\n"})
     sweeps.on_change(tmp, [tmp + "/main.py"])
+    _settle(sweeps)
     assert calls == [tmp, tmp], f"real code drift must re-trigger the cascade once; calls={calls}"
 
 
@@ -252,6 +273,7 @@ def test_fcg4_convergence_second_call_reuses(_fcg_project):
     tmp, calls, sweeps = _fcg_project
     sweeps._last_kb_enrich.pop(tmp, None)  # bypass debounce so only the sig gate is exercised
     sweeps.on_change(tmp, [tmp + "/main.py"])
+    _settle(sweeps)
     assert calls == [tmp], f"unchanged second call must reuse, not re-enrich; calls={calls}"
 
 
