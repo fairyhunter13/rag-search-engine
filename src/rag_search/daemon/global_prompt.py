@@ -25,7 +25,9 @@ Rules (no exceptions):
 - RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs/errors,
   immediately fall back to native Read/Grep/Glob/Bash — never wait or retry the MCP call.
 - NEVER auto-index. Only call index(enabled=True) when the user explicitly asks.
-- If not indexed, say so and ask before indexing.\
+- If not indexed, say so and ask before indexing.
+- `search` returns ranked LOCATIONS (path + line range + a short preview), not file bodies.
+  Read the ranges you actually want. Pass verbosity="full" only when you need bodies inline.\
 """
 
 

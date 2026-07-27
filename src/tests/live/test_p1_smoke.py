@@ -39,10 +39,12 @@ def test_reranker_bound_to_gpu(embedder):
         del r
 
 
-def test_embed_returns_float16(embedder):
+def test_embed_returns_float32(embedder):
+    """float32 out, because VectorStore's FLOAT[768] column upcasts anyway — narrowing to
+    float16 first saved nothing and only added quantisation error."""
     texts = ["def hello():", "class Foo:", "import os"]
     vecs = embedder.embed(texts)
-    assert vecs.dtype == np.float16
+    assert vecs.dtype == np.float32
     assert vecs.shape == (3, 768)
 
 

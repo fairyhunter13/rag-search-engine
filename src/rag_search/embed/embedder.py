@@ -28,6 +28,16 @@ _log = logging.getLogger(__name__)
 # Prevents concurrent GPU inference races (embed + rerank on same device).
 _GPU_INFER_LOCK = threading.Lock()
 
+# Query-embed call count, the mirror of query.search._rerank_stats. A federated search must
+# embed the query once no matter how many members it spans, and this is the only signal that
+# says so: N members embedding one short string separately are fast enough that latency hides it.
+_embed_stats: dict = {"calls": 0, "texts": 0}
+
+
+def embed_stats() -> dict:
+    """A copy of the process-lifetime embed counters."""
+    return dict(_embed_stats)
+
 
 def _await_thermal_headroom(_temp_fn=None, _sleep_fn=None) -> None:
     """Block until GPU temperature is within THERMAL_MAX_C, then return.
@@ -115,14 +125,22 @@ class Embedder:
         list(self._model.embed(["warmup"], batch_size=1))
 
     def embed(self, texts: list[str], batch_size: int = 8) -> np.ndarray:
-        """Embed on GPU; returns normalized float16 array of shape (n, 768)."""
+        """Embed on GPU; returns normalized float32 array of shape (n, 768).
+
+        Deliberately not float16. VectorStore stores FLOAT[768] and upcasts on the way in,
+        so narrowing here bought no space at all — it only added quantisation error to every
+        vector on the way to a float32 column. The cost of dropping it is transient: a bulk
+        index holds n x 768 x 4 bytes, ~390 MB rather than ~195 MB on the largest repo here.
+        """
         if self._model is None:
             self._init()
         _await_thermal_headroom()
+        _embed_stats["calls"] += 1
+        _embed_stats["texts"] += len(texts)
         raw = np.array(list(self._model.embed(texts, batch_size=batch_size)), dtype=np.float32)
         norms = np.linalg.norm(raw, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
-        return (raw / norms).astype(np.float16)
+        return raw / norms
 
     @property
     def dim(self) -> int:
