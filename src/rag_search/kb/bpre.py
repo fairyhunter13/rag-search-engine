@@ -179,8 +179,14 @@ def _narrative_incomplete(con: sqlite3.Connection) -> bool:
 
 
 def _source_files(member_path: str) -> list[Path]:
+    from rag_search.core.index_config import effective_config
     from rag_search.core.registry import get_project
-    from rag_search.index.discover import detect_language, is_code_language, is_ignored_path
+    from rag_search.index.discover import (
+        detect_language,
+        gitignore_chain_for_dir,
+        is_code_language,
+        is_ignored_path,
+    )
     root = Path(member_path)
     entry = get_project(member_path)
     # Monorepo-style federations nest member subdirectories inside the root's own tree
@@ -191,21 +197,27 @@ def _source_files(member_path: str) -> list[Path]:
         Path(m).resolve() for m in (entry.federation if entry and entry.federation else [])
     }
     out: list[Path] = []
+    # `cfg` and the .gitignore chain are constant per directory; deriving them inside the file
+    # loop instead cost ~85% of this walk in pathlib churn alone (measured: 83.6s over a
+    # 194-member federation). Same decisions, hoisted — see is_ignored_path's is_dir/chain.
+    cfg = effective_config(root.resolve())
     try:
         for dirpath, dirs, files in os.walk(str(root)):
             dp = Path(dirpath)
+            chain = gitignore_chain_for_dir(dp, root)
             # is_ignored_path shares the same HR35 resolver as iter_files/the watcher (RSE
             # exclude/include, hidden-dir skip, .gitignore), so BPRE's scan never sees a file
             # the indexer or the drift gate wouldn't also see.
             dirs[:] = [
                 d for d in dirs
-                if (dp / d).resolve() not in nested_members and not is_ignored_path(dp / d, root)
+                if (dp / d).resolve() not in nested_members
+                and not is_ignored_path(dp / d, root, cfg, is_dir=True, chain=chain)
             ]
             for f in files:
                 p = dp / f
                 if (is_code_language(detect_language(p))
                         and not _is_test_file(str(p))
-                        and not is_ignored_path(p, root)):
+                        and not is_ignored_path(p, root, cfg, is_dir=False, chain=chain)):
                     out.append(p)
     except OSError:
         pass

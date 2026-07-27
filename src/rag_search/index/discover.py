@@ -62,6 +62,16 @@ def _gitignore_chain_for(path: Path, root: Path) -> _GitignoreChain:
     return tuple(chain)
 
 
+def gitignore_chain_for_dir(dirpath: Path, root: Path) -> _GitignoreChain:
+    """The chain that applies to every direct child of `dirpath` — identical for all of them.
+
+    `_gitignore_chain_for` only ever reads `path`'s ancestors (`rel_parts[:-1]`), so a loop over
+    a directory's files rebuilds the same tuple once per file, re-joining a `.gitignore` Path at
+    every level. A tree walk should call this once per directory and pass the result down.
+    """
+    return _gitignore_chain_for(dirpath / "_", root)
+
+
 def _gitignore_match(full: Path, is_dir: bool, chain: _GitignoreChain) -> bool:
     """True if any ancestor-or-own .gitignore in chain matches full (each relative to its base)."""
     for base, spec in chain:
@@ -219,11 +229,19 @@ def _is_generated_docs_dir(p: Path) -> bool:
     return p.is_dir() and (p / "_meta" / "provenance.json").exists()
 
 
-def is_ignored_path(p: Path, root: Path | None = None, cfg: ProjectConfig | None = None) -> bool:
+def is_ignored_path(
+    p: Path, root: Path | None = None, cfg: ProjectConfig | None = None,
+    *, is_dir: bool | None = None, chain: _GitignoreChain | None = None,
+) -> bool:
     """True if p is dropped by the discovery decision order, or is under a generated docs/ tree.
 
     Shares _should_drop with iter_files so the watcher (this function) and the indexer/
     source-fingerprint always agree on what counts as a real source change.
+
+    `is_dir` and `chain` are pure hoists for callers already walking a tree: both are constant
+    across a directory's children, and recomputing them per file costs a `stat()` and a full
+    ancestor rebuild each time. Passing them changes no decision — omit them and they are
+    derived exactly as before.
     """
     if root is None:
         return any(part in _EXCLUDE for part in p.parts)
@@ -235,8 +253,12 @@ def is_ignored_path(p: Path, root: Path | None = None, cfg: ProjectConfig | None
         return False
     if cfg is None:
         cfg = _cached_effective_config(root)
-    is_dir = p.is_dir()
-    chain = _gitignore_chain_for(p, root) if cfg.respect_gitignore else ()
+    if is_dir is None:
+        is_dir = p.is_dir()
+    if not cfg.respect_gitignore:
+        chain = ()  # a caller-supplied chain must never override an opted-out config
+    elif chain is None:
+        chain = _gitignore_chain_for(p, root)
     if _should_drop(p, root, rel_parts, is_dir, cfg, chain):
         return True
     # Walk prefix dirs: if a "docs" segment on disk is a docgen-generated tree, ignore it.
