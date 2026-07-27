@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +58,10 @@ def _open(db_path: Path, dim: int) -> sqlite3.Connection:
     con.execute(
         "CREATE TABLE IF NOT EXISTS file_hashes (path TEXT PRIMARY KEY, hash TEXT NOT NULL)"
     )
+    # A scoped search restricts the KNN with `chunk_id IN (SELECT ... WHERE language IN ...)`.
+    # Without this index that subquery scans a table holding >100k rows on the larger repos,
+    # on every query. Costs one lazy build per existing store; no reindex, no signature change.
+    con.execute("CREATE INDEX IF NOT EXISTS idx_chunks_language ON chunks(language)")
     con.commit()
     return con
 
@@ -122,18 +127,40 @@ class VectorStore:
     def flush(self) -> None:
         self._con.commit()
 
-    def search(self, query_vector: np.ndarray, top_k: int = 10) -> list[dict]:
+    def search(
+        self,
+        query_vector: np.ndarray,
+        top_k: int = 10,
+        languages: Sequence[str] | None = None,
+    ) -> list[dict]:
+        """Nearest `top_k` chunks, restricted to `languages` when given.
+
+        The restriction goes *inside* the vec0 query, not on its output. vec0 returns
+        exactly k rows regardless, so filtering afterwards silently shrinks the result:
+        a docs query against a code-heavy repo comes back near-empty while the matching
+        docs sit just past the cut. Pre-filtering asks for k rows that already qualify.
+        """
+        if languages is not None and not languages:
+            return []
         v = query_vector.astype(np.float32).tobytes()
+        params: list = [v, top_k]
+        lang_clause = ""
+        if languages is not None:
+            marks = ",".join("?" * len(languages))
+            lang_clause = (
+                f" AND v.chunk_id IN (SELECT chunk_id FROM chunks WHERE language IN ({marks}))"
+            )
+            params.extend(languages)
         rows = self._con.execute(
-            """
+            f"""
             SELECT c.chunk_id, c.path, c.start_line, c.end_line,
                    c.language, c.content, v.distance
             FROM vec_chunks v
             JOIN chunks c USING (chunk_id)
-            WHERE v.embedding MATCH ? AND v.k = ?
+            WHERE v.embedding MATCH ? AND v.k = ?{lang_clause}
             ORDER BY v.distance
             """,
-            [v, top_k],
+            params,
         ).fetchall()
         return [
             {"chunk_id": r[0], "path": r[1], "start_line": r[2], "end_line": r[3],

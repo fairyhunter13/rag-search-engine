@@ -45,11 +45,35 @@ def _resolve_roots(requested: list[str]) -> list[str]:
     return resolved
 
 
-def _search_sync(query: str, scope: str, project_paths: list[str] | None) -> str:
+_PREVIEW_CHARS = 200
+
+
+def _project(r: dict, verbosity: str) -> dict:
+    """A compact result carries a location and a preview; a full one carries the chunk body.
+
+    Compact is the default because the caller is an agent with a context window. A body it did
+    not ask for costs tokens on every single call, while path + line range is all it needs to
+    Read the exact region for the few hits it actually cares about.
+    """
+    if verbosity == "full":
+        return r
+    return {
+        "path": r.get("path"),
+        "start_line": r.get("start_line"),
+        "end_line": r.get("end_line"),
+        "language": r.get("language"),
+        "score": round(float(r.get("rerank_score", r.get("score", 0.0))), 4),
+        "preview": " ".join((r.get("content") or "").split())[:_PREVIEW_CHARS],
+    }
+
+
+def _search_sync(
+    query: str, scope: str, project_paths: list[str] | None, top_k: int, verbosity: str
+) -> str:
     from rag_search.core.config import project_vector_db
     from rag_search.core.registry import list_projects
     from rag_search.index.store import VectorStore
-    from rag_search.query.search import search as _search
+    from rag_search.query.search import search_federation
 
     if project_paths:
         from rag_search.daemon.federation import expand_federation
@@ -62,23 +86,26 @@ def _search_sync(query: str, scope: str, project_paths: list[str] | None) -> str
                     paths.append(_p)
     else:
         paths = [p.path for p in list_projects() if p.enabled]
-    embedder = get_embedder()
-    results: list[dict] = []
     t0 = time.monotonic()
     searched: list[str] = []
+    stores: list[VectorStore] = []
     for path in paths:
         vdb = project_vector_db(path)
         if not vdb.exists():
             continue
-        vs = VectorStore(vdb)
-        try:
-            results.extend(_search(query, embedder, vs, scope=scope, top_k=10))
-            searched.append(path)
-        finally:
+        stores.append(VectorStore(vdb))
+        searched.append(path)
+    # One embed and one global rerank for the whole federation. Looping search() per project
+    # instead costs an extra GPU embed and an extra rerank batch per member — 194 of each for
+    # one question on the largest federation here — and concatenates rankings that were never
+    # scored against each other.
+    try:
+        results = search_federation(query, get_embedder(), stores, scope=scope, top_k=top_k)
+    finally:
+        for vs in stores:
             vs.close()
-    results.sort(key=lambda r: r.get("rerank_score", r.get("score", 0.0)), reverse=True)
     return json.dumps({
-        "results": results[:10],
+        "results": [_project(r, verbosity) for r in results],
         "total": len(results),
         "elapsed_ms": round((time.monotonic() - t0) * 1000),
         "projects_searched": searched,
@@ -137,9 +164,15 @@ async def search(
     query: str,
     scope: str = "code",
     project_paths: list[str] | None = None,
+    top_k: int = 8,
+    verbosity: str = "compact",
     ctx: Context | None = None,
 ) -> str:
-    """Search for code semantically. scope: code|docs|all."""
+    """Search for code semantically. scope: code|docs|all.
+
+    Returns ranked locations — path, line range, score, and a short preview — to Read.
+    Pass verbosity="full" when you need the whole chunk body inline instead.
+    """
     note_query(query)
     if not project_paths:
         # Scope to the project the client is actually in, when inferable from its roots;
@@ -148,7 +181,7 @@ async def search(
         chosen, _ = infer_default_project(await _roots_paths(ctx))
         if chosen:
             project_paths = [chosen]
-    return await asyncio.to_thread(_search_sync, query, scope, project_paths)
+    return await asyncio.to_thread(_search_sync, query, scope, project_paths, top_k, verbosity)
 
 
 @mcp.tool()
