@@ -256,3 +256,50 @@ def test_wg6_only_the_handed_over_files_are_re_extracted(safe_tmp_path):
         "WG6: a file the watcher did not report was parsed anyway — the pass is walking the "
         "whole repo, which costs ~190s on a 17k-file repo inside a 45s debounce window"
     )
+
+
+def test_wg7_a_debounced_event_is_carried_forward_not_dropped(safe_tmp_path):
+    """WG7: files whose event lost the debounce race must still reach the next pass.
+
+    The debounce drops events instead of queueing them. That was harmless while only enrich rode
+    it — enrich is project-scoped, so the next event redid the same work — but the graph path is
+    file-list-scoped *and* stamps source_sig as though the whole tree had been re-derived, so a
+    dropped list leaves rows nothing will ever correct: _graph_stale reads "fresh" afterwards.
+
+    Found on the live daemon, not here: a probe file deleted 26s after it was added kept its
+    symbol while the stored sig matched the tree byte for byte, and only the compaction counter
+    (3 of 50 at the time) would eventually have cleaned it.
+    """
+    import time as _time
+
+    from rag_search.daemon import sweeps
+    from rag_search.daemon.sweeps import _index_project
+
+    proj = str(safe_tmp_path)
+    m1, m2 = safe_tmp_path / "a.py", safe_tmp_path / "b.py"
+    m1.write_text("def wg_a_seed():\n    return 1\n")
+    m2.write_text("def wg_b_seed():\n    return 2\n")
+    _index_project(proj)
+
+    _time.sleep(1.1)
+    m1.write_text("def wg_a_seed():\n    return 1\n\n\ndef wg_dropped_fn():\n    return 3\n")
+    sweeps._last_enriched_sig.pop(proj, None)
+    sweeps._last_index_fail.pop(proj, None)
+    _forget_sig(proj)
+    sweeps._last_kb_enrich[proj] = _time.monotonic()  # inside the window: this event is dropped
+    sweeps.on_change(proj, [str(m1)])
+    assert "wg_dropped_fn" not in _syms(proj), (
+        "WG7: the debounce did not drop the event, so the rest of this test proves nothing"
+    )
+
+    _time.sleep(1.1)
+    m2.write_text("def wg_b_seed():\n    return 2\n\n\ndef wg_second_fn():\n    return 4\n")
+    _forget_sig(proj)
+    _fire(proj, [m2])  # clears the debounce, reports only b.py
+
+    syms = _syms(proj)
+    assert "wg_second_fn" in syms, "WG7: the reported file must have been re-extracted"
+    assert "wg_dropped_fn" in syms, (
+        "WG7: the debounced file was never re-extracted — its rows are now unreachable, because "
+        "this pass stamped source_sig as if the whole tree were current"
+    )
