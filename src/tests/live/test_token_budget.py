@@ -13,17 +13,19 @@ pytestmark = pytest.mark.live
 
 _TOP_K = 8
 
-# A compact hit is five short fields plus a <=200-char preview, so eight of them plus the
-# envelope have no honest way to reach a kilobyte apiece. The fleet's mean chunk body is
-# 838 chars, so `full` for the same query clears this ceiling on content alone.
+# Eight hits carry at most 8 x 200 = 1,600 chars of preview; the rest is paths and five short
+# fields. 4096 leaves roughly 2.5x headroom for that and still fails hard the moment bodies come
+# back, since the fleet's mean chunk is 838 chars and eight of those alone are ~6.7 KB.
 _COMPACT_BYTES_MAX = 4096
 
 
 def test_tk1_compact_response_fits_a_byte_budget(sample_workspace):
-    """TK1: compact must be small in absolute terms, not merely smaller than full.
+    """TK1: compact must be small in absolute terms, and small *because it dropped bodies*.
 
-    "compact < full" would pass on a one-character difference, so the ceiling is the real
-    assertion; the ratio and the absent bodies corroborate it.
+    A size ratio is the tempting assertion and the wrong one: these fixture projects are 1-4 KB
+    files, so their chunks are short and correct code can land near any fixed ratio by accident.
+    What cannot happen by accident is compact carrying no body while full carries one — so that
+    pairing is the discriminator, and the byte ceiling is the regression guard.
     """
     from rag_search.server.mcp import _search_sync
 
@@ -36,10 +38,12 @@ def test_tk1_compact_response_fits_a_byte_budget(sample_workspace):
     assert len(compact) < _COMPACT_BYTES_MAX, (
         f"TK1: compact response is {len(compact)} bytes, over the {_COMPACT_BYTES_MAX} ceiling"
     )
-    assert len(compact) * 2 < len(full), (
-        f"TK1: compact ({len(compact)}B) is not materially smaller than full ({len(full)}B)"
-    )
+    assert len(compact) < len(full), f"TK1: compact {len(compact)}B >= full {len(full)}B"
     assert all("content" not in h for h in hits), "TK1: compact results still carry chunk bodies"
+    assert all("content" in h for h in json.loads(full)["results"]), (
+        "TK1: verbosity='full' stopped returning bodies — compact is now the only mode, so the "
+        "size comparison above proves nothing"
+    )
     assert all(h["path"] and h["start_line"] for h in hits), (
         "TK1: compact dropped bodies without leaving a location to Read"
     )
