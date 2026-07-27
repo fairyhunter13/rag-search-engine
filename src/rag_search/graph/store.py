@@ -167,6 +167,35 @@ class GraphStore:
             (cid, level, title, summary, member_count, semantic_type, narrated),
         )
 
+    def delete_file_symbols(self, file: str) -> int:
+        """Drop one file's symbols and the edges *out of* them (incremental re-extract).
+
+        `upsert_symbol` can only add or overwrite, so a renamed or deleted function would
+        otherwise linger forever; the caller must run this before re-extracting the file.
+        Community membership lives on `symbols.community_id`, so it goes with the row.
+
+        Incoming edges are deliberately left dangling rather than deleted: they were written
+        by files this pass is not re-scanning, so deleting them would silently strip an
+        untouched caller's edge whenever its callee's file happened to change. `symbol_id` is
+        stable for a symbol whose start_line did not move, so most of them are valid again the
+        moment the file is re-extracted; call `purge_dangling_edges` afterwards for the rest.
+        """
+        sids = [r[0] for r in self._con.execute("SELECT sid FROM symbols WHERE file=?", (file,))]
+        if not sids:
+            return 0
+        marks = ",".join("?" * len(sids))
+        self._con.execute(f"DELETE FROM edges WHERE caller_sid IN ({marks})", sids)
+        self._con.execute("DELETE FROM symbols WHERE file=?", (file,))
+        return len(sids)
+
+    def purge_dangling_edges(self) -> int:
+        """Delete edges whose caller or callee no longer exists. Run after a re-extract."""
+        cur = self._con.execute(
+            "DELETE FROM edges WHERE caller_sid NOT IN (SELECT sid FROM symbols) "
+            "OR callee_sid NOT IN (SELECT sid FROM symbols)"
+        )
+        return cur.rowcount
+
     def clear(self) -> None:
         """Wipe symbols/edges/communities before a full re-index so stale rows don't persist."""
         self._con.executescript("DELETE FROM symbols; DELETE FROM edges; DELETE FROM communities;")

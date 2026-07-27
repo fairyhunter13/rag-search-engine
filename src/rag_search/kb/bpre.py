@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS member_scan_cache (
     member TEXT PRIMARY KEY, sig TEXT NOT NULL, facts_json TEXT NOT NULL
 );
+-- Which unresolved link candidates have already been sent to the LLM. Without it the
+-- capped slice re-sends the same head of the list every run and the tail is never seen.
+CREATE TABLE IF NOT EXISTS link_resolve_attempts (id TEXT PRIMARY KEY);
 """
 
 # ─── Tiny helpers ─────────────────────────────────────────────────────────────
@@ -739,6 +742,42 @@ def _llm_link_scan(
     return items
 
 
+_LLM_LINK_CAP = 30  # candidates per LLM call; the cap is fine, blind reuse of the same 30 was not
+
+
+def _link_item_id(u: dict) -> str:
+    return _hid(u.get("kind", ""), u.get("caller", ""), u.get("topic_or_route", ""))
+
+
+def _select_link_batch(con: sqlite3.Connection, items: list[dict]) -> list[dict]:
+    """Rank the admitted set, then page through it — never re-send the same head forever.
+
+    SEA (arXiv:2408.04344) assumes a *ranked* admitted set; `items[:30]` was insertion order,
+    so a 734-candidate backlog sent the same 30 on all 68 logged runs while the other 704 were
+    permanently invisible. Fan-in is the ranking signal available here without reaching for a
+    second data source: a topic or route several services call is a bigger hole in the graph
+    than a one-off, and it costs one pass over a list already in memory.
+
+    Attempted ids persist, so the next run resumes where this one stopped. Once the whole
+    backlog has been attempted the stamps are cleared and the cycle restarts: a candidate the
+    LLM could not place today may resolve once its callee's service has been scanned, and
+    resolved ones drop out earlier anyway (`_llm_link_scan` filters against known routes).
+    """
+    fan_in: dict[str, int] = {}
+    for u in items:
+        route = u.get("topic_or_route", "")
+        fan_in[route] = fan_in.get(route, 0) + 1
+    done = {r[0] for r in con.execute("SELECT id FROM link_resolve_attempts")}
+    fresh = [u for u in items if _link_item_id(u) not in done]
+    if not fresh:
+        con.execute("DELETE FROM link_resolve_attempts")
+        con.commit()
+        fresh = list(items)
+    fresh.sort(key=lambda u: (-fan_in[u.get("topic_or_route", "")], u.get("kind", ""),
+                              u.get("topic_or_route", ""), u.get("caller", "")))
+    return fresh[:_LLM_LINK_CAP]
+
+
 def _llm_link_resolve(
     con: sqlite3.Connection, items: list[dict], svcs: list[str],
 ) -> None:
@@ -761,11 +800,13 @@ def _llm_link_resolve(
         "Use null callee if you cannot determine it confidently. "
         "Return ONLY valid JSON — no markdown, no explanation."
     )
+    batch = _select_link_batch(con, items)
     hints = "\n".join(
-        f"- {u['kind']} '{u['topic_or_route']}' from '{u['caller']}'" for u in items[:30]
+        f"- {u['kind']} '{u['topic_or_route']}' from '{u['caller']}'" for u in batch
     )
-    if len(items) > 30:
-        log.warning("bpre llm_link_resolve: cap 30 hit (had %d items)", len(items))
+    if len(items) > len(batch):
+        log.info("bpre llm_link_resolve: %d of %d candidates this pass (paging the backlog)",
+                 len(batch), len(items))
     dynamic_tail = f"Admitted services: {json.dumps(svcs)}\n\nEdges to resolve:\n{hints}"
     try:
         raw, usage = deepseek_extract(stable_prefix, dynamic_tail, max_tokens=512)
@@ -773,6 +814,12 @@ def _llm_link_resolve(
         log.warning("bpre _llm_link_resolve: %s", exc)
         return
     _accumulate_llm_tokens(usage, "bpre_link")
+    # Stamped on a completed call, not on a parsed verdict: an answer of "cannot determine" is
+    # still an attempt, and re-asking it costs the same tokens as asking it the first time. A
+    # raised call above returns before this and is therefore retried.
+    con.executemany("INSERT OR IGNORE INTO link_resolve_attempts VALUES (?)",
+                    [(_link_item_id(u),) for u in batch])
+    con.commit()
     if usage.get("prompt_cache_hit_tokens", 0) > 0:
         log.debug("bpre llm_link: cache hit %d tokens", usage["prompt_cache_hit_tokens"])
     s, e = raw.find("["), raw.rfind("]")
