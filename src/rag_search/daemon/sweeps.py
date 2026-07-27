@@ -834,6 +834,99 @@ def _regen_owning_processes(member_path: str) -> None:
                 log.error("owning-process regen %s: %s", entry.path, exc, exc_info=True)
 
 
+# ── KB lane ───────────────────────────────────────────────────────────────────────────────
+# The heavy half of on_change is serialised by _KB_HEAVY_LOCK regardless, so running it on the
+# watcher's dispatch workers never bought parallelism — it only meant a worker sat *blocked* on
+# that lock. Measured on the live daemon: one worker inside bounded_parse holding the lock, the
+# other parked on it for 4+ minutes, and a third project's edit never indexed because both
+# workers were consumed. Moving the reader off the work was necessary but not sufficient.
+#
+# One dedicated lane does the same serialised work without occupying a worker, so the cheap half
+# (_index_files — what actually makes an edit searchable) always runs promptly.
+_kb_lane_cv = threading.Condition()   # guards _kb_lane_wanted and _pending_graph_files
+_kb_lane_wanted: dict[str, str] = {}  # project -> source sig to stamp once its pass lands
+_kb_lane_thread: threading.Thread | None = None
+_kb_lane_busy: bool = False           # a pass is running right now (queue-empty is not idle)
+
+
+def _kb_lane_join(timeout: float = 120.0) -> bool:
+    """Block until nothing is queued and no pass is in flight. False on timeout.
+
+    on_change used to finish the heavy half before returning, so callers could read graph.db
+    straight after it. That guarantee is what the lane moved, not what it removed — this hands
+    it back to anyone who needs it (the WG gates read the graph the moment on_change returns).
+    """
+    import time
+    with _kb_lane_cv:
+        deadline = time.monotonic() + timeout
+        while _kb_lane_wanted or _kb_lane_busy:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            # A deadline on a join, not a poll interval: the lane's own wait() is untimed.
+            _kb_lane_cv.wait(remaining)
+        return True
+
+
+def _kb_lane_submit(project_path: str, sig: str) -> None:
+    """Queue a project's heavy KB pass, coalescing with anything already queued for it.
+
+    Started lazily rather than at import: a process that never sees a file event (a CLI
+    invocation, a test importing this module) should not grow a thread for it.
+    """
+    global _kb_lane_thread
+    with _kb_lane_cv:
+        _kb_lane_wanted[project_path] = sig
+        if _kb_lane_thread is None or not _kb_lane_thread.is_alive():
+            _kb_lane_thread = threading.Thread(target=_kb_lane_run, daemon=True, name="rse-kb-lane")
+            _kb_lane_thread.start()
+        _kb_lane_cv.notify()
+
+
+def _kb_lane_run() -> None:
+    global _kb_lane_busy
+    while True:
+        with _kb_lane_cv:
+            while not _kb_lane_wanted:
+                # No timeout: the lane wakes on a submit, never on a clock. Same rule as the
+                # watcher's dispatch workers — the only clock in this daemon is the kernel's.
+                _kb_lane_cv.wait()
+            project_path, sig = next(iter(_kb_lane_wanted.items()))
+            del _kb_lane_wanted[project_path]
+            # Popped here, not at submit time, so files that arrived while this project waited
+            # its turn belong to this pass instead of provoking a second one.
+            pending = _pending_graph_files.pop(project_path, set())
+            # Set before releasing the lock: an empty queue is not an idle lane, and a join
+            # that sampled the gap between pop and pass would return "done" mid-pass.
+            _kb_lane_busy = True
+        try:
+            _kb_lane_pass(project_path, sig, pending)
+        finally:
+            with _kb_lane_cv:
+                _kb_lane_busy = False
+                _kb_lane_cv.notify_all()
+
+
+def _kb_lane_pass(project_path: str, sig: str, pending: set) -> None:
+    """One project's heavy pass. `sig` was sampled before the wait, so it can only ever claim
+    *less* than this pass covered — a later event re-runs it, which is the safe direction."""
+    try:
+        if pending and _graph_needs_update(project_path):
+            # Must be released before _enrich_project: _KB_HEAVY_LOCK is a plain threading.Lock
+            # and _enrich_project acquires it itself. Held here so extraction never runs
+            # concurrently with another heavy KB pass (the daemon's ~1-core budget).
+            with _KB_HEAVY_LOCK:
+                _update_graph_files(project_path, sorted(pending))
+        _enrich_project(project_path)
+        _last_enriched_sig[project_path] = sig
+    except Exception as exc:
+        # Put the batch back rather than stamping it done: source_sig is only written by a pass
+        # that completed, so a lost batch here would leave the same silent phantom rows.
+        with _kb_lane_cv:
+            _pending_graph_files.setdefault(project_path, set()).update(pending)
+        log.warning("kb enrich %s: %s", project_path, exc)
+
+
 def on_change(project_path: str, files: list) -> None:
     """Watcher callback: incremental reindex; then KB enrich (debounced) if not recently done."""
     import time
@@ -863,26 +956,16 @@ def on_change(project_path: str, files: list) -> None:
     if sig == _last_enriched_sig.get(project_path):
         return  # source unchanged — KB/wiki/BPRE cascade not needed
     if files:
-        _pending_graph_files.setdefault(project_path, set()).update(str(f) for f in files)
+        # Guarded now that the lane reads this map too; the dispatch workers are several
+        # threads, not the single watcher thread this was written for.
+        with _kb_lane_cv:
+            _pending_graph_files.setdefault(project_path, set()).update(str(f) for f in files)
     if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:
         return  # carried in _pending_graph_files above, so this event's files are not lost
     _last_kb_enrich[project_path] = now
-    pending = _pending_graph_files.pop(project_path, set())
-    try:
-        if pending and _graph_needs_update(project_path):
-            # Must release before _enrich_project: _KB_HEAVY_LOCK is a plain threading.Lock
-            # and _enrich_project acquires it itself, so holding it across that call would
-            # deadlock the watcher thread. Held here so extraction can never run concurrently
-            # with another heavy KB pass (the daemon's ~1-core budget).
-            with _KB_HEAVY_LOCK:
-                _update_graph_files(project_path, sorted(pending))
-        _enrich_project(project_path)
-        _last_enriched_sig[project_path] = sig
-    except Exception as exc:
-        # Put the batch back rather than stamping it done: source_sig is only written by a pass
-        # that completed, so a lost batch here would leave the same silent phantom rows.
-        _pending_graph_files.setdefault(project_path, set()).update(pending)
-        log.warning("kb enrich on_change %s: %s", project_path, exc)
+    # Hand off and return. Blocking here on _KB_HEAVY_LOCK would consume a dispatch worker for
+    # the length of another project's federation pass, which is the starvation this exists to end.
+    _kb_lane_submit(project_path, sig)
 
 
 def burst_enrich_federation(root_path: str) -> dict:
