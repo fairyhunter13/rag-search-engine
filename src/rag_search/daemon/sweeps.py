@@ -18,6 +18,14 @@ _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremen
 _INCREMENTAL_COMPACT_AT: int = 50  # incremental graph passes before one authoritative re-derive
 _last_kb_enrich: dict[str, float] = {}
 _last_index_fail: dict[str, float] = {}
+# Files whose graph rows are owed but whose event lost the debounce race, per project. The
+# debounce *drops* events rather than queueing them, which cost only a delayed enrich before the
+# graph rode this gate: enrich is project-scoped, so the next event redid the same work. The
+# graph path is file-list-scoped, and it stamps source_sig as if the whole tree were re-derived —
+# so a dropped list is invisible to _graph_stale afterwards and only the compaction counter ever
+# recovers it. Measured live: a delete 26s behind an add left a symbol for a deleted file while
+# the stored sig matched the tree exactly.
+_pending_graph_files: dict[str, set[str]] = {}
 _last_owning_process_regen: dict[str, float] = {}  # debounce per federation root
 _last_owning_federation_regen: dict[str, float] = {}  # debounce per federation root
 _bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
@@ -854,20 +862,26 @@ def on_change(project_path: str, files: list) -> None:
     sig = _code_source_fingerprint(project_path)
     if sig == _last_enriched_sig.get(project_path):
         return  # source unchanged — KB/wiki/BPRE cascade not needed
+    if files:
+        _pending_graph_files.setdefault(project_path, set()).update(str(f) for f in files)
     if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:
-        return
+        return  # carried in _pending_graph_files above, so this event's files are not lost
     _last_kb_enrich[project_path] = now
+    pending = _pending_graph_files.pop(project_path, set())
     try:
-        if files and _graph_needs_update(project_path):
+        if pending and _graph_needs_update(project_path):
             # Must release before _enrich_project: _KB_HEAVY_LOCK is a plain threading.Lock
             # and _enrich_project acquires it itself, so holding it across that call would
             # deadlock the watcher thread. Held here so extraction can never run concurrently
             # with another heavy KB pass (the daemon's ~1-core budget).
             with _KB_HEAVY_LOCK:
-                _update_graph_files(project_path, files)
+                _update_graph_files(project_path, sorted(pending))
         _enrich_project(project_path)
         _last_enriched_sig[project_path] = sig
     except Exception as exc:
+        # Put the batch back rather than stamping it done: source_sig is only written by a pass
+        # that completed, so a lost batch here would leave the same silent phantom rows.
+        _pending_graph_files.setdefault(project_path, set()).update(pending)
         log.warning("kb enrich on_change %s: %s", project_path, exc)
 
 
