@@ -10,7 +10,10 @@ test proves the real cobol grammar round-trips correctly through the bounded pat
 """
 from __future__ import annotations
 
+import contextlib
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -42,6 +45,88 @@ def _unpicklable():
 def _new_pool():
     from rag_search.index.bounded_parse import BoundedParsePool
     return BoundedParsePool(size=2)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Live and not a zombie. The orphan is reparented away from us, so waitpid is unavailable."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split(" ", 1)[0]
+    except (FileNotFoundError, ProcessLookupError, IndexError):
+        return False
+    return state != "Z"
+
+
+# Holds a pool open and prints its worker pid, then blocks — so the test can SIGKILL it.
+# The __main__ guard is load-bearing: spawn children re-import __main__, so without it the worker
+# re-runs this script, dies on multiprocessing's bootstrap check, and BP1 goes green for entirely
+# the wrong reason (observed — it passed against the unfixed worker in 0.39s).
+_ORPHAN_PARENT = """
+import time
+from rag_search.index.bounded_parse import BoundedParsePool
+
+if __name__ == "__main__":
+    pool = BoundedParsePool(size=1)
+    pool._ensure_started()
+    print(next(iter(pool.pids)), flush=True)
+    time.sleep(600)
+"""
+
+
+def test_bp1_worker_exits_when_its_parent_is_killed(tmp_path: Path) -> None:
+    """A worker must not outlive its parent.
+
+    `daemon=True` only reaps children through multiprocessing's `atexit`, which a SIGKILL'd (or
+    SIGTERM'd) parent never runs; the old unbounded `task_q.get()` then blocked forever on a pipe
+    with no writer. That leaked one worker per killed daemon or test run — 15 of them, 589 MB,
+    were found alive on this box, the oldest 13 hours old. Red before the parent check.
+    """
+    script = tmp_path / "orphan_parent.py"
+    script.write_text(_ORPHAN_PARENT)
+    env = {**os.environ, "RSE_BOUNDED_PARSE_PARENT_CHECK_S": "1"}
+    proc = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE,
+                            env=env, text=True)
+    worker_pid = -1
+    try:
+        worker_pid = int(proc.stdout.readline().strip())
+        assert _pid_alive(worker_pid), "worker did not start"
+        proc.kill()
+        proc.wait(timeout=10)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and _pid_alive(worker_pid):
+            time.sleep(0.25)
+        assert not _pid_alive(worker_pid), (
+            f"worker {worker_pid} outlived its killed parent — the orphan leak is back"
+        )
+    finally:
+        if worker_pid > 0 and _pid_alive(worker_pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(worker_pid, 9)
+        with contextlib.suppress(Exception):
+            proc.kill()
+
+
+def test_bp2_dead_slot_respawns_instead_of_burning_the_deadline() -> None:
+    """A worker that exited must cost a respawn, not a full deadline of silence.
+
+    Discriminating on both value and time: without the liveness check `run` posts into the dead
+    worker's queue, waits the entire `deadline_s`, returns PARSE_TIMEOUT and inflates
+    parse_timeout_count — and BP1's self-exit would otherwise make that the normal path after
+    every idle period.
+    """
+    from rag_search.index.bounded_parse import BoundedParsePool
+    pool = BoundedParsePool(size=1)
+    try:
+        pool._ensure_started()
+        proc = pool._slots[0].proc
+        os.kill(proc.pid, 9)
+        proc.join(timeout=10)
+        assert not proc.is_alive()
+        t0 = time.monotonic()
+        assert pool.run(_add, (7, 5), deadline_s=30) == 12
+        assert time.monotonic() - t0 < 15, "respawn should be fast, not a burnt 30s deadline"
+        assert pool.parse_timeout_count == 0, "a dead slot is not a parse timeout"
+    finally:
+        pool.idle_shutdown(idle_s=0)
 
 
 def test_run_bounded_normal_execution() -> None:
