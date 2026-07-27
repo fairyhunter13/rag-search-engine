@@ -15,6 +15,7 @@ _PAUSED: bool = False
 _KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change
 _BPRE_CASCADE_DEBOUNCE_S: float = 45.0  # min seconds between owning-root BPRE/federation regens
 _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
+_INCREMENTAL_COMPACT_AT: int = 50  # incremental graph passes before one authoritative re-derive
 _last_kb_enrich: dict[str, float] = {}
 _last_index_fail: dict[str, float] = {}
 _last_owning_process_regen: dict[str, float] = {}  # debounce per federation root
@@ -164,15 +165,27 @@ def _vectors_stale(path: str) -> str | None:
 
 
 def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
-    """True if algo-version or code-only source fingerprint has drifted from stored stamps."""
+    """True if algo-version or code-only source fingerprint has drifted from stored stamps.
+
+    Also true once enough incremental watcher passes have accumulated: `symbol_id` is
+    (file, name, start_line), so inserting a line shifts every symbol below it and silently
+    drops the *incoming* edges from files the watcher did not re-scan. Full re-derive stays
+    the backstop — the incremental path is a fast path, not a replacement.
+    """
     return (
         gs.get_meta("algo_version") != _pipeline_algo_version()
+        or int(gs.get_meta("incremental_since_full") or 0) >= _INCREMENTAL_COMPACT_AT
         or gs.get_meta("source_sig") != _code_source_fingerprint(path)
     )
 
 
-def _extract_graph(gs, root) -> None:
-    """Extract symbols + call edges from source into gs (caller must gs.clear() first)."""
+def _extract_graph(gs, root, only: list | None = None) -> None:
+    """Extract symbols + call edges from source into gs (caller must gs.clear() first).
+
+    `only` restricts both passes to those files (the watcher's incremental path); the callee
+    resolution tables are still built from the whole symbol table, so calls into untouched
+    files still resolve. Pass `only=None` for a full re-derive.
+    """
     from rag_search.graph.extractor import (
         extract_calls_with_lines,
         extract_symbols,
@@ -180,7 +193,8 @@ def _extract_graph(gs, root) -> None:
     )
     from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
     from rag_search.index.discover import detect_language, iter_files
-    for fpath in iter_files(root, federation_mode=True):
+    targets = list(only) if only is not None else None
+    for fpath in (targets if targets is not None else iter_files(root, federation_mode=True)):
         try:
             content = fpath.read_text(errors="replace")
         except OSError:
@@ -207,7 +221,7 @@ def _extract_graph(gs, root) -> None:
             file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
     for spans in file_to_sym_spans.values():
         spans.sort()
-    for fpath in iter_files(root, federation_mode=True):
+    for fpath in (targets if targets is not None else iter_files(root, federation_mode=True)):
         fstr = str(fpath)
         sym_spans = file_to_sym_spans.get(fstr)
         if not sym_spans:
@@ -264,11 +278,89 @@ def _rederive_graph(project_path: str) -> None:
         gs.commit()
         gs.set_meta("algo_version", _pipeline_algo_version())
         gs.set_meta("source_sig", _code_source_fingerprint(project_path))
+        gs.set_meta("incremental_since_full", "0")
         _persist_partition_quality(gs)
         gs.commit()
     finally:
         gs.close()
     log.info("_rederive_graph %s: re-extracted and re-detected", project_path)
+
+
+def _graph_needs_update(project_path: str) -> bool:
+    """True if the watcher should re-extract this project's graph for the current change.
+
+    Mirrors reconcile's own conditions so the two paths cannot drift apart, minus the cases
+    that belong to reconcile: a project with no graph.db yet has never been indexed, and a
+    federation root has 0 own communities by design (HR4), so neither is the watcher's job.
+    Reuses the memoised code-only fingerprint on_change has already computed — no second walk.
+    """
+    from rag_search.core.config import project_graph_db
+    from rag_search.core.registry import list_projects
+    from rag_search.graph.store import GraphStore
+    gdb = project_graph_db(project_path)
+    if not gdb.exists():
+        return False
+    if any(e.path == project_path and e.federation for e in list_projects()):
+        return False
+    gs = GraphStore(gdb)
+    try:
+        return _graph_stale(project_path, gs)
+    finally:
+        gs.close()
+
+
+def _update_graph_files(project_path: str, files: list) -> None:
+    """Re-extract just `files` into the existing graph, then re-detect communities whole.
+
+    Extraction is single-worker-bound (HR40) and scales with repo size, not edit size — a full
+    re-derive costs ~190s on a 17k-file repo, which is not something a 45s debounce window can
+    afford. detect_communities is <4s even there, so it is simply re-run.
+
+    Deletion is deliberately not filtered by is_ignored_path: a file that was removed, renamed
+    or newly gitignored must still lose its rows, and `upsert_symbol` alone never subtracts.
+
+    An algo bump or an exhausted compaction budget falls through to the full re-derive here
+    rather than being left for reconcile — reconcile is startup-once by design, so deferring
+    to it would freeze that project's graph until the next daemon restart.
+    """
+    from pathlib import Path
+
+    from rag_search.core.config import project_graph_db
+    from rag_search.graph.community import detect_communities
+    from rag_search.graph.store import GraphStore
+    from rag_search.index.discover import detect_language, is_code_language, is_ignored_path
+    root = Path(project_path)
+    changed = [Path(f) for f in files if is_code_language(detect_language(Path(f)))]
+    if not changed:
+        return
+    targets = [p for p in changed if p.exists() and not is_ignored_path(p, root)]
+    owed = True  # assume the expensive path until the cheap one is proven safe
+    gs = GraphStore(project_graph_db(project_path))
+    try:
+        owed = (gs.get_meta("algo_version") != _pipeline_algo_version()
+                or int(gs.get_meta("incremental_since_full") or 0) >= _INCREMENTAL_COMPACT_AT)
+        if not owed:
+            for fpath in changed:
+                gs.delete_file_symbols(str(fpath))
+            gs.commit()
+            if targets:
+                _extract_graph(gs, root, only=targets)
+            # Only now: a symbol whose start_line did not move keeps its sid, so its incoming
+            # edges are live again and must not be swept as dangling.
+            gs.purge_dangling_edges()
+            detect_communities(gs)
+            gs._con.execute("DELETE FROM communities WHERE level>=2")
+            passes = int(gs.get_meta("incremental_since_full") or 0) + 1
+            gs.set_meta("incremental_since_full", str(passes))
+            gs.set_meta("source_sig", _code_source_fingerprint(project_path))
+            _persist_partition_quality(gs)
+            gs.commit()
+            log.info("_update_graph_files %s: %d file(s) re-extracted (pass %d)",
+                     project_path, len(targets), passes)
+    finally:
+        gs.close()
+    if owed:
+        _rederive_graph(project_path)  # must run with the store closed — it reopens it
 
 
 def _reindex_vectors(project_path: str) -> None:
@@ -368,7 +460,11 @@ def reconcile_projects() -> None:
 
         from rag_search.core.config import is_federation_excluded
 
-        for entry in list_projects():
+        # Most-recently-touched projects first. The pass is one linear walk with no ordering,
+        # and it is startup-once by design, so an unordered registry starves exactly the repos
+        # being worked on: a measured pass here ground through 198 projects for 7.6 h without
+        # reaching either repo edited that day. One sort key, no new timer, same work per pass.
+        for entry in sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True):
             if _PAUSED:
                 return
             if not entry.enabled:
@@ -526,6 +622,7 @@ def _index_project(project_path: str) -> None:
         detect_communities(gs)
         gs.set_meta("algo_version", _pipeline_algo_version())
         gs.set_meta("source_sig", _code_source_fingerprint(project_path))
+        gs.set_meta("incremental_since_full", "0")  # this IS the authoritative full pass
         _persist_partition_quality(gs)
         gs.commit()
     finally:
@@ -761,6 +858,13 @@ def on_change(project_path: str, files: list) -> None:
         return
     _last_kb_enrich[project_path] = now
     try:
+        if files and _graph_needs_update(project_path):
+            # Must release before _enrich_project: _KB_HEAVY_LOCK is a plain threading.Lock
+            # and _enrich_project acquires it itself, so holding it across that call would
+            # deadlock the watcher thread. Held here so extraction can never run concurrently
+            # with another heavy KB pass (the daemon's ~1-core budget).
+            with _KB_HEAVY_LOCK:
+                _update_graph_files(project_path, files)
         _enrich_project(project_path)
         _last_enriched_sig[project_path] = sig
     except Exception as exc:

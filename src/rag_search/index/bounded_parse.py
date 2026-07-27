@@ -18,6 +18,7 @@ PARSE_TIMEOUT = "PARSE_TIMEOUT"  # sentinel result, distinct from any real retur
 _DEADLINE_S = float(os.environ.get("RSE_BOUNDED_PARSE_DEADLINE_S", "10"))
 _POOL_SIZE = int(os.environ.get("RSE_BOUNDED_PARSE_WORKERS", "1"))  # HR40: 1-core quota
 _IDLE_SHUTDOWN_S = float(os.environ.get("RSE_BOUNDED_PARSE_IDLE_S", "120"))
+_PARENT_CHECK_S = float(os.environ.get("RSE_BOUNDED_PARSE_PARENT_CHECK_S", "30"))
 _CTX = mp.get_context("spawn")
 
 
@@ -25,10 +26,27 @@ def _path_hash(path: str) -> str:
     return hashlib.sha256(path.encode()).hexdigest()[:12]  # non-reversible log id, never the real path (HR34)
 
 
-def _worker_main(task_q, result_q) -> None:
-    """Persistent worker loop. CPU-only — must never import the embedder/CUDA."""
+def _worker_main(task_q, result_q, parent_pid: int) -> None:
+    """Persistent worker loop. CPU-only — must never import the embedder/CUDA.
+
+    Wakes every `_PARENT_CHECK_S` to notice a vanished parent. `daemon=True` only reaps children
+    through multiprocessing's `atexit`, which a SIGTERM'd or SIGKILL'd parent never runs, so an
+    unbounded `get()` here leaks a worker per killed daemon or test run — it then blocks forever
+    on a pipe whose writer is gone.
+
+    `parent_pid` is passed in rather than read here: a spawn worker takes a second or two to boot,
+    and if the parent dies inside that window `os.getppid()` already reads the reaper, so the
+    worker would compare the reaper against itself and never exit (measured — py-spy showed
+    `parent: 2316`). Comparing against the reaper pid directly is wrong for the same reason under
+    `systemd --user`, a child subreaper: orphans land on the manager, never on init.
+    """
     while True:
-        item = task_q.get()
+        try:
+            item = task_q.get(timeout=_PARENT_CHECK_S)
+        except queue.Empty:
+            if os.getppid() != parent_pid:
+                return
+            continue
         if item is None:
             return
         func, args = item
@@ -64,7 +82,7 @@ class BoundedParsePool:
 
     def _spawn_slot(self, i: int) -> None:
         task_q, result_q = _CTX.Queue(), _CTX.Queue()
-        proc = _CTX.Process(target=_worker_main, args=(task_q, result_q), daemon=True)
+        proc = _CTX.Process(target=_worker_main, args=(task_q, result_q, os.getpid()), daemon=True)
         proc.start()
         self._slots[i] = _Slot(proc, task_q, result_q)
 
@@ -78,6 +96,13 @@ class BoundedParsePool:
         idx = self._free.get()
         try:
             slot = self._slots[idx]
+            if not slot.proc.is_alive():
+                # Self-exited on the orphan check, or killed out from under us. Without this the
+                # only symptom is a full `deadline_s` of silence and a phantom PARSE_TIMEOUT,
+                # which also inflates parse_timeout_count.
+                with self._lock:
+                    self._spawn_slot(idx)
+                slot = self._slots[idx]
             slot.task_q.put((func, args))
             try:
                 status, payload = slot.result_q.get(timeout=deadline_s)
