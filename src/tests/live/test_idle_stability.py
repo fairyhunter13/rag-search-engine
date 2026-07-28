@@ -416,6 +416,7 @@ def test_drift_gate_quiescent_under_tool_cache_churn():
 def test_is_ignored_path_agrees_with_iter_files():
     """DIS6: watcher (is_ignored_path) and indexer (iter_files) must agree on every path —
     they share the same _should_drop resolver so the drift gate and the watcher never diverge."""
+    import os
     import tempfile
     from pathlib import Path
 
@@ -428,15 +429,24 @@ def test_is_ignored_path_agrees_with_iter_files():
             ".svelte-kit/generated.js": "x\n",
             ".gitignore": "rootgen\n",
             "rootgen/out.txt": "x\n",
+            # The size rule is the one these two screens disagreed on in production: it lived in
+            # iter_files alone, so the watcher indexed a file past the cap and the drift check
+            # then purged it, every write. Measured on redacted-name-10's 143-172 kB diagram specs.
+            "spec/oversize.yaml": "a: 1\n" * 30_000,   # ~180 kB, data cap is 100 kB
+            "spec/under.yaml": "a: 1\n",
+            "src/empty.py": "",                        # zero bytes is also a discovery rule
         })
         root = Path(tmp)
         cfg = ProjectConfig()
         kept = set(iter_files(root, cfg=cfg))
-        for candidate in [
-            root / "src" / "main.py",
-            root / ".svelte-kit" / "generated.js",
-            root / "rootgen" / "out.txt",
-        ]:
+        # Derived, not hand-listed. The previous three-name list could not see a rule its own
+        # fixtures never triggered, which is how the size disagreement survived this gate.
+        candidates = [Path(dp) / f for dp, _d, fs in os.walk(root) for f in fs]
+        assert len(candidates) >= 7, f"fixture tree did not materialise: {candidates}"
+        # Agreement alone is satisfied by deleting the rule from both screens, so pin the rule.
+        assert root / "spec" / "oversize.yaml" not in kept, "size cap not applied"
+        assert root / "spec" / "under.yaml" in kept, "size cap swallowed a file under the cap"
+        for candidate in candidates:
             assert is_ignored_path(candidate, root, cfg) == (candidate not in kept), (
                 f"is_ignored_path/iter_files disagree on {candidate}"
             )
