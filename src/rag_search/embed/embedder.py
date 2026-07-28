@@ -126,12 +126,37 @@ class Embedder:
 
 # Rerankers fastembed has no built-in description for. Its registry is a curated list, not a
 # capability boundary — `add_custom_model` serves any HF repo carrying an ONNX export, which
-# gte-reranker-modernbert-base does (`onnx/model.onnx`, Apache-2.0). Keeping the table explicit
-# rather than registering whatever RSE_RERANK_MODEL names means a typo still fails loudly
-# instead of becoming a download attempt against a repo nobody vetted.
+# gte-reranker-modernbert-base does (Apache-2.0). Keeping the table explicit rather than
+# registering whatever RSE_RERANK_MODEL names means a typo still fails loudly instead of becoming
+# a download attempt against a repo nobody vetted.
+#
+# fp16 by deliberate choice, not by default: measured over 20 realistic chunks it reranks in
+# 179 ms against fp32's 290 ms, and the largest score disagreement between them is 0.0006 on a
+# scale where relevant and irrelevant passages sit ~6 apart. Same ranking, a third less time.
 _CUSTOM_RERANKERS = {
-    "Alibaba-NLP/gte-reranker-modernbert-base": (0.6, "apache-2.0"),
+    "Alibaba-NLP/gte-reranker-modernbert-base": (0.3, "apache-2.0", "onnx/model_fp16.onnx"),
 }
+
+
+def _ensure_model_file(model: str, model_file: str) -> None:
+    """Fetch model_file when a prior download of the same repo left the snapshot without it.
+
+    fastembed skips downloading entirely if the snapshot directory already exists, and the
+    directory is keyed by repo, not by which ONNX export was pulled. So a cache populated with
+    `onnx/model.onnx` can never acquire `onnx/model_fp16.onnx` — the load fails NO_SUCHFILE on
+    every future start, on a host that looks perfectly healthy. Fresh hosts are unaffected,
+    which is exactly what makes it a trap worth closing in code rather than by hand.
+    """
+    from pathlib import Path
+
+    from fastembed.common.utils import define_cache_dir
+
+    cache = define_cache_dir(None)
+    snaps = Path(cache) / f"models--{model.replace('/', '--')}" / "snapshots"
+    if not snaps.is_dir() or any((d / model_file).exists() for d in snaps.iterdir()):
+        return
+    from huggingface_hub import hf_hub_download
+    hf_hub_download(repo_id=model, filename=model_file, cache_dir=str(cache))
 
 
 def _register_custom_reranker(model: str) -> None:
@@ -146,9 +171,10 @@ def _register_custom_reranker(model: str) -> None:
             f"RSE_RERANK_MODEL={model!r} is neither a fastembed built-in nor a vetted custom "
             f"reranker (known: {sorted(_CUSTOM_RERANKERS)})"
         )
-    size_gb, lic = _CUSTOM_RERANKERS[model]
+    size_gb, lic, model_file = _CUSTOM_RERANKERS[model]
+    _ensure_model_file(model, model_file)
     TextCrossEncoder.add_custom_model(
-        model, ModelSource(hf=model), size_in_gb=size_gb, license=lic
+        model, ModelSource(hf=model), model_file=model_file, size_in_gb=size_gb, license=lic
     )
 
 
