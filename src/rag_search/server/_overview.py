@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 
 def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def]
@@ -54,20 +53,10 @@ def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def
     return cycles[:20]
 
 
-def _detect_services(root: str) -> list[dict]:
-    """Detect gRPC services by mining registrar names from generated *.pb.go (tree-sitter)."""
-    from rag_search.kb.bpre_ast import federation_discover
-    names = set(federation_discover([root]).registrars.values())
-    if not names:
-        return []
-    return [{"name": Path(root).name, "path": root, "services": sorted(names)}]
-
-
 _VALID = {
-    "structure", "projects", "metrics", "patterns", "communities",
+    "structure", "projects", "metrics", "communities",
     "status", "import_cycles",
-    "surprising_connections", "feature_map", "business_rules",
-    "process_flows", "suggested_questions", "service_mesh", "validate",
+    "surprising_connections", "suggested_questions", "validate",
 }
 
 
@@ -114,19 +103,11 @@ def handle_overview(project_path: str, what: str) -> str:
         project_path, _err = _require_project(list_projects())
         if _err:
             return _err
-    if what == "patterns" and project_path:
-        from pathlib import Path
-
-        from rag_search.kb.patterns import detect_patterns
-        return json.dumps({**detect_patterns(Path(project_path)), "resolved_project": project_path})
     if project_path:
         from rag_search.core.config import project_graph_db
         from rag_search.daemon.federation import expand_federation
         from rag_search.graph.store import GraphStore
 
-        if what == "service_mesh":
-            return json.dumps({"services": [s for p in expand_federation(project_path) for s in _detect_services(p)],
-                                "resolved_project": project_path})
         _paths = [p for p in expand_federation(project_path) if project_graph_db(p).exists()]
         if not _paths:
             return json.dumps({"what": what, "status": "no project available"})
@@ -145,18 +126,16 @@ def handle_overview(project_path: str, what: str) -> str:
                 tot_sym, tot_comm, tot_fc = 0, 0, 0
                 members_info: list = []
                 worst_state = "ready"
-                _rank = {"indexing": 0, "searchable": 1, "enriching": 2, "ready": 3}
-                root_pct = (100.0, 100.0)
-                for i, (p, gs) in enumerate(zip(_paths, _gstores, strict=False)):
-                    c = gs.conn
-                    l1t = c.execute("SELECT COUNT(*) FROM communities WHERE level=1").fetchone()[0]
-                    l1s = c.execute("SELECT COUNT(*) FROM communities WHERE level=1 AND summary IS NOT NULL AND summary!=''").fetchone()[0]
-                    l1p = round(l1s / l1t * 100, 1) if l1t else 100.0
-                    _pct = l1p
+                # Three reachable states. The old ladder had a fourth, `enriching`, keyed on the
+                # level-1 summary fill rate — meaningless now that structural labelling fills every
+                # summary deterministically, which would have pinned every project at a permanent
+                # `ready`. What still discriminates is whether the index exists and whether the
+                # partition is degenerate.
+                _rank = {"indexing": 0, "degraded": 1, "ready": 2}
+                for p, gs in zip(_paths, _gstores, strict=False):
                     ep = _by_path.get(p)  # §2a: cached lookup, not a fresh file read
                     _ks = ("indexing" if (ep is None or ep.indexed_at is None
-                                          or not project_vector_db(p).exists()) else
-                           "ready" if _pct >= 95 else "enriching" if l1p > 0 else "searchable")
+                                          or not project_vector_db(p).exists()) else "ready")
                     s, cm = gs.symbol_count(), gs.community_count()
                     ec = gs.edge_count()
                     tot_sym += s
@@ -173,17 +152,15 @@ def handle_overview(project_path: str, what: str) -> str:
                         hq = _pq_cached["q"] if _pq_cached.get("sig") == _pq_sig else partition_quality(gs)
                     else:
                         hq = partition_quality(gs)
-                    # Degenerate partition demotes kb_state below ready (Gate kb_state, user choice).
+                    # Degenerate partition demotes index_state below ready (Gate kb_state, user choice).
                     if hq.get("degenerate") and _ks == "ready":
-                        _ks = "searchable"
-                    members_info.append({"path": p, "kb_state": _ks, "symbols": s,
+                        _ks = "degraded"
+                    members_info.append({"path": p, "index_state": _ks, "symbols": s,
                                          "communities": cm, "edges": ec,
                                          "symbol_hollow": _hollow,
                                          "hierarchy_quality": hq})
-                    if _rank.get(_ks, 3) < _rank.get(worst_state, 3):
+                    if _rank.get(_ks, 2) < _rank.get(worst_state, 2):
                         worst_state = _ks
-                    if i == 0:
-                        root_pct = (_pct, l1p)
                 from pathlib import Path as _P
 
                 from rag_search.core.index_config import _CONFIG_NAMES, effective_config
@@ -198,8 +175,7 @@ def handle_overview(project_path: str, what: str) -> str:
                                    "last_change_seen": e.last_change_seen if e else None,
                                    "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
                                    "symbols": tot_sym, "communities": tot_comm,
-                                   "kb_state": worst_state, "enriched_pct": root_pct[0],
-                                   "l1_enriched_pct": root_pct[1],
+                                   "index_state": worst_state,
                                    "symbol_hollow": _any_hollow,
                                    "hierarchy_quality": {"degenerate": _any_degenerate},
                                    "members": members_info,
@@ -221,50 +197,6 @@ def handle_overview(project_path: str, what: str) -> str:
                 ).fetchall()]
                 return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]],
                                     "resolved_project": project_path})
-            if what == "feature_map":
-                rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT id,title,semantic_type FROM communities "
-                    "WHERE semantic_type IS NOT NULL AND semantic_type != '' AND level=1"
-                ).fetchall()]
-                return json.dumps({"features": [{"id": r[0], "title": r[1], "type": r[2]} for r in rows],
-                                    "resolved_project": project_path})
-            if what == "business_rules":
-                rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT id,title,summary,member_count FROM communities "
-                    "WHERE semantic_type='business_rule' ORDER BY member_count DESC"
-                ).fetchall()]
-                return json.dumps({"rules": [
-                    {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
-                    for r in rows
-                ], "resolved_project": project_path})
-            if what == "process_flows":
-                from rag_search.core.config import root_process_db
-                pdb = root_process_db(project_path)
-                if pdb.exists():
-                    import sqlite3 as _sq
-                    pcon = _sq.connect(str(pdb))
-                    try:
-                        procs = pcon.execute(
-                            "SELECT p.id, p.name, p.entry_service, p.services_json, p.step_count, "
-                            "pa.mermaid FROM processes p LEFT JOIN process_artifacts pa "
-                            "ON pa.process_id=p.id ORDER BY p.step_count DESC"
-                        ).fetchall()
-                    finally:
-                        pcon.close()
-                    return json.dumps({"source": "reconstructed", "flows": [
-                        {"id": r[0], "name": r[1], "entry_service": r[2],
-                         "services": json.loads(r[3] or "[]"),
-                         "step_count": r[4], "mermaid": r[5] or ""}
-                        for r in procs
-                    ], "resolved_project": project_path})
-                rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT id,title,summary,member_count FROM communities "
-                    "WHERE semantic_type='business_process' ORDER BY member_count DESC"
-                ).fetchall()]
-                return json.dumps({"source": "communities", "flows": [
-                    {"id": r[0], "title": r[1], "summary": r[2] or "", "member_count": r[3] or 0}
-                    for r in rows
-                ], "resolved_project": project_path})
             if what == "suggested_questions":
                 rows = [r for gs in _gstores for r in gs.conn.execute(
                     "SELECT title FROM communities WHERE title IS NOT NULL AND level>=1 ORDER BY member_count DESC LIMIT 5"

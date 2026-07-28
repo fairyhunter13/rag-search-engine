@@ -22,8 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
 
       - uses: actions/setup-python@v6
         with:
@@ -50,8 +48,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive  # vendor/docgen provides ose_docgen (test_docgen_all_projects)
 
       - uses: actions/setup-python@v6
         with:

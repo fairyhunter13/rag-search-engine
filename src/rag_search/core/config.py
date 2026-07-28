@@ -169,8 +169,28 @@ def is_federation_excluded(candidate: str) -> bool:
 
 
 def embed_batch_size() -> int:
+    """Embed batch size, from RSE_EMBED_BATCH or scaled to free VRAM.
+
+    Was a flat 8 on a 16 GB card. That is the batch *count* multiplier for the two
+    per-batch costs that dominate bulk indexing: _thermal_pace samples the GPU once
+    per batch, and fastembed's numpy pooling pays fixed per-call overhead once per
+    batch. A 128k-chunk project at 8 arms the thermal gate ~16,000 times; at 32,
+    ~4,000. Capped well under fastembed's own default of 256 because attention is
+    quadratic in the 768-token sequence — L5 walks the ladder and keeps the winner.
+    """
+    override = os.environ.get("RSE_EMBED_BATCH")
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            pass
     try:
         from rag_search.core.gpu import vram_free_mb
-        return 8 if vram_free_mb() >= 7_000 else 6
+        free = vram_free_mb()
     except Exception:
         return 8
+    # Reserve headroom for the reranker, which must stay co-resident (v2 OOM'd here).
+    for threshold, size in ((9_000, 32), (7_000, 16), (4_000, 8)):
+        if free >= threshold:
+            return size
+    return 6

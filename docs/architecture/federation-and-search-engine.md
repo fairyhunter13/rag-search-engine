@@ -26,13 +26,13 @@ The governing principle is **P0: most efficient + most effective, for *everythin
 1. **DeepSeek = least/minimum token usage (DIKW token economy).** The cloud generative lane spends the *fewest possible* tokens: significance-gated head only, prefix-cached, abstention on the tail, child-reuse roll-ups; `$0` when quiescent; spend only to climb Information→Knowledge→Wisdom, and only at the nodes/queries actually read (HR22–HR24).
 2. **tree-sitter, then LLM — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts) first, then LLM (semantic/linkage facts) for what tree-sitter cannot statically reach. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code (HR14, HR15, HR16 resolution ladder, HR17, HR18, §7a).
 3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26, HR32, P16). Idle target: < 1 % CPU, constant RAM floor (models unload after `RSE_MODEL_IDLE_UNLOAD_S`). The heavy KB cascade runs only on real source-fingerprint drift (`_last_enriched_sig` gate in `on_change`). File-watching is event-driven via `watchfiles`/Rust `notify` — one thread + one inotify instance for all roots, `watch_filter` ignore-aware via the same HR35 resolver as the drift gate (P17, HR33, HR37); polling, if ever needed, is the Rust library's own `force_polling` path, never a hand-rolled loop.
-4. **No local generative LLM** — cloud DeepSeek for KB, Claude Code for chat/docgen (HR12).
+4. **No local generative LLM** — cloud DeepSeek for KB, `claude -p` for dashboard chat, which since docgen's deletion (2026-07-28) is its only caller (HR12).
 5. **Determinism + idempotence** — byte-identical reruns with LLM off; enrichment gated on `summary IS NULL`, never re-labels settled rows (HR3, HR11, HR13, HR20, HR21, HR24, HR25).
 6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`ask`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval; all generative spend (DeepSeek) is **enrichment-time**, pre-built into the KB the read-path serves (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
 7. **Self-healing** — event-driven (watcher) + reconcile re-derive on algo/source drift (HR1, HR2, HR25, §10).
-8. **Root-only docgen + universal config** — one root-owned `docs/`; `.rse-index.yaml` honored by every enumerator (HR27, HR28, HR29).
+8. **`docs/` is ordinary source + universal config** — nothing generates a `docs/` tree any more (docgen deleted 2026-07-28); `docs/` is walked, chunked and embedded like any other directory, and `.rse-index.yaml` is honored by every enumerator (HR28, HR29; HR27 retired).
 9. **Two-stage retrieval; rerank is the relevance authority.** Query = bi-encoder vector recall (`sqlite-vec`) → cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU); results ordered by `rerank_score`, **never the bare vector `score`**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
-10. **Public-repo hygiene.** Every emitted artifact (wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN, docgen pages, citations) is **project-root-relative**; absolute device paths and company/device names never leak — `symbols.file` stores absolute paths, so strip to root-relative before any artifact (HR13).
+10. **Public-repo hygiene.** Every emitted artifact (wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN, citations) is **project-root-relative**; absolute device paths and company/device names never leak — `symbols.file` stores absolute paths, so strip to root-relative before any artifact (HR13).
 11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU). Machine-verified Concept→Spec→Impl→Test traceability closes the V&V loop (HR30).
 
 ## 1b. World model & governance/spec WM *(updated Phase 1 2026-06-26)*
@@ -215,8 +215,10 @@ mapping table may substitute for structural analysis of user code.
    + BPMN/mermaid; byte-identical without a DeepSeek key (F1/F2).
    (See §8b and **HR14** in Part 2.)
 
-7. **`run_docgen` (root-only, manual-trigger only)** — generates the information hierarchy `docs/` tree at the federation root; pure members have their generated `docs/` cleaned instead (HR27). **NOT triggered by enrichment sweep** (removed Phase 2); CLI/dashboard only (`rag-search docgen <project>`).
-8. **`index_docs` (scope=docs)** — embeds generated `docs/` pages into the vector store; idempotent per-path replace; runs after `run_docgen`; watcher/fingerprint exclude `docs/` from the code path (HR28).
+*(Steps 7 — `run_docgen` — and 8 — `index_docs` — were deleted 2026-07-28. Nothing generates a
+`docs/` tree any more, and nothing indexes one specially: `docs/` is ordinary source that
+`index_project` walks like any other directory, and `search(scope="docs")` filters on language.
+See HR28 in Part 2.)*
 
 All enrichment is **idempotent and gated on `summary IS NULL`** (classification gated on
 `semantic_type IS NULL OR non-canonical`), so the daemon never re-labels settled communities.
@@ -269,15 +271,15 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 | **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
 | **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** only (Claude Code CLI); emits SSE error event when CLI unavailable | Codex removed; DeepSeek is KB-enrichment-exclusive (HR12) — no chat fallback |
 | **D — KB enrichment** | Background sweep (`_enrich_project`: summaries/intents/classification/wiki) | cloud **DeepSeek** `deepseek-v4-flash` only | Write path only; `DEEPSEEK_API_KEY` required (crash-loud if absent); no local generative LLM |
-| **E — Doc-tooling** | `rag-search docgen/okf` (manual only; `POST /api/docgen`, `/api/okf`) | **`claude -p`** headless: **Haiku 4.5** (concept/write) + **Sonnet 4.6** (architect/discover) | LLM-native; no tree-sitter on doc path; no deterministic skeleton; kill-switches `RSE_DOCGEN=0`/`RSE_OKF=0`; never from auto-sweep or MCP (HR27/P13) |
 
-**Four-lane invariant (HR12, HR31):**
+*(Lane **E — Doc-tooling** was deleted 2026-07-28 with docgen. `claude -p` now has exactly one caller: lane B.)*
+
+**Lane invariant (HR12, HR31):**
 - **LOCAL GPU lane** = embedding (FastEmbed/ONNX/CUDA, 768-dim) + cross-encoder reranking ONLY. CPU binding is fatal; any CPU fallback raises immediately.
-- **CLOUD KB lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, intents, semantic-type, wiki narrative; BPRE Tier-2 link resolution, D5 rule text).
-- **CLOUD chat lane** = claude-haiku-4-5 (dashboard chat only; no DeepSeek fallback).
-- **DOC-TOOLING lane** = `claude -p` headless (docgen IH + OKF; Haiku/Sonnet; never KB, never chat).
+- **CLOUD KB lane** = DeepSeek `deepseek-v4-flash` (KB enrichment: summaries, intents, semantic-type, wiki narrative; BPRE Tier-2 link resolution, D5 rule text). **Leaves with the rest of tier 3.**
+- **CLOUD chat lane** = `claude -p` at claude-haiku-4-5 (dashboard chat only; no DeepSeek fallback).
 
-**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 3-tier BPRE resolution ladder (HR16, corrected 2026-07-09): Tier-1.75 is the GPU rerank lane; Tier-2 is cloud DeepSeek. Doc-tooling (`docgen`/`okf`) uses `claude -p` headless — a distinct lane from KB enrichment and chat (HR31).
+**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). In the 3-tier BPRE resolution ladder (HR16, corrected 2026-07-09): Tier-1.75 is the GPU rerank lane; Tier-2 is cloud DeepSeek.
 
 ## 16. Per-project config & federation inheritance
 

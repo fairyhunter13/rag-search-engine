@@ -105,9 +105,9 @@ Parallel to the LLM-spend ladder above, RSE applies a **compute-spend doctrine**
 ## Publishability & device-neutrality (P18, HR34)
 
 RSE is a **public repo**. Parallel to the compute-spend and extraction doctrines above, every
-tracked artifact — source, tests, docs, scripts, generated wiki/docgen/OKF output — must be safe to
+tracked artifact — source, tests, docs, scripts, generated wiki/OKF output — must be safe to
 publish: no secrets, no real device paths, no company/project names. This is a whole-repo widening
-of P7/HR13 (which already banned absolute paths in generated wiki/docgen/OKF artifacts specifically).
+of P7/HR13 (which already banned absolute paths in generated wiki/OKF artifacts specifically).
 Device/host portability is achieved the same way efficiency is achieved elsewhere in this doctrine —
 by never hardcoding what should be resolved at the boundary: every machine-specific value (storage
 paths, host, port, embed/rerank models, GPU device) is **env-driven with an XDG-style default**
@@ -121,6 +121,8 @@ public tree and live only in the private `rse-live-audit` repo.
 ## Hierarchy removal (WS-B, 2026-06-26)
 
 The former L2 (domain aggregations) and L3 (federation themes) layers between Knowledge and Wisdom have been **deleted**. They added 35,000+ graph.db rows per project at significant LLM cost but were not consumed by any query path that flat-L1 couldn't serve. Standalone docgen/OKF tools (WS-A/WS-C) now own deep hierarchy generation for any repo — they parse the repo directly, with no RSE graph.db input.
+
+*(Amended 2026-07-28: docgen was deleted, so WS-A no longer exists and OKF is the only standalone hierarchy generator left; OKF leaves with the rest of tier 3. The WS-B paragraph above is a dated record of the June 2026 decision and is left as written.)*
 
 ## How to use
 

@@ -1,7 +1,11 @@
 # Conformance Evaluation — World Model, Architecture, Principles & Rules
 
 > **Date:** June 27 2026 (final verification pass; all 711 tests green)
-> **Scope:** RSE (`rag-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/docgen/` · `vendor/okf/`
+> **Scope:** RSE (`rag-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/okf/`
+>
+> **Amended 2026-07-28:** docgen was deleted (module, submodule, tests, CLI and dashboard routes).
+> The rows it owned are marked *retired* rather than removed, so this scorecard still reads as a
+> record of what was checked; nothing below claims a docgen guard is currently passing.
 > **Method:** `check_world_model.py --all` + static source reads + `test_world_model_traceability.py`
 > **Verdict:** CONFORMS (all checkable L1 invariants pass; 5 gaps found and remediated this session)
 
@@ -23,10 +27,10 @@
 | P9 | Flat-L1 communities only (WS-B 2026-06-26) | Pass | `daemon/sweeps.py:147` enforces delete; predicate updated |
 | P10 | Every line of code is a liability | Pass (MANUAL) | Dead LLM fns deleted this session |
 | P11 | Push after every commit | Pass (MANUAL) | Zero unpushed maintained |
-| P12 | Doc-tooling LLM-native via `claude -p`; no tree-sitter on doc path | Pass | `test_ih_no_tree_sitter_import_in_vendor` passes |
-| P13 | Docgen + OKF = manual-trigger only | Pass | `test_ih_docgen_not_in_sweeps` passes |
-| P14 | Four LLM lanes; no cross-lane calls | Pass (MANUAL) | `test_inference_lanes.py` lane guards pass |
-| P15 | Kill-switches RSE_DOCGEN=0/RSE_OKF=0 to no output | Pass | `test_ih_kill_switch_off` + `test_okf_kill_switch_off` pass |
+| P12 | Doc-tooling LLM-native via `claude -p`; no tree-sitter on doc path | Pass (OKF half) | `test_okf_no_tree_sitter_import_in_vendor` passes; docgen half retired 2026-07-28 |
+| P13 | OKF = manual-trigger only | Pass | `test_okf_not_in_sweeps` passes; docgen half retired 2026-07-28 |
+| P14 | LLM lanes; no cross-lane calls | Pass (MANUAL) | `test_inference_lanes.py` lane guards pass. **Three lanes since 2026-07-28** — doc-tooling deleted, so `claude -p` has exactly one caller; DeepSeek leaves with tier 3 |
+| P15 | Kill-switch RSE_OKF=0 to no output | Pass | `test_okf_kill_switch_off` passes; `RSE_DOCGEN` retired 2026-07-28 (no reader) |
 
 ---
 
@@ -47,12 +51,12 @@
 | HR13 | Wiki paths root-relative; no abs paths | `test_community_page_structure` | Pass (was broken) |
 | HR15 | No re.compile in Category A | `test_no_code_semantic_regex_in_category_a` | Pass |
 | HR20 | Partition quality gate | `test_partition_quality_on_sample` | Pass (was broken) |
-| HR25 | Docgen LLM-native; no tree-sitter | `test_ih_no_tree_sitter_import_in_vendor` | Pass |
-| HR26 | Docgen + OKF manual-trigger only | `test_ih_docgen_not_in_sweeps` | Pass |
-| HR27 | Kill-switch RSE_DOCGEN=0 | `test_ih_kill_switch_off` | Pass |
+| HR25 | Doc-tooling LLM-native; no tree-sitter | `test_okf_no_tree_sitter_import_in_vendor` | Pass (docgen half retired 2026-07-28) |
+| HR26 | OKF manual-trigger only | `test_okf_not_in_sweeps` | Pass (docgen half retired 2026-07-28) |
+| HR27 | *(retired 2026-07-28 — docgen deleted, `RSE_DOCGEN` has no reader)* | — | Retired |
 | HR28 | OKF v0.1 bundle structure | `test_okf_llm_generate_structure` | Pass |
 | HR29 | Kill-switch RSE_OKF=0 | `test_okf_kill_switch_off` | Pass |
-| HR30 | MCP surface = 5 tools only | `test_api_docgen_not_in_mcp` | Pass |
+| HR30 | MCP surface = 5 tools only | `test_mcp_has_five_tools` | Pass |
 
 ---
 
@@ -89,7 +93,10 @@ python scripts/check_world_model.py --all   # CONFORMS
 .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -x -q  # 711 passed (Jun 27 2026)
 ```
 
-Additional fixes applied during this audit (beyond the 5 gaps):
+Additional fixes applied during this audit (beyond the 5 gaps) — **a dated record of what was done
+in June 2026, deliberately left as written.** Entries naming `ose-docgen`, `vendor/docgen/` or the
+`test_ih_*` tests describe files that were true then and were deleted on 2026-07-28; rewriting them
+to match a later decision is how a repo loses the trail of why something changed.
 - Deleted `test_graph_narrative_and_trace_real_be` (was testing deleted P2-violating LLM functions)
 - Added `test_fp17_no_llm_in_graph_handler` deletion guard to `test_feature_proof.py`
 - Fixed `test_known_business_rule_classified_correctly` (community topology keyword set)

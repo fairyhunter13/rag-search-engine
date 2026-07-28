@@ -30,7 +30,7 @@ L1_invariants:
     principle: "No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped) — the registry is empty as of 2026-07-01: the last entry, bpre_spec._LANG_SPECS/_DEFAULT_SPEC (15 per-language HTTP method-name tables), was retired in favor of ONE universal structural classifier (URL-path anchor + _has_handler_arg handler-shape + _V verb ground-truth + gRPC proto-binding + _SCHEMES receiver-text provenance for non-verb client idioms) covering every tree-sitter code grammar by construction. Protocol/framework codegen-contract naming bound to structural facts (e.g. protoc New*Client/Register*Server scoped to .pb.go output, Spring *Mapping annotations, _GRP_SFXS gated on a discovered proto_services match) is ground truth, not a heuristic — reclassified 2026-07-01, same class as the closed HTTP-verb set _V and the closed protocol/URI-scheme set _SCHEMES. _provenance (bpre_generic.py) was generalized 2026-07-01 (Part C1) from receiver-text-only to also resolve def-use type bindings (build_type_use, valueflow.py) and import-map aliases (_scan_imports, bpre_ast.py) against the same closed _SCHEMES set — still zero library-name vocabulary; unresolved bare library-name idioms (e.g. requests/axios on a non-scheme absolute URL) remain accounted residue-ladder territory, never silently dropped."
     check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/rag_search/kb/bpre.py src/rag_search/kb/bpre_ast.py src/rag_search/kb/bpre_spec.py src/rag_search/kb/bpre_generic.py src/rag_search/kb/bpre_paradigms.py src/rag_search/kb/patterns.py src/rag_search/server/_overview.py", verdict_if_match: AT_RISK}
   - id: P7
-    principle: "Public-repo hygiene — absolute device paths never in wiki/docgen/OKF artifacts."
+    principle: "Public-repo hygiene — absolute device paths never in wiki/OKF artifacts."
     check: {grep: "/home/|/root/|/Users/", paths: "src/rag_search/kb/wiki.py src/rag_search/kb/bpre.py", verdict_if_match: AT_RISK}
   - id: P8
     principle: "No mocks in tests — real daemon at :8765, real GPU, real embedder."
@@ -45,16 +45,16 @@ L1_invariants:
     principle: "Push after every commit — zero unpushed is the policy."
     check: null
   - id: P12
-    principle: "Doc-tooling (docgen + OKF) is LLM-native via claude -p; no tree-sitter on the doc-tooling path."
-    check: {grep: "import tree_sitter|from tree_sitter", paths: "vendor/docgen/src/ vendor/okf/src/", verdict_if_match: AT_RISK}
+    principle: "Doc-tooling (OKF) is LLM-native via claude -p; no tree-sitter on the doc-tooling path. Docgen's half was retired 2026-07-28 when docgen was deleted; OKF's leaves with the rest of tier 3."
+    check: {grep: "import tree_sitter|from tree_sitter", paths: "vendor/okf/src/", verdict_if_match: AT_RISK}
   - id: P13
-    principle: "Docgen + OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools."
-    check: {grep: "run_docgen|run_okf", paths: "src/rag_search/daemon/sweeps.py", verdict_if_match: AT_RISK}
+    principle: "OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools. (Docgen's half retired 2026-07-28 — docgen is deleted.)"
+    check: {grep: "run_okf", paths: "src/rag_search/daemon/sweeps.py", verdict_if_match: AT_RISK}
   - id: P14
-    principle: "LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling. No cross-lane calls."
+    principle: "LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat via claude -p. The doc-tooling lane was deleted 2026-07-28 with docgen, so claude -p has exactly one caller (dashboard chat); the DeepSeek lane leaves with the rest of tier 3, after which this is two lanes. No cross-lane calls."
     check: null
   - id: P15
-    principle: "Kill-switches (RSE_DOCGEN=0, RSE_OKF=0) → no output; no deterministic skeleton fallback."
+    principle: "Kill-switch RSE_OKF=0 → no output; no deterministic skeleton fallback. (RSE_DOCGEN retired 2026-07-28 — no reader left.)"
     check: null
   - id: P16
     principle: "Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after RSE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). CPU budget is two-tier and kernel-enforced, not merely cooperative (HR40): idle/steady-state < 1 % of one core is a live-measured automated gate; active work (indexing, BPRE, parsing) is bounded ≤ 1 core by a cgroup-v2 CPUQuota on the daemon's systemd unit that it physically cannot exceed."
@@ -63,7 +63,7 @@ L1_invariants:
     principle: "File-watching is event-driven via OS filesystem notifications (watchfiles/Rust notify) — one inotify instance + one thread for all watched roots, Rust-side event coalescing; manual per-file polling is a last-resort fallback only (NFS/SMB, handled internally by the Rust notify crate's force_polling), never a hand-rolled Python poll loop. Watcher-triggered indexing/parsing work inherits the same kernel CPUQuota ceiling as the rest of the daemon (HR40), including bounded_parse.py's spawn-context workers, which are children of the daemon's own cgroup."
     check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P18
-    principle: "Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Permanent brand lock (2026-07-09): the legacy OSE/OPENCODE/ocs branding was fully retired in favor of RSE — no OPENCODE_, OSE_, bare OSE, opencode, ocs[-_]/ose[-_], or opencode-index token may ever reappear, outside a narrow external-product allowlist (the external OpenCode CLI product, the vendored ose-docgen package/repo). Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private rse-live-audit repo."
+    principle: "Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Permanent brand lock (2026-07-09): the legacy OSE/OPENCODE/ocs branding was fully retired in favor of RSE — no OPENCODE_, OSE_, bare OSE, opencode, ocs[-_]/ose[-_], or opencode-index token may ever reappear, outside a narrow external-product allowlist (the external OpenCode CLI product). Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private rse-live-audit repo."
     check: {grep: "/home/[a-zA-Z0-9_.-]+/|/root/[a-zA-Z0-9_.-]+/|/Users/[a-zA-Z0-9_.-]+/|C:\\\\Users\\\\[a-zA-Z0-9_.-]+", paths: "src/rag_search/ docs/ scripts/ vendor/*/src/", exclude_paths: "src/tests/live/test_public_hygiene.py", verdict_if_match: AT_RISK}
 
 # ── L2: Components (capability → module → entry points) ─────────────────────
@@ -72,7 +72,7 @@ L2_components:
   embed:   {module: "rag_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
   index:   {module: "rag_search.index",   ops: [index_project, VectorStore]}
   graph:   {module: "rag_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
-  kb:      {module: "rag_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_docgen, run_okf]}
+  kb:      {module: "rag_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_okf]}
   query:   {module: "rag_search.query",   ops: [search, compose_answer]}
   server:  {module: "rag_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
   daemon:  {module: "rag_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
@@ -116,14 +116,15 @@ L3_specs:
     spec: "Partition quality gate: degenerate=True demotes kb_state to searchable."
     test: test_kb_state_demoted_when_degenerate
   - id: HR25
-    spec: "Docgen IH is LLM-native via claude -p; no tree-sitter import on the doc-tooling path."
-    test: test_ih_no_tree_sitter_import_in_vendor
+    spec: "Doc-tooling is LLM-native via claude -p; no tree-sitter import on that path. Docgen's half retired 2026-07-28 (deleted); OKF carries the invariant until tier 3 goes."
+    test: test_okf_no_tree_sitter_import_in_vendor
   - id: HR26
-    spec: "Docgen and OKF are manual-trigger only; not called from _enrich_project or MCP tools."
-    test: test_ih_docgen_not_in_sweeps
-  - id: HR27
-    spec: "Kill-switch RSE_DOCGEN=0 → generate() returns mode=off, writes no files."
-    test: test_ih_kill_switch_off
+    spec: "OKF is manual-trigger only; not called from _enrich_project or MCP tools. (Docgen's half retired 2026-07-28 — deleted.)"
+    test: test_okf_not_in_sweeps
+  # HR27 retired 2026-07-28 — docgen is deleted, so RSE_DOCGEN has no reader and there is
+  # nothing left to check. Was: kill-switch RSE_DOCGEN=0 → generate() returns mode=off, writes
+  # no files. L3_specs is the *checkable* subset of the HR register; the dated retirement note
+  # lives in docs/architecture/federation-ops-and-invariants.md's HR table, which keeps the id.
   - id: HR28
     spec: "OKF v0.1 bundle: one concept per semantic-named file; index.md present; type required; no fragment_ naming."
     test: test_okf_llm_generate_structure
@@ -131,8 +132,8 @@ L3_specs:
     spec: "Kill-switch RSE_OKF=0 → generate() returns mode=off, writes no files."
     test: test_okf_kill_switch_off
   - id: HR30
-    spec: "MCP surface = index+search+ask+graph+overview only; docgen and okf absent from _MCP_TOOLS."
-    test: test_api_docgen_not_in_mcp
+    spec: "MCP surface = index+search+ask+graph+overview only; nothing else appears in _MCP_TOOLS."
+    test: test_mcp_has_five_tools
   - id: HR32
     spec: "Idle-efficiency — on_change KB cascade (enrich/wiki/BPRE) is gated by source-fingerprint drift (_last_enriched_sig); metadata-only and non-source events skip the cascade entirely; idle-unload frees the ORT arena after MODEL_IDLE_UNLOAD_S; CPU < 1 % when idle."
     test: test_drift_gate_skips_enrich_when_sig_unchanged
@@ -140,7 +141,7 @@ L3_specs:
     spec: "Notification-first watcher — Watcher.start() runs a single watchfiles (Rust notify) thread across all watched roots; no hand-rolled poll loop exists (polling, if ever needed, is the Rust library's own force_polling path)."
     test: test_watcher_prefers_inotify_over_poll
   - id: HR34
-    spec: "Public-release & device-neutrality guard (P18) — a whole-tracked-tree git-grep (src/, docs/, scripts/, vendor/*/src/, generated artifacts) fails on any absolute /home/<user>/, /root/, /Users/<user>/, or Windows C:\\Users\\<user>\\ path; storage-path literals in core/ and daemon/ must derive from XDG_DATA_HOME/RSE_* env, never a hardcoded machine path. Permanent brand-lock guard (2026-07-09): a parametrized whole-tracked-tree git-grep bans every legacy OSE/OPENCODE/ocs token form (OPENCODE_, OSE_, bare OSE, opencode, ocs[-_]/ose[-_], opencode-index) from ever reappearing, excluding this guard file, the two generated skill files, vendor/, .gitmodules, and lines containing a genuine external-product reference (Title-case OpenCode, ose_docgen/ose-docgen). Runnable-by-anyone contract (hardened 2026-07-09): every machine/deployment-specific value in core/config.py — embed/rerank model, embed device, daemon host/port, query LLM provider/model, GPU device override — must itself be produced by os.environ.get(...), so a fresh clone needs zero source edits to retarget any of them. .gitmodules' vendor/docgen submodule URL and the CI live-fast job's github.repository guard are confirmed public/fork-safe (submodule repo is publicly cloneable; the CI guard exists specifically so forks without a self-hosted GPU runner skip the job instead of hanging) and are not in scope for genericization. Device-specific name bans (company/codename/device-id) are deliberately absent from the public tree and live only in the private rse-live-audit repo."
+    spec: "Public-release & device-neutrality guard (P18) — a whole-tracked-tree git-grep (src/, docs/, scripts/, vendor/*/src/, generated artifacts) fails on any absolute /home/<user>/, /root/, /Users/<user>/, or Windows C:\\Users\\<user>\\ path; storage-path literals in core/ and daemon/ must derive from XDG_DATA_HOME/RSE_* env, never a hardcoded machine path. Permanent brand-lock guard (2026-07-09): a parametrized whole-tracked-tree git-grep bans every legacy OSE/OPENCODE/ocs token form (OPENCODE_, OSE_, bare OSE, opencode, ocs[-_]/ose[-_], opencode-index) from ever reappearing, excluding this guard file, the two generated skill files, vendor/, and lines containing a genuine external-product reference (Title-case OpenCode). Runnable-by-anyone contract (hardened 2026-07-09): every machine/deployment-specific value in core/config.py — embed/rerank model, embed device, daemon host/port, query LLM provider/model, GPU device override — must itself be produced by os.environ.get(...), so a fresh clone needs zero source edits to retarget any of them. This repo has no submodules since docgen's deletion (2026-07-28), so a plain clone is complete; the CI live-fast job's github.repository guard is confirmed fork-safe (it exists specifically so forks without a self-hosted GPU runner skip the job instead of hanging) and is not in scope for genericization. Device-specific name bans (company/codename/device-id) are deliberately absent from the public tree and live only in the private rse-live-audit repo."
     test: test_no_absolute_home_paths
   - id: HR35
     spec: "Source-fingerprint discovery is gitignore- and hidden-dir-aware with RSE-config precedence (index/discover.py _should_drop, shared by iter_files + is_ignored_path): RSE .rse-index.yaml exclude beats include beats default hidden-dir/IGNORED_DIRS policy beats .gitignore beats keep. Gitignored/hidden tool-cache dirs (.svelte-kit, .playwright-mcp, .astro, .turbo, .vite, etc.) never enter _source_fingerprint, so tool-cache regeneration cannot spuriously flip the P4 drift gate (root-caused 2026-07-01: a live vite/playwright session rewriting wiki/.svelte-kit + .playwright-mcp pinned a CPU core via an every-~5min false-positive BPRE/enrich cascade)."

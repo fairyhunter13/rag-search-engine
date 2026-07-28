@@ -14,7 +14,7 @@ from typing import Any
 def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
     import sqlite_vec  # type: ignore[import-untyped]
 
-    from rag_search.core.config import project_graph_db, project_vector_db, root_process_db
+    from rag_search.core.config import project_graph_db, project_vector_db
     from rag_search.core.registry import get_project
     out: dict[str, Any] = {}
     ep = get_project(member_path)
@@ -71,29 +71,6 @@ def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
             gcon.close()
     except Exception as exc:
         out["graph_db_error"] = str(exc)
-    pdb = root_process_db(root_path)
-    if member_path == root_path and pdb.exists():
-        try:
-            pcon = sqlite3.connect(str(pdb), check_same_thread=False)
-            try:
-                t = pcon.execute("SELECT COUNT(*) FROM cross_service_edges").fetchone()[0]
-                out["process_graph"] = {
-                    "edge_count": t,
-                    "unanchored": pcon.execute(
-                        "SELECT COUNT(*) FROM cross_service_edges"
-                        " WHERE caller_file='' OR caller_file IS NULL OR caller_line=0"
-                    ).fetchone()[0] if t else 0,
-                    "out_of_band": pcon.execute(
-                        "SELECT COUNT(*) FROM cross_service_edges"
-                        " WHERE confidence<0.5 OR confidence>1.0"
-                    ).fetchone()[0] if t else 0,
-                }
-            finally:
-                pcon.close()
-        except Exception as exc:
-            out["process_graph"] = {"error": str(exc)}
-    else:
-        out["process_graph"] = None
     return out
 
 
@@ -108,18 +85,10 @@ def _is_member_valid(c: dict[str, Any]) -> bool:
         return False
     if c.get("embedding_dim", 768) != 768:
         return False
-    if any(c.get(k, 0) != 0 for k in (
+    return not any(c.get(k, 0) != 0 for k in (
         "orphan_count", "dangling_edges", "bad_community_refs",
         "placeholder_communities", "path_leakage",
-    )):
-        return False
-    pg = c.get("process_graph")
-    if pg is not None:
-        if "error" in pg:
-            return False
-        if pg.get("unanchored", 0) != 0 or pg.get("out_of_band", 0) != 0:
-            return False
-    return True
+    ))
 
 
 def validate_index(project_path: str) -> dict:
@@ -148,8 +117,5 @@ def validate_index(project_path: str) -> dict:
         "path_leakage": t("path_leakage"),
         "indexed_at_fresh": all(r["checks"].get("indexed_at_fresh", False) for r in reports),
     }
-    root_r = next((r for r in reports if r["checks"].get("process_graph") is not None), None)
-    if root_r:
-        agg["process_graph"] = root_r["checks"]["process_graph"]
     return {"verdict": "VALID" if all_valid else "INVALID",
             "member_count": len(reports), "checks": agg, "members": reports}

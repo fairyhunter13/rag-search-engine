@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from pathlib import Path
 
 import numpy as np
@@ -34,22 +33,32 @@ def _content_hash(content: str) -> str:
     return h.hexdigest()
 
 
-def _thermal_pace() -> None:
+def _thermal_pace(_temp_fn=None, _sleep_fn=None) -> None:
     """Background-only: pause briefly when the GPU is near the hard-raise ceiling.
 
     Called before each embed batch during bulk indexing so large repos complete
     without triggering embed()'s RuntimeError.  Releases the GIL via sleep so
     the asyncio event loop stays responsive.  Never called on the query path.
+
+    _temp_fn / _sleep_fn: injectable for deterministic tests only, matching the
+    seam embedder._await_thermal_headroom already uses for the same guard.
     """
     import time
 
     from rag_search.core.config import THERMAL_MAX_C
     from rag_search.core.gpu import gpu_temp_c
 
+    gpu_temp_c = _temp_fn if _temp_fn is not None else gpu_temp_c
+    time_sleep = _sleep_fn if _sleep_fn is not None else time.sleep
+
+    # 0.25s, not 3s: a batch takes well under a second, so a coarse quantum turns one
+    # over-temperature reading into a guaranteed multi-second idle, the card cools, the
+    # next batch reheats it, and the gate re-arms. That oscillation — not the threshold —
+    # was 57% of the July-2026 migration's embed phase.
     waited = 0.0
     while gpu_temp_c() >= THERMAL_MAX_C - 2 and waited < 120.0:
-        time.sleep(3.0)
-        waited += 3.0
+        time_sleep(0.25)
+        waited += 0.25
 
 
 def index_project(
@@ -173,57 +182,3 @@ def index_files(
     return len(files), len(chunks)
 
 
-def index_docs(
-    project_path: str | Path,
-    embedder,
-    store: VectorStore,
-    *,
-    project_root: Path | None = None,
-) -> int:
-    """Idempotent embed-only pass for generated docs/ tree (HR28). Returns chunk count."""
-    from rag_search.index.discover import _TEXT_LANGS, _is_generated_docs_dir
-
-    root = Path(project_path).resolve()
-    docs_dir = root / os.environ.get("RSE_DOCGEN_DIR", "docs")
-    if not _is_generated_docs_dir(docs_dir):
-        return 0
-    pr = project_root or root
-    chunks: list[Chunk] = []
-    for fpath in sorted(docs_dir.rglob("*")):
-        if not fpath.is_file():
-            continue
-        lang = detect_language(fpath)
-        if lang not in _TEXT_LANGS:
-            continue
-        store.delete_by_path(str(fpath))
-        try:
-            content = fpath.read_text(errors="replace")
-        except OSError:
-            continue
-        chunks.extend(chunk_file(fpath, content, lang, project_root=pr))
-    return _embed_docs(chunks, embedder, store)
-
-
-def _embed_docs(chunks: list[Chunk], embedder, store: VectorStore) -> int:
-    if not chunks:
-        store.flush()
-        return 0
-    batch = embed_batch_size()
-    texts = [c.content for c in chunks]
-    vectors: list[np.ndarray] = []
-    for i in range(0, len(texts), batch):
-        _thermal_pace()
-        vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
-        vectors.extend(vecs)
-    for pos, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
-        store.insert(
-            chunk_id=_chunk_id(chunk.path, pos),
-            path=chunk.path,
-            start=chunk.start_line,
-            end=chunk.end_line,
-            language=chunk.language,
-            content=chunk.content,
-            vector=vec,
-        )
-    store.flush()
-    return len(chunks)

@@ -38,7 +38,7 @@ _last_enriched_sig: dict[str, str] = {}
 # sole BPRE trigger during bulk reconcile — avoids rebuilding the same root repeatedly on a
 # mid-pass-shifting source sig.
 _reconcile_active = threading.Event()
-# Serializes CPU-bound KB work (community recompute / wiki / BPRE / index_docs) across the
+# Serializes CPU-bound KB work (community recompute / wiki / BPRE) across the
 # watcher and reconcile threads so at most one heavy pass runs at a time — caps daemon CPU at
 # ~one core instead of pinning two concurrently. Never held around index/embed or GPU queries.
 _KB_HEAVY_LOCK = threading.Lock()
@@ -453,6 +453,11 @@ def reconcile_projects() -> None:
     docstring for why (avoids rebuilding the same root repeatedly on a mid-pass-shifting sig).
     """
     if _PAUSED:
+        # Suspension is a state, not a discard (cf. Flux `suspend`) — but _PAUSED is a bare
+        # global with no nesting, so a pause landing inside the startup grace silently
+        # abandoned the whole pass. It cost days of a fleet migration to find, precisely
+        # because both this and the mid-walk return below logged nothing.
+        log.info("reconcile: abandoned before start (sweeps paused)")
         return
     from rag_search.core.config import project_graph_db
     from rag_search.core.registry import list_projects
@@ -472,8 +477,12 @@ def reconcile_projects() -> None:
         # and it is startup-once by design, so an unordered registry starves exactly the repos
         # being worked on: a measured pass here ground through 198 projects for 7.6 h without
         # reaching either repo edited that day. One sort key, no new timer, same work per pass.
-        for entry in sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True):
+        walk = sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True)
+        for pos, entry in enumerate(walk):
             if _PAUSED:
+                # Name the position: "reconcile stopped" is not actionable, "stopped at
+                # 105/160" tells you how much of the walk never ran.
+                log.info("reconcile: abandoned at %d/%d (sweeps paused)", pos, len(walk))
                 return
             if not entry.enabled:
                 continue
@@ -778,22 +787,6 @@ def _enrich_project(project_path: str) -> None:
             except Exception as exc:
                 log.error("bpre reconstruct %s: %s", project_path, exc, exc_info=True)
                 _bpre_state["last_error"] = str(exc)
-        # Docgen is manual-trigger only (CLI/dashboard). Not wired into the auto-pipeline.
-        # Re-embed generated docs/ under scope=docs (HR28); no-op if no generated docs/ exists.
-        try:
-            from rag_search.core.config import project_vector_db
-            from rag_search.embed.embedder import get_embedder
-            from rag_search.index.indexer import index_docs
-            from rag_search.index.store import VectorStore
-            _vs = VectorStore(project_vector_db(project_path))
-            try:
-                _n = index_docs(project_path, get_embedder(), _vs)
-                if _n:
-                    log.info("index_docs %s: %d doc chunks", project_path, _n)
-            finally:
-                _vs.close()
-        except Exception as exc:
-            log.error("index_docs %s: %s", project_path, exc, exc_info=True)
 
 
 def _regen_owning_federations(member_path: str) -> None:
