@@ -112,6 +112,68 @@ def test_sd3_file_that_chunks_to_nothing_does_not_drift_forever(safe_tmp_path, e
     )
 
 
+def test_sd6_an_unreadable_file_is_not_reported_forever(safe_tmp_path, embedder):
+    """SD6: a discoverable file that cannot be read must not be requeued every pass.
+
+    `index_files` purges an unreadable path and returns without stamping a hash — it has no
+    content to hash — so without a screen the drift trigger reports it, hands it over, and reports
+    it again next pass, forever. SD3's zero-chunk case does not cover this: that file is readable
+    and *does* get stamped.
+
+    The readable half of the assertion is not decoration. A screen that reported nothing at all
+    would satisfy the first assertion perfectly, so the gate has to show the trigger still sees
+    the file it is supposed to see.
+    """
+    _seed(safe_tmp_path, embedder)
+    blocked = safe_tmp_path / "blocked.py"
+    blocked.write_text("def blocked():\n    return 1\n")
+    (safe_tmp_path / "fine.py").write_text("def fine():\n    return 2\n")
+    blocked.chmod(0o000)
+    try:
+        sweeps._code_fingerprint_cache.pop(str(safe_tmp_path), None)
+        unindexed, _ = sweeps._index_set_drift(str(safe_tmp_path))
+    finally:
+        blocked.chmod(0o644)
+    names = sorted(p.name for p in unindexed)
+    assert "blocked.py" not in names, (
+        "an unreadable file is reported unindexed; index_files cannot stamp it, so this repeats "
+        "on every reconcile pass forever"
+    )
+    assert names == ["fine.py"], f"the screen swallowed a readable file too: {names}"
+
+
+def test_sd5_chunks_without_a_hash_row_are_still_purgeable(safe_tmp_path, embedder):
+    """SD5: the orphan side reads `file_hashes` UNION `chunks`, not `file_hashes` alone.
+
+    A chunk row can outlive its hash row — 2,091 of inosoft's 5,242 indexed paths had no hash row
+    at all, written by an index generation pre-dating the table. What keeps retrieving is the
+    chunk, so keying orphans on `file_hashes` would leave every one of those unpurgeable the
+    moment discovery stopped yielding it. Dropping the hash row here reproduces that generation
+    exactly, against a real indexed store.
+    """
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+
+    _seed(safe_tmp_path, embedder)
+    vs = VectorStore(project_vector_db(str(safe_tmp_path)), migrate=False)
+    try:
+        vs._con.execute("DELETE FROM file_hashes WHERE path LIKE '%b.py'")
+        vs._con.commit()
+    finally:
+        vs.close()
+    (safe_tmp_path / "b.py").unlink()
+    sweeps._code_fingerprint_cache.pop(str(safe_tmp_path), None)
+
+    _, orphaned = sweeps._index_set_drift(str(safe_tmp_path))
+    assert [os.path.basename(p) for p in orphaned] == ["b.py"], (
+        f"a path with chunks but no hash row was not reported orphaned: {orphaned}"
+    )
+    sweeps._purge_paths(str(safe_tmp_path), orphaned)
+    sweeps._code_fingerprint_cache.pop(str(safe_tmp_path), None)
+    _, orphaned = sweeps._index_set_drift(str(safe_tmp_path))
+    assert not orphaned, f"purge left drift behind: {orphaned}"
+
+
 def test_sd4_scan_sees_a_change_nested_below_the_root(safe_tmp_path):
     """SD4: the walk's memo must not be keyed on the root directory's mtime.
 
