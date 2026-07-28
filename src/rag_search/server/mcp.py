@@ -95,7 +95,10 @@ def _search_sync(
             continue
         # migrate=False: a query must never pay a store's one-time FTS backfill. Measured at
         # 11.3 s for a single 99 k-chunk member, and this loop opens one store per federation
-        # member. Reconcile converges the fleet in the background instead.
+        # member. Reconcile does open stores writable and so does migrate them, but it is not the
+        # convergence path it looks like: measured across the hours after this shipped it moved
+        # 137 owed stores to 136, because its walk is spent on real indexing work and every live
+        # test run pauses it. The backfill is run as an explicit one-time fleet migration.
         stores.append(VectorStore(vdb, migrate=False))
         searched.append(path)
     # One embed and one global rerank for the whole federation. Looping search() per project
