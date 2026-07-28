@@ -156,13 +156,54 @@ _SIZE_LIMITS: dict[str, int] = {
 
 
 def detect_language(path: Path) -> str:
-    """Return the pack's language id for path (H3: detect_language_from_path, 306+ langs)."""
+    """Return the pack's language id for path (H3: detect_language_from_path, 306+ langs).
+
+    S7: an extensionless file falls back to its shebang. `Makefile`, `Dockerfile`, `.env` and a
+    bare `script` all return None from path detection — measured against pack 1.12.1 — so every
+    such file was invisible to the graph. The shebang answers for the executable ones (python,
+    bash, node); Dockerfile and Makefile have no content signature and stay unknown, which is
+    the honest result rather than a filename table.
+
+    The read is bounded to the first line and only happens when path detection has already
+    failed, so the hot discovery loop pays nothing for the overwhelming majority of files.
+    """
     try:
-        from tree_sitter_language_pack import detect_language_from_path
+        from tree_sitter_language_pack import (
+            detect_language_from_content,
+            detect_language_from_path,
+        )
         lang = detect_language_from_path(str(path))
+        if lang:
+            return lang
+        with path.open("rb") as fh:
+            head = fh.readline(256)
+        if head.startswith(b"#!"):
+            lang = detect_language_from_content(head.decode("utf-8", errors="replace"))
         return lang if lang else "unknown"
     except Exception:
         return "unknown"
+
+
+# S8: language families for call-edge resolution. A call can only bind to a definition the
+# caller's grammar could actually reach, and the unit that governs that is not the language but
+# the family: a `.ts` file legitimately calls a `.js` export, a `.vue` SFC's <script> block *is*
+# javascript, and a Blade template is PHP. Anything not named here is its own family, which is
+# the strict case — the table only ever *widens* what resolution accepts.
+#
+# This is a taxonomy, not a heuristic: it states which grammars share a module system, the same
+# way _STRUCTURE_KIND_MAP states which StructureKinds are functions. HR15 bans guessing *meaning*
+# from surface text; it does not ban knowing that TypeScript compiles to JavaScript.
+_LANGUAGE_FAMILY: dict[str, str] = {
+    "javascript": "js", "typescript": "js", "jsx": "js", "tsx": "js",
+    "vue": "js", "svelte": "js", "astro": "js", "html": "js",
+    "c": "c", "cpp": "c", "objc": "c", "cuda": "c",
+    "php": "php", "blade": "php",
+}
+
+
+def language_family(lang: str) -> str:
+    """The resolution family `lang` belongs to; a language with no relatives is its own family."""
+    return _LANGUAGE_FAMILY.get(lang, lang)
 
 
 def is_code_language(lang: str) -> bool:

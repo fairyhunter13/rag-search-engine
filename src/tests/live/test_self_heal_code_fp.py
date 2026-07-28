@@ -76,14 +76,22 @@ def test_sh2b_every_fingerprinted_module_exists():
     )
 
 
-def test_sh3_algo_version_includes_code_fp():
-    """SH3: _pipeline_algo_version() contains the code-fingerprint component."""
+def test_sh3_algo_version_includes_every_component():
+    """SH3: every component of the graph identity is present and in its own slot.
+
+    Was a bare `len(parts) == 2`, which is the [[feedback_guard_tests_must_discriminate]] shape:
+    it says nothing about *which* two, so swapping a component for a constant would pass. It went
+    red when S3 added EXTRACTOR_REV — correctly, since the identity changed — and it is rewritten
+    rather than re-counted, so adding a fourth component fails only if the new one is unstamped.
+    """
     from rag_search.daemon.sweeps import _code_fingerprint, _pipeline_algo_version
+    from rag_search.graph.community import ALGO_VERSION
+    from rag_search.graph.extractor import EXTRACTOR_REV
     ver = _pipeline_algo_version()
-    fp = _code_fingerprint()
-    assert fp in ver, f"code_fp {fp!r} not in algo_version {ver!r}"
     parts = ver.split("+")
-    assert len(parts) == 2, f"expected 2-part version 'ALGO+code_fp', got {ver!r}"
+    assert parts == [ALGO_VERSION, EXTRACTOR_REV, _code_fingerprint()], (
+        f"algo_version {ver!r} does not compose ALGO_VERSION + EXTRACTOR_REV + code_fp"
+    )
 
 
 def test_sh4_baseline_seed_no_mutation(safe_tmp_path):

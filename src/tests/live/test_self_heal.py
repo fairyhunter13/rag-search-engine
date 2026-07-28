@@ -71,11 +71,16 @@ def test_rederive_graph_has_no_embedder_call():
     assert "embed(" not in src, "_rederive_graph must not call embed() (GPU-free)"
 
 
-def test_pipeline_algo_version_reflects_both_constants():
-    """T1d: _pipeline_algo_version() composes ALGO_VERSION + code_fp."""
+def test_pipeline_algo_version_reflects_all_three_constants():
+    """T1d: _pipeline_algo_version() composes ALGO_VERSION + EXTRACTOR_REV + code_fp.
+
+    EXTRACTOR_REV joined the identity with S3, because resolution lives in
+    `sweeps._extract_graph` and no byte fingerprint covers it — see TS3.
+    """
     from rag_search.daemon.sweeps import _code_fingerprint, _pipeline_algo_version
     from rag_search.graph.community import ALGO_VERSION
-    expected = f"{ALGO_VERSION}+{_code_fingerprint()}"
+    from rag_search.graph.extractor import EXTRACTOR_REV
+    expected = f"{ALGO_VERSION}+{EXTRACTOR_REV}+{_code_fingerprint()}"
     assert _pipeline_algo_version() == expected
 
 

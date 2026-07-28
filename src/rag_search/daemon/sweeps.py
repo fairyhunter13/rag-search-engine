@@ -59,8 +59,18 @@ def _code_fingerprint() -> str:
 
 
 def _pipeline_algo_version() -> str:
+    """The stamp a stored graph must match to be considered current.
+
+    S3: `EXTRACTOR_REV` is carried explicitly because the byte fingerprint above cannot see
+    every input to extraction. Call resolution lives in `_extract_graph`, in *this* file, which
+    is deliberately not fingerprinted — hashing a module this large would re-derive 160 graphs
+    for an unrelated log line. So a resolution change is invisible to `_code_fingerprint` and
+    would have served stale edges forever. Bump `EXTRACTOR_REV` in the same commit as any change
+    to what extraction emits; `test_extractor_rev.py` is the gate that says so.
+    """
     from rag_search.graph.community import ALGO_VERSION
-    return f"{ALGO_VERSION}+{_code_fingerprint()}"
+    from rag_search.graph.extractor import EXTRACTOR_REV
+    return f"{ALGO_VERSION}+{EXTRACTOR_REV}+{_code_fingerprint()}"
 
 
 def _source_fingerprint(path: str) -> str:
@@ -301,14 +311,28 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     resolution tables are still built from the whole symbol table, so calls into untouched
     files still resolve. Pass `only=None` for a full re-derive.
     """
+    from pathlib import Path
+
     from rag_search.graph.extractor import (
         extract_calls_with_lines,
         extract_symbols,
         symbol_id,
     )
     from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
-    from rag_search.index.discover import detect_language, iter_files
+    from rag_search.index.discover import detect_language, iter_files, language_family
     targets = list(only) if only is not None else None
+    # S8: the host language of a file, cached. Symbols carry the *inner* language — a symbol
+    # lifted out of a .vue <script> block is stamped "javascript" — so the symbol row cannot
+    # answer "what grammar was this file written in". The path can, and deriving it here is
+    # what S9 asks for without adding a column that would have to be kept in sync.
+    fam_of: dict[str, str] = {}
+
+    def _fam(fstr: str) -> str:
+        f = fam_of.get(fstr)
+        if f is None:
+            f = fam_of[fstr] = language_family(detect_language(Path(fstr)))
+        return f
+
     for fpath in (targets if targets is not None else iter_files(root, federation_mode=True)):
         try:
             content = fpath.read_text(errors="replace")
@@ -326,12 +350,16 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
                              sym.file, sym.start_line, sym.end_line, sym.language)
     gs.commit()
     gs.dedup_symbols()
-    name_to_entries: dict[str, list[tuple[str, str]]] = {}
+    # S8: keyed by (family, name), not name. Keying on the bare name is what bound every
+    # javascript `get()` to every PHP `get()` in the same repo — 1.09 M edges fleet-wide,
+    # 5.97 % of all of them, measured 2026-07-28 across 151 projects with edges. A call can
+    # only reach a definition its own grammar could import, so the family is part of the key.
+    name_to_entries: dict[tuple[str, str], list[tuple[str, str]]] = {}
     file_to_sym_spans: dict[str, list[tuple[int, int, str]]] = {}
     for (sid, name, fstr, sl, el) in gs._con.execute(
         "SELECT sid, name, file, start_line, end_line FROM symbols"
     ):
-        name_to_entries.setdefault(name, []).append((sid, fstr))
+        name_to_entries.setdefault((_fam(fstr), name), []).append((sid, fstr))
         if fstr:
             file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
     for spans in file_to_sym_spans.values():
@@ -358,7 +386,7 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
                         best_span, caller_sid = span, sid
             if not caller_sid:
                 continue
-            for (callee_sid, callee_file) in name_to_entries.get(callee_name, []):
+            for (callee_sid, callee_file) in name_to_entries.get((_fam(fstr), callee_name), []):
                 if callee_file != fstr:
                     gs.upsert_edge(caller_sid, callee_sid)
     gs.commit()

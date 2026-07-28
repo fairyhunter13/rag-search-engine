@@ -118,9 +118,11 @@ def label_community_structural(store: GraphStore, cid: int) -> None:
     """Deterministic structural label for a tail community — zero LLM tokens.
 
     Sets title (reuses _label_from_names if absent) and templated summary listing
-    member kinds and source files. semantic_type is left NULL (abstained): it is a
-    Knowledge-rung judgment, only assigned by the LLM on head/lazy paths (HR23).
-    Byte-identical on repeated runs.
+    member kinds and source files. Byte-identical on repeated runs.
+
+    This used to also clobber `semantic_type` to NULL, so a tail community abstained from
+    the Knowledge-rung judgment the LLM made on head paths (HR23). Both the column and the
+    judgment left with tier 3; the abstention has nothing left to abstain from.
     """
     rows = store._con.execute(
         "SELECT name, kind, file FROM symbols WHERE community_id=? LIMIT 30",
@@ -155,7 +157,3 @@ def _label_community_structural_finish(
         summary=summary[:2000],
         member_count=member_count,
     )
-    # Explicit NULL clobbers the COALESCE in upsert_community's ON CONFLICT clause,
-    # which would otherwise preserve any prior '' or 'utility' on the stored row.
-    # semantic_type is a Knowledge judgment — the tail abstains until lazily read.
-    store._con.execute("UPDATE communities SET semantic_type=NULL WHERE id=?", (cid,))

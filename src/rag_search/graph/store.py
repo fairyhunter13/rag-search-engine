@@ -35,9 +35,7 @@ def _open(db_path: Path) -> sqlite3.Connection:
             level INTEGER NOT NULL DEFAULT 1,
             title TEXT,
             summary TEXT,
-            member_count INTEGER DEFAULT 0,
-            semantic_type TEXT,
-            narrated INTEGER DEFAULT 0
+            member_count INTEGER DEFAULT 0
         );
     """)
     con.commit()
@@ -69,38 +67,20 @@ def _open(db_path: Path) -> sqlite3.Connection:
             con.execute(f"ALTER TABLE symbols DROP COLUMN {_dead_col}")
     if any(c in _sym_cols for c in ("signature", "docstring", "intent")):
         con.commit()
-    # Schema migration: Phase 2 Information spine — kind (dir/file/community/domain) + path.
-    if "kind" not in _cols:
-        con.execute("ALTER TABLE communities ADD COLUMN kind TEXT DEFAULT 'community'")
-        con.execute("UPDATE communities SET kind='domain' WHERE level>=2")
-        con.commit()
-    if "path" not in _cols:
-        con.execute("ALTER TABLE communities ADD COLUMN path TEXT")
-        con.commit()
-    # Schema migration Phase 3: narrated flag (0=unnarrated tail/structure, 1=LLM-narrated).
-    # Backfill narrated=1 only for communities with LLM evidence (semantic_type IS NOT NULL);
-    # templated tails (semantic_type IS NULL) stay narrated=0 per the abstention doctrine.
-    if "narrated" not in _cols:
-        con.execute("ALTER TABLE communities ADD COLUMN narrated INTEGER DEFAULT 0")
-        con.execute(
-            "UPDATE communities SET narrated=1 "
-            "WHERE level>=1 AND summary IS NOT NULL AND summary!='' "
-            "AND kind NOT IN ('dir','file') AND semantic_type IS NOT NULL"
-        )
-        con.commit()
-    # Data migration Phase 4D: correct over-stamped narrated=1 on tail rows.
-    # Phase 3 backfill used summary IS NOT NULL; existing DBs may have narrated=1 on
-    # tail rows (semantic_type IS NULL). One-time sweep corrects them to narrated=0 so
-    # the classify gate and retrieval selectors behave correctly.
-    _over = con.execute(
-        "SELECT COUNT(*) FROM communities "
-        "WHERE narrated=1 AND semantic_type IS NULL AND kind NOT IN ('dir','file')"
-    ).fetchone()[0]
-    if _over:
-        con.execute(
-            "UPDATE communities SET narrated=0 "
-            "WHERE narrated=1 AND semantic_type IS NULL AND kind NOT IN ('dir','file')"
-        )
+    # Schema migration R2: drop the four dead community columns, same DROP COLUMN precedent
+    # as the symbols sweep above. `semantic_type` and `narrated` belonged to the LLM narrator
+    # and its abstention doctrine, both deleted with tier 3 — `semantic_type`'s last writer was
+    # community.py's explicit NULL clobber, and nothing has set `narrated=1` since the narrator
+    # went. `kind` and `path` belonged to the DIKW information spine, whose writers left in the
+    # same deletion: a census over all 160 fleet graphs found `kind` holding exactly one value
+    # ('community', 8793 rows) and `path` never written at all. The Phase-2/3/4D migrations that
+    # added and backfilled them are gone with them; a DB that never saw those migrations has
+    # nothing to drop, which is what the `in _cols` test is for.
+    _dead_community_cols = ("semantic_type", "narrated", "kind", "path")
+    for _dead_col in _dead_community_cols:
+        if _dead_col in _cols:
+            con.execute(f"ALTER TABLE communities DROP COLUMN {_dead_col}")
+    if _cols.intersection(_dead_community_cols):
         con.commit()
     # Schema migration: key-value meta store for algo-version + source-fingerprint stamps.
     # Survives GraphStore.clear() (which only deletes symbols/edges/communities).
@@ -153,18 +133,15 @@ class GraphStore:
         self._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (community_id, sid))
 
     def upsert_community(self, cid: int, level: int, title: str | None, summary: str,
-                         member_count: int, semantic_type: str = "",
-                         narrated: int | None = None) -> None:
+                         member_count: int) -> None:
         self._con.execute(
-            """INSERT INTO communities (id,level,title,summary,member_count,semantic_type,narrated)
-               VALUES (?,?,?,?,?,?,COALESCE(?,0))
+            """INSERT INTO communities (id,level,title,summary,member_count)
+               VALUES (?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  title=COALESCE(excluded.title, title),
                  summary=COALESCE(excluded.summary, summary),
-                 member_count=excluded.member_count,
-                 semantic_type=COALESCE(excluded.semantic_type, semantic_type),
-                 narrated=MAX(narrated, COALESCE(excluded.narrated, 0))""",
-            (cid, level, title, summary, member_count, semantic_type, narrated),
+                 member_count=excluded.member_count""",
+            (cid, level, title, summary, member_count),
         )
 
     def delete_file_symbols(self, file: str) -> int:

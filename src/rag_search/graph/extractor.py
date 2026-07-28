@@ -5,6 +5,15 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+# S3: the extraction contract's revision. Any change to what extraction *emits* — this module,
+# or `sweeps._extract_graph`'s call resolution, which no fingerprint covers — must bump this in
+# the same commit, and the bump is what invalidates every stored graph in the fleet.
+#
+# History, so the next bump knows what it is joining:
+#   e1  2026-07-28  S8 family-gated call resolution; S1 grammar-decided names; S4 token-matched
+#                   call nodes (+`macro` field, `*_signature` excluded); S7 shebang fallback.
+EXTRACTOR_REV = "e1"
+
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
 _STRUCTURE_KIND_MAP: dict[str, str] = {
@@ -64,7 +73,7 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
         if name_node:
             br = name_node.byte_range()
             name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
-            if name and name.isidentifier():
+            if _is_name_text(name):
                 qname = f"{parent}.{name}" if parent else name
                 if "function" in k or "method" in k or "func" in k:
                     sym_kind = "function"
@@ -86,30 +95,79 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
 
 # H2 helpers: generic call-node detection (replaces the old per-language call-node table)
 
+def _is_name_text(name: str) -> bool:
+    """S1: accept whatever the grammar handed back as a name, minus the impossible cases.
+
+    `str.isidentifier()` stood here and answered a *Python* question about every language:
+    it rejects `$user` (PHP), `list-ref` (Scheme, Clojure), `empty?` and `save!` (Ruby, Elixir)
+    and `@media` — all of which are names their own grammar named. The grammar has already
+    decided this node is a name; re-deciding it in Python only ever discards edges.
+
+    What is still rejected is what no name can be: empty, or spanning lines/whitespace, which
+    is the signature of an unwrap that fell through to a whole expression.
+    """
+    return bool(name) and not any(c.isspace() for c in name)
+
+
 def _unwrap_callee(nn, code_bytes: bytes) -> str:
-    """Unwrap member/attribute node to rightmost identifier; '' if not an identifier."""
+    """Unwrap member/attribute node to rightmost identifier; '' if not a name."""
     if nn is None:
         return ""
     if nn.kind() in _MEMBER_KINDS:
         # "field"=Go/JS, "property"=TS/JS, "attribute"=Python, "name"=Java/Kotlin
         nn = (nn.child_by_field_name("field") or nn.child_by_field_name("property")
               or nn.child_by_field_name("attribute") or nn.child_by_field_name("name") or nn)
+    # S1: a name is a leaf. If the node still has named children after unwrapping it is an
+    # expression — `factory()()`, `arr[i]()` — and its text is not a callee name.
+    if nn.named_child_count():
+        return ""
     br = nn.byte_range()
     name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
-    return name if name and name.isidentifier() else ""
+    return name if _is_name_text(name) else ""
 
 
 def _callee_node(node):  # type: ignore[return]
-    """Return the callee sub-node from a call/invocation node (common field names)."""
-    return (node.child_by_field_name("function")
-            or node.child_by_field_name("name")
-            or node.child_by_field_name("method")
-            or node.child_by_field_name("callee"))
+    """Return the callee sub-node from a call/invocation node.
+
+    Field names first — `function` (C, JS, Rust), `name`, `method` (Java), `macro` (Rust
+    `macro_invocation`, added by S4), `callee`. Not every grammar names the field: Kotlin's
+    `call_expression` is `(simple_identifier call_suffix)` with no field on either child, so
+    every Kotlin call resolved to nothing and the language contributed **zero** call edges.
+    That was true before S4 and was found by TS4b, not by reading the grammar.
+
+    The fallback is positional and structural, never per-language: the first named child of a
+    call node is its callee in every grammar that leaves the field unnamed, and it is only
+    consulted once all the field lookups have missed.
+    """
+    named = (node.child_by_field_name("function")
+             or node.child_by_field_name("name")
+             or node.child_by_field_name("method")
+             or node.child_by_field_name("macro")
+             or node.child_by_field_name("callee"))
+    if named is not None:
+        return named
+    return node.named_child(0) if node.named_child_count() else None
+
+
+def _is_call_node(kind: str) -> bool:
+    """S4: is this grammar node a call site? Matched on node-type *tokens*, not substring.
+
+    `"call" in kind` is a substring test, so it fires on any node type that merely contains
+    the letters — and it silently misses nothing it should have caught, because every call
+    node type in the pack spells the word as its own `_`-separated token (`call`,
+    `call_expression`, `function_call`, `method_invocation`, `macro_invocation`). Splitting on
+    `_` keeps all of those and stops matching by accident.
+
+    `*_signature` is excluded outright: a signature declares a callable, it does not call one.
+    """
+    if kind.endswith("_signature"):
+        return False
+    parts = kind.split("_")
+    return "call" in parts or "invocation" in parts
 
 
 def _collect_call_names(node, code_bytes: bytes, out: list[str]) -> None:
-    k = node.kind()
-    if "call" in k or "invocation" in k:
+    if _is_call_node(node.kind()):
         name = _unwrap_callee(_callee_node(node), code_bytes)
         if name:
             out.append(name)
@@ -283,8 +341,7 @@ def _extract_symbols_from(r, outer_root, code_bytes: bytes, file_str: str, langu
 
 
 def _collect_calls_with_lines(node, code_bytes: bytes, out: list) -> None:
-    k = node.kind()
-    if "call" in k or "invocation" in k:
+    if _is_call_node(node.kind()):
         name = _unwrap_callee(_callee_node(node), code_bytes)
         if name:
             out.append((name, node.start_position().row + 1))
