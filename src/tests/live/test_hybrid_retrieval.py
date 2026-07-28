@@ -280,3 +280,42 @@ def test_hy2_operator_characters_cannot_reach_fts5(embedder, safe_tmp_path, raw)
         vs.search_lexical(raw, top_k=5)  # must not raise
     finally:
         vs.close()
+
+
+def test_lx3_write_cache_is_on_the_write_path_only(safe_tmp_path):
+    """LX3: the 128 MB page cache belongs to write-path handles and must never reach a query one.
+
+    Both halves fail to opposite defects. Dropping the pragma costs 1.94x on indexing statement
+    time (5.46-5.77s to 2.85-2.94s over 50k rows) and is invisible in every output — the class of
+    regression that needs an assertion on configuration rather than on results. Applying it
+    unconditionally is the worse direction and equally invisible: a federated search opens one
+    handle per member, and 189 members at 128 MB is a 24 GB ask to answer one question.
+
+    The query-path expectation is read off a bare connection rather than written down as -2000, so
+    a build with a different compiled default does not turn this into a false alarm.
+    """
+    import sqlite3
+
+    from rag_search.index.store import VectorStore
+
+    bare = sqlite3.connect(":memory:")
+    default = bare.execute("PRAGMA cache_size").fetchone()[0]
+    bare.close()
+
+    path = safe_tmp_path / "lx3.db"
+    rw = VectorStore(path, migrate=True)
+    try:
+        assert rw._con.execute("PRAGMA cache_size").fetchone()[0] == -131072, (
+            "LX3: the write path lost its page cache — indexing pays 1.94x in statement time, "
+            "with nothing wrong in any result to notice it by"
+        )
+    finally:
+        rw.close()
+    ro = VectorStore(path, migrate=False)
+    try:
+        assert ro._con.execute("PRAGMA cache_size").fetchone()[0] == default, (
+            "LX3: a query-path handle claimed the 128 MB write cache — one handle is opened per "
+            "federation member, so this is a 24 GB allocation on the largest federation here"
+        )
+    finally:
+        ro.close()
