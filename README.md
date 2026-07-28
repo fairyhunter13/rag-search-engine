@@ -1,8 +1,12 @@
 # rag-search-engine (RSE)
 
 Semantic code-search, knowledge-graph, and AI-assistant integration via a 5-tool MCP API
-(search / ask / graph / overview / index). Backed by GPU-accelerated embeddings, a
-call-graph store, and a DeepSeek-powered knowledge-base pipeline.
+(search / ask / graph / overview / index). Backed by GPU-accelerated embeddings, a GPU
+reranker, and a deterministic tree-sitter call-graph store.
+
+**No generative LLM runs anywhere in this pipeline.** The generative knowledge-base tier
+(DeepSeek enrichment, wiki, BPRE, docgen, OKF) was deleted on 2026-07-28; the only LLM the
+system reaches at all is `claude -p` on the dashboard's chat route.
 
 ## Platform requirements
 
@@ -37,17 +41,11 @@ python3 -m venv .venv
 
 ## Configure secrets
 
-RSE needs a [DeepSeek](https://platform.deepseek.com/) API key for KB-enrichment.
-
-Resolution order: `DEEPSEEK_API_KEY` env var → `~/.config/rag-search/env` → (legacy `~/.bash_env`)
-
-```bash
-mkdir -p ~/.config/rag-search
-echo "DEEPSEEK_API_KEY=sk-..." >> ~/.config/rag-search/env
-chmod 600 ~/.config/rag-search/env
-```
-
-The systemd unit reads this file automatically via `EnvironmentFile`.
+**None required.** RSE needs no API key: indexing, extraction and retrieval are entirely
+local (GPU embedder + GPU reranker + tree-sitter). The cloud key this section used to
+document went with the generative KB tier on 2026-07-28. `~/.config/rag-search/env` is
+still read via the systemd unit's `EnvironmentFile` for tuning vars such as
+`RSE_DISABLE_TENSORRT`; it just holds no secret any more.
 
 ## Run the daemon
 
@@ -75,7 +73,7 @@ rag-search daemon install-global   # registers rag-search in every Claude Code p
 ## Index a project
 
 ```bash
-rag-search-index /path/to/project      # one-shot: register + index + enrich + wiki
+rag-search-index /path/to/project      # one-shot: register + index + derive the graph
 # or step-by-step:
 rag-search init /path/to/project
 rag-search index /path/to/project
@@ -88,15 +86,15 @@ rag-search index /path/to/project
 | `search` | Semantic code/docs search with GPU-reranked results |
 | `ask` | Assemble architecture context for a codebase question |
 | `graph` | Call-graph analysis (definition / callers / callees / impact) |
-| `overview` | Project metrics, structure, communities, KB state |
+| `overview` | Project metrics, structure, communities, index state |
 | `index` | Register or remove a project |
 
 ## Verify health
 
 ```bash
-.venv/bin/python scripts/check_system.py                    # GPU + deps + daemon + LLM
+.venv/bin/python scripts/check_system.py                    # GPU + deps + daemon
 .venv/bin/python scripts/configure_integrations.py --check  # MCP wiring
-python scripts/check_world_model.py               # architecture invariants (GPU-free)
+.venv/bin/python scripts/check_world_model.py               # architecture invariants (GPU-free)
 ```
 
 All three should exit 0 with no `[ ]` failures.
@@ -117,12 +115,11 @@ src/rag_search/
   core/    config, registry, GPU enforcement
   embed/   FastEmbed/ONNX GPU embedder + reranker
   index/   file discovery, chunking, sqlite-vec store
-  graph/   tree-sitter symbols, call edges, Leiden communities
-  kb/      DeepSeek KB enrichment, wiki, BPRE
+  graph/   tree-sitter symbols, call edges, fastgreedy communities
+  kb/      answer_cache (deterministic; all that survives the 2026-07-28 tier-3 deletion)
   query/   search, ask, reranking pipeline
   server/  MCP tools, HTTP routes, dashboard
   daemon/  server lifecycle, watcher, sweeps, systemd, federation
-vendor/    okf (in-tree)
 scripts/   check_system.py, configure_integrations.py, check_world_model.py
 docs/      architecture, world-model, info-hierarchy, conformance
 ```
@@ -131,5 +128,6 @@ docs/      architecture, world-model, info-hierarchy, conformance
 
 - `docs/architecture/federation-and-search-engine.md`
 - `docs/architecture/federation-ops-and-invariants.md`
-- `docs/world-model/model.yaml` — governing laws P0–P15, requirements HR1–HR31
-- `docs/info-hierarchy.md` — DIKW doctrine for KB artefacts
+- `docs/world-model/model.yaml` — governing laws P0–P18, requirements HR1–HR40 (both registers
+  keep the ids of retired entries, so the numbering never gets reused)
+- `docs/info-hierarchy.md` — the DIKW doctrine, now covering the deterministic layers only

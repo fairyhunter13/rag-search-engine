@@ -9,17 +9,17 @@
 | Lane | Engine | Used for | CPU fallback? |
 |---|---|---|---|
 | **Embeddings + rerank** | **GPU** (FastEmbed/ONNX/CUDA) | Vector search (`search`) + cross-encoder rerank ONLY | **Fatal** — raises at startup |
-| **KB enrichment** | **DeepSeek** (cloud, `deepseek-v4-flash`) | Community narration · wiki pages · BPRE process linkage — ON when `DEEPSEEK_API_KEY` present; suppressed naturally when absent | N/A — cloud |
-| **Dashboard chat** | **claude-haiku-4-5** via `claude -p` | Interactive chat answers via `/api/chat` | N/A — cloud |
+| **Dashboard chat** | **claude-haiku-4-5** via `claude -p` | Interactive chat answers via `/api/chat_stream` | N/A — cloud |
 
-The **doc-tooling lane is gone.** `docgen` and `okf` were deleted with tier 3 (July 2026), so
-`claude -p` now has exactly one caller: dashboard chat. The KB-enrichment row leaves with the rest
-of tier 3 — when it does, this table is two lanes: **GPU (embed + rerank)** and **`claude -p`
-(dashboard chat only)**.
+**Two lanes, and that is the whole map.** The doc-tooling lane (`docgen`, `okf`) and the
+KB-enrichment lane (DeepSeek narration, wiki pages, BPRE process linkage) were both deleted with
+tier 3 on 2026-07-28. `DEEPSEEK_API_KEY` has no reader left anywhere in the repo, and `claude -p`
+has exactly one caller: dashboard chat.
 
 No other lane assignments are permitted. In particular:
-- `claude -p` MUST NOT be used for KB enrichment
-- DeepSeek MUST NOT be used for dashboard chat — there is no fallback on that path
+- **no generative LLM may be added to the index, extraction or retrieval path** — that is what
+  the tier-3 deletion bought, and re-adding one is a new lane needing a row here first
+- no cloud LLM may serve dashboard chat except `claude -p`; there is no fallback on that path
 - CPU inference for embeddings/rerank is a fatal error — never a silent fallback
 
 ---
@@ -77,7 +77,8 @@ Non-interactive Claude usage (`claude -p`) bills against a **separate Agent-SDK 
 | Property | Check |
 |---|---|
 | GPU lane: no CPU fallback | `assert_cuda_available()` called at startup; `ort.preload_dlls()` forces CUDA binding |
-| KB lane: DeepSeek only | `DEEPSEEK_API_KEY` checked at enrichment time; no ollama/qwen/local model references in `src/rag_search/kb/` |
+| GPU lane: exactly two residents | `EMBED_MODEL` + `RERANK_MODEL` are the only model ids reaching the ONNX loader — nothing generative is loadable on-device |
+| No third lane | no module in `src/rag_search/` opens an LLM URL, and `DEEPSEEK_API_KEY` has no reader (the tier-3 deletion, 2026-07-28) |
 | Chat lane: claude-haiku-4-5 only | `QUERY_LLM_MODEL = "claude-haiku-4-5"`; `routes_chat.py` reaches its LLM only via `_CLAUDE, "-p"` — no HTTP client, no fallback engine |
 | `claude -p` has exactly one caller | `routes_chat.py`. A second one is a new lane and needs a row in §1 first |
 | Profile selection reads usage, not completions | `core/claude_profiles.py` opens `/api/oauth/usage` only |

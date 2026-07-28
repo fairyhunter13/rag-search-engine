@@ -10,21 +10,24 @@ Every feature of rag-search-engine, end-to-end, against your registered indexed 
 - `search` — code, docs, all scopes; multiple queries; non-empty results
 - `ask` — scopes: all, architecture, global, feature, business; non-empty answers
 - `graph` — callers, callees, impact_narrative, semantic_trace, path; non-empty responses
-- `overview` — structure, communities, patterns, service_mesh, feature_map, process_flows, business_rules, import_cycles, suggested_questions
+- `overview` — structure, projects, status, metrics, communities, import_cycles, surprising_connections, suggested_questions, validate. The five generative variants (patterns, service_mesh, feature_map, process_flows, business_rules) were deleted with tier 3 on 2026-07-28
 - `index` — register/remove roundtrip
 
-### KB question categories
-Each must return a non-empty, grounded answer — not a "no data" fallback:
-1. "What are the business processes in this repository?" → `ask(scope='business')` or `overview(what='process_flows')`
-2. "Which code is related to checkout / key feature?" → `search` + `graph(semantic_trace)`
-3. "How does service communication work?" → `ask(scope='feature')` + `graph(callers)`
-4. "How does the integration between services work?" → `ask(scope='global')` + `overview(what='service_mesh')`
-5. "What is the root cause of a bug?" → `ask` (debug) + `graph(impact_narrative)`
-6. "How do we trace a function call?" → `graph(semantic_trace)` + `graph(callers/callees)`
+### Retrieval question categories
+Each must return a non-empty, grounded answer — not a "no data" fallback. Rewritten
+2026-07-28: the two questions that routed through `overview(what='process_flows')` and
+`overview(what='service_mesh')` had no surface left to answer them once tier 3 was deleted,
+so they now ask the same thing of the deterministic graph, which is what survived.
+1. "Which code is related to checkout / key feature?" → `search` + `graph(semantic_trace)`
+2. "How does service communication work?" → `ask(scope='feature')` + `graph(callers)`
+3. "What is the root cause of a bug?" → `ask` (debug) + `graph(impact_narrative)`
+4. "How do we trace a function call?" → `graph(semantic_trace)` + `graph(callers/callees)`
+5. "What are the main modules?" → `overview(what='communities')` — structural labels, no narration
+6. "Where does this project import cycles?" → `overview(what='import_cycles')`
 
 ### Constraints enforced in every probe
 - GPU-only: embeddings + reranking via FastEmbed/ONNX/CUDA. No CPU fallback.
-- KB build = cloud DeepSeek-only; dashboard chat = claude-haiku-4-5 only
+- No generative LLM anywhere except dashboard chat, which is claude-haiku-4-5 via `claude -p`
 - Auto-pipeline on by default: `GET /api/auto_pipeline_status` → `enabled: true`
 
 ## Loop body
@@ -36,11 +39,11 @@ Each must return a non-empty, grounded answer — not a "no data" fallback:
    - Infra (embedding model cold start): wait for GPU warm-up → rerun, never skip
 3. After fixing: run fast suite again → if clean, continue
 4. RUN the slow non-browser suite → fix any failures
-5. PROBE each KB question category via the MCP tools directly → assert non-empty answers
+5. PROBE each retrieval question category via the MCP tools directly → assert non-empty answers
 6. CHECK GPU enforcement: CUDA provider active, no CPU fallback
 7. CHECK auto-pipeline: GET /api/auto_pipeline_status → enabled must be true
 8. RECONCILE global prompts: run scripts/configure_integrations.py --apply-all (idempotent)
-9. DASHBOARD drive: each view (Pulse/Chat/Graph/Wiki/Admin) loads; send one chat query;
+9. DASHBOARD drive: each view (Pulse/Chat/Admin/Graph/Docs) loads — Wiki left with tier 3; send one chat query;
    confirm SSE streams a real answer (non-empty, intent != null)
 10. COMMIT + PUSH: git add source + tests; commit message; git push origin main
 11. If any step failed: loop back to step 1
@@ -51,7 +54,7 @@ Each must return a non-empty, grounded answer — not a "no data" fallback:
 Stop when ALL of:
 - Fast suite: 0 failed
 - Slow suite: 0 failed
-- KB question categories: all return non-empty answers
+- Retrieval question categories: all return non-empty answers
 - GPU enforcement: CUDA active, no CPU fallback
 - Auto-pipeline: enabled=true
 - Dashboard chat: SSE streams real answer

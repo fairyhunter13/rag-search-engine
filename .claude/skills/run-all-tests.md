@@ -9,8 +9,7 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
    .venv/bin/pytest src/tests/live/ -m "live and not slow" -q --ignore=src/tests/live/test_browser.py
    ```
 
-2. **Slow suite** (~93 LLM-heavy tests; ~40 min on a cool GPU, but **1.5–2 h when the
-   laptop is heat-soaked** — thermal pauses dominate). Prefer the whole non-browser
+2. **Slow suite** (~93 LLM-heavy tests, ~40 min). Prefer the whole non-browser
    set so fast + slow share fixtures:
    ```
    .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q -rfE
@@ -21,13 +20,12 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
    .venv/bin/pytest src/tests/live/test_browser.py -q --browser chromium
    ```
 
-## Thermal-aware execution (laptop GPU hosts)
+## GPU pacing — there is none, deliberately
 
-- **Check GPU temp before the slow suite.** If GPU > ~70°C (heat-soaked), idle-cool
-  first — a hot start makes the slow run much longer (thermal pauses).
-- **Don't run heavy suites back-to-back** without a cooldown; in "cool mode", run the
-  fast suite for iteration and defer the slow suite until the GPU has cooled.
-- Software thermal guards are 85°C (inference) / 82°C (indexing); tune `RSE_GPU_TEMP_MAX` for your device.
+Nothing in `src/` sleeps on temperature. The driver (~86°C) and the hardware (~88°C)
+own throttling; they are finer-grained than a Python sleep and, unlike us, can see the
+hotspot sensor. `gpu_temp_c()` survives as observability only — read it, never wait on it.
+Run the suites back-to-back.
 
 ## Inference-efficiency when fixing/adding slow tests (no mocks, no coverage loss)
 

@@ -12,31 +12,31 @@ L1_invariants:
     principle: "GPU-only inference — embed+rerank on CUDA; CPU fallback raises fatally."
     check: {grep: "cpu_fallback|CPU_ONLY|providers.*cpu", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P1
-    principle: "No local generative LLM. KB=DeepSeek-only. Chat=claude-haiku-4-5 only."
+    principle: "No local generative LLM. Chat=claude-haiku-4-5 via `claude -p` only — the one generative lane left after tier 3 (2026-07-28)."
     check: {grep: "ollama|qwen3|llama|local.*model", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P2
-    principle: "MCP query path (search/ask/graph/overview) runs NO generative LLM — only embed+rerank."
+    principle: "MCP query path (search/ask/graph/overview) runs NO generative LLM — only embed+rerank. The deepseek_* tokens stay in the check after tier 3's deletion: they now match nothing, which is the point — this is the reintroduction guard, not a description of a live call site."
     check: {grep: "deepseek_extract|deepseek_chat|claude.*ask|haiku.*ask", paths: "src/rag_search/query/", verdict_if_match: AT_RISK}
   - id: P3
     principle: "Federation = query-time union; no cross-repo edges; members have independent stores."
     check: {grep: "cross.*repo.*edge|member.*edge.*root", paths: "src/rag_search/graph/ src/rag_search/index/ src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P4
-    principle: "Indexing is event-driven (watcher/inotify); heavy KB cascade (enrich/wiki/BPRE) runs ONLY on source-fingerprint drift — never on metadata-only or non-indexed-file events; no periodic sweeps or timers."
+    principle: "Indexing is event-driven (watcher/inotify); the heavy pass (graph re-derive + structural community labelling) runs ONLY on code-source-fingerprint drift — never on metadata-only or non-indexed-file events; no periodic sweeps or timers. The cascade this named until 2026-07-28 (enrich/wiki/BPRE) left with tier 3; the gate did not, because the re-derive it protects is the expensive half that survived."
     check: {grep: "register.*kb_sweep|register.*auto_index|threading.Timer.*sweep", paths: "src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P5
     principle: "Two-stage retrieval: vector recall (sqlite-vec) → cross-encoder rerank (GPU). Results ordered by rerank_score."
     check: {grep: "rerank.*skip", paths: "src/rag_search/query/", verdict_if_match: AT_RISK}
   - id: P6
-    principle: "No heuristics — tree-sitter + LLM only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis in Category A paths. Regex is grepped here; keyword/mapping-table debt is enforced by name in test_no_code_semantic_regex.py (a dict/frozenset literal ban can't be soundly grepped) — the registry is empty as of 2026-07-01: the last entry, bpre_spec._LANG_SPECS/_DEFAULT_SPEC (15 per-language HTTP method-name tables), was retired in favor of ONE universal structural classifier (URL-path anchor + _has_handler_arg handler-shape + _V verb ground-truth + gRPC proto-binding + _SCHEMES receiver-text provenance for non-verb client idioms) covering every tree-sitter code grammar by construction. Protocol/framework codegen-contract naming bound to structural facts (e.g. protoc New*Client/Register*Server scoped to .pb.go output, Spring *Mapping annotations, _GRP_SFXS gated on a discovered proto_services match) is ground truth, not a heuristic — reclassified 2026-07-01, same class as the closed HTTP-verb set _V and the closed protocol/URI-scheme set _SCHEMES. _provenance (bpre_generic.py) was generalized 2026-07-01 (Part C1) from receiver-text-only to also resolve def-use type bindings (build_type_use, valueflow.py) and import-map aliases (_scan_imports, bpre_ast.py) against the same closed _SCHEMES set — still zero library-name vocabulary; unresolved bare library-name idioms (e.g. requests/axios on a non-scheme absolute URL) remain accounted residue-ladder territory, never silently dropped."
-    check: {grep: "re\\.compile|re\\.finditer|re\\.search", paths: "src/rag_search/kb/bpre.py src/rag_search/kb/bpre_ast.py src/rag_search/kb/bpre_spec.py src/rag_search/kb/bpre_generic.py src/rag_search/kb/bpre_paradigms.py src/rag_search/kb/patterns.py src/rag_search/server/_overview.py", verdict_if_match: AT_RISK}
-  - id: P7
-    principle: "Public-repo hygiene — absolute device paths never in wiki/OKF artifacts."
-    check: {grep: "/home/|/root/|/Users/", paths: "src/rag_search/kb/wiki.py src/rag_search/kb/bpre.py", verdict_if_match: AT_RISK}
+    principle: "No heuristics — tree-sitter only. No re, no static/dynamic keyword list, no mapping table may substitute for structural analysis, anywhere in the package except four intrinsic-mechanism files (graph/extractor.py grammar node-kind tables, index/discover.py extension bootstrap, core/registry.py and core/config.py slug plumbing). The doctrine outlived tier 3 and got WIDER, not narrower: the Category-A list this used to enumerate was the five kb/bpre*.py files plus kb/patterns.py and _overview.py's service detection, and every one of them left on 2026-07-28 — so the whole package is now checked instead of seven files. The '+ LLM' half of the old principle went with them; structural analysis has no fallback now, which is why extraction coverage is a first-order concern rather than a nicety. The \\b in the check below is load-bearing at this width: bare `re\\.search` also matches `store.search(` in query/search.py and would report a permanent false AT_RISK — invisible while paths named seven kb/ files that had no such call. Keep the comment inside this string, not above the check: _parse_invariants matches principle and check with `\\s+` between them, so an intervening comment line drops the whole invariant out of the checker silently."
+    check: {grep: "\\bre\\.compile|\\bre\\.finditer|\\bre\\.search", paths: "src/rag_search/", exclude_paths: "src/rag_search/graph/extractor.py src/rag_search/index/discover.py src/rag_search/core/registry.py src/rag_search/core/config.py", verdict_if_match: AT_RISK}
+  # P7 retired 2026-07-28 — it scoped public-repo hygiene to the artifact writers (kb/wiki.py,
+  # kb/bpre.py), and RSE writes no artifacts at all now that tier 3 is deleted. P18 is the
+  # whole-tracked-tree facet of the same rule and is what HR34 executes; nothing is lost.
   - id: P8
     principle: "No mocks in tests — real daemon at :8765, real GPU, real embedder."
     check: {grep: "unittest\\.mock|MagicMock|@patch\\(", paths: "src/tests/", exclude_paths: "src/tests/live/test_no_mocks_or_fakes.py", verdict_if_match: AT_RISK}
   - id: P9
-    principle: "Flat-L1 communities only — no L2/L3 hierarchy in RSE KB (WS-B 2026-06-26)."
+    principle: "Flat-L1 communities only — no L2/L3 hierarchy in the graph (WS-B 2026-06-26). Communities are tier 2 (igraph community_fastgreedy + structural labelling, no LLM) and survive tier 3's deletion; only the DeepSeek narration of them was lost."
     check: {grep: "build_hierarchy|build_federation_hierarchy|set_community_parent", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P10
     principle: "Every line of code is a liability — prefer no change, then deletion, then smallest diff."
@@ -44,27 +44,23 @@ L1_invariants:
   - id: P11
     principle: "Push after every commit — zero unpushed is the policy."
     check: null
-  - id: P12
-    principle: "Doc-tooling (OKF) is LLM-native via claude -p; no tree-sitter on the doc-tooling path. Docgen's half was retired 2026-07-28 when docgen was deleted; OKF's leaves with the rest of tier 3."
-    check: {grep: "import tree_sitter|from tree_sitter", paths: "vendor/okf/src/", verdict_if_match: AT_RISK}
-  - id: P13
-    principle: "OKF = manual-trigger only; never called from auto-sweep (_enrich_project) or MCP tools. (Docgen's half retired 2026-07-28 — docgen is deleted.)"
-    check: {grep: "run_okf", paths: "src/rag_search/daemon/sweeps.py", verdict_if_match: AT_RISK}
+  # P12, P13 and P15 retired 2026-07-28 with tier 3. All three governed doc-tooling: OKF's
+  # LLM-native-no-tree-sitter rule, its manual-trigger-only rule, and the RSE_OKF/RSE_DOCGEN
+  # kill-switches. vendor/okf/ and kb/okf.py are deleted, so every check pointed at a path that
+  # no longer exists — a check whose paths cannot match is a silent CONFORMS, which is worse
+  # than no invariant. The surviving statement is P14: two lanes, and neither is doc-tooling.
   - id: P14
-    principle: "LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat via claude -p. The doc-tooling lane was deleted 2026-07-28 with docgen, so claude -p has exactly one caller (dashboard chat); the DeepSeek lane leaves with the rest of tier 3, after which this is two lanes. No cross-lane calls."
-    check: null
-  - id: P15
-    principle: "Kill-switch RSE_OKF=0 → no output; no deterministic skeleton fallback. (RSE_DOCGEN retired 2026-07-28 — no reader left.)"
+    principle: "Two LLM lanes, no cross-lane calls: GPU = embed + rerank (local, non-generative); claude-haiku-4-5 = dashboard chat via `claude -p`, its sole caller. This was four lanes until 2026-07-28 — the doc-tooling lane went with docgen, the DeepSeek KB-enrichment lane with the rest of tier 3. Nothing generative runs on the local GPU and nothing outside routes_chat.py spawns a generative process."
     check: null
   - id: P16
-    principle: "Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after RSE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). CPU budget is two-tier and kernel-enforced, not merely cooperative (HR40): idle/steady-state < 1 % of one core is a live-measured automated gate; active work (indexing, BPRE, parsing) is bounded ≤ 1 core by a cgroup-v2 CPUQuota on the daemon's systemd unit that it physically cannot exceed."
+    principle: "Idle frugality — with no query and no source drift the daemon holds < 1 % CPU and a constant RAM floor; models unload after RSE_MODEL_IDLE_UNLOAD_S (300 s default); GPU is the only inference engine (maximized; CPU fallback fatal). CPU budget is two-tier and kernel-enforced, not merely cooperative (HR40): idle/steady-state < 1 % of one core is a live-measured automated gate; active work (indexing, graph re-derive, parsing — it was 'indexing, BPRE, parsing' until tier 3 left on 2026-07-28, and the ceiling is unchanged because it bounds the cgroup, not a named workload) is bounded ≤ 1 core by a cgroup-v2 CPUQuota on the daemon's systemd unit that it physically cannot exceed."
     check: null
   - id: P17
     principle: "File-watching is event-driven via OS filesystem notifications (watchfiles/Rust notify) — one inotify instance + one thread for all watched roots, Rust-side event coalescing; manual per-file polling is a last-resort fallback only (NFS/SMB, handled internally by the Rust notify crate's force_polling), never a hand-rolled Python poll loop. Watcher-triggered indexing/parsing work inherits the same kernel CPUQuota ceiling as the rest of the daemon (HR40), including bounded_parse.py's spawn-context workers, which are children of the daemon's own cgroup."
     check: {grep: "threading.Timer|while.*st_mtime|while.*poll.*sleep", paths: "src/rag_search/daemon/", verdict_if_match: AT_RISK}
   - id: P18
     principle: "Public-release & device-neutrality (whole-repo facet of P7) — the tracked tree is publishable: no secrets, no real device paths, no company/project names. Every machine-specific value (storage paths, host, port, models, GPU device) is env-driven with XDG defaults (core/config.py); no hardcoded absolute paths/usernames/hostnames in tracked source, tests, docs, or generated artifacts. Permanent brand lock (2026-07-09): the legacy OSE/OPENCODE/ocs branding was fully retired in favor of RSE — no OPENCODE_, OSE_, bare OSE, opencode, ocs[-_]/ose[-_], or opencode-index token may ever reappear, outside a narrow external-product allowlist (the external OpenCode CLI product). Device-specific name bans (company/codename/device-id lists) never ship in the public tree — they live only in the private rse-live-audit repo."
-    check: {grep: "/home/[a-zA-Z0-9_.-]+/|/root/[a-zA-Z0-9_.-]+/|/Users/[a-zA-Z0-9_.-]+/|C:\\\\Users\\\\[a-zA-Z0-9_.-]+", paths: "src/rag_search/ docs/ scripts/ vendor/*/src/", exclude_paths: "src/tests/live/test_public_hygiene.py", verdict_if_match: AT_RISK}
+    check: {grep: "/home/[a-zA-Z0-9_.-]+/|/root/[a-zA-Z0-9_.-]+/|/Users/[a-zA-Z0-9_.-]+/|C:\\\\Users\\\\[a-zA-Z0-9_.-]+", paths: "src/rag_search/ docs/ scripts/", exclude_paths: "src/tests/live/test_public_hygiene.py", verdict_if_match: AT_RISK}
 
 # ── L2: Components (capability → module → entry points) ─────────────────────
 L2_components:
@@ -72,7 +68,7 @@ L2_components:
   embed:   {module: "rag_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
   index:   {module: "rag_search.index",   ops: [index_project, VectorStore]}
   graph:   {module: "rag_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
-  kb:      {module: "rag_search.kb",      ops: [enrich_communities_batch, build_wiki, reconstruct_processes, run_okf]}
+  kb:      {module: "rag_search.kb",      ops: [answer_cache]}   # all that survives tier 3 — deterministic, no LLM
   query:   {module: "rag_search.query",   ops: [search, compose_answer]}
   server:  {module: "rag_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
   daemon:  {module: "rag_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
@@ -95,48 +91,29 @@ L3_specs:
     spec: "MCP query actions run no generative LLM — embed+rerank only."
     test: test_mcp_handlers_have_no_llm_generation
   - id: HR10
-    spec: "Dashboard chat uses claude-haiku-4-5 only; no DeepSeek fallback."
+    spec: "Dashboard chat uses claude-haiku-4-5 only, spawned as `claude -p` by routes_chat.py, which is its sole caller; no fallback of any kind. Tightened 2026-07-28 from 'no DeepSeek fallback' — there is no DeepSeek left to fall back to, and routes_chat.py:1 says 'no fallback' flat, so the narrower wording would read as permitting some other one."
     test: test_chat_lane_is_haiku_only
   - id: HR11
-    spec: "semantic_type assigned by DeepSeek classify batch-20; reclassify_all=False (no churn)."
-    test: test_ab3_no_type_dominates
-  - id: HR12
-    spec: "KB enrichment uses cloud DeepSeek only; crashes if DEEPSEEK_API_KEY absent."
-    test: test_kb_enrich_is_deepseek_only
-  - id: HR13
-    spec: "Wiki artifacts use project-root-relative paths; no absolute device paths."
-    test: test_community_page_structure
+    spec: "semantic_type abstains rather than guesses: the community tail is stored as SQL NULL, never '' and never a catch-all label. Rewritten 2026-07-28 — the DeepSeek classify batch that used to assign it is deleted, so every community is now the abstaining case, and what is left to protect is that community.py keeps writing a true NULL. The old test_ab3_no_type_dominates (no non-NULL bucket > 50%) went vacuous the same day: with no writer, its row set is always empty and it cannot fail."
+    test: test_ab1_ab2_tail_is_sql_null
+  # HR12, HR13, HR23, HR25, HR26, HR27, HR28 and HR29 retired 2026-07-28 with tier 3, and each
+  # took its test with it: DeepSeek-only KB enrichment, wiki path hygiene, llm_token_stats
+  # accounting, and the four OKF/docgen invariants (LLM-native doc-tooling, manual-trigger-only,
+  # and both kill-switches). L3_specs is the *checkable* subset of the HR register — the dated
+  # retirement notes live in docs/architecture/federation-ops-and-invariants.md's HR table,
+  # which keeps the ids so the numbering never gets reused.
   - id: HR15
-    spec: "No re.compile/re.finditer, no keyword/mapping-table heuristic in Category A (bpre.py, bpre_ast.py, bpre_spec.py, bpre_generic.py, bpre_paradigms.py, patterns.py, _overview.py services); resolution ladder is tree-sitter/gRPC-pubsub-registry (1.0) -> GPU rerank incl. valueflow-resolved residue (0.8) -> DeepSeek escalate (0.7) — 3 tiers, full stop; no code path stamps any other confidence value. valueflow (kb/valueflow.py) feeds candidates into the 1.0/0.8 tiers and stamps no confidence of its own. Every non-first-class language (all 299 tree-sitter code grammars) shares ONE universal structural classifier in bpre_generic.py/bpre_paradigms.py — no per-language table remains. _provenance (the non-verb HTTP-client discriminator) resolves three signal sources against the closed _SCHEMES set — receiver text, def-use-resolved constructed-type name (build_type_use, valueflow.py), and import-map-resolved module path (_scan_imports, bpre_ast.py, generalizing Go's existing import check to every language) — still zero library-name vocabulary; a bare library-name idiom with no scheme-bearing signal falls through to the DeepSeek escalate tier of this same ladder, never silently dropped."
-    test: test_no_code_semantic_regex_in_category_a
-  - id: HR23
-    spec: "DIKW token economy — llm_token_stats() accounts for every DeepSeek call site in kb/ (enrich/classify/bpre narrative AND bpre edge-resolution); no direct deepseek_extract call may bypass accumulation."
-    test: test_bpre_link_resolve_tokens_are_accounted
+    spec: "No re.* and no keyword/mapping-table heuristic for code semantics anywhere in rag_search/, outside the four intrinsic-mechanism files named in P6. Rewritten 2026-07-28: the Category-A/Category-B split this spec used to enumerate collapsed when Category A (the five bpre*.py files, patterns.py, _overview.py's service detection) was deleted, and with it the 3-tier resolution ladder, the confidence stamps, and the closed-vocabulary justifications (_V, _SCHEMES, _GRP_SFXS). The guard that replaced it is wider, not narrower — every module except the four exempt ones is now checked against the full re.* pattern set that only Category A used to face."
+    test: test_no_code_semantic_regex_outside_allowlist
   - id: HR20
-    spec: "Partition quality gate: degenerate=True demotes kb_state to searchable."
-    test: test_kb_state_demoted_when_degenerate
-  - id: HR25
-    spec: "Doc-tooling is LLM-native via claude -p; no tree-sitter import on that path. Docgen's half retired 2026-07-28 (deleted); OKF carries the invariant until tier 3 goes."
-    test: test_okf_no_tree_sitter_import_in_vendor
-  - id: HR26
-    spec: "OKF is manual-trigger only; not called from _enrich_project or MCP tools. (Docgen's half retired 2026-07-28 — deleted.)"
-    test: test_okf_not_in_sweeps
-  # HR27 retired 2026-07-28 — docgen is deleted, so RSE_DOCGEN has no reader and there is
-  # nothing left to check. Was: kill-switch RSE_DOCGEN=0 → generate() returns mode=off, writes
-  # no files. L3_specs is the *checkable* subset of the HR register; the dated retirement note
-  # lives in docs/architecture/federation-ops-and-invariants.md's HR table, which keeps the id.
-  - id: HR28
-    spec: "OKF v0.1 bundle: one concept per semantic-named file; index.md present; type required; no fragment_ naming."
-    test: test_okf_llm_generate_structure
-  - id: HR29
-    spec: "Kill-switch RSE_OKF=0 → generate() returns mode=off, writes no files."
-    test: test_okf_kill_switch_off
+    spec: "Partition quality gate: degenerate=True demotes index_state below ready. The field was called kb_state until 2026-07-28; the gate itself is tier 2 (igraph + SQL, no LLM) and is unchanged."
+    test: test_index_state_demoted_when_degenerate
   - id: HR30
     spec: "MCP surface = index+search+ask+graph+overview only; nothing else appears in _MCP_TOOLS."
     test: test_mcp_has_five_tools
   - id: HR32
-    spec: "Idle-efficiency — on_change KB cascade (enrich/wiki/BPRE) is gated by source-fingerprint drift (_last_enriched_sig); metadata-only and non-source events skip the cascade entirely; idle-unload frees the ORT arena after MODEL_IDLE_UNLOAD_S; CPU < 1 % when idle."
-    test: test_drift_gate_skips_enrich_when_sig_unchanged
+    spec: "Idle-efficiency — the on_change heavy pass (graph re-derive + structural community labelling) is gated by source-fingerprint drift; metadata-only and non-source events skip it entirely; idle-unload frees the ORT arena after MODEL_IDLE_UNLOAD_S; CPU < 1 % when idle. The cascade this named until 2026-07-28 was enrich/wiki/BPRE and left with tier 3; the gate did not, because what it protects is the expensive half that survived."
+    test: test_drift_gate_skips_labelling_when_sig_unchanged
   - id: HR33
     spec: "Notification-first watcher — Watcher.start() runs a single watchfiles (Rust notify) thread across all watched roots; no hand-rolled poll loop exists (polling, if ever needed, is the Rust library's own force_polling path)."
     test: test_watcher_prefers_inotify_over_poll
@@ -146,17 +123,18 @@ L3_specs:
   - id: HR35
     spec: "Source-fingerprint discovery is gitignore- and hidden-dir-aware with RSE-config precedence (index/discover.py _should_drop, shared by iter_files + is_ignored_path): RSE .rse-index.yaml exclude beats include beats default hidden-dir/IGNORED_DIRS policy beats .gitignore beats keep. Gitignored/hidden tool-cache dirs (.svelte-kit, .playwright-mcp, .astro, .turbo, .vite, etc.) never enter _source_fingerprint, so tool-cache regeneration cannot spuriously flip the P4 drift gate (root-caused 2026-07-01: a live vite/playwright session rewriting wiki/.svelte-kit + .playwright-mcp pinned a CPU core via an every-~5min false-positive BPRE/enrich cascade)."
     test: test_drift_gate_quiescent_under_tool_cache_churn
-  - id: HR36
-    spec: "BPRE's federation-wide reuse stamp (bpre_source_sig, kb/bpre.py) and per-member scan-cache key (_member_scan_sig) are code-only and discovery-unified: _source_files routes through the same HR35 _should_drop resolver as iter_files (is_code_language-gated, hidden-dir/gitignore/RSE-config aware), and _bpre_code_sig hashes only that file set — never the all-files _source_fingerprint. The stamp is written once from the sig computed at rebuild start (no end-of-rebuild recompute), so docs/config/image/hidden-tool-cache churn on a federation root can never trigger a process-graph rebuild, while a real member code edit still does (root-caused 2026-07-01, 3rd distinct idle-CPU cause: docs/*.yaml + .claude/*.js churn on a 170-member federation root was flipping the all-files stamp faster than the ~5min rebuild completed, pinning a core continuously)."
-    test: test_bps1_docs_churn_quiescent_no_rebuild
+  # HR36 retired 2026-07-28 with tier 3. It governed BPRE's federation-wide reuse stamp
+  # (bpre_source_sig) and per-member scan-cache key; kb/bpre.py is deleted and its test
+  # (test_bps1_docs_churn_quiescent_no_rebuild) went with it in 8048ad5. The code-only-fingerprint
+  # property it shared with HR35/HR38 is unaffected — those two still execute it.
   - id: HR37
     spec: "The watcher trigger surface, not only the drift gates it feeds, must be ignore-aware and storm-proof: daemon/watcher.py runs one watchfiles (Rust notify) thread + one inotify instance for ALL watched roots (not one watchdog Observer per root); watch_filter reuses the HR35 is_ignored_path resolver so a churn burst in a hidden/gitignored dir is dropped in Rust before on_change is ever called; Rust-side debounce/step coalesces a burst of writes to one file into a single on_change call; dynamic watch(new_root) while running relaunches the watch generator and blocks (bounded, via a restart-ack event) until the new root is actually armed, closing the race where an edit immediately after a dynamic add could land in the teardown/rearm gap and be silently lost (root-caused 2026-07-01 evening, 4th distinct idle-CPU cause: watchdog scheduled one recursive Observer per federation member — ~278 threads / 139 inotify instances, already over the default max_user_instances=128 — and filtered ignored paths post-hoc in Python per raw event, so an unbounded Python-side InotifyBuffer grew to 2.45GB RSS and pinned one dispatch thread at ~104% CPU for the life of the process, even after the HR35/HR36 drift-gate fixes made the gates themselves correctly report no drift)."
     test: test_wt1_ignored_dir_churn_never_reaches_on_change
   - id: HR38
-    spec: "The on_change KB/wiki/BPRE enrich cascade and the graph re-derive gate (_graph_stale/source_sig, daemon/sweeps.py) key on a code-only fingerprint (_code_source_fingerprint), not the all-files _source_fingerprint: iter_files results are filtered through is_code_language — the same filter BPRE's own HR36 _bpre_code_sig already uses — so docs/wiki/config/image churn on a project root can never wake the cascade or force a graph re-derive, only real source-code drift does. The vector-index/doc-search reindex step (_index_files/_index_project) runs before this gate and is unaffected — doc search freshness is unchanged. Unifies the drift gate with BPRE's HR36 reuse stamp (previously the two used different fingerprints, so BPRE could correctly skip a rebuild while sweeps.py's own gate still spuriously fired enrich/wiki on non-code churn — root-caused 2026-07-01)."
+    spec: "The on_change heavy pass and the graph re-derive gate (_graph_stale/source_sig, daemon/sweeps.py) key on a code-only fingerprint (_code_source_fingerprint), not the all-files _source_fingerprint: iter_files results are filtered through is_code_language, so docs/config/image churn on a project root can never wake the pass or force a graph re-derive, only real source-code drift does. The vector-index/doc-search reindex step (_index_files/_index_project) runs before this gate and is unaffected — doc search freshness is unchanged. Written 2026-07-01 to unify this gate with BPRE's own reuse stamp (retired HR36), which used a different fingerprint and let sweeps.py spuriously fire enrich/wiki on non-code churn; BPRE left with tier 3 on 2026-07-28 but the code-only rule is now the single fingerprint the surviving pass uses, so the unification outlived the thing it was unifying with."
     test: test_fcg1_docs_wiki_churn_quiescent
   - id: HR39
-    spec: "Every tree-sitter parse (graph/extractor.py symbol/call extraction; kb/bpre_ast.py scan_file and the proto-surface pass, including the Go fast path) runs through index/bounded_parse.py's persistent spawn-context worker pool, never a direct get_parser(...).parse() call — enforced by a guard test banning that call shape outside bounded_parse.py. A worker that exceeds its deadline is terminated and respawned; the timeout is recorded (path-hash only, public-hygiene — P7/HR34) via parse_timeout_count in overview(what='metrics'), and extraction continues with the next file, so no grammar is ever silently skipped. Workers are spawn-context and CPU-only (never fork, never import the embedder — the daemon holds CUDA + many threads) so GPU-only doctrine (P0) is unaffected. This closes the cobol catastrophic-hang case proven 2026-07-01: tree_sitter_language_pack's bundled parser exposes no progress_callback and can hang unkillable in-process, so out-of-process isolation is the only mechanism that hard-bounds it."
+    spec: "Every tree-sitter parse (graph/extractor.py symbol/call extraction — the only parse call-site left since kb/bpre_ast.py's scan_file and proto-surface pass went with tier 3 on 2026-07-28; the guard is unchanged and still tree-wide, so a second call-site cannot reappear unnoticed) runs through index/bounded_parse.py's persistent spawn-context worker pool, never a direct get_parser(...).parse() call — enforced by a guard test banning that call shape outside bounded_parse.py. A worker that exceeds its deadline is terminated and respawned; the timeout is recorded (path-hash only, public-hygiene — P7/HR34) via parse_timeout_count in overview(what='metrics'), and extraction continues with the next file, so no grammar is ever silently skipped. Workers are spawn-context and CPU-only (never fork, never import the embedder — the daemon holds CUDA + many threads) so GPU-only doctrine (P0) is unaffected. This closes the cobol catastrophic-hang case proven 2026-07-01: tree_sitter_language_pack's bundled parser exposes no progress_callback and can hang unkillable in-process, so out-of-process isolation is the only mechanism that hard-bounds it."
     test: test_pool_timeout_kills_and_respawns_only_that_slot
   - id: HR40
     spec: "CPU budget is two-tier and kernel-enforced, not merely cooperative (2026-07-01). Idle/steady-state stays < 1% of one core — a live-measured automated gate over the daemon's own cgroup-v2 cpu.stat usage_usec delta (daemon/cpu_budget.py, exposed via /healthz and /api/metrics). Active work is bounded <= 1 core by CPUQuota=100% on the daemon's systemd unit (cgroup-v2 cpu.max), with CPUAccounting=yes set explicitly since CPUQuota alone does not imply it (systemd issue #9647); the ceiling covers bounded_parse.py's spawn-context worker pool too, since those workers are children of the daemon's own service cgroup (RSE_BOUNDED_PARSE_WORKERS defaults to 1 under this quota). cpu.stat's nr_throttled/throttled_usec climbing under sustained load is the canonical proof the cap is physically enforced, not merely that usage happened to stay low; a hermetic systemd-run --user --scope self-test proves the cpu controller is genuinely delegated to the --user manager on this host, independent of the daemon's own unit. Requires the cpu controller delegated to the --user systemd manager (verified via delegate.conf); the live gate fails loudly with a remediation hint if the quota reads back as infinity."
@@ -167,13 +145,11 @@ L4_patterns:
   - "upsert_community: always pass summary=None (never empty string) to avoid churn"
   - "project_graph_db: content-addressed path (slug + sha256[:16])"
   - "expand_federation returns [root] + entry.federation — canonical logical-repo primitive"
-  - "deepseek_extract: prefix-cached stable system prompt; dynamic user prompt only"
   - "graph.db communities: level=1 only (L2/L3 deleted WS-B 2026-06-26)"
   - "iter_files: federation_mode=True prunes symlink dirs pointing outside root"
-  - "on_change drift gate: compute _code_source_fingerprint(path) after index step (code-only, HR38); skip enrich if sig == _last_enriched_sig[path]; commit sig only after successful _enrich_project"
+  - "on_change drift gate: compute _code_source_fingerprint(path) after index step (code-only, HR38); skip the heavy pass if sig is unchanged; commit sig only after the pass succeeds"
   - "all tree-sitter parses route through index/bounded_parse.py's spawn-context worker pool (HR39) — never a direct get_parser(...).parse() call"
   - "watcher: one watchfiles.watch() generator in a single 'rse-watcher' thread covers all roots; _filter reuses is_ignored_path; watch(new_path) while running sets a restart Event and blocks on a restart-ack Event (bounded) so the caller only returns once the new root is actually armed"
-  - "code-semantic resolution ladder (HR15-19, 3 tiers): tree-sitter extraction -> valueflow FQN-join -> resolve_rerank GPU cross-encoder -> bpre._llm_link_resolve (SEA, capped/cached/batched, accounted under bpre_link.*); each tier sees only the prior tier's unresolved residue"
-  - "any new DeepSeek call site in kb/ or graph/ must feed _accumulate_llm_tokens(usage, category) so llm_token_stats() stays a complete accounting (HR23) — no direct deepseek_extract call bypasses it"
+  - "code semantics come from tree-sitter structural extraction alone (HR15) — the 3-tier resolution ladder that fell back to valueflow, a GPU cross-encoder and an LLM link-resolve was deleted with tier 3 on 2026-07-28, so there is no fallback below extraction any more"
   - "discovery decision order (index/discover.py _should_drop): RSE exclude (drop) > RSE include (force-keep) > default hidden-dir/IGNORED_DIRS policy (drop) > .gitignore (drop, supplementary) > keep — RSE config is always authoritative over .gitignore"
   - "CPU quota proof (HR40): daemon/cpu_budget.py resolves the caller's own cgroup-v2 dir via /proc/self/cgroup (unified hierarchy only); cpu.max's first field is the cores ceiling, cpu.stat's nr_throttled/throttled_usec climbing under load is the enforcement proof — both must be read from inside the daemon process (its own HTTP route handlers), never from a foreign PID"

@@ -314,7 +314,7 @@ _BASH_ALIASES_SENTINEL_END   = "# [rag-search-aliases:end]"
 _BASH_ALIASES_COMMENT = """\
 # rag-search shell helpers (managed by configure_integrations.py):
 #   rse            — rag-search CLI entry point
-#   rse-index PATH — index + build KB (entity enrichment + wiki)
+#   rse-index PATH — index + derive the symbol graph (no KB since 2026-07-28)
 #   rse-dash       — open the search-engine dashboard"""
 
 
