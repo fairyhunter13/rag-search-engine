@@ -178,8 +178,11 @@ def is_code_language(lang: str) -> bool:
 
 # Machine-generated code files: derived build/codegen output (protobuf stubs, dart codegen,
 # SvelteKit dashboards, *.generated.*). tree-sitter parses them as real code, but regenerating
-# them is NOT source drift — treating it as such wakes the enrich cascade for nothing.
-# This is what drove redacted-name-10-project's wiki/src/lib/*.generated.js reconstruct loop.
+# them is NOT source drift — treating it as such re-derives the graph for nothing.
+# Provenance, kept because it is why the list exists: redacted-name-10-project's own SvelteKit dashboard
+# (its `wiki/` directory — not the deleted kb/wiki.py) regenerated src/lib/*.generated.js on
+# every build and looped the reconstruct cascade. That cascade left with tier 3; the drift signal
+# it shared with the graph re-derive did not.
 _GENERATED_SUFFIXES: tuple[str, ...] = (
     "_pb2.py", "_pb2_grpc.py", ".pb.go", ".pb.gw.go", ".pb.cc", ".pb.h",
     ".g.dart", ".freezed.dart",
@@ -190,9 +193,11 @@ def is_generated_path(rel: str | os.PathLike) -> bool:
     """True iff rel names a machine-generated code file (codegen/build output).
 
     Conservative — matches only unambiguous generated markers (``*.generated.*``, ``*.gen.*``,
-    protobuf/dart codegen suffixes) so hand-written source is never misclassified. Used by the
-    code-drift signals (sweeps._code_source_fingerprint, bpre._bpre_code_sig) so regenerating a
-    derived file never wakes the KB/wiki/BPRE cascade.
+    protobuf/dart codegen suffixes) so hand-written source is never misclassified. One drift
+    signal reads it now — sweeps._code_source_fingerprint (HR38) — so regenerating a derived
+    file never wakes the graph re-derive. The second reader it used to name, bpre._bpre_code_sig,
+    left with tier 3; the guard is still load-bearing because the re-derive it gates is the
+    expensive half that survived.
     """
     name = os.path.basename(str(rel))
     if ".generated." in name or ".gen." in name:

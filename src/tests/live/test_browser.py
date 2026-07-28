@@ -4,7 +4,12 @@ Run separately (Playwright conflicts with asyncio_mode=auto):
   .venv/bin/pytest src/tests/live/test_browser.py --browser chromium -q
 
 Uses sample_workspace (shop-federation + ledger-standalone) for all data assertions.
-Zero mocks — real daemon, real chromium, real SSE, real KB.
+Zero mocks — real daemon, real chromium, real SSE.
+
+The wiki and processes views left with tier 3, so every assertion that drove them is deleted
+rather than re-pointed: the wiki pane rendered kb/wiki.py's generated pages and the processes
+pane read BPRE. `docs` is the surviving half of the old wiki view — the repo's own
+human-authored tree over /api/docs — so its tests are re-pointed, not dropped.
 """
 from __future__ import annotations
 
@@ -17,7 +22,13 @@ pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _DASH = f"{_BASE}/dashboard"
-_VIEWS = ["pulse", "chat", "admin", "graph", "wiki"]
+# `hierarchy` (the "Knowledge" tab) was never in this list, so #vbtn-hierarchy was the one nav
+# button no test clicked — a gap the P12.10 completeness guard would have reported, except this
+# whole module is excluded from CI's line. It is added here rather than deleted because the view
+# is not tier 3: its loader calls overview(what="hierarchy"), a variant that never existed, over
+# GET against a POST-only route. That dead surface predates R0 and is deliberately left in place;
+# what these tests cover is the nav wiring, which works.
+_VIEWS = ["pulse", "chat", "admin", "graph", "docs", "hierarchy"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -52,7 +63,7 @@ def _select_project(page: Page, project_path: str, wait_ms: int = 2500) -> None:
 # ── P12.1: load + view presence ───────────────────────────────────────────────
 
 def test_dashboard_loads_without_console_errors(page: Page) -> None:
-    """P12.1: /dashboard loads; all 5 view divs present; no JS errors on load."""
+    """P12.1: /dashboard loads; every view div present; no JS errors on load."""
     errors: list[str] = []
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -182,14 +193,9 @@ def test_graph_renders_on_reload(page: Page) -> None:
     assert cnt.strip(), f"#graph-node-count empty after reload: {cnt!r}"
 
 
-def test_admin_reindex_appends_to_op_log(page: Page) -> None:
-    """P12.8: Re-index op button calls opLog() immediately; #op-log shows the message."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-admin").click()
-    page.locator("button[onclick='runReindex()']").click()
-    page.wait_for_timeout(1500)
-    log = page.locator("#op-log").inner_text() or ""
-    assert log.strip(), f"#op-log empty after Re-index click: {log!r}"
+# P12.8 (Re-index → #op-log) left with tier 3. runReindex() and runWiki() were byte-identical
+# apart from their log strings — both POSTed /api/build_wiki?action=wiki — so the "Re-index"
+# button never re-indexed anything, and there is no live route to re-point the test at.
 
 
 # ── P12.3: every _CMD_ITEMS entry dispatches ──────────────────────────────
@@ -199,7 +205,7 @@ _CMD_VIEW_ITEMS = [
     ("Chat — Ask", "chat"),
     ("Admin — Proj", "admin"),
     ("Graph — Know", "graph"),
-    ("Wiki — Know", "wiki"),
+    ("Docs — Repo", "docs"),
 ]
 
 
@@ -230,31 +236,17 @@ def test_cmd_palette_refresh_pulse_op(page: Page, _sample_promo: str) -> None:
     assert files not in ("", "—"), f"kpi-files empty after Refresh Pulse cmd: {files!r}"
 
 
-def test_cmd_palette_op_items_fire_via_palette(page: Page) -> None:
-    """P12.3: Re-index, Generate-wiki, Refresh-Admin ops fire via palette."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
-    page.locator("#vbtn-admin").click()
-    page.wait_for_timeout(1000)
-    for label in ("Re-index project", "Generate wiki"):
-        page.keyboard.press("Control+k")
-        page.wait_for_timeout(150)
-        page.locator("#cmd-input").fill(label[:10])
-        page.wait_for_timeout(100)
-        page.locator("#cmd-results li").first.click()
-        page.wait_for_timeout(800)
-    log = page.locator("#op-log").inner_text() or ""
-    assert log.strip(), f"#op-log empty after palette ops: {log!r}"
+# The two op entries this exercised — "Re-index project" and "Generate wiki" — left the palette
+# with tier 3, along with the runReindex()/runWiki() functions behind them. The surviving op
+# entries ("Refresh Admin", "Refresh Pulse") are covered by the Refresh-Pulse test above.
 
 
-# ── P12.4 extended: enrichment tile + admin panels ────────────────────────
+# ── P12.4 extended: admin panels ──────────────────────────────────────────
 
-def test_pulse_enrichment_tile_populated(page: Page, _sample_promo: str) -> None:
-    """P12.4: #kpi-enrichment tile shows % for sample promo-svc."""
-    page.goto(_DASH, wait_until="networkidle")
-    _select_project(page, _sample_promo)
-    enrich = page.locator("#kpi-enrichment").text_content() or ""
-    assert enrich not in ("", "—"), f"#kpi-enrichment empty for sample: {enrich!r}"
+# The #kpi-enrichment tile left with tier 3: it read /api/kb_health's enrichment_pct, which
+# measured DeepSeek narration coverage over community summaries. Structural labelling now fills
+# every summary, so the number would be a permanent, meaningless 100%. #kpi-communities is the
+# surviving KPI over that same table, and it is asserted in the id-coverage test below.
 
 
 def test_admin_projects_body_populated(page: Page) -> None:
@@ -317,67 +309,71 @@ def test_graph_layout_sel_change_no_crash(page: Page) -> None:
     assert cnt.strip(), f"#graph-node-count empty after layout change: {cnt!r}"
 
 
-def test_admin_wiki_appends_to_op_log(page: Page) -> None:
-    """P12.8: Wiki generate button appends to #op-log."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-admin").click()
-    page.wait_for_timeout(2000)
-    page.locator("button[onclick='runWiki()']").click()
-    page.wait_for_timeout(1500)
-    log = page.locator("#op-log").inner_text() or ""
-    assert log.strip(), f"#op-log empty after Wiki click: {log!r}"
+# The Wiki-generate half of P12.8 left with tier 3 along with its button and runWiki(). #op-log
+# went with it too — I claimed here that opLog() survived via the Reload-config and Pause/Resume
+# ops, and that was wrong: `git grep opLog` found the definition and nothing else. The same trace
+# killed #admin-job-chips, whose /api/events/stream feed had no publisher left once the pipeline
+# job runner was deleted, so the route, the chips and the sink are all gone.
 
 
-def test_admin_job_chips_and_autopipeline_present(page: Page) -> None:
-    """P12.8: #admin-job-chips and #admin-autopipeline-log are rendered in admin view."""
+def test_admin_autopipeline_present(page: Page) -> None:
+    """P12.8: #admin-autopipeline-log is rendered in admin view."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-admin").click()
-    expect(page.locator("#admin-job-chips")).to_be_attached()
     expect(page.locator("#admin-autopipeline-log")).to_be_attached()
 
 
-# ── P12.8b: wiki view ─────────────────────────────────────────────────────
+# ── P12.8b: docs view ─────────────────────────────────────────────────────
+#
+# Re-pointed from the wiki view rather than deleted: the wiki pane listed kb/wiki.py's generated
+# pages, and the docs pane lists the project's own human-authored docs/ tree over /api/docs. The
+# lint (#wiki-lint-*) and export (#wiki-export-btn) tests have no successor here — both operated on
+# generated pages — so they are gone with the generator.
+#
+# The count assertion below is only meaningful because the promo-svc fixture now carries
+# docs/README.md. /api/docs returns {"tree": []} for a project with no docs/ directory
+# (routes_project.py:36-37), and _renderDocsPages then writes a "No docs in this project."
+# placeholder with no <button> in it — so on the old fixture this would have been red, and an
+# attached-only assertion would have been decoration passing on a broken fetch.
 
-def test_wiki_view_loads_pages(page: Page, _sample_promo: str) -> None:
-    """P12.8b: switching to wiki view loads page buttons into #wiki-pages for sample promo-svc."""
+def test_docs_view_loads_pages(page: Page, _sample_promo: str) -> None:
+    """P12.8b: switching to docs view loads page buttons into #docs-pages for sample promo-svc."""
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
-    page.locator("#vbtn-wiki").click()
+    page.locator("#vbtn-docs").click()
     page.wait_for_timeout(3000)
-    btns = page.locator("#wiki-pages button").count()
-    assert btns >= 1, f"#wiki-pages has no page buttons for sample promo-svc: {btns}"
+    btns = page.locator("#docs-pages button").count()
+    assert btns >= 1, f"#docs-pages has no page buttons for sample promo-svc: {btns}"
 
 
-def test_wiki_page_loads_content(page: Page, _sample_promo: str) -> None:
-    """P12.8b: clicking a wiki page button populates #wiki-content for sample promo-svc."""
+def test_docs_page_loads_content(page: Page, _sample_promo: str) -> None:
+    """P12.8b: clicking a docs page button populates #docs-content for sample promo-svc."""
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
-    page.locator("#vbtn-wiki").click()
+    page.locator("#vbtn-docs").click()
     page.wait_for_timeout(3000)
-    page.locator("#wiki-pages button").first.click()
+    page.locator("#docs-pages button").first.click()
     page.wait_for_timeout(3000)
-    text = page.locator("#wiki-content").inner_text() or ""
-    assert text.strip(), f"#wiki-content empty after page open for sample promo-svc: {text[:80]!r}"
+    text = page.locator("#docs-content").inner_text() or ""
+    assert text.strip(), f"#docs-content empty after page open for sample promo-svc: {text[:80]!r}"
+    assert "Pick a page" not in text, f"#docs-content still shows the empty placeholder: {text[:80]!r}"
 
 
-def test_wiki_lint_elements_attached(page: Page) -> None:
-    """P12.8b: #wiki-lint-panel and #wiki-lint-count are in the wiki DOM."""
+def test_docs_search_filters_pages(page: Page, _sample_promo: str) -> None:
+    """P12.8b: typing in #docs-search filters #docs-pages down.
+
+    Replaces the wiki-lint test's slot in this block. #docs-search is the only interactive control
+    left in the docs sidebar, and nothing else exercised it.
+    """
     page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-wiki").click()
-    expect(page.locator("#wiki-lint-panel")).to_be_attached()
-    expect(page.locator("#wiki-lint-count")).to_be_attached()
-
-
-def test_wiki_export_button_present_and_clickable(page: Page) -> None:
-    """P12.8c: #wiki-export-btn is in the wiki view and clicking it does not crash (Phase B)."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-wiki").click()
-    page.wait_for_timeout(1000)
-    btn = page.locator("#wiki-export-btn")
-    expect(btn).to_be_attached()
-    btn.click()  # triggers a markdown download (or a toast if empty); must not crash the view
+    _select_project(page, _sample_promo)
+    page.locator("#vbtn-docs").click()
+    page.wait_for_timeout(3000)
+    before = page.locator("#docs-pages button").count()
+    page.locator("#docs-search").fill("zzz-no-such-page")
     page.wait_for_timeout(500)
-    expect(btn).to_be_attached()
+    after = page.locator("#docs-pages button").count()
+    assert before >= 1 and after == 0, f"#docs-search did not filter: before={before} after={after}"
 
 
 def test_graph_detail_present_after_load(page: Page) -> None:
@@ -406,14 +402,20 @@ def test_p12_completeness_guard() -> None:
     key_ids = {
         "cmd-overlay", "cmd-input", "cmd-results", "chat-in", "send-btn",
         "chat-history", "graph-search", "graph-filter-sel", "graph-layout-sel",
-        "graph-node-count", "graph-detail", "wiki-pages", "wiki-content",
-        "wiki-lint-panel", "wiki-lint-count", "op-log", "admin-job-chips",
+        "graph-node-count", "graph-detail", "docs-pages", "docs-content",
+        "docs-search",
         "admin-autopipeline-log", "projects-body", "project-sel",
         "storage-health-body", "activity-list", "suggested-list", "daemon-dot",
-        "kpi-files", "kpi-communities", "kpi-enrichment", "theme-btn",
+        "kpi-files", "kpi-communities", "theme-btn",
     }
+    # wiki-pages/wiki-content/wiki-lint-panel/wiki-lint-count/kpi-enrichment/op-log/admin-job-chips
+    # left with tier 3 — the last two because their writers (opLog, the SSE job feed) did;
+    # docs-pages/docs-content/docs-search are the surviving half of that view. Keeping a deleted id
+    # in this list would fail the guard forever; dropping one that still exists would let it go
+    # untested — so this list has to track dashboard.html on both sides, which is what the `tagged`
+    # scan above does automatically for onclick-bearing elements.
     # vbtn-* ids are covered by the f-string f"#vbtn-{view}" parametrize pattern
-    pattern_covered = {f"vbtn-{v}" for v in ("pulse", "chat", "admin", "graph", "wiki")}
+    pattern_covered = {f"vbtn-{v}" for v in _VIEWS}
     all_ids = tagged | key_ids
     missing = sorted(i for i in all_ids if f"#{i}" not in tests and i not in pattern_covered)
     assert not missing, f"IDs not covered by any test selector: {missing}"
@@ -421,7 +423,9 @@ def test_p12_completeness_guard() -> None:
     # Every interactive id must be exercised with an action verb within 5 lines of its reference.
     interactive_ids = {
         "send-btn", "chat-in", "graph-filter-sel", "project-sel",
-        "graph-canvas", "wiki-lint-items",
+        # wiki-lint-items left with tier 3; docs-search takes its place as the docs view's one
+        # interactive control, and is driven by test_docs_search_filters_pages.
+        "graph-canvas", "docs-search",
     }
     action_verbs = (".click(", ".fill(", ".select_option(", ".press(", "page.mouse.click", ".evaluate(")
     all_lines = tests.splitlines()
@@ -507,19 +511,10 @@ def test_journey_user_empty_chat_is_ignored(page: Page) -> None:
     assert page.locator("#send-btn").is_enabled(), "#send-btn must not be disabled on empty submit"
 
 
-def test_journey_reader_toggles_wiki_lint(page: Page) -> None:
-    """DB6b: user clicks wiki-lint header; #wiki-lint-items .open class toggles."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-wiki").click()
-    page.wait_for_timeout(1000)
-    items = page.locator("#wiki-lint-items")
-    had_open = "open" in (items.get_attribute("class") or "")
-    page.evaluate("toggleWikiLint()")
-    page.wait_for_timeout(300)
-    now_open = "open" in (items.get_attribute("class") or "")
-    assert now_open != had_open, (
-        f"toggleWikiLint must flip .open class: was_open={had_open} now_open={now_open}"
-    )
+# DB6b (the wiki-lint disclosure) left with tier 3 along with toggleWikiLint() and the lint panel
+# itself. The lint ran over kb/wiki.py's generated pages — broken links between generated pages,
+# citations into a KB that no longer exists — so there is nothing in the docs view for it to
+# inspect. The reader journey it covered is now test_docs_page_loads_content.
 
 
 def test_journey_analyst_filters_graph_to_files(page: Page) -> None:
@@ -557,36 +552,11 @@ def test_journey_structure_tile_shows_files_with_symbols(page: Page) -> None:
     )
 
 
-def test_journey_operator_reindex_sees_completion(page: Page) -> None:
-    """DB5: operator clicks Re-index; an .ok line appears in #op-log (job response returned)."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
-    page.locator("#vbtn-admin").click()
-    page.wait_for_timeout(1000)
-    page.locator("button[onclick='runReindex()']").click()
-    page.wait_for_function(
-        "!!document.querySelector('#op-log .ok')",
-        timeout=30000,
-    )
-    ok_text = page.locator("#op-log .ok").first.inner_text()
-    assert ok_text.strip(), f"#op-log .ok line must have text: {ok_text!r}"
-
-
-def test_journey_operator_reindex_sees_job_chip(page: Page) -> None:
-    """DB1: Re-index publishes SSE job event; admin chip appears in #admin-job-chips."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
-    page.locator("#vbtn-admin").click()
-    page.wait_for_function("_adminSSE && _adminSSE.readyState === 1", timeout=10000)
-    proj = page.evaluate("_proj") or ""
-    assert proj, "window._proj must be set before triggering build"
-    page.request.post(
-        f"http://127.0.0.1:8765/api/build_wiki?project={proj}&action=wiki",
-        headers={"Content-Type": "application/json"},
-    )
-    page.wait_for_selector(".admin-chip", timeout=30000)
-    chip_text = page.locator(".admin-chip").first.inner_text()
-    assert chip_text.strip(), f".admin-chip must have text: {chip_text!r}"
+# DB5 and DB1 (the operator's Re-index journey) left with tier 3. Both drove the same button, which
+# POSTed /api/build_wiki: DB5 read the completion line out of #op-log, DB1 read the SSE job chip the
+# same POST published. The button, the log sink, the publisher and the stream are all gone, and the
+# operator journey that replaces them is not a click at all — indexing is driven by the reconcile
+# sweep, whose result the operator reads in the admin table (test_admin_projects_body_populated).
 
 
 def test_journey_user_asks_and_gets_progressive_answer(page: Page) -> None:
@@ -614,7 +584,7 @@ def test_chat_debug_question_via_browser(page: Page) -> None:
     """DB8: debug question in chat view produces non-error answer referencing the issue domain."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-chat").click()
-    page.locator("#chat-in").fill("What might cause community enrichment to get stuck?")
+    page.locator("#chat-in").fill("What might cause a project's vector index to go stale?")
     page.locator("#send-btn").click()
     page.wait_for_function(
         """() => {
@@ -626,45 +596,15 @@ def test_chat_debug_question_via_browser(page: Page) -> None:
     )
     history = page.locator("#chat-history").inner_text().lower()
     assert "error" not in history[:100], f"Error in chat response: {history[:200]!r}"
-    assert any(k in history for k in ("community", "enrich", "summary", "null")), (
+    # Re-pointed off community enrichment, which was DeepSeek's job and left with tier 3. Staleness
+    # is the surviving equivalent — embed_signature vs. the store's stamp — and the keywords are
+    # still terms the answer has to reach for rather than words echoed back from the question.
+    assert any(k in history for k in ("index", "stale", "chunk", "embed")), (
         f"Debug answer must mention domain keywords: {history[:300]!r}"
     )
 
 
-# ── Processes view ────────────────────────────────────────────────────────────
-
-def test_processes_view_switches_in(page: Page) -> None:
-    """Processes nav shows #view-processes and hides the 5 standard views."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-processes").click()
-    page.wait_for_timeout(500)
-    expect(page.locator("#view-processes")).to_be_visible()
-    for v in _VIEWS:
-        expect(page.locator(f"#view-{v}")).to_be_hidden()
-
-
-def test_processes_sidebar_attached(page: Page) -> None:
-    """#proc-list is part of the Processes view DOM."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-processes").click()
-    expect(page.locator("#proc-list")).to_be_attached()
-
-
-# ── Wiki Docs group ───────────────────────────────────────────────────────────
-
-def test_wiki_sidebar_and_content_attached(page: Page) -> None:
-    """#wiki-pages sidebar and #wiki-content pane are always in the Wiki DOM."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-wiki").click()
-    expect(page.locator("#wiki-pages")).to_be_attached()
-    expect(page.locator("#wiki-content")).to_be_attached()
-
-
-def test_wiki_view_has_buttons_after_load(page: Page) -> None:
-    """After project selection, Wiki sidebar has ≥1 button (KB or Docs)."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(2000)
-    page.locator("#vbtn-wiki").click()
-    page.wait_for_timeout(3000)
-    btns = page.locator("#wiki-pages button").count()
-    assert btns >= 1, f"#wiki-pages has no buttons after load: {btns}"
+# The Processes view and the Wiki Docs group both left with tier 3, so their tests are deleted
+# rather than re-pointed. #view-processes rendered kb/bpre.py's reconstructed process flows, which
+# no longer exist in any form. #vbtn-wiki/#wiki-pages/#wiki-content listed kb/wiki.py's generated
+# pages; the docs view above is the surviving half of that surface and carries its assertions.

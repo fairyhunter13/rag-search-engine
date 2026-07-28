@@ -1030,6 +1030,53 @@ def test_needs_labels_clears_after_a_labelling_pass(safe_tmp_path):
         remove_project(proj)
 
 
+def test_reconcile_gates_the_community_check_on_symbols():
+    """Wiring: a bare community_count() in reconcile is the ungated trigger this replaced."""
+    import inspect
+
+    from rag_search.daemon import sweeps
+
+    src = inspect.getsource(sweeps.reconcile_projects)
+    assert "_graph_needs_full_index" in src, "reconcile must gate through the helper"
+    assert "community_count" not in src, (
+        "reconcile reads community_count() directly again — the re-index loop is back"
+    )
+
+
+def test_symbol_free_graph_does_not_force_a_full_reindex(safe_tmp_path):
+    """A graph with no symbols is derived, not un-derived — re-indexing it is unbounded work.
+
+    Keying the trigger on communities alone re-chunked and re-embedded every project whose
+    extractor yields nothing (config trees, uncovered languages) on every reconcile pass,
+    forever — measured at 9 of 160 projects, 27,301 chunks per pass. Both directions are
+    asserted: a graph that *does* hold unclustered symbols must still force the re-index,
+    or the fix trades a loop for a silently unclustered fleet.
+    """
+    from rag_search.core.config import ProjectEntry, project_graph_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon.sweeps import _graph_needs_full_index
+    from rag_search.graph.store import GraphStore
+
+    proj = str(safe_tmp_path)
+    upsert_project(ProjectEntry(path=proj, enabled=True))
+    try:
+        gs = GraphStore(project_graph_db(proj))
+        try:
+            assert gs.symbol_count() == 0 and gs.community_count() == 0
+            assert _graph_needs_full_index(gs) is False, (
+                "a symbol-free graph must not re-index — that is the unbounded loop"
+            )
+            gs.upsert_symbol("s0", "f", "f", "function", "f.py", 1, 2, "python")
+            gs.commit()
+            assert _graph_needs_full_index(gs) is True, (
+                "symbols with no communities means clustering never ran — still re-index"
+            )
+        finally:
+            gs.close()
+    finally:
+        remove_project(proj)
+
+
 def test_p34_start_watcher_wires_enabled_projects(safe_tmp_path):
     """P34.3: start_watcher() registers all enabled projects and excludes disabled ones."""
     from rag_search.core.config import ProjectEntry

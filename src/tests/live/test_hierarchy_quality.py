@@ -87,8 +87,13 @@ def test_status_includes_hierarchy_quality(live_client, sample_workspace: Sample
         assert "hierarchy_quality" in m, f"member {m.get('path','?')} missing hierarchy_quality"
 
 
-def test_kb_state_demoted_when_degenerate(safe_tmp_path):
-    """HQ3b: degenerate partition demotes kb_state to 'searchable'."""
+def test_index_state_demoted_when_degenerate(safe_tmp_path):
+    """HQ3b: degenerate partition demotes index_state to 'degraded'.
+
+    Renamed from test_kb_state_demoted_when_degenerate on 2026-07-28: the field was `kb_state`
+    and the demoted value `searchable` until tier 3's deletion removed the enrichment ladder
+    those names described. The gate itself is unchanged — it is tier 2 (igraph + SQL, no LLM).
+    """
     import json
 
     from rag_search.core.config import ProjectEntry, project_vector_db
@@ -112,7 +117,7 @@ def test_kb_state_demoted_when_degenerate(safe_tmp_path):
         finally:
             gs.close()
         result = json.loads(handle_overview(proj, "status"))
-        assert result.get("kb_state") == "searchable", f"expected 'searchable'; got {result.get('kb_state')!r}"
+        assert result.get("index_state") == "degraded", f"expected 'degraded'; got {result.get('index_state')!r}"
         assert result["hierarchy_quality"]["degenerate"] is True
     finally:
         remove_project(proj)

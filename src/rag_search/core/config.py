@@ -30,9 +30,6 @@ EMBED_MAX_TOKENS = int(os.environ.get("RSE_EMBED_MAX_TOKENS", "768"))
 # in every project at once, so acting on that drift means reindexing the whole fleet.
 # Drift is always logged; opting in is what makes the fleet migrate itself.
 AUTO_MIGRATE_VECTORS = int(os.environ.get("RSE_AUTO_MIGRATE_VECTORS", "0"))
-THERMAL_MAX_C = int(os.environ.get("RSE_GPU_TEMP_MAX", "80"))
-THERMAL_COOLDOWN_S = int(os.environ.get("RSE_GPU_THERMAL_COOLDOWN_S", "30"))
-THERMAL_POLL_S = float(os.environ.get("RSE_GPU_THERMAL_POLL_S", "3"))
 DISABLE_TENSORRT = int(os.environ.get("RSE_DISABLE_TENSORRT", "1"))
 RSE_GPU_DEVICE: str | None = os.environ.get("RSE_GPU_DEVICE")  # unset = auto-pick
 
@@ -41,7 +38,9 @@ DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
 CLIENT_STALE_S = int(os.environ.get("RSE_MCP_CLIENT_STALE_S", "60"))
 MODEL_IDLE_UNLOAD_S = int(os.environ.get("RSE_MODEL_IDLE_UNLOAD_S", "300"))
 
-# Dashboard chat: claude-haiku-4-5 only. No DeepSeek fallback, no local generative LLM.
+# Dashboard chat: claude-haiku-4-5 only. No fallback of any kind, no local generative LLM.
+# ("No DeepSeek fallback" until 2026-07-28 — there is no DeepSeek left to fall back to, and the
+# narrower wording would read as permitting some other one. Matches routes_chat.py:1 and HR10.)
 QUERY_LLM_PROVIDER = os.environ.get("RSE_QUERY_LLM_PROVIDER", "claude")
 QUERY_LLM_MODEL = os.environ.get("RSE_QUERY_LLM_MODEL", "claude-haiku-4-5")
 QUERY_LLM_NUM_CTX = int(os.environ.get("RSE_QUERY_LLM_NUM_CTX", "4096"))
@@ -168,12 +167,12 @@ def is_federation_excluded(candidate: str) -> bool:
 def embed_batch_size() -> int:
     """Embed batch size, from RSE_EMBED_BATCH or scaled to free VRAM.
 
-    Was a flat 8 on a 16 GB card. That is the batch *count* multiplier for the two
-    per-batch costs that dominate bulk indexing: _thermal_pace samples the GPU once
-    per batch, and fastembed's numpy pooling pays fixed per-call overhead once per
-    batch. A 128k-chunk project at 8 arms the thermal gate ~16,000 times; at 32,
-    ~4,000. Capped well under fastembed's own default of 256 because attention is
-    quadratic in the 768-token sequence — L5 walks the ladder and keeps the winner.
+    Was a flat 8 on a 16 GB card. That is the batch *count* multiplier for the
+    per-batch cost that dominates bulk indexing: fastembed's numpy pooling pays fixed
+    per-call overhead once per batch, and Python↔ONNX dispatch likewise. A 128k-chunk
+    project at 8 pays it ~16,000 times; at 32, ~4,000. Capped well under fastembed's
+    own default of 256 because attention is quadratic in the 768-token sequence —
+    L5 walks the ladder and keeps the winner.
     """
     override = os.environ.get("RSE_EMBED_BATCH")
     if override:

@@ -1,4 +1,10 @@
-"""5-view dashboard HTML (pulse/chat/admin/wiki/graph) — served from static file."""
+"""4-view dashboard HTML (pulse/chat/admin/graph) — served from static file.
+
+The wiki view left with tier 3: it rendered kb/wiki.py's generated pages, and with no builder
+behind it the tab would open on a permanently empty pane. The literal below is the fallback the
+daemon serves when static/dashboard.html is missing, so it has to lose the tab too — otherwise
+the degraded page advertises a view the real page no longer has.
+"""
 from pathlib import Path
 
 _STATIC = Path(__file__).parent / "static" / "dashboard.html"
@@ -30,7 +36,6 @@ button{margin-top:8px;padding:6px 16px;cursor:pointer}
   <a onclick="show('pulse')" class="active" id="tab-pulse">Pulse</a>
   <a onclick="show('chat')" id="tab-chat">Chat</a>
   <a onclick="show('admin')" id="tab-admin">Admin</a>
-  <a onclick="show('wiki')" id="tab-wiki">Wiki</a>
   <a onclick="show('graph')" id="tab-graph">Graph</a>
 </nav>
 <div id="pulse" class="view active"><h2>Pulse</h2><p id="status">Loading...</p></div>
@@ -40,7 +45,6 @@ button{margin-top:8px;padding:6px 16px;cursor:pointer}
   <div id="chat-output" style="margin-top:12px;white-space:pre-wrap"></div>
 </div>
 <div id="admin" class="view"><h2>Admin</h2><div id="projects-list">Loading projects...</div></div>
-<div id="wiki" class="view"><h2>Wiki</h2><div id="wiki-content">Select a project to view the wiki.</div></div>
 <div id="graph" class="view"><h2>Graph</h2><canvas id="graph-canvas" width="800" height="600"></canvas></div>
 <script>
 function show(id){

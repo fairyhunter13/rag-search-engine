@@ -24,10 +24,15 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# An event under no registered root is dropped — correct, but it used to be silent, which is
+# how a project can stop being watched without anything anywhere saying so. Rate-limited
+# because a single unregistered churn storm would otherwise be the loudest thing in the journal.
+_UNATTRIBUTED_LOG_INTERVAL_S = 30.0
 
 
 def _worker_count() -> int:
@@ -42,7 +47,13 @@ class Watcher:
 
     def __init__(self, on_change: Callable[[str, list[Path]], None]) -> None:
         self._on_change = on_change
-        self._paths: set[str] = set()
+        # Replaced wholesale rather than mutated: the reader thread iterates it in `_owning_root`
+        # while `sync()` may be rebinding it from a registry write, and a mutated `set` raises
+        # mid-iteration. Rebinding a frozenset is atomic under the GIL, so readers see either
+        # the old set or the new one and never a torn one.
+        self._paths: frozenset[str] = frozenset()
+        self._paths_lock = threading.Lock()
+        self._last_unattributed_log = 0.0
         self._stop = threading.Event()
         self._restart = threading.Event()
         self._restart_ack = threading.Event()
@@ -53,9 +64,29 @@ class Watcher:
         self._workers: list[threading.Thread] = []
 
     def watch(self, project_path: str) -> None:
-        if project_path in self._paths:
-            return
-        self._paths.add(project_path)
+        self.sync(self._paths | {project_path})
+
+    def unwatch(self, project_path: str) -> None:
+        """Drop a root. Symmetric with `watch()` — without it a disabled project stays
+        watched for the daemon's whole lifetime, holding kernel watches nobody reads."""
+        self.sync(self._paths - {project_path})
+
+    def sync(self, paths: Iterable[str]) -> None:
+        """Arm exactly `paths`, applying **one** re-arm for the whole diff.
+
+        Never one re-arm per path: each one tears the single `watchfiles` generator down and
+        back up, and 160 roots' worth of teardown would be its own outage. Callers pass the
+        desired set (the registry's enabled, non-federation-excluded projects) and this works
+        out the difference.
+        """
+        desired = frozenset(paths)
+        with self._paths_lock:
+            current = self._paths
+            if desired == current:
+                return
+            self._paths = desired
+            added, removed = desired - current, current - desired
+        log.debug("watcher: root set changed +%d -%d", len(added), len(removed))
         if self._thread is not None and self._thread.is_alive():
             self._restart_ack.clear()
             self._restart.set()
@@ -111,8 +142,30 @@ class Watcher:
 
         root = self._owning_root(path)
         if root is None:
+            now = time.monotonic()
+            if now - self._last_unattributed_log >= _UNATTRIBUTED_LOG_INTERVAL_S:
+                self._last_unattributed_log = now
+                log.debug("watcher: unattributed %s (no registered root owns it)", path)
             return False
         return not is_ignored_path(Path(path), Path(root))
+
+    def status(self) -> dict[str, object]:
+        """What this watcher is actually watching, right now.
+
+        Nothing logged the root set and no endpoint exposed it, so answering "is this project
+        being watched?" meant a py-spy dump of the reader thread's locals. That is the whole
+        reason a stale index took a day to diagnose.
+        """
+        with self._cv:
+            pending = {root: len(files) for root, files in self._pending.items()}
+            inflight = sorted(self._inflight)
+        return {
+            "roots": sorted(self._paths),
+            "pending": pending,
+            "inflight": inflight,
+            "reader_alive": bool(self._thread is not None and self._thread.is_alive()),
+            "workers_alive": sum(1 for t in self._workers if t.is_alive()),
+        }
 
     def _enqueue(self, root: str, files: list[Path]) -> None:
         with self._cv:
@@ -150,12 +203,17 @@ class Watcher:
 
         stop_or_restart = _StopOrRestart(self._stop, self._restart)
         while not self._stop.is_set():
-            roots = list(self._paths)
+            roots = sorted(self._paths)
             if not roots:
                 self._stop.wait(timeout=1.0)
                 continue
             self._restart.clear()
             self._restart_ack.set()
+            # Logged here rather than in `sync()` because this is where the watch is actually
+            # armed — a count from the request side would go on claiming roots the loop never
+            # reached if arming ever failed.
+            log.info("watcher: armed %d roots", len(roots))
+            log.debug("watcher: roots %s", roots)
             try:
                 for changes in _watch(
                     *roots, watch_filter=self._filter, stop_event=stop_or_restart, rust_timeout=5000,

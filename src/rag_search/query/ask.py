@@ -77,9 +77,11 @@ def _assemble_context(query: str, chunks: list[dict], stores: list, scope: str) 
     if scope in ("architecture", "all"):
         community_ctx = _tree_walk_context(query, stores)[:_MAX_CTX]
         return f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
-    if scope == "wiki":
-        community_ctx = _community_context(stores, limit=10)[:_MAX_CTX]
-        return f"## Wiki\n{community_ctx}\n\n## Code\n{chunk_ctx}"
+    # The `wiki` scope stood here and left with tier 3. It was named after kb/wiki.py's generated
+    # pages, but it never read one — it assembled community context under a "## Wiki" header, which
+    # is what `feature` and `business` below already do. Keeping the name after the wiki builder is
+    # deleted would advertise a document store that no longer exists; an unknown scope falls through
+    # to plain chunk context, which is the same answer this branch gave minus the misleading header.
     if scope == "feature":
         return (
             f"## Code (feature trace)\n{chunk_ctx}\n\n"

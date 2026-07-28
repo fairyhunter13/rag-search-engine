@@ -67,13 +67,22 @@ def test_healthz(live_client):
     assert r.json()["ok"] is True
 
 
-def test_dashboard_five_views(live_client):
-    """P15.2: /dashboard on the REAL daemon — all 5 views present."""
+def test_dashboard_views_present(live_client):
+    """P15.2: /dashboard on the REAL daemon — every nav view is wired.
+
+    `wiki` left with tier 3 and `docs` took its place. The assertion moved from a bare substring
+    to the `vbtn-` nav id because a bare `"docs" in body` matches the word anywhere in the page
+    (comments included) and would pass with the view deleted — the shape
+    [[feedback_guard_tests_must_discriminate]] warns about, and the reason the old `"wiki" in body`
+    kept passing while the view was being dismantled.
+    """
     r = live_client.get("/dashboard")
     assert r.status_code == 200
     body = r.text.lower()
-    for view in ("pulse", "chat", "admin", "wiki", "graph"):
-        assert view in body, f"dashboard missing '{view}' view"
+    for view in ("pulse", "chat", "admin", "graph", "docs", "hierarchy"):
+        assert f'id="vbtn-{view}"' in body, f"dashboard missing '{view}' nav button"
+    assert 'id="vbtn-wiki"' not in body, "wiki nav button must not survive tier 3's deletion"
+    assert 'id="vbtn-processes"' not in body, "processes nav button must not survive tier 3"
 
 
 def test_api_projects_returns_list(live_client):
@@ -618,6 +627,11 @@ def test_e7_trimmed_http_surface(live_client):
         ("GET", "/api/wiki_lint"), ("POST", "/api/build_wiki"),
         ("GET", "/api/kb_health"), ("POST", "/api/docgen"), ("POST", "/api/okf"),
         ("GET", "/api/process/bpmn"),
+        # events/stream is the last row: the job bus whose only publisher was the pipeline job
+        # runner. It is asserted here rather than in test_http_surface/test_sse_contracts because
+        # a surviving-but-empty stream still answers 200 with an SSE content-type, so only a
+        # 404/405 assertion can tell "deleted" from "publishes nothing".
+        ("GET", "/api/events/stream"),
     ]
     for method, path in deleted:
         r = live_client.request(method, path)

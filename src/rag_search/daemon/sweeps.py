@@ -93,11 +93,24 @@ def _source_fingerprint(path: str) -> str:
 # Code-only fingerprint memo (HR38): same 'relpath:mtime' shape as _fingerprint_cache but
 # filtered to is_code_language files only, so the labelling gate and the graph re-derive gate
 # are both code-only — non-code churn (docs/config/images) never wakes either.
-_code_fingerprint_cache: dict[str, tuple[float, str]] = {}
+_code_fingerprint_cache: dict[str, tuple[float, str, float]] = {}
 
 
 def _code_source_fingerprint(path: str) -> str:
     """SHA-1 over sorted 'relpath:mtime' for CODE files only — stat-only, GPU-free."""
+    return _code_scan(path)[0]
+
+
+def _newest_code_mtime(path: str) -> float:
+    """Newest mtime across the same code files the fingerprint walks; 0.0 when there are none.
+
+    Deliberately the *same* walk rather than a second one — reconcile asks for the
+    fingerprint first, so this is a memo hit by the time it is called.
+    """
+    return _code_scan(path)[1]
+
+
+def _code_scan(path: str) -> tuple[str, float]:
     from pathlib import Path
 
     from rag_search.index.discover import (
@@ -113,8 +126,9 @@ def _code_source_fingerprint(path: str) -> str:
         coarse = 0.0
     cached = _code_fingerprint_cache.get(path)
     if cached is not None and cached[0] == coarse:
-        return cached[1]
+        return cached[1], cached[2]
     parts: list[str] = []
+    newest = 0.0
     try:
         for f in iter_files(root, federation_mode=True):
             if not is_code_language(detect_language(f)):
@@ -124,6 +138,7 @@ def _code_source_fingerprint(path: str) -> str:
             try:
                 rel = str(f.relative_to(root))
                 mtime = int(f.stat().st_mtime)
+                newest = max(newest, float(mtime))
                 parts.append(f"{rel}:{mtime}")
             except (OSError, ValueError):
                 pass
@@ -131,8 +146,47 @@ def _code_source_fingerprint(path: str) -> str:
         pass
     parts.sort()
     sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
-    _code_fingerprint_cache[path] = (coarse, sig)
-    return sig
+    _code_fingerprint_cache[path] = (coarse, sig, newest)
+    return sig, newest
+
+
+# Watermark: the newest source mtime the vectors in a store were built from.
+_VECTORS_MTIME_KEY = "source_mtime"
+
+
+def _vectors_baseline(path: str) -> float | None:
+    """When this project's vectors were last brought up to date, as an mtime.
+
+    The store's own watermark when it has one, else the registry's `indexed_at`. That
+    fallback is load-bearing: stores written before this key existed must still be
+    checked, or precisely the projects that have already rotted would be grandfathered
+    into staying rotten. None means never indexed — `_needs_index`'s business, not ours.
+    """
+    from datetime import datetime
+
+    from rag_search.core.config import project_vector_db
+    from rag_search.core.registry import get_project
+    from rag_search.index.store import VectorStore
+
+    vdb = project_vector_db(path)
+    if not vdb.exists():
+        return None
+    vs = VectorStore(vdb)
+    try:
+        raw = vs.get_meta(_VECTORS_MTIME_KEY)
+    except Exception:
+        return None
+    finally:
+        vs.close()
+    if raw is not None:
+        return float(raw)
+    e = get_project(path)
+    if e is None or not e.indexed_at:
+        return None
+    try:
+        return datetime.fromisoformat(e.indexed_at).timestamp()
+    except ValueError:
+        return None
 
 
 def _vectors_stale(path: str) -> str | None:
@@ -155,6 +209,66 @@ def _vectors_stale(path: str) -> str | None:
         return None
     finally:
         vs.close()
+
+
+def _vectors_content_stale(path: str) -> list:
+    """Code files written after this store's vectors were last brought up to date.
+
+    `_vectors_stale` sees only *signature* drift, and `_graph_stale`'s mtime drift routes
+    to `_rederive_graph`, which never touches vectors. So a project that loses its watcher
+    stream keeps a maintained graph over months-old vectors and looks healthy from every
+    angle except the answers it gives. This is the trigger that closes that hole.
+
+    Returns the files rather than a bool so the caller can re-embed just those — a full
+    rebuild here would re-index the whole fleet on the first pass after deploy, for
+    projects the watcher may have been maintaining correctly all along.
+    """
+    import contextlib
+    from pathlib import Path
+
+    from rag_search.index.discover import (
+        detect_language,
+        is_code_language,
+        is_generated_path,
+        iter_files,
+    )
+    baseline = _vectors_baseline(path)
+    # The cheap check first, off the memoised scan reconcile has already paid for. Only a
+    # project that fails it walks the tree again, which after convergence is rare.
+    if baseline is None or _newest_code_mtime(path) <= baseline:
+        return []
+    out = []
+    try:
+        for f in iter_files(Path(path), federation_mode=True):
+            if not is_code_language(detect_language(f)) or is_generated_path(f.name):
+                continue
+            with contextlib.suppress(OSError):
+                if f.stat().st_mtime > baseline:
+                    out.append(f)
+    except Exception:
+        pass
+    return out
+
+
+def _graph_needs_full_index(gs) -> bool:  # gs: GraphStore
+    """True if the graph holds symbols that were never clustered.
+
+    Zero communities means the clustering pass never ran — but only when there was
+    something to cluster. Keying on `community_count() == 0` alone made this trigger
+    permanently true for any project whose extractor legitimately yields no symbols
+    (config/docs trees, or a language no extraction rung covers): nothing to cluster,
+    so no communities, so re-chunk and re-embed the entire project — on every reconcile
+    pass, with nothing that can ever satisfy the gate. Measured before it: 9 of 160
+    projects, 27,301 chunks per pass, 22,741 of them one Katalon repo that yields 0
+    symbols by construction and completed a full 76s re-index at 17:40:39-17:41:55.
+    Cadence is configuration: the fleet was on RSE_RECONCILE_RESYNC_S=1800 (the vector
+    migration drop-in), and at the default 0 it is once per daemon start instead — so
+    the cost is a slower restart rather than a permanent burn. Wrong either way.
+
+    A symbol-free graph is not an un-derived one. `_graph_stale` decides whether it
+    needs re-deriving, on the same fingerprint as every other project.
+    """
+    return gs.symbol_count() > 0 and gs.community_count() == 0
 
 
 def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
@@ -372,9 +486,13 @@ def _reindex_vectors(project_path: str) -> None:
     from rag_search.index.indexer import index_project
     from rag_search.index.store import VectorStore
 
+    # Read the watermark before indexing, never after: a file written while this runs must
+    # stay stale rather than be marked done by a stamp taken at the end.
+    newest = _newest_code_mtime(project_path)
     vs = VectorStore(project_vector_db(project_path))
     try:
         file_count, chunk_count = index_project(Path(project_path), get_embedder(), vs)
+        vs.set_meta(_VECTORS_MTIME_KEY, repr(newest))
     finally:
         vs.close()
     # indexed_at is deliberately left alone: it marks graph+vector completeness for
@@ -456,6 +574,13 @@ def reconcile_projects() -> None:
     except Exception as exc:
         log.warning("reconcile member-discovery: %s", exc)
 
+    # Re-arm the watcher against the registry once per pass. `upsert_project` already
+    # notifies on a membership change, but `_migrate()` prunes dead entries without one
+    # (it is called from `list_projects`, so notifying there would recurse) — this is the
+    # path that catches those. A no-change sync returns without touching the watch.
+    from rag_search.daemon.server import sync_watcher
+    sync_watcher()
+
     from rag_search.core.config import is_federation_excluded
 
     # Most-recently-touched projects first. The pass is one linear walk with no ordering,
@@ -485,13 +610,27 @@ def reconcile_projects() -> None:
                 else "set RSE_AUTO_MIGRATE_VECTORS=1 to migrate",
             )
             needs_vectors = bool(AUTO_MIGRATE_VECTORS)
+        # The third trigger. Without it, a project whose watcher stream goes quiet keeps
+        # a re-derived graph over vectors from months ago and reports itself healthy;
+        # the only symptom is `search` answering from source that no longer exists.
+        if not needs_idx and not needs_vectors and (
+            missed := _vectors_content_stale(entry.path)
+        ):
+            log.info(
+                "%s: %d file(s) newer than vectors — re-embedding them",
+                entry.path, len(missed),
+            )
+            try:
+                _index_files(entry.path, missed)
+            except Exception as exc:
+                log.warning("%s: content-freshness reindex failed: %s", entry.path, exc)
         # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
         if not needs_idx and not entry.federation:
             gdb = project_graph_db(entry.path)
             if gdb.exists():
                 gs = GraphStore(gdb)
                 try:
-                    if gs.community_count() == 0:
+                    if _graph_needs_full_index(gs):
                         needs_idx = True
                     elif _graph_stale(entry.path, gs):
                         needs_rederive = True
@@ -572,6 +711,7 @@ def maintenance() -> None:
 
 
 def _index_project(project_path: str) -> None:
+    import time
     from pathlib import Path
 
     from rag_search.core.config import project_graph_db, project_vector_db
@@ -584,12 +724,21 @@ def _index_project(project_path: str) -> None:
     root = Path(project_path)
     embedder = get_embedder()
 
-    # 1. Chunk + embed → vectors.db
+    # 1. Chunk + embed → vectors.db. The span and chunk count are logged because a full unit
+    # is the only place indexing throughput can be measured end to end — the incremental path
+    # at _reindex_vectors logs its own, and without this one a completed unit left no trace at
+    # all, so "new-chunks/min" had to be sampled with py-spy instead of read.
+    t0 = time.monotonic()
     vs = VectorStore(project_vector_db(project_path))
     try:
         file_count, chunk_count = index_project(root, embedder, vs)
     finally:
         vs.close()
+    span = time.monotonic() - t0
+    log.info(
+        "_index_project %s: %d files -> %d chunks in %.1fs (%.0f chunks/min)",
+        project_path, file_count, chunk_count, span, chunk_count / span * 60 if span > 0 else 0,
+    )
 
     # 2. Tree-sitter extract + community detection → graph.db; stamp pipeline meta.
     gs = GraphStore(project_graph_db(project_path))
@@ -636,9 +785,21 @@ def _index_files(project_path: str, files: list) -> None:
     ]
     if not filtered:
         return
+    # Stat before indexing, and only over the files this pass actually handled. A file the
+    # debounce dropped is not in `filtered`, so it never advances the mark and the tree's
+    # newest mtime stays above it — which is exactly how `_vectors_content_stale` still
+    # catches a dropped event. Advancing from the whole tree instead would mask it.
+    import contextlib
+    handled = 0.0
+    for f in filtered:
+        with contextlib.suppress(OSError):
+            handled = max(handled, float(int(f.stat().st_mtime)))
     vs = VectorStore(project_vector_db(project_path))
     try:
         index_files(filtered, get_embedder(), vs, project_root=root)
+        prior = vs.get_meta(_VECTORS_MTIME_KEY)
+        if handled and handled > float(prior or 0.0):
+            vs.set_meta(_VECTORS_MTIME_KEY, repr(handled))
     finally:
         vs.close()
 
@@ -652,7 +813,10 @@ def _index_files(project_path: str, files: list) -> None:
 
 
 def _label_project(project_path: str) -> None:
-    """Give every Leiden community a deterministic structural label. No LLM, no network.
+    """Give every fastgreedy community a deterministic structural label. No LLM, no network.
+
+    (Not Leiden — `graph/community.py` runs igraph `community_fastgreedy`, ALGO_VERSION "fg1",
+    and `test_schema_consistency.py::SC8a` asserts leidenalg is never imported.)
 
     Only L1 communities are ever generated (WS-B), and the orphan prune below is what keeps
     this terminating: label_community_structural writes nothing for a community with no
