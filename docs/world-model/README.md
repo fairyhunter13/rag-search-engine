@@ -28,7 +28,7 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 | P2 | MCP query path: embed+rerank only (no LLM) |
 | P3 | Federation = query-time union; no cross-repo edges |
 | P4 | Event-driven indexing; the heavy pass runs only on code-source-fingerprint drift; no periodic sweeps |
-| P5 | Two-stage retrieval: vector recall → cross-encoder rerank |
+| P5 | Two-stage retrieval: hybrid recall (dense + FTS5 BM25, RRF-fused) → cross-encoder rerank |
 | P6 | No heuristics: tree-sitter only, package-wide, outside four intrinsic-mechanism files |
 | ~~P7~~ | *retired 2026-07-28* — it scoped hygiene to the artifact writers, and RSE writes no artifacts now; P18 is the whole-tree facet |
 | P8 | No mocks in tests |

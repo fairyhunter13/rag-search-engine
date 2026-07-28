@@ -1,7 +1,9 @@
 """sqlite-vec vector store for code chunk embeddings."""
 from __future__ import annotations
 
+import logging
 import sqlite3
+import time
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -10,6 +12,8 @@ import numpy as np
 import sqlite_vec
 
 from rag_search.core.config import EMBED_MAX_TOKENS, EMBED_MODEL
+
+_log = logging.getLogger(__name__)
 
 # Bump by hand whenever chunk *shape* changes (boundaries, headers, overlap) in a
 # way that makes old vectors incomparable to new ones.
@@ -22,6 +26,11 @@ CHUNKER_REV = "cast-1"
 # one shifts every vector. Recording it is what makes that change invalidate the index instead of
 # silently querying a space the stored vectors were never embedded into. Bump by hand.
 EMBED_PREFIX_REV = "noprefix-1"
+
+# Identity of the *lexical* index, which is independent of the vector one: it holds no
+# embeddings, so changing it costs a re-tokenise and never a re-embed. Bump when the tokenizer
+# or column set changes; the guarded `rebuild` in `_open` then backfills each store once.
+FTS_REV = "fts5-unicode61-1"
 
 # The pooling and prefix every stored index in the fleet was built with. While the pipeline still
 # matches these the signature stays in its four-field form, byte-identical to what is stamped
@@ -81,6 +90,32 @@ def embed_signature(dim: int = 768) -> str:
     return _compose_signature(dim, pooling_id(), EMBED_PREFIX_REV)
 
 
+def fts_query(text: str) -> str:
+    """A user question rewritten as an FTS5 MATCH expression. Empty when nothing is searchable.
+
+    Raw text cannot be passed through: `-`, `*`, `:`, `(`, `"` and the bare words AND/OR/NOT are
+    all FTS5 operators, so a question like "worker-side validation (async)" is a syntax error,
+    not a query. Each whitespace-separated word becomes one quoted phrase of its alphanumeric
+    runs, and the phrases are OR'd.
+
+    Phrasing per word is what makes this useful on code. unicode61 splits `_content_hash` into
+    `content` + `hash`, so a bare-token query would match every chunk mentioning either word
+    anywhere; as the phrase "content hash" it matches only where they are adjacent — which is
+    the identifier itself, and its call sites. Splitting is still the right tokenizer: it is what
+    lets an English question reach a snake_case name it does not spell exactly.
+
+    Split with `str.isalnum` rather than a regex, both because P6 forbids `re` in this package
+    and because it is the closer match: unicode61 keeps unicode letters and digits, which a
+    `[0-9A-Za-z]` class would drop from the query while the index still held them.
+    """
+    phrases = [
+        '"' + " ".join(t) + '"'
+        for w in text.split()
+        if (t := "".join(c if c.isalnum() else " " for c in w).split())
+    ]
+    return " OR ".join(phrases)
+
+
 def _open(db_path: Path, dim: int) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -116,6 +151,27 @@ def _open(db_path: Path, dim: int) -> sqlite3.Connection:
     # Without this index that subquery scans a table holding >100k rows on the larger repos,
     # on every query. Costs one lazy build per existing store; no reindex, no signature change.
     con.execute("CREATE INDEX IF NOT EXISTS idx_chunks_language ON chunks(language)")
+    # The lexical lane. External content, so the text lives once in `chunks` and FTS5 stores
+    # only the inverted index. `chunks` is maintained by hand at the three sites that write it
+    # rather than by triggers: `INSERT OR REPLACE` fires delete triggers only under
+    # recursive_triggers, and `clear()` would otherwise re-tokenise every row on its way out.
+    con.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
+        "USING fts5(content, content='chunks', content_rowid='chunk_id')"
+    )
+    # Creating the table leaves it EMPTY — an external-content table indexes nothing it did not
+    # see written. `rebuild` is FTS5's own backfill and is the only thing that must run against
+    # the ~1.39 M rows already on disk; the meta guard is what keeps it (and `optimize`, which
+    # merges every segment) from running on each of 160 stores at every daemon start.
+    if con.execute("SELECT value FROM meta WHERE key='fts_rev'").fetchone() != (FTS_REV,):
+        t0 = time.monotonic()
+        con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('fts_rev', ?)", (FTS_REV,))
+        # 10.8 s + 1.8 s measured on the fleet's largest store (207 k chunks), once. Logged
+        # because it happens inside the first open, so without this it is an unattributable
+        # ten-second stall on a query path that is otherwise milliseconds.
+        _log.info("fts5 backfill %s: %.1fs", db_path.parent.name, time.monotonic() - t0)
     con.commit()
     return con
 
@@ -163,13 +219,30 @@ class VectorStore:
         language: str, content: str, vector: np.ndarray,
     ) -> None:
         v = vector.astype(np.float32).tobytes()
+        # Replacing a live chunk_id has to be done by hand, in full. `OR REPLACE` covered only
+        # `chunks`: an external-content FTS5 index cannot see the row it displaces (and deleting
+        # from that index needs the text that *was* indexed, not the text replacing it), and vec0
+        # does not implement the conflict clause at all — it raises UNIQUE, so this path has
+        # always aborted midway, after `chunks` was already overwritten. The probe is a PK miss
+        # in the normal case, since both callers clear or purge the path before inserting.
+        old = self._con.execute(
+            "SELECT content FROM chunks WHERE chunk_id=?", (chunk_id,)
+        ).fetchone()
+        if old is not None:
+            self._con.execute(
+                "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
+                (chunk_id, old[0]),
+            )
+            self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
         self._con.execute(
             "INSERT OR REPLACE INTO chunks VALUES (?,?,?,?,?,?)",
             (chunk_id, path, start, end, language, content),
         )
         self._con.execute(
-            "INSERT OR REPLACE INTO vec_chunks(chunk_id, embedding) VALUES (?,?)",
-            (chunk_id, v),
+            "INSERT INTO chunks_fts(rowid, content) VALUES (?,?)", (chunk_id, content)
+        )
+        self._con.execute(
+            "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?,?)", (chunk_id, v),
         )
 
     def file_hash(self, path: str) -> str | None:
@@ -233,6 +306,47 @@ class VectorStore:
             for r in rows
         ]
 
+    def search_lexical(
+        self,
+        query: str,
+        top_k: int = 10,
+        languages: Sequence[str] | None = None,
+    ) -> list[dict]:
+        """Best `top_k` chunks by BM25, restricted to `languages` when given.
+
+        The lexical half of hybrid retrieval, and the only lane that can retrieve a chunk the
+        embedder never placed near the query: a rare literal identifier is a strong lexical
+        signal and a weak semantic one, because an embedding of a name the model has never seen
+        is mostly the shape of its neighbours. Returns `bm25` (lower is better) rather than a
+        `score`, so nothing downstream can mistake the two lanes' numbers for each other.
+        """
+        expr = fts_query(query)
+        if not expr or (languages is not None and not languages):
+            return []
+        params: list = [expr]
+        lang_clause = ""
+        if languages is not None:
+            marks = ",".join("?" * len(languages))
+            lang_clause = f" AND c.language IN ({marks})"
+            params.extend(languages)
+        params.append(top_k)
+        rows = self._con.execute(
+            f"""
+            SELECT c.chunk_id, c.path, c.start_line, c.end_line, c.language, c.content,
+                   bm25(chunks_fts)
+            FROM chunks_fts JOIN chunks c ON c.chunk_id = chunks_fts.rowid
+            WHERE chunks_fts MATCH ?{lang_clause}
+            ORDER BY bm25(chunks_fts)
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [
+            {"chunk_id": r[0], "path": r[1], "start_line": r[2], "end_line": r[3],
+             "language": r[4], "content": r[5], "bm25": float(r[6])}
+            for r in rows
+        ]
+
     def count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
@@ -240,13 +354,22 @@ class VectorStore:
         """Drop all chunk metadata + vectors (for idempotent full reindex)."""
         self._con.execute("DELETE FROM vec_chunks")
         self._con.execute("DELETE FROM chunks")
+        # FTS5's own reset. Deleting row by row would re-tokenise the whole store on the way
+        # out, and would have to read each `content` back to do it.
+        self._con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')")
         self._con.execute("DELETE FROM file_hashes")
 
     def delete_by_path(self, path: str) -> None:
         """Remove all chunks (metadata + vectors) for a single file path."""
-        ids = [r[0] for r in self._con.execute("SELECT chunk_id FROM chunks WHERE path=?", (path,))]
-        for cid in ids:
+        rows = self._con.execute(
+            "SELECT chunk_id, content FROM chunks WHERE path=?", (path,)
+        ).fetchall()
+        for cid, content in rows:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
+            self._con.execute(
+                "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
+                (cid, content),
+            )
         self._con.execute("DELETE FROM chunks WHERE path=?", (path,))
         self._con.execute("DELETE FROM file_hashes WHERE path=?", (path,))
 
