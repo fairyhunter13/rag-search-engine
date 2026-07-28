@@ -32,6 +32,10 @@ EMBED_PREFIX_REV = "noprefix-1"
 # or column set changes; the guarded `rebuild` in `_open` then backfills each store once.
 FTS_REV = "fts5-unicode61-1"
 
+# Stores already reported as lexically unavailable, so the warning is one line per store per
+# process instead of one per query against a 189-member federation.
+_WARNED_UNMIGRATED: set[str] = set()
+
 # The pooling and prefix every stored index in the fleet was built with. While the pipeline still
 # matches these the signature stays in its four-field form, byte-identical to what is stamped
 # today — because the two new fields *describe what those runs already did*, and re-deriving them
@@ -116,7 +120,8 @@ def fts_query(text: str) -> str:
     return " OR ".join(phrases)
 
 
-def _open(db_path: Path, dim: int) -> sqlite3.Connection:
+def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, bool]:
+    """Open (creating if absent) and return the connection plus whether the FTS index is usable."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db_path), check_same_thread=False)
     con.enable_load_extension(True)
@@ -161,27 +166,53 @@ def _open(db_path: Path, dim: int) -> sqlite3.Connection:
     )
     # Creating the table leaves it EMPTY — an external-content table indexes nothing it did not
     # see written. `rebuild` is FTS5's own backfill and is the only thing that must run against
-    # the ~1.39 M rows already on disk; the meta guard is what keeps it (and `optimize`, which
-    # merges every segment) from running on each of 160 stores at every daemon start.
-    if con.execute("SELECT value FROM meta WHERE key='fts_rev'").fetchone() != (FTS_REV,):
+    # the rows already on disk; the meta guard is what keeps it (and `optimize`, which merges
+    # every segment) from running on each of 160 stores at every daemon start.
+    #
+    # `migrate` is what keeps it off the query path, and that is not a tuning knob. Measured on
+    # the live fleet: opening `redacted-name-12` (99 k chunks) inside a query cost 11.31 s before returning
+    # a 1.9 ms result, and a federated search opens one store per member — 189 of them on the
+    # largest federation, 137 of which still owed a backfill, so the first such query would have
+    # paid roughly two minutes serially and timed out. It defaults True because the dangerous
+    # direction is the other one: an unmigrated store whose FTS index is empty cannot be
+    # maintained incrementally, since deleting a row that was never indexed writes a negative
+    # entry. A forgotten call site must therefore land on "slow but correct", never on "fast
+    # and silently corrupting".
+    owed = con.execute("SELECT value FROM meta WHERE key='fts_rev'").fetchone() != (FTS_REV,)
+    if owed and migrate:
         t0 = time.monotonic()
         con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
         con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
         con.execute("INSERT OR REPLACE INTO meta VALUES ('fts_rev', ?)", (FTS_REV,))
         # 10.8 s + 1.8 s measured on the fleet's largest store (207 k chunks), once. Logged
-        # because it happens inside the first open, so without this it is an unattributable
-        # ten-second stall on a query path that is otherwise milliseconds.
+        # because it happens inside an open, so without this it is an unattributable
+        # ten-second stall on a path that is otherwise milliseconds.
         _log.info("fts5 backfill %s: %.1fs", db_path.parent.name, time.monotonic() - t0)
+        owed = False
+    elif owed:
+        # A store the lexical lane cannot serve, announced once per process rather than per
+        # query. Silence here would read as "hybrid retrieval is on" while that member was
+        # answering from the dense lane alone — the recall regression 2d exists to remove,
+        # invisible in every output.
+        if db_path.parent.name not in _WARNED_UNMIGRATED:
+            _WARNED_UNMIGRATED.add(db_path.parent.name)
+            _log.warning("fts5 index not built for %s — lexical lane disabled for this store "
+                         "until it is next indexed", db_path.parent.name)
     con.commit()
-    return con
+    return con, not owed
 
 
 class VectorStore:
     """sqlite-vec backed vector store for code chunk embeddings (float32 ANN)."""
 
-    def __init__(self, db_path: Path, dim: int = 768):
-        self._con = _open(db_path, dim)
+    def __init__(self, db_path: Path, dim: int = 768, *, migrate: bool = True):
+        self._con, self._lexical_ready = _open(db_path, dim, migrate)
         self._dim = dim
+
+    @property
+    def lexical_ready(self) -> bool:
+        """Whether this store's FTS index is built, and so whether the lexical lane can run."""
+        return self._lexical_ready
 
     def stamp(self) -> None:
         """Record which pipeline built the vectors now held here. Call after a full reindex."""
@@ -229,18 +260,23 @@ class VectorStore:
             "SELECT content FROM chunks WHERE chunk_id=?", (chunk_id,)
         ).fetchone()
         if old is not None:
-            self._con.execute(
-                "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
-                (chunk_id, old[0]),
-            )
+            if self._lexical_ready:
+                self._con.execute(
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
+                    (chunk_id, old[0]),
+                )
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
         self._con.execute(
             "INSERT OR REPLACE INTO chunks VALUES (?,?,?,?,?,?)",
             (chunk_id, path, start, end, language, content),
         )
-        self._con.execute(
-            "INSERT INTO chunks_fts(rowid, content) VALUES (?,?)", (chunk_id, content)
-        )
+        # An unbuilt index is left strictly empty rather than partially filled. Maintaining it
+        # here would be worse than useless: `delete` against a row the index never saw writes a
+        # negative entry, and the next `rebuild` is what makes the store whole in one step.
+        if self._lexical_ready:
+            self._con.execute(
+                "INSERT INTO chunks_fts(rowid, content) VALUES (?,?)", (chunk_id, content)
+            )
         self._con.execute(
             "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?,?)", (chunk_id, v),
         )
@@ -321,23 +357,42 @@ class VectorStore:
         `score`, so nothing downstream can mistake the two lanes' numbers for each other.
         """
         expr = fts_query(query)
-        if not expr or (languages is not None and not languages):
+        if not self._lexical_ready or not expr:
+            return []
+        if languages is not None and not languages:
             return []
         params: list = [expr]
         lang_clause = ""
         if languages is not None:
             marks = ",".join("?" * len(languages))
-            lang_clause = f" AND c.language IN ({marks})"
+            # Filtered by rowid, not by joining `chunks` — the join is what phase 1 exists to
+            # avoid, and `idx_chunks_language` already serves this shape. Same construction the
+            # dense lane uses for its own pre-filter.
+            lang_clause = (
+                f" AND chunks_fts.rowid IN (SELECT chunk_id FROM chunks "
+                f"WHERE language IN ({marks}))"
+            )
             params.extend(languages)
         params.append(top_k)
+        # Two phases, and the split is the difference between reading `top_k` chunk bodies and
+        # reading every body that matched. Joining `chunks` in the same SELECT as the MATCH makes
+        # sqlite resolve the join *before* the sort — `SEARCH c USING INTEGER PRIMARY KEY` then
+        # `USE TEMP B-TREE FOR ORDER BY` — so a three-common-word question over a 207 k-chunk
+        # store hydrates 178 k full-text rows to return ten. Phase 1 sorts rowid+score alone;
+        # phase 2 hydrates the survivors. Measured 323 ms -> 130 ms on that store, and the
+        # memory difference is four orders of magnitude larger than the time difference.
         rows = self._con.execute(
             f"""
-            SELECT c.chunk_id, c.path, c.start_line, c.end_line, c.language, c.content,
-                   bm25(chunks_fts)
-            FROM chunks_fts JOIN chunks c ON c.chunk_id = chunks_fts.rowid
-            WHERE chunks_fts MATCH ?{lang_clause}
-            ORDER BY bm25(chunks_fts)
-            LIMIT ?
+            SELECT c.chunk_id, c.path, c.start_line, c.end_line, c.language, c.content, t.rk
+            FROM (
+                SELECT chunks_fts.rowid AS rid, bm25(chunks_fts) AS rk
+                FROM chunks_fts
+                WHERE chunks_fts MATCH ?{lang_clause}
+                ORDER BY rk
+                LIMIT ?
+            ) t
+            JOIN chunks c ON c.chunk_id = t.rid
+            ORDER BY t.rk
             """,
             params,
         ).fetchall()
@@ -356,7 +411,8 @@ class VectorStore:
         self._con.execute("DELETE FROM chunks")
         # FTS5's own reset. Deleting row by row would re-tokenise the whole store on the way
         # out, and would have to read each `content` back to do it.
-        self._con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')")
+        if self._lexical_ready:
+            self._con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')")
         self._con.execute("DELETE FROM file_hashes")
 
     def delete_by_path(self, path: str) -> None:
@@ -366,10 +422,11 @@ class VectorStore:
         ).fetchall()
         for cid, content in rows:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
-            self._con.execute(
-                "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
-                (cid, content),
-            )
+            if self._lexical_ready:
+                self._con.execute(
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
+                    (cid, content),
+                )
         self._con.execute("DELETE FROM chunks WHERE path=?", (path,))
         self._con.execute("DELETE FROM file_hashes WHERE path=?", (path,))
 
