@@ -57,15 +57,11 @@ def test_chat_primary_model_is_haiku():
 # ---------------------------------------------------------------------------
 
 
-def test_no_local_generative_llm_in_llm_module():
-    """R6c static: graph/llm.py has no deleted chat(), _OLLAMA_URL, or assert_ollama_gpu."""
-    text = (_SRC / "graph" / "llm.py").read_text()
-    assert "_OLLAMA_URL" not in text, "graph/llm.py still defines _OLLAMA_URL (decommissioned)"
-    assert "assert_ollama_gpu" not in text, "graph/llm.py still references assert_ollama_gpu (decommissioned)"
-    assert "def chat(" not in text, "graph/llm.py still defines chat() (local generative LLM decommissioned)"
-    # Positive: DeepSeek must remain
-    assert "def deepseek_chat" in text, "graph/llm.py must still define deepseek_chat"
-    assert "def deepseek_key" in text, "graph/llm.py must still define deepseek_key"
+# The graph/llm.py guard left with the module it read. Its negative half — no _OLLAMA_URL, no
+# assert_ollama_gpu, no bare `def chat(` — is already carried tree-wide by B1 below, which screens
+# every file in the package rather than one named module. Its positive half asserted the *opposite*
+# of what R0 established: `def deepseek_chat` and `def deepseek_key` must exist. There is no
+# DeepSeek client left, so keeping it would have made this file a guard against the deletion.
 
 
 def test_config_has_no_ollama_knobs():
@@ -171,11 +167,13 @@ def test_no_local_llm_tokens_anywhere_in_src():
 # Canonical allowlist: the ONLY files permitted to use rerank_passages.
 # query/search.py    — defines rerank_passages (GPU cross-encoder)
 # query/ask.py       — calls it for AXIS-B community context ranking
-# kb/resolve_rerank.py — Tier-1.75 bridge (single kb/ delegation point)
+# kb/resolve_rerank.py was the third entry — BPRE's Tier-1.75 bridge, the one place kb/ was
+# allowed to reach the cross-encoder. It left with tier 3, and the entry has to leave with it:
+# the loop below asserts every allowlisted file *exists*, so a stale entry fails outright rather
+# than quietly exempting whatever later takes that path.
 _RERANK_ALLOWLIST = frozenset({
     "query/search.py",
     "query/ask.py",
-    "kb/resolve_rerank.py",
 })
 
 

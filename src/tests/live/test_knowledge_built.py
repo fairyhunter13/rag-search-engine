@@ -4,9 +4,23 @@ Research grounding (June 2026):
 - Community structure without ground truth validated by modularity, coverage, singleton ratio
   (arXiv 2501.07025; Leiden Q~0.53 = moderately well-formed).
 - Composition invariants in federated systems are invisible to single-unit analysis
-  (arXiv 2606.02019): a single non-enriched member degrades aggregate quality silently.
-- The gap caught: projects could pass validity (verdict=VALID, kb_state=ready, enriched_pct=100)
-  with 0 communities — those checks are vacuously true when detect_communities was skipped.
+  (arXiv 2606.02019): a single member with no communities degrades aggregate quality silently.
+- The gap caught: a project could pass validity (verdict=VALID) with 0 communities — that
+  check is vacuously true when detect_communities was skipped.
+
+The two other signals this docstring used to cite alongside verdict — `kb_state=ready` and
+`enriched_pct=100` — left with tier 3, and their removal does not weaken the gate: they were
+named here as examples of checks that pass vacuously, i.e. as the problem rather than the
+guard. What the tests below assert is unchanged, because communities are graph clustering
+plus `label_community_structural`, neither of which ever involved an LLM.
+
+On the algorithm named above: detection is igraph `community_fastgreedy` (agglomerative
+Clauset-Newman-Moore modularity, ALGO_VERSION "fg1"), with edgeless symbols grouped by
+directory. It is not Leiden — Leiden was replaced by an exact k-shell partition, which was
+in turn replaced by fastgreedy because k-core is a node ranking rather than a partition and
+fragmented connected nodes into singletons. The arXiv 2501.07025 grounding above is cited
+for the no-ground-truth validation method (modularity, coverage, singleton ratio), which
+still applies; its Leiden Q figure is a scale anchor from the paper, not this repo's number.
 """
 from __future__ import annotations
 
@@ -65,7 +79,7 @@ class TestKnowledgeBuiltCorrectly:
     def test_federation_members_community_coverage(self, status_by_key: dict) -> None:
         """T1b: Every federation member with ≥50 symbols must have ≥1 community.
 
-        Catches the composition-level gap where a single non-enriched member
+        Catches the composition-level gap where a single uncommunitied member
         silently degrades aggregate overview/ask quality (arXiv 2606.02019).
         """
         members = status_by_key.get("federation", {}).get("members", [])
