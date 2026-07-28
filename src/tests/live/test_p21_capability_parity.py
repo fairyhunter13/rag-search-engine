@@ -3,7 +3,7 @@
 These guard against:
   A1: overview docstring advertising fewer what= values than _overview._VALID
   A2: graph docstring omitting the 'path' relation
-  B3: overview round-trips for the 10 previously-undocumented what= handlers
+  B3: overview round-trips for every what= in _VALID over the real /mcp transport
   B4: check_system.py exits 0 against the live daemon
 """
 from __future__ import annotations
@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 import requests
+
+from rag_search.server._overview import _VALID as _VALID_WHATS
 
 pytestmark = pytest.mark.live
 
@@ -98,15 +100,17 @@ def test_graph_docstring_matches_supported_relations():
 
 
 # ---------------------------------------------------------------------------
-# B3: overview round-trips for all 15 what= values via real /mcp transport
+# B3: overview round-trips for every what= in _VALID via real /mcp transport
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("what", sorted([
-    "structure", "communities", "status", "projects", "patterns",
-    "metrics", "import_cycles",
-    "surprising_connections", "feature_map", "business_rules",
-    "process_flows", "suggested_questions", "service_mesh",
-]))
+# This was a hand-maintained list of 13 names, five of which (patterns, feature_map,
+# business_rules, process_flows, service_mesh) R0a deleted and one of which (validate) it had
+# never picked up — so it was simultaneously red on the deleted half and blind on the live half.
+# A list meant to say "every advertised what= round-trips" now reads the advertised set instead
+# of restating it. It cannot go stale again, and it does not weaken the deletion guard: that a
+# *removed* what= is rejected is asserted by name in test_feature_proof.py's fp1/fp2, which is
+# where a shrinking `_VALID` gets caught.
+@pytest.mark.parametrize("what", sorted(_VALID_WHATS))
 def test_overview_what_round_trip(what):
     """B3: overview({what}) over real /mcp transport returns non-error JSON.
 

@@ -1,7 +1,7 @@
 """HR39 guard: every tree-sitter parse is bounded (subprocess pool), no exception.
 
 Two invariants enforced:
-1. Only the whitelisted worker-executed modules (graph/extractor.py, kb/bpre_ast.py) may
+1. Only the whitelisted worker-executed module (graph/extractor.py) may
    contain a direct tree-sitter `.parse(` call — every other module's parses must go through
    `index.bounded_parse.run_bounded`. Nodes aren't picklable, so parsing must physically live
    inside the extraction function's own source, not at the call-site — this is why the guard
@@ -21,11 +21,17 @@ pytestmark = pytest.mark.live
 
 _ROOT = Path(__file__).resolve().parents[2] / "rag_search"
 
-_WORKER_MODULES = {"graph/extractor.py", "kb/bpre_ast.py"}
+# kb/bpre_ast.py left with tier 3, taking `scan_file` and `_scan_pb_go_file` — the only two
+# _WORKER_FUNCS entries it owned — with it. Unlike the seven stale-allowlist holes this
+# deletion has turned up elsewhere, this entry could not have gone silent:
+# test_worker_modules_are_exhaustive *reads* each whitelisted path, so a deleted module fails
+# with FileNotFoundError rather than passing an empty check. That is the shape an allowlist
+# guard has to have — assert the exception still describes something real, don't just skip it.
+_WORKER_MODULES = {"graph/extractor.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")
 _WORKER_FUNCS = (
     "extract_symbols(", "extract_calls_with_lines(", "extract_calls(",
-    "extract_call_sites(", "scan_file(", "_scan_pb_go_file(",
+    "extract_call_sites(",
 )
 
 

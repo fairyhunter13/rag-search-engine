@@ -1,4 +1,11 @@
-"""WS-F/WS-G: prove surviving features work after WS-B hierarchy deletion + WS-E purge."""
+"""WS-F/WS-G: prove surviving features work after WS-B hierarchy deletion + WS-E purge.
+
+R0 folded the tier-3 deletion into the same two lists this file was already built around.
+`_REMOVED` and `_WHATS` are complements — one names what `overview` must reject, the other
+what it must answer — so the five tier-3 variants move from the second list to the first
+rather than simply leaving. That keeps fp1/fp2 discriminating: a variant that came back
+would be caught by _REMOVED, and one that was dropped by mistake by _WHATS.
+"""
 from __future__ import annotations
 import asyncio, json, sqlite3
 from pathlib import Path
@@ -9,10 +16,10 @@ from tests.live._sample_workspace import SampleWorkspace
 pytestmark = pytest.mark.live
 
 _RSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
-_REMOVED = ["hierarchy", "architecture_domains", "world_model"]
+_REMOVED = ["hierarchy", "architecture_domains", "world_model",
+            "patterns", "process_flows", "service_mesh", "business_rules", "feature_map"]
 _WHATS = ["structure","status","projects","metrics","import_cycles",
-          "surprising_connections","feature_map","business_rules",
-          "process_flows","suggested_questions","service_mesh","validate"]
+          "surprising_connections","suggested_questions","validate"]
 
 
 def _sym(path: str) -> str:
@@ -27,8 +34,15 @@ def _sym(path: str) -> str:
 # ── L1: structural guards ─────────────────────────────────────────────────
 
 def test_fp0_deleted_modules():
+    # WS-B's four, plus the tier-3 modules R0c deleted. Same assertion, wider subject: the
+    # generative KB left as a unit, so the import guard that proved WS-B landed is also the
+    # cheapest proof that R0c did — a re-added kb/bpre.py fails here before anything imports it.
     for mod in ("rag_search.kb.hierarchy","rag_search.kb.federation_hierarchy",
-                "rag_search.kb.structure","rag_search.kb.world_model"):
+                "rag_search.kb.structure","rag_search.kb.world_model",
+                "rag_search.kb.bpre","rag_search.kb.bpre_ast","rag_search.kb.okf",
+                "rag_search.kb.patterns","rag_search.kb.resolve_rerank",
+                "rag_search.kb.valueflow","rag_search.kb.wiki",
+                "rag_search.graph.enrich","rag_search.graph.llm"):
         with pytest.raises(ModuleNotFoundError): __import__(mod)
 
 
@@ -57,12 +71,13 @@ def test_fp3_l1_only_in_all_dbs(sample_workspace):
     assert not bad, "non-L1 rows remain:\n" + "\n".join(bad)
 
 
-def test_fp4_no_domain_pages(service_path):
-    from rag_search.core.config import project_wiki_dir
-    d = project_wiki_dir(service_path)
-    # If wiki dir doesn't exist, there are trivially no domain pages — test passes.
-    if d.exists():
-        assert not list(d.glob("domain_*.md")), "domain_*.md found — L2 re-appeared"
+# fp4, fp9 and fp13 were three views of one property — no `domain_*.md` page anywhere, the
+# WS-B guard that L2 nesting had not come back — read off the wiki directory, the per-project
+# `/api/wiki` listing and the federation-root one. All three died with the wiki: `kb/wiki.py`
+# and `core.config.project_wiki_dir` are gone, and there is no route left to list pages from.
+# The property does not need re-pointing either, because fp3 asserts it at the source that
+# actually mattered: `communities WHERE level!=1` must be empty in every sample graph.db, and
+# a page could only ever have been rendered from such a row.
 
 
 # ── L2: sample service member ─────────────────────────────────────────────
@@ -89,16 +104,16 @@ def test_fp7_service_overview(what, service_path):
 
 
 def test_fp8_service_status(service_path):
+    # `l1_enriched_pct`/`l2_enriched_pct` were the level-1-vs-level-2 summary fill rates, and
+    # both left with the summariser: R0b removed the `enriching` state from the status ladder
+    # because structural labelling fills every summary deterministically, which would have
+    # pinned the percentage at a permanent 100. `index_state` is what discriminates now, and
+    # `hierarchy_quality` (Leiden partition quality — no LLM in it) is unchanged.
     from rag_search.server.mcp import overview as t
     d = json.loads(asyncio.run(t(service_path, "status")))
-    assert "l1_enriched_pct" in d and "hierarchy_quality" in d
-    assert "l2_enriched_pct" not in d
-
-
-def test_fp9_service_wiki(live_client, service_path):
-    r = live_client.get(f"/api/wiki?project={service_path}")
-    assert r.status_code == 200
-    assert not any("domain_" in p for p in r.json().get("pages", []))
+    assert "index_state" in d and "hierarchy_quality" in d
+    assert d["index_state"] in ("indexing", "degraded", "ready"), d["index_state"]
+    assert "l1_enriched_pct" not in d and "l2_enriched_pct" not in d
 
 
 # ── L2: federation root ──────────────────────────────────────────────────
@@ -120,23 +135,21 @@ def test_fp10_federation_search(fed_root):
 
 
 def test_fp11_federation_status(fed_root):
+    # Same re-pointing as fp8; the load-bearing half here is `members`, which proves federation
+    # expansion still resolves after R0 — the one failure mode that would have made the deletion
+    # unsafe, since BPRE's `federation_discover` and `daemon/federation.py` share a name and
+    # nothing else.
     from rag_search.server.mcp import overview as t
     d = json.loads(asyncio.run(t(fed_root, "status")))
-    assert "members" in d and d["members"] and "l1_enriched_pct" in d
-    assert "l2_enriched_pct" not in d
+    assert "members" in d and d["members"] and "index_state" in d
+    assert all("index_state" in m for m in d["members"]), d["members"][:2]
+    assert "l1_enriched_pct" not in d and "l2_enriched_pct" not in d
 
 
-@pytest.mark.parametrize("what", ["business_rules","process_flows"])
-def test_fp12_federation_features(fed_root, what):
-    from rag_search.server.mcp import overview as t
-    d = json.loads(asyncio.run(t(fed_root, what)))
-    assert isinstance(d, dict) and "error" not in d
-
-
-def test_fp13_federation_wiki_no_domain(live_client, fed_root):
-    r = live_client.get(f"/api/wiki?project={fed_root}")
-    assert r.status_code == 200
-    assert not any("domain_" in p for p in r.json().get("pages", []))
+# fp12 asked the federation root for `business_rules` and `process_flows` — two of the five
+# tier-3 overview variants R0a dropped from `_VALID`. It is not deleted so much as inverted:
+# both names are in `_REMOVED` now, so fp1 asserts the daemon *rejects* them and fp2 that
+# they are absent from `_VALID`, which is a stronger statement than the one made here.
 
 
 # ── L3: quality (@slow) ──────────────────────────────────────────────────
@@ -181,11 +194,9 @@ def test_fp17_no_llm_in_graph_handler():
         "semantic_trace re-introduced in query/graph_handler (P2 violation: LLM in query path)"
 
 
-def test_fp18_build_wiki_route_present(live_client):
-    """Phase-1b guard: /api/build_wiki route replaces /api/build_hierarchy."""
-    # /api/build_wiki with nonexistent path returns 404, not 404-for-unknown-route
-    r = live_client.post("/api/build_wiki", json={"project_path": "/nonexistent"}, timeout=10)
-    assert r.status_code in (400, 404), f"/api/build_wiki: {r.status_code} {r.text[:80]}"
-    # old route must 404
-    r2 = live_client.post("/api/build_hierarchy", json={"project_path": "/nonexistent"}, timeout=10)
-    assert r2.status_code == 404, f"/api/build_hierarchy should be gone: {r2.status_code}"
+# fp18 asserted /api/build_wiki had *replaced* /api/build_hierarchy — a Phase-1b succession
+# guard whose winning side R0a then deleted. It could not simply be inverted here: its
+# `in (400, 404)` acceptance means it stayed green against a route that no longer exists,
+# which is the shape of a guard that has quietly stopped discriminating. The surviving
+# statement lives in test_p5_server.py::test_e7_trimmed_http_surface, whose `deleted` list
+# now names /api/build_wiki, /api/wiki and /api/kb_health and demands a hard 404/405.

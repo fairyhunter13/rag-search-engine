@@ -58,7 +58,13 @@ CORE_MODULES = [
     "rag_search.embed",
     "rag_search.index.store",
     "rag_search.graph.store",
-    "rag_search.kb.wiki",
+    # kb.wiki left with tier 3. Re-pointed rather than dropped: kb/ still ships
+    # answer_cache (deterministic, no LLM — tier 2), and query/ask.py plus
+    # server/routes_chat.py both import it, so the package is still worth an
+    # import check. Dropping the row silently would have been the same stale-
+    # allowlist hole R0 has found repeatedly — this list has no exhaustiveness
+    # test, so each entry has to be re-pointed or removed by hand.
+    "rag_search.kb.answer_cache",
     "rag_search.query.search",
     "rag_search.daemon",
     "rag_search.cli",
@@ -193,30 +199,26 @@ def check_cli() -> None:
 
 
 def check_llm_provider() -> None:
-    print("\n### LLM provider (GPU = embed+rerank only; chat = claude-haiku-4-5 only; DeepSeek = KB enrichment only)")
+    print("\n### LLM provider (GPU = embed+rerank only; chat = claude-haiku-4-5 only)")
     try:
         from rag_search.core.config import QUERY_LLM_MODEL
     except ImportError as exc:
         _fail("core.config importable", str(exc))
         return
     _ok(f"QUERY_LLM_MODEL (chat, haiku-only) = {QUERY_LLM_MODEL}")
-    # DeepSeek = KB-enrichment-exclusive; not a chat fallback (HR12)
-    try:
-        from rag_search.graph.llm import deepseek_key
-        key = deepseek_key()
-        if key:
-            _ok("DEEPSEEK_API_KEY found — KB enrichment available (KB-exclusive; no chat fallback)")
-        else:
-            _fail("DEEPSEEK_API_KEY", "not found in env or ~/.config/rag-search/env — KB build will crash", required=False)
-    except Exception as exc:
-        _fail("deepseek_key()", str(exc), required=False)
-    # claude CLI is the sole chat lane; no DeepSeek fallback (F / HR10)
+    # The DEEPSEEK_API_KEY check that stood here died with tier 3, and what it gated
+    # is now the opposite of a requirement: graph/llm.py was the only module in the
+    # repo that opened an LLM URL, so a *missing* key is the normal configuration and
+    # a reader of it would be a regression. That property is asserted where it can
+    # actually fail — the tree-wide no-LLM-client guard in the live suite — rather
+    # than by a health check that would report "all clear" either way.
+    # claude CLI is the sole generative lane, and it is chat-only.
     import shutil
     claude = shutil.which("claude")
     if claude:
         _ok(f"claude CLI found at {claude} — haiku-4-5 chat lane active")
     else:
-        _warn("claude CLI not found — chat will emit SSE error (no DeepSeek fallback; KB/search unaffected)")
+        _warn("claude CLI not found — chat will emit SSE error (search/graph unaffected)")
 
 
 # ---------------------------------------------------------------------------

@@ -1,22 +1,15 @@
-"""P4 kb/ tests: wiki, answer_cache, patterns (all fast)."""
+"""P4 kb/ tests: answer_cache — the whole of what `kb/` is after tier 3 (all fast).
+
+Two of this file's three subjects were tier 3 and both are gone. `build_wiki` wrote the
+community wiki out of DeepSeek-narrated summaries; `detect_patterns` was the framework
+labeller behind `overview(what="patterns")`, the last synchronous cloud round trip on a
+query path. Neither property survives the module it tested — there is no wiki to render
+and no framework labeller to call. `answer_cache` is deterministic TTL caching with no
+LLM in it, which is why it stayed in tier 2 while the rest of the package left.
+"""
 import pytest
 
 pytestmark = pytest.mark.live
-
-
-def test_wiki_writes_pages(mini_stores, tmp_path):
-    from rag_search.graph.store import GraphStore
-    from rag_search.kb.wiki import build_wiki
-    gs = GraphStore(mini_stores["gdb"])
-    # Inject a pre-enriched community so wiki has something to write.
-    gs.upsert_community(999, level=1, title="Auth module",
-                        summary="Handles JWT authentication.", member_count=2)
-    gs.commit()
-    count = build_wiki(gs, tmp_path / "wiki")
-    gs.close()
-    assert count >= 1
-    pages = list((tmp_path / "wiki").glob("*.md"))
-    assert any("Auth module" in p.read_text() for p in pages)
 
 
 def test_answer_cache_set_get_invalidate(tmp_path):
@@ -38,14 +31,3 @@ def test_answer_cache_expired_returns_none(tmp_path):
     cd.mkdir()
     cache_set(cd, "k", "v", ttl_s=-1)  # already expired
     assert get(cd, "k") is None
-
-
-def test_patterns_detects_python_files(mini_stores):
-    from rag_search.kb.patterns import detect_patterns
-    result = detect_patterns(mini_stores["proj"])
-    assert "python" in result["languages"]
-    assert result["source_file_count"] >= 3
-    # DELIBERATE: mini-project has no external packages; LLM may return [] for
-    # frameworks and dependencies — testing structure, not real-project content.
-    assert isinstance(result["frameworks"], list)
-    assert isinstance(result["dependencies"], list)

@@ -1,12 +1,20 @@
 """Universal language-coverage guard — GPU-free, daemon-free, no embedder.
 
-Three structural invariants (sub-second each, live and not slow):
+Two structural invariants (sub-second each, live and not slow):
 
   1. is_code_language(lang) is True for every tree-sitter code language in our probe set.
-  2. extract_symbols + scan_file never raise for any supported language; they may return
-     empty results — that is correct degradation, not a failure.
-  3. _source_files in kb/bpre.py uses is_code_language() and contains no hardcoded extension
-     allowlist (prevents re-introducing the gate that ead67e4 removed).
+  2. extract_symbols never raises for any supported language; it may return an empty list —
+     that is correct degradation, not a failure.
+
+The scan_file half of this module left with tier 3, and so did the third invariant, which
+asserted kb/bpre.py::_source_files gated on is_code_language() rather than a hardcoded
+extension list. The anti-regression guard below still covers discover.py and extractor.py,
+which is where any new allowlist would now have to appear.
+
+Standing caveat, unchanged by the deletion: clause 2's "empty list is valid" is why the
+48%-of-files-yield-no-symbol gap lived undetected — an extractor returning [] for every
+language passes every case here. Phase 5's TS1 is the gate that discriminates; this one
+only proves nothing raises.
 """
 from __future__ import annotations
 
@@ -63,15 +71,9 @@ def test_extract_symbols_no_crash(lang: str, ext: str, snippet: str) -> None:
     assert isinstance(result, list), f"extract_symbols({lang!r}) returned {type(result).__name__}"
 
 
-@pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
-def test_scan_file_no_crash(lang: str, ext: str, snippet: str) -> None:
-    """scan_file must not raise for any supported language (None or empty surface is valid)."""
-    from rag_search.kb.bpre_ast import ApiSurface, scan_file
-    surf = ApiSurface()
-    result = scan_file(f"file.{ext}", snippet, lang, surf)
-    assert result is None or hasattr(result, "http_clients"), (
-        f"scan_file({lang!r}) returned unexpected type: {type(result).__name__}"
-    )
+# The scan_file no-crash sweep is gone with tier 3: it drove kb/bpre_ast.py::scan_file over the
+# same 20 probes to prove BPRE's API-surface scan never raised. There is no API-surface scan any
+# more, and extract_symbols above is the only extractor left to sweep.
 
 
 @pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
@@ -85,19 +87,9 @@ def test_extract_symbols_bounded_parity(lang: str, ext: str, snippet: str) -> No
     assert [(s.name, s.kind) for s in bounded] == [(s.name, s.kind) for s in direct]
 
 
-@pytest.mark.parametrize("lang,ext,snippet", _LANG_PROBES, ids=_IDS)
-def test_scan_file_bounded_parity(lang: str, ext: str, snippet: str) -> None:
-    """scan_file via run_bounded matches the direct call (HR39: bounded path, all grammars)."""
-    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
-    from rag_search.kb.bpre_ast import ApiSurface, scan_file
-    direct = scan_file(f"file.{ext}", snippet, lang, ApiSurface())
-    bounded = run_bounded(scan_file, (f"file.{ext}", snippet, lang, ApiSurface()), path_for_log=f"file.{ext}")
-    assert bounded != PARSE_TIMEOUT
-    if direct is None:
-        assert bounded is None
-    else:
-        assert bounded.http_clients == direct.http_clients
-        assert bounded.http_routes == direct.http_routes
+# The scan_file half of HR39's bounded-parity pair goes with it. extract_symbols is now the only
+# function run_bounded is asked to carry, and the parity case above still covers that contract for
+# all 20 grammars.
 
 
 def test_is_code_language_false_for_exclusions() -> None:
@@ -115,13 +107,11 @@ def test_is_code_language_false_for_exclusions() -> None:
 _SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "rag_search"
 # Variable names that are permitted to hold language-name sets in the core discovery/BPRE files.
 # Any NEW name indicates a new gate was added — this guard fails, preventing regression.
+# The nine bpre_spec.py names this set used to carry (_FIRST_CLASS, _CALL_KINDS, _NEW_KINDS,
+# _NOT_CALL, _PARADIGM_KINDS, _GRP_SFXS, _STR_KINDS, _HANDLER_KINDS, _V, _SCHEMES) left with tier 3
+# along with the file that defined them.
 _ALLOWED_LANG_SETS = frozenset({
     "_TEXT_LANGS", "_DATA_LANGS",  # discover.py: exclusion lists
-    "_FIRST_CLASS",                 # bpre_spec.py: bespoke opt-in tier (not a gate)
-    "_CALL_KINDS", "_NEW_KINDS", "_NOT_CALL", "_PARADIGM_KINDS", "_GRP_SFXS", "_STR_KINDS",
-    "_HANDLER_KINDS",               # bpre_spec.py: structural handler-shape node kinds
-    "_V",                           # bpre_spec.py: HTTP verb set (not language names)
-    "_SCHEMES",                     # bpre_spec.py: protocol/URI-scheme set (not language names)
 })
 _EXT_SET_RE = re.compile(
     r"""^\s*(_[A-Z_]+)\s*[=:]\s*frozenset\s*\(\s*\{[^}]*"\.[a-z]""", re.MULTILINE
@@ -133,20 +123,20 @@ _LANG_SET_RE = re.compile(
 
 
 def test_no_new_hardcoded_lang_or_ext_allowlist_in_core() -> None:
-    """Core BPRE/discovery files must not introduce new frozensets of lang names or file extensions.
+    """Core discovery/extraction files must not introduce new frozensets of lang names or extensions.
 
-    ead67e4 replaced the 19-extension allowlist in _source_files with is_code_language().
-    This guard prevents that gate from being re-introduced under a new name.
+    ead67e4 replaced a 19-extension allowlist with is_code_language(). The file that carried it
+    (kb/bpre.py) is gone with tier 3, but the gate can just as easily be re-introduced in the two
+    files that now decide what gets discovered and extracted — so the guard follows the behaviour,
+    not the old module list.
     """
     violations: list[str] = []
-    target_files = (
-        "discover.py", "extractor.py",
-        "bpre.py", "bpre_ast.py", "bpre_spec.py", "bpre_generic.py", "bpre_paradigms.py",
-    )
+    target_files = ("discover.py", "extractor.py")
     for fname in target_files:
         found = next(_SRC_ROOT.rglob(fname), None)
-        if found is None:
-            continue
+        # Not `continue`: a missing target means the guard silently stops guarding, which is the
+        # failure mode the five deleted bpre*.py entries would have had.
+        assert found is not None, f"{fname} not found under {_SRC_ROOT} — guard has no subject"
         src = found.read_text()
         for m in _EXT_SET_RE.finditer(src):
             if m.group(1) not in _ALLOWED_LANG_SETS:
@@ -161,14 +151,6 @@ def test_no_new_hardcoded_lang_or_ext_allowlist_in_core() -> None:
     )
 
 
-def test_source_files_uses_is_code_language() -> None:
-    """kb/bpre.py::_source_files must call is_code_language() (not a hardcoded ext set)."""
-    bpre = next(_SRC_ROOT.rglob("bpre.py"), None)
-    assert bpre is not None, "kb/bpre.py not found"
-    src = bpre.read_text()
-    assert "is_code_language" in src, (
-        "_source_files must gate on is_code_language() — hardcoded extension list forbidden"
-    )
-    assert '".go"' not in src or src.index('".go"') > src.index("is_code_language"), (
-        '".go" appears before is_code_language — extension allowlist may have been re-introduced'
-    )
+# The positive half of that pair asserted kb/bpre.py::_source_files called is_code_language() and
+# named no extension before it. It read the file directly, so it dies with the file; the negative
+# guard above is what carries the invariant forward.

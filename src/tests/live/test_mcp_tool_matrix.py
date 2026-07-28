@@ -4,7 +4,8 @@ Covers (no duplication of test_p5 or test_p21):
   - graph: all 7 relations (definition/callers/callees/impact/impact_narrative/path/semantic_trace)
   - search: 3 scopes (code/docs/all) + federated project_paths
   - ask: scope variants (architecture/global/feature/wiki/business)
-  - overview: patterns / metrics / projects (the 3 what= values that fail on stale index)
+  - overview: metrics / projects (the what= values that fail on a stale index; `patterns` was
+    the third and left with tier 3)
 
 Requires daemon at :8765 with ≥1 indexed project.
 """
@@ -110,9 +111,10 @@ class TestOverviewNewWhats:
         assert isinstance(data, dict), f"overview(what={what!r}) must return JSON object"
         assert data, f"overview(what={what!r}) must not return empty dict"
 
-    @pytest.mark.slow
-    def test_overview_patterns_returns_nonempty_dict(self, indexed_proj):
-        from rag_search.server.mcp import overview as overview_tool
-        data = json.loads(asyncio.run(overview_tool(indexed_proj, "patterns")))
-        assert isinstance(data, dict), "overview(what='patterns') must return JSON object"
-        assert data, "overview(what='patterns') must not return empty dict"
+    # `overview(what="patterns")` left with tier 3 — it was the last synchronous DeepSeek round
+    # trip on a query path (kb/patterns.py::_llm_frameworks via _overview.py). Its test is not
+    # re-pointed, and it is worth naming why it did not go red on its own: it asserted
+    # `isinstance(data, dict) and data`, and the rejection handle_overview now returns —
+    # {"error": "unknown what='patterns'"} — is a non-empty dict, so it stayed green whether the
+    # variant existed or not. The discriminating form is test_feature_proof.py::test_fp1, which
+    # requires the word "unknown" in the error.

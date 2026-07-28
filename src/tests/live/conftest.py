@@ -243,11 +243,13 @@ def mini_stores(embedder, tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def sample_workspace(_purge_leaked_test_state) -> SampleWorkspace:
-    """Session-scoped sample workspace: GPU-indexed fixture projects + replayed enrichment golden.
+    """Session-scoped sample workspace: GPU-indexed fixture projects.
 
     Builds shop-federation (cart/checkout/promo) + ledger-standalone under
-    ~/.local/share/rse-test-dirs. DeepSeek is suppressed; enrichment.json
-    goldens are replayed from src/tests/fixtures/sample_projects/.
+    ~/.local/share/rse-test-dirs. The four enrichment.json goldens this used to replay
+    (so a build could produce community narratives without spending DeepSeek tokens) went
+    with tier 3, along with the suppression they existed to make safe — there is no LLM in
+    the build path any more, so there is nothing left to suppress or replay.
     Teardown removes all registry entries and the temp directory.
     """
     ws = build_sample_workspace()

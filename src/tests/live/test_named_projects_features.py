@@ -4,7 +4,8 @@ test_mcp_tool_matrix.py binds to any indexed project via a single promo-svc scop
 This file proves every feature works for the 3 roles: federation member (promo-svc),
 federation root (shop-federation), and standalone (ledger-standalone). All 3 are sourced
 from sample_workspace — no real device projects used.
-No duplication of matrix tests — focuses on per-root binding and the 15 overview what= values.
+No duplication of matrix tests — focuses on per-root binding and the 8 overview what= values
+(every member of `_overview._VALID` except `validate`, which test_index_validity.py owns).
 """
 from __future__ import annotations
 
@@ -25,13 +26,17 @@ def named_projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
         "standalone": sample_workspace.ledger,
     }
 
+# feature_map / business_rules / process_flows / service_mesh (fast) and patterns (slow) left
+# with tier 3. Worth recording that none of the five went red on their own: these tests assert
+# only `isinstance(data, dict)`, and handle_overview's rejection — {"error": "unknown what=…"} —
+# is a dict, so the rows stayed green against variants that no longer exist. Whether a deleted
+# what= is rejected is asserted by name in test_feature_proof.py's fp1; what this file uniquely
+# covers is that a *surviving* what= binds for all three project roles.
 _OVERVIEW_WHATS_FAST = [
-    "structure", "status", "projects", "metrics",
-    "feature_map", "business_rules",
-    "process_flows", "service_mesh", "suggested_questions",
+    "structure", "status", "projects", "metrics", "suggested_questions",
     "surprising_connections", "import_cycles",
 ]
-_OVERVIEW_WHATS_SLOW = ["communities", "patterns"]
+_OVERVIEW_WHATS_SLOW = ["communities"]
 _SEARCH_SCOPES = ["code", "docs", "all"]
 
 
@@ -51,7 +56,7 @@ class TestNamedProjectsSearch:
 
 
 class TestNamedProjectsOverview:
-    """T3b: all 15 overview what= values return valid JSON for each named root."""
+    """T3b: all 8 overview what= values return valid JSON for each named root."""
 
     @pytest.mark.parametrize("key,what", [
         (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_FAST

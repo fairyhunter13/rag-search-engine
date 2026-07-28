@@ -2,11 +2,15 @@
 
 Verifies the event sequence:
   chat_stream POST → chunks of {type: thinking|token|done, ...}
-                   → done event has model_used ∈ {haiku|deepseek} + sources list
+                   → done event has model_used == claude-haiku-4-5 + sources list
   events/stream GET → text/event-stream, first data contains "connected"
 
 No mocks. Requires daemon at :8765 with ≥1 indexed project.
-LLM tests are @slow (full round-trip to Anthropic/DeepSeek).
+LLM tests are @slow (full round-trip to Anthropic).
+
+The `{haiku|deepseek}` union above described a fallback the chat lane stopped having long
+before tier 3 went: `_ALLOWED_MODELS` has been Haiku-only, so the docstring was advertising
+a second model that test_chat_model_is_haiku would already have failed on.
 """
 from __future__ import annotations
 

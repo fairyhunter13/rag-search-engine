@@ -16,11 +16,14 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
     ("import_cycles",        {"cycles", "cycle_count", "has_cycles"},         False),
     ("surprising_connections", {"connections"},                                False),
     ("suggested_questions",  {"questions"},                                    True),
-    ("service_mesh",         {"services"},                                     False),
-    ("feature_map",          {"features"},                                     False),
-    ("business_rules",       {"rules"},                                        False),
-    ("process_flows",        {"flows"},                                        False),
-    ("patterns",             {"frameworks"},                                   False),
+    # Five rows left with tier 3: service_mesh/{services}, feature_map/{features},
+    # business_rules/{rules}, process_flows/{flows}, patterns/{frameworks}. Each was RED the
+    # moment R0a dropped the variant from `_VALID` — handle_overview answers an unknown `what`
+    # with {"error": ...}, so `required_keys` went missing rather than empty. The property is not
+    # re-pointed here: this file asserts the *shape of an answer*, and the surviving statement
+    # about a deleted variant is that there is no answer at all, which is what
+    # test_feature_proof.py's fp1 (daemon returns "unknown") and fp2 (absent from `_VALID`)
+    # assert over exactly these five names.
     ("projects",             {"projects"},                                     True),
 ]
 

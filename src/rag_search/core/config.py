@@ -107,15 +107,12 @@ def project_graph_db(project_path: str) -> Path:
     return index_dir(project_path) / "graph.db"
 
 
-def project_wiki_dir(project_path: str) -> Path:
-    return index_dir(project_path) / "wiki"
-
-
-def root_process_db(root_path: str) -> Path:
-    """Root-level BPRE process graph (cross-service edges, processes). HR4: never in per-member graph.db."""
-    return index_dir(root_path) / "process_graph.db"
-
-
+# project_wiki_dir and root_process_db stood here and left with tier 3. Both were
+# pure path builders, so neither had a test of its own — their only callers were
+# kb/wiki.py and kb/bpre.py, and with those deleted a surviving helper would just be
+# a path nothing ever opens. The directories they named (index_dir/wiki,
+# index_dir/process_graph.db) are stale on disk for already-indexed projects; nothing
+# reads them and reconcile does not walk them, so they are inert rather than a leak.
 def federation_exclude_paths() -> frozenset[str]:
     """Resolved absolute paths excluded from federation discovery + reconcile indexing.
 

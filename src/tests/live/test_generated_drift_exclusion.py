@@ -8,10 +8,15 @@ rebuild each cycle. `is_generated_path()` now excludes them from the drift signa
 GEN1 — is_generated_path() truth table (conservative markers only).
 GEN2 — sweeps._code_source_fingerprint() is unchanged when only a *.generated.js mtime bumps;
        changes when a real source file bumps.
-GEN3 — bpre._bpre_code_sig() has the same behavior (BPRE's own reuse stamp).
+GEN4 — is_ignored_path() drops generated files for watcher + indexer + _index_files alike.
 
-Cache note: both sigs memoize on the root dir's coarse mtime, and bumping a *file* mtime
-does not change the parent dir mtime — so each helper invalidates the cache exactly as
+GEN3 asserted the identical property for `bpre._bpre_code_sig`, BPRE's own per-member reuse
+stamp — a second drift signal that had to agree with the first. It left with tier 3, and the
+property did not need re-pointing: `_code_source_fingerprint` is now the only stamp that
+decides whether a member is re-derived, and GEN2 is that assertion.
+
+Cache note: the sig memoizes on the root dir's coarse mtime, and bumping a *file* mtime
+does not change the parent dir mtime — so the helper invalidates the cache exactly as
 daemon.sweeps.on_change does before recomputing.
 """
 from __future__ import annotations
@@ -91,27 +96,3 @@ def test_gen4_is_ignored_path_drops_generated_files(safe_tmp_path):
     assert is_ignored_path(gen, root), "generated file must be dropped (no watch/index/embed)"
     assert not is_ignored_path(real, root), "real source must be kept"
     assert not is_ignored_path(svelte, root), "hand-written renderer must be kept"
-
-
-def test_gen3_bpre_code_sig_ignores_generated_churn(safe_tmp_path):
-    """GEN3: regenerating a *.generated.js does not flip BPRE's per-member reuse stamp."""
-    from rag_search.kb import bpre
-
-    member = safe_tmp_path / "member"
-    (member / "src").mkdir(parents=True)
-    (member / "wiki" / "src" / "lib").mkdir(parents=True)
-    real = member / "src" / "handler.go"
-    real.write_text("package main\nfunc H() {}\n")
-    gen = member / "wiki" / "src" / "lib" / "diagram.generated.js"
-    gen.write_text("export const d = 1;\n")
-
-    def sig() -> str:
-        bpre._invalidate_bpre_code_sig(str(member))  # mirror on_change invalidation
-        return bpre._bpre_code_sig(str(member))
-
-    base = sig()
-    future = time.time() + 120
-    os.utime(gen, (future, future))
-    assert sig() == base, "regenerating *.generated.js must NOT flip the BPRE reuse stamp"
-    os.utime(real, (future, future))
-    assert sig() != base, "editing real source MUST flip the BPRE code sig"

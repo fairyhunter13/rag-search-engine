@@ -1,4 +1,4 @@
-"""Phase 3H — config universality (HH1–HH3). Requires live GPU embedder."""
+"""Phase 3H — config universality (HH1–HH5). Requires live GPU embedder."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -77,10 +77,20 @@ def test_hh2_on_change_filters_excluded(safe_tmp_path, embedder):
     )
 
 
-def test_hh3_bpre_exclude(safe_tmp_path):
-    """HH3: excluded dir absent from _source_files BPRE walk."""
-    from rag_search.kb.bpre import _source_files
+# HH3 and HH4 used to drive kb/bpre.py::_source_files, the second walk over a project — BPRE's.
+# Both properties still matter, because the code-only walk still exists: `_code_source_fingerprint`
+# and `_extract_graph` both compose iter_files() with is_code_language(detect_language(...)), and
+# that composition is what these two now test. Written against the composition rather than a named
+# helper, because the defect worth catching is the two walks disagreeing, not a signature change.
 
+
+def _code_files(root: Path) -> set[str]:
+    from rag_search.index.discover import detect_language, is_code_language, iter_files
+    return {f.name for f in iter_files(root) if is_code_language(detect_language(f))}
+
+
+def test_hh3_code_walk_honours_exclude(safe_tmp_path):
+    """HH3: an excluded dir is absent from the code-only walk, not just from the index."""
     root = safe_tmp_path / "proj_hh3"
     root.mkdir()
     (root / "app.py").write_text("def run(): pass\n")
@@ -89,27 +99,26 @@ def test_hh3_bpre_exclude(safe_tmp_path):
     (secret / "credentials.go").write_text("package main\nfunc creds() {}\n")
     _write_config(root, _EXCLUDE_CFG)
 
-    bpre_files = _source_files(str(root))
-    bpre_strs = [str(f) for f in bpre_files]
-    assert not any("credentials.go" in p for p in bpre_strs), (
-        f"credentials.go must be excluded from _source_files; found: {bpre_strs}"
+    found = _code_files(root)
+    assert "app.py" in found, f"app.py must survive the exclude: {found}"
+    assert "credentials.go" not in found, (
+        f"credentials.go must be excluded from the code walk; found: {found}"
     )
 
 
-def test_hh4_source_files_universal_discovery(safe_tmp_path):
-    """HH4: _source_files discovers long-tail languages (lua) and excludes non-code (md/json)."""
-    from rag_search.kb.bpre import _source_files
+def test_hh4_code_walk_universal_discovery(safe_tmp_path):
+    """HH4: the code walk finds long-tail languages (lua) and excludes non-code (md/json)."""
     root = safe_tmp_path / "proj_hh4"
     root.mkdir()
     (root / "gateway.lua").write_text('http.get("/status")\n')
     (root / "README.md").write_text("# hello\n")
     (root / "config.json").write_text('{"k":"v"}\n')
     (root / "app.go").write_text("package main\n")
-    found = {f.name for f in _source_files(str(root))}
-    assert "gateway.lua" in found, f"gateway.lua missing from _source_files: {found}"
-    assert "README.md" not in found, f"README.md must not be in _source_files (text): {found}"
-    assert "config.json" not in found, f"config.json must not be in _source_files (data): {found}"
-    assert "app.go" in found, f"app.go missing from _source_files: {found}"
+    found = _code_files(root)
+    assert "gateway.lua" in found, f"gateway.lua missing from the code walk: {found}"
+    assert "README.md" not in found, f"README.md must not be a code file (text): {found}"
+    assert "config.json" not in found, f"config.json must not be a code file (data): {found}"
+    assert "app.go" in found, f"app.go missing from the code walk: {found}"
 
 
 def test_hh5_is_code_language_contract():

@@ -1,7 +1,9 @@
-"""F2: embedded <script> sub-parsing — Vue/Svelte SFC symbols, calls, and BPRE HTTP clients.
+"""F2: embedded <script> sub-parsing — Vue/Svelte SFC symbols and calls.
 
-Both grammars parse <script> as an opaque `raw_text` leaf; graph/extractor.py and
-kb/bpre_ast.py sub-parse that leaf with the js/ts grammar and remap line numbers.
+Both grammars parse <script> as an opaque `raw_text` leaf; graph/extractor.py sub-parses that
+leaf with the js/ts grammar and remaps line numbers. kb/bpre_ast.py did the same thing for BPRE's
+HTTP-client surface and left with tier 3, taking the two http_clients cases below with it — the
+remapping contract they shared is still covered by the symbol and call-line cases here.
 """
 from __future__ import annotations
 
@@ -41,16 +43,6 @@ _SVELTE_JS = (
     "\n"
     "<div>hello</div>\n"
 )
-
-_VUE_HTTP = (
-    "<script lang=\"ts\">\n"
-    "async function loadUser(id: string) {\n"
-    "  const res = await fetch(\"/api/users\");\n"
-    "  return res.json();\n"
-    "}\n"
-    "</script>\n"
-)
-
 
 def test_vue_script_symbols_have_correct_line_offset():
     """extract_symbols must find inner <script lang=ts> functions with file-relative lines."""
@@ -95,28 +87,6 @@ def test_svelte_script_symbols_and_calls():
 
     calls = dict(extract_calls_with_lines(_SVELTE_JS, "svelte"))
     assert calls.get("sum") == 3
-
-
-def test_scan_file_vue_records_http_client():
-    """BPRE process graph: fetch() inside a Vue SFC <script> must land in http_clients."""
-    from rag_search.kb.bpre_ast import ApiSurface, scan_file
-
-    ff = scan_file("Test.vue", _VUE_HTTP, "vue", ApiSurface())
-    assert ff is not None
-    assert any(path == "/api/users" for _verb, path, _ln in ff.http_clients), (
-        f"expected /api/users in http_clients, got {ff.http_clients}"
-    )
-    verb, _path, ln = next(c for c in ff.http_clients if c[1] == "/api/users")
-    assert verb == "GET"
-    assert ln == 3
-
-
-def test_scan_file_svelte_records_http_client():
-    from rag_search.kb.bpre_ast import ApiSurface, scan_file
-
-    ff = scan_file("Test.svelte", _SVELTE_JS.replace("return sum(a, b);", 'fetch("/api/items");'), "svelte", ApiSurface())
-    assert ff is not None
-    assert any(path == "/api/items" for _verb, path, _ln in ff.http_clients)
 
 
 def test_html_files_are_not_code_language():

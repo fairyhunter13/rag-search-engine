@@ -1,39 +1,38 @@
-"""Engine-wide guard: assert no code-semantic regex/keyword/mapping in Category-A paths.
+"""Engine-wide guard: no code-semantic regex anywhere outside four intrinsic-mechanism files.
 
-Category-A sites (eliminated — must stay regex-free):
-  kb/bpre.py, kb/bpre_ast.py         — structural BPRE detection
-  kb/bpre_spec.py                     — tree-sitter node-kind maps + closed HTTP-verb/scheme sets (ground truth)
-  kb/bpre_generic.py, kb/bpre_paradigms.py — generic/paradigm HTTP client-vs-route classification
-  kb/patterns.py                      — framework labelling (now LLM)
-  server/_overview.py                 — service detection (now bpre_ast Pass A)
+HR15 bans regex AND static/dynamic keyword-list / mapping-table heuristics for semantic
+inference (surface-text guessing). The doctrine outlives tier 3; what changed is that the
+guard no longer needs two categories to express it.
 
-Category-B sites (intrinsic mechanism — explicitly exempt):
+Category-B — intrinsic mechanism, explicitly exempt:
   graph/extractor.py          — tree-sitter grammar node-kind tables
   index/discover.py           — file-extension → language bootstrap
   core/registry.py            — registry path-slug plumbing (re.sub)
   core/config.py              — project-name slug plumbing (re.sub)
 
-HR15 bans regex AND static/dynamic keyword-list / mapping-table heuristics for semantic
-inference (surface-text guessing). Closed protocol vocabularies (e.g. the fixed HTTP method
-set `bpre_spec._V` and the protocol/URI-scheme set `bpre_spec._SCHEMES`), tree-sitter
-node-kind maps (`_CALL_KINDS`/`_NEW_KINDS`/`_HANDLER_KINDS`/etc.), and protocol/framework
-codegen-contract naming bound to structural facts are ground truth, not heuristics, and are
-allowed — e.g. `bpre_ast.py`'s protoc `New*Client`/`Register*Server`/`*Client`-receiver
-discovery (scoped to `.pb.go` codegen output only, feeding a structural dict lookup at call
-sites) and Spring's `*Mapping` annotation vocabulary (paired with structural argument/route
-extraction), the PHP `*Client` constructor check gated on `cls_name[:-6] in s.proto_services`
-(an actual discovered proto service, not a guess), and `_GRP_SFXS` (gRPC codegen-contract
-suffixes, likewise gated on a discovered `proto_services` match, not a bare guess).
+Category-A was the list of modules that had *eliminated* their regex and had to stay that
+way: the five kb/bpre*.py files, kb/patterns.py, and server/_overview.py's service
+detection. Every one of them left with tier 3, and with them the docstring's long
+justification of which closed vocabularies counted as ground truth rather than heuristics
+(`_V`, `_SCHEMES`, `_GRP_SFXS`, the protoc/Spring codegen-contract naming) — none of those
+tables exist any more.
 
-`_SEMANTIC_HEURISTIC_DEBT` below is now **empty** (2026-07-01): the last surviving entry,
-`bpre_spec._LANG_SPECS`/`_DEFAULT_SPEC` (15 per-language method-name keyword tables consumed
-by the generic fallback path for every non-first-class language), was retired in favor of ONE
-universal structural classifier — URL-path anchor + `_has_handler_arg` handler-shape + `_V`
-verb ground-truth + gRPC proto-binding (`_GRP_SFXS` against discovered `proto_services`) +
-`_SCHEMES` receiver-text provenance for non-verb client idioms (C# `GetAsync`, Elixir `get!`,
-Swift `dataTask`, …) — covering all 299 tree-sitter *code* grammars by construction, not by
-per-language enumeration. BPRE's Category-A modules are now fully structural/ground-truth; the
-registry may only ever shrink from here — a new, unlisted heuristic is a regression.
+**The guard got stronger, not weaker.** With Category-A empty, every module in the package
+except the four above is now checked, and checked against the *wide* pattern set
+(compile/finditer/findall/search/match/fullmatch/sub/subn) that only Category-A used to
+face — the tree-wide sweep previously screened compile/finditer alone. Measured at the
+deletion: zero hits outside the four exempt files.
+
+`_SEMANTIC_HEURISTIC_DEBT` — the registry of surviving heuristics, pinned by exact source
+substring — went with them. It had been **empty since 2026-07-01**, so its guard iterated
+nothing and could not fail; every entry it had ever held named a bpre_spec.py table.
+
+test_extraction_doctrine_e2e.py's E4 used to import this module and re-invoke four of its
+tests by name, so the ratchet ran "in the same run as the extraction proof". That file left
+with tier 3 (its fixtures read BPRE's process_graph.db) and the re-invocation is not
+re-pointed: all four names it called had already been deleted by the rewrite above, so E4
+was raising AttributeError rather than ratcheting anything. The tests below carry the
+doctrine on their own — they are `live`-marked and collected directly.
 """
 from __future__ import annotations
 
@@ -47,29 +46,6 @@ import pytest
 pytestmark = pytest.mark.live
 
 _ROOT = Path(__file__).resolve().parents[2] / "rag_search"
-
-_CATEGORY_A = [
-    "rag_search.kb.bpre",
-    "rag_search.kb.bpre_ast",
-    "rag_search.kb.bpre_spec",
-    "rag_search.kb.bpre_generic",
-    "rag_search.kb.bpre_paradigms",
-    "rag_search.kb.patterns",
-    "rag_search.server._overview",
-]
-
-# Known surviving (b)-category name-matching heuristics (HR15 debt). Each entry names an
-# *exact* source substring expected to still be present. A migration (Part 3) that removes
-# a heuristic must delete its entry here — the registry only shrinks, never grows.
-#
-# bpre_ast.py's protoc/Spring codegen-contract naming (New*Client/Register*Server/*Mapping/
-# proto-bound *Client) and bpre_spec.py's _GRP_SFXS were reclassified 2026-07-01 as ground
-# truth, not debt — see the module docstring above — because each site is scoped to codegen
-# output or paired with a structural fact (proto_services / .pb.go discovery), not a bare
-# surface-text guess. The last true entry, `_LANG_SPECS`/`_DEFAULT_SPEC` (per-language HTTP
-# method-name tables), was retired the same day by the universal structural classifier
-# (bpre_generic.py/bpre_paradigms.py) — the registry is now empty.
-_SEMANTIC_HEURISTIC_DEBT: dict[str, tuple[str, ...]] = {}
 
 _CATEGORY_B_ALLOWLIST = {
     "rag_search.graph.extractor",
@@ -86,24 +62,19 @@ def _source(mod_name: str) -> str:
     return inspect.getsource(mod)
 
 
-def test_no_code_semantic_regex_in_category_a() -> None:
-    """All Category-A modules must contain zero re.compile / re.finditer / re.sub calls."""
-    violations: list[str] = []
-    for mod_name in _CATEGORY_A:
-        src = _source(mod_name)
-        hits = _RE_PATTERNS.findall(src)
-        if hits:
-            violations.append(f"{mod_name}: {hits}")
-    assert not violations, "Code-semantic regex found in Category-A modules:\n" + "\n".join(violations)
+def test_no_code_semantic_regex_outside_allowlist() -> None:
+    """Every module but the four Category-B files must be free of the wide `re` surface.
 
-
-def test_category_b_allowlist_is_exhaustive() -> None:
-    """No module outside Category-A or Category-B allowlist may use re.compile/finditer."""
+    Replaces the Category-A/Category-B pair. The old split existed because the seven
+    Category-A modules were held to the wide pattern set while the tree-wide sweep only
+    screened compile/finditer; with Category-A gone there is no reason to screen the rest
+    of the package less strictly than the modules that left.
+    """
     violations: list[str] = []
     for py in _ROOT.rglob("*.py"):
         rel = py.relative_to(_ROOT.parent)
         mod_name = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")
-        if mod_name in {*_CATEGORY_A, *_CATEGORY_B_ALLOWLIST}:
+        if mod_name in _CATEGORY_B_ALLOWLIST:
             continue
         if "test" in mod_name:
             continue
@@ -111,63 +82,38 @@ def test_category_b_allowlist_is_exhaustive() -> None:
             src = py.read_text(errors="replace")
         except OSError:
             continue
-        hits = re.findall(r"\bre\.(compile|finditer)\b", src)
+        hits = _RE_PATTERNS.findall(src)
         if hits:
             violations.append(f"{mod_name}: {hits}")
     assert not violations, (
-        "Unexpected re.compile/finditer outside Category-A/B boundary:\n"
+        "Code-semantic regex found outside the Category-B allowlist:\n"
         + "\n".join(violations)
         + "\nAdd to Category-B allowlist if this is an intrinsic mechanism (not a code heuristic)."
     )
 
 
-def test_bpre_no_hardcoded_api_surface_patterns() -> None:
-    """kb/bpre.py must not contain hardcoded gRPC constructor patterns or method verb sets."""
-    src = _source("rag_search.kb.bpre")
-    # No hardcoded constructor prefix/suffix patterns (now discovered from pb.go)
-    assert "NewCartServiceClient" not in src, "Hardcoded gRPC constructor name found"
-    assert "RegisterCartServer" not in src, "Hardcoded gRPC registrar name found"
-    # No static publish-verb keyword set
-    assert '"Publish"' not in src or "bpre_ast" in src, "Hardcoded Publish verb found"
+def test_category_b_allowlist_has_no_dead_entries() -> None:
+    """Every allowlisted module must exist and actually use `re` — else it is stale.
 
-
-def test_semantic_heuristic_debt_registry_is_accurate() -> None:
-    """Each pinned debt entry must still be present — proves the registry matches reality.
-
-    When a Part-3 migration removes a heuristic, delete its entry here in the same change;
-    a stale entry (heuristic gone but still pinned) fails loudly instead of silently drifting.
+    Without this, an allowlist entry for a deleted module is a silent hole: the exemption
+    survives, and a future file at that import path inherits it. That is precisely how the
+    seven Category-A entries would have failed once kb/ left.
     """
-    violations: list[str] = []
-    for mod_name, needles in _SEMANTIC_HEURISTIC_DEBT.items():
+    for mod_name in sorted(_CATEGORY_B_ALLOWLIST):
         src = _source(mod_name)
-        for needle in needles:
-            if needle not in src:
-                violations.append(f"{mod_name}: pinned debt {needle!r} no longer present — remove from registry")
-    assert not violations, "\n".join(violations)
+        assert _RE_PATTERNS.search(src), (
+            f"{mod_name} is allowlisted for intrinsic `re` use but no longer uses re — "
+            "drop it from _CATEGORY_B_ALLOWLIST"
+        )
 
 
-def test_no_new_semantic_heuristics_beyond_debt_registry() -> None:
-    """bpre_generic.py / bpre_paradigms.py must not grow their own name-matching tables.
-
-    They classify via the universal structural signals (URL-anchor, _has_handler_arg,
-    _V, _GRP_SFXS/proto_services, _SCHEMES provenance) — any new per-module keyword table
-    is an unlisted heuristic and must route through structural resolution + the residue
-    ladder (resolve_rerank -> bpre._llm_link_resolve) instead.
-    """
-    for mod_name in ("rag_search.kb.bpre_generic", "rag_search.kb.bpre_paradigms"):
-        src = _source(mod_name)
-        assert "_LANG_SPECS" not in src, f"{mod_name} must not define its own language-spec table"
-        assert "frozenset({" not in src, f"{mod_name} must not define a new keyword frozenset"
-
-
-def test_bpre_ast_uses_tree_sitter_only() -> None:
-    """H4 guard: bpre_ast must use pack-native has_language/get_parser; no _TS_LANG; no re."""
-    src = _source("rag_search.kb.bpre_ast")
-    assert "_TS_LANG" not in src, "bpre_ast must NOT import _TS_LANG (removed in H4)"
-    assert "has_language" in src, "bpre_ast must use has_language() from the pack (H4)"
-    assert "get_parser" in src, "bpre_ast must use get_parser() from the pack (H4)"
-    assert "import re" not in src, "bpre_ast must not import re"
-    assert "re.compile" not in src, "bpre_ast must not use re.compile"
+# Seven guards left with tier 3, each of which read a deleted module's source directly:
+# bpre.py's hardcoded-gRPC-constructor check, the _SEMANTIC_HEURISTIC_DEBT registry pair
+# (empty since 2026-07-01, so it iterated nothing), bpre_ast's pack-native-parser check,
+# _overview's delegate-to-bpre_ast check, patterns.py's "no static _KNOWN framework map"
+# check, bpre's HR23 token-accounting check, and the valueflow/resolve_rerank/bpre
+# no-import-re trio. The HR23 one is worth naming: it gated that _llm_link_resolve fed
+# llm_token_stats() — there is no DeepSeek call left in the repo to account for.
 
 
 def test_extractor_has_no_hardcoded_lang_dicts() -> None:
@@ -185,41 +131,6 @@ def test_discover_uses_pack_language_detection() -> None:
     src = _source("rag_search.index.discover")
     assert "_EXT_LANG" not in src, "discover must not define _EXT_LANG (removed in H3)"
     assert "detect_language_from_path" in src, "discover must use detect_language_from_path (H3)"
-
-
-def test_overview_detect_services_uses_bpre_ast() -> None:
-    """server/_overview.py _detect_services must delegate to bpre_ast, not re.finditer."""
-    src = _source("rag_search.server._overview")
-    assert "bpre_ast" in src, "_detect_services must use kb.bpre_ast"
-    assert "re.finditer" not in src, "_detect_services must not use re.finditer"
-    # Match the actual `re` module import, not the substring — otherwise legitimate lines like
-    # `from ...registry import resolve_registered_root` ("import re"solve) false-positive.
-    assert not any(ln.strip() in ("import re", "import re as re") for ln in src.splitlines()), (
-        "_overview.py must not import re"
-    )
-
-
-def test_patterns_no_static_framework_map() -> None:
-    """kb/patterns.py must not contain the _KNOWN static map; framework labels via LLM."""
-    src = _source("rag_search.kb.patterns")
-    assert "_KNOWN" not in src, "Static _KNOWN framework map must be removed"
-    assert "deepseek" in src.lower() or "llm" in src.lower(), (
-        "patterns.py must use LLM for framework labelling"
-    )
-
-
-def test_bpre_link_resolve_tokens_are_accounted() -> None:
-    """HR23 guard: bpre.py's Tier-2 edge-linking DeepSeek call must feed llm_token_stats().
-
-    _llm_link_resolve previously called deepseek_extract without accumulation, making its
-    token spend invisible to overview(what='metrics') — a gap in the DIKW token-economy
-    budget that this test prevents from regressing.
-    """
-    src = _source("rag_search.kb.bpre")
-    assert "_accumulate_llm_tokens" in src, "bpre.py must import _accumulate_llm_tokens"
-    assert '_accumulate_llm_tokens(usage, "bpre_link")' in src, (
-        "_llm_link_resolve must accumulate its DeepSeek usage under the bpre_link namespace"
-    )
 
 
 def test_no_skip_markers_in_live_suite() -> None:
@@ -242,18 +153,3 @@ def test_no_skip_markers_in_live_suite() -> None:
         "Live suite must contain NO skip/xfail/skipif markers (no-skip policy):\n"
         + "\n".join(violations)
     )
-
-
-def test_no_import_re_in_resolution_path() -> None:
-    """Zero-vocab doctrine: Tier-1.5/1.75/2 resolution modules must not use re."""
-    for mod_name in (
-        "rag_search.kb.valueflow",
-        "rag_search.kb.resolve_rerank",
-        "rag_search.kb.bpre",
-    ):
-        src = _source(mod_name)
-        # match standalone "import re" or "import re\n" but not "import rerank_*"
-        assert "\nimport re\n" not in src and not src.startswith("import re\n"), (
-            f"{mod_name} must not import re"
-        )
-        assert "re.compile" not in src, f"{mod_name} must not call re.compile"
