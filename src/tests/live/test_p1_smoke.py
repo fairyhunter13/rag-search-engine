@@ -67,6 +67,32 @@ def test_reranker_padding_is_batch_longest(embedder):
         del r
 
 
+def test_reranker_serves_the_configured_onnx_export(embedder):
+    """RP2: the ONNX file actually on disk is the one _CUSTOM_RERANKERS names.
+
+    fastembed skips downloading when the repo's snapshot dir exists, whatever export it holds,
+    so a cache first populated with `onnx/model.onnx` can never acquire `onnx/model_fp16.onnx`
+    on its own — `_ensure_model_file` closes that. Asserting the load succeeded would not
+    discriminate: fp32 loads fine and is silently 1.8x slower, which is precisely the state this
+    catches. Built-in rerankers are not in the table and have nothing to check.
+    """
+    from pathlib import Path
+
+    from fastembed.common.utils import define_cache_dir
+
+    from rag_search.core.config import RERANK_MODEL
+    from rag_search.embed.embedder import _CUSTOM_RERANKERS, Reranker
+    if RERANK_MODEL not in _CUSTOM_RERANKERS:
+        return
+    model_file = _CUSTOM_RERANKERS[RERANK_MODEL][2]
+    Reranker()._init()
+    snaps = Path(define_cache_dir(None)) / f"models--{RERANK_MODEL.replace('/', '--')}" / "snapshots"
+    assert any((d / model_file).exists() for d in snaps.iterdir()), (
+        f"{RERANK_MODEL} is configured for {model_file}, which is not in {snaps} — the cache "
+        "holds a different export and fastembed will not fetch the right one on its own"
+    )
+
+
 def test_embed_returns_float32(embedder):
     """float32 out, because VectorStore's FLOAT[768] column upcasts anyway — narrowing to
     float16 first saved nothing and only added quantisation error."""
