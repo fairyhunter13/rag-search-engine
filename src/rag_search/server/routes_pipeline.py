@@ -12,7 +12,7 @@ async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
     for p in list_projects():
         if not p.enabled:
             continue
-        if sweeps._needs_index(p.path) or sweeps._needs_enrich(p.path):
+        if sweeps._needs_index(p.path) or sweeps._needs_labels(p.path):
             pending.append(p.path)
     return JSONResponse({"enabled": not sweeps._PAUSED, "pending": pending})
 

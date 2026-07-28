@@ -219,19 +219,19 @@ def status() -> None:
 
 
 def rse_index_main() -> None:
-    """One-shot onboarding: index → label communities → index docs."""
+    """One-shot onboarding: index → label communities."""
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "."
     import pathlib
     resolved = str(pathlib.Path(path).expanduser().resolve())
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import upsert_project
-    from rag_search.daemon.sweeps import _enrich_project, _index_project
+    from rag_search.daemon.sweeps import _index_project, _label_project
     print(f"Indexing {resolved}...")
     upsert_project(ProjectEntry(path=resolved, enabled=True))
     _index_project(resolved)
-    print("Enriching...")
-    _enrich_project(resolved)
+    print("Labelling communities...")
+    _label_project(resolved)
     print("Done.")
 
 
