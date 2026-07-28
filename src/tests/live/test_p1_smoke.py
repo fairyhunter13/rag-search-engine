@@ -39,6 +39,34 @@ def test_reranker_bound_to_gpu(embedder):
         del r
 
 
+def test_reranker_padding_is_batch_longest(embedder):
+    """RP1: no reranker may pad to a fixed length, and the repad must really do the work.
+
+    fastembed calls `enable_padding` only when the tokenizer has none, so a `tokenizer.json`
+    shipping `padding.strategy.Fixed` survives into inference and inflates every input to that
+    length. gte-reranker-modernbert-base pins 8000: one three-passage rerank then asks the
+    allocator for 9.2 GB and dies. The first assertion is what production must hold; the second
+    re-pins the live tokenizer and drives the real function over it, so this cannot pass by the
+    model simply never having had fixed padding ([[feedback_guard_tests_must_discriminate]]).
+    """
+    from rag_search.embed.embedder import Reranker, _unpin_tokenizer_padding
+    r = Reranker()
+    r._init()
+    try:
+        tok = r._model.model.tokenizer
+        assert tok.padding.get("length") is None, (
+            f"reranker pads every input to {tok.padding['length']} tokens — dead compute below "
+            "the truncation cap, and an allocator failure at it"
+        )
+        tok.enable_padding(length=8000, pad_id=tok.padding["pad_id"],
+                           pad_token=tok.padding["pad_token"])
+        assert _unpin_tokenizer_padding(tok) is True, "repad reported no change on fixed padding"
+        assert tok.padding.get("length") is None, "repad left the fixed length in place"
+        assert _unpin_tokenizer_padding(tok) is False, "repad must be idempotent"
+    finally:
+        del r
+
+
 def test_embed_returns_float32(embedder):
     """float32 out, because VectorStore's FLOAT[768] column upcasts anyway — narrowing to
     float16 first saved nothing and only added quantisation error."""
