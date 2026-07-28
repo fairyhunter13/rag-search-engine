@@ -1,4 +1,4 @@
-"""chat_stream (SSE) route — claude-haiku-4-5 only; no DeepSeek fallback; no local generative LLM."""
+"""chat_stream (SSE) route — claude-haiku-4-5 only; no fallback; no local generative LLM."""
 from __future__ import annotations
 
 import asyncio
@@ -29,14 +29,8 @@ def _pick_claude_env() -> dict[str, str] | None:
     executor — see _stream_answer.
     """
     try:
-        # _inject_vendor owns the vendor/docgen/src path arithmetic; reuse it
-        # rather than recomputing the relative path in a second place.
-        from rag_search.kb.docgen import _inject_vendor
-        if not _inject_vendor():
-            return None
-        from ose_docgen.accounts import pick_profile, subprocess_env  # type: ignore[import]
-        from ose_docgen.config import CLAUDE_PROFILES  # type: ignore[import]
-        chosen = pick_profile(CLAUDE_PROFILES)
+        from rag_search.core.claude_profiles import pick_profile, subprocess_env
+        chosen = pick_profile()
         if not chosen:
             return None
         return subprocess_env(chosen)
@@ -87,12 +81,12 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 async def _stream_answer(prompt: str, model_used: list[str]):
     """Yield text chunks from claude-haiku-4-5. Raises RuntimeError if CLI absent or empty output.
 
-    DeepSeek is the KB-enrichment-exclusive engine (HR12); it has no role in dashboard chat.
+    `claude -p` is the only generative engine in the system; there is no fallback.
     """
     if not _CLAUDE:
         raise RuntimeError(
-            "claude CLI unavailable — dashboard chat requires claude-haiku-4-5 "
-            "(DeepSeek is KB-enrichment-only)"
+            "claude CLI unavailable — dashboard chat requires claude-haiku-4-5, "
+            "which is the only generative engine in the system"
         )
     model_used[0] = QUERY_LLM_MODEL
     # Spread chat load across subscription profiles instead of always billing the
@@ -112,8 +106,7 @@ async def _stream_answer(prompt: str, model_used: list[str]):
     await proc.wait()
     if not output_bytes:
         raise RuntimeError(
-            "claude-haiku-4-5 yielded empty output — dashboard chat requires claude-haiku-4-5 "
-            "(DeepSeek is KB-enrichment-only)"
+            "claude-haiku-4-5 yielded empty output — dashboard chat has no fallback engine"
         )
 
 

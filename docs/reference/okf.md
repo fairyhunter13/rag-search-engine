@@ -118,4 +118,6 @@ Producers may freely extend frontmatter. Consumers MUST:
 - `src/rag_search/kb/okf.py` — RSE adapter
 - `src/tests/live/test_okf.py` — live conformance tests
 - `docs/reference/llm-drivers.md` — `claude -p` driver doctrine
-- `docs/reference/information-hierarchy.md` — docgen IH (distinct from OKF concept-graph)
+- `docs/reference/information-hierarchy.md` — the repo-agnostic IH definition (distinct from the
+  OKF concept-graph). It was docgen's governing law until docgen was deleted 2026-07-28; the page
+  itself is conceptual, not docgen documentation, so it survives.

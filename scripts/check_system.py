@@ -188,23 +188,6 @@ def check_cli() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section: vendor submodules
-# ---------------------------------------------------------------------------
-
-
-def check_vendor() -> None:
-    print("\n### Vendor submodules")
-    docgen_src = Path(__file__).parent.parent / "vendor" / "docgen" / "src"
-    if docgen_src.exists() and any(docgen_src.iterdir()):
-        _ok("vendor/docgen/src present — rag-search docgen available")
-    else:
-        _warn(
-            "vendor/docgen/src missing — rag-search docgen will silently skip. "
-            "Run: git submodule update --init --recursive"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Section: LLM provider
 # ---------------------------------------------------------------------------
 
@@ -289,7 +272,6 @@ def main() -> int:
     check_daemon()
     check_mcp_tools()
     check_cli()
-    check_vendor()
     check_llm_provider()
 
     print()

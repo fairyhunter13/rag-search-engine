@@ -35,10 +35,10 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 | P9 | Flat-L1 communities only (WS-B 2026-06-26) |
 | P10 | Every line of code is a liability |
 | P11 | Push after every commit |
-| P12 | Doc-tooling (docgen + OKF) is LLM-native via `claude -p`; no tree-sitter on the doc-tooling path |
-| P13 | Docgen + OKF = manual-trigger only; never from auto-sweep or MCP tools |
-| P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat; claude-p=doc-tooling |
-| P15 | Kill-switches (RSE_DOCGEN=0, RSE_OKF=0) → no output; no deterministic skeleton fallback |
+| P12 | Doc-tooling (OKF) is LLM-native via `claude -p`; no tree-sitter on that path (docgen's half retired 2026-07-28) |
+| P13 | OKF = manual-trigger only; never from auto-sweep or MCP tools |
+| P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat via `claude -p`, its only caller |
+| P15 | Kill-switch RSE_OKF=0 → no output; no deterministic skeleton fallback (RSE_DOCGEN retired 2026-07-28) |
 
 ## Tools
 

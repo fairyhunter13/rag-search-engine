@@ -1,6 +1,6 @@
 """Regression guard: live tests must never pick arbitrary real projects from the registry.
 
-All per-project KB/overview/wiki/ask/graph/validate/docgen/okf data tests must use
+All per-project KB/overview/wiki/ask/graph/validate/okf data tests must use
 sample_workspace (shop-federation + ledger-standalone). Real device projects are forbidden
 as test data to keep the suite machine-agnostic and the public repo free of real paths.
 
@@ -50,7 +50,6 @@ _RSE_DATA_ALLOWLIST = {
     "test_inference_lanes.py",         # reads scripts/*.py source
     "test_p20_capabilities.py",        # reads scripts/*.py source
     "test_okf.py",                     # _RSE_SRC for vendor/okf + sweeps.py source reads
-    "test_docgen_hierarchy_e2e.py",    # _RSE_SRC for vendor/docgen + sweeps.py source reads
     "test_feature_proof.py",           # _RSE_SRC for quality.py inspect read (fp16)
     "test_p5_server.py",               # _RSE_SRC for mcp.py/ask.py/routes_chat.py source reads
     "test_no_real_project_in_tests.py",  # this file
@@ -78,7 +77,7 @@ _UNSCOPED_SEARCH_ALLOWLIST = {
 }
 
 # Pattern: _RSE or _RSE_SRC used as a project_path= / project= / project_paths=[…] argument
-# on the same logical line as a daemon call (overview/search/ask/graph/wiki/validate/enrich/okf/docgen).
+# on the same logical line as a daemon call (overview/search/ask/graph/wiki/validate/enrich/okf).
 _DATA_ARG_RE = re.compile(
     r"_RSE\b.*(?:project_path|project_paths|project)\s*[=\[]"
     r"|(?:project_path|project_paths|project)\s*[=\[]\s*[^\n]*_RSE\b",

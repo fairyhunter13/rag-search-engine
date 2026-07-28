@@ -174,49 +174,6 @@ def health(json_out: bool = typer.Option(False, "--json")) -> None:
     raise typer.Exit(0 if ok else 1)
 
 
-@app.command("kb-status")
-def kb_status(project: str | None = typer.Option(None, "--project", "-p")) -> None:
-    """Show KB enrichment status per project."""
-    import requests
-
-    from rag_search.core.config import DAEMON_HOST, DAEMON_PORT
-    from rag_search.core.registry import list_projects
-    paths = [project] if project else [p.path for p in list_projects() if p.enabled]
-    for path in paths:
-        try:
-            r = requests.get(f"http://{DAEMON_HOST}:{DAEMON_PORT}/api/kb_health",
-                             params={"project": path}, timeout=5)
-            d = r.json()
-            typer.echo(f"{path}: {d.get('verdict')} ({d.get('enriched_pct', 0):.0f}%)")
-        except Exception as exc:
-            typer.echo(f"{path}: ERROR ({exc})")
-
-
-@app.command()
-def docgen(
-    path: str = typer.Argument(..., help="Project root to generate IH docs for."),
-) -> None:
-    """Generate Information Hierarchy docs for a project (manual trigger; LLM-native)."""
-    from rag_search.kb.docgen import run_docgen
-    typer.echo(f"Running docgen for {path} ...")
-    run_docgen(path)
-    typer.echo("Done.")
-
-
-@app.command()
-def okf(
-    path: str = typer.Argument(..., help="Project root to generate OKF bundle for."),
-) -> None:
-    """Generate OKF v0.1 knowledge bundle for a project (manual trigger; LLM-native)."""
-    from rag_search.kb.okf import run_okf
-    typer.echo(f"Running OKF for {path} ...")
-    result = run_okf(path)
-    written = len(result.get("written", []))
-    skipped = len(result.get("skipped", []))
-    mode = result.get("mode", "on")
-    typer.echo(f"Done. mode={mode} written={written} skipped={skipped}")
-
-
 @app.command()
 def ask(
     query: str = typer.Argument(..., help="Question to answer."),
@@ -244,31 +201,11 @@ def graph(
 @app.command()
 def overview(
     project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
-    what: str = typer.Option("structure", help="structure|communities|status|projects|patterns|metrics|..."),
+    what: str = typer.Option("structure", help="structure|communities|status|projects|metrics|..."),
 ) -> None:
     """Overview of a project (same as MCP overview tool)."""
     from rag_search.server._overview import handle_overview
     typer.echo(handle_overview(project or os.getcwd(), what))
-
-
-@app.command()
-def wiki(
-    path: str = typer.Argument(..., help="Project root to build wiki for."),
-) -> None:
-    """Build wiki pages for a project from its graph DB."""
-    from rag_search.core.config import project_graph_db, project_wiki_dir
-    from rag_search.graph.store import GraphStore
-    from rag_search.kb.wiki import build_wiki
-    gdb = project_graph_db(path)
-    if not gdb.exists():
-        typer.echo(f"Not indexed: {path}", err=True)
-        raise typer.Exit(1)
-    gs = GraphStore(gdb)
-    try:
-        n = build_wiki(gs, project_wiki_dir(path))
-        typer.echo(f"pages_written={n}")
-    finally:
-        gs.close()
 
 
 @app.command()
@@ -282,7 +219,7 @@ def status() -> None:
 
 
 def rse_index_main() -> None:
-    """One-shot onboarding: index → enrich → wiki."""
+    """One-shot onboarding: index → label communities → index docs."""
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "."
     import pathlib
