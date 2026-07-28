@@ -37,24 +37,20 @@ def test_watcher_starts_and_stops():
     w.stop(timeout=2.0)
 
 
-def test_watcher_detects_new_file(tmp_path):
-    from rag_search.daemon.watcher import Watcher
-
-    proj = str(tmp_path)
-    (tmp_path / "init.py").write_text("x = 1\n")
-    changed: list[str] = []
-    w = Watcher(on_change=lambda p, fs: changed.append(p))
-    w.watch(proj)
-    w.start()
-    time.sleep(0.15)
-    (tmp_path / "new_file.py").write_text("y = 2\n")
-    time.sleep(0.35)
-    w.stop()
-    assert changed, "watcher should have detected the new file"
-
-
 def test_watcher_inotify_fast(tmp_path):
-    """watchfiles/Rust notify must detect a new file in < 1s (kernel notification, no polling)."""
+    """watchfiles/Rust notify must detect a new file in < 1s (kernel notification, no polling).
+
+    This subsumes the `test_watcher_detects_new_file` that used to sit above it — identical setup
+    and identical assertion, but that one slept a fixed 0.35s instead of waiting on the condition,
+    giving detection a *smaller* budget than this test's deadline. So it could only ever fail where
+    this one passed, and it did: it was the flake-band member that stopped the suite under `-x`
+    while passing 3/3 in isolation, because the path it times is inotify to the watchfiles
+    generator to `_pending` to a dispatch worker, and a busy host stretches every hop.
+
+    Do not reintroduce a "does it detect at all" test beside this one. Detection within 1s implies
+    detection, and a second fixed-sleep copy adds no property — only false reds. If the sub-second
+    claim is what needs relaxing, widen this deadline here, where the number means something.
+    """
     from rag_search.daemon.watcher import Watcher
 
     proj = str(tmp_path)
