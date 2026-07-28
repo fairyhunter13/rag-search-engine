@@ -33,7 +33,7 @@ A **validator is mandatory** (2026 CWM finding): multi-step rollout degrades via
 
 | Repo | Regime | Executor |
 |---|---|---|
-| **RSE (rag-search-engine)** | **Governance/spec only** — the "domain" of RSE *is* the development rules; no separate business domain to simulate. State = codebase + invariants/laws. Action = a diff/change. Guard = does the diff satisfy the preconditions (P0–P11)? Delta = resulting conformance verdict. Planner = which change-sequences are permitted. Validator = `check_world_model.py` (rejects diffs that violate L1 invariants). | `scripts/check_world_model.py` |
+| **RSE (rag-search-engine)** | **Governance/spec only** — the "domain" of RSE *is* the development rules; no separate business domain to simulate. State = codebase + invariants/laws. Action = a diff/change. Guard = does the diff satisfy the preconditions (P0–P18, of which P7, P12, P13 and P15 are retired — the register keeps retired ids so numbering is never reused)? Delta = resulting conformance verdict. Planner = which change-sequences are permitted. Validator = `check_world_model.py` (rejects diffs that violate L1 invariants). | `scripts/check_world_model.py` |
 | **companion-governance-repo** | **Governance/spec + execution** — governance/spec layer (repo invariants) **plus** an executable domain world model. State = `SimState` (commitments/call-offs/returns/transfers/inspections/invoices/SOH). Actions = domain commands (CreateCommitment, PostCallOff, …). Planner = BFS `plan(state, goal)`. Validator = `--validate` mode in `simulate.py`. | `docs/world-model/simulate.py` |
 
 **One shared `model.yaml` schema, two profiles.** `scripts/gen_world_model_skills.py` and `scripts/check_world_model.py` are parameterized per repo (governance-only profile for RSE; governance+execution profile for companion repo) — one tool, two profiles, not two separate generators.
@@ -75,4 +75,6 @@ A **validator is mandatory** (2026 CWM finding): multi-step rollout degrades via
 - `companion-governance-repo/docs/world-model/SPEC.md` — companion repo governance+execution WM narrative
 - `companion-governance-repo/docs/world-model/simulate.py` — companion repo executable planner + validator
 - `scripts/check_world_model.py` — conformance checker (both profiles)
-- `docs/reference/llm-drivers.md` — doc-tooling driver doctrine
+- `docs/reference/llm-drivers.md` — the `claude -p` chat lane and its profile selection *(was "doc-tooling driver doctrine" until 2026-07-28; doc-tooling is deleted and that page was rewritten down to the one live subsystem it documented)*
+
+**Kept, not deleted, on 2026-07-28.** The tier-3 deletion plan listed this page for removal alongside `okf.md` on the grounds that it "documents only deleted subsystems". It does not: it defines *what a world model is*, repo-agnostically, and RSE's own world model — `docs/world-model/model.yaml`, `scripts/check_world_model.py`, the generated `.claude/skills/world-model.md` — is tier-2 governance machinery that survives whole. Only the two cross-references above named anything that left.

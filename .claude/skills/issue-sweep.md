@@ -42,10 +42,10 @@ echo "tracebacks:       $(grep -c 'Traceback' $LOG)"
 echo "GPU OOM:          $(grep -ic 'out of memory\|OOM\|CUDA error' $LOG)"
 ```
 `curl -s http://localhost:8765/api/metrics` — check:
-- `cublas.hard_cooldowns_entered > 0` → ONNX thrash (high severity)
 - `chat_stream.stream_error_count > 0` → streaming failures
 - `error_by_intent` non-empty → intent-routing errors
-- `gpu_temp_c > 85` → thermal throttle active
+- `gpu_temp_c > 85` → the driver's own throttle is engaging (observability; nothing in
+  `src/` sleeps on this — check `nvidia-smi -q -d PERFORMANCE` for `clocks_event_reasons`)
 
 Flag if embedding-model reload count > 10 (indicates session eviction storm).
 
@@ -57,10 +57,11 @@ Flag if embedding-model reload count > 10 (indicates session eviction storm).
 ```
 Use `/run-all-tests` for the full live suite when investigating a known failure.
 
-### 1c. Data / KB health
-```bash
-rag-search kb-status --json              # per-project DONE/PENDING
-```
+### 1c. Data / index health
+`overview(what='status')` per project — `index_state` must be `ready`, not `indexing` or
+`degraded`. This replaces the `rag-search kb-status --json` CLI command, which left with tier 3
+on 2026-07-28 along with the `/api/kb_health` endpoint it was a client for.
+
 `curl -s "http://localhost:8765/api/storage_health?project=..."` — check:
 - `stale_index_dirs > active_index_count + 2`
 - `wal_bytes > 64MB`

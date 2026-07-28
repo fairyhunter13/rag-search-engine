@@ -1,6 +1,8 @@
 # Information Hierarchy — Canonical Definition (June 2026)
 
-> **Status:** reference — repo-agnostic, machine-verified by `check_world_model.py`. Do not conflate with Information Architecture (structure) or Visual Hierarchy (rendering).
+> **Status:** reference — repo-agnostic. Do not conflate with Information Architecture (structure) or Visual Hierarchy (rendering).
+>
+> *Corrected 2026-07-28: this line used to claim the page was "machine-verified by `check_world_model.py`". It is not — that checker reads `docs/world-model/model.yaml` and nothing else (`scripts/check_world_model.py:14`). The §5 checklist below is a rubric a reader applies by hand, not a gate that runs.*
 
 ---
 
@@ -27,7 +29,7 @@ The name "hierarchy" is precise: Wurman (1989, *Information Anxiety*, LATCH fram
 1. **Value/generality spine.** Categories are ranked by generality (broadest = most primary). Labels: **Primary** (most general), **Secondary**, **Tertiary** (most specific leaf).
 2. **Drill-down / roll-up traversal.** Drill-down = root→leaf, general→specific, finer granularity (Oracle/TIBCO OLAP). Roll-up = leaf→root, specific→general, coarser aggregation. Both operators must be named and supported.
 3. **Importance ranking, not structural ordering.** Alphabetical / temporal / spatial ordering is not a hierarchy (Wurman LATCH distinguishes all five). A hierarchy requires an explicit value judgment.
-4. **`[code: file:line]` grounding (doc-tooling law).** Every claim about a codebase must cite a real file:line that was actually read. Claims without resolvable citations are hallucinated structure and must be rejected by the citation-resolution gate.
+4. *(retired 2026-07-28 — **`[code: file:line]` grounding**, the doc-tooling law: every claim about a codebase had to cite a real file:line, and the citation-resolution gate rejected the rest as hallucinated structure. It was never one of the three sourced properties above; it was a local law that existed because a generator wrote prose about code. Doc-tooling is deleted, so there is no generated prose to ground and no gate to reject it. The number is kept rather than reused. **The lesson survives its subject:** hallucinated structure was worth guarding against precisely because nothing downstream could tell it from the real thing — which is why RSE now has no generative documentation layer at all.)*
 
 ---
 
@@ -68,14 +70,16 @@ IA's labeling, navigation, and search systems appear **once**, under §4, as sup
 | Drill-down/roll-up named as §2 | Appears immediately after the tree spine |
 | Visual ranking present as §3 | Framed as "rendering of the generality tree"; tab/column order by importance |
 | IA systems subordinate under §4 | Labeling/navigation/search collapsed under one "## Supporting IA systems" heading |
-| Every claim code-grounded | All `[code: file:line]` citations resolve (plain file read + content-substring match) |
+| ~~Every claim code-grounded~~ | *retired 2026-07-28 with property 4 — the citation-resolution gate went with doc-tooling* |
 | No IA/IH conflation | No co-equal Labeling / Navigation / Search headings at §1/§2/§3 level |
 
 ---
 
 ## See also
 
-- `docs/info-hierarchy.md` — RSE's DIKW doctrine ladder (how RSE spends LLM tokens at each rung)
+- `docs/info-hierarchy.md` — RSE's DIKW doctrine ladder *(was "how RSE spends LLM tokens at each rung" until 2026-07-28; every rung now reads `$0` — the climb is deterministic end to end, so what the page documents is where the **compute** goes, not the tokens)*
 - `docs/reference/world-model.md` — canonical WM definition
-- `docs/reference/llm-drivers.md` — doc-tooling LLM driver doctrine
-- `docs/CONFORMANCE_EVALUATION.md` — current-state scorecard + gap map for this repo
+- `docs/reference/llm-drivers.md` — the `claude -p` chat lane and its profile selection *(was "doc-tooling LLM driver doctrine"; doc-tooling is deleted and that page was rewritten down to the one live subsystem it documented)*
+- `docs/CONFORMANCE_EVALUATION.md` — dated verification record for this repo
+
+**Kept, not deleted, on 2026-07-28** — the same call, for the same reason, as `world-model.md`. The tier-3 plan's "documents only deleted subsystems" row does not describe this page: it defines *what an information hierarchy is*, from Wurman/IxDF/NN-g, and RSE's own hierarchy (`docs/info-hierarchy.md`) survives whole — it lost its prices, not its rungs. Only property 4 named something that left, and it was an import from doc-tooling rather than one of the sourced properties.

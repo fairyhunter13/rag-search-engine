@@ -12,9 +12,9 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 
 | Layer | What | Where in RSE |
 |-------|------|-------------|
-| **L1** | Architecture invariants (laws — what changes are permitted) | §1a + `model.yaml` P0–P15 in `federation-and-search-engine.md` |
+| **L1** | Architecture invariants (laws — what changes are permitted) | §1a + `model.yaml` P0–P18 in `federation-and-search-engine.md` |
 | **L2** | Components — capability→module→operation map | `src/rag_search/{core,embed,index,graph,kb,query,server,daemon}/` |
-| **L3** | Behavior specs — HRs, invariants, workflows | §13b HR1–HR31 in `federation-ops-and-invariants.md` |
+| **L3** | Behavior specs — HRs, invariants, workflows | §13b HR1–HR40 in `federation-ops-and-invariants.md` |
 | **L4** | Code patterns & generation rules | `model.yaml` L4_patterns; enforced by `test_no_code_semantic_regex.py` |
 
 `model.yaml` in this directory is the machine-readable instantiation.
@@ -24,33 +24,34 @@ This is a development-governance artifact. It lives in `docs/` and `scripts/`; i
 | ID | Law |
 |----|-----|
 | P0 | GPU-only inference; CPU fallback fatal |
-| P1 | No local generative LLM; KB=DeepSeek; chat=claude-haiku-4-5 |
+| P1 | No local generative LLM; chat=claude-haiku-4-5 via `claude -p`, the one generative lane left |
 | P2 | MCP query path: embed+rerank only (no LLM) |
 | P3 | Federation = query-time union; no cross-repo edges |
-| P4 | Event-driven indexing; no periodic sweeps |
+| P4 | Event-driven indexing; the heavy pass runs only on code-source-fingerprint drift; no periodic sweeps |
 | P5 | Two-stage retrieval: vector recall → cross-encoder rerank |
-| P6 | No heuristics: tree-sitter + LLM only |
-| P7 | Public-repo hygiene: no absolute paths in artifacts |
+| P6 | No heuristics: tree-sitter only, package-wide, outside four intrinsic-mechanism files |
+| ~~P7~~ | *retired 2026-07-28* — it scoped hygiene to the artifact writers, and RSE writes no artifacts now; P18 is the whole-tree facet |
 | P8 | No mocks in tests |
-| P9 | Flat-L1 communities only (WS-B 2026-06-26) |
+| P9 | Flat-L1 communities only (WS-B 2026-06-26) — igraph `community_fastgreedy`, no LLM |
 | P10 | Every line of code is a liability |
 | P11 | Push after every commit |
-| P12 | Doc-tooling (OKF) is LLM-native via `claude -p`; no tree-sitter on that path (docgen's half retired 2026-07-28) |
-| P13 | OKF = manual-trigger only; never from auto-sweep or MCP tools |
-| P14 | LLM lanes: GPU=embed+rerank; DeepSeek=KB-enrichment; claude-haiku-4-5=chat via `claude -p`, its only caller |
-| P15 | Kill-switch RSE_OKF=0 → no output; no deterministic skeleton fallback (RSE_DOCGEN retired 2026-07-28) |
+| ~~P12~~, ~~P13~~, ~~P15~~ | *retired 2026-07-28 with tier 3* — all three governed doc-tooling (OKF's LLM-native rule, its manual-trigger-only rule, and the two kill-switches) |
+| P14 | Two LLM lanes: GPU=embed+rerank (non-generative); claude-haiku-4-5=chat via `claude -p`, its only caller |
+| P16 | Idle frugality — < 1 % CPU idle, models unload, active work cgroup-capped at 1 core |
+| P17 | File-watching is OS-notification driven; no hand-rolled poll loop |
+| P18 | Public-release & device-neutrality: no secrets, no real device paths, permanent brand lock |
 
 ## Tools
 
 ```bash
 # Check working-tree conformance (GPU-free, daemon-free):
-python scripts/check_world_model.py
+.venv/bin/python scripts/check_world_model.py
 
 # Check a specific diff:
-python scripts/check_world_model.py --base HEAD~1 --head HEAD
+.venv/bin/python scripts/check_world_model.py --base HEAD~1 --head HEAD
 
 # Regenerate skills from this model:
-python scripts/gen_world_model_skills.py
+.venv/bin/python scripts/gen_world_model_skills.py
 ```
 
 ## Relationship to §1a/§13b
