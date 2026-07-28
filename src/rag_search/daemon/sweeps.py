@@ -320,6 +320,13 @@ def _index_set_drift(path: str) -> tuple[list, list[str]]:
     empty `__init__.py`) still gets a hash, so it is processed-and-done rather than eternally
     missing — 68 of the fleet's 446 were exactly that, and keying on `chunks` would requeue them
     every pass forever, the never-satisfiable gate `_graph_needs_full_index` had to be rescued from.
+
+    The two sides are deliberately asymmetric. Orphans come from `file_hashes` UNION `chunks`,
+    because what keeps retrieving is a *chunk*, and a chunk row can outlive its hash row: 2,091 of
+    redacted-name-10's 5,242 indexed paths had no hash row at all, written by an index generation that
+    pre-dates the table. Keying the orphan side on `file_hashes` alone would leave every one of
+    those permanently unpurgeable the moment discovery stopped yielding it — the exact defect this
+    function exists to close, reintroduced through the other door.
     """
     from pathlib import Path
 
@@ -337,13 +344,32 @@ def _index_set_drift(path: str) -> tuple[list, list[str]]:
     vs = VectorStore(vdb, migrate=False)
     try:
         known = {p for (p,) in vs._con.execute("SELECT path FROM file_hashes")}
+        charted = {p for (p,) in vs._con.execute("SELECT DISTINCT path FROM chunks")}
     except Exception:
         return [], []
     finally:
         vs.close()
     if not known:
         return [], []  # never indexed, or pre-dates the hash table: _needs_index's business
-    return [Path(p) for p in live if p not in known], sorted(known - set(live))
+    live_set = set(live)
+    return (
+        [Path(p) for p in live if p not in known and _readable(p)],
+        sorted((known | charted) - live_set),
+    )
+
+
+def _readable(path: str) -> bool:
+    """Would an index pass be able to produce anything for this path?
+
+    `index_files` purges an unreadable path and returns *without stamping a hash* — it has no
+    content to hash. So a discoverable file that cannot be read (a broken symlink, a mode-000
+    file, a FIFO) is reported unindexed, handed over, purged, and reported again on the next
+    pass, forever: the never-satisfiable gate SD3 guards against for zero-chunk files, in the one
+    shape a zero-chunk file does not cover. Screening here keeps the trigger convergent and keeps
+    its log line meaning "there is work to do" rather than becoming a permanent alarm.
+    """
+    import os
+    return os.path.isfile(path) and os.access(path, os.R_OK)
 
 
 def _purge_paths(project_path: str, paths: list[str]) -> None:
