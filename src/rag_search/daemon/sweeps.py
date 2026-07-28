@@ -5,6 +5,7 @@ import hashlib
 import logging
 import shutil
 import threading
+import time
 
 _PAUSED: bool = False
 _LANE_DEBOUNCE_S: float = 45.0  # min seconds between graph-lane passes per project after a change
@@ -111,7 +112,21 @@ def _source_fingerprint(path: str) -> str:
 # Code-only fingerprint memo (HR38): same 'relpath:mtime' shape as _fingerprint_cache but
 # filtered to is_code_language files only, so the labelling gate and the graph re-derive gate
 # are both code-only — non-code churn (docs/config/images) never wakes either.
-_code_fingerprint_cache: dict[str, tuple[float, str, float]] = {}
+_code_fingerprint_cache: dict[str, tuple[float, str, float, list[str]]] = {}
+
+# How long a scan's fingerprint, watermark and discoverable-file set may be reused before the
+# tree is walked again. Bounds the cost of being honest; it does not bound the drift, which the
+# walk itself is what detects. Read per call, not at import, so a gate can shorten it rather
+# than sleep out the real one.
+_CODE_SCAN_TTL_S = 300.0
+
+
+def _code_scan_ttl() -> float:
+    import os
+    try:
+        return float(os.environ.get("RSE_CODE_SCAN_TTL_S", _CODE_SCAN_TTL_S))
+    except ValueError:
+        return _CODE_SCAN_TTL_S
 
 
 def _code_source_fingerprint(path: str) -> str:
@@ -138,17 +153,33 @@ def _code_scan(path: str) -> tuple[str, float]:
         iter_files,
     )
     root = Path(path)
-    try:
-        coarse = root.stat().st_mtime
-    except OSError:
-        coarse = 0.0
+    # The memo is keyed on elapsed time, NOT on the root directory's mtime.
+    #
+    # It used to be keyed on `root.stat().st_mtime`, which cannot observe the changes it is
+    # memoising: a directory's mtime moves only when its *direct* entries change, so every edit
+    # nested below the project root left the key identical and returned a frozen fingerprint and
+    # a frozen watermark. Measured on the live fleet before this changed — rag-search-engine's key
+    # was 9.1 hours older than its newest file, redacted-name-10's 1.5 hours — and since the baseline
+    # `_vectors_content_stale` compares against keeps advancing, a frozen watermark reads "clean"
+    # permanently. `_graph_stale` was frozen by the same key.
+    #
+    # A walk is the only thing that can answer this honestly, so the cache now just bounds how
+    # often we pay for one: 43 s of stat-walking for all 160 projects, against a reconcile cadence
+    # measured in half-hours.
+    now = time.monotonic()
     cached = _code_fingerprint_cache.get(path)
-    if cached is not None and cached[0] == coarse:
+    if cached is not None and (now - cached[0]) < _code_scan_ttl():
         return cached[1], cached[2]
     parts: list[str] = []
     newest = 0.0
+    seen: list[str] = []
     try:
         for f in iter_files(root, federation_mode=True):
+            # Every discoverable file, before the code-only filter below: this is the set an
+            # index pass would visit, and `_index_set_drift` compares it against what the store
+            # has actually processed. Collected here rather than in a second walk because this
+            # loop already visits all of them and then throws the non-code ones away.
+            seen.append(str(f))
             if not is_code_language(detect_language(f)):
                 continue
             if is_generated_path(f.name):
@@ -164,8 +195,15 @@ def _code_scan(path: str) -> tuple[str, float]:
         pass
     parts.sort()
     sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
-    _code_fingerprint_cache[path] = (coarse, sig, newest)
+    _code_fingerprint_cache[path] = (now, sig, newest, seen)
     return sig, newest
+
+
+def _discoverable(path: str) -> list[str]:
+    """Every file an index pass would visit for this project, off `_code_scan`'s walk."""
+    _code_scan(path)
+    cached = _code_fingerprint_cache.get(path)
+    return list(cached[3]) if cached else []
 
 
 # Watermark: the newest source mtime the vectors in a store were built from.
@@ -266,6 +304,68 @@ def _vectors_content_stale(path: str) -> list:
     except Exception:
         pass
     return out
+
+
+def _index_set_drift(path: str) -> tuple[list, list[str]]:
+    """(files discoverable but never processed, processed paths no longer discoverable).
+
+    The completeness check `_vectors_content_stale` is not. That one asks "has anything changed
+    since I last ran" — but the index's contents are decided by discovery policy, not only by file
+    writes, so a lowered size cap or a newly excluded suffix retroactively changes what should be
+    indexed and no comparison of timestamps can notice, in either direction. Measured on the live
+    fleet the day this landed: 42,952 chunks indexed that discovery rejects today, and 378 files
+    discoverable and never indexed, with every existing check reporting it perfectly converged.
+
+    Compared against `file_hashes`, NOT `chunks`: a file that legitimately chunks to nothing (an
+    empty `__init__.py`) still gets a hash, so it is processed-and-done rather than eternally
+    missing — 68 of the fleet's 446 were exactly that, and keying on `chunks` would requeue them
+    every pass forever, the never-satisfiable gate `_graph_needs_full_index` had to be rescued from.
+    """
+    from pathlib import Path
+
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+
+    vdb = project_vector_db(path)
+    if not vdb.exists():
+        return [], []
+    live = _discoverable(path)
+    if not live:
+        # An empty walk means the tree is gone or unreadable, not that every indexed file was
+        # deleted. Repairing on that reading would purge a whole project on a transient error.
+        return [], []
+    vs = VectorStore(vdb, migrate=False)
+    try:
+        known = {p for (p,) in vs._con.execute("SELECT path FROM file_hashes")}
+    except Exception:
+        return [], []
+    finally:
+        vs.close()
+    if not known:
+        return [], []  # never indexed, or pre-dates the hash table: _needs_index's business
+    return [Path(p) for p in live if p not in known], sorted(known - set(live))
+
+
+def _purge_paths(project_path: str, paths: list[str]) -> None:
+    """Drop every trace of paths the index holds but discovery no longer yields.
+
+    Not routed through `_index_files`: most of these files still exist and are perfectly
+    readable — they are excluded by policy, not gone — so handing them to `index_files` would
+    read them straight back in. Only an explicit delete expresses "should not be indexed".
+    """
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+
+    vdb = project_vector_db(project_path)
+    if not vdb.exists():
+        return
+    vs = VectorStore(vdb)
+    try:
+        for p in paths:
+            vs.delete_by_path(p)
+        vs.flush()
+    finally:
+        vs.close()
 
 
 def _graph_needs_full_index(gs) -> bool:  # gs: GraphStore
@@ -660,6 +760,33 @@ def reconcile_projects() -> None:
                 _index_files(entry.path, missed)
             except Exception as exc:
                 log.warning("%s: content-freshness reindex failed: %s", entry.path, exc)
+        # The fourth trigger, and the only one that is a completeness check rather than a change
+        # detector. The three above all reduce to "something is newer than the last pass", which
+        # is blind by construction to drift caused by discovery *policy* — a size cap, an
+        # exclusion, a newly supported language — because no file's mtime moves when the rule
+        # about it does. Level-triggered, in the Kubernetes sense: it compares desired against
+        # actual and repairs the difference, so it also absorbs whatever the watcher's debounce
+        # dropped instead of needing to have observed the event.
+        if not needs_idx and not needs_vectors:
+            try:
+                unindexed, orphaned = _index_set_drift(entry.path)
+            except Exception as exc:
+                unindexed, orphaned = [], []
+                log.warning("%s: index set check failed: %s", entry.path, exc)
+            if orphaned:
+                log.info("%s: purging %d indexed path(s) discovery no longer yields",
+                         entry.path, len(orphaned))
+                try:
+                    _purge_paths(entry.path, orphaned)
+                except Exception as exc:
+                    log.warning("%s: orphan purge failed: %s", entry.path, exc)
+            if unindexed:
+                log.info("%s: %d discoverable file(s) never indexed — indexing them",
+                         entry.path, len(unindexed))
+                try:
+                    _index_files(entry.path, unindexed)
+                except Exception as exc:
+                    log.warning("%s: set-drift reindex failed: %s", entry.path, exc)
         # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
         if not needs_idx and not entry.federation:
             gdb = project_graph_db(entry.path)
