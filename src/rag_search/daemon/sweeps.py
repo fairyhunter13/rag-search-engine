@@ -1,47 +1,33 @@
-"""Background sweep jobs: maintenance; event-driven on_change KB enrich."""
+"""Background sweep jobs: maintenance; event-driven on_change graph re-derive and labelling."""
 from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import shutil
 import threading
 
-# Max DeepSeek completion tokens spent on L1 community narration per _enrich_project run.
-# Prevents runaway cost on unexpectedly large projects.  Default 50k ≈ ≤250 head communities.
-_ENRICH_BUDGET_TOKENS: int = int(os.environ.get("RSE_ENRICH_BUDGET_TOKENS", "50000"))
-
 _PAUSED: bool = False
-_KB_DEBOUNCE_S: float = 45.0  # min seconds between KB rebuilds per project after a file change
-_BPRE_CASCADE_DEBOUNCE_S: float = 45.0  # min seconds between owning-root BPRE/federation regens
+_LANE_DEBOUNCE_S: float = 45.0  # min seconds between graph-lane passes per project after a change
 _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
 _INCREMENTAL_COMPACT_AT: int = 50  # incremental graph passes before one authoritative re-derive
-_last_kb_enrich: dict[str, float] = {}
+_last_lane_run: dict[str, float] = {}
 _last_index_fail: dict[str, float] = {}
 # Files whose graph rows are owed but whose event lost the debounce race, per project. The
-# debounce *drops* events rather than queueing them, which cost only a delayed enrich before the
-# graph rode this gate: enrich is project-scoped, so the next event redid the same work. The
+# debounce *drops* events rather than queueing them, which cost only a delayed labelling pass
+# before the graph rode this gate: labelling is project-scoped, so the next event redid it. The
 # graph path is file-list-scoped, and it stamps source_sig as if the whole tree were re-derived —
 # so a dropped list is invisible to _graph_stale afterwards and only the compaction counter ever
 # recovers it. Measured live: a delete 26s behind an add left a symbol for a deleted file while
 # the stored sig matched the tree exactly.
 _pending_graph_files: dict[str, set[str]] = {}
-_last_owning_process_regen: dict[str, float] = {}  # debounce per federation root
-_last_owning_federation_regen: dict[str, float] = {}  # debounce per federation root
-_bpre_state: dict = {"last_run": None, "edge_count": 0, "last_error": None}
 # Source-fingerprint memo: path → (coarse_dir_mtime, sig). Avoids re-walking unchanged projects.
 _fingerprint_cache: dict[str, tuple[float, str]] = {}
-# Drift gate: path → sig at last successful _enrich_project. Skips KB cascade when unchanged.
-_last_enriched_sig: dict[str, str] = {}
-# Set while reconcile_projects() is running a bulk pass. Suppresses per-member BPRE fan-out
-# (_regen_owning_processes / self-BPRE in _enrich_project) so the reconcile root-pass is the
-# sole BPRE trigger during bulk reconcile — avoids rebuilding the same root repeatedly on a
-# mid-pass-shifting source sig.
-_reconcile_active = threading.Event()
-# Serializes CPU-bound KB work (community recompute / wiki / BPRE) across the
-# watcher and reconcile threads so at most one heavy pass runs at a time — caps daemon CPU at
+# Drift gate: path → sig at last successful _label_project. Skips the heavy pass when unchanged.
+_last_labelled_sig: dict[str, str] = {}
+# Serializes CPU-bound graph work (symbol extraction / community recompute / labelling) across
+# the watcher and reconcile threads so at most one heavy pass runs at a time — caps daemon CPU at
 # ~one core instead of pinning two concurrently. Never held around index/embed or GPU queries.
-_KB_HEAVY_LOCK = threading.Lock()
+_HEAVY_LOCK = threading.Lock()
 
 log = logging.getLogger(__name__)
 
@@ -105,9 +91,8 @@ def _source_fingerprint(path: str) -> str:
 
 
 # Code-only fingerprint memo (HR38): same 'relpath:mtime' shape as _fingerprint_cache but
-# filtered to is_code_language files only, mirroring kb.bpre._bpre_code_sig (HR36) so the
-# enrich/wiki/BPRE cascade gate and the graph re-derive gate are code-only like BPRE's own
-# reuse stamp — non-code churn (docs/wiki/config/images) never wakes either.
+# filtered to is_code_language files only, so the labelling gate and the graph re-derive gate
+# are both code-only — non-code churn (docs/config/images) never wakes either.
 _code_fingerprint_cache: dict[str, tuple[float, str]] = {}
 
 
@@ -375,9 +360,9 @@ def _reindex_vectors(project_path: str) -> None:
     """Rebuild only the vector index, leaving the graph and its summaries intact.
 
     An embed-signature drift invalidates vectors and nothing else — chunk shape has
-    no bearing on the tree-sitter graph or the LLM narration derived from it. Routing
-    drift through _index_project would gs.clear() the graph and force every community
-    to be re-narrated, spending a fleet's worth of DeepSeek calls to fix a chunking bug.
+    no bearing on the tree-sitter graph derived from it. Routing drift through
+    _index_project would gs.clear() the graph and force a full re-extract and
+    re-cluster of the whole project to fix a chunking bug.
     """
     from pathlib import Path
 
@@ -425,8 +410,14 @@ def _needs_index(path: str) -> bool:
         return True
 
 
-def _needs_enrich(path: str) -> bool:
-    """True if any community in this project's graph is missing a summary."""
+def _needs_labels(path: str) -> bool:
+    """True if any community in this project's graph is missing a summary.
+
+    Still terminates now that labelling is structural: label_community_structural writes a
+    templated summary ("N symbol(s) (kinds) from files. Primary: …"), never NULL or "", so a
+    completed pass always clears this gate. If it ever stopped writing one, reconcile would
+    spin forever with nothing in the journal — which is why DK4a asserts this directly.
+    """
     import sqlite3
 
     from rag_search.core.config import project_graph_db
@@ -445,12 +436,8 @@ def _needs_enrich(path: str) -> bool:
 
 
 def reconcile_projects() -> None:
-    """Idempotent: discover+register members, index any unindexed/stalled project, enrich any
+    """Idempotent: discover+register members, index any unindexed/stalled project, label any
     project with missing community summaries (any level).  Safe to call repeatedly.
-
-    While running, suppresses per-member BPRE fan-out (_reconcile_active) so the federation
-    root-pass below is the sole BPRE trigger for a bulk pass — see Part D / sweeps.py module
-    docstring for why (avoids rebuilding the same root repeatedly on a mid-pass-shifting sig).
     """
     if _PAUSED:
         # Suspension is a state, not a discard (cf. Flux `suspend`) — but _PAUSED is a bare
@@ -464,96 +451,69 @@ def reconcile_projects() -> None:
     from rag_search.daemon.federation import register_all_members
     from rag_search.graph.store import GraphStore
 
-    _reconcile_active.set()
     try:
+        register_all_members()
+    except Exception as exc:
+        log.warning("reconcile member-discovery: %s", exc)
+
+    from rag_search.core.config import is_federation_excluded
+
+    # Most-recently-touched projects first. The pass is one linear walk with no ordering,
+    # and it is startup-once by design, so an unordered registry starves exactly the repos
+    # being worked on: a measured pass here ground through 198 projects for 7.6 h without
+    # reaching either repo edited that day. One sort key, no new timer, same work per pass.
+    walk = sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True)
+    for pos, entry in enumerate(walk):
+        if _PAUSED:
+            # Name the position: "reconcile stopped" is not actionable, "stopped at
+            # 105/160" tells you how much of the walk never ran.
+            log.info("reconcile: abandoned at %d/%d (sweeps paused)", pos, len(walk))
+            return
+        if not entry.enabled:
+            continue
+        if is_federation_excluded(entry.path):
+            continue
+        needs_idx = _needs_index(entry.path)
+        needs_rederive = needs_vectors = False
+        if not needs_idx and (drifted := _vectors_stale(entry.path)):
+            from rag_search.core.config import AUTO_MIGRATE_VECTORS
+            from rag_search.index.store import embed_signature
+            log.warning(
+                "%s: vectors built by %r, config is now %r — %s",
+                entry.path, drifted, embed_signature(),
+                "re-embedding" if AUTO_MIGRATE_VECTORS
+                else "set RSE_AUTO_MIGRATE_VECTORS=1 to migrate",
+            )
+            needs_vectors = bool(AUTO_MIGRATE_VECTORS)
+        # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
+        if not needs_idx and not entry.federation:
+            gdb = project_graph_db(entry.path)
+            if gdb.exists():
+                gs = GraphStore(gdb)
+                try:
+                    if gs.community_count() == 0:
+                        needs_idx = True
+                    elif _graph_stale(entry.path, gs):
+                        needs_rederive = True
+                finally:
+                    gs.close()
         try:
-            register_all_members()
+            # Orthogonal to the chain below, not a branch of it: re-embedding touches
+            # only vectors.db, so it neither satisfies nor preempts a graph rederive.
+            # needs_vectors is only ever set when needs_idx is False, so the two can
+            # never both rebuild the same vectors.
+            if needs_vectors:
+                _reindex_vectors(entry.path)
+            if needs_idx:
+                _index_project(entry.path)
+                _label_project(entry.path)
+            elif needs_rederive:
+                _rederive_graph(entry.path)
+                _label_project(entry.path)
+            elif _needs_labels(entry.path):
+                _label_project(entry.path)  # label-only; skip expensive re-index
         except Exception as exc:
-            log.warning("reconcile member-discovery: %s", exc)
-
-        from rag_search.core.config import is_federation_excluded
-
-        # Most-recently-touched projects first. The pass is one linear walk with no ordering,
-        # and it is startup-once by design, so an unordered registry starves exactly the repos
-        # being worked on: a measured pass here ground through 198 projects for 7.6 h without
-        # reaching either repo edited that day. One sort key, no new timer, same work per pass.
-        walk = sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True)
-        for pos, entry in enumerate(walk):
-            if _PAUSED:
-                # Name the position: "reconcile stopped" is not actionable, "stopped at
-                # 105/160" tells you how much of the walk never ran.
-                log.info("reconcile: abandoned at %d/%d (sweeps paused)", pos, len(walk))
-                return
-            if not entry.enabled:
-                continue
-            if is_federation_excluded(entry.path):
-                continue
-            needs_idx = _needs_index(entry.path)
-            needs_rederive = needs_vectors = False
-            if not needs_idx and (drifted := _vectors_stale(entry.path)):
-                from rag_search.core.config import AUTO_MIGRATE_VECTORS
-                from rag_search.index.store import embed_signature
-                log.warning(
-                    "%s: vectors built by %r, config is now %r — %s",
-                    entry.path, drifted, embed_signature(),
-                    "re-embedding" if AUTO_MIGRATE_VECTORS
-                    else "set RSE_AUTO_MIGRATE_VECTORS=1 to migrate",
-                )
-                needs_vectors = bool(AUTO_MIGRATE_VECTORS)
-            # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
-            if not needs_idx and not entry.federation:
-                gdb = project_graph_db(entry.path)
-                if gdb.exists():
-                    gs = GraphStore(gdb)
-                    try:
-                        if gs.community_count() == 0:
-                            needs_idx = True
-                        elif _graph_stale(entry.path, gs):
-                            needs_rederive = True
-                    finally:
-                        gs.close()
-            try:
-                # Orthogonal to the chain below, not a branch of it: re-embedding touches
-                # only vectors.db, so it neither satisfies nor preempts a graph rederive.
-                # needs_vectors is only ever set when needs_idx is False, so the two can
-                # never both rebuild the same vectors.
-                if needs_vectors:
-                    _reindex_vectors(entry.path)
-                if needs_idx:
-                    _index_project(entry.path)
-                    _enrich_project(entry.path)
-                elif needs_rederive:
-                    _rederive_graph(entry.path)
-                    _enrich_project(entry.path)
-                elif _needs_enrich(entry.path):
-                    _enrich_project(entry.path)  # enrich-only; skip expensive re-index
-            except Exception as exc:
-                log.warning("reconcile %s: %s", entry.path, exc)
-
-        # Federation root-pass: reconstruct BPRE process graph (backstop for quiescent fleet;
-        # sole BPRE trigger during this bulk pass — see _reconcile_active above). Unconditional:
-        # reconstruct_processes() carries its own persistent stamp (bpre_algo/bpre_source_sig in
-        # process_graph.db) and is a cheap no-op on an unchanged root, so no extra in-memory gate
-        # is needed here — and a persistent gate survives restarts, unlike one kept in memory.
-        for entry in list_projects():
-            if _PAUSED:
-                return
-            if not entry.enabled or not entry.federation:
-                continue
-            if is_federation_excluded(entry.path):
-                continue
-            try:
-                from rag_search.kb.bpre import reconstruct_processes
-                with _KB_HEAVY_LOCK:
-                    n = reconstruct_processes(entry.path)
-                _bpre_state["last_run"] = entry.path
-                _bpre_state["edge_count"] = n
-                _bpre_state["last_error"] = None
-            except Exception as exc:
-                log.warning("reconcile bpre %s: %s", entry.path, exc)
-                _bpre_state["last_error"] = str(exc)
-    finally:
-        _reconcile_active.clear()
+            log.warning("reconcile %s: %s", entry.path, exc)
 
 
 _VACUUM_BLOAT_BYTES: int = 256 * 1024 * 1024  # VACUUM when freelist > 256 MB
@@ -691,29 +651,20 @@ def _index_files(project_path: str, files: list) -> None:
         upsert_project(entry)
 
 
-def _enrich_project(project_path: str) -> None:
-    from rag_search.graph.llm import deepseek_key
-    if not deepseek_key():
-        raise RuntimeError(
-            "KB build requires DEEPSEEK_API_KEY — local generative LLM is decommissioned. "
-            "Set DEEPSEEK_API_KEY in env or ~/.config/rag-search/env."
-        )
+def _label_project(project_path: str) -> None:
+    """Give every Leiden community a deterministic structural label. No LLM, no network.
 
-    # Single-flight: at most one CPU-bound KB pass (this function + the reconcile BPRE
-    # root-pass) runs at a time across the watcher and reconcile threads — caps daemon CPU at
-    # ~one core instead of pinning two concurrently. Never held around index/embed or GPU
-    # queries, so search freshness and query latency are unaffected.
-    with _KB_HEAVY_LOCK:
-        from rag_search.core.config import THERMAL_MAX_C, project_graph_db, project_wiki_dir
-        from rag_search.core.gpu import gpu_temp_c
+    Only L1 communities are ever generated (WS-B), and the orphan prune below is what keeps
+    this terminating: label_community_structural writes nothing for a community with no
+    symbols, so an orphan row would hold _needs_labels True forever.
+    """
+    # Single-flight: at most one CPU-bound graph pass runs at a time across the watcher and
+    # reconcile threads — caps daemon CPU at ~one core instead of pinning two concurrently.
+    # Never held around index/embed or GPU queries, so search freshness is unaffected.
+    with _HEAVY_LOCK:
+        from rag_search.core.config import project_graph_db
         from rag_search.graph.community import label_community_structural
-        from rag_search.graph.enrich import (
-            classify_communities_semantic,
-            compute_significance,
-            enrich_communities_batch,
-        )
         from rag_search.graph.store import GraphStore
-        from rag_search.kb.wiki import build_wiki
 
         gs = GraphStore(project_graph_db(project_path))
         try:
@@ -722,113 +673,25 @@ def _enrich_project(project_path: str) -> None:
                 "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
             )
             gs.commit()
-            # Head (member_count≥8 OR cross-community edges≥2): LLM narration, batched+prefix-cached.
-            # Tail (below gate): deterministic structural labels, zero tokens.
-            _head_cids, _tail_cids = compute_significance(gs)
-            for _cid in _tail_cids:
-                label_community_structural(gs, _cid)
-            gs.commit()
-            if _head_cids:
-                _enriched_ids, _usage = enrich_communities_batch(
-                    gs, _head_cids,
-                    thermal_guard_fn=lambda: gpu_temp_c() > THERMAL_MAX_C,
-                    budget=_ENRICH_BUDGET_TOKENS,
-                )
-                log.info(
-                    "_enrich_project %s: head=%d tail=%d enriched=%d "
-                    "tok(hit=%d miss=%d comp=%d) calls=%d",
-                    project_path, len(_head_cids), len(_tail_cids), len(_enriched_ids),
-                    _usage.get("prompt_cache_hit_tokens", 0),
-                    _usage.get("prompt_cache_miss_tokens", 0),
-                    _usage.get("completion_tokens", 0),
-                    _usage.get("calls", 0),
-                )
+            cids = [r[0] for r in gs._con.execute(
+                "SELECT id FROM communities WHERE (summary IS NULL OR summary = '') AND level = 1"
+            ).fetchall()]
+            for cid in cids:
+                label_community_structural(gs, cid)
             gs.commit()
             gs._con.execute(
                 "UPDATE communities SET title='Community-' || CAST(id AS TEXT) "
                 "WHERE level=1 AND (title IS NULL OR title='')"
             )
             gs.commit()
-            _needs_classify = gs._con.execute(
-                "SELECT COUNT(*) FROM communities "
-                "WHERE level=1 AND narrated=1 AND summary IS NOT NULL AND summary!='' AND semantic_type IS NULL"
-            ).fetchone()[0]
-            if _needs_classify:
-                classify_communities_semantic(gs, lambda: gpu_temp_c() > 78, reclassify_all=False)
-            build_wiki(gs, project_wiki_dir(project_path))
+            if cids:
+                log.info("_label_project %s: labelled=%d", project_path, len(cids))
         finally:
             gs.close()
-        # Federated wiki: (re)generate federation.md for this project if it is a root, and for any
-        # root that owns it as a member (a member edit refreshes the root's aggregate). HR4 holds —
-        # aggregation reads each member's own graph.db; no cross-repo edges. No-op for standalones.
-        try:
-            from rag_search.kb.wiki import build_federated_index
-            build_federated_index(project_path)
-            _regen_owning_federations(project_path)
-        except Exception as exc:
-            log.warning("federation index %s: %s", project_path, exc)
-        # Member-edit refresh + self-BPRE: skipped during a bulk reconcile pass (_reconcile_active)
-        # — the reconcile root-pass is the sole BPRE trigger then, so the same root is not rebuilt
-        # once per member on a mid-pass-shifting source sig (Part D). Steady-state on_change still
-        # triggers both normally.
-        if not _reconcile_active.is_set():
-            try:
-                _regen_owning_processes(project_path)
-            except Exception as exc:
-                log.error("owning-process regen %s: %s", project_path, exc, exc_info=True)
-            try:
-                from rag_search.daemon.federation import expand_federation
-                if len(expand_federation(project_path)) >= 2:
-                    from rag_search.kb.bpre import reconstruct_processes
-                    n = reconstruct_processes(project_path)
-                    _bpre_state["last_run"] = project_path
-                    _bpre_state["edge_count"] = n
-                    _bpre_state["last_error"] = None
-            except Exception as exc:
-                log.error("bpre reconstruct %s: %s", project_path, exc, exc_info=True)
-                _bpre_state["last_error"] = str(exc)
 
 
-def _regen_owning_federations(member_path: str) -> None:
-    """Regenerate federation.md for any enabled root whose federation list contains member_path."""
-    import time
-
-    from rag_search.core.registry import list_projects
-    from rag_search.kb.wiki import build_federated_index
-    now = time.monotonic()
-    for entry in list_projects():
-        if entry.enabled and entry.federation and member_path in entry.federation:
-            if now - _last_owning_federation_regen.get(entry.path, 0.0) < _BPRE_CASCADE_DEBOUNCE_S:
-                continue
-            # Stamp BEFORE the long operation so concurrent triggers see the lock.
-            _last_owning_federation_regen[entry.path] = now
-            try:
-                build_federated_index(entry.path)
-            except Exception as exc:
-                log.warning("owning-federation regen %s: %s", entry.path, exc)
-
-
-def _regen_owning_processes(member_path: str) -> None:
-    """Reconstruct processes for any enabled root whose federation contains member_path (HR14)."""
-    import time
-
-    from rag_search.core.registry import list_projects
-    from rag_search.kb.bpre import reconstruct_processes
-    now = time.monotonic()
-    for entry in list_projects():
-        if entry.enabled and entry.federation and member_path in entry.federation:
-            if now - _last_owning_process_regen.get(entry.path, 0.0) < _BPRE_CASCADE_DEBOUNCE_S:
-                continue
-            # Stamp BEFORE the long operation so concurrent triggers see the lock.
-            _last_owning_process_regen[entry.path] = now
-            try:
-                reconstruct_processes(entry.path)
-            except Exception as exc:
-                log.error("owning-process regen %s: %s", entry.path, exc, exc_info=True)
-
-
-# ── KB lane ───────────────────────────────────────────────────────────────────────────────
-# The heavy half of on_change is serialised by _KB_HEAVY_LOCK regardless, so running it on the
+# ── graph lane ────────────────────────────────────────────────────────────────────────────
+# The heavy half of on_change is serialised by _HEAVY_LOCK regardless, so running it on the
 # watcher's dispatch workers never bought parallelism — it only meant a worker sat *blocked* on
 # that lock. Measured on the live daemon: one worker inside bounded_parse holding the lock, the
 # other parked on it for 4+ minutes, and a third project's edit never indexed because both
@@ -836,13 +699,13 @@ def _regen_owning_processes(member_path: str) -> None:
 #
 # One dedicated lane does the same serialised work without occupying a worker, so the cheap half
 # (_index_files — what actually makes an edit searchable) always runs promptly.
-_kb_lane_cv = threading.Condition()   # guards _kb_lane_wanted and _pending_graph_files
-_kb_lane_wanted: dict[str, str] = {}  # project -> source sig to stamp once its pass lands
-_kb_lane_thread: threading.Thread | None = None
-_kb_lane_busy: bool = False           # a pass is running right now (queue-empty is not idle)
+_graph_lane_cv = threading.Condition()   # guards _graph_lane_wanted and _pending_graph_files
+_graph_lane_wanted: dict[str, str] = {}  # project -> source sig to stamp once its pass lands
+_graph_lane_thread: threading.Thread | None = None
+_graph_lane_busy: bool = False           # a pass is running right now (queue-empty is not idle)
 
 
-def _kb_lane_join(timeout: float = 120.0) -> bool:
+def _graph_lane_join(timeout: float = 120.0) -> bool:
     """Block until nothing is queued and no pass is in flight. False on timeout.
 
     on_change used to finish the heavy half before returning, so callers could read graph.db
@@ -850,78 +713,79 @@ def _kb_lane_join(timeout: float = 120.0) -> bool:
     it back to anyone who needs it (the WG gates read the graph the moment on_change returns).
     """
     import time
-    with _kb_lane_cv:
+    with _graph_lane_cv:
         deadline = time.monotonic() + timeout
-        while _kb_lane_wanted or _kb_lane_busy:
+        while _graph_lane_wanted or _graph_lane_busy:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
             # A deadline on a join, not a poll interval: the lane's own wait() is untimed.
-            _kb_lane_cv.wait(remaining)
+            _graph_lane_cv.wait(remaining)
         return True
 
 
-def _kb_lane_submit(project_path: str, sig: str) -> None:
-    """Queue a project's heavy KB pass, coalescing with anything already queued for it.
+def _graph_lane_submit(project_path: str, sig: str) -> None:
+    """Queue a project's heavy graph pass, coalescing with anything already queued for it.
 
     Started lazily rather than at import: a process that never sees a file event (a CLI
     invocation, a test importing this module) should not grow a thread for it.
     """
-    global _kb_lane_thread
-    with _kb_lane_cv:
-        _kb_lane_wanted[project_path] = sig
-        if _kb_lane_thread is None or not _kb_lane_thread.is_alive():
-            _kb_lane_thread = threading.Thread(target=_kb_lane_run, daemon=True, name="rse-kb-lane")
-            _kb_lane_thread.start()
-        _kb_lane_cv.notify()
+    global _graph_lane_thread
+    with _graph_lane_cv:
+        _graph_lane_wanted[project_path] = sig
+        if _graph_lane_thread is None or not _graph_lane_thread.is_alive():
+            _graph_lane_thread = threading.Thread(
+                target=_graph_lane_run, daemon=True, name="rse-graph-lane")
+            _graph_lane_thread.start()
+        _graph_lane_cv.notify()
 
 
-def _kb_lane_run() -> None:
-    global _kb_lane_busy
+def _graph_lane_run() -> None:
+    global _graph_lane_busy
     while True:
-        with _kb_lane_cv:
-            while not _kb_lane_wanted:
+        with _graph_lane_cv:
+            while not _graph_lane_wanted:
                 # No timeout: the lane wakes on a submit, never on a clock. Same rule as the
                 # watcher's dispatch workers — the only clock in this daemon is the kernel's.
-                _kb_lane_cv.wait()
-            project_path, sig = next(iter(_kb_lane_wanted.items()))
-            del _kb_lane_wanted[project_path]
+                _graph_lane_cv.wait()
+            project_path, sig = next(iter(_graph_lane_wanted.items()))
+            del _graph_lane_wanted[project_path]
             # Popped here, not at submit time, so files that arrived while this project waited
             # its turn belong to this pass instead of provoking a second one.
             pending = _pending_graph_files.pop(project_path, set())
             # Set before releasing the lock: an empty queue is not an idle lane, and a join
             # that sampled the gap between pop and pass would return "done" mid-pass.
-            _kb_lane_busy = True
+            _graph_lane_busy = True
         try:
-            _kb_lane_pass(project_path, sig, pending)
+            _graph_lane_pass(project_path, sig, pending)
         finally:
-            with _kb_lane_cv:
-                _kb_lane_busy = False
-                _kb_lane_cv.notify_all()
+            with _graph_lane_cv:
+                _graph_lane_busy = False
+                _graph_lane_cv.notify_all()
 
 
-def _kb_lane_pass(project_path: str, sig: str, pending: set) -> None:
+def _graph_lane_pass(project_path: str, sig: str, pending: set) -> None:
     """One project's heavy pass. `sig` was sampled before the wait, so it can only ever claim
     *less* than this pass covered — a later event re-runs it, which is the safe direction."""
     try:
         if pending and _graph_needs_update(project_path):
-            # Must be released before _enrich_project: _KB_HEAVY_LOCK is a plain threading.Lock
-            # and _enrich_project acquires it itself. Held here so extraction never runs
-            # concurrently with another heavy KB pass (the daemon's ~1-core budget).
-            with _KB_HEAVY_LOCK:
+            # Must be released before _label_project: _HEAVY_LOCK is a plain threading.Lock
+            # and _label_project acquires it itself. Held here so extraction never runs
+            # concurrently with another heavy graph pass (the daemon's ~1-core budget).
+            with _HEAVY_LOCK:
                 _update_graph_files(project_path, sorted(pending))
-        _enrich_project(project_path)
-        _last_enriched_sig[project_path] = sig
+        _label_project(project_path)
+        _last_labelled_sig[project_path] = sig
     except Exception as exc:
         # Put the batch back rather than stamping it done: source_sig is only written by a pass
         # that completed, so a lost batch here would leave the same silent phantom rows.
-        with _kb_lane_cv:
+        with _graph_lane_cv:
             _pending_graph_files.setdefault(project_path, set()).update(pending)
-        log.warning("kb enrich %s: %s", project_path, exc)
+        log.warning("graph lane %s: %s", project_path, exc)
 
 
 def on_change(project_path: str, files: list) -> None:
-    """Watcher callback: incremental reindex; then KB enrich (debounced) if not recently done."""
+    """Watcher callback: incremental reindex; then the graph pass (debounced) if not recent."""
     import time
 
     if _PAUSED:
@@ -932,8 +796,6 @@ def on_change(project_path: str, files: list) -> None:
     # Invalidate fingerprint caches so the next reconcile pass re-walks this project.
     _fingerprint_cache.pop(project_path, None)
     _code_fingerprint_cache.pop(project_path, None)
-    from rag_search.kb.bpre import _invalidate_bpre_code_sig
-    _invalidate_bpre_code_sig(project_path)
     try:
         if files:
             _index_files(project_path, files)
@@ -943,26 +805,26 @@ def on_change(project_path: str, files: list) -> None:
         log.warning("incremental reindex %s: %s", project_path, exc)
         _last_index_fail[project_path] = now  # back off before retrying
         return
-    # HR38: code-only sig (mirrors BPRE's HR36 stamp) — non-code churn (docs/wiki/config/
-    # images) never wakes the KB/wiki/BPRE cascade, only real source drift does.
+    # HR38: code-only sig — non-code churn (docs/config/images) never wakes the graph lane,
+    # only real source drift does.
     sig = _code_source_fingerprint(project_path)
-    if sig == _last_enriched_sig.get(project_path):
-        return  # source unchanged — KB/wiki/BPRE cascade not needed
+    if sig == _last_labelled_sig.get(project_path):
+        return  # source unchanged — graph re-derive and labelling not needed
     if files:
         # Guarded now that the lane reads this map too; the dispatch workers are several
         # threads, not the single watcher thread this was written for.
-        with _kb_lane_cv:
+        with _graph_lane_cv:
             _pending_graph_files.setdefault(project_path, set()).update(str(f) for f in files)
-    if now - _last_kb_enrich.get(project_path, 0.0) < _KB_DEBOUNCE_S:
+    if now - _last_lane_run.get(project_path, 0.0) < _LANE_DEBOUNCE_S:
         return  # carried in _pending_graph_files above, so this event's files are not lost
-    _last_kb_enrich[project_path] = now
-    # Hand off and return. Blocking here on _KB_HEAVY_LOCK would consume a dispatch worker for
-    # the length of another project's federation pass, which is the starvation this exists to end.
-    _kb_lane_submit(project_path, sig)
+    _last_lane_run[project_path] = now
+    # Hand off and return. Blocking here on _HEAVY_LOCK would consume a dispatch worker for the
+    # length of another project's graph pass, which is the starvation this exists to end.
+    _graph_lane_submit(project_path, sig)
 
 
-def burst_enrich_federation(root_path: str) -> dict:
-    """Burst-enrich root + all discovered federation members. Return aggregate totals."""
+def burst_label_federation(root_path: str) -> dict:
+    """Label root + all discovered federation members. Return aggregate totals."""
     from rag_search.core.config import project_graph_db
     from rag_search.daemon.federation import discover_members
     from rag_search.graph.store import GraphStore
@@ -972,9 +834,9 @@ def burst_enrich_federation(root_path: str) -> dict:
     for path in paths:
         gdb = project_graph_db(path)
         if not gdb.exists():
-            log.info("burst_enrich_federation: skip %s (no graph DB)", path)
+            log.info("burst_label_federation: skip %s (no graph DB)", path)
             continue
-        _enrich_project(path)
+        _label_project(path)
         gs = GraphStore(gdb)
         try:
             total = gs._con.execute("SELECT COUNT(*) FROM communities WHERE level>=1").fetchone()[0]
@@ -984,10 +846,10 @@ def burst_enrich_federation(root_path: str) -> dict:
         finally:
             gs.close()
         results.append({"path": path, "total": total, "pending": pending})
-        log.info("burst_enrich_federation %s: total=%d pending=%d", path, total, pending)
+        log.info("burst_label_federation %s: total=%d pending=%d", path, total, pending)
 
     total_communities = sum(r["total"] for r in results)
     total_pending = sum(r["pending"] for r in results)
-    log.info("burst_enrich_federation %s: Σ=%d pending=%d", root_path, total_communities, total_pending)
+    log.info("burst_label_federation %s: Σ=%d pending=%d", root_path, total_communities, total_pending)
     return {"root": root_path, "members": results,
             "total_communities": total_communities, "total_pending": total_pending}

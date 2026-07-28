@@ -14,7 +14,7 @@ walk-the-whole-repo implementation cannot satisfy.
 WG1  a new symbol must reach graph.db through on_change alone
 WG2  docs-only churn must NOT re-extract (HR38 must survive)
 WG3  a federation root must NOT re-extract (HR4 carve-out)
-WG4  on_change must not deadlock on _KB_HEAVY_LOCK when it takes the extraction branch
+WG4  on_change must not deadlock on _HEAVY_LOCK when it takes the extraction branch
 WG5  a deleted symbol disappears; an untouched file keeps its symbols AND its cross-file edges
 WG6  a changed file the watcher did NOT report must not be parsed (no whole-repo walk)
 """
@@ -64,18 +64,18 @@ def _meta(proj: str, key: str) -> str | None:
 def _fire(proj: str, files: list) -> None:
     """Drive the real on_change with the debounce and the reuse stamp cleared.
 
-    Clearing `_last_enriched_sig` deliberately makes WG2 harder: without it a docs-only change
+    Clearing `_last_labelled_sig` deliberately makes WG2 harder: without it a docs-only change
     would return at the HR38 gate and the test would pass without ever reaching the new code.
     """
     from rag_search.daemon import sweeps
-    sweeps._last_kb_enrich.pop(proj, None)
-    sweeps._last_enriched_sig.pop(proj, None)
+    sweeps._last_lane_run.pop(proj, None)
+    sweeps._last_labelled_sig.pop(proj, None)
     sweeps._last_index_fail.pop(proj, None)
     sweeps.on_change(proj, [str(f) for f in files])
-    # on_change now hands the heavy half to the KB lane so a dispatch worker never blocks on
-    # _KB_HEAVY_LOCK. Joining restores exactly the guarantee these gates were written against —
+    # on_change now hands the heavy half to the graph lane so a dispatch worker never blocks on
+    # _HEAVY_LOCK. Joining restores exactly the guarantee these gates were written against —
     # every assertion below is unchanged — rather than turning them into timing tests.
-    assert sweeps._kb_lane_join(timeout=180.0), "KB lane did not finish its pass"
+    assert sweeps._graph_lane_join(timeout=180.0), "graph lane did not finish its pass"
 
 
 def test_wg1_new_symbol_reaches_the_graph(safe_tmp_path):
@@ -165,9 +165,9 @@ def test_wg3_federation_root_is_not_the_watchers_job(safe_tmp_path):
 
 
 def test_wg4_extraction_branch_does_not_deadlock(safe_tmp_path):
-    """WG4: on_change takes _KB_HEAVY_LOCK for extraction, and _enrich_project takes it again.
+    """WG4: on_change takes _HEAVY_LOCK for extraction, and _label_project takes it again.
 
-    It is a plain threading.Lock, so holding it across the _enrich_project call hangs the
+    It is a plain threading.Lock, so holding it across the _label_project call hangs the
     watcher thread outright — no error, no log line, no more indexing ever. A watchdog is the
     only way to observe that: a deadlocked on_change never returns to fail an assertion.
     """
@@ -191,7 +191,7 @@ def test_wg4_extraction_branch_does_not_deadlock(safe_tmp_path):
             done.set()
 
     threading.Thread(target=_run, daemon=True).start()
-    assert done.wait(timeout=180), "WG4: on_change never returned — _KB_HEAVY_LOCK deadlock"
+    assert done.wait(timeout=180), "WG4: on_change never returned — _HEAVY_LOCK deadlock"
     assert "wg_second" in _syms(proj), (
         "WG4: the run must actually have taken the lock-holding extraction branch"
     )
@@ -265,8 +265,8 @@ def test_wg6_only_the_handed_over_files_are_re_extracted(safe_tmp_path):
 def test_wg7_a_debounced_event_is_carried_forward_not_dropped(safe_tmp_path):
     """WG7: files whose event lost the debounce race must still reach the next pass.
 
-    The debounce drops events instead of queueing them. That was harmless while only enrich rode
-    it — enrich is project-scoped, so the next event redid the same work — but the graph path is
+    The debounce drops events instead of queueing them. That was harmless while only the labelling
+    pass rode it — it is project-scoped, so the next event redid the same work — but the graph path is
     file-list-scoped *and* stamps source_sig as though the whole tree had been re-derived, so a
     dropped list leaves rows nothing will ever correct: _graph_stale reads "fresh" afterwards.
 
@@ -287,10 +287,10 @@ def test_wg7_a_debounced_event_is_carried_forward_not_dropped(safe_tmp_path):
 
     _time.sleep(1.1)
     m1.write_text("def wg_a_seed():\n    return 1\n\n\ndef wg_dropped_fn():\n    return 3\n")
-    sweeps._last_enriched_sig.pop(proj, None)
+    sweeps._last_labelled_sig.pop(proj, None)
     sweeps._last_index_fail.pop(proj, None)
     _forget_sig(proj)
-    sweeps._last_kb_enrich[proj] = _time.monotonic()  # inside the window: this event is dropped
+    sweeps._last_lane_run[proj] = _time.monotonic()  # inside the window: this event is dropped
     sweeps.on_change(proj, [str(m1)])
     assert "wg_dropped_fn" not in _syms(proj), (
         "WG7: the debounce did not drop the event, so the rest of this test proves nothing"
