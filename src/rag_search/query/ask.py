@@ -25,9 +25,11 @@ def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
     the context was whichever communities happened to be inserted first. Ranking is the only
     thing that makes a templated summary worth reading, so both surviving scopes now share it.
 
-    `narrated=1` used to gate this pool. Its one writer was the LLM narrator deleted with tier 3,
-    so the filter would now select nothing; the cross-encoder discriminates instead, and it scores
-    filler low without being told to.
+    Two filters used to gate this pool and both are gone with their columns: `narrated=1`, whose
+    one writer was the LLM narrator, and `kind NOT IN ('dir','file')`, which excluded the DIKW
+    information spine. A fleet census found `kind` holding one value across all 160 graphs, so the
+    clause had nothing to exclude. The cross-encoder discriminates instead, and it scores filler
+    low without being told to.
     """
     from rag_search.query.search import rerank_passages
 
@@ -36,7 +38,7 @@ def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
     for store in stores:
         for ctitle, csumm in store._con.execute(
             "SELECT title,summary FROM communities WHERE level=1 "
-            "AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') "
+            "AND summary IS NOT NULL AND summary!='' "
             "ORDER BY id LIMIT 50"
         ).fetchall():
             if ctitle and ctitle not in seen:
