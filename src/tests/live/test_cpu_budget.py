@@ -139,7 +139,7 @@ def test_cb3_idle_cpu_under_one_percent_core():
 
 # A single small synthetic project isn't enough to prove throttling: the pipeline is
 # deliberately architected to stay within ~1 core per project (bounded_parse's single
-# spawn worker matches the quota; _KB_HEAVY_LOCK single-flights the BPRE pass) -- see
+# spawn worker matches the quota; _HEAVY_LOCK single-flights the graph pass) -- see
 # HR39/A1. Multiple *distinct* projects registered close together each spawn their own
 # reconcile_projects() thread (server/mcp.py::index() has no cross-project lock), so
 # their chunk/embed and tree-sitter-extract steps genuinely overlap in time. That overlap

@@ -169,7 +169,7 @@ def test_hl2_events_during_a_pass_are_coalesced_not_dropped_or_queued(two_roots)
 def test_hl3_one_project_is_never_processed_by_two_workers_at_once(two_roots):
     """HL3: dispatching concurrently must not let a project's pass overlap itself.
 
-    `on_change` keeps per-project module state (`_last_kb_enrich`, `_last_enriched_sig`,
+    `on_change` keeps per-project module state (`_last_lane_run`, `_last_labelled_sig`,
     `_pending_graph_files`) that assumes one pass per project at a time; two overlapping passes
     would interleave the read-modify-write of the pending file set. Affinity is what lets
     sweeps.py stay untouched, so it is a gate, not an implementation detail.

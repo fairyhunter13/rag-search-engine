@@ -1,4 +1,9 @@
-"""R6 inference-lane guards: DeepSeek-only KB; haiku-only chat; no local generative LLM."""
+"""R6 inference-lane guards: haiku-only chat; no local generative LLM; GPU runs embed+rerank only.
+
+With tier 3 deleted the lane map is two lanes, not four: the local GPU hosts the embedder and the
+reranker, and `claude -p` on the dashboard chat route is the only generative model the system
+reaches at all. The DeepSeek half of these guards is gone with the subsystem it gated.
+"""
 import inspect
 from pathlib import Path
 
@@ -9,33 +14,10 @@ pytestmark = pytest.mark.live
 _SRC = Path(__file__).parents[2] / "rag_search"
 
 
-# ---------------------------------------------------------------------------
-# R6a — KB enrichment → DeepSeek-only (no local generative LLM)
-# ---------------------------------------------------------------------------
-
-
-def test_kb_enrich_is_deepseek_only():
-    """R6a static: enrich.py KB enrichment uses deepseek_extract (no local ollama/generative fallback)."""
-    import rag_search.graph.enrich as enrich_mod
-    src = inspect.getsource(enrich_mod)
-    assert "deepseek_extract" in src, "enrich.py must use deepseek_extract for KB enrichment"
-    assert "ollama" not in src.lower(), "enrich.py must not reference ollama"
-
-
-def test_enrich_project_crashes_without_key():
-    """R6a static: sweeps._enrich_project precondition raises RuntimeError when DEEPSEEK_API_KEY absent."""
-    from rag_search.daemon import sweeps
-
-    src = inspect.getsource(sweeps._enrich_project)
-    assert "deepseek_key()" in src, "_enrich_project must check deepseek_key() before proceeding"
-    assert "RuntimeError" in src, "_enrich_project must raise RuntimeError when key is absent"
-    # The check must appear early — within the first 15 non-blank lines of the function
-    lines = [ln for ln in src.splitlines() if ln.strip()]
-    key_line = next((i for i, ln in enumerate(lines) if "deepseek_key()" in ln), None)
-    assert key_line is not None, "_enrich_project must call deepseek_key()"
-    assert key_line < 10, (
-        f"deepseek_key() check is at line {key_line} — must be near the top of _enrich_project"
-    )
+# R6a is gone with tier 3: it asserted that KB enrichment *reached* DeepSeek and that
+# _enrich_project refused to run keyless. There is no KB and no DeepSeek to assert about —
+# a keyless box is now the normal configuration, and DK2 (no LLM client anywhere) is the
+# guard that replaces it.
 
 
 # ---------------------------------------------------------------------------

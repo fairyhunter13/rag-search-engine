@@ -706,11 +706,11 @@ def test_p21_community_labels_set_without_llm(tmp_path):
 
 
 @pytest.mark.slow
-def test_p21_burst_enriches_all_communities(safe_tmp_path):
-    """P21.3: _enrich_project enriches ALL title IS NULL communities (no LIMIT 20 cap)."""
+def test_p21_burst_labels_all_communities(safe_tmp_path):
+    """P21.3: _label_project labels ALL title IS NULL communities (no LIMIT 20 cap)."""
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import remove_project, upsert_project
-    from rag_search.daemon.sweeps import _enrich_project
+    from rag_search.daemon.sweeps import _label_project
     from rag_search.graph.store import GraphStore
 
     proj = str(safe_tmp_path)
@@ -725,7 +725,7 @@ def test_p21_burst_enriches_all_communities(safe_tmp_path):
         gs.commit()
         gs.close()
 
-        _enrich_project(proj)
+        _label_project(proj)
 
         gs2 = GraphStore(project_graph_db(proj))
         null_count = gs2._con.execute(
@@ -740,11 +740,11 @@ def test_p21_burst_enriches_all_communities(safe_tmp_path):
 
 
 @pytest.mark.slow
-def test_p21_burst_enrich_federation(safe_tmp_path):
-    """P21.4: burst_enrich_federation enriches root + member, reports aggregate totals."""
+def test_p21_burst_label_federation(safe_tmp_path):
+    """P21.4: burst_label_federation labels root + member, reports aggregate totals."""
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import remove_project, upsert_project
-    from rag_search.daemon.sweeps import burst_enrich_federation
+    from rag_search.daemon.sweeps import burst_label_federation
     from rag_search.graph.store import GraphStore
 
     member = safe_tmp_path / "member"
@@ -765,7 +765,7 @@ def test_p21_burst_enrich_federation(safe_tmp_path):
         gs.commit()
         gs.close()
 
-        result = burst_enrich_federation(root_path)
+        result = burst_label_federation(root_path)
 
         assert result["total_communities"] >= 1, f"expected ≥1 total communities: {result}"
         assert result["total_pending"] == 0, f"expected 0 pending after burst: {result}"
@@ -826,19 +826,19 @@ def test_no_fixed_interval_timers():
         )
 
 
-def test_on_change_wires_kb_enrich():
-    """Guard: on_change must call _enrich_project (event-driven KB build after file change)."""
+def test_on_change_wires_graph_labelling():
+    """Guard: on_change must reach _label_project (event-driven labelling after a file change)."""
     import inspect
 
     from rag_search.daemon import sweeps
     src = inspect.getsource(sweeps.on_change)
-    # on_change hands the heavy half to the KB lane rather than running it inline, so follow the
-    # one hop. The invariant is unchanged: a file event, and nothing on a clock, drives enrich.
-    assert "_kb_lane_submit" in src, (
-        "on_change must submit to the KB lane — KB enrichment must be event-driven via the watcher"
+    # on_change hands the heavy half to the graph lane rather than running it inline, so follow
+    # the one hop. The invariant is unchanged: a file event, and nothing on a clock, drives it.
+    assert "_graph_lane_submit" in src, (
+        "on_change must submit to the graph lane — labelling must be event-driven via the watcher"
     )
-    assert "_enrich_project" in inspect.getsource(sweeps._kb_lane_pass), (
-        "the KB lane must call _enrich_project — otherwise on_change's hand-off reaches nothing"
+    assert "_label_project" in inspect.getsource(sweeps._graph_lane_pass), (
+        "the graph lane must call _label_project — otherwise on_change's hand-off reaches nothing"
     )
 
 
@@ -876,8 +876,8 @@ def test_registry_filters_legacy_watch_field(safe_tmp_path):
 
 
 @pytest.mark.slow
-def test_on_change_kb_debounce(safe_tmp_path):
-    """Debounce: on_change within _KB_DEBOUNCE_S of a prior enrich skips KB (no duplicate LLM calls)."""
+def test_on_change_lane_debounce(safe_tmp_path):
+    """Debounce: on_change within _LANE_DEBOUNCE_S of a prior pass skips the graph lane."""
     import time
 
     from rag_search.daemon import sweeps
@@ -886,20 +886,20 @@ def test_on_change_kb_debounce(safe_tmp_path):
     proj = str(safe_tmp_path)
     (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
     _index_project(proj)
-    # Simulate "just enriched" so debounce window is active → _enrich_project must be skipped
-    sweeps._last_kb_enrich[proj] = time.monotonic()
-    t_before = sweeps._last_kb_enrich[proj]
+    # Simulate "just ran" so the debounce window is active → the lane must not be submitted to
+    sweeps._last_lane_run[proj] = time.monotonic()
+    t_before = sweeps._last_lane_run[proj]
     try:
         on_change(proj, [safe_tmp_path / "a.py"])
-        assert sweeps._last_kb_enrich.get(proj) == t_before, (
-            "on_change within debounce window must not advance _last_kb_enrich"
+        assert sweeps._last_lane_run.get(proj) == t_before, (
+            "on_change within debounce window must not advance _last_lane_run"
         )
     finally:
-        sweeps._last_kb_enrich.pop(proj, None)
+        sweeps._last_lane_run.pop(proj, None)
 
 
-def test_watcher_kb_e2e(tmp_path):
-    """T5/HR2+HR3: on_change outside debounce triggers _enrich_project; existing summaries not wiped."""
+def test_watcher_labelling_e2e(tmp_path):
+    """T5/HR2+HR3: on_change outside debounce runs the lane; existing summaries are not wiped."""
     from rag_search.core.config import project_graph_db
     from rag_search.daemon import sweeps
     from rag_search.daemon.sweeps import _index_project, on_change
@@ -917,12 +917,12 @@ def test_watcher_kb_e2e(tmp_path):
     finally:
         gs.close()
 
-    sweeps._last_kb_enrich.pop(proj, None)
+    sweeps._last_lane_run.pop(proj, None)
     try:
         (tmp_path / "new.py").write_text("def extra(): pass\n")
         on_change(proj, [tmp_path / "new.py"])
-        assert proj in sweeps._last_kb_enrich, (
-            "on_change outside debounce must call _enrich_project (HR2 violation)"
+        assert proj in sweeps._last_lane_run, (
+            "on_change outside debounce must submit the graph lane (HR2 violation)"
         )
         gs = GraphStore(gdb)
         try:
@@ -933,16 +933,21 @@ def test_watcher_kb_e2e(tmp_path):
             gs.close()
         assert wiped == 0, f"on_change wiped {wiped} L1 summaries (HR3/F1 violation)"
     finally:
-        sweeps._last_kb_enrich.pop(proj, None)
+        sweeps._last_lane_run.pop(proj, None)
 
 
-def test_p35_enrich_project_prunes_orphan_communities(safe_tmp_path):
-    """P35: _enrich_project prunes L1 communities with 0 symbols before enriching."""
+def test_p35_label_project_prunes_orphan_communities(safe_tmp_path):
+    """P35: _label_project prunes L1 communities with 0 symbols before labelling.
+
+    Load-bearing beyond hygiene: label_community_structural writes nothing for a
+    symbol-less community, so an un-pruned orphan would hold _needs_labels True forever
+    and live-lock the reconcile walk.
+    """
     import sqlite3
 
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import remove_project, upsert_project
-    from rag_search.daemon.sweeps import _enrich_project
+    from rag_search.daemon.sweeps import _label_project
     from rag_search.graph.store import GraphStore
 
     proj = str(safe_tmp_path)
@@ -956,14 +961,46 @@ def test_p35_enrich_project_prunes_orphan_communities(safe_tmp_path):
         gs.commit()
         gs.close()
 
-        _enrich_project(proj)
+        _label_project(proj)
 
         with sqlite3.connect(str(project_graph_db(proj))) as con:
             orphans = con.execute(
                 "SELECT COUNT(*) FROM communities WHERE level=1 AND id NOT IN "
                 "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
             ).fetchone()[0]
-        assert orphans == 0, f"_enrich_project must prune 0-symbol L1 communities, got {orphans}"
+        assert orphans == 0, f"_label_project must prune 0-symbol L1 communities, got {orphans}"
+    finally:
+        remove_project(proj)
+
+
+def test_needs_labels_clears_after_a_labelling_pass(safe_tmp_path):
+    """DK4a: the reconcile gate terminates once _label_project has run — no live-lock.
+
+    Salvaged from the deleted test_p22_kb_e2e.py, and strengthened: the original only
+    proved _needs_labels reads NULL summaries, which a live-locking daemon satisfies too.
+    What discriminates is that a real pass drives the gate False.
+    """
+    from rag_search.core.config import ProjectEntry, project_graph_db
+    from rag_search.core.registry import remove_project, upsert_project
+    from rag_search.daemon.sweeps import _label_project, _needs_labels
+    from rag_search.graph.store import GraphStore
+
+    proj = str(safe_tmp_path)
+    upsert_project(ProjectEntry(path=proj, enabled=True))
+    try:
+        gs = GraphStore(project_graph_db(proj))
+        gs.upsert_symbol("s0", "real_func", "real_func", "function", "f.py", 1, 2, "python")
+        gs.upsert_community(0, level=1, title=None, summary=None, member_count=1)
+        gs._con.execute("UPDATE symbols SET community_id=0 WHERE sid='s0'")
+        gs.commit()
+        gs.close()
+
+        assert _needs_labels(proj) is True, "a NULL summary must open the gate"
+        _label_project(proj)
+        assert _needs_labels(proj) is False, (
+            "_label_project must close the gate — otherwise reconcile loops forever "
+            "with nothing in the journal"
+        )
     finally:
         remove_project(proj)
 
@@ -1115,35 +1152,6 @@ def test_env_thread_caps_set_at_import():
 
 
 # ── Gap 5 F3: BPRE metrics surface ───────────────────────────────────────────
-
-def test_bpre_metrics_surface(live_client, sample_workspace: SampleWorkspace):
-    """Gap 5 F3: overview(what='metrics') returns bpre block with last_run/edge_count/last_error."""
-    import asyncio
-
-    from rag_search.server.mcp import overview as overview_tool
-    result = asyncio.run(overview_tool(sample_workspace.fed_root, what="metrics"))
-    import json
-    data = json.loads(result)
-    assert "bpre" in data, f"overview(metrics) must include 'bpre' block; got keys: {list(data)}"
-    bpre = data["bpre"]
-    for key in ("last_run", "edge_count", "last_error"):
-        assert key in bpre, f"bpre metrics block missing key {key!r}"
-
-
-# ── Gap 5 F4: on_change wires BPRE process regen ─────────────────────────────
-
-def test_on_change_wires_bpre_regen():
-    """Gap 5 F4 source-guard: on_change/_enrich_project must call _regen_owning_processes."""
-    import inspect
-
-    from rag_search.daemon import sweeps
-    on_change_src = inspect.getsource(sweeps.on_change)
-    enrich_src = inspect.getsource(sweeps._enrich_project)
-    assert "_regen_owning_processes" in on_change_src or "_regen_owning_processes" in enrich_src, (
-        "on_change or _enrich_project must call _regen_owning_processes "
-        "so member edits refresh the owning federation's process_graph.db"
-    )
-
 
 @pytest.mark.slow
 def test_idle_unload_then_cuda_reload():

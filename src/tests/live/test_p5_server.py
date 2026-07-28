@@ -268,40 +268,19 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
         remove_project(proj_path)
 
 
-def test_kb_health_measures_summary_not_title(live_client, service_path):
-    """P25.1: /api/kb_health counts summary-enriched communities, not just titled ones."""
-    import sqlite3
-
-    from rag_search.core.config import project_graph_db
-
-    gdb = project_graph_db(service_path)
-    assert gdb.exists(), "promo-svc graph.db not found — sample_workspace fixture must run first"
-    con = sqlite3.connect(str(gdb))
-    try:
-        total = con.execute("SELECT COUNT(*) FROM communities WHERE level = 1").fetchone()[0]
-        summarized = con.execute(
-            "SELECT COUNT(*) FROM communities WHERE level = 1 "
-            "AND summary IS NOT NULL AND summary != ''"
-        ).fetchone()[0]
-    finally:
-        con.close()
-    assert total > 0, "promo-svc must have L1 communities"
-    r = live_client.get(f"/api/kb_health?project={service_path}")
-    assert r.status_code == 200, f"kb_health {r.status_code}: {r.text}"
-    d = r.json()
-    expected_pct = round(summarized / total * 100, 1) if total else 0
-    assert abs(d["enriched_pct"] - expected_pct) < 0.1, (
-        f"enriched_pct={d['enriched_pct']} != summary-based {expected_pct} "
-        f"(summarized={summarized} total={total})"
-    )
+# P25.1 is gone with tier 3. It asserted /api/kb_health's enriched_pct counted communities with a
+# DeepSeek *summary* rather than merely a title. Structural labelling writes a templated summary for
+# every community it labels, so the ratio it measured is now a permanent 100% by construction — a
+# gate that can only ever read one value is not a gate. P27 below still covers the property that
+# survived: the labelling pass keys on summary, not title.
 
 
 @pytest.mark.slow
-def test_enrich_project_uses_summary_gate(safe_tmp_path):
-    """P27: _enrich_project enriches titled-but-unsummarized communities."""
+def test_label_project_uses_summary_gate(safe_tmp_path):
+    """P27: _label_project labels titled-but-unsummarized communities."""
     import sqlite3  # noqa: I001
     from rag_search.core.config import project_graph_db
-    from rag_search.daemon.sweeps import _enrich_project
+    from rag_search.daemon.sweeps import _label_project
     from rag_search.graph.community import detect_communities
     from rag_search.graph.extractor import extract_symbols, symbol_id
     from rag_search.graph.store import GraphStore
@@ -320,42 +299,37 @@ def test_enrich_project_uses_summary_gate(safe_tmp_path):
         titled = gs._con.execute(
             "SELECT COUNT(*) FROM communities WHERE title IS NOT NULL AND title != ''"
         ).fetchone()[0]
-        assert titled > 0, "P21 must set structural labels before enrichment"
+        assert titled > 0, "P21 must set structural labels before the summary pass"
     finally:
         gs.close()
-    _enrich_project(proj)
+    _label_project(proj)
     with sqlite3.connect(str(project_graph_db(proj))) as con:
         post = con.execute(
             "SELECT COUNT(*) FROM communities WHERE summary IS NOT NULL AND summary != ''"
         ).fetchone()[0]
-    assert post > 0, "enrichment gate must use summary IS NULL, not title IS NULL"
+    assert post > 0, "the labelling gate must use summary IS NULL, not title IS NULL"
 
 
-def test_build_wiki_default_action_succeeds(live_client, service_path):
-    """P28.1: POST /api/build_wiki without explicit action defaults to wiki and returns pages_written."""
-    r = live_client.post(f"/api/build_wiki?project={service_path}", data=b"")
-    assert r.status_code == 200, f"default action (wiki) must succeed: {r.status_code} {r.text[:80]}"
-    assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
+# P28.1 and P28.2 are gone with tier 3: both POSTed /api/build_wiki, a route R0a deleted along with
+# the wiki generator behind it.
 
 
-def test_build_wiki_action_wiki(live_client, service_path):
-    """P28.2: action=wiki calls build_wiki and returns pages_written."""
-    r = live_client.post(f"/api/build_wiki?project={service_path}&action=wiki", data=b"")
-    assert r.status_code == 200, f"action=wiki failed: {r.status_code} {r.text[:80]}"
-    assert "pages_written" in r.json(), f"pages_written missing: {r.json()}"
+def test_overview_status_has_index_state(service_path):
+    """P25.2: overview(what='status') returns index_state in the 3-value ladder.
 
-
-def test_overview_status_has_kb_state(service_path):
-    """P25.2: overview(what='status') returns kb_state in 4-value set + numeric enriched_pct."""
+    The old ladder had a fourth rung, `enriching`, and a companion `enriched_pct`. Both keyed on
+    DeepSeek narration, so they left with it; the surviving states are the ones a keyless box can
+    actually reach.
+    """
     from rag_search.server.mcp import overview as overview_tool
 
     data = json.loads(asyncio.run(overview_tool(service_path, "status")))
-    assert "kb_state" in data, f"kb_state missing from status: {data}"
-    assert data["kb_state"] in ("indexing", "searchable", "enriching", "ready"), (
-        f"kb_state={data['kb_state']!r} not in expected set"
+    assert "index_state" in data, f"index_state missing from status: {data}"
+    assert data["index_state"] in ("indexing", "degraded", "ready"), (
+        f"index_state={data['index_state']!r} not in expected set"
     )
-    assert isinstance(data.get("enriched_pct"), (int, float)), (
-        f"enriched_pct must be numeric: {data}"
+    assert "enriched_pct" not in data, (
+        f"enriched_pct must not survive tier 3's deletion: {data}"
     )
 
 

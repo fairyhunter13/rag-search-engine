@@ -113,11 +113,11 @@ def _purge_leaked_test_state():
 
 
 @pytest.fixture(autouse=True)
-def _drain_kb_lane():
-    """Never let one test's KB pass still be running during the next one.
+def _drain_graph_lane():
+    """Never let one test's graph pass still be running during the next one.
 
     on_change used to finish its heavy half before returning, so heavy in-process work could not
-    outlive the test that caused it. The dispatch workers and the KB lane both broke that, and a
+    outlive the test that caused it. The dispatch workers and the graph lane both broke that, and a
     pass still extracting symbols holds the GIL in stretches — measured here at 3-5s of delivery
     latency for an inotify callback under in-process contention, against a 0.35s budget in
     test_watcher_detects_new_file. That test failed in 2 of 3 full-suite runs and never once in
@@ -130,7 +130,7 @@ def _drain_kb_lane():
     sweeps = sys.modules.get("rag_search.daemon.sweeps")
     if sweeps is not None:
         with contextlib.suppress(Exception):
-            sweeps._kb_lane_join(timeout=300.0)
+            sweeps._graph_lane_join(timeout=300.0)
 
 
 @pytest.fixture(scope="session", autouse=True)

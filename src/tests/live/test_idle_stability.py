@@ -22,52 +22,10 @@ def test_source_fingerprint_is_memoized():
     assert sweeps._source_fingerprint(tmp_dir) == sig1
 
 
-def test_bpre_cascade_debounced():
-    """FP2: _regen_owning_processes must skip roots within _BPRE_CASCADE_DEBOUNCE_S."""
-    import time
-
-    import rag_search.core.registry as reg_mod
-    import rag_search.kb.bpre as bpre_mod
-    from rag_search.core.config import ProjectEntry
-    from rag_search.daemon import sweeps
-
-    calls: list[str] = []
-    orig_map = sweeps._last_owning_process_regen.copy()
-    sweeps._last_owning_process_regen["__fp2__"] = time.monotonic()
-    orig_list, orig_bpre = reg_mod.list_projects, bpre_mod.reconstruct_processes
-    reg_mod.list_projects = lambda: [ProjectEntry(path="__fp2__", enabled=True, federation=["__m__"])]
-    bpre_mod.reconstruct_processes = calls.append
-    try:
-        sweeps._regen_owning_processes("__m__")
-        assert not calls, f"debounce must suppress regen; calls={calls}"
-    finally:
-        reg_mod.list_projects, bpre_mod.reconstruct_processes = orig_list, orig_bpre
-        sweeps._last_owning_process_regen.clear()
-        sweeps._last_owning_process_regen.update(orig_map)
-
-
-def test_federation_cascade_debounced():
-    """FP2b: _regen_owning_federations must skip roots within _BPRE_CASCADE_DEBOUNCE_S."""
-    import time
-
-    import rag_search.core.registry as reg_mod
-    import rag_search.kb.wiki as wiki_mod
-    from rag_search.core.config import ProjectEntry
-    from rag_search.daemon import sweeps
-
-    calls: list[str] = []
-    orig_map = sweeps._last_owning_federation_regen.copy()
-    sweeps._last_owning_federation_regen["__fp2b__"] = time.monotonic()
-    orig_list, orig_fed = reg_mod.list_projects, wiki_mod.build_federated_index
-    reg_mod.list_projects = lambda: [ProjectEntry(path="__fp2b__", enabled=True, federation=["__m__"])]
-    wiki_mod.build_federated_index = calls.append
-    try:
-        sweeps._regen_owning_federations("__m__")
-        assert not calls, f"debounce must suppress regen; calls={calls}"
-    finally:
-        reg_mod.list_projects, wiki_mod.build_federated_index = orig_list, orig_fed
-        sweeps._last_owning_federation_regen.clear()
-        sweeps._last_owning_federation_regen.update(orig_map)
+# FP2 and FP2b are gone with tier 3: both gated the _BPRE_CASCADE_DEBOUNCE_S window around
+# _regen_owning_processes / _regen_owning_federations, and a member's owning federation has no
+# wiki or BPRE left to regenerate. Nothing cascades off a member edit any more, so there is no
+# debounce to assert about — the absence itself is covered by DK2's tree-wide no-LLM guard.
 
 
 def test_reconcile_startup_once_before_while_loop():
@@ -137,76 +95,77 @@ def test_no_junk_paths_in_live_registry(live_client, sample_workspace):
 
 
 def _settle(sweeps) -> None:
-    """Wait out the KB lane, which now runs on_change's heavy half off the caller's thread.
+    """Wait out the graph lane, which runs on_change's heavy half off the caller's thread.
 
-    Two reasons, and the second is the load-bearing one. The gates below assert on _enrich_project
+    Two reasons, and the second is the load-bearing one. The gates below assert on _label_project
     calls, and without this they would be assertions about scheduling rather than about the drift
-    gate. More importantly the fixtures restore the real _enrich_project in `finally`, so a pass
+    gate. More importantly the fixtures restore the real _label_project in `finally`, so a pass
     that landed after teardown would run it against a TemporaryDirectory that no longer exists.
     """
-    assert sweeps._kb_lane_join(timeout=180.0), "KB lane did not finish its pass"
+    assert sweeps._graph_lane_join(timeout=180.0), "graph lane did not finish its pass"
 
 
-def test_drift_gate_skips_enrich_when_sig_unchanged():
-    """FP5: on_change must not call _enrich_project when source fingerprint is unchanged."""
+def test_drift_gate_skips_labelling_when_sig_unchanged():
+    """FP5: on_change must not call _label_project when source fingerprint is unchanged."""
     import os
     import tempfile
 
     from rag_search.daemon import sweeps
 
     calls: list[str] = []
-    orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
+    orig_label, orig_idx = sweeps._label_project, sweeps._index_files
     with tempfile.TemporaryDirectory() as tmp:
         sig = sweeps._code_source_fingerprint(tmp)
-        sweeps._last_enriched_sig[tmp] = sig
+        sweeps._last_labelled_sig[tmp] = sig
         sweeps._last_index_fail.pop(tmp, None)
-        sweeps._last_kb_enrich.pop(tmp, None)
-        sweeps._enrich_project = calls.append  # type: ignore[assignment]
+        sweeps._last_lane_run.pop(tmp, None)
+        sweeps._label_project = calls.append  # type: ignore[assignment]
         sweeps._index_files = lambda *a, **kw: None  # type: ignore[assignment]
         try:
             sweeps.on_change(tmp, [os.path.join(tmp, "app.log")])
-            _settle(sweeps)  # else "no enrich yet" and "no enrich ever" look identical
-            assert not calls, f"drift gate must suppress enrich when sig unchanged; calls={calls}"
+            _settle(sweeps)  # else "no pass yet" and "no pass ever" look identical
+            assert not calls, f"drift gate must suppress labelling when sig unchanged; calls={calls}"
         finally:
-            sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
-            sweeps._last_enriched_sig.pop(tmp, None)
-            sweeps._last_kb_enrich.pop(tmp, None)
+            sweeps._label_project, sweeps._index_files = orig_label, orig_idx
+            sweeps._last_labelled_sig.pop(tmp, None)
+            sweeps._last_lane_run.pop(tmp, None)
 
 
-def test_drift_gate_triggers_enrich_when_sig_changes():
-    """FP6: on_change must call _enrich_project when source fingerprint differs."""
+def test_drift_gate_triggers_labelling_when_sig_changes():
+    """FP6: on_change must call _label_project when source fingerprint differs."""
     import tempfile
 
     from rag_search.daemon import sweeps
 
     calls: list[str] = []
-    orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
+    orig_label, orig_idx = sweeps._label_project, sweeps._index_files
     with tempfile.TemporaryDirectory() as tmp:
-        sweeps._last_enriched_sig[tmp] = "stale-sig-will-never-match"
+        sweeps._last_labelled_sig[tmp] = "stale-sig-will-never-match"
         sweeps._last_index_fail.pop(tmp, None)
-        sweeps._last_kb_enrich.pop(tmp, None)
-        sweeps._enrich_project = lambda p: calls.append(p)  # type: ignore[assignment]
+        sweeps._last_lane_run.pop(tmp, None)
+        sweeps._label_project = lambda p: calls.append(p)  # type: ignore[assignment]
         sweeps._index_files = lambda *a, **kw: None  # type: ignore[assignment]
         try:
             sweeps.on_change(tmp, [tmp + "/main.go"])
             _settle(sweeps)
-            assert calls, f"enrich must fire when sig differs; calls={calls}"
-            assert sweeps._last_enriched_sig.get(tmp) != "stale-sig-will-never-match"
+            assert calls, f"labelling must fire when sig differs; calls={calls}"
+            assert sweeps._last_labelled_sig.get(tmp) != "stale-sig-will-never-match"
         finally:
-            sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
-            sweeps._last_enriched_sig.pop(tmp, None)
-            sweeps._last_kb_enrich.pop(tmp, None)
+            sweeps._label_project, sweeps._index_files = orig_label, orig_idx
+            sweeps._last_labelled_sig.pop(tmp, None)
+            sweeps._last_lane_run.pop(tmp, None)
 
 
-# ─── HR38: on_change's code-only cascade gate (mirrors BPS1-4 for _bpre_code_sig) ──────────
+# ─── HR38: on_change's code-only cascade gate ──────────────────────────────────────────────
 # The 4th idle-CPU root cause the code-only fingerprint closes: on_change's own drift gate
-# was keyed on the all-files _source_fingerprint, so docs/wiki/config/image churn kept waking
-# the cascade even though HR36 already made BPRE's own reuse stamp code-only.
+# was keyed on the all-files _source_fingerprint, so docs/config/image churn kept waking the
+# graph lane for churn that changes no source. With tier 3 deleted these are the only surviving
+# gates on that fingerprint, so they carry the whole class on their own.
 
 
 @pytest.fixture
 def _fcg_project():
-    """A real tmp project, one code file, _enrich_project/_index_files stubbed to a call list."""
+    """A real tmp project, one code file, _label_project/_index_files stubbed to a call list."""
     import tempfile
 
     from rag_search.daemon import sweeps
@@ -214,32 +173,32 @@ def _fcg_project():
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {"main.py": "def f():\n    pass\n"})
         calls: list[str] = []
-        orig_enrich, orig_idx = sweeps._enrich_project, sweeps._index_files
-        sweeps._enrich_project = calls.append  # type: ignore[assignment]
+        orig_label, orig_idx = sweeps._label_project, sweeps._index_files
+        sweeps._label_project = calls.append  # type: ignore[assignment]
         sweeps._index_files = lambda *a, **kw: None  # type: ignore[assignment]
         sweeps._last_index_fail.pop(tmp, None)
-        sweeps._last_kb_enrich.pop(tmp, None)
-        sweeps._last_enriched_sig.pop(tmp, None)
+        sweeps._last_lane_run.pop(tmp, None)
+        sweeps._last_labelled_sig.pop(tmp, None)
         try:
             sweeps.on_change(tmp, [tmp + "/main.py"])  # baseline stamp
             _settle(sweeps)
-            assert calls == [tmp], "baseline on_change must enrich exactly once"
+            assert calls == [tmp], "baseline on_change must label exactly once"
             yield tmp, calls, sweeps
         finally:
             # Unasserted on purpose: a test that already failed must report its own reason, not a
-            # join timeout. Still required — restoring the real _enrich_project under a running
+            # join timeout. Still required — restoring the real _label_project under a running
             # lane pass points it at a directory this `with` block is about to delete.
-            sweeps._kb_lane_join(timeout=180.0)
-            sweeps._enrich_project, sweeps._index_files = orig_enrich, orig_idx
-            sweeps._last_enriched_sig.pop(tmp, None)
-            sweeps._last_kb_enrich.pop(tmp, None)
+            sweeps._graph_lane_join(timeout=180.0)
+            sweeps._label_project, sweeps._index_files = orig_label, orig_idx
+            sweeps._last_labelled_sig.pop(tmp, None)
+            sweeps._last_lane_run.pop(tmp, None)
             sweeps._last_index_fail.pop(tmp, None)
 
 
 def test_fcg1_docs_wiki_churn_quiescent(_fcg_project):
-    """FCG1: editing docs/*.md + generated wiki/*.md after the baseline must not re-enrich."""
+    """FCG1: editing docs/*.md + generated wiki/*.md after the baseline must not re-label."""
     tmp, calls, sweeps = _fcg_project
-    sweeps._last_kb_enrich.pop(tmp, None)  # bypass the 45s debounce for this scenario
+    sweeps._last_lane_run.pop(tmp, None)  # bypass the 45s debounce for this scenario
     _write_tree(tmp, {"docs/notes.md": "hello\n", "wiki/L1_overview.md": "generated\n"})
     sweeps.on_change(tmp, [tmp + "/docs/notes.md", tmp + "/wiki/L1_overview.md"])
     _settle(sweeps)
@@ -247,9 +206,9 @@ def test_fcg1_docs_wiki_churn_quiescent(_fcg_project):
 
 
 def test_fcg2_config_image_churn_quiescent(_fcg_project):
-    """FCG2: editing config (*.json) + image (*.png) after the baseline must not re-enrich."""
+    """FCG2: editing config (*.json) + image (*.png) after the baseline must not re-label."""
     tmp, calls, sweeps = _fcg_project
-    sweeps._last_kb_enrich.pop(tmp, None)
+    sweeps._last_lane_run.pop(tmp, None)
     _write_tree(tmp, {"config/settings.json": '{"a": 1}\n', "assets/logo.png": "not-a-png\n"})
     sweeps.on_change(tmp, [tmp + "/config/settings.json", tmp + "/assets/logo.png"])
     _settle(sweeps)
@@ -257,10 +216,10 @@ def test_fcg2_config_image_churn_quiescent(_fcg_project):
 
 
 def test_fcg3_real_code_drift_fires_cascade_once(_fcg_project):
-    """FCG3: editing main.py after the baseline must re-enrich exactly once — gate not inert."""
+    """FCG3: editing main.py after the baseline must re-label exactly once — gate not inert."""
     import time
     tmp, calls, sweeps = _fcg_project
-    sweeps._last_kb_enrich.pop(tmp, None)
+    sweeps._last_lane_run.pop(tmp, None)
     time.sleep(1.1)  # ensure a distinct mtime tick (sig truncates to whole seconds)
     _write_tree(tmp, {"main.py": "def f():\n    pass\n\ndef g():\n    pass\n"})
     sweeps.on_change(tmp, [tmp + "/main.py"])
@@ -269,12 +228,12 @@ def test_fcg3_real_code_drift_fires_cascade_once(_fcg_project):
 
 
 def test_fcg4_convergence_second_call_reuses(_fcg_project):
-    """FCG4: a second consecutive on_change with no change since baseline must not re-enrich."""
+    """FCG4: a second consecutive on_change with no change since baseline must not re-label."""
     tmp, calls, sweeps = _fcg_project
-    sweeps._last_kb_enrich.pop(tmp, None)  # bypass debounce so only the sig gate is exercised
+    sweeps._last_lane_run.pop(tmp, None)  # bypass debounce so only the sig gate is exercised
     sweeps.on_change(tmp, [tmp + "/main.py"])
     _settle(sweeps)
-    assert calls == [tmp], f"unchanged second call must reuse, not re-enrich; calls={calls}"
+    assert calls == [tmp], f"unchanged second call must reuse, not re-label; calls={calls}"
 
 
 def test_watcher_prefers_inotify_over_poll():
@@ -293,136 +252,17 @@ def test_watcher_prefers_inotify_over_poll():
     assert not w._thread.is_alive(), "watcher thread must stop cleanly"
 
 
-def test_reconcile_active_flag_lifecycle():
-    """FP7: reconcile_projects() must set _reconcile_active during the pass and always clear
-    it afterward (including on exception), so _enrich_project's bulk-suppression gate (see
-    test_bulk_reconcile_suppresses_member_bpre_fanout) is only ever active during a real pass."""
-    import rag_search.core.registry as reg_mod
-    from rag_search.daemon import sweeps
-
-    assert not sweeps._reconcile_active.is_set(), "flag must start clear"
-    observed: list[bool] = []
-    orig_list = reg_mod.list_projects
-
-    def _spy():
-        observed.append(sweeps._reconcile_active.is_set())
-        return []
-    reg_mod.list_projects = _spy
-    try:
-        sweeps.reconcile_projects()
-        assert observed and all(observed), "flag must be set while reconcile_projects runs"
-        assert not sweeps._reconcile_active.is_set(), "flag must be cleared after a normal return"
-    finally:
-        reg_mod.list_projects = orig_list
-
-    # Exception mid-pass must still clear the flag (finally-guarded).
-    def _boom():
-        raise RuntimeError("synthetic failure")
-    reg_mod.list_projects = _boom
-    try:
-        with pytest.raises(RuntimeError):
-            sweeps.reconcile_projects()
-        assert not sweeps._reconcile_active.is_set(), "flag must be cleared even after an exception"
-    finally:
-        reg_mod.list_projects = orig_list
+# FP7/FP8/FP9 are gone with tier 3, and FP7 is the one worth explaining. It asserted that
+# reconcile_projects() sets and always clears _reconcile_active — a flag whose sole reader was
+# _enrich_project's BPRE bulk-suppression gate. With the fan-out deleted the flag had no reader
+# left, so it was deleted from sweeps.py in this same commit rather than kept under test: a
+# lifecycle gate on state nothing consults proves only that the gate still runs.
+# FP8 (the reconcile root-pass calls reconstruct_processes every pass) and FP9 (that same call
+# is suppressed during a bulk pass) were both assertions about BPRE, which no longer exists.
 
 
-def test_reconcile_bpre_root_pass_unconditional():
-    """FP8: the reconcile root-pass must call reconstruct_processes on every pass — no
-    in-memory sig gate suppressing a repeat call (that gate was restart-fragile; the
-    persistent stamp inside reconstruct_processes is now the sole reuse guard, D3)."""
-    import rag_search.core.registry as reg_mod
-    import rag_search.kb.bpre as bpre_mod
-    from rag_search.core.config import ProjectEntry
-    from rag_search.daemon import sweeps
-
-    calls: list[str] = []
-    orig_list, orig_bpre = reg_mod.list_projects, bpre_mod.reconstruct_processes
-    orig_needs_idx, orig_needs_enrich = sweeps._needs_index, sweeps._needs_enrich
-    entry = ProjectEntry(path="__fp8_root__", enabled=True, federation=["__fp8_member__"])
-    reg_mod.list_projects = lambda: [entry]
-    bpre_mod.reconstruct_processes = lambda p: calls.append(p) or 0
-    # Isolate the root-pass: keep the per-project loop a no-op for this fake, unregistered path.
-    sweeps._needs_index = lambda p: False
-    sweeps._needs_enrich = lambda p: False
-    try:
-        sweeps.reconcile_projects()
-        sweeps.reconcile_projects()
-        assert calls == ["__fp8_root__", "__fp8_root__"], (
-            f"root-pass must call reconstruct_processes on every pass, no in-memory gate; calls={calls}"
-        )
-    finally:
-        reg_mod.list_projects, bpre_mod.reconstruct_processes = orig_list, orig_bpre
-        sweeps._needs_index, sweeps._needs_enrich = orig_needs_idx, orig_needs_enrich
-
-
-def test_bulk_reconcile_suppresses_member_bpre_fanout():
-    """FP9: during a bulk reconcile pass, _enrich_project must NOT fan out to
-    _regen_owning_processes or its own self-BPRE reconstruct_processes (Part D1) — the
-    reconcile root-pass is the sole BPRE trigger then. Outside reconcile (steady-state
-    on_change), both must still fire normally."""
-    import shutil
-    import tempfile
-
-    import rag_search.daemon.federation as fed_mod
-    import rag_search.embed.embedder as embed_mod
-    import rag_search.index.store as store_mod
-    import rag_search.kb.bpre as bpre_mod
-    import rag_search.kb.wiki as wiki_mod
-    from rag_search.core.config import index_dir
-    from rag_search.daemon import sweeps
-    from rag_search.graph import llm as llm_mod
-
-    owning_calls: list[str] = []
-    bpre_calls: list[str] = []
-
-    class _NoopVectorStore:
-        def __init__(self, *a, **kw):
-            pass
-        def close(self):
-            pass
-
-    orig = (
-        llm_mod.deepseek_key, wiki_mod.build_federated_index, fed_mod.expand_federation,
-        sweeps._regen_owning_processes, bpre_mod.reconstruct_processes,
-        embed_mod.get_embedder, store_mod.VectorStore,
-    )
-    llm_mod.deepseek_key = lambda: "unused-key-bypasses-guard"
-    wiki_mod.build_federated_index = lambda root_path: 0
-    fed_mod.expand_federation = lambda p: [p, "__fp9_other__"]
-    sweeps._regen_owning_processes = owning_calls.append
-    bpre_mod.reconstruct_processes = lambda p: bpre_calls.append(p) or 0
-    embed_mod.get_embedder = lambda: None
-    store_mod.VectorStore = _NoopVectorStore
-
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            sweeps._reconcile_active.set()
-            try:
-                sweeps._enrich_project(tmp)
-            finally:
-                sweeps._reconcile_active.clear()
-            assert not owning_calls and not bpre_calls, (
-                f"BPRE fan-out must be suppressed during bulk reconcile; "
-                f"owning={owning_calls} bpre={bpre_calls}"
-            )
-
-            sweeps._enrich_project(tmp)
-            assert owning_calls and bpre_calls, (
-                f"BPRE fan-out must fire outside reconcile (steady-state); "
-                f"owning={owning_calls} bpre={bpre_calls}"
-            )
-        finally:
-            (
-                llm_mod.deepseek_key, wiki_mod.build_federated_index, fed_mod.expand_federation,
-                sweeps._regen_owning_processes, bpre_mod.reconstruct_processes,
-                embed_mod.get_embedder, store_mod.VectorStore,
-            ) = orig
-            shutil.rmtree(index_dir(tmp), ignore_errors=True)
-
-
-def test_kb_heavy_lock_serializes_concurrent_passes():
-    """FP10: _KB_HEAVY_LOCK must allow at most one CPU-bound KB pass at a time across
+def test_heavy_lock_serializes_concurrent_passes():
+    """FP10: _HEAVY_LOCK must allow at most one CPU-bound graph pass at a time across
     threads (Part D2) — caps daemon CPU at ~one core instead of pinning two concurrently."""
     import threading
     import time
@@ -435,7 +275,7 @@ def test_kb_heavy_lock_serializes_concurrent_passes():
 
     def _hold():
         nonlocal concurrent, max_concurrent
-        with sweeps._KB_HEAVY_LOCK:
+        with sweeps._HEAVY_LOCK:
             with counter_lock:
                 concurrent += 1
                 max_concurrent = max(max_concurrent, concurrent)
@@ -448,7 +288,7 @@ def test_kb_heavy_lock_serializes_concurrent_passes():
         t.start()
     for t in threads:
         t.join(timeout=5)
-    assert max_concurrent == 1, f"KB_HEAVY_LOCK must serialize passes; max_concurrent={max_concurrent}"
+    assert max_concurrent == 1, f"_HEAVY_LOCK must serialize passes; max_concurrent={max_concurrent}"
 
 
 def _write_tree(root, files: dict[str, str]) -> None:
@@ -559,7 +399,7 @@ def test_respect_gitignore_false_disables_gitignore_only():
 def test_drift_gate_quiescent_under_tool_cache_churn():
     """DIS5: the exact regression this fix targets — writing into a git-ignored,
     hidden tool-cache dir (.svelte-kit) must NOT change _source_fingerprint, so on_change
-    does not retrigger the BPRE/enrich cascade for churn that isn't real source drift."""
+    does not retrigger the graph-lane pass for churn that isn't real source drift."""
     import tempfile
 
     from rag_search.daemon import sweeps
@@ -602,144 +442,10 @@ def test_is_ignored_path_agrees_with_iter_files():
             )
 
 
-# ─── Phase 5: BPRE code-only, discovery-unified reuse signature (BPS1-BPS4) ──────
-# The 3rd idle-CPU root cause: bpre_source_sig was keyed on the all-files
-# _source_fingerprint, so unrelated docs/hidden-dir churn flipped it and forced a
-# full federation rebuild. These tests prove the code-only signature (_bpre_code_sig,
-# routed through the same HR35 resolver as iter_files) is quiescent under that churn
-# while still detecting real code drift.
-
-
-@pytest.fixture
-def _bps_fed():
-    from tests.live._bpre_fixture import build_synth_federation, teardown_synth_federation
-    fed = build_synth_federation()
-    yield fed
-    teardown_synth_federation(fed)
-
-
-def _bps_no_llm(root: str) -> int:
-    from rag_search.graph.llm import no_deepseek
-    from rag_search.kb.bpre import reconstruct_processes
-    with no_deepseek():
-        return reconstruct_processes(root)
-
-
-def _bps_spy_trace_processes():
-    """Wrap bpre_mod._trace_processes with a call-counting spy; caller must restore."""
-    import rag_search.kb.bpre as bpre_mod
-    calls: list[int] = []
-    orig = bpre_mod._trace_processes
-
-    def _wrapped(*a, **k):
-        calls.append(1)
-        return orig(*a, **k)
-
-    bpre_mod._trace_processes = _wrapped
-    return calls, orig
-
-
-def test_bps1_docs_churn_quiescent_no_rebuild(_bps_fed, caplog):
-    """BPS1: touching a docs/*.yaml file inside a member must not change the code
-    sig — reconstruct_processes reuses the stamped result (logs 'reusing
-    stamp-matched'), it does not call _trace_processes again."""
-    import logging
-    import os
-    import time
-
-    import rag_search.kb.bpre as bpre_mod
-
-    fed = _bps_fed
-    docs_file = fed.cart + "/docs/notes.yaml"
-    os.makedirs(os.path.dirname(docs_file), exist_ok=True)
-    with open(docs_file, "w") as f:
-        f.write("note: initial\n")
-    bpre_mod._invalidate_bpre_code_sig(fed.cart)
-    _bps_no_llm(fed.root)  # baseline build with the docs file already present
-
-    calls, orig = _bps_spy_trace_processes()
-    try:
-        time.sleep(1.1)  # ensure a distinct mtime tick
-        with open(docs_file, "w") as f:
-            f.write("note: edited\n")
-        bpre_mod._invalidate_bpre_code_sig(fed.cart)
-        with caplog.at_level(logging.INFO, logger="rag_search.kb.bpre"):
-            _bps_no_llm(fed.root)
-        assert not calls, "docs-only churn must not trigger a rebuild"
-        assert any("reusing stamp-matched" in r.message for r in caplog.records), (
-            "docs-only churn must reuse the stamped result, not reconstruct"
-        )
-    finally:
-        bpre_mod._trace_processes = orig
-
-
-def test_bps2_hidden_dir_tool_cache_churn_no_rebuild(_bps_fed):
-    """BPS2: touching a .claude/**/*.js tool-cache file (the live build_docauth_flow.js
-    pattern) must not trigger a rebuild — hidden dirs are excluded by the same
-    HR35 resolver _source_files now uses."""
-    import os
-    import time
-
-    import rag_search.kb.bpre as bpre_mod
-
-    fed = _bps_fed
-    cache_file = fed.checkout + "/.claude/skills/tool/build.js"
-    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-    with open(cache_file, "w") as f:
-        f.write("console.log('tool cache churn');\n")
-    bpre_mod._invalidate_bpre_code_sig(fed.checkout)
-    _bps_no_llm(fed.root)  # baseline build with the hidden-dir file already present
-
-    calls, orig = _bps_spy_trace_processes()
-    try:
-        time.sleep(1.1)
-        with open(cache_file, "w") as f:
-            f.write("console.log('tool cache churn again');\n")
-        bpre_mod._invalidate_bpre_code_sig(fed.checkout)
-        _bps_no_llm(fed.root)
-        assert not calls, "hidden-dir tool-cache churn must not trigger a rebuild"
-    finally:
-        bpre_mod._trace_processes = orig
-
-
-def test_bps3_real_code_drift_still_rebuilds(_bps_fed):
-    """BPS3: editing a real member .go service file must still flip the sig and
-    trigger a rebuild — the code-only signature must not become inert."""
-    import time
-
-    import rag_search.kb.bpre as bpre_mod
-
-    fed = _bps_fed
-    _bps_no_llm(fed.root)  # baseline build
-
-    calls, orig = _bps_spy_trace_processes()
-    try:
-        time.sleep(1.1)
-        checkout_go = fed.checkout + "/checkout.go"
-        with open(checkout_go, "a") as f:
-            f.write("\n// drift comment\n")
-        bpre_mod._invalidate_bpre_code_sig(fed.checkout)
-        _bps_no_llm(fed.root)
-        assert calls, "real member code drift must still trigger a rebuild"
-    finally:
-        bpre_mod._trace_processes = orig
-
-
-def test_bps4_convergence_second_call_reuses(_bps_fed):
-    """BPS4: two consecutive reconstruct_processes calls with no code change in
-    between must converge — the second call reuses (stamp written at the end of
-    the first rebuild equals the stamp read at the start of the second call)."""
-    import rag_search.kb.bpre as bpre_mod
-
-    fed = _bps_fed
-    _bps_no_llm(fed.root)  # first call: builds and stamps
-
-    calls, orig = _bps_spy_trace_processes()
-    try:
-        _bps_no_llm(fed.root)  # second call: no code change since first
-        assert not calls, "second consecutive call with no code change must reuse, not rebuild"
-    finally:
-        bpre_mod._trace_processes = orig
+# BPS1-BPS4 are gone with tier 3. They gated _bpre_code_sig: proving a code-only reuse signature
+# stayed quiescent under docs/hidden-dir churn while still catching real code drift. That defect
+# class did not leave with BPRE — the same shape lives on in _code_source_fingerprint, and FCG1-FCG4
+# above are its surviving gates, over the graph lane instead of a federation rebuild.
 
 
 def _wt_wait_for(pred, timeout: float = 6.0, step: float = 0.05) -> bool:

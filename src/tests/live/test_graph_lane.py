@@ -1,6 +1,6 @@
 """Live gates: on_change's heavy half must leave the caller free (no mocks).
 
-Getting the work off the inotify reader was necessary and not sufficient. `_KB_HEAVY_LOCK`
+Getting the work off the inotify reader was necessary and not sufficient. `_HEAVY_LOCK`
 serialises the heavy half regardless, so running it on the watcher's dispatch workers only
 ever meant a worker *blocked* on that lock. Measured on the live daemon after the reader fix:
 `rse-sweeps-0` inside `bounded_parse` holding the lock, `rse-sweeps-1` parked on it for 56
@@ -14,7 +14,7 @@ Output does not discriminate: the same rows land either way, eventually. The dif
 whether the *caller* is still available, so KL1 is a timing assertion, self-calibrated against
 an unblocked run rather than a hardcoded threshold.
 
-KL1  on_change must not block when _KB_HEAVY_LOCK is held by someone else (load-bearing)
+KL1  on_change must not block when _HEAVY_LOCK is held by someone else (load-bearing)
 KL2  the deferred pass must still happen — returning fast by dropping work would pass KL1
 KL3  submits for a busy project coalesce into one queued pass, not a growing backlog
 KL4  the lane waits without a timeout — notification-driven, never a poll clock
@@ -49,25 +49,25 @@ def _seed(safe_tmp_path) -> tuple[str, object]:
 def _fire(proj: str, files: list) -> None:
     """Drive the real on_change with the debounce and reuse stamp cleared (as _fire in WG)."""
     from rag_search.daemon import sweeps
-    sweeps._last_kb_enrich.pop(proj, None)
-    sweeps._last_enriched_sig.pop(proj, None)
+    sweeps._last_lane_run.pop(proj, None)
+    sweeps._last_labelled_sig.pop(proj, None)
     sweeps._last_index_fail.pop(proj, None)
     sweeps.on_change(proj, [str(f) for f in files])
 
 
 def _held(seconds: float) -> threading.Event:
-    """Hold _KB_HEAVY_LOCK for `seconds` on another thread; returns an 'is held now' event."""
-    from rag_search.daemon.sweeps import _KB_HEAVY_LOCK
+    """Hold _HEAVY_LOCK for `seconds` on another thread; returns an 'is held now' event."""
+    from rag_search.daemon.sweeps import _HEAVY_LOCK
 
     holding = threading.Event()
 
     def hold() -> None:
-        with _KB_HEAVY_LOCK:
+        with _HEAVY_LOCK:
             holding.set()
             time.sleep(seconds)
 
     threading.Thread(target=hold, daemon=True).start()
-    assert holding.wait(timeout=10.0), "fixture: could not acquire _KB_HEAVY_LOCK"
+    assert holding.wait(timeout=10.0), "fixture: could not acquire _HEAVY_LOCK"
     return holding
 
 
@@ -86,7 +86,7 @@ def test_kl1_on_change_does_not_block_on_the_heavy_lock(safe_tmp_path):
     t0 = time.monotonic()
     _fire(proj, [src])
     free = time.monotonic() - t0
-    assert sweeps._kb_lane_join(timeout=180.0), "KL1: the unblocked pass never finished"
+    assert sweeps._graph_lane_join(timeout=180.0), "KL1: the unblocked pass never finished"
 
     hold_s = free + 20.0
     _held(hold_s)
@@ -96,19 +96,19 @@ def test_kl1_on_change_does_not_block_on_the_heavy_lock(safe_tmp_path):
     _fire(proj, [src])
     blocked = time.monotonic() - t0
     assert blocked < free + 5.0, (
-        f"KL1: on_change took {blocked:.1f}s with _KB_HEAVY_LOCK held vs {free:.1f}s free "
+        f"KL1: on_change took {blocked:.1f}s with _HEAVY_LOCK held vs {free:.1f}s free "
         f"(lock was held {hold_s:.0f}s) — the caller is still waiting out another project's "
         "pass, which is the starvation the lane exists to end"
     )
-    # Drain before yielding: the hold thread still owns _KB_HEAVY_LOCK, and a following test
+    # Drain before yielding: the hold thread still owns _HEAVY_LOCK, and a following test
     # that needs it would fail in its fixture on this test's leftovers rather than its own code.
-    assert sweeps._kb_lane_join(timeout=180.0), "KL1: the deferred pass never drained"
+    assert sweeps._graph_lane_join(timeout=180.0), "KL1: the deferred pass never drained"
 
 
 def test_kl2_the_deferred_pass_still_happens(safe_tmp_path):
     """KL2: returning fast is only a fix if the work lands anyway.
 
-    Without this, KL1 is satisfied by an on_change that quietly drops the KB half — the exact
+    Without this, KL1 is satisfied by an on_change that quietly drops the heavy half — the exact
     silent-staleness trade WG7 exists to prevent. The symbol must reach graph.db, and it must
     arrive from the lane, after the lock that delayed it is released.
     """
@@ -133,7 +133,7 @@ def test_kl2_the_deferred_pass_still_happens(safe_tmp_path):
     assert "kl_zzq_deferred" not in syms(), (
         "KL2: extraction ran inline — on_change was supposed to have handed it to the lane"
     )
-    assert sweeps._kb_lane_join(timeout=180.0), "KL2: the lane never finished the deferred pass"
+    assert sweeps._graph_lane_join(timeout=180.0), "KL2: the lane never finished the deferred pass"
     assert "kl_zzq_deferred" in syms(), (
         "KL2: the deferred pass never landed — on_change returned fast by losing the work"
     )
@@ -143,7 +143,7 @@ def test_kl3_submits_for_a_busy_project_coalesce(safe_tmp_path):
     """KL3: a save storm against a project already mid-pass must not grow a queue.
 
     A `queue.Queue` would satisfy KL1 and KL2 and fail here: every submit would become its own
-    full KB pass, so a burst of N saves would cost N federation walks instead of one.
+    full graph pass, so a burst of N saves would cost N symbol re-derives instead of one.
     """
     from rag_search.daemon import sweeps
 
@@ -157,12 +157,12 @@ def test_kl3_submits_for_a_busy_project_coalesce(safe_tmp_path):
             # Let the lane take the first submit and park on the held lock, so the rest queue
             # behind a genuinely busy lane rather than an idle one.
             time.sleep(1.0)
-    with sweeps._kb_lane_cv:
-        queued = dict(sweeps._kb_lane_wanted)
+    with sweeps._graph_lane_cv:
+        queued = dict(sweeps._graph_lane_wanted)
     assert list(queued) == [proj], (
         f"KL3: expected exactly one coalesced entry for this project, got {list(queued)}"
     )
-    assert sweeps._kb_lane_join(timeout=180.0), "KL3: the lane never drained"
+    assert sweeps._graph_lane_join(timeout=180.0), "KL3: the lane never drained"
 
 
 def test_kl4_the_lane_waits_without_a_timeout():
@@ -177,7 +177,7 @@ def test_kl4_the_lane_waits_without_a_timeout():
 
     from rag_search.daemon import sweeps
 
-    tree = ast.parse(inspect.getsource(sweeps._kb_lane_run))
+    tree = ast.parse(inspect.getsource(sweeps._graph_lane_run))
     waits = [n for n in ast.walk(tree)
              if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "wait"]
     assert waits, "KL4: no wait() in the lane loop — it is not blocking on notifications at all"
