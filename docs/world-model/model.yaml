@@ -68,8 +68,10 @@ L2_components:
   embed:   {module: "rag_search.embed",   ops: [get_embedder, get_reranker], gpu: true}
   index:   {module: "rag_search.index",   ops: [index_project, VectorStore]}
   graph:   {module: "rag_search.graph",   ops: [extract_symbols, detect_communities, GraphStore]}
-  kb:      {module: "rag_search.kb",      ops: [answer_cache]}   # all that survives tier 3 — deterministic, no LLM
-  query:   {module: "rag_search.query",   ops: [search, compose_answer]}
+  # `kb` was the ninth component. Tier 3 left it holding one deterministic module, answer_cache,
+  # which moved into query/ on 2026-07-28 — a cache keyed on a query is a query concern, and a
+  # package named for a knowledge base that holds no knowledge is surface without a component.
+  query:   {module: "rag_search.query",   ops: [search, compose_answer, answer_cache]}
   server:  {module: "rag_search.server",  ops: [mcp, routes_pipeline, routes_project, _overview]}
   daemon:  {module: "rag_search.daemon",  ops: [sweeps, watcher, federation, scheduler]}
 

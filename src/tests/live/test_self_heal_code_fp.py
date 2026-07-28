@@ -2,6 +2,7 @@
 
 SH1 — _code_fingerprint() is stable across two calls (byte-equal).
 SH2 — _code_fingerprint() changes when a tracked module's bytes change.
+SH2b — every module _FINGERPRINT_MODULES names still exists (a deleted one hashes silently).
 SH3 — _pipeline_algo_version() includes the code fingerprint component.
 SH4 — baseline-seed writes the new stamp without touching symbols or communities.
 """
@@ -20,30 +21,59 @@ def test_sh1_code_fingerprint_stable():
     assert _code_fingerprint() == _code_fingerprint()
 
 
+def _module_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "rag_search"  # src/tests/live/ -> src/
+
+
 def test_sh2_code_fingerprint_changes_on_module_edit(tmp_path):
-    """SH2: fingerprint differs when a tracked module's bytes differ (via file perturb)."""
-    import hashlib
+    """SH2: the production hasher's output moves when a tracked module's bytes move.
 
-    from rag_search.daemon.sweeps import _code_fingerprint
+    This used to re-implement the hash beside the real one over a hand-written module list, so it
+    asserted its own arithmetic and not the shipped function — and when `graph/enrich.py` was
+    deleted with tier 3 the copy raised FileNotFoundError while `_code_fingerprint()` itself,
+    which suppresses OSError, went on working. It now copies the tracked modules to tmp_path,
+    checks the copies hash to the live fingerprint, then perturbs one copy on disk. Nothing under
+    src/ is written: a real edit there would re-derive all 160 fleet graphs.
+    """
+    from rag_search.daemon.sweeps import (
+        _FINGERPRINT_MODULES,
+        _code_fingerprint,
+        _fingerprint_paths,
+    )
 
-    root = Path(__file__).resolve().parents[3] / "src" / "rag_search"
-    fp_before = _code_fingerprint()
+    root = _module_root()
+    copies = []
+    for rel in _FINGERPRINT_MODULES:
+        dst = tmp_path / rel.replace("/", "__")
+        dst.write_bytes((root / rel).read_bytes())
+        copies.append(dst)
 
-    # Hash the same modules but with extractor.py content perturbed
-    modules = [
-        root / "graph" / "extractor.py",
-        root / "graph" / "enrich.py",
-        root / "graph" / "community.py",
-    ]
-    h = hashlib.sha1()
-    for i, p in enumerate(modules):
-        data = p.read_bytes()
-        if i == 0:
-            data = data + b"\n# perturbed"  # perturb extractor.py
-        h.update(data)
-    fp_perturbed = h.hexdigest()[:4]
+    assert _fingerprint_paths(copies) == _code_fingerprint(), (
+        "byte-identical copies must hash to the live fingerprint — otherwise the perturbation "
+        "below proves nothing about the shipped function"
+    )
+    copies[0].write_bytes(copies[0].read_bytes() + b"\n# perturbed")
+    assert _fingerprint_paths(copies) != _code_fingerprint(), (
+        f"perturbing {_FINGERPRINT_MODULES[0]} left the fingerprint unchanged — a code-only "
+        "change to the graph pipeline would not self-heal the fleet"
+    )
 
-    assert fp_perturbed != fp_before, "perturbed hash must differ from real fingerprint"
+
+def test_sh2b_every_fingerprinted_module_exists():
+    """SH2b: no dead entry in _FINGERPRINT_MODULES.
+
+    `_code_fingerprint` suppresses OSError, so a module deleted out from under the list is silent:
+    it contributes zero bytes and the fingerprint keeps working, while the list now claims to
+    track a file whose changes it cannot see. That is what `graph/enrich.py` was after R0.
+    """
+    from rag_search.daemon.sweeps import _FINGERPRINT_MODULES
+
+    root = _module_root()
+    missing = [rel for rel in _FINGERPRINT_MODULES if not (root / rel).exists()]
+    assert not missing, (
+        f"_FINGERPRINT_MODULES names files that do not exist: {missing} — drop them, or the "
+        "fingerprint silently stops covering what it advertises"
+    )
 
 
 def test_sh3_algo_version_includes_code_fp():

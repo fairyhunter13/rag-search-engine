@@ -31,8 +31,7 @@ Use this skill to check conformance and understand RSE's governing laws.
 | embed | `rag_search.embed` | get_embedder · get_reranker |
 | index | `rag_search.index` | index_project · VectorStore |
 | graph | `rag_search.graph` | extract_symbols · detect_communities · GraphStore |
-| kb | `rag_search.kb` | answer_cache |
-| query | `rag_search.query` | search · compose_answer |
+| query | `rag_search.query` | search · compose_answer · answer_cache |
 | server | `rag_search.server` | mcp · routes_pipeline · routes_project · _overview |
 | daemon | `rag_search.daemon` | sweeps · watcher · federation · scheduler |
 

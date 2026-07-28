@@ -46,8 +46,8 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
     from rag_search.embed.embedder import get_embedder
     from rag_search.graph.store import GraphStore
     from rag_search.index.store import VectorStore
-    from rag_search.kb.answer_cache import get as _cache_get
-    from rag_search.kb.answer_cache import set as _cache_set
+    from rag_search.query.answer_cache import get as _cache_get
+    from rag_search.query.answer_cache import set as _cache_set
     from rag_search.query.ask import compose_answer
     from rag_search.query.search import search_federation as _search_fed
 

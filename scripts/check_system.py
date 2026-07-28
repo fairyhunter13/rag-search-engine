@@ -58,13 +58,13 @@ CORE_MODULES = [
     "rag_search.embed",
     "rag_search.index.store",
     "rag_search.graph.store",
-    # kb.wiki left with tier 3. Re-pointed rather than dropped: kb/ still ships
-    # answer_cache (deterministic, no LLM — tier 2), and query/ask.py plus
-    # server/routes_chat.py both import it, so the package is still worth an
-    # import check. Dropping the row silently would have been the same stale-
-    # allowlist hole R0 has found repeatedly — this list has no exhaustiveness
-    # test, so each entry has to be re-pointed or removed by hand.
-    "rag_search.kb.answer_cache",
+    # kb.wiki left with tier 3, and answer_cache — the one deterministic module the package still
+    # held — moved to query/ on 2026-07-28, retiring `rag_search.kb` entirely. Re-pointed rather
+    # than dropped: query/ask.py and server/routes_chat.py both import it, so it is still worth an
+    # import check. Dropping the row silently would have been the same stale-allowlist hole R0 has
+    # found repeatedly — this list has no exhaustiveness test, so each entry has to be re-pointed
+    # or removed by hand.
+    "rag_search.query.answer_cache",
     "rag_search.query.search",
     "rag_search.daemon",
     "rag_search.cli",

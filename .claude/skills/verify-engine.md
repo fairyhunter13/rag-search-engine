@@ -8,8 +8,12 @@ Every feature of rag-search-engine, end-to-end, against your registered indexed 
 
 ### MCP tool surfaces
 - `search` — code, docs, all scopes; multiple queries; non-empty results
-- `ask` — scopes: all, architecture, global, feature, business; non-empty answers
-- `graph` — callers, callees, impact_narrative, semantic_trace, path; non-empty responses
+- `ask` — scopes: all, architecture; non-empty answers. Rewritten 2026-07-28: `global`, `feature`
+  and `business` were names for orderings of the same two ingredients once their distinguishing
+  filters left with tier 3, and an unrecognized scope now errors instead of returning chunk context
+- `graph` — definition, callers, callees, impact, impact_narrative, path; non-empty responses.
+  `semantic_trace` was deleted 2026-07-28: the implementation went in 3fe4b29 and only the name
+  survived, silently answering with `path` semantics
 - `overview` — structure, projects, status, metrics, communities, import_cycles, surprising_connections, suggested_questions, validate. The five generative variants (patterns, service_mesh, feature_map, process_flows, business_rules) were deleted with tier 3 on 2026-07-28
 - `index` — register/remove roundtrip
 
@@ -18,10 +22,10 @@ Each must return a non-empty, grounded answer — not a "no data" fallback. Rewr
 2026-07-28: the two questions that routed through `overview(what='process_flows')` and
 `overview(what='service_mesh')` had no surface left to answer them once tier 3 was deleted,
 so they now ask the same thing of the deterministic graph, which is what survived.
-1. "Which code is related to checkout / key feature?" → `search` + `graph(semantic_trace)`
-2. "How does service communication work?" → `ask(scope='feature')` + `graph(callers)`
+1. "Which code is related to checkout / key feature?" → `search` + `graph(callers)`
+2. "How does service communication work?" → `ask(scope='all')` + `graph(callers)`
 3. "What is the root cause of a bug?" → `ask` (debug) + `graph(impact_narrative)`
-4. "How do we trace a function call?" → `graph(semantic_trace)` + `graph(callers/callees)`
+4. "How do we trace a function call?" → `graph(path, --to-symbol)` + `graph(callers/callees)`
 5. "What are the main modules?" → `overview(what='communities')` — structural labels, no narration
 6. "Where does this project import cycles?" → `overview(what='import_cycles')`
 

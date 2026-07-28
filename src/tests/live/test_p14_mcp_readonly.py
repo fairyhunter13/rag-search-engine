@@ -3,8 +3,12 @@
 Static guard: mcp.py must not reference the synthesis/LLM-generation functions
 (chat, _ask synthesis, impact_narrative LLM call, semantic_trace LLM call).
 
-Runtime smoke: ask + graph(impact_narrative) + graph(semantic_trace) return
+Runtime smoke: ask + graph(impact_narrative) + graph(path) return
 structured data assembled from pre-built DB artifacts, NOT prose from LLM.
+
+The static guard still names `semantic_trace` deliberately: the function is long deleted, so
+the assertion matches nothing, which is the point — it is the reintroduction guard, not a
+description of a live call site.
 """
 import asyncio
 import inspect
@@ -88,19 +92,25 @@ def test_impact_narrative_returns_structured_json():
     assert data["risk"] in ("low", "medium", "high"), f"risk must be low/medium/high; got {data['risk']!r}"
 
 
-def test_semantic_trace_returns_structured_json():
-    """P14.4 runtime: graph(semantic_trace) returns JSON with path data, no LLM prose."""
+def test_path_returns_structured_json():
+    """P14.4 runtime: graph(path) returns JSON with path data, no LLM prose.
+
+    This test was written against `semantic_trace` and passed by calling it with a `to_symbol`,
+    which the old fallthrough handed straight to the `path` branch — so it asserted the `path`
+    contract under another name and would have gone on passing after `semantic_trace` was gutted.
+    It now names the relation it actually exercises.
+    """
     from rag_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
 
     svc_member = service_member()  # sample promo-svc, not a real project
-    result = asyncio.run(graph_tool("NewService", svc_member, "semantic_trace", "Run"))
+    result = asyncio.run(graph_tool("NewService", svc_member, "path", "Run"))
     data = json.loads(result)
     assert "from" in data and "to" in data, (
-        f"semantic_trace must return JSON with 'from' and 'to' keys; got: {result[:200]}"
+        f"path must return JSON with 'from' and 'to' keys; got: {result[:200]}"
     )
-    assert "path" in data, "semantic_trace must include 'path' list"
-    assert "summary" in data, "semantic_trace must include 'summary' string"
+    assert "path" in data, "path must include 'path' list"
+    assert "summary" in data, "path must include 'summary' string"
 
 
 # A2 and A3 were the no-regex half of HR15 applied to two tier-3 modules, and both had to leave

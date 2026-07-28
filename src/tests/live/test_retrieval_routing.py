@@ -1,12 +1,12 @@
 """Phase 2.5 — adaptive reasoning-retrieval (RAGRouter-Bench framing).
 
-RR1  global scope produces ## Architecture section (flat-L1 tree-walk, WS-B)
-RR2  architecture scope produces Architecture section or tree-walk content
-RR3  feature scope is code-focused (no tree-walk header)
-RR4  tree-walk context grounded — every cited community exists in DB
+RR1  all scope puts Code before Architecture
+RR2  architecture scope puts Architecture before Code — the one thing that separates the two
+RR3  an unrecognized scope errors and names the valid set
+RR4  community context grounded — every cited community exists in DB
 RR5  adaptive MR — architecture query cites >= refs as narrow query
 RR6  determinism MR — same query produces byte-identical context
-RR7  _tree_walk_context returns '' when no summaries exist
+RR7  _community_summaries returns '' when no summaries exist
 """
 from __future__ import annotations
 
@@ -26,55 +26,65 @@ def _open_stores(project_with_communities):
     return [GraphStore(project_graph_db(p)) for p in paths]
 
 
-def test_rr1_global_scope_tree_walk_header(project_with_communities):
-    """RR1: global scope context contains Architecture section with flat-L1 community context."""
+def test_rr1_all_scope_puts_code_first(project_with_communities):
+    """RR1: `all` assembles Code then Architecture.
+
+    The assertion is on *order*, not presence. Both surviving scopes contain both sections, so
+    `"Architecture" in ctx` — what RR1 and RR2 both used to assert — passes even if the ordering
+    branch is inverted or deleted. Ordering is the only thing the scope selects.
+    """
     from rag_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
-        ctx = compose_answer("How does the overall architecture work?", [], stores, scope="global")
-        assert "Architecture" in ctx, (
-            f"global scope must include ## Architecture section; got: {ctx[:200]!r}"
+        ctx = compose_answer("How does the overall architecture work?", [], stores, scope="all")
+        assert len(ctx.strip()) > 20, f"all scope context is empty: {ctx!r}"
+        assert ctx.index("## Code") < ctx.index("## Architecture"), (
+            f"all scope must lead with Code; got: {ctx[:200]!r}"
         )
-        assert len(ctx.strip()) > 20, f"global scope context is empty: {ctx!r}"
     finally:
         for s in stores:
             s.close()
 
 
-def test_rr2_architecture_scope_tree_walk_header(project_with_communities):
-    """RR2: architecture scope context contains tree-walk header."""
+def test_rr2_architecture_scope_puts_architecture_first(project_with_communities):
+    """RR2: `architecture` assembles Architecture then Code — the inverse of RR1."""
     from rag_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
         ctx = compose_answer("What are the main modules?", [], stores, scope="architecture")
-        assert "tree-walk" in ctx.lower() or "Architecture" in ctx, (
-            f"architecture scope must include tree-walk header; got: {ctx[:200]!r}"
+        assert ctx.index("## Architecture") < ctx.index("## Code"), (
+            f"architecture scope must lead with Architecture; got: {ctx[:200]!r}"
         )
     finally:
         for s in stores:
             s.close()
 
 
-def test_rr3_feature_scope_no_tree_walk(project_with_communities):
-    """RR3: feature scope does not include tree-walk header."""
+def test_rr3_unknown_scope_errors_with_valid_set(project_with_communities):
+    """RR3: an unrecognized scope errors instead of silently answering.
+
+    `global`, `feature` and `business` were removed once they stopped selecting anything
+    distinct. The failure mode this guards is the one they left behind: the old fallthrough
+    returned plain chunk context, so a mistyped scope produced a plausible answer.
+    """
     from rag_search.query.ask import compose_answer
     stores = _open_stores(project_with_communities)
     try:
-        ctx = compose_answer("authenticate user token", [], stores, scope="feature")
-        assert "hierarchy tree-walk" not in ctx.lower(), (
-            "feature scope must not use tree-walk header"
-        )
+        for gone in ("global", "feature", "business", "wiki"):
+            ctx = compose_answer("authenticate user token", [], stores, scope=gone)
+            assert "unknown scope" in ctx, f"scope={gone!r} must error; got: {ctx[:200]!r}"
+            assert "architecture" in ctx, f"scope error must name the valid set; got: {ctx!r}"
     finally:
         for s in stores:
             s.close()
 
 
-def test_rr4_tree_walk_context_grounded(project_with_communities):
+def test_rr4_community_summaries_grounded(project_with_communities):
     """RR4: every community title cited in tree-walk exists in the DB."""
-    from rag_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _community_summaries
     stores = _open_stores(project_with_communities)
     try:
-        ctx = _tree_walk_context("architecture overview", stores)
+        ctx = _community_summaries("architecture overview", stores)
         if not ctx:
             return
         all_titles: set[str] = set()
@@ -90,11 +100,11 @@ def test_rr4_tree_walk_context_grounded(project_with_communities):
 
 def test_rr5_adaptive_mr(project_with_communities):
     """RR5: architecture query yields >= community refs as narrow pinpoint query."""
-    from rag_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _community_summaries
     stores = _open_stores(project_with_communities)
     try:
-        arch = len(re.findall(r"\[", _tree_walk_context("overall architecture and main domains", stores)))
-        code = len(re.findall(r"\[", _tree_walk_context("authenticate", stores, top_k=1)))
+        arch = len(re.findall(r"\[", _community_summaries("overall architecture and main domains", stores)))
+        code = len(re.findall(r"\[", _community_summaries("authenticate", stores, top_k=1)))
         assert arch >= code, f"RR5: architecture ({arch}) should cite >= refs as narrow ({code})"
     finally:
         for s in stores:
@@ -103,11 +113,11 @@ def test_rr5_adaptive_mr(project_with_communities):
 
 def test_rr6_determinism_mr(project_with_communities):
     """RR6: same query produces byte-identical tree-walk context on two calls."""
-    from rag_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _community_summaries
     stores = _open_stores(project_with_communities)
     try:
         q = "what are the main architectural domains?"
-        assert _tree_walk_context(q, stores) == _tree_walk_context(q, stores), (
+        assert _community_summaries(q, stores) == _community_summaries(q, stores), (
             "RR6: tree-walk context must be deterministic"
         )
     finally:
@@ -116,10 +126,10 @@ def test_rr6_determinism_mr(project_with_communities):
 
 
 def test_rr7_empty_fallback_no_summaries(safe_tmp_path):
-    """RR7: _tree_walk_context returns '' when no community summaries exist."""
+    """RR7: _community_summaries returns '' when no community summaries exist."""
     from rag_search.graph.extractor import extract_symbols, symbol_id
     from rag_search.graph.store import GraphStore
-    from rag_search.query.ask import _tree_walk_context
+    from rag_search.query.ask import _community_summaries
     fpath = safe_tmp_path / "mod.py"
     fpath.write_text("def foo(): pass\n")
     gs = GraphStore(safe_tmp_path / "g.db")
@@ -128,5 +138,5 @@ def test_rr7_empty_fallback_no_summaries(safe_tmp_path):
                          s.name, s.qualified_name, s.kind, str(fpath),
                          s.start_line, s.end_line, s.language)
     gs.commit()
-    assert _tree_walk_context("architecture", [gs]) == "", "RR7: expected '' when no summaries"
+    assert _community_summaries("architecture", [gs]) == "", "RR7: expected '' when no summaries"
     gs.close()

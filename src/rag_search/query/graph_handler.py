@@ -1,9 +1,13 @@
-"""Graph query relations: definition, callers, callees, impact, impact_narrative."""
+"""Graph query relations: definition, callers, callees, impact, impact_narrative, path."""
 from __future__ import annotations
 
 from rag_search.graph.store import GraphStore
 
 _SYM_KEYS = ("sid", "name", "qualified_name", "kind", "file", "start_line", "end_line", "language")
+
+# Every relation run_graph implements, and the set the MCP + CLI docstrings must agree with.
+# test_surface_consistency.py holds them to it.
+_RELATIONS = ("definition", "callers", "callees", "impact", "impact_narrative", "path")
 
 
 def _lookup_sids(store: GraphStore, symbol: str) -> list[str]:
@@ -181,6 +185,11 @@ def run_graph(
                 f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."
             ),
         })
+    # Everything above returned; only `path` is left. It used to be the fallthrough, which is how
+    # `semantic_trace` outlived its implementation (deleted in 3fe4b29): the name stayed advertised
+    # in the tool docstrings and quietly answered with path semantics instead of erroring.
+    if relation != "path":
+        return _dump({"error": f"unknown relation={relation!r}", "valid": sorted(_RELATIONS)})
     _note = "call paths are per-member; cross-repo paths are not represented"
     if not to_symbol:
         return _dump({"error": f"relation='{relation}' requires to_symbol"})

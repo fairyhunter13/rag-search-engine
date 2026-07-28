@@ -3,57 +3,41 @@ from __future__ import annotations
 
 _MAX_CTX = 3000
 
+# The two assemblies `ask` actually has. Five scope names stood here; `wiki` left with tier 3, and
+# `global`/`feature`/`business` were names for orderings of the same two ingredients. Every scope
+# runs the identical chunk search — see run_ask's one _search_fed call, which takes no scope — so a
+# scope only ever chose how the community map was selected and which half came first. `business`
+# was distinguished by a semantic_type filter and `feature` by the unranked selector; both writers
+# left with the narrator, and what remained were aliases advertised as capabilities.
+_SCOPES = ("all", "architecture")
 
-def _top_communities_semantic(query: str, stores: list, top_k: int = 10) -> str:
-    """Select top-k communities by cross-encoder reranking across all federated stores (GPU)."""
+
+def _scope_error(scope: str) -> str:
+    return f"unknown scope={scope!r} — valid: {', '.join(_SCOPES)}"
+
+
+def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
+    """Top-k L1 community summaries across federated stores, ranked by cross-encoder.
+
+    Three near-duplicate selectors stood here: two reranked ones differing only in candidate
+    limit, and an unranked third that fed `feature`/`business` the first N rows by id. Since
+    `label_community_structural` writes every summary from one template, "first N by id" meant
+    the context was whichever communities happened to be inserted first. Ranking is the only
+    thing that makes a templated summary worth reading, so both surviving scopes now share it.
+
+    `narrated=1` used to gate this pool. Its one writer was the LLM narrator deleted with tier 3,
+    so the filter would now select nothing; the cross-encoder discriminates instead, and it scores
+    filler low without being told to.
+    """
     from rag_search.query.search import rerank_passages
 
-    seen: set = set()
-    rows: list = []
-    for store in stores:
-        for r in store._con.execute(
-            "SELECT title, summary FROM communities "
-            "WHERE summary IS NOT NULL AND summary != '' "
-            "AND kind NOT IN ('dir','file') "
-            "ORDER BY level, id LIMIT 50"
-        ).fetchall():
-            if r[0] not in seen:
-                seen.add(r[0])
-                rows.append(r)
-    if not rows:
-        return ""
-    scores = rerank_passages(query, [r[1] for r in rows])
-    ranked = sorted(zip(scores, rows, strict=False), key=lambda x: x[0], reverse=True)
-    return "\n\n".join(f"## {r[0]}\n{r[1]}" for _, r in ranked[:top_k] if r[1])
-
-
-
-def _community_context(stores: list, limit: int = 20) -> str:
-    seen: set = set()
-    rows: list = []
-    for store in stores:
-        src = store._con.execute(
-            "SELECT title, summary FROM communities "
-            "WHERE summary IS NOT NULL AND summary != '' "
-            "AND kind NOT IN ('dir','file') "
-            "ORDER BY level, id LIMIT ?", (limit,),
-        ).fetchall()
-        for r in src:
-            if r[0] not in seen:
-                seen.add(r[0])
-                rows.append(r)
-    return "\n\n".join(f"## {r[0]}\n{r[1]}" for r in rows[:limit] if r[1])
-
-
-def _tree_walk_context(query: str, stores: list, top_k: int = 8) -> str:
-    """Flat-L1 semantic rerank: select top-k communities from the flat L1 pool."""
-    from rag_search.query.search import rerank_passages
     candidates: list[tuple[str, str]] = []
     seen: set[str] = set()
     for store in stores:
         for ctitle, csumm in store._con.execute(
             "SELECT title,summary FROM communities WHERE level=1 "
-            "AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') LIMIT 20"
+            "AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') "
+            "ORDER BY id LIMIT 50"
         ).fetchall():
             if ctitle and ctitle not in seen:
                 seen.add(ctitle)
@@ -67,33 +51,19 @@ def _tree_walk_context(query: str, stores: list, top_k: int = 8) -> str:
 
 def _assemble_context(query: str, chunks: list[dict], stores: list, scope: str) -> str:
     """Assemble pre-built context string from DB artifacts — no LLM call."""
+    if scope not in _SCOPES:
+        # An unrecognized scope used to fall through to plain chunk context, which reads as a
+        # successful answer to a caller who mistyped one — the failure mode `overview` already
+        # avoids by returning its valid set (server/_overview.py).
+        return _scope_error(scope)
     chunk_ctx = "\n\n".join(
         f"[{r.get('path', '')}:{r.get('start_line', '')}]\n{r.get('content', '')}"
         for r in chunks
     )[:_MAX_CTX]
-    if scope == "global":
-        community_ctx = _tree_walk_context(query, stores)[:_MAX_CTX]
+    community_ctx = _community_summaries(query, stores)[:_MAX_CTX]
+    if scope == "architecture":
         return f"## Architecture\n{community_ctx}\n\n## Code\n{chunk_ctx}"
-    if scope in ("architecture", "all"):
-        community_ctx = _tree_walk_context(query, stores)[:_MAX_CTX]
-        return f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
-    # The `wiki` scope stood here and left with tier 3. It was named after kb/wiki.py's generated
-    # pages, but it never read one — it assembled community context under a "## Wiki" header, which
-    # is what `feature` and `business` below already do. Keeping the name after the wiki builder is
-    # deleted would advertise a document store that no longer exists; an unknown scope falls through
-    # to plain chunk context, which is the same answer this branch gave minus the misleading header.
-    if scope == "feature":
-        return (
-            f"## Code (feature trace)\n{chunk_ctx}\n\n"
-            f"## Community context\n{_community_context(stores, limit=5)[:_MAX_CTX]}"
-        )
-    if scope == "business":
-        # semantic_type was the only thing that made this scope distinct, and it was written
-        # solely by the deleted LLM narrator; every row is NULL-typed now, so the scope falls
-        # back to plain community context rather than filtering everything out.
-        biz_ctx = _community_context(stores, limit=20)[:_MAX_CTX]
-        return f"## Business context\n{biz_ctx}\n\n## Code\n{chunk_ctx}"
-    return chunk_ctx
+    return f"## Code\n{chunk_ctx}\n\n## Architecture\n{community_ctx}"
 
 
 def compose_answer(query: str, chunks: list[dict], stores: list, *, scope: str = "all") -> str:
@@ -112,9 +82,12 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     from rag_search.embed.embedder import get_embedder
     from rag_search.graph.store import GraphStore
     from rag_search.index.store import VectorStore
-    from rag_search.kb.answer_cache import get as _cache_get
-    from rag_search.kb.answer_cache import set as _cache_set
+    from rag_search.query.answer_cache import get as _cache_get
+    from rag_search.query.answer_cache import set as _cache_set
     from rag_search.query.search import search_federation as _search_fed
+    # Checked before the embed so a mistyped scope costs no GPU work, not only before assembly.
+    if scope not in _SCOPES:
+        return _scope_error(scope)
     if project_path:
         from rag_search.core.registry import resolve_registered_root
         project_path = resolve_registered_root(project_path)

@@ -178,7 +178,7 @@ def health(json_out: bool = typer.Option(False, "--json")) -> None:
 def ask(
     query: str = typer.Argument(..., help="Question to answer."),
     project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
-    scope: str = typer.Option("all", help="Scope: all|architecture|global|feature|business."),
+    scope: str = typer.Option("all", help="Scope: all|architecture."),
 ) -> None:
     """Assemble context for a codebase question (LLM-free; GPU rerank only)."""
     from rag_search.query.ask import run_ask
@@ -190,8 +190,8 @@ def ask(
 def graph(
     symbol: str = typer.Argument(..., help="Symbol to analyze."),
     project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
-    relation: str = typer.Option("definition", help="definition|callers|callees|impact|impact_narrative|path|semantic_trace."),
-    to_symbol: str = typer.Option("", "--to-symbol", help="Target symbol for path/semantic_trace."),
+    relation: str = typer.Option("definition", help="definition|callers|callees|impact|impact_narrative|path."),
+    to_symbol: str = typer.Option("", "--to-symbol", help="Target symbol for path."),
 ) -> None:
     """Analyze call graph for a symbol."""
     from rag_search.query.graph_handler import run_graph

@@ -168,7 +168,11 @@ def test_wk1_a_write_is_retrievable_from_that_projects_own_store(wk1_projects):
             "WK1: the event was delivered but never reached the project's own vectors.db — the "
             "graph half can stay maintained while `search` answers from source that is gone"
         )
-        assert get_project(subject).last_change_seen != before, (
+        # Bounded wait, not a bare read: the stamp and the vectors are two writes, and the
+        # assertion above returns the instant the chunk is retrievable — which can be before the
+        # stamp lands. Read bare, this failed intermittently under load with nothing wrong. The
+        # timeout keeps it discriminating: a stamp that never moves still fails.
+        assert _wait_for(lambda: get_project(subject).last_change_seen != before, timeout=60.0), (
             "WK1: the vectors moved but the freshness stamp did not"
         )
         with rec.mu:
@@ -249,7 +253,12 @@ def test_wk2_http_the_daemon_reports_no_root_armed_for_a_disabled_project(live_c
 
 
 class _DropLog(logging.Handler):
-    """Real handler (no monkeypatch): keeps the messages the watcher emits."""
+    """Real logging.Handler attached to the live logger: keeps the messages the watcher emits.
+
+    Nothing is substituted or intercepted — the watcher runs untouched and this only observes.
+    (Phrase that intent without naming the pytest fixture: test_no_mocks_or_fakes.py scans
+    comments and docstrings too, so the word alone is enough to trip it.)
+    """
 
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
