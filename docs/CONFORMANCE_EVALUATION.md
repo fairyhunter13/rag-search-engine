@@ -3,9 +3,15 @@
 > **Date:** June 27 2026 (final verification pass; all 711 tests green)
 > **Scope:** RSE (`rag-search-engine`) — `docs/world-model/` · `docs/architecture/` · `docs/info-hierarchy.md` · `vendor/okf/`
 >
-> **Amended 2026-07-28:** docgen was deleted (module, submodule, tests, CLI and dashboard routes).
-> The rows it owned are marked *retired* rather than removed, so this scorecard still reads as a
-> record of what was checked; nothing below claims a docgen guard is currently passing.
+> **Amended 2026-07-28, twice.** First for docgen (module, submodule, tests, CLI and dashboard
+> routes), then for **the whole of tier 3** — `kb/bpre*.py`, `graph/enrich.py`, `graph/llm.py`,
+> `kb/wiki.py`, `kb/okf.py`, `vendor/okf/`, `kb/patterns.py`, `kb/valueflow.py`,
+> `kb/resolve_rerank.py` and every test that guarded them. **DeepSeek is no longer in this repo.**
+> The rows they owned are marked *retired* rather than removed, keeping their ids so the numbering
+> is never reused; nothing below claims a deleted guard is currently passing. A row still reading
+> "Pass" names a test that was verified to exist on 2026-07-28 — that re-verification is the reason
+> P6, P7, HR11 and HR15 changed too, since their tests had been *renamed* rather than deleted and
+> this scorecard was the last place still citing the old names.
 > **Method:** `check_world_model.py --all` + static source reads + `test_world_model_traceability.py`
 > **Verdict:** CONFORMS (all checkable L1 invariants pass; 5 gaps found and remediated this session)
 
@@ -16,27 +22,27 @@
 | P | Principle | Status | Evidence |
 |---|-----------|--------|----------|
 | P0 | GPU-only inference; CPU fallback fatal | Pass | `core/gpu.py` raises if providers empty; checker CONFORMS |
-| P1 | No local generative LLM; KB=DeepSeek; chat=claude-haiku-4-5 | Pass | `test_no_local_llm_tokens_anywhere_in_src` passes |
+| P1 | No local generative LLM; chat=claude-haiku-4-5 *(the "KB=DeepSeek" clause came out 2026-07-28 — there is no KB and no DeepSeek; the principle got **stronger**, since `claude -p` on one route is now the only generative call in the system)* | Pass | `test_no_local_llm_tokens_anywhere_in_src` passes; `test_deepseek_api_key_has_no_reader` asserts the absence rather than assuming it |
 | P2 | MCP query path: embed+rerank only (no generative LLM) | Pass | `server/mcp.py` graph tool uses deterministic substitutes; dead `semantic_trace`/`impact_narrative` deleted (commit 3fe4b29) |
 | P3 | Federation = query-time union; no cross-repo edges | Pass | `test_inv1_no_inlining`; checker predicate scoped to graph/index/daemon |
 | P4 | Event-driven indexing; no periodic sweeps | Pass | `daemon/watcher.py` + scheduler; checker CONFORMS |
 | P5 | Two-stage retrieval: vector recall to cross-encoder rerank | Pass | `query/search.py`; checker predicate tightened to `rerank.*skip` |
-| P6 | No heuristics — tree-sitter + LLM only in Category A | Pass | `test_no_code_semantic_regex_in_category_a` passes |
-| P7 | Public-repo hygiene: no absolute device paths in artifacts | Pass | `test_no_absolute_device_path_leaks` passes |
+| P6 | No heuristics — tree-sitter only *(the "+ LLM" escape hatch and the Category-A scope both went 2026-07-28; Category A **is empty**, so the guard now scans all of `rag_search/` against a four-module allowlist)* | Pass | `test_no_code_semantic_regex_outside_allowlist` passes — **renamed** from `..._in_category_a`, which no longer exists |
+| P7 | Public-repo hygiene: no absolute device paths in artifacts. **The artifact writers this scoped (`kb/wiki.py`, `kb/bpre.py`) are deleted and RSE writes no artifacts at all**, so P7 is retired 2026-07-28 and P18's whole-tracked-tree guard is the surviving check | Retired | superseded by P18 / `test_no_absolute_home_paths` (`test_no_absolute_device_path_leaks` no longer exists) |
 | P8 | No mocks in tests | Pass | `test_no_mocks_or_fakes.py` passes; checker excludes guard file |
 | P9 | Flat-L1 communities only (WS-B 2026-06-26) | Pass | `daemon/sweeps.py:147` enforces delete; predicate updated |
 | P10 | Every line of code is a liability | Pass (MANUAL) | Dead LLM fns deleted this session |
 | P11 | Push after every commit | Pass (MANUAL) | Zero unpushed maintained |
-| P12 | Doc-tooling LLM-native via `claude -p`; no tree-sitter on doc path | Pass (OKF half) | `test_okf_no_tree_sitter_import_in_vendor` passes; docgen half retired 2026-07-28 |
-| P13 | OKF = manual-trigger only | Pass | `test_okf_not_in_sweeps` passes; docgen half retired 2026-07-28 |
-| P14 | LLM lanes; no cross-lane calls | Pass (MANUAL) | `test_inference_lanes.py` lane guards pass. **Three lanes since 2026-07-28** — doc-tooling deleted, so `claude -p` has exactly one caller; DeepSeek leaves with tier 3 |
-| P15 | Kill-switch RSE_OKF=0 to no output | Pass | `test_okf_kill_switch_off` passes; `RSE_DOCGEN` retired 2026-07-28 (no reader) |
+| P12 | *(retired 2026-07-28 — doc-tooling is gone whole. The docgen half went first, then OKF: `kb/okf.py` and `vendor/okf/` are deleted, so there is no doc path for a rule about it to govern)* | Retired | — |
+| P13 | *(retired 2026-07-28 with OKF — `test_okf_not_in_sweeps` is deleted along with its subject)* | Retired | — |
+| P14 | LLM lanes; no cross-lane calls | Pass (MANUAL) | `test_inference_lanes.py` lane guards pass. **Two lanes since 2026-07-28** — GPU (embed + rerank, non-generative) and `claude -p` (dashboard chat, one caller). Four until docgen went, three for the few hours DeepSeek outlived it |
+| P15 | *(retired 2026-07-28 — `RSE_OKF` and `RSE_DOCGEN` both have no reader; a kill-switch for deleted code is not a guard)* | Retired | — |
 
 ---
 
 ## 2. L3 HR Behavior Specs — traceability
 
-`test_world_model_traceability.py::test_l3_rtm_all_tests_resolve` verifies every `model.yaml` L3_specs `test:` name resolves to a live `def test_...`. All 17 mappings resolve (7 were broken before this session; all fixed, commit d0305bb).
+`test_world_model_traceability.py::test_l3_rtm_all_tests_resolve` verifies every `model.yaml` L3_specs `test:` name resolves to a live `def test_...`. All **18** mappings resolve (17 in June 2026, 7 of them broken and fixed in commit d0305bb; the register lost HR12/HR13/HR23/HR25–HR29 and HR36 to tier 3 on 2026-07-28, and had gained HR32–HR35 and HR37–HR40 before that, leaving HR1/4/6/8/9/10/11/15/20/30/32–35/37–40). **That gate is why this table's rot was findable at all** — it covers `model.yaml`, not this page, so the rows below had drifted while the register stayed green.
 
 | HR | Spec | Test | Status |
 |----|------|------|--------|
@@ -46,17 +52,23 @@
 | HR8 | Two-stage retrieval; rerank authority | `test_rerank_passages_only_in_gpu_lane` | Pass (was broken) |
 | HR9 | MCP path no generative LLM | `test_mcp_handlers_have_no_llm_generation` | Pass (was broken) |
 | HR10 | Chat = claude-haiku-4-5 only | `test_chat_lane_is_haiku_only` | Pass (was broken) |
-| HR11 | semantic_type DeepSeek batch-20 | `test_ab3_no_type_dominates` | Pass |
-| HR12 | KB enrichment = DeepSeek only | `test_kb_enrich_is_deepseek_only` | Pass |
-| HR13 | Wiki paths root-relative; no abs paths | `test_community_page_structure` | Pass (was broken) |
-| HR15 | No re.compile in Category A | `test_no_code_semantic_regex_in_category_a` | Pass |
+| HR11 | semantic_type **abstains** — the community tail is a true SQL NULL *(rewritten 2026-07-28: the DeepSeek classify batch that assigned it is deleted, so every community is the abstaining case and what is left to protect is that `community.py` still writes NULL)* | `test_ab1_ab2_tail_is_sql_null` | Pass — `test_ab3_no_type_dominates` went **vacuous** the same day (no writer ⇒ empty row set ⇒ it cannot fail) and was deleted rather than left green |
+| HR12 | *(retired 2026-07-28 with tier 3 — there is no KB enrichment and no DeepSeek)* | — | Retired |
+| HR13 | *(retired 2026-07-28 with `kb/wiki.py` — no wiki, no wiki paths)* | — | Retired |
+| HR15 | No `re.*` or keyword/mapping-table heuristic for code semantics anywhere in `rag_search/`, outside the four intrinsic-mechanism files *(Category A **is empty** since 2026-07-28, so the guard got **wider**: one scan over the whole package instead of seven `kb/` files)* | `test_no_code_semantic_regex_outside_allowlist` | Pass — **renamed** from `..._in_category_a` |
 | HR20 | Partition quality gate | `test_partition_quality_on_sample` | Pass (was broken) |
-| HR25 | Doc-tooling LLM-native; no tree-sitter | `test_okf_no_tree_sitter_import_in_vendor` | Pass (docgen half retired 2026-07-28) |
-| HR26 | OKF manual-trigger only | `test_okf_not_in_sweeps` | Pass (docgen half retired 2026-07-28) |
+| HR25 | *(retired 2026-07-28 — `vendor/okf/` and `kb/okf.py` deleted; the docgen half had gone hours earlier)* | — | Retired |
+| HR26 | *(retired 2026-07-28 with OKF)* | — | Retired |
 | HR27 | *(retired 2026-07-28 — docgen deleted, `RSE_DOCGEN` has no reader)* | — | Retired |
-| HR28 | OKF v0.1 bundle structure | `test_okf_llm_generate_structure` | Pass |
-| HR29 | Kill-switch RSE_OKF=0 | `test_okf_kill_switch_off` | Pass |
+| HR28 | *(retired 2026-07-28 with OKF — no bundle is written)* | — | Retired |
+| HR29 | *(retired 2026-07-28 with OKF — `RSE_OKF` has no reader)* | — | Retired |
 | HR30 | MCP surface = 5 tools only | `test_mcp_has_five_tools` | Pass |
+
+**HR32–HR40 are deliberately not listed here.** They post-date this snapshot, and duplicating the
+register into a second table is what let the rows above rot unnoticed while `model.yaml` stayed
+green under `test_l3_rtm_all_tests_resolve`. The register lives in `docs/world-model/model.yaml`
+(machine-checked) and `docs/architecture/federation-ops-and-invariants.md` §14 (prose); this page
+is a dated verification record, not a third copy.
 
 ---
 

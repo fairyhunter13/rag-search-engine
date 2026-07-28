@@ -40,9 +40,14 @@ python -m compileall -q src/rag_search
 
 **Stream error metrics**: `overview(what="metrics")` returns `chat_stream.stream_error_count` and `chat_stream.error_by_intent`.
 
-**Key env vars** (BPRE resolution ladder):
-- `RSE_DEEPSEEK_MODEL` — override DeepSeek model (default `deepseek-v4-flash`; `deepseek-chat` alias deprecates 2026-07-24)
-- All LLM lanes (Tier-2 edge linkage, BPRE narrative, wiki L2) are **ON by default**, suppressed only when `DEEPSEEK_API_KEY` is absent.
+**Key env vars** (the generative lane — *rewritten 2026-07-28*):
+- `RSE_QUERY_LLM_MODEL` — dashboard-chat model (default `claude-haiku-4-5`), plus
+  `RSE_QUERY_LLM_PROVIDER` / `_NUM_CTX` / `_TIMEOUT` (`core/config.py:45-48`).
+- **These four are the only LLM vars in the repo.** `RSE_DEEPSEEK_MODEL` and `DEEPSEEK_API_KEY`
+  were deleted with tier 3 on 2026-07-28 and have **no reader anywhere in `src/`** — that absence
+  is asserted, not assumed (`test_deepseek_api_key_has_no_reader`, `test_inference_lanes.py`).
+  There is no LLM lane left to switch on or off: `claude -p` on `POST /api/chat_stream` is the
+  whole of it, and no MCP tool reaches it.
 
 **CI**: `.github/workflows/ci.yml` — **owner-triggered only** (quality → tests → contracts → property
 tests). Because this is a public repo whose GPU jobs run on a **self-hosted** runner (this device),
@@ -56,21 +61,27 @@ nothing external runs without explicit owner approval.
 full `@slow` sweep (`live-slow`, ~15–30 min) is **manual only** — `gh workflow run CI`, or the "Run
 workflow" button. There is no commit-message trigger: `contains()` matches the whole message
 including the body, so a commit that merely mentioned the tag in prose fired a 60-minute real-model
-run. The convergence path is guarded on every push by the fast `test_converge_smoke_standalone`
-tripwire, but any change touching `src/rag_search/graph/enrich.py` or the enrich→converge loop
-**MUST be followed by `gh workflow run CI`** so the full multi-project convergence sweep
-(`test_kb_state_ready_all_projects`) runs against that change rather than being discovered later.
+run. **The convergence prescription that used to sit here is retired (2026-07-28).** It named
+`test_converge_smoke_standalone` and `test_kb_state_ready_all_projects` guarding
+`graph/enrich.py`'s enrich→converge loop; all three left with tier 3, and the property they
+measured — how far DeepSeek narration had got — cannot vary now that structural labelling fills
+every summary in one deterministic pass (see HR7). The surviving cascade gate is HR38's
+FCG1–FCG4 in `test_idle_stability.py`, which runs in `live-fast` on every push, so no
+manual-dispatch rule replaces it.
 
 ## GPU-only enforcement
 
-**CPU fallback is forbidden.** All inference (embeddings + LLMs) runs on GPU (NVIDIA CUDA).
+**CPU fallback is forbidden.** All inference runs on GPU (NVIDIA CUDA). Since 2026-07-28 that is
+exactly **two** residents — the embedder and the cross-encoder reranker; the parenthetical used to
+read "embeddings + LLMs" and there is no LLM on this device to include.
 Any CPU fallback must raise a fatal error — never fall back silently.
 
 ## Efficiency invariants (P16/P17, HR32/HR33/HR35/HR36/HR37/HR38/HR39/HR40)
 
-**Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The KB cascade (enrich/wiki/federation/BPRE)
+**Idle CPU < 1 %, RAM minimal & constant, GPU maximized.** The graph-lane cascade (symbol re-derive
++ structural community labelling — *was "KB cascade (enrich/wiki/federation/BPRE)" until 2026-07-28*)
 in `daemon/sweeps.py:on_change` runs only when `_code_source_fingerprint` (code-only, HR38) detects
-real source drift — never on metadata-only, non-indexed-file, or non-code (docs/wiki/config/image)
+real source drift — never on metadata-only, non-indexed-file, or non-code (docs/config/image)
 events. With no drift the daemon reaches true idle and `_idle_unload` (300 s) frees the
 embedder/reranker + ORT CUDA arena. **File-watching is event-driven via `watchfiles` (Rust `notify`) —
 never manual polling.** `daemon/watcher.py` runs a single `watchfiles.watch()` generator in one thread
@@ -92,33 +103,34 @@ full cascade every ~5 min, pinning a CPU core indefinitely. `.rse-index.yaml` no
 `index.include` (force-keep globs) and `index.respect_gitignore` (default `true`) alongside the
 existing `index.exclude`.
 
-**BPRE's own reuse stamp must be code-only and discovery-unified too (HR36).** `kb/bpre.py`'s
-federation-wide reuse stamp (`bpre_source_sig`) and per-member scan-cache key (`_member_scan_sig`)
-are hashed from `_bpre_code_sig`, which walks `_source_files` — routed through the same HR35
-resolver as `iter_files`, gated by `is_code_language` — never the all-files `_source_fingerprint`.
-The stamp is written once from the sig computed at rebuild start (no end-of-rebuild recompute
-chasing a moving target). This closes a 3rd, distinct root-cause found 2026-07-01: on a 170-member
-federation root, concurrent docs/config/image edits and `.claude/*.js` tool-cache churn kept
-flipping the all-files stamp faster than the ~5 min BPRE federation rebuild it triggered could
-finish, pinning a CPU core continuously even after HR35 shipped. Guarded by `test_idle_stability.py`
-BPS1-BPS4 (docs-churn/hidden-dir-churn quiescence, real-code-drift rebuild, convergence).
+**~~HR36 — BPRE's own reuse stamp must be code-only and discovery-unified too.~~ Retired 2026-07-28
+with BPRE itself**; `kb/bpre.py`, `bpre_source_sig`, `_member_scan_sig`, `_bpre_code_sig` and the
+BPS1–BPS4 quartet are all deleted. **The incident it was written for is kept, because the lesson
+outlived the subsystem**: on 2026-07-01, on a 170-member federation root, concurrent docs/config/
+image edits and `.claude/*.js` tool-cache churn flipped the *all-files* stamp faster than the
+~5 min federation rebuild it triggered could finish, pinning a CPU core continuously even after
+HR35 shipped. The generalisable rule — **a reuse stamp must be hashed from the same code-only,
+HR35-resolved file set as the walk it gates, and written once from the sig taken at start rather
+than recomputed at the end against a moving target** — survives in HR38 below, which is now the
+whole gate rather than the second half of a pair.
 
-**The `on_change` cascade gate itself must be code-only, unified with the HR36 BPRE stamp (HR38).**
-`daemon/sweeps.py` gains `_code_source_fingerprint` — same coarse-cache-plus-`iter_files`-walk shape
-as `_source_fingerprint`, filtered through `is_code_language`, mirroring `kb/bpre.py`'s
-`_bpre_code_sig` exactly. It now backs `_graph_stale`'s `source_sig` comparison, both
-`set_meta("source_sig", ...)` stamp sites, and `on_change`'s cascade-gate comparison — so non-code
-churn (docs/wiki/config/image) can no longer spuriously wake the enrich/wiki/BPRE cascade or force a
-graph re-derive, closing the gap where BPRE's own stamp (HR36) was already code-only but the gate
-feeding it wasn't. The vector-index/doc-search reindex step runs before this gate and is unaffected.
-Guarded by `test_idle_stability.py` FCG1-FCG4.
+**The `on_change` cascade gate must be code-only (HR38).** *(The "unified with the HR36 BPRE stamp"
+clause came out on 2026-07-28 — HR36 is retired, so this is the whole gate, not one of a matched
+pair.)* `daemon/sweeps.py` has `_code_source_fingerprint` — same coarse-cache-plus-`iter_files`-walk
+shape as `_source_fingerprint`, filtered through `is_code_language`. It backs `_graph_stale`'s
+`source_sig` comparison, both `set_meta("source_sig", ...)` stamp sites, and `on_change`'s
+cascade-gate comparison — so non-code churn (docs/config/image) can no longer spuriously wake the
+labelling cascade or force a graph re-derive. The vector-index/doc-search reindex step runs before
+this gate and is unaffected. Guarded by `test_idle_stability.py` FCG1-FCG4, which now carry the
+four properties BPS1–BPS4 used to assert for the BPRE half.
 
 **Every tree-sitter parse is bounded out-of-process, so no grammar is ever skipped (HR39).**
 In-process cancellation is unavailable in this stack (py-tree-sitter 0.25's `progress_callback` never
 fires during a stuck parse; `tree_sitter_language_pack`'s bundled parser exposes no callback at all) —
 proven this session via a `cobol`-fed-non-cobol-bytes hang that pinned a core unkillable in-process.
-`index/bounded_parse.py` routes every parse call-site (`graph/extractor.py`, `kb/bpre_ast.py`,
-including the Go fast path) through a persistent **spawn**-context (never `fork`) worker pool; a
+`index/bounded_parse.py` routes every parse call-site (`graph/extractor.py` — the only one left
+since `kb/bpre_ast.py` went with tier 3 on 2026-07-28) through a persistent **spawn**-context
+(never `fork`) worker pool; a
 timed-out worker is killed and respawned, `parse_timeout_count` is exposed via
 `overview(what="metrics")`, and the timed-out file is logged by path-hash only (never the real path)
 and skipped for that pass only — never silently excluded from the language matrix. A guard test
@@ -140,38 +152,38 @@ under this quota — two workers would only time-slice one capped core). The pro
 canonical cgroup-v2 enforcement signal — cross-checked by a hermetic `systemd-run --user --scope`
 self-test independent of the daemon's own unit. Guarded by `test_cpu_budget.py` (CB1-CB6).
 
-## Extraction doctrine (P6, HR15–HR19, HR23)
+## Extraction doctrine (P6, HR15)
+
+*(Header was "P6, HR15–HR19, HR23" until 2026-07-28. HR16 (resolution ladder), HR17 (Tier-1.5
+value-flow), HR18 (Tier-1.75/2 rerank + token economy) and HR19 (deterministic LLM gating) were all
+tier-3 machinery and retired with it. **HR15 is the one that survives, and it got stronger, not
+weaker**: the doctrine no longer has an LLM escape hatch to fall through to.)*
 
 **No regex, no static/dynamic keyword list, no mapping table for code-semantic inference** — only
-tree-sitter structure and, for genuine residual ambiguity, a capped/cached/batched DeepSeek call
-(SEA select-not-author). Applies to Category A (`kb/bpre*.py`, `kb/patterns.py`,
-`server/_overview.py`); node-kind maps and infra/config ground-truth are exempt. **The debt
-registry is empty (2026-07-01)**: the last per-language HTTP method-name table
-(`bpre_spec._LANG_SPECS`) was retired for ONE universal structural classifier (URL-anchor +
-handler-shape + `_V` verb ground-truth + gRPC proto-binding + `_SCHEMES` receiver-text provenance)
-covering all 299 tree-sitter code grammars — see `bpre_generic.py`/`bpre_paradigms.py`. Full
-5-tier ladder + Category A/B enumeration: `docs/architecture/federation-and-search-engine.md` §7a.
-Token-frugality requirement for any new DeepSeek call site (stable prefix, batch, cap, structural
-context, feed
-`llm_token_stats()`): `docs/info-hierarchy.md` "Extraction / semantic-resolution ladder". Enforced by
-`src/tests/live/test_no_code_semantic_regex.py` + `model.yaml` P6.
+tree-sitter structure. **There is no longer an "and, for residual ambiguity, a capped/cached/batched
+DeepSeek call" clause**: the whole write path is deterministic, which is invariant #9 rather than a
+gate. Category A (`kb/bpre*.py`, `kb/patterns.py`, `server/_overview.py`) **is empty** now that
+`kb/` is gone, so the guard is one scan over `src/rag_search/` with a four-module Category-B
+allowlist (`graph.extractor`, `index.discover`, `core.registry`, `core.config` —
+`test_no_code_semantic_regex.py:50`); node-kind maps and infra/config ground-truth remain exempt.
+Enforced by `src/tests/live/test_no_code_semantic_regex.py` + `model.yaml` P6.
 
-**`_provenance` (`bpre_generic.py`) is import- and type-provenance-aware, not just receiver-text
-(P6/HR15).** Beyond the original `_SCHEMES`-token receiver-text check, it now also resolves the
-receiver's def-use type binding (`build_type_use`, `valueflow.py`, gated on `_NEW_KINDS`) and its
-import-map-resolved module path (`_scan_imports`, `bpre_ast.py`, gated on a new `_IMPORT_KINDS`
-node-kind set in `bpre_spec.py`) against the same closed `_SCHEMES` set — generalizing Go's existing
-import check to every language. This closes typed-client idioms (`client = new HttpClient();
-client.GetAsync(...)`) with zero new library-name vocabulary. A bare library-name idiom with no
-scheme-bearing signal (`requests`/`axios` on a non-scheme absolute URL) still falls through to the
-DeepSeek escalate/whole-file residue tiers — recorded, never silently dropped.
+**Retired with tier 3, recorded so it is not re-derived:** the universal structural HTTP classifier
+(`bpre_generic.py`/`bpre_paradigms.py`, URL-anchor + handler-shape + `_V` verbs + gRPC binding +
+`_SCHEMES` provenance), its import/type-provenance extension over `valueflow.py`/`bpre_ast.py`, and
+the DeepSeek escalate/whole-file residue tiers those fell through to. The transferable half is the
+doctrine above — **prefer retiring a per-language table over feeding it**, which is how
+`bpre_spec._LANG_SPECS` died on 2026-07-01 and why the debt registry was already empty when tier 3
+left.
 
 **Embedded-`<script>` sub-parsing (F2, 2026-07-09).** Vue/Svelte/Astro/HTML host grammars parse
 `<script>` content as one opaque `raw_text` leaf — structurally blind to embedded JS/TS calls and
-symbols. `graph/extractor.py::_iter_script_blocks` and `kb/bpre_ast.py::_script_blocks` locate that
-leaf plus its `lang` attribute (node-kind/attribute reads, no vocabulary) and sub-parse it with the
-js/ts grammar, remapping line numbers by the block's start row — covering both the symbol/call
-graph and BPRE's HTTP-client detection for Vue and Svelte SFCs. Guarded by
+symbols. `graph/extractor.py::_iter_script_blocks` *(sole remaining implementation since 2026-07-28
+— `kb/bpre_ast.py::_script_blocks` left with tier 3)* locates that leaf plus its `lang` attribute
+(node-kind/attribute reads, no vocabulary) and sub-parses it with the js/ts grammar, remapping line
+numbers by the block's start row — covering the symbol/call graph for Vue and Svelte SFCs. **This
+path is measurably load-bearing**: `.vue` is 92 % covered fleet-wide (2,020 of 2,190 files,
+16,477 symbols). Guarded by
 `test_embedded_script_extraction.py`.
 
 ## Public-release & device-neutrality invariants (P18, HR34)
@@ -206,10 +218,14 @@ CI on the self-hosted runner — the `github.repository`/ref `if` guards now sta
 ## Project quick reference
 
 - Entry points: `src/rag_search/server/mcp.py` (MCP server + routes), `src/rag_search/daemon/` (daemon package), `src/rag_search/cli.py` (CLI), `src/rag_search/__main__.py` (bridge-stdio shim)
-- Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/rag_search/`
+- Packages: `core/ embed/ index/ graph/ kb/ query/ server/ daemon/` under `src/rag_search/`. Since
+  2026-07-28 `kb/` holds **only `answer_cache.py`** (deterministic caching, no LLM — it was always
+  tier 2), and `graph/` is `extractor / store / community / quality`; `enrich.py` and `llm.py` are gone
 - Registry: `~/.local/share/rag-search/projects.json`
 - Tests: `src/tests/live/` (live suite — requires daemon at :8765, GPU; no local generative LLM)
-- LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking only); KB build = cloud DeepSeek; chat = claude-haiku-4-5 only (no DeepSeek fallback, HR12)
+- LLM: GPU = FastEmbed/ONNX/CUDA (embeddings + reranking, and **nothing else** — two residents);
+  chat = claude-haiku-4-5 via `claude -p`, dashboard-only, **no fallback** (HR10). *(The "KB build =
+  cloud DeepSeek" lane was deleted 2026-07-28 — DeepSeek is not in this repo.)*
 - Setup scripts: `scripts/configure_integrations.py`, `scripts/check_system.py`
 - Architecture: `docs/architecture/federation-and-search-engine.md` + `docs/architecture/federation-ops-and-invariants.md`
 

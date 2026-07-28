@@ -34,7 +34,7 @@ Run these 5 checks against your indexed project:
 - `ask("how does auth work", scope="all")` → must return non-empty answer
 - `graph("main", relation="callers")` → must return graph nodes
 - `overview(what="structure")` → must show non-zero files and communities
-- `overview(what="status")` → must show kb_state=ready
+- `overview(what="status")` → must show index_state=ready (the field was `kb_state` until 2026-07-28)
 
 ### 5. Lint check
 ```bash
