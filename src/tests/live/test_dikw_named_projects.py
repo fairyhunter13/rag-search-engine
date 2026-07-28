@@ -1,10 +1,20 @@
-"""DIKW invariants on live named projects (DN3–DN5).
+"""DIKW invariants on live named projects (DN4–DN5).
 
-DN3  retrieval selectors exclude level=0 spine nodes from query context
 DN4  live project has L1 communities with narrated column populated
 DN5  all L1 communities have no parent_id pointing to a non-L1 row
 
 Live read-only: no rebuild, no LLM calls. Works against existing enriched projects.
+
+DN3 — "the retrieval selector excludes kind='dir'/'file' spine nodes" — was deleted 2026-07-28.
+It was measured non-discriminating: dropping the `kind NOT IN ('dir','file')` clause from
+`query/ask.py` left it green. A fleet census explains why — across all 160 graph DBs `kind` has
+exactly one value, 'community' (8793 rows). Not one 'dir' or 'file' row exists anywhere, because
+the DIKW information spine that wrote them left with tier 3, and no writer remains in
+`src/rag_search`. A live project cannot exercise the filter, so DN3 could only ever pass or skip,
+and the no-skip policy (test_no_code_semantic_regex.py) correctly refuses the second. The
+discriminating guard is **test_abstention.py::AB6**, which builds the spine row synthetically and
+does go red when the clause is dropped. (`kind` is a constant column — Step 2a purge candidate
+alongside `semantic_type` and `narrated`.)
 """
 from __future__ import annotations
 
@@ -15,26 +25,6 @@ import pytest
 from rag_search.core.config import project_graph_db
 
 pytestmark = pytest.mark.live
-
-
-def test_dn3_retrieval_selectors_exclude_spine(project_with_communities):
-    """DN3: _top_communities_semantic and _community_context exclude kind='dir'/'file' nodes."""
-    from rag_search.graph.store import GraphStore
-    from rag_search.query.ask import _community_context, _top_communities_semantic
-    gdb = project_graph_db(project_with_communities)
-    gs = GraphStore(gdb)
-    try:
-        sem = _top_communities_semantic("files directories modules", [gs])
-        ctx = _community_context([gs])
-    finally:
-        gs.close()
-    for text, label in [(sem, "semantic"), (ctx, "context")]:
-        assert "subdirectory" not in text, (
-            f"DN3: dir spine node leaked into {label}: {text[:200]}"
-        )
-        assert "symbol(s) [" not in text, (
-            f"DN3: file spine node leaked into {label}: {text[:200]}"
-        )
 
 
 def test_dn4_narrated_column_integrity(project_with_communities):

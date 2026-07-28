@@ -4,8 +4,8 @@ Tests:
   GH1: GraphStore.clear() wipes symbols/edges/communities
   GH2: symbol_hollow flag fires on edge-free graph (communities>0, edges=0)
   GH3: overview(status) includes symbol_hollow field on healthy projects
-  GH4: reconcile source-guard: checks community_count() == 0 (no graph built yet) to
-       force a full re-index. This is narrower than symbol_hollow (GH2): a graph with
+  GH4: _graph_needs_full_index: symbols with zero communities (no graph built yet) force a
+       full re-index; an empty graph and a clustered graph do not. This is narrower than symbol_hollow (GH2): a graph with
        communities>0 but edges=0 does NOT re-trigger automatically, by design — the
        extraction gap that produces a hollow graph (e.g. an embedded-script SFC format
        whose call sites tree-sitter can't see) would reproduce on every re-index, so
@@ -105,15 +105,39 @@ def test_overview_status_includes_symbol_hollow_field(sample_workspace: SampleWo
     )
 
 
-def test_reconcile_triggers_reindex_when_communities_empty():
-    """GH4: reconcile_projects source-guard: community_count()==0 forces a full re-index."""
-    import inspect
+def test_reconcile_triggers_reindex_when_communities_empty(tmp_path):
+    """GH4: an unclustered graph is re-indexed; a clustered or symbol-free one is not.
 
-    from rag_search.daemon import sweeps
-    src = inspect.getsource(sweeps.reconcile_projects)
-    assert "community_count() == 0" in src, (
-        "reconcile must force re-index when community_count()==0 (no graph built yet)"
-    )
+    This asserted the substring "community_count() == 0" was present in
+    `reconcile_projects`'s own source. The decision has since moved into
+    `_graph_needs_full_index`, and the guard went red on the move without anything being
+    broken — a source-text assertion tracks where code lives, not what it does. Worse, it
+    could not see the defect that actually shipped in that predicate: keying on the
+    community count *alone* made a symbol-free project (config/docs trees) re-index on every
+    pass forever. All three states are now exercised.
+    """
+    from rag_search.daemon.sweeps import _graph_needs_full_index
+    from rag_search.graph.store import GraphStore
+
+    gs = GraphStore(tmp_path / "graph.db")
+    try:
+        assert _graph_needs_full_index(gs) is False, (
+            "GH4: an empty graph has nothing to cluster — re-indexing it can never satisfy "
+            "the gate, which is the permanent-burn bug this predicate was rewritten to fix"
+        )
+        gs.upsert_symbol("s1", "fn", "fn", "function", "a.py", 1, 2, "python")
+        gs.commit()
+        assert _graph_needs_full_index(gs) is True, (
+            "GH4: symbols with zero communities means the clustering pass never ran — "
+            "reconcile must force a full re-index"
+        )
+        gs.upsert_community(0, level=1, title="grp", summary="ok", member_count=1)
+        gs.commit()
+        assert _graph_needs_full_index(gs) is False, (
+            "GH4: a clustered graph must not re-index on every pass"
+        )
+    finally:
+        gs.close()
 
 
 def test_index_project_clears_graph_before_rebuild():

@@ -143,7 +143,6 @@ module = [
     "rag_search.core.*",
     "rag_search.index.*",
     "rag_search.graph.*",
-    "rag_search.kb.*",
     "rag_search.query.*",
     "rag_search.server.*",
     "rag_search.daemon.*",

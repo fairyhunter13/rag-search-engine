@@ -17,6 +17,11 @@ from pathlib import Path
 import pytest
 import requests
 
+# Both expected-sides are read from the implementation, never restated here. The graph set was a
+# hand-maintained tuple of seven, and the seventh — `semantic_trace` — had no implementation behind
+# it since 3fe4b29; because it was the *expected* side, A2 was actively holding the docstring to
+# advertise a relation that did not exist. Same stale-allowlist shape as B3's what= list below.
+from rag_search.query.graph_handler import _RELATIONS as _GRAPH_SUPPORTED_RELATIONS
 from rag_search.server._overview import _VALID as _VALID_WHATS
 
 pytestmark = pytest.mark.live
@@ -25,10 +30,6 @@ _BASE = "http://127.0.0.1:8765"
 _MCP_URL = f"{_BASE}/mcp"
 _HDR = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
 
-_GRAPH_SUPPORTED_RELATIONS = {
-    "definition", "callers", "callees", "impact",
-    "impact_narrative", "path", "semantic_trace",
-}
 _REPO = Path(__file__).resolve().parent.parent.parent.parent  # repo root
 
 
@@ -94,7 +95,7 @@ def test_graph_docstring_matches_supported_relations():
     m = re.search(r"relation:\s*([\w|]+)", doc)
     assert m, f"graph docstring has no 'relation:' section: {doc!r}"
     doc_tokens = set(m.group(1).split("|"))
-    assert doc_tokens == _GRAPH_SUPPORTED_RELATIONS, (
+    assert doc_tokens == set(_GRAPH_SUPPORTED_RELATIONS), (
         f"graph docstring relations {sorted(doc_tokens)} != supported {sorted(_GRAPH_SUPPORTED_RELATIONS)}"
     )
 

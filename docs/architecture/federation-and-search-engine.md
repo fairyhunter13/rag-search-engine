@@ -260,9 +260,15 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
   Observability: `search()` records `rerank.queries` and `rerank.top1_changed` (the "lift"
   count where the cross-encoder moved a different chunk to position 1 vs the vector sort).
   Exposed via `GET /api/metrics` and `overview(what="metrics")`.
-- **AXIS B — community/architecture context** (`scope="global"`, `_top_communities_semantic`):
-  pool ≤50 community summaries per store, then cross-encoder rerank → sort by `rerank_score`
+- **AXIS B — community/architecture context** (`_community_summaries`, both `ask` scopes):
+  pool ≤50 L1 community summaries per store, then cross-encoder rerank → sort by `rerank_score`
   → top_k. Replaced former bi-encoder cosine (`s_vecs @ q_vec`) approach.
+  *Updated 2026-07-28:* three near-duplicate selectors stood here (`_top_communities_semantic`,
+  `_community_context`, `_tree_walk_context`); the unranked one fed the `feature`/`business`
+  scopes the first N communities by rowid. All three collapsed into `_community_summaries`, and
+  the scope surface collapsed with them — `all` and `architecture` are the two that remain, and
+  they differ only in which axis is assembled first. Axis A takes no scope at all: one
+  `search_federation` call serves every scope.
 - Rerank scores (jina logits) and vector scores are never blended across axes.
 - Reranking runs **only** at query time; the index/KB-build pipeline never reranks.
 

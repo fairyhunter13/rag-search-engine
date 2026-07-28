@@ -84,8 +84,12 @@ def test_migrate_rekeys_raw_symlink_registration(safe_tmp_path):
     try:
         raw = str(root / "link")  # symlink path, deliberately not canonicalized
         upsert_project(ProjectEntry(path=raw, enabled=True))
-        assert get_project(raw) is not None  # sanity: seeded under the raw key
-        list_projects()  # triggers _migrate()'s self-heal
+        # A `get_project(raw) is not None` precondition stood here and went red intermittently:
+        # the registry is one shared file and the live daemon's reconcile calls list_projects()
+        # on its own schedule, so it can re-key the entry before this process looks. That is the
+        # self-heal working, not failing. The end state below is the contract, and it can only
+        # hold if the seeding landed — nothing else in this test registers `canon`.
+        list_projects()  # triggers _migrate()'s self-heal, if the daemon has not already
         canon = canonicalize_path(raw)
         assert canon == str(member)
         assert get_project(canon) is not None
@@ -168,7 +172,8 @@ def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_pa
         for probe in (str(root / "link"), str(sub), str(member) + "/"):
             ov = json.loads(asyncio.run(mcp_overview(probe, "status")))
             assert ov.get("resolved_project") == str(member), (probe, ov)
-            assert ov.get("kb_state") is not None, (probe, ov)
+            # Renamed from kb_state with tier 3 (HR7, _overview.py:155-161).
+            assert ov.get("index_state") is not None, (probe, ov)
 
             answer = asyncio.run(mcp_ask(marker, probe, "all"))
             assert "not indexed" not in answer.lower(), (probe, answer)

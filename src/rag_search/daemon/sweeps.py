@@ -33,21 +33,29 @@ log = logging.getLogger(__name__)
 
 # Composite pipeline algorithm version — bump either component constant to trigger re-derive.
 # Also folds a SHA-4 of key pipeline modules so code-only changes self-heal without a manual bump.
+# The modules whose bytes determine graph output, relative to src/rag_search/. `graph/enrich.py`
+# stood here until 2026-07-28; it was deleted with tier 3 and the suppress() below meant a missing
+# file contributed nothing — so dropping it leaves the hash bit-identical and re-derives nothing.
+# test_self_heal_code_fp.py::SH2b now asserts every entry exists, so the next one can't go dead
+# unnoticed. Editing this tuple, or any file it names, re-derives all fleet graphs.
+_FINGERPRINT_MODULES = ("graph/extractor.py", "graph/community.py")
+
+
+def _fingerprint_paths(paths) -> str:
+    """4-char SHA over the concatenated bytes of `paths`, in order. Missing files contribute none."""
+    import contextlib
+    h = hashlib.sha1()
+    for p in paths:
+        with contextlib.suppress(OSError):
+            h.update(p.read_bytes())
+    return h.hexdigest()[:4]
+
+
 def _code_fingerprint() -> str:
     """4-char SHA over source bytes of modules that determine graph output."""
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]  # src/rag_search/
-    modules = [
-        root / "graph" / "extractor.py",
-        root / "graph" / "enrich.py",
-        root / "graph" / "community.py",
-    ]
-    import contextlib
-    h = hashlib.sha1()
-    for p in modules:
-        with contextlib.suppress(OSError):
-            h.update(p.read_bytes())
-    return h.hexdigest()[:4]
+    return _fingerprint_paths(root / m for m in _FINGERPRINT_MODULES)
 
 
 def _pipeline_algo_version() -> str:

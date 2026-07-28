@@ -73,7 +73,7 @@ overview(project_path, what='import_cycles')          # circular deps
 overview(project_path, what='surprising_connections')  # cross-layer edges
 overview(project_path, what='graph_diff')              # recently changed symbols
 graph(hot_symbol, project_path, relation='impact_narrative')  # blast radius
-ask('what is the most fragile or riskiest code right now?', project_path, scope='global')
+ask('what is the most fragile or riskiest code right now?', project_path, scope='architecture')
 ```
 
 ### 1e. Code smell grep

@@ -14,7 +14,9 @@ Comprehensive status audit of the rag-search-engine system.
 ### 2. Canonical test target verification
 - `overview(project_path='<TEST_PROJECT_PATH>', what='status')` — confirm watching=true, communities>5000
 - `search(query='payment handler', project_paths=[test_path])` — confirm search returns real results
-- `ask(query='how does payment flow work', project_path=test_path, scope='feature')` — confirm structured answer with entry_points
+- `ask(query='how does payment flow work', project_path=test_path, scope='all')` — confirm a
+  non-empty `## Code` / `## Architecture` assembly. (`scope='feature'` was retired 2026-07-28 along
+  with `global` and `business`; the `entry_points` field it once returned left with tier 3.)
 - `graph(symbol='PaymentService', project_path=test_path, relation='impact_narrative')` — confirm graph works
 - The same `overview(what='status')` call carries `index_state` — confirm `ready`, not `indexing`
   or `degraded`. This replaces `GET /api/kb_health?project=…` (enrichment_pct=100.0), which left

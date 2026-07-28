@@ -7,7 +7,8 @@ metamorphic booster MRs (MetaRAG arXiv 2509.09360; arXiv 2603.24774).
 AB1/AB2  tail writes true SQL NULL, not '' (the NOT IN filter load-bearing detail)
 AB3      no non-NULL bucket dominates > 50% of typed rows on a sample project
 AB4      NULL fraction is majority of L1 (tail >> head by design)
-AB5/AB6  read-path: NULL-typed tail excluded; typed head included
+AB6      read-path: community rows reach the ask context, kind='file' spine rows do not
+         (AB5 retired 2026-07-28 — its head/tail contract left with the narrator; see AB6)
 AB7      L2 types unaffected (non-regression — upsert_community default must stay '')
 AB8      opaque/low-signal community abstains, never forced to 'utility'
 SG1      community.py source contains no 'utility' string-literal assignment
@@ -105,43 +106,44 @@ def test_ab4_null_majority_post_reenrich(project_with_communities):
     )
 
 
-def test_ab5_null_tail_excluded_from_ask_path(safe_tmp_path):
-    """AB5: NULL-typed tail absent from _top_communities_semantic / _community_context."""
-    from rag_search.query.ask import _community_context, _top_communities_semantic
+def test_ab6_spine_rows_excluded_from_ask_context(safe_tmp_path):
+    """AB6: the ask context admits community rows and rejects file-spine rows.
+
+    AB5 stood here and asserted the other half of a head/tail split: that NULL-typed communities
+    stayed out of the ask path. The filter that actually enforced that was `AND narrated=1`, never
+    `semantic_type` — and `narrated`'s only writer was the LLM narrator deleted with tier 3, so the
+    split has no mechanism left. AB5's assertion had also been passing through a column it did not
+    name, which is why nothing caught the coupling earlier.
+
+    What survives is `kind NOT IN ('dir','file')`, the one filter `_community_summaries` still
+    applies. This test discriminates on it: both rows are level=1 with a non-empty summary, so
+    dropping the `kind` clause admits the spine row and turns the second assertion red. Verified
+    red that way before this was committed.
+    """
+    from rag_search.query.ask import _community_summaries
 
     gs, cid = _build_tail_store(safe_tmp_path)
     try:
         _label(gs, cid)
         gs._con.execute(
-            "UPDATE communities SET summary='order processing routines' WHERE id=?", (cid,)
+            "UPDATE communities SET summary='order processing and payment routines' WHERE id=?",
+            (cid,),
         )
-        gs.commit()
-        assert gs._con.execute(
-            "SELECT semantic_type FROM communities WHERE id=?", (cid,)
-        ).fetchone()[0] is None, "precondition: must be NULL-typed"
-        assert "order processing" not in _top_communities_semantic("order processing", [gs]), (
-            "AB5: NULL-typed tail polluted _top_communities_semantic"
-        )
-        assert "order processing" not in _community_context([gs]), (
-            "AB5: NULL-typed tail polluted _community_context"
-        )
-    finally:
-        gs.close()
-
-
-def test_ab6_typed_head_in_ask_path(safe_tmp_path):
-    """AB6: typed head community present in _community_context."""
-    from rag_search.query.ask import _community_context
-
-    gs, cid = _build_tail_store(safe_tmp_path)
-    try:
         gs._con.execute(
-            "UPDATE communities SET semantic_type='service',narrated=1,"
-            "summary='payment gateway service for order routing' WHERE id=?", (cid,)
+            "INSERT INTO communities (id,level,title,summary,kind) "
+            "SELECT MAX(id)+1,1,'svc.py','order processing spine file node','file' FROM communities"
         )
         gs.commit()
-        assert "payment gateway" in _community_context([gs]), (
-            "AB6: typed head must appear in _community_context"
+        kinds = dict(gs._con.execute("SELECT kind,COUNT(*) FROM communities GROUP BY kind").fetchall())
+        assert kinds.get("file") == 1 and kinds.get("community", 0) >= 1, (
+            f"precondition: need one file row and one community row; got {kinds}"
+        )
+        ctx = _community_summaries("order processing", [gs])
+        assert "order processing and payment routines" in ctx, (
+            f"AB6: community row must reach the ask context; got {ctx[:200]!r}"
+        )
+        assert "spine file node" not in ctx, (
+            f"AB6: kind='file' spine row leaked into the ask context; got {ctx[:200]!r}"
         )
     finally:
         gs.close()
