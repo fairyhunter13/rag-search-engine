@@ -33,34 +33,6 @@ def _content_hash(content: str) -> str:
     return h.hexdigest()
 
 
-def _thermal_pace(_temp_fn=None, _sleep_fn=None) -> None:
-    """Background-only: pause briefly when the GPU is near the hard-raise ceiling.
-
-    Called before each embed batch during bulk indexing so large repos complete
-    without triggering embed()'s RuntimeError.  Releases the GIL via sleep so
-    the asyncio event loop stays responsive.  Never called on the query path.
-
-    _temp_fn / _sleep_fn: injectable for deterministic tests only, matching the
-    seam embedder._await_thermal_headroom already uses for the same guard.
-    """
-    import time
-
-    from rag_search.core.config import THERMAL_MAX_C
-    from rag_search.core.gpu import gpu_temp_c
-
-    gpu_temp_c = _temp_fn if _temp_fn is not None else gpu_temp_c
-    time_sleep = _sleep_fn if _sleep_fn is not None else time.sleep
-
-    # 0.25s, not 3s: a batch takes well under a second, so a coarse quantum turns one
-    # over-temperature reading into a guaranteed multi-second idle, the card cools, the
-    # next batch reheats it, and the gate re-arms. That oscillation — not the threshold —
-    # was 57% of the July-2026 migration's embed phase.
-    waited = 0.0
-    while gpu_temp_c() >= THERMAL_MAX_C - 2 and waited < 120.0:
-        time_sleep(0.25)
-        waited += 0.25
-
-
 def index_project(
     project_path: str | Path,
     embedder,
@@ -92,7 +64,6 @@ def index_project(
     texts = [c.content for c in chunks]
     vectors: list[np.ndarray] = []
     for i in range(0, len(texts), batch):
-        _thermal_pace()
         vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
         vectors.extend(vecs)
 
@@ -160,7 +131,6 @@ def index_files(
     texts = [c.content for c in chunks]
     vectors: list[np.ndarray] = []
     for i in range(0, len(texts), batch):
-        _thermal_pace()
         vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
         vectors.extend(vecs)
     for pos, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):

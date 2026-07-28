@@ -178,7 +178,7 @@ def health(json_out: bool = typer.Option(False, "--json")) -> None:
 def ask(
     query: str = typer.Argument(..., help="Question to answer."),
     project: str | None = typer.Option(None, "--project", "-p", help="Project path."),
-    scope: str = typer.Option("all", help="Scope: all|architecture|global|feature|wiki|business."),
+    scope: str = typer.Option("all", help="Scope: all|architecture|global|feature|business."),
 ) -> None:
     """Assemble context for a codebase question (LLM-free; GPU rerank only)."""
     from rag_search.query.ask import run_ask

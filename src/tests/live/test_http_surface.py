@@ -8,7 +8,6 @@ docstring used to list are asserted absent by test_p5_server.py::test_e7_trimmed
   GET /               → 200 or redirect
   GET /api/metrics    → 200, and no LLM token accounting
   POST /api/sweeps/*  → 200
-  GET /api/events/stream → 200, text/event-stream
   GET /api/graph_export  → 200, node/edge structure
   GET /api/storage_health → 200
 """
@@ -51,12 +50,11 @@ def test_api_sweeps_pause_resume(live_client):
     assert live_client.post("/api/sweeps/pause").status_code == 200  # restore paused state
 
 
-def test_api_events_stream_sse_content_type(live_client):
-    r = live_client.get("/api/events/stream", stream=True, timeout=3)
-    ct = r.headers.get("content-type", "")
-    r.close()
-    assert r.status_code == 200
-    assert "text/event-stream" in ct, f"events/stream must be SSE; content-type={ct}"
+# /api/events/stream left with tier 3. Its only publisher was the pipeline job runner
+# (build_wiki / docgen / okf), so `publish_event` had no callers after R0 and the bus could only
+# emit its own "connected"/"keepalive" frames — this test would have kept asserting the
+# content-type of an empty stream. The route now joins the `deleted` list in
+# test_p5_server.py::test_e7_trimmed_http_surface, which demands a hard 404/405 for it.
 
 
 def test_api_graph_export(live_client, project):

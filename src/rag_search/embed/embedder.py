@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 
 import numpy as np
 
@@ -12,21 +11,23 @@ from rag_search.core.config import (
     EMBED_MAX_TOKENS,
     EMBED_MODEL,
     RERANK_MODEL,
-    THERMAL_COOLDOWN_S,
-    THERMAL_MAX_C,
-    THERMAL_POLL_S,
 )
 from rag_search.core.gpu import (
     GPU_EP_NAMES,
     assert_gpu_available,
-    gpu_temp_c,
     select_gpu_providers,
 )
 
 _log = logging.getLogger(__name__)
 
-# Prevents concurrent GPU inference races (embed + rerank on same device).
-_GPU_INFER_LOCK = threading.Lock()
+# Serialises every GPU-resident ONNX operation in this process: both inference paths AND
+# session construction/warm-up. onnxruntime#26610 — several InferenceSession objects on one
+# device, driven from different threads, abort or SEGV at *instantiation* as well as at Run(),
+# and Run() releases the GIL so daemon threads genuinely overlap on the card. This lock is what
+# 9fab658 added for the real cause of the SEGVs; the clean-room rewrite kept it only on the
+# rerank path and put a temperature-polling sleep where it had been. RLock, not Lock,
+# because embed() holds it across a lazy _init() that takes it again.
+_GPU_INFER_LOCK = threading.RLock()
 
 # Query-embed call count, the mirror of query.search._rerank_stats. A federated search must
 # embed the query once no matter how many members it spans, and this is the only signal that
@@ -37,35 +38,6 @@ _embed_stats: dict = {"calls": 0, "texts": 0}
 def embed_stats() -> dict:
     """A copy of the process-lifetime embed counters."""
     return dict(_embed_stats)
-
-
-def _await_thermal_headroom(_temp_fn=None, _sleep_fn=None) -> None:
-    """Block until GPU temperature is within THERMAL_MAX_C, then return.
-
-    Polls every THERMAL_POLL_S seconds for up to THERMAL_COOLDOWN_S total.
-    Raises RuntimeError if the GPU remains over-temperature after the budget is exhausted.
-    CPU fallback is never used; the raise is always fatal on genuine cooling failure.
-
-    _temp_fn / _sleep_fn: injectable for deterministic unit tests only (default: gpu_temp_c / time.sleep).
-    """
-    _get_temp = _temp_fn if _temp_fn is not None else gpu_temp_c
-    _do_sleep = _sleep_fn if _sleep_fn is not None else time.sleep
-    temp = _get_temp()
-    if temp <= THERMAL_MAX_C:
-        return
-    waited = 0.0
-    while temp > THERMAL_MAX_C:
-        _log.warning(
-            "GPU too hot (%d°C > %d°C) — pausing %.0fs to cool (%.0fs budget remaining)",
-            int(temp), THERMAL_MAX_C, THERMAL_POLL_S, max(0.0, THERMAL_COOLDOWN_S - waited),
-        )
-        if waited >= THERMAL_COOLDOWN_S:
-            raise RuntimeError(
-                f"GPU too hot ({temp:.0f}°C > {THERMAL_MAX_C}°C) after {THERMAL_COOLDOWN_S}s cooldown."
-            )
-        _do_sleep(THERMAL_POLL_S)
-        waited += THERMAL_POLL_S
-        temp = _get_temp()
 
 
 class Embedder:
@@ -120,9 +92,10 @@ class Embedder:
             raise RuntimeError(f"Embedder not bound to a GPU EP (providers={providers}). CPU inference is forbidden.")
 
     def warmup(self) -> None:
-        if self._model is None:
-            self._init()
-        list(self._model.embed(["warmup"], batch_size=1))
+        with _GPU_INFER_LOCK:
+            if self._model is None:
+                self._init()
+            list(self._model.embed(["warmup"], batch_size=1))
 
     def embed(self, texts: list[str], batch_size: int = 8) -> np.ndarray:
         """Embed on GPU; returns normalized float32 array of shape (n, 768).
@@ -132,20 +105,21 @@ class Embedder:
         vector on the way to a float32 column. The cost of dropping it is transient: a bulk
         index holds n x 768 x 4 bytes, ~390 MB rather than ~195 MB on the largest repo here.
         """
-        if self._model is None:
-            self._init()
-        _await_thermal_headroom()
-        _embed_stats["calls"] += 1
-        _embed_stats["texts"] += len(texts)
-        raw = np.array(list(self._model.embed(texts, batch_size=batch_size)), dtype=np.float32)
+        with _GPU_INFER_LOCK:
+            if self._model is None:
+                self._init()
+            _embed_stats["calls"] += 1
+            _embed_stats["texts"] += len(texts)
+            raw = np.array(list(self._model.embed(texts, batch_size=batch_size)), dtype=np.float32)
         norms = np.linalg.norm(raw, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         return raw / norms
 
     @property
     def dim(self) -> int:
-        if self._model is None:
-            self._init()
+        with _GPU_INFER_LOCK:
+            if self._model is None:
+                self._init()
         meta = self._model._get_model_description(self._model_name)
         return int(meta.get("dim", 768))
 
@@ -171,9 +145,9 @@ class Reranker:
     def rerank(self, query: str, passages: list[str]) -> list[float]:
         if not passages:
             return []
-        if self._model is None:
-            self._init()
         with _GPU_INFER_LOCK:
+            if self._model is None:
+                self._init()
             scores = list(self._model.rerank(query, passages))
         return [float(s) for s in scores]
 

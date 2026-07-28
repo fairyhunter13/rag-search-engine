@@ -6,7 +6,11 @@ for multi-vendor breadth, assert CUDA_DEVICE_ORDER=PCI_BUS_ID (#26705/#17546).
 """
 from __future__ import annotations
 
+import itertools
 import os
+import threading
+import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -157,43 +161,98 @@ def test_vram_and_temp_read_selected_device():
 
 
 # ---------------------------------------------------------------------------
-# Thermal cooldown helper unit tests — parameter injection, GPU-free, no patch libs
+# TK6: GPU inference is serialised, and the temperature-pacing layer is gone
 # ---------------------------------------------------------------------------
 
 
-def test_thermal_cooldown_cool_gpu_is_noop():
-    """TC1: _await_thermal_headroom returns immediately when GPU is cool — zero sleeps."""
-    from rag_search.embed.embedder import _await_thermal_headroom
-    sleep_calls: list[float] = []
-    _await_thermal_headroom(_temp_fn=lambda: 60.0, _sleep_fn=lambda s: sleep_calls.append(s))
-    assert not sleep_calls, "sleep must not be called when GPU is cool"
+class _Timed:
+    """The real fastembed model, wrapped to record when each inference actually ran.
+
+    Every call reaches the real session — this records, it does not stand in. It has to
+    sit here rather than around Embedder.embed() because the interval TK6a asserts on is
+    the one *inside* _GPU_INFER_LOCK; timing from outside would measure the wait too.
+    """
+
+    def __init__(self, real, spans, guard):
+        self._real, self._spans, self._guard = real, spans, guard
+
+    def _run(self, label, call):
+        t0 = time.perf_counter()
+        out = list(call())
+        with self._guard:
+            self._spans.append((label, t0, time.perf_counter()))
+        return out
+
+    def embed(self, texts, batch_size=8):
+        return self._run("embed", lambda: self._real.embed(texts, batch_size=batch_size))
+
+    def rerank(self, query, passages):
+        return self._run("rerank", lambda: self._real.rerank(query, passages))
 
 
-def test_thermal_cooldown_transient_spike_rides_out():
-    """TC2: a transient 82°C spike resolves after two polls — no raise."""
-    from rag_search.core.config import THERMAL_MAX_C
-    from rag_search.embed.embedder import _await_thermal_headroom
-    temps = iter([82.0, 81.0, float(THERMAL_MAX_C - 1)])
-    sleep_calls: list[float] = []
-    _await_thermal_headroom(_temp_fn=lambda: next(temps), _sleep_fn=lambda s: sleep_calls.append(s))
-    assert len(sleep_calls) == 2, f"expected 2 sleep calls for 2 hot readings, got {sleep_calls}"
+def _embed_loop(embedder) -> None:
+    for _ in range(4):
+        embedder.embed(["def foo():", "class Bar:"])
 
 
-def test_thermal_cooldown_sustained_over_temp_raises():
-    """TC3: GPU staying hot past the budget raises RuntimeError — fatal, no CPU fallback."""
-    from rag_search.core.config import THERMAL_MAX_C
-    from rag_search.embed.embedder import (
-        THERMAL_COOLDOWN_S,
-        THERMAL_POLL_S,
-        _await_thermal_headroom,
+def _rerank_loop(reranker) -> None:
+    for _ in range(4):
+        reranker.rerank("query", ["alpha", "beta"])
+
+
+def test_tk6b_no_temperature_pacing_remains_in_src():
+    """TK6b: the deleted layer stays deleted, while gpu_temp_c survives as observability.
+
+    This is what stops it growing back one call site at a time — which is how the
+    hardcoded 78 reached sweeps.py after the constants had already been centralised.
+    """
+    import rag_search
+    banned = ("THERMAL", "_thermal_pace", "_await_thermal_headroom", "thermal_guard_fn")
+    root = Path(rag_search.__file__).parent
+    offenders = [
+        f"{p.relative_to(root)}:{tok}"
+        for p in sorted(root.rglob("*.py"))
+        for tok in banned
+        if tok in p.read_text()
+    ]
+    assert not offenders, f"temperature-pacing layer is growing back: {offenders}"
+    # The trailing paren is load-bearing: without it a rename to gpu_temp_c_anything
+    # still satisfies the substring, so the assertion would pass on the very deletion
+    # it exists to catch. Demonstrated — the prefix form went green on a renamed def.
+    assert "def gpu_temp_c(" in (root / "core" / "gpu.py").read_text(), (
+        "gpu_temp_c was deleted with the pacing layer — it is observability and stays"
     )
-    sleep_calls: list[float] = []
-    with pytest.raises(RuntimeError, match="cooldown"):
-        _await_thermal_headroom(
-            _temp_fn=lambda: float(THERMAL_MAX_C + 5),
-            _sleep_fn=lambda s: sleep_calls.append(s),
-        )
-    expected_polls = int(THERMAL_COOLDOWN_S / THERMAL_POLL_S)
-    assert len(sleep_calls) == expected_polls, (
-        f"expected {expected_polls} sleep calls before fatal raise, got {sleep_calls}"
-    )
+
+
+def test_tk6a_gpu_inference_regions_never_overlap(embedder):
+    """TK6a: concurrent embed + rerank hold one card, so their inference spans are disjoint.
+
+    onnxruntime#26610 — two sessions on one device driven from different threads abort or
+    SEGV, and Run() releases the GIL so daemon threads genuinely overlap. Asserting "no
+    crash" would not discriminate: the SEGV was intermittent under 228 tasks.
+    """
+    from rag_search.embed.embedder import Reranker
+    spans: list[tuple[str, float, float]] = []
+    guard = threading.Lock()
+    reranker = Reranker()
+    reranker._init()
+    real_embed, real_rerank = embedder._model, reranker._model
+    embedder._model = _Timed(real_embed, spans, guard)
+    reranker._model = _Timed(real_rerank, spans, guard)
+    try:
+        threads = [
+            threading.Thread(target=_embed_loop, args=(embedder,)) for _ in range(3)
+        ] + [threading.Thread(target=_rerank_loop, args=(reranker,)) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=180)
+        assert not any(t.is_alive() for t in threads), "a GPU worker never finished"
+    finally:
+        embedder._model, reranker._model = real_embed, real_rerank
+        del reranker
+
+    assert len(spans) == 20, f"expected 20 inference calls, recorded {len(spans)}"
+    ordered = sorted(spans, key=lambda s: s[1])
+    overlaps = [(a, b) for a, b in itertools.pairwise(ordered) if b[1] < a[2]]
+    assert not overlaps, f"GPU inference regions overlapped: {overlaps}"

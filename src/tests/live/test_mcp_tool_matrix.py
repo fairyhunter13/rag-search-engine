@@ -3,7 +3,7 @@
 Covers (no duplication of test_p5 or test_p21):
   - graph: all 7 relations (definition/callers/callees/impact/impact_narrative/path/semantic_trace)
   - search: 3 scopes (code/docs/all) + federated project_paths
-  - ask: scope variants (architecture/global/feature/wiki/business)
+  - ask: scope variants (architecture/global/feature/business; `wiki` left with tier 3)
   - overview: metrics / projects (the what= values that fail on a stale index; `patterns` was
     the third and left with tier 3)
 
@@ -23,7 +23,7 @@ from tests.live._sample_workspace import SampleWorkspace
 pytestmark = pytest.mark.live
 
 _GRAPH_RELATIONS_SIMPLE = ["definition", "callers", "callees", "impact", "impact_narrative"]
-_ASK_SCOPES = ["architecture", "global", "feature", "wiki", "business"]
+_ASK_SCOPES = ["architecture", "global", "feature", "business"]
 
 
 @pytest.fixture(scope="module")

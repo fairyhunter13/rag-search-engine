@@ -275,37 +275,11 @@ def _extract_symbols_from(r, outer_root, code_bytes: bytes, file_str: str, langu
     return _generic_walk(outer_root, code_bytes, file_str, language)
 
 
-# ─── Ordered call sites (BPRE D1) ────────────────────────────────────────────
-
-@dataclass(slots=True)
-class CallSite:
-    """Call site with source-order index and enclosing branch depth (BPRE D1)."""
-    caller_qualified_name: str
-    callee_name: str
-    order_index: int
-    branch_id: int  # 0 = unconditional; >0 = inside if/for/switch
-    guard: str      # enclosing keyword: "if", "for", "switch", …
-
-
-_BRANCH_NODE_KINDS: frozenset[str] = frozenset({
-    "if_statement", "for_statement", "while_statement", "switch_statement",
-    "select_statement", "with_statement", "for_range_clause", "try_statement",
-})
-
-
-def _collect_sites(
-    node, code_bytes: bytes, out: list, counter: list, depth: int, kw: str,
-) -> None:
-    kind = node.kind()
-    nd = depth + 1 if kind in _BRANCH_NODE_KINDS else depth
-    nk = kind.split("_")[0] if kind in _BRANCH_NODE_KINDS else kw
-    if "call" in kind or "invocation" in kind:
-        name = _unwrap_callee(_callee_node(node), code_bytes)
-        if name:
-            out.append(CallSite("", name, counter[0], nd, nk))
-            counter[0] += 1
-    for i in range(node.named_child_count()):
-        _collect_sites(node.named_child(i), code_bytes, out, counter, nd, nk)
+# The ordered-call-site layer (CallSite / _BRANCH_NODE_KINDS / _collect_sites /
+# extract_call_sites) left with tier 3 on 2026-07-28. It carried source order and branch
+# depth so BPRE could reconstruct a process from a call sequence; nothing else ever read
+# order_index, branch_id or guard, so with BPRE deleted it was a parse nobody consumed.
+# Edges keep coming from extract_calls_with_lines below, which sweeps.py:226 still calls.
 
 
 def _collect_calls_with_lines(node, code_bytes: bytes, out: list) -> None:
@@ -339,28 +313,3 @@ def extract_calls_with_lines(content: str, language: str) -> list[tuple[str, int
     return out
 
 
-def extract_call_sites(content: str, language: str) -> list[CallSite]:
-    """Return ordered call sites (DFS order). Branch depth tracks if/for/switch nesting.
-
-    H2: generic call-node detection (node kind ∋ 'call'/'invocation'), any grammar.
-    """
-    parser, ok = _get_parser_for(language)
-    if not ok:
-        return []
-    try:
-        root = parser.parse(content).root_node()
-    except Exception:
-        return []
-    code_bytes = content.encode("utf-8", errors="replace")
-    out: list[CallSite] = []
-    counter = [0]
-    _collect_sites(root, code_bytes, out, counter, 0, "")
-    for inner_lang, inner_bytes, _offset in _iter_script_blocks(root, code_bytes):
-        inner_src = inner_bytes.decode("utf-8", errors="replace")
-        for site in extract_call_sites(inner_src, inner_lang):
-            out.append(CallSite(
-                site.caller_qualified_name, site.callee_name,
-                counter[0], site.branch_id, site.guard,
-            ))
-            counter[0] += 1
-    return out

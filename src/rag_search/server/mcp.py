@@ -191,7 +191,7 @@ async def ask(
     scope: str = "all",
     ctx: Context | None = None,
 ) -> str:
-    """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture|global|feature|wiki|business. LLM synthesis is the HTTP /api/ask path."""
+    """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture|global|feature|business. LLM synthesis is the HTTP /api/ask path."""
     note_query(query)
     project_path, err = await _default_or_error(ctx, project_path)
     if err:
