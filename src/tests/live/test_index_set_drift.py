@@ -174,6 +174,61 @@ def test_sd5_chunks_without_a_hash_row_are_still_purgeable(safe_tmp_path, embedd
     assert not orphaned, f"purge left drift behind: {orphaned}"
 
 
+def test_sd7_a_store_with_chunks_but_no_hash_table_is_repaired(safe_tmp_path, embedder):
+    """SD7: an empty `file_hashes` alongside a full `chunks` is drift, not an unindexed project.
+
+    The first cut of `_index_set_drift` bailed on `if not known`, reasoning that a project with no
+    hash rows had never been indexed and was `_needs_index`'s business. `_needs_index` returns
+    False for these — the store has chunks and communities and looks healthy — so nothing repaired
+    them at all. Measured on the live fleet: **14 stores, 16,148 paths, 196,706 chunks** written by
+    an index generation pre-dating the table, frozen across four consecutive reconcile passes.
+
+    Same family as SD5, which fixed the orphan side of the identical asymmetry; this is the
+    unindexed side.
+    """
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+
+    _seed(safe_tmp_path, embedder)
+    vs = VectorStore(project_vector_db(str(safe_tmp_path)), migrate=False)
+    try:
+        vs._con.execute("DELETE FROM file_hashes")
+        vs._con.commit()
+        assert vs._con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0], (
+            "the store must still hold chunks, or this reproduces an empty store instead"
+        )
+    finally:
+        vs.close()
+    sweeps._code_fingerprint_cache.pop(str(safe_tmp_path), None)
+
+    unindexed, _ = sweeps._index_set_drift(str(safe_tmp_path))
+    assert sorted(p.name for p in unindexed) == ["a.py", "b.py"], (
+        f"a store whose hash table is empty was skipped rather than repaired: {unindexed} — "
+        "no other trigger covers it, so it stays stale forever"
+    )
+
+
+def test_sd7b_a_genuinely_empty_store_is_left_to_needs_index(safe_tmp_path):
+    """SD7b: SD7's fix must not turn every never-indexed project into 100% drift.
+
+    Without this, SD7 would pass under a `_index_set_drift` that had simply deleted the guard —
+    and a project awaiting its first index would be repaired file-by-file through `_index_files`
+    instead of by the full `index_project` that also builds its graph and communities.
+    """
+    from rag_search.core.config import project_vector_db
+    from rag_search.index.store import VectorStore
+
+    (safe_tmp_path / "a.py").write_text("def alpha():\n    return 1\n")
+    VectorStore(project_vector_db(str(safe_tmp_path))).close()  # exists, holds nothing
+    sweeps._code_fingerprint_cache.pop(str(safe_tmp_path), None)
+
+    unindexed, orphaned = sweeps._index_set_drift(str(safe_tmp_path))
+    assert not unindexed and not orphaned, (
+        f"an empty store was reported as drift: {unindexed} — a first index is _needs_index's "
+        "job, and routing it here skips graph and community construction"
+    )
+
+
 def test_sd4_scan_sees_a_change_nested_below_the_root(safe_tmp_path):
     """SD4: the walk's memo must not be keyed on the root directory's mtime.
 

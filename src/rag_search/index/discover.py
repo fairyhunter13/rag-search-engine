@@ -139,7 +139,29 @@ def _should_drop(
         check_parts = rel_parts if is_dir else rel_parts[:-1]
         if any(part in _EXCLUDE or part.startswith(".") for part in check_parts):
             return True
-    return bool(cfg.respect_gitignore and chain and _gitignore_match(full, is_dir, chain))
+    if cfg.respect_gitignore and chain and _gitignore_match(full, is_dir, chain):
+        return True
+    if is_dir:
+        return False
+    # Size is the last rule on purpose: it costs a stat(), and everything above rejects for free.
+    #
+    # It lived only in iter_files, so the watcher's screen (is_ignored_path) and discovery's
+    # disagreed on exactly this one rule. A file past the cap was watched and indexed, then
+    # reported orphaned by the set-drift check and purged, then re-indexed on its next write —
+    # a churn loop, caught live on inosoft's 143-172 kB diagram specs reappearing one reconcile
+    # pass after being purged. Before the drift check existed the same disagreement simply
+    # accumulated: 42,952 chunks the engine had decided were not indexable, still being searched.
+    # Shared here for the reason is_generated_path was: the watcher, the indexer and the drift
+    # gate have to apply one rule, and the only way to guarantee that is one implementation.
+    try:
+        size = full.stat().st_size
+    except OSError:
+        # Cannot evaluate the policy, so this is not a policy drop. Returning True here breaks
+        # deletion: `_index_files` filters its input through is_ignored_path, and a removed file
+        # has to survive that filter to be purged from the index at all. Caught by
+        # test_daemon_incremental_reindex_purges_deleted_file, which is why that gate exists.
+        return False
+    return size == 0 or size > _size_limit(detect_language(full))
 
 
 # H3: non-parseable text/data formats kept explicitly; code = any language
@@ -342,11 +364,6 @@ def iter_files(
                 p, root, (*rel_dp_parts, fname), False, cfg, cur_chain
             ):
                 continue
-            lang = detect_language(p)
-            try:
-                size = p.stat().st_size
-            except OSError:
-                continue
-            if not is_rse_cfg and (size == 0 or size > _size_limit(lang)):
-                continue
+            # No size test here any more: _should_drop owns it, so the walk and the watcher
+            # cannot drift apart. `is_rse_cfg` keeps its exemption by bypassing that call.
             yield p

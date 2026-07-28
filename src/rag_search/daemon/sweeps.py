@@ -120,6 +120,15 @@ _code_fingerprint_cache: dict[str, tuple[float, str, float, list[str]]] = {}
 # than sleep out the real one.
 _CODE_SCAN_TTL_S = 300.0
 
+# Files the set-drift trigger will re-index for one project in one pass. Not a throughput bound —
+# it makes the repair *fair* and *resumable*. `_index_files` does not yield, so uncapped, the
+# largest stranded store (7,693 files, ~85 min) would hold the walk while every project behind it
+# waited, and a pause abandons the walk where it stands: exactly the starvation that left the last
+# fleet migration discarding 104 of 202 projects. Capped, each pass keeps what it stamped and the
+# next re-derives the remainder from the store, needing no progress state. The cost is wall clock,
+# since the loop sleeps RSE_RECONCILE_RESYNC_S between walks regardless of outstanding work.
+_DRIFT_REPAIR_MAX = 500
+
 
 def _code_scan_ttl() -> float:
     import os
@@ -349,8 +358,14 @@ def _index_set_drift(path: str) -> tuple[list, list[str]]:
         return [], []
     finally:
         vs.close()
-    if not known:
-        return [], []  # never indexed, or pre-dates the hash table: _needs_index's business
+    if not known and not charted:
+        return [], []  # genuinely empty store: a first full index_project's business, not ours
+    # An empty `known` with a non-empty `charted` is NOT an unindexed project — it is a store
+    # written before file_hashes existed, and deferring it to `_needs_index` (as this did) meant
+    # deferring it to a predicate that returns False for it, since the store has chunks and
+    # communities and looks healthy. Measured: payment-gateway 3,066 of 3,066 live files unhashed,
+    # octg_inspection 7,697 of 7,697, both invisible to all four triggers. Repairing them is the
+    # whole point; skipping them is the escape hatch this function exists to remove.
     live_set = set(live)
     return (
         [Path(p) for p in live if p not in known and _readable(p)],
@@ -807,10 +822,17 @@ def reconcile_projects() -> None:
                 except Exception as exc:
                     log.warning("%s: orphan purge failed: %s", entry.path, exc)
             if unindexed:
-                log.info("%s: %d discoverable file(s) never indexed — indexing them",
-                         entry.path, len(unindexed))
+                # Bounded per pass, not because the whole set is too expensive but because it is
+                # one indivisible unit: a restart mid-`_index_files` discards everything it has
+                # done, and the measured backlog here is 7,693 files for a single project. A cap
+                # makes the repair resumable by construction — each pass keeps what it finished,
+                # and the next pass re-derives the remainder from the store rather than from any
+                # progress state. Convergence is unaffected; only its granularity is.
+                batch = unindexed[:_DRIFT_REPAIR_MAX]
+                log.info("%s: %d discoverable file(s) never indexed — indexing %d this pass",
+                         entry.path, len(unindexed), len(batch))
                 try:
-                    _index_files(entry.path, unindexed)
+                    _index_files(entry.path, batch)
                 except Exception as exc:
                     log.warning("%s: set-drift reindex failed: %s", entry.path, exc)
         # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
