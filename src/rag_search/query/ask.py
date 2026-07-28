@@ -120,7 +120,11 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
         return f"Project not indexed: {project_path}"
     embedder = get_embedder()
     graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
-    vector_stores = [VectorStore(project_vector_db(p)) for p in all_paths if project_vector_db(p).exists()]
+    # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never to a query.
+    vector_stores = [
+        VectorStore(project_vector_db(p), migrate=False)
+        for p in all_paths if project_vector_db(p).exists()
+    ]
     try:
         chunks = _search_fed(query, embedder, vector_stores, top_k=8)
         answer = compose_answer(query, chunks, graph_stores, scope=scope)

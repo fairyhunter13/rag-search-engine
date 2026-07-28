@@ -64,7 +64,11 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
     embedder = get_embedder()
     all_paths = expand_federation(project_path)
     graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
-    vector_stores = [VectorStore(project_vector_db(p)) for p in all_paths if project_vector_db(p).exists()]
+    # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never to a query.
+    vector_stores = [
+        VectorStore(project_vector_db(p), migrate=False)
+        for p in all_paths if project_vector_db(p).exists()
+    ]
     try:
         chunks = _search_fed(query, embedder, vector_stores, top_k=8)
         answer = compose_answer(query, chunks, graph_stores, scope="all")

@@ -93,7 +93,10 @@ def _search_sync(
         vdb = project_vector_db(path)
         if not vdb.exists():
             continue
-        stores.append(VectorStore(vdb))
+        # migrate=False: a query must never pay a store's one-time FTS backfill. Measured at
+        # 11.3 s for a single 99 k-chunk member, and this loop opens one store per federation
+        # member. Reconcile converges the fleet in the background instead.
+        stores.append(VectorStore(vdb, migrate=False))
         searched.append(path)
     # One embed and one global rerank for the whole federation. Looping search() per project
     # instead costs an extra GPU embed and an extra rerank batch per member — 194 of each for
