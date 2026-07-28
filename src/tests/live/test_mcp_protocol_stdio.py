@@ -90,10 +90,30 @@ def test_stdio_tools_list_returns_exactly_5(stdio_mcp):
     assert names == _EXPECTED_TOOLS, f"wrong tool set: {names}"
 
 
+def _payload(r: dict) -> dict:
+    """Decode a tools/call result, reporting the server's own error text when there is one.
+
+    Every tool here returns `json.dumps(...)` on all of its paths, so a payload that will not
+    parse never means "bad JSON" — it means the tool raised and FastMCP put the exception string
+    in `text` with `isError` set. Decoding it blind turns that into
+    `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`, which names neither the failing
+    tool nor the reason, and this module's search test was written off as a flake three times on
+    exactly that non-message. Check the flag the protocol provides, and quote the raw text if it
+    still will not parse, so the next failure arrives with its cause attached.
+    """
+    res = r.get("result") or {}
+    text = (res.get("content") or [{}])[0].get("text", "")
+    assert not res.get("isError"), f"server returned isError: {text}"
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise AssertionError(f"tools/call payload is not JSON ({e}); raw text={text!r}") from None
+
+
 def test_stdio_overview_projects_returns_indexed_sample_projects(stdio_mcp, sample_proj_path):
     """P15.3a: tools/call overview(projects) over stdio — >=2 sample projects indexed."""
     r = stdio_mcp.request("tools/call", {"name": "overview", "arguments": {"what": "projects"}})
-    data = json.loads(r["result"]["content"][0]["text"])
+    data = _payload(r)
     projects = data.get("projects", [])
     assert len(projects) >= 2, f"expected >=2 sample projects, got {len(projects)}"
 
@@ -104,7 +124,7 @@ def test_stdio_search_returns_sample_ranked_results(stdio_mcp, sample_proj_path)
         "query": "promo apply discount",
         "project_paths": [sample_proj_path],
     }})
-    hits = json.loads(r["result"]["content"][0]["text"])
+    hits = _payload(r)
     assert len(hits.get("results", [])) >= 1, (
         f"search returned no results from sample promo-svc over stdio; hits={hits}"
     )
