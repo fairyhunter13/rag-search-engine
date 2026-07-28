@@ -1,12 +1,10 @@
-"""Metrics, health, reload, sweeps, and event-stream routes."""
+"""Metrics, health, reload, and sweeps routes."""
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse
 
 _metrics: dict = {
     "search": {"count": 0},
@@ -64,34 +62,11 @@ async def _api_sweeps_resume(request: Request) -> JSONResponse:
     return JSONResponse({"status": "resumed"})
 
 
-_event_subscribers: list[asyncio.Queue] = []
-
-
-def publish_event(evt: dict) -> None:
-    """Publish a job event to all active SSE subscribers (best-effort)."""
-    import contextlib
-    for q in list(_event_subscribers):
-        with contextlib.suppress(asyncio.QueueFull):
-            q.put_nowait(evt)
-
-
-async def _api_events_stream(request: Request) -> Response:
-    q: asyncio.Queue = asyncio.Queue(maxsize=32)
-    _event_subscribers.append(q)
-
-    async def _gen():
-        try:
-            yield b'data: {"type":"connected"}\n\n'
-            while True:
-                try:
-                    evt = await asyncio.wait_for(q.get(), timeout=10.0)
-                    yield f"data: {json.dumps(evt)}\n\n".encode()
-                except TimeoutError:
-                    yield b'data: {"type":"keepalive"}\n\n'
-        finally:
-            _event_subscribers.remove(q)
-
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+# The /api/events/stream job bus left with tier 3. Its only producer was the pipeline job runner
+# (build_wiki / docgen / okf), so after R0 `publish_event` had no callers and the stream could only
+# ever emit its own "connected" and "keepalive" frames. The dashboard's job chips, which were its
+# only consumer, went with it. Indexing progress is reported by `overview(what="status")`, not by a
+# pushed event — nothing else in the daemon ever published here.
 
 
 def register(app) -> None:
@@ -99,4 +74,3 @@ def register(app) -> None:
     app.add_route("/api/reload", _api_reload, methods=["POST"])
     app.add_route("/api/sweeps/pause", _api_sweeps_pause, methods=["POST"])
     app.add_route("/api/sweeps/resume", _api_sweeps_resume, methods=["POST"])
-    app.add_route("/api/events/stream", _api_events_stream, methods=["GET"])

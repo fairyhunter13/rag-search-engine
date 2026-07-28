@@ -107,18 +107,57 @@ def serve(host: str | None = None, port: int | None = None) -> None:
     _shutdown_exit(_REQUESTED_EXIT_CODE)  # reload -> 3 (systemd restarts); stop -> 0 (stays down)
 
 
-def start_watcher():
-    """Build and start the file watcher for all enabled registered projects."""
+# The live watcher. Held at module scope because `start_watcher()`'s return value used to be
+# discarded, which meant roots were armed exactly once at boot: a project registered afterwards
+# was never watched, and one disabled afterwards was watched forever. Nothing could re-arm,
+# because nothing held the handle.
+_WATCHER = None
+
+
+def watch_roots() -> set[str]:
+    """The set of roots the watcher *should* be armed on, per the registry."""
     from rag_search.core.config import is_federation_excluded
     from rag_search.core.registry import list_projects
+
+    return {
+        e.path for e in list_projects()
+        if e.enabled and not is_federation_excluded(e.path)
+    }
+
+
+def get_watcher():
+    """The running watcher, or None outside the daemon process."""
+    return _WATCHER
+
+
+def sync_watcher() -> bool:
+    """Re-arm the live watcher against the registry. No-op when no watcher is running.
+
+    Called from the registry write path and once per reconcile pass — both already
+    event-driven, so this adds no clock. `Watcher.sync` returns immediately when the set
+    is unchanged, which is the common case (every index stamp goes through `upsert_project`).
+    """
+    watcher = _WATCHER
+    if watcher is None:
+        return False
+    try:
+        watcher.sync(watch_roots())
+    except Exception as exc:
+        log.warning("watcher sync failed: %s", exc)
+        return False
+    return True
+
+
+def start_watcher():
+    """Build and start the file watcher for all enabled registered projects."""
+    global _WATCHER
     from rag_search.daemon.sweeps import on_change
     from rag_search.daemon.watcher import Watcher
 
     watcher = Watcher(on_change=on_change)
-    for entry in list_projects():
-        if entry.enabled and not is_federation_excluded(entry.path):
-            watcher.watch(entry.path)
+    watcher.sync(watch_roots())
     watcher.start()
+    _WATCHER = watcher
     return watcher
 
 

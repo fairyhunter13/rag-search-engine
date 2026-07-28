@@ -31,8 +31,10 @@ _WORKER_MODULES = {"graph/extractor.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")
 _WORKER_FUNCS = (
     "extract_symbols(", "extract_calls_with_lines(", "extract_calls(",
-    "extract_call_sites(",
 )
+# extract_call_sites( was the fourth entry and left with tier 3 (BPRE was its only caller).
+# Dropped rather than kept: an entry naming a function that no longer exists can never fire,
+# which is the stale-allowlist hole the comment above is about.
 
 
 def _all_py_files() -> list[Path]:

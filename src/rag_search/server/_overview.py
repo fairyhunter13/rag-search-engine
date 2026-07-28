@@ -152,7 +152,10 @@ def handle_overview(project_path: str, what: str) -> str:
                         hq = _pq_cached["q"] if _pq_cached.get("sig") == _pq_sig else partition_quality(gs)
                     else:
                         hq = partition_quality(gs)
-                    # Degenerate partition demotes index_state below ready (Gate kb_state, user choice).
+                    # Degenerate partition demotes index_state below ready (HR20, user choice).
+                    # The gate was written against the field's old name, `kb_state`; that name is
+                    # gone from src/ with tier 3 and the partition check itself is tier 2 (igraph
+                    # + SQL, no LLM), so only the label changed here.
                     if hq.get("degenerate") and _ks == "ready":
                         _ks = "degraded"
                     members_info.append({"path": p, "index_state": _ks, "symbols": s,

@@ -20,8 +20,11 @@ def discover_members(root_path: str) -> list[str]:
 
     Deduped (order-preserved): the same repo is often symlinked from several locations
     under the root, which would otherwise store the member N times in root.federation and
-    make every consumer that walks it (index_members, sweeps burst-enrich, _bpre_source_sig
-    via expand_federation) do N× the work. expand_federation also dedups, as defense.
+    make every consumer that walks it do N× the work — index_members here, and every
+    expand_federation caller: search (mcp), ask, routes_chat, graph_handler, _overview,
+    validate. The two tier-3 walkers this used to name (sweeps burst-enrich, _bpre_source_sig)
+    are gone; the dedup still matters because search fans out over all 194 members per query.
+    expand_federation also dedups, as defense.
     """
     from rag_search.core.config import is_federation_excluded
     root = Path(root_path).resolve()

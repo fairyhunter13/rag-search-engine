@@ -139,6 +139,23 @@ def get_project(path: str) -> ProjectEntry | None:
     return ProjectEntry(path=path, **{k: v for k, v in meta.items() if k in known})
 
 
+def _notify_watcher() -> None:
+    """Tell the running watcher the enabled set changed.
+
+    Looked up through `sys.modules` rather than imported: a CLI process has no watcher and
+    importing the daemon server there would drag uvicorn in for nothing. Inside the daemon
+    the module is always already imported, so this finds it.
+    """
+    import contextlib
+    import sys
+    server = sys.modules.get("rag_search.daemon.server")
+    if server is None:
+        return
+    # A registry write must never fail because the watcher could not be re-armed.
+    with contextlib.suppress(Exception):
+        server.sync_watcher()
+
+
 def upsert_project(entry: ProjectEntry) -> None:
     from rag_search.index.discover import is_forbidden_root
     if is_forbidden_root(Path(entry.path)):
@@ -146,8 +163,14 @@ def upsert_project(entry: ProjectEntry) -> None:
     data = _load()
     d = asdict(entry)
     d.pop("path")
+    prior = data.get(entry.path)
     data[entry.path] = d
     _save(data)
+    # Only on a membership change. This function also carries every index stamp, and each
+    # `sync()` that finds a changed set costs a watch teardown/re-arm — so re-arming on a
+    # stamp would tear the watch down hundreds of times a day for no gain.
+    if prior is None or bool(prior.get("enabled", True)) != bool(entry.enabled):
+        _notify_watcher()
 
 
 def remove_project(path: str) -> bool:
@@ -156,4 +179,5 @@ def remove_project(path: str) -> bool:
         return False
     del data[path]
     _save(data)
+    _notify_watcher()
     return True

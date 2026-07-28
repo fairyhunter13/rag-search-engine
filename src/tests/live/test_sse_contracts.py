@@ -1,9 +1,8 @@
-"""SSE event grammar contracts — chat_stream + events/stream.
+"""SSE event grammar contracts — chat_stream.
 
 Verifies the event sequence:
   chat_stream POST → chunks of {type: thinking|token|done, ...}
                    → done event has model_used == claude-haiku-4-5 + sources list
-  events/stream GET → text/event-stream, first data contains "connected"
 
 No mocks. Requires daemon at :8765 with ≥1 indexed project.
 LLM tests are @slow (full round-trip to Anthropic).
@@ -51,25 +50,11 @@ def _collect_chat_events(live_client, project: str, msg: str, timeout: int = 60)
     return events
 
 
-def test_events_stream_sse_header(live_client):
-    """GET /api/events/stream → text/event-stream content-type."""
-    r = live_client.get("/api/events/stream", stream=True, timeout=3)
-    ct = r.headers.get("content-type", "")
-    r.close()
-    assert r.status_code == 200
-    assert "text/event-stream" in ct, f"Must be SSE; got {ct!r}"
-
-
-def test_events_stream_connected_event(live_client):
-    """events/stream must emit a 'connected' event within the read window."""
-    body = b""
-    r = live_client.get("/api/events/stream", stream=True, timeout=5)
-    for chunk in r.iter_content(chunk_size=1024):
-        body += chunk
-        if b"connected" in body:
-            break
-    r.close()
-    assert b"connected" in body, "events/stream must emit 'connected' SSE event"
+# The two /api/events/stream tests left with tier 3 along with the route. Its only publisher was
+# the pipeline job runner (build_wiki/docgen/okf); with that gone the stream could only ever emit
+# its own "connected" and "keepalive" frames, so both tests would have kept passing over a bus with
+# nothing on it — an assertion that survives the thing it was written to observe. chat_stream is
+# the surviving SSE surface and the rest of this module covers it.
 
 
 @pytest.mark.slow

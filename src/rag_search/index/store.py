@@ -80,6 +80,17 @@ class VectorStore:
             (embed_signature(self._dim),),
         )
 
+    def get_meta(self, key: str) -> str | None:
+        row = self._con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Write a meta key and commit it now — callers use this to record when a store was
+        last brought up to date, and a value that vanishes on close would re-trigger the
+        rebuild it exists to end."""
+        self._con.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, value))
+        self._con.commit()
+
     def stale_signature(self) -> str | None:
         """The recorded signature, if it disagrees with the running config; else None.
 

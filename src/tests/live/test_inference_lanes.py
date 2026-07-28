@@ -209,6 +209,36 @@ def test_rerank_passages_only_in_gpu_lane():
 # ---------------------------------------------------------------------------
 
 
+def test_only_claude_profiles_opens_a_url():
+    """DK2: exactly one module opens a URL, and what it opens is a usage read."""
+    base = Path(__file__).parents[2] / "rag_search"
+    openers = {
+        py.relative_to(base).as_posix()
+        for py in base.rglob("*.py")
+        if "https://" in py.read_text(errors="replace")
+    }
+    assert openers <= _DK2_URL_ALLOWLIST, (
+        f"module(s) outside {sorted(_DK2_URL_ALLOWLIST)} open a URL: {sorted(openers - _DK2_URL_ALLOWLIST)}"
+    )
+    profiles = (base / "core" / "claude_profiles.py").read_text()
+    assert "oauth/usage" in profiles, "claude_profiles.py must read the usage endpoint"
+    assert "completion" not in profiles.lower(), (
+        "claude_profiles.py is allowlisted for the *usage* endpoint only — no completion call"
+    )
+
+
+def test_deepseek_api_key_has_no_reader():
+    """DK2: the tier-3 secret is unreadable — a keyless box is the normal configuration."""
+    base = Path(__file__).parents[2] / "rag_search"
+    readers = [
+        f"{py.relative_to(base.parent)}:{n}"
+        for py in base.rglob("*.py")
+        for n, line in enumerate(py.read_text(errors="replace").splitlines(), 1)
+        if "DEEPSEEK" in line and not line.strip().startswith("#")
+    ]
+    assert not readers, f"DEEPSEEK_API_KEY still has a reader: {readers}"
+
+
 def test_embedder_never_requests_cpu_ep():
     """Source-guard: embedder.py and gpu.py must never list CPUExecutionProvider in a providers=[...] arg."""
     import re
@@ -218,6 +248,50 @@ def test_embedder_never_requests_cpu_ep():
         assert not matches, (
             f"{name} must not request CPUExecutionProvider; found: " + str(matches)
         )
+
+
+# ---------------------------------------------------------------------------
+# DK2 — no generative LLM client anywhere in the package (the R0 closing gate)
+# ---------------------------------------------------------------------------
+
+# Host/path fragments that mean "a completion is being requested over HTTP". Written against
+# *paths* as well as hosts, because the one legitimate network call in the package goes to
+# api.anthropic.com — a usage read, not a completion (see _DK2_URL_ALLOWLIST).
+_LLM_ENDPOINT_TOKENS = (
+    "api.deepseek.com",
+    "deepseek.com",
+    "api.openai.com",
+    "generativelanguage.googleapis.com",
+    "/v1/chat/completions",
+    "/v1/messages",
+    "/v1/complete",
+    "/api/generate",
+)
+
+# The single module allowed to open any URL at all. R0e kept it deliberately: dashboard chat
+# picks its Claude account through it, which is what stopped the account-drain regression.
+_DK2_URL_ALLOWLIST = frozenset({"core/claude_profiles.py"})
+
+
+def test_no_module_opens_a_generative_llm_endpoint():
+    """DK2: no module in src/rag_search/ requests a completion over HTTP."""
+    base = Path(__file__).parents[2] / "rag_search"
+    violations: list[str] = []
+    for py in base.rglob("*.py"):
+        text = py.read_text(errors="replace")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            for token in _LLM_ENDPOINT_TOKENS:
+                if token in line:
+                    violations.append(
+                        f"{py.relative_to(base.parent)}:{lineno}: {token!r}: {line.strip()[:80]}"
+                    )
+    assert not violations, (
+        "Generative LLM endpoint found in src/rag_search (tier 3 deleted 2026-07-28; "
+        "`claude -p` on dashboard chat is the whole generative surface):\n"
+        + "\n".join(violations[:20])
+    )
 
 
 def test_embedder_does_not_use_is_gpu_available():
