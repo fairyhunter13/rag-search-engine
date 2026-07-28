@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,59 @@ from rag_search.core.config import EMBED_MAX_TOKENS, EMBED_MODEL
 CHUNKER_REV = "cast-1"
 
 
+# What this pipeline prepends to text before embedding, per flow. It prepends nothing: the
+# current model's own card says "Prefixes for queries/documents: not necessary". But "none" is a
+# choice and not an absence — an e5- or bge-style model needs `query: ` / `passage: `, and adding
+# one shifts every vector. Recording it is what makes that change invalidate the index instead of
+# silently querying a space the stored vectors were never embedded into. Bump by hand.
+EMBED_PREFIX_REV = "noprefix-1"
+
+# The pooling and prefix every stored index in the fleet was built with. While the pipeline still
+# matches these the signature stays in its four-field form, byte-identical to what is stamped
+# today — because the two new fields *describe what those runs already did*, and re-deriving them
+# would recompute identical vectors at fleet scale for no change in any result. `embed_signature`
+# is also folded into `indexer._content_hash`, so a cosmetic change here would defeat the
+# byte-identical re-embed skip on every file at once. Change pooling or the prefix for real and
+# both fields appear, invalidating stamp and content hashes together — which is the whole job.
+_ERA_POOLING = "PooledNormalizedEmbedding"
+_ERA_PREFIX_REV = "noprefix-1"
+
+
+@lru_cache(maxsize=8)
+def pooling_id(model: str = EMBED_MODEL) -> str:
+    """The pooling + normalisation actually in force, read off fastembed's implementation class.
+
+    Derived, not hand-maintained, and that is the whole point. fastembed picks one of several
+    implementations *from the model name* — `PooledNormalizedEmbedding` is mean-pool + L2,
+    `OnnxTextEmbedding` is CLS, `PooledEmbedding` is mean-pool unnormalised — so a model swap can
+    change the vector space without one line of this repo changing. A constant here would have to
+    be remembered at exactly the moment everyone is thinking about something else; this cannot be
+    forgotten. Resolution reads the registry only: no ONNX session, no download, no GPU.
+    """
+    from fastembed import TextEmbedding
+    for cls in TextEmbedding.EMBEDDINGS_REGISTRY:
+        try:
+            if any(m.model == model for m in cls._list_supported_models()):
+                return cls.__name__
+        except Exception:
+            continue
+    return "unregistered"
+
+
+def _compose_signature(dim: int, pooling: str, prefix_rev: str) -> str:
+    """Assemble a signature from stated pipeline facts, era clause included.
+
+    Split out from `embed_signature` so the expansion branch can be exercised with a real
+    alternative pooling id — read off fastembed's registry, not patched in — since the repo
+    bans monkeypatching and the branch is the one that must not be wrong: if it failed to
+    expand, an embedder swap would keep the legacy stamp and serve two vector spaces at once.
+    """
+    sig = f"{EMBED_MODEL}|{EMBED_MAX_TOKENS}|{dim}|{CHUNKER_REV}"
+    if pooling == _ERA_POOLING and prefix_rev == _ERA_PREFIX_REV:
+        return sig
+    return f"{sig}|{pooling}|{prefix_rev}"
+
+
 def embed_signature(dim: int = 768) -> str:
     """Identity of the pipeline that produced a set of vectors.
 
@@ -24,7 +78,7 @@ def embed_signature(dim: int = 768) -> str:
     shapes coexisting silently and forever — which is how a 512-token truncation
     went unnoticed while discarding half of every indexed repo.
     """
-    return f"{EMBED_MODEL}|{EMBED_MAX_TOKENS}|{dim}|{CHUNKER_REV}"
+    return _compose_signature(dim, pooling_id(), EMBED_PREFIX_REV)
 
 
 def _open(db_path: Path, dim: int) -> sqlite3.Connection:

@@ -124,8 +124,53 @@ class Embedder:
         return int(meta.get("dim", 768))
 
 
+# Rerankers fastembed has no built-in description for. Its registry is a curated list, not a
+# capability boundary — `add_custom_model` serves any HF repo carrying an ONNX export, which
+# gte-reranker-modernbert-base does (`onnx/model.onnx`, Apache-2.0). Keeping the table explicit
+# rather than registering whatever RSE_RERANK_MODEL names means a typo still fails loudly
+# instead of becoming a download attempt against a repo nobody vetted.
+_CUSTOM_RERANKERS = {
+    "Alibaba-NLP/gte-reranker-modernbert-base": (0.6, "apache-2.0"),
+}
+
+
+def _register_custom_reranker(model: str) -> None:
+    """Teach fastembed a reranker it does not ship, idempotently. No-op for built-ins."""
+    from fastembed.common.model_description import ModelSource
+    from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+    if any(m["model"] == model for m in TextCrossEncoder.list_supported_models()):
+        return
+    if model not in _CUSTOM_RERANKERS:
+        raise RuntimeError(
+            f"RSE_RERANK_MODEL={model!r} is neither a fastembed built-in nor a vetted custom "
+            f"reranker (known: {sorted(_CUSTOM_RERANKERS)})"
+        )
+    size_gb, lic = _CUSTOM_RERANKERS[model]
+    TextCrossEncoder.add_custom_model(
+        model, ModelSource(hf=model), size_in_gb=size_gb, license=lic
+    )
+
+
+def _unpin_tokenizer_padding(tokenizer) -> bool:
+    """Repad to batch-longest when a repo pins a fixed padding length. True if it changed.
+
+    fastembed only calls `enable_padding` when the tokenizer has none, so a `tokenizer.json`
+    shipping `padding.strategy.Fixed` is honoured verbatim — every input is inflated to that
+    length no matter how short it is. gte-reranker-modernbert-base pins 8000, which makes one
+    three-passage rerank ask for 3 x 12 heads x 8000^2 x 4 B = 9.2 GB and die in the allocator,
+    while its own truncation is capped at 512. Fixed padding is never right for a reranker:
+    below the cap it is dead compute, at the cap it is fatal.
+    """
+    pad = tokenizer.padding
+    if not pad or pad.get("length") is None:
+        return False
+    tokenizer.enable_padding(pad_id=pad["pad_id"], pad_token=pad["pad_token"])
+    return True
+
+
 class Reranker:
-    """Cross-encoder reranker (jina-reranker-v1-turbo-en) on GPU."""
+    """Cross-encoder reranker on GPU. Model from RSE_RERANK_MODEL; see _CUSTOM_RERANKERS."""
 
     def __init__(self, model: str = RERANK_MODEL) -> None:
         assert_gpu_available()
@@ -134,10 +179,12 @@ class Reranker:
 
     def _init(self) -> None:
         from fastembed.rerank.cross_encoder import TextCrossEncoder
+        _register_custom_reranker(self._model_name)
         self._model = TextCrossEncoder(
             model_name=self._model_name,
             providers=select_gpu_providers(),
         )
+        _unpin_tokenizer_padding(self._model.model.tokenizer)
         providers = self._model.model.model.get_providers()
         if not providers or providers[0] not in GPU_EP_NAMES:
             raise RuntimeError(f"Reranker not bound to a GPU EP (providers={providers}). CPU inference is forbidden.")
