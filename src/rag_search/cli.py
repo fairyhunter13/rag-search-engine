@@ -62,7 +62,8 @@ def search(
         vdb = project_vector_db(path)
         if not vdb.exists():
             continue
-        vs = VectorStore(vdb)
+        # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never to a query.
+        vs = VectorStore(vdb, migrate=False)
         try:
             results.extend(_search(query, embedder, vs, scope=scope, top_k=top_k))
         finally:

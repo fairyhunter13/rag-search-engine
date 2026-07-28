@@ -1,4 +1,10 @@
-"""TK4 + HY1/HY2 — gates for the lexical lane and its fusion with dense retrieval.
+"""TK4 + HY1/HY2 + LX1/LX1b/LX2 — gates for the lexical lane and its fusion with dense retrieval.
+
+The LX gates cover the two defects found by tracing the fleet after 2d shipped: the one-time FTS
+backfill was running inside `_open` on the *query* path (11.31 s for one 99 k-chunk member, once
+per federation member), and `search_lexical` joined `chunks` inside the MATCH query, so sqlite
+hydrated every matched row before sorting. Both were invisible in output — correct answers,
+paid for at hundreds of times the necessary cost.
 
 TK4 is the plan's own gate for Phase 2 and is red by construction before it: dense retrieval
 alone cannot rank a chunk highly for a name the embedder has never seen.
@@ -115,6 +121,140 @@ def test_hy1_lexical_index_tracks_the_chunks_table(embedder, safe_tmp_path):
         vs.flush()
         assert vs.search_lexical("statements", top_k=500) == [], (
             "HY1: clear() emptied chunks but left the lexical index populated"
+        )
+    finally:
+        vs.close()
+
+
+def _unmigrate(vs) -> None:
+    """Put a store back into the shape every pre-2d index has on disk: rows in `chunks`, an empty
+    FTS index, no `fts_rev` stamp. This is the state 137 of the fleet's 172 stores were in when
+    the lexical lane shipped, not a contrived one.
+    """
+    vs._con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')")
+    vs._con.execute("DELETE FROM meta WHERE key='fts_rev'")
+    vs._con.commit()
+
+
+def test_lx1_backfill_never_runs_on_the_query_path(embedder, safe_tmp_path):
+    """LX1: opening a store to *read* must not migrate it, and must degrade instead of stalling.
+
+    Measured on the live fleet: opening `gims` (99 k chunks) inside a query cost 11.31 s to then
+    answer in 1.9 ms, and a federated search opens one store per member — so the first query
+    against the 189-member federation would have paid that per member, serially, and timed out.
+    The `fts_rev` assertion is the discriminating half: returning no lexical hits is also what a
+    migrated-but-empty store does, so only "the stamp is still absent" proves the backfill was
+    skipped rather than run.
+    """
+    from rag_search.index.store import VectorStore
+
+    path = safe_tmp_path / "lx1.db"
+    vs, _ = _reconcile_store(embedder, path)
+    _unmigrate(vs)
+    vs.close()
+    ro = VectorStore(path, migrate=False)
+    try:
+        assert ro.lexical_ready is False
+        assert ro.search_lexical("statements", top_k=10) == []
+        assert ro.get_meta("fts_rev") is None, (
+            "LX1: a read-only open built the FTS index — the 11 s backfill is back on the query "
+            "path, where a federated search pays it once per member"
+        )
+        q_vec = embedder.embed(["reconcile the ledger"], batch_size=1)[0].astype("float32")
+        assert ro.search(q_vec, top_k=5), "LX1: dense retrieval must still answer"
+    finally:
+        ro.close()
+    rw = VectorStore(path, migrate=True)
+    try:
+        assert rw.lexical_ready is True
+        assert rw.get_meta("fts_rev") is not None
+        assert rw.search_lexical("statements", top_k=10), (
+            "LX1: the writable open did not build the index the reading open refused to build"
+        )
+    finally:
+        rw.close()
+
+
+def test_lx1b_writes_through_an_unmigrated_store_stay_repairable(embedder, safe_tmp_path):
+    """LX1b: skipping FTS maintenance on an unbuilt index must leave it *rebuildable*, not wrong.
+
+    This is why the write sites skip rather than raise. An external-content index cannot be
+    maintained before it exists — `delete` against a row it never saw writes a negative entry —
+    so a store that takes writes while unmigrated must still come out correct the first time
+    something rebuilds it. 137 fleet stores were taking watcher writes in exactly this state.
+    """
+    from rag_search.index.store import VectorStore
+
+    path = safe_tmp_path / "lx1b.db"
+    vs, _ = _reconcile_store(embedder, path)
+    _unmigrate(vs)
+    vs.close()
+    vec = embedder.embed(["def unrelated():\n    return None\n"], batch_size=1)[0]
+    un = VectorStore(path, migrate=False)
+    try:
+        un.delete_by_path("f0.py")
+        un.insert(1, "f1.py", 1, 3, "python", "ledger statements reconciled here", vec)
+        un.flush()
+    finally:
+        un.close()
+    vs2 = VectorStore(path, migrate=True)
+    try:
+        vs2._con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('integrity-check')")
+        got = {h["chunk_id"] for h in vs2.search_lexical("statements", top_k=500)}
+        live = {r[0] for r in vs2._con.execute(
+            "SELECT chunk_id FROM chunks WHERE content LIKE '%statements%'")}
+        assert got == live, (
+            f"LX1b: after writes through an unmigrated handle the rebuilt index returns "
+            f"{sorted(got - live)} that are gone and misses {sorted(live - got)} that are not"
+        )
+    finally:
+        vs2.close()
+
+
+# The known-bad shape, as a control. Retyped deliberately: its whole job is to be the query the
+# production one is no longer, so it must not track production.
+_NAIVE_SQL = """
+SELECT c.chunk_id, c.content, bm25(chunks_fts)
+FROM chunks_fts JOIN chunks c ON c.chunk_id = chunks_fts.rowid
+WHERE chunks_fts MATCH 'ledger' ORDER BY bm25(chunks_fts) LIMIT 5
+"""
+
+
+def _hydrates_after_ranking(con, sql: str) -> tuple[bool, list[str]]:
+    """True when sqlite sorts before it joins `chunks` — i.e. hydrates top_k, not every match."""
+    plan = [r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql)]
+    hydrate = next(i for i, d in enumerate(plan) if "SEARCH c" in d)
+    return any("ORDER BY" in d for d in plan[:hydrate]), plan
+
+
+def test_lx2_lexical_query_ranks_before_it_hydrates(embedder, safe_tmp_path):
+    """LX2: `chunks` is joined only to the rows that survived the LIMIT.
+
+    Joining inside the MATCH query makes sqlite hydrate every matched row before sorting, so a
+    three-common-word question over a 207 k-chunk store read 178 k full chunk bodies to return
+    ten (323 ms; 130 ms once split). Asserted on the plan sqlite chose for the statement the
+    method *actually ran* — read back off a trace callback rather than retyped here, so it
+    cannot drift from production — and not on elapsed time, which is noise on a shared GPU box,
+    nor on VM steps, which miss it: the cost is bytes of `content`, not instructions (measured
+    1.1x by step count against 2.5x by clock).
+    """
+    vs, _ = _reconcile_store(embedder, safe_tmp_path / "lx2.db")
+    try:
+        seen: list[str] = []
+        vs._con.set_trace_callback(seen.append)
+        hits = vs.search_lexical("reconcile the ledger statements", top_k=5)
+        vs._con.set_trace_callback(None)
+        assert hits, "LX2 is vacuous: the query matched nothing to rank"
+        control, cplan = _hydrates_after_ranking(vs._con, _NAIVE_SQL)
+        assert not control, (
+            f"LX2 is vacuous: the naive join already ranks before it hydrates on this sqlite, "
+            f"so the assertion below would pass without the split. Plan was {cplan}"
+        )
+        live, plan = _hydrates_after_ranking(
+            vs._con, next(s for s in seen if "chunks_fts" in s and "MATCH" in s))
+        assert live, (
+            f"LX2: `chunks` is joined before the ranking sort, so every matched row is hydrated "
+            f"to return top_k. Plan was {plan}"
         )
     finally:
         vs.close()
