@@ -14,8 +14,6 @@ def _top_communities_semantic(query: str, stores: list, top_k: int = 10) -> str:
         for r in store._con.execute(
             "SELECT title, summary FROM communities "
             "WHERE summary IS NOT NULL AND summary != '' "
-            "AND narrated=1 "
-            "AND (semantic_type IS NULL OR semantic_type NOT IN ('test')) "
             "AND kind NOT IN ('dir','file') "
             "ORDER BY level, id LIMIT 50"
         ).fetchall():
@@ -30,26 +28,16 @@ def _top_communities_semantic(query: str, stores: list, top_k: int = 10) -> str:
 
 
 
-def _community_context(stores: list, limit: int = 20, semantic_types: tuple[str, ...] = ()) -> str:
+def _community_context(stores: list, limit: int = 20) -> str:
     seen: set = set()
     rows: list = []
     for store in stores:
-        if semantic_types:
-            placeholders = ",".join("?" * len(semantic_types))
-            src = store._con.execute(
-                f"SELECT title, summary FROM communities WHERE summary IS NOT NULL AND summary != '' "
-                f"AND narrated=1 AND semantic_type IN ({placeholders}) ORDER BY level, id LIMIT ?",
-                (*semantic_types, limit),
-            ).fetchall()
-        else:
-            src = store._con.execute(
-                "SELECT title, summary FROM communities "
-                "WHERE summary IS NOT NULL AND summary != '' "
-                "AND narrated=1 "
-                "AND (semantic_type IS NULL OR semantic_type NOT IN ('test')) "
-                "AND kind NOT IN ('dir','file') "
-                "ORDER BY level, id LIMIT ?", (limit,),
-            ).fetchall()
+        src = store._con.execute(
+            "SELECT title, summary FROM communities "
+            "WHERE summary IS NOT NULL AND summary != '' "
+            "AND kind NOT IN ('dir','file') "
+            "ORDER BY level, id LIMIT ?", (limit,),
+        ).fetchall()
         for r in src:
             if r[0] not in seen:
                 seen.add(r[0])
@@ -64,7 +52,7 @@ def _tree_walk_context(query: str, stores: list, top_k: int = 8) -> str:
     seen: set[str] = set()
     for store in stores:
         for ctitle, csumm in store._con.execute(
-            "SELECT title,summary FROM communities WHERE level=1 AND narrated=1 "
+            "SELECT title,summary FROM communities WHERE level=1 "
             "AND summary IS NOT NULL AND summary!='' AND kind NOT IN ('dir','file') LIMIT 20"
         ).fetchall():
             if ctitle and ctitle not in seen:
@@ -98,8 +86,10 @@ def _assemble_context(query: str, chunks: list[dict], stores: list, scope: str) 
             f"## Community context\n{_community_context(stores, limit=5)[:_MAX_CTX]}"
         )
     if scope == "business":
-        biz_ctx = _community_context(stores, limit=20,
-                                     semantic_types=("business_rule", "business_process", "feature"))[:_MAX_CTX]
+        # semantic_type was the only thing that made this scope distinct, and it was written
+        # solely by the deleted LLM narrator; every row is NULL-typed now, so the scope falls
+        # back to plain community context rather than filtering everything out.
+        biz_ctx = _community_context(stores, limit=20)[:_MAX_CTX]
         return f"## Business context\n{biz_ctx}\n\n## Code\n{chunk_ctx}"
     return chunk_ctx
 

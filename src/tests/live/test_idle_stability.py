@@ -366,7 +366,6 @@ def test_bulk_reconcile_suppresses_member_bpre_fanout():
 
     import rag_search.daemon.federation as fed_mod
     import rag_search.embed.embedder as embed_mod
-    import rag_search.index.indexer as indexer_mod
     import rag_search.index.store as store_mod
     import rag_search.kb.bpre as bpre_mod
     import rag_search.kb.wiki as wiki_mod
@@ -386,7 +385,7 @@ def test_bulk_reconcile_suppresses_member_bpre_fanout():
     orig = (
         llm_mod.deepseek_key, wiki_mod.build_federated_index, fed_mod.expand_federation,
         sweeps._regen_owning_processes, bpre_mod.reconstruct_processes,
-        embed_mod.get_embedder, indexer_mod.index_docs, store_mod.VectorStore,
+        embed_mod.get_embedder, store_mod.VectorStore,
     )
     llm_mod.deepseek_key = lambda: "unused-key-bypasses-guard"
     wiki_mod.build_federated_index = lambda root_path: 0
@@ -394,7 +393,6 @@ def test_bulk_reconcile_suppresses_member_bpre_fanout():
     sweeps._regen_owning_processes = owning_calls.append
     bpre_mod.reconstruct_processes = lambda p: bpre_calls.append(p) or 0
     embed_mod.get_embedder = lambda: None
-    indexer_mod.index_docs = lambda *a, **kw: 0
     store_mod.VectorStore = _NoopVectorStore
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -418,7 +416,7 @@ def test_bulk_reconcile_suppresses_member_bpre_fanout():
             (
                 llm_mod.deepseek_key, wiki_mod.build_federated_index, fed_mod.expand_federation,
                 sweeps._regen_owning_processes, bpre_mod.reconstruct_processes,
-                embed_mod.get_embedder, indexer_mod.index_docs, store_mod.VectorStore,
+                embed_mod.get_embedder, store_mod.VectorStore,
             ) = orig
             shutil.rmtree(index_dir(tmp), ignore_errors=True)
 

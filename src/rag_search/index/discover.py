@@ -178,9 +178,8 @@ def is_code_language(lang: str) -> bool:
 
 # Machine-generated code files: derived build/codegen output (protobuf stubs, dart codegen,
 # SvelteKit dashboards, *.generated.*). tree-sitter parses them as real code, but regenerating
-# them is NOT source drift — treating it as such wakes the enrich/wiki/BPRE cascade for nothing.
-# This is what drove inosoft-project's wiki/src/lib/*.generated.js reconstruct loop. Mirrors
-# _is_generated_docs_dir, which already keeps generated docs/ trees out of the drift signals.
+# them is NOT source drift — treating it as such wakes the enrich cascade for nothing.
+# This is what drove inosoft-project's wiki/src/lib/*.generated.js reconstruct loop.
 _GENERATED_SUFFIXES: tuple[str, ...] = (
     "_pb2.py", "_pb2_grpc.py", ".pb.go", ".pb.gw.go", ".pb.cc", ".pb.h",
     ".g.dart", ".freezed.dart",
@@ -224,16 +223,11 @@ def is_forbidden_root(path: Path) -> bool:
     )
 
 
-def _is_generated_docs_dir(p: Path) -> bool:
-    """True if p is a docgen-generated docs/ tree (contains _meta/provenance.json)."""
-    return p.is_dir() and (p / "_meta" / "provenance.json").exists()
-
-
 def is_ignored_path(
     p: Path, root: Path | None = None, cfg: ProjectConfig | None = None,
     *, is_dir: bool | None = None, chain: _GitignoreChain | None = None,
 ) -> bool:
-    """True if p is dropped by the discovery decision order, or is under a generated docs/ tree.
+    """True if p is dropped by the discovery decision order.
 
     Shares _should_drop with iter_files so the watcher (this function) and the indexer/
     source-fingerprint always agree on what counts as a real source change.
@@ -259,20 +253,11 @@ def is_ignored_path(
         chain = ()  # a caller-supplied chain must never override an opted-out config
     elif chain is None:
         chain = _gitignore_chain_for(p, root)
-    if _should_drop(p, root, rel_parts, is_dir, cfg, chain):
-        return True
-    # Walk prefix dirs: if a "docs" segment on disk is a docgen-generated tree, ignore it.
-    for i, part in enumerate(rel_parts):
-        if part == "docs":
-            candidate = root / Path(*rel_parts[: i + 1])
-            if _is_generated_docs_dir(candidate):
-                return True
-    return False
+    return _should_drop(p, root, rel_parts, is_dir, cfg, chain)
 
 
 def iter_files(
     root: Path, *, federation_mode: bool = False, cfg: ProjectConfig | None = None,
-    include_generated_docs: bool = False,
 ) -> Iterator[Path]:
     """Yield indexable files under root, skipping ignored dirs and big files."""
     root = root.resolve()
@@ -294,7 +279,6 @@ def iter_files(
         dirnames[:] = [
             d for d in dirnames
             if not d.endswith(".egg-info")
-            and not (not include_generated_docs and d == "docs" and _is_generated_docs_dir(dp / d))
             and not _should_drop(dp / d, root, (*rel_dp_parts, d), True, cfg, cur_chain)
         ]
         if federation_mode:

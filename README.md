@@ -22,10 +22,8 @@ call-graph store, and a DeepSeek-powered knowledge-base pipeline.
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/fairyhunter13/rag-search-engine.git
+git clone https://github.com/fairyhunter13/rag-search-engine.git
 cd rag-search-engine
-# If you cloned without --recurse-submodules, run this to populate vendor/docgen:
-git submodule update --init --recursive
 
 python3 -m venv .venv
 .venv/bin/pip install -e src         # editable install (latest deps)
@@ -34,8 +32,8 @@ python3 -m venv .venv
 .venv/bin/python scripts/check_system.py          # must show [x] assert_gpu_available()
 ```
 
-> **`rag-search docgen`** requires the `vendor/docgen` submodule.
-> All other features (`rag-search-index`, search, chat) work without it.
+> This repo has **no git submodules** — `vendor/docgen` was deleted with docgen (2026-07-28),
+> so a plain `git clone` is complete.
 
 ## Configure secrets
 
@@ -120,11 +118,11 @@ src/rag_search/
   embed/   FastEmbed/ONNX GPU embedder + reranker
   index/   file discovery, chunking, sqlite-vec store
   graph/   tree-sitter symbols, call edges, Leiden communities
-  kb/      DeepSeek KB enrichment, wiki, BPRE, docgen, OKF
+  kb/      DeepSeek KB enrichment, wiki, BPRE
   query/   search, ask, reranking pipeline
   server/  MCP tools, HTTP routes, dashboard
   daemon/  server lifecycle, watcher, sweeps, systemd, federation
-vendor/    ose-docgen, okf (git submodules)
+vendor/    okf (in-tree)
 scripts/   check_system.py, configure_integrations.py, check_world_model.py
 docs/      architecture, world-model, info-hierarchy, conformance
 ```

@@ -193,11 +193,12 @@ hygiene: a fresh clone must run with zero source edits given only env vars and t
 steps. `test_public_hygiene.py::test_runtime_config_is_env_driven` asserts every machine/deployment
 constant in `core/config.py` — embed/rerank model, embed device, daemon host/port, query LLM
 provider/model, GPU device override — is produced by `os.environ.get(...)`, not a hardcoded literal.
-`.gitmodules`' `vendor/docgen` submodule URL and the CI `live-fast` job's `github.repository` guard
-were audited and found already fork-safe by design (the submodule repo is public; the CI guard exists
-specifically so forks lacking a self-hosted GPU runner skip the job instead of queuing indefinitely —
-see the comment above that job in `.github/workflows/ci.yml`) — **no change needed**, recorded here so
-a future pass doesn't re-flag them. See `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`.
+This repo has **no submodules** since docgen's deletion (2026-07-28), so a plain `git clone` is
+complete and there is no submodule URL left to audit. The CI `live-fast` job's `github.repository`
+guard was audited and found already fork-safe by design (it exists specifically so forks lacking a
+self-hosted GPU runner skip the job instead of queuing indefinitely — see the comment above that job
+in `.github/workflows/ci.yml`) — **no change needed**, recorded here so a future pass doesn't
+re-flag it. See `docs/audits/2026-07-09-whole-engine-conformance-and-research.md`.
 Self-hosted-runner hardening (2026-07-14): the `pull_request` trigger was removed and the fork-PR
 workflow-approval policy tightened to `all_external_contributors`, so a fork PR can no longer trigger
 CI on the self-hosted runner — the `github.repository`/ref `if` guards now stand as defense-in-depth.

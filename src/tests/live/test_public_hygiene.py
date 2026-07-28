@@ -3,12 +3,13 @@
 Permanent brand-lock (P18/HR34): the pre-2026-07-09 OSE/OPENCODE/ocs branding was fully retired
 in favor of RSE. This guard bans every legacy self-reference token from ever reappearing in the
 tracked tree, with a narrow allowlist for genuine external-product references (the external
-"OpenCode" CLI product, the vendored ose-docgen package/repo) that must never be renamed.
-Device-specific name bans (company names, project codenames, device ids) live in the private
-rse-live-audit repo to avoid shipping the ban-list in the public tree.
+"OpenCode" CLI product, and the retired ose-docgen package as named in dated audit records) that
+must never be renamed. Device-specific name bans (company names, project codenames, device ids)
+live in the private rse-live-audit repo to avoid shipping the ban-list in the public tree.
 
 Runs git grep over the tracked tree and fails on any match.
-Guard file and .gitmodules are allowlisted automatically.
+This guard file is allowlisted automatically. The repo has no submodules since docgen's deletion
+(2026-07-28), so there is no .gitmodules to exempt.
 """
 from __future__ import annotations
 
@@ -49,8 +50,11 @@ _LEGACY_TOKEN_ALLOWLIST_FILES = {
 # references, not this project's own branding — any matching line is exempt from the ban.
 _EXTERNAL_PRODUCT_ALLOWLIST_SUBSTRINGS = [
     "OpenCode",    # Title-case: the external OpenCode CLI product (integration removed, still named in prose/tests)
-    "ose_docgen",  # vendored ose-docgen package import (vendor/docgen submodule)
-    "ose-docgen",  # vendored ose-docgen repo/dir name
+    # The docgen vendor package was deleted 2026-07-28. These two survive only as the package's
+    # real name inside dated audit records (docs/CONFORMANCE_EVALUATION.md §5), which are kept as
+    # written — renaming history to match a later decision loses the trail of why it changed.
+    "ose_docgen",  # retired package import, named in dated audit records only
+    "ose-docgen",  # retired repo/dir name, named in dated audit records only
 ]
 
 
@@ -60,7 +64,6 @@ def _git_grep_legacy(pattern: str) -> list[str]:
             "git", "grep", "-nE", pattern,
             "--",
             ".",
-            ":(exclude).gitmodules",
             ":(exclude)vendor",
             *[f":(exclude){f}" for f in _LEGACY_TOKEN_ALLOWLIST_FILES],
         ],
@@ -91,7 +94,6 @@ def _git_grep_re(pattern: str, exclude_file: str) -> list[str]:
             "git", "grep", "-nE", pattern,
             "--",
             ".",
-            ":(exclude).gitmodules",
             f":(exclude){exclude_file}",
         ],
         cwd=_REPO_ROOT,
