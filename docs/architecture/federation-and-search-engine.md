@@ -46,7 +46,7 @@ The governing principle is **P0: most efficient + most effective, for *everythin
 6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`ask`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval. **Since 2026-07-28 that is true of the write path too**: there is no enrichment-time generative spend to pre-build, so the read-path serves what deterministic indexing produced. The invariant used to be "no generation *here*"; it is now "no generation *anywhere* but dashboard chat" (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
 7. **Self-healing** — event-driven (watcher) + reconcile re-derive on algo/source drift (HR1, HR2, HR25, §10).
 8. **`docs/` is ordinary source + universal config** — nothing generates a `docs/` tree any more (docgen deleted 2026-07-28); `docs/` is walked, chunked and embedded like any other directory, and `.rse-index.yaml` is honored by every enumerator (HR28, HR29; HR27 retired).
-9. **Two-stage retrieval; rerank is the relevance authority.** Query = bi-encoder vector recall (`sqlite-vec`) → cross-encoder rerank (`jina-reranker-v1-turbo-en`, GPU); results ordered by `rerank_score`, **never the bare vector `score`**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
+9. **Two-stage retrieval; rerank is the relevance authority.** Query = hybrid recall (bi-encoder `sqlite-vec` + FTS5 BM25, fused by RRF) → cross-encoder rerank (`gte-reranker-modernbert-base`, GPU); results ordered by `rerank_score`, **never the bare retrieval score**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
 10. **Public-repo hygiene, now whole-tree.** RSE emits no artifacts at all since 2026-07-28 — wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN and citations all left with tier 3 — so the artifact-scoped rule (P7/HR13) is **retired** and its whole-repo widening (P18) is the entire principle: every tracked file must be safe to publish, with no secrets, no real device paths and no company/device names. The mechanism the old rule protected still exists and still matters: `symbols.file` stores **absolute** paths, so anything that ever renders one must strip it to root-relative first.
 11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU). Machine-verified Concept→Spec→Impl→Test traceability closes the V&V loop (HR30).
 
@@ -254,12 +254,21 @@ any key. The system's whole generative surface is one `claude -p` per dashboard 
 
 All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback):
 
-- **AXIS A — code chunks**: vector retrieve (`sqlite-vec`, overfetch `top_k×3`), then
-  cross-encoder rerank (`jinaai/jina-reranker-v1-turbo-en`) → sort by `rerank_score` →
-  top_k. Federation: each member runs the above; union merged + re-sorted by `rerank_score`.
+- **AXIS A — code chunks**: *hybrid* retrieve, then cross-encoder rerank
+  (`Alibaba-NLP/gte-reranker-modernbert-base`, fp16 ONNX) → sort by `rerank_score` → top_k.
+  Federation: each member runs the above; union merged + re-sorted by `rerank_score`.
   Observability: `search()` records `rerank.queries` and `rerank.top1_changed` (the "lift"
-  count where the cross-encoder moved a different chunk to position 1 vs the vector sort).
+  count where the cross-encoder moved a different chunk to position 1 vs the retrieval sort).
   Exposed via `GET /api/metrics` and `overview(what="metrics")`.
+  *Hybrid, added 2026-07-28:* two lanes run per store — dense (`sqlite-vec` KNN) and lexical
+  (FTS5 BM25 over `chunks_fts`, an external-content index on `chunks`) — fused by Reciprocal
+  Rank Fusion (`Σ 1/(60 + rank)`) before either reaches the cross-encoder. Fusion is on **rank**
+  because cosine and BM25 share no scale, no range and no polarity. The lexical lane is the only
+  one that can retrieve a chunk for a name the embedder has never seen, and it is also what
+  makes RRF scores comparable across federation members. No embeddings are involved, so the
+  chunk shape and `embed_signature` are unchanged; `FTS_REV` versions the lexical index alone
+  and a `fts_rev` meta key runs FTS5's `rebuild`/`optimize` backfill once per store
+  (10.8 s + 1.8 s and +17 % on disk, measured on the fleet's largest store at 207 k chunks).
 - **AXIS B — community/architecture context** (`_community_summaries`, both `ask` scopes):
   pool ≤50 L1 community summaries per store, then cross-encoder rerank → sort by `rerank_score`
   → top_k. Replaced former bi-encoder cosine (`s_vecs @ q_vec`) approach.
@@ -269,7 +278,7 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
   the scope surface collapsed with them — `all` and `architecture` are the two that remain, and
   they differ only in which axis is assembled first. Axis A takes no scope at all: one
   `search_federation` call serves every scope.
-- Rerank scores (jina logits) and vector scores are never blended across axes.
+- Rerank scores (cross-encoder logits), RRF scores and vector scores are never blended across axes.
 - Reranking runs **only** at query time; the index/KB-build pipeline never reranks.
 
 ## 9b. Inference lanes
