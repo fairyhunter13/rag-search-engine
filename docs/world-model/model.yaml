@@ -95,13 +95,14 @@ L3_specs:
   - id: HR10
     spec: "Dashboard chat uses claude-haiku-4-5 only, spawned as `claude -p` by routes_chat.py, which is its sole caller; no fallback of any kind. Tightened 2026-07-28 from 'no DeepSeek fallback' — there is no DeepSeek left to fall back to, and routes_chat.py:1 says 'no fallback' flat, so the narrower wording would read as permitting some other one."
     test: test_chat_lane_is_haiku_only
-  - id: HR11
-    spec: "semantic_type abstains rather than guesses: the community tail is stored as SQL NULL, never '' and never a catch-all label. Rewritten 2026-07-28 — the DeepSeek classify batch that used to assign it is deleted, so every community is now the abstaining case, and what is left to protect is that community.py keeps writing a true NULL. The old test_ab3_no_type_dominates (no non-NULL bucket > 50%) went vacuous the same day: with no writer, its row set is always empty and it cannot fail."
-    test: test_ab1_ab2_tail_is_sql_null
-  # HR12, HR13, HR23, HR25, HR26, HR27, HR28 and HR29 retired 2026-07-28 with tier 3, and each
-  # took its test with it: DeepSeek-only KB enrichment, wiki path hygiene, llm_token_stats
+  # HR11, HR12, HR13, HR23, HR25, HR26, HR27, HR28 and HR29 retired 2026-07-28 with tier 3, and
+  # each took its test with it: the semantic_type abstention doctrine, DeepSeek-only KB
+  # enrichment, wiki path hygiene, llm_token_stats
   # accounting, and the four OKF/docgen invariants (LLM-native doc-tooling, manual-trigger-only,
-  # and both kill-switches). L3_specs is the *checkable* subset of the HR register — the dated
+  # and both kill-switches). HR11 outlived the others by hours: it was rewritten that morning to
+  # protect "the tail is a true SQL NULL" now that the classifier was gone, then retired outright
+  # when the R2 purge dropped the semantic_type column itself (with narrated, kind and path) and
+  # deleted test_abstention.py whole. L3_specs is the *checkable* subset of the HR register — the dated
   # retirement notes live in docs/architecture/federation-ops-and-invariants.md's HR table,
   # which keeps the ids so the numbering never gets reused.
   - id: HR15

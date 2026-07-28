@@ -6,9 +6,10 @@ SC6  Producer↔consumer symmetry: no write-only symbols column beyond _KNOWN_DE
 SC8  community detection is leidenalg-free and deterministic
 
 Four guards left with tier 3, all four of them anchored on the semantic-type taxonomy that
-`graph/enrich.py` owned and `kb/wiki.py` mirrored. That taxonomy does not exist any more —
-`communities.semantic_type` is written NULL by `community.py`'s structural labeller and read
-by nobody — so these were not re-pointed at a new subject; they had none.
+`graph/enrich.py` owned and `kb/wiki.py` mirrored. That taxonomy does not exist any more, and
+as of R2 neither does the column: `communities.semantic_type` was dropped along with
+`narrated`, `kind` and `path` once the census showed no writer and no reader left. These
+guards were not re-pointed at a new subject; they had none.
 
   SC1  every `semantic_type NOT IN (…)` literal in ask.py ∈ enrich._TYPE_ORDER. Its subject
        went first: R0b removed ask.py's semantic-type scope, so by the time enrich.py left
@@ -103,6 +104,63 @@ def test_sc6_no_dead_data_beyond_allowlist():
                 f"SC6: symbols.{col} written by upsert_symbol but absent from list_symbols — "
                 f"add a consumer or add 'symbols.{col}' to _KNOWN_DEAD"
             )
+
+
+_R2_DROPPED_COLS = ("semantic_type", "narrated", "kind", "path")
+
+_PRE_R2_SCHEMA = """
+    CREATE TABLE communities (
+        id INTEGER PRIMARY KEY,
+        level INTEGER NOT NULL DEFAULT 1,
+        title TEXT,
+        summary TEXT,
+        member_count INTEGER DEFAULT 0,
+        semantic_type TEXT,
+        narrated INTEGER DEFAULT 0,
+        kind TEXT DEFAULT 'community',
+        path TEXT
+    );
+    INSERT INTO communities (id,level,title,summary,member_count,semantic_type,narrated,kind)
+    VALUES (7,1,'Auth','3 symbol(s) (function) from auth.py.',3,'security',1,'community');
+"""
+
+
+def test_sc9_r2_purge_migrates_a_pre_purge_db(safe_tmp_path):
+    """SC9: opening a pre-R2 graph.db drops the four dead community columns and keeps the rest.
+
+    Every graph in the fleet was created with these columns, so the purge is a migration, not a
+    schema edit — and nothing else exercises that path. The keep half is not decoration: a
+    migration that dropped `summary` or `member_count` would satisfy "the dead columns are gone"
+    just as well, and both halves read the same reopened DB.
+    """
+    import sqlite3
+
+    from rag_search.graph.store import GraphStore
+
+    db = safe_tmp_path / "pre_r2.db"
+    con = sqlite3.connect(str(db))
+    con.executescript(_PRE_R2_SCHEMA)
+    con.commit()
+    con.close()
+
+    gs = GraphStore(db)
+    try:
+        cols = {r[1] for r in gs._con.execute("PRAGMA table_info(communities)")}
+        row = gs._con.execute(
+            "SELECT title, summary, member_count FROM communities WHERE id=7"
+        ).fetchone()
+    finally:
+        gs.close()
+
+    assert not cols.intersection(_R2_DROPPED_COLS), (
+        f"SC9: pre-R2 columns survived: {sorted(cols.intersection(_R2_DROPPED_COLS))}"
+    )
+    assert {"id", "level", "title", "summary", "member_count"} <= cols, (
+        f"SC9: the migration took a live column with it — surviving columns are {sorted(cols)}"
+    )
+    assert row is not None and row[0] == "Auth" and row[2] == 3, (
+        f"SC9: DROP COLUMN lost the row's live data — read back {row!r}"
+    )
 
 
 def test_sc8_no_leidenalg_in_community():

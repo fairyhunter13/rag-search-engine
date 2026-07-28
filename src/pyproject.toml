@@ -65,9 +65,13 @@ dependencies = [
     # Process utilities
     "psutil>=5.9.0",
 
-    # Structural code graph: AST extraction
+    # Structural code graph: AST extraction.
+    # S3: the pack is pinned, not floored. Its grammars are a direct input to what extraction
+    # emits, so a silent upgrade would change every stored graph with no EXTRACTOR_REV bump to
+    # invalidate them — the fleet would keep serving edges no current code would produce.
+    # Raise the pin and the REV together, deliberately.
     "tree-sitter>=0.23.0",
-    "tree-sitter-language-pack>=1.9.1",
+    "tree-sitter-language-pack==1.12.1",
 
     # Community detection (k-core over igraph — see the leidenalg note above)
     "igraph>=0.11.0",
