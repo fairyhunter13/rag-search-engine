@@ -12,7 +12,13 @@ REGISTRY_PATH = Path(os.environ.get("RSE_REGISTRY_PATH", str(_RSE_ROOT / "projec
 INDEX_ROOT = Path(os.environ.get("RSE_INDEX_ROOT", str(_RSE_ROOT / "indexes")))
 
 EMBED_MODEL = os.environ.get("RSE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
-RERANK_MODEL = os.environ.get("RSE_RERANK_MODEL", "jinaai/jina-reranker-v1-turbo-en")
+# Measured against the 40-query golden set, A/B'd alone so the result is attributable and
+# re-run once bit-identical: recall@1 0.725 -> 0.800, MRR 0.783 -> 0.825, gnDCG@10 0.789 -> 0.824,
+# recall@10 flat at 0.850 (a reranker reorders the candidate set; it cannot add to it). The cost
+# is real and on the hot path: 179 ms per 20-chunk rerank against jina-turbo's 66 ms. Revert with
+# RSE_RERANK_MODEL=jinaai/jina-reranker-v1-turbo-en — no reindex either way, the reranker never
+# touches a stored vector. Served via _CUSTOM_RERANKERS; fastembed ships no description for it.
+RERANK_MODEL = os.environ.get("RSE_RERANK_MODEL", "Alibaba-NLP/gte-reranker-modernbert-base")
 EMBED_DEVICE = os.environ.get("RSE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
 # Token budget shared by the chunker and the embedder, so a chunk can never be
 # larger than the window that embeds it.  Was effectively 512 with 100-line
