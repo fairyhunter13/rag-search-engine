@@ -107,19 +107,10 @@ def test_live_daemon_has_mcp_route(live_client):
 
 
 
-@pytest.mark.slow
-def test_detect_patterns_llm_frameworks():
-    """P9.2: detect_patterns() derives frameworks via LLM, not _FW static dict."""
-
-    from rag_search.kb.patterns import detect_patterns
-    from tests.live._projects import federation_root
-
-    proj = federation_root()
-    result = detect_patterns(Path(proj))
-    assert "frameworks" in result
-    assert isinstance(result["frameworks"], list)
-    # the federation root should have framework deps → LLM should name ≥1 framework
-    assert len(result["frameworks"]) >= 1
+# P9.2 asserted that detect_patterns() named ≥1 framework via the LLM rather than a static dict.
+# It was the runtime half of the same pair as test_p14_mcp_readonly's A3 source-guard, and both
+# died with kb/patterns.py — the module behind overview(what="patterns"), the one synchronous
+# DeepSeek round trip that ever sat on a query path.
 
 
 def test_index_tool_rejects_forbidden_root(safe_tmp_path):
@@ -174,10 +165,13 @@ def test_overview_all_whats_real_federation_root(sample_workspace):
     from tests.live._projects import federation_root
 
     fed_root = federation_root()
+    # Read off _overview._VALID minus the three that take no graph: projects, metrics, validate.
+    # service_mesh / feature_map / business_rules / process_flows were the tier-3 half of this
+    # list; R0a deleted them from _VALID, so leaving them here would fail on the "unknown what="
+    # branch — the list has to shrink with the tool, not outlive it.
     whats = [
         "structure", "communities", "status", "import_cycles",
         "surprising_connections", "suggested_questions",
-        "service_mesh", "feature_map", "business_rules", "process_flows",
     ]
     for what in whats:
         result = asyncio.run(overview_tool(fed_root, what))
@@ -185,18 +179,10 @@ def test_overview_all_whats_real_federation_root(sample_workspace):
         assert data, f"overview(what={what!r}) returned empty dict: {result[:120]}"
 
 
-def test_service_mesh_be_nonempty(sample_workspace):
-    """Federation service_mesh must detect gRPC/HTTP services from the federation root."""
-    from tests.live._projects import federation_root
-    root = federation_root()
-    from rag_search.daemon.federation import expand_federation
-    from rag_search.server._overview import _detect_services
-    svcs = [s for p in expand_federation(root) for s in _detect_services(p)]
-    assert svcs, "Federation must have at least one gRPC service entry"
-    names = {n for s in svcs for n in s.get("services", [])}
-    assert names, (
-        f"service_mesh detected gRPC entry but no named services; svcs={svcs[:2]}"
-    )
+# The service_mesh non-emptiness test went with `_detect_services`, which delegated to
+# kb/bpre_ast.py::federation_discover. Nothing re-points: federation *membership* is still
+# asserted (daemon/federation.py::expand_federation, exercised above and in DK1), but the
+# gRPC/HTTP service-surface view it produced does not exist any more.
 
 
 def test_suggested_questions_and_chat_context_no_operationalerror(live_client, service_path):
@@ -394,21 +380,23 @@ def test_reranking_is_query_time_only():
     """T-R2: index/ and kb/ packages must not directly invoke the cross-encoder.
 
     The reranking IMPLEMENTATION (rerank_passages) lives only in query/search.py.
-    The G1.75 bridge kb/resolve_rerank.py is the single permitted delegation point;
-    all other kb/ files must call through it, never import rerank_passages directly.
+
+    This scan used to carry one exception, kb/resolve_rerank.py — BPRE's Tier-1.75 bridge and
+    the single point where kb/ was allowed to reach the cross-encoder. It left with tier 3, and
+    the exception had to leave with it rather than sit here unused: an exemption for a deleted
+    file is a silent hole, since a future kb/resolve_rerank.py would inherit it. With the
+    exception gone the rule is flat — nothing under index/ or kb/ may name rerank_passages —
+    which is also what test_inference_lanes.py::test_rerank_passages_only_in_gpu_lane now
+    enforces tree-wide from the allowlist side.
     """
 
     base = Path(__file__).parents[2] / "rag_search"
-    # Only the G1.75 bridge may import rerank_passages directly
-    _DIRECT_RERANK_EXCEPTION = {"resolve_rerank.py"}
     for pkg in [base / "index", base / "kb"]:
         for py in pkg.rglob("*.py"):
-            if py.name in _DIRECT_RERANK_EXCEPTION:
-                continue
             src = py.read_text()
             assert "rerank_passages" not in src, (
                 f"Direct rerank_passages call found in {py.relative_to(base.parent)} — "
-                "route through kb/resolve_rerank.py (the G1.75 bridge) instead"
+                "the cross-encoder is query-time only; keep it in query/search.py"
             )
 
 
@@ -618,10 +606,18 @@ def test_e6b_chat_model_is_haiku(live_client):
 
 def test_e7_trimmed_http_surface(live_client):
     """E7/D5: deleted endpoints 404/405; KEEP endpoints 200; route inventory guard."""
+    # The tier-3 rows are the second half of this list: R0a deleted the wiki, docgen, okf and
+    # kb_health routes, and this is where their absence is now asserted — a hard 404/405, not
+    # the `in (400, 404)` acceptance the deleted per-route tests used, which would have stayed
+    # green either way.
     deleted = [
         ("GET", "/api/search"), ("POST", "/api/ask"), ("POST", "/api/index"),
         ("POST", "/api/chat"), ("GET", "/api/feature"), ("GET", "/api/service_mesh"),
         ("GET", "/admin/status"),
+        ("GET", "/api/wiki"), ("GET", "/api/wiki/page"), ("GET", "/api/wiki/export"),
+        ("GET", "/api/wiki_lint"), ("POST", "/api/build_wiki"),
+        ("GET", "/api/kb_health"), ("POST", "/api/docgen"), ("POST", "/api/okf"),
+        ("GET", "/api/process/bpmn"),
     ]
     for method, path in deleted:
         r = live_client.request(method, path)

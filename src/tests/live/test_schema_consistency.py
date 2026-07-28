@@ -1,12 +1,26 @@
 """Phase 2.0 — schema-consistency static guards (runs at collection time, no GPU needed).
 
-SC1  No dead predicate: every semantic_type literal in ask.py filters ∈ _TYPE_ORDER
-SC2  EXCLUDED_FROM_RETRIEVAL ⊆ _TYPE_ORDER (the constant is self-consistent)
 SC3  community_count() is scoped to level>=1 (structural spine excluded)
 SC4  No unscoped FROM-communities read: known leaks are patched; allowlist enforced
-SC5  Taxonomy single-source: enrich._TYPE_ORDER == wiki._TYPE_ORDER == wiki._TYPE_LABEL.keys()
-SC6  Producer↔consumer symmetry: no write-only column/table beyond _KNOWN_DEAD allowlist
-SC7  semantic_type three-state contract: feature_map SQL excludes NULL and '' and scopes level=1
+SC6  Producer↔consumer symmetry: no write-only symbols column beyond _KNOWN_DEAD allowlist
+SC8  community detection is leidenalg-free and deterministic
+
+Four guards left with tier 3, all four of them anchored on the semantic-type taxonomy that
+`graph/enrich.py` owned and `kb/wiki.py` mirrored. That taxonomy does not exist any more —
+`communities.semantic_type` is written NULL by `community.py`'s structural labeller and read
+by nobody — so these were not re-pointed at a new subject; they had none.
+
+  SC1  every `semantic_type NOT IN (…)` literal in ask.py ∈ enrich._TYPE_ORDER. Its subject
+       went first: R0b removed ask.py's semantic-type scope, so by the time enrich.py left
+       the loop was already iterating zero clauses and could not fail.
+  SC2  EXCLUDED_FROM_RETRIEVAL ⊆ _TYPE_ORDER — both constants lived in enrich.py.
+  SC5  the taxonomy's single-source binding: enrich._TYPE_ORDER == wiki._TYPE_ORDER ==
+       wiki._TYPE_LABEL.keys(). It existed because `wiki._render_index` iterated its own
+       copy and silently dropped any type missing from it, so a type added to enrich alone
+       would vanish from the wiki index. Two of the three sources are deleted files.
+  SC7  the semantic_type three-state contract (NULL=abstained, ''=L2-default, <type>=head),
+       read out of `_overview.py`'s `feature_map` SQL. `feature_map` is one of the five
+       overview variants R0a deleted, so this guard has been red since that commit.
 """
 from __future__ import annotations
 
@@ -18,37 +32,6 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.live
-
-
-# ---------------------------------------------------------------------------
-# SC1 + SC2 — No dead predicates; taxonomy covers every filter literal
-# ---------------------------------------------------------------------------
-
-def test_sc1_no_dead_semantic_type_predicates():
-    """SC1: every semantic_type NOT IN/IN literal in ask.py is a member of _TYPE_ORDER."""
-    from rag_search.graph.enrich import _TYPE_ORDER
-    from rag_search.query import ask as ask_mod
-
-    valid = frozenset(_TYPE_ORDER)
-    src = inspect.getsource(ask_mod)
-    # Extract literals from all NOT IN (...) clauses following semantic_type
-    for clause in re.findall(r"semantic_type\s+NOT\s+IN\s*\(([^)]+)\)", src, re.IGNORECASE):
-        for lit in re.findall(r"['\"]([^'\"]+)['\"]", clause):
-            assert lit in valid, (
-                f"ask.py: filter literal {lit!r} not in _TYPE_ORDER={list(valid)} — dead predicate. "
-                "Remove or add it to _TYPE_ORDER in graph/enrich.py."
-            )
-
-
-def test_sc2_excluded_from_retrieval_subset_of_type_order():
-    """SC2: EXCLUDED_FROM_RETRIEVAL ⊆ _TYPE_ORDER — the constant must stay self-consistent."""
-    from rag_search.graph.enrich import _TYPE_ORDER, EXCLUDED_FROM_RETRIEVAL
-    valid = frozenset(_TYPE_ORDER)
-    for excl in EXCLUDED_FROM_RETRIEVAL:
-        assert excl in valid, (
-            f"EXCLUDED_FROM_RETRIEVAL member {excl!r} not in _TYPE_ORDER — "
-            "update enrich.py to keep both in sync."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -90,51 +73,24 @@ def test_sc4_fixed_leak_sites_carry_level_scope():
         )
 
 
-# ---------------------------------------------------------------------------
-# SC5 — Taxonomy single-source (closes F-C)
-# ---------------------------------------------------------------------------
-
-def test_sc5_taxonomy_single_source():
-    """SC5: enrich._TYPE_ORDER, wiki._TYPE_ORDER, wiki._TYPE_LABEL all cover the same types.
-
-    wiki._render_index iterates wiki._TYPE_ORDER and silently drops any semantic_type
-    absent from it.  If enrich._TYPE_ORDER gains a new type without updating wiki, that
-    type never appears in the wiki index.  This guard binds all three sources.
-    """
-    from rag_search.graph.enrich import _TYPE_ORDER as _ENRICH_TYPE_ORDER
-    from rag_search.kb.wiki import _TYPE_LABEL
-    from rag_search.kb.wiki import _TYPE_ORDER as _WIKI_TYPE_ORDER
-
-    enrich_set = frozenset(_ENRICH_TYPE_ORDER)
-    wiki_order_set = frozenset(_WIKI_TYPE_ORDER)
-    wiki_label_set = frozenset(_TYPE_LABEL)
-
-    assert enrich_set == wiki_order_set, (
-        f"SC5: enrich._TYPE_ORDER ≠ wiki._TYPE_ORDER (as sets) — "
-        f"extra in enrich: {enrich_set - wiki_order_set}; "
-        f"extra in wiki: {wiki_order_set - enrich_set}. "
-        "Keep graph/enrich.py and kb/wiki.py in sync."
-    )
-    assert enrich_set == wiki_label_set, (
-        f"SC5: enrich._TYPE_ORDER ≠ wiki._TYPE_LABEL.keys() — "
-        f"extra in enrich: {enrich_set - wiki_label_set}; "
-        f"extra in wiki._TYPE_LABEL: {wiki_label_set - enrich_set}. "
-        "A type without a _TYPE_LABEL entry renders as the raw string in the wiki index."
-    )
-
-
 # Phase-2a cleaned all dead items (F-B/D/G/H/I); new dead items fail CI.
 _KNOWN_DEAD: frozenset[str] = frozenset()
 
 
 def test_sc6_no_dead_data_beyond_allowlist():
-    """SC6: no write-only column/table outside _KNOWN_DEAD — write-amplification tripwire."""
+    """SC6: no write-only symbols column outside _KNOWN_DEAD — write-amplification tripwire.
+
+    Part B applied the same tripwire to process.db, reading every `CREATE TABLE IF NOT
+    EXISTS` out of kb/bpre.py and requiring a payload SELECT for each somewhere in the
+    package. There is no process.db and no second store any more; graph.db's symbols table
+    is the only producer↔consumer pair left, and that is Part A.
+    """
     from rag_search.graph.store import GraphStore
 
     _r = Path(__file__).parents[2] / "rag_search"
     ss = (_r / "graph/store.py").read_text()
 
-    # Part A: symbols columns — parse INSERT col list; read cols from list_symbols source
+    # symbols columns — parse INSERT col list; read cols from list_symbols source
     # (regex-only across multi-line SQL string literals is fragile; inspect is reliable)
     im = re.search(r"INSERT\s+INTO\s+symbols\s*\(([^)]+)\)", ss, re.IGNORECASE)
     assert im, "SC6: upsert_symbol INSERT INTO symbols not found"
@@ -147,38 +103,6 @@ def test_sc6_no_dead_data_beyond_allowlist():
                 f"SC6: symbols.{col} written by upsert_symbol but absent from list_symbols — "
                 f"add a consumer or add 'symbols.{col}' to _KNOWN_DEAD"
             )
-
-    # Part B: process.db tables — writers in bpre.py, but readers may be anywhere in source
-    bs = (_r / "kb/bpre.py").read_text()
-    all_src = bs + "".join(p.read_text() for p in _r.rglob("*.py") if p != _r / "kb/bpre.py")
-    for tbl in re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", bs):
-        if tbl not in _KNOWN_DEAD:
-            sel = [s.strip() for s in
-                   re.findall(rf"SELECT\s+(.+?)\s+FROM\s+{re.escape(tbl)}\b", all_src, re.IGNORECASE)
-                   if s.strip().upper() not in ("1", "COUNT(*)")]
-            assert sel, f"SC6: table '{tbl}' has no payload SELECT anywhere in source — consumer or _KNOWN_DEAD"
-
-
-# ---------------------------------------------------------------------------
-# SC7 — semantic_type three-state contract (closes F-J)
-# ---------------------------------------------------------------------------
-
-def test_sc7_semantic_type_three_state_contract():
-    """SC7: feature_map SQL must exclude NULL and '' and scope to level=1 (closes F-J).
-
-    Three sentinels: NULL=abstained/spine, ''=L2-default, <type>=head.
-    feature_map must filter out NULL (IS NOT NULL), '' (!= ''), and scope to level=1.
-    """
-    mod = importlib.import_module("rag_search.server._overview")
-    src = inspect.getsource(mod)
-    m = re.search(r'what\s*==\s*["\']feature_map["\'](.+?)return\s+json', src, re.DOTALL)
-    assert m, "SC7: feature_map handler not found in _overview.py"
-    blk = m.group(1)
-    assert "IS NOT NULL" in blk, "SC7: feature_map must include IS NOT NULL (exclude NULL tail)"
-    assert any(t in blk for t in ("!= ''", "<> ''", '!= ""', '<> ""')), (
-        "SC7: feature_map must exclude '' — L2 default must not appear as a typed feature"
-    )
-    assert re.search(r"level\s*=\s*1", blk), "SC7: feature_map must scope to level=1"
 
 
 def test_sc8_no_leidenalg_in_community():

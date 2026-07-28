@@ -1,8 +1,15 @@
 """Session-scoped sample workspace builder for the live test suite.
 
 Materializes committed fixture trees into a temporary registry workspace,
-indexes with GPU, replays frozen enrichment.json goldens (no DeepSeek at
-test time), then tears down cleanly.
+indexes with GPU, labels the communities the way the daemon now does, then
+tears down cleanly.
+
+The labelling step used to replay four committed enrichment.json goldens —
+frozen DeepSeek narrations, so the suite never called the API. Tier 3's
+deletion removed both the narrator and the goldens, and structural labelling
+is not a stand-in for them: it is what the daemon writes now, so building the
+workspace with `_label_project` makes the fixture match production instead of
+preserving a shape nothing produces any more.
 
 Usage:
     from tests.live._sample_workspace import SampleWorkspace, build_sample_workspace, teardown_sample_workspace
@@ -10,18 +17,13 @@ Usage:
 from __future__ import annotations
 
 import contextlib
-import json
 import shutil
-import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
-
-from rag_search.core.config import ProjectEntry, project_graph_db
+from rag_search.core.config import ProjectEntry
 from rag_search.core.registry import remove_project, upsert_project
-from rag_search.graph.store import GraphStore
 
 _REPO_ROOT = Path(__file__).parents[3]
 _FIXTURES = _REPO_ROOT / "src" / "tests" / "fixtures" / "sample_projects"
@@ -47,9 +49,9 @@ class SampleWorkspace:
 
 def _copy_fixtures(base: Path) -> tuple[Path, Path]:
     fed_base = base / "shop-federation"
-    shutil.copytree(_SHOP_SRC, fed_base, ignore=shutil.ignore_patterns("enrichment.json"))
+    shutil.copytree(_SHOP_SRC, fed_base)
     ledger_dir = base / "ledger-standalone"
-    shutil.copytree(_LEDGER_SRC, ledger_dir, ignore=shutil.ignore_patterns("enrichment.json"))
+    shutil.copytree(_LEDGER_SRC, ledger_dir)
     return fed_base, ledger_dir
 
 
@@ -64,20 +66,15 @@ def _register(fed_base: Path, ledger_dir: Path) -> tuple[str, list[str], str]:
     return fed_root, member_paths, ledger
 
 
-def _golden_path_for(member_path: str) -> Path:
-    """Return the committed enrichment.json golden for a sample member path."""
-    name = Path(member_path).name
-    if name in _MEMBERS:
-        return _SHOP_SRC / name / "enrichment.json"
-    return _LEDGER_SRC / "enrichment.json"
+def label_member(member_path: str) -> None:
+    """Re-label a sample member's communities (idempotent self-heal).
 
-
-def replay_member_golden(member_path: str) -> None:
-    """Re-apply the committed enrichment golden for a sample member (idempotent self-heal).
-
-    Restores golden community summaries after an in-process re-index/re-derive cleared them.
+    Replaces replay_member_golden, which re-applied a frozen DeepSeek narration after an
+    in-process re-index cleared it. _label_project only touches communities whose summary is
+    NULL or empty, so calling it twice is free.
     """
-    _replay_golden(member_path, _golden_path_for(member_path))
+    from rag_search.daemon.sweeps import _label_project
+    _label_project(member_path)
 
 
 def _index_members(paths: list[str]) -> None:
@@ -86,45 +83,10 @@ def _index_members(paths: list[str]) -> None:
         _index_project(p)
 
 
-def _live_sig(con: sqlite3.Connection, cid: int) -> list[str]:
-    return sorted(r[0] for r in con.execute(
-        "SELECT name FROM symbols WHERE community_id=? ORDER BY name", (cid,)
-    ).fetchall())
-
-
-def _replay_golden(project_path: str, golden_path: Path) -> None:
-    if not golden_path.exists():
-        pytest.fail(
-            f"enrichment.json missing for {Path(project_path).name} — "
-            "run scripts/build_sample_enrichment.py to generate it"
-        )
-    golden = json.loads(golden_path.read_text())
-    gdb = project_graph_db(project_path)
-    gs = GraphStore(gdb)
-    try:
-        with sqlite3.connect(str(gdb)) as con:
-            live_ids = {r[0] for r in con.execute("SELECT id FROM communities WHERE level=1").fetchall()}
-            for row in golden:
-                cid = row["community_id"]
-                if cid not in live_ids:
-                    golden_sig = sorted(row["member_signature"])
-                    matched = next(
-                        (lid for lid in live_ids if _live_sig(con, lid) == golden_sig),
-                        None,
-                    )
-                    if matched is None:
-                        pytest.fail(
-                            f"Golden community {cid!r} in {golden_path} has no match in live "
-                            "graph.db — re-run scripts/build_sample_enrichment.py"
-                        )
-                    cid = matched
-                gs.upsert_community(
-                    cid, row["level"], row["title"], row["summary"],
-                    row["member_count"], row["semantic_type"], row["narrated"],
-                )
-        gs.commit()
-    finally:
-        gs.close()
+# _replay_golden and its _live_sig helper went with the goldens. They existed to re-key a frozen
+# narration onto whatever community ids Leiden happened to produce this run — matching on the
+# member signature when the ids drifted. Structural labelling reads the live graph directly, so
+# there is nothing left to re-key.
 
 
 def _deregister_under(base: Path) -> None:
@@ -152,21 +114,17 @@ def _cleanup_stale_workspaces(keep: Path) -> None:
 
 
 def build_sample_workspace() -> SampleWorkspace:
-    from rag_search.graph.llm import no_deepseek
+    # The `no_deepseek()` context manager that used to wrap this whole body is gone with the client
+    # it suppressed. Nothing here reaches a network at all now, so there is no lane left to close.
     _SAFE_BASE.mkdir(parents=True, exist_ok=True)
     base = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="sample-ws-"))
     _cleanup_stale_workspaces(base)
-    with no_deepseek():
-        fed_base, ledger_dir = _copy_fixtures(base)
-        fed_root, member_paths, ledger = _register(fed_base, ledger_dir)
-        _index_members([fed_root, *member_paths, ledger])
-        for mp in member_paths:
-            _replay_golden(mp, _golden_path_for(mp))
-        _replay_golden(ledger, _golden_path_for(ledger))
-        from rag_search.kb.bpre import reconstruct_processes
-        reconstruct_processes(fed_root)
-        from rag_search.kb.wiki import build_federated_index
-        build_federated_index(fed_root)
+    fed_base, ledger_dir = _copy_fixtures(base)
+    fed_root, member_paths, ledger = _register(fed_base, ledger_dir)
+    _index_members([fed_root, *member_paths, ledger])
+    for p in [*member_paths, ledger]:
+        label_member(p)
+    # reconstruct_processes (BPRE) and build_federated_index (wiki) ran here; both left with tier 3.
     return SampleWorkspace(
         base=base,
         fed_root=fed_root,

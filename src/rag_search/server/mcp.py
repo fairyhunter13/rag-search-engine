@@ -219,7 +219,7 @@ async def graph(
 
 @mcp.tool()
 async def overview(project_path: str = "", what: str = "structure", ctx: Context | None = None) -> str:
-    """Overview of a project. what: structure|communities|status|projects|patterns|metrics|import_cycles|surprising_connections|feature_map|business_rules|process_flows|suggested_questions|service_mesh|validate."""
+    """Overview of a project. what: structure|communities|status|projects|metrics|import_cycles|surprising_connections|suggested_questions|validate."""
     note_activity()
     from rag_search.server._overview import _VALID
     # Only a known, project-scoped `what` needs a project. 'projects'/'metrics' are global, and an

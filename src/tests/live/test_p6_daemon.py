@@ -116,8 +116,11 @@ def test_federation_discover_empty_dir(tmp_path):
 def test_sweeps_reconcile_skips_complete_project(safe_tmp_path):
     """reconcile_projects must skip an already-indexed project.
 
-    Marked slow: reconcile_projects includes an unconditional federation-root-pass that
-    calls reconstruct_processes on ALL fleet federation roots (DeepSeek BPRE narration).
+    Still marked slow, for a different reason than it was: the unconditional
+    federation-root pass that ran reconstruct_processes over every fleet root left with
+    BPRE, so no cloud call remains here. What is left is the walk itself — reconcile
+    visits every registered project and will index or re-embed any that is stale, which
+    on this fleet is minutes, not seconds.
     """
     from rag_search.core.config import ProjectEntry, project_vector_db
     from rag_search.core.registry import remove_project, upsert_project
@@ -196,7 +199,14 @@ def test_ensure_running_false_for_wrong_port():
 
 
 def test_cli_has_expected_commands():
-    """P10.8: all 13 top-level commands + 7 daemon subcommands present."""
+    """P10.8: all 15 top-level commands + 7 daemon subcommands present.
+
+    `kb-status` (which GET'd /api/kb_health), `docgen` and `okf` were the three commands
+    R0a deleted, and this list is the only place the CLI surface is asserted — so it went
+    red with them. The three MCP-parity commands `ask`/`graph`/`overview` are added in the
+    same pass: they were always in cli.py and never asserted here, which is how a list
+    meant to pin the CLI surface managed to name a deleted command and miss three live ones.
+    """
     from typer.testing import CliRunner
 
     from rag_search.cli import app
@@ -207,7 +217,7 @@ def test_cli_has_expected_commands():
     for cmd in (
         "init", "index", "search", "watch", "stop-watching", "mcp",
         "clean-orphans", "storage", "dashboard", "list",
-        "health", "kb-status", "status", "daemon",
+        "health", "status", "daemon", "ask", "graph", "overview",
     ):
         assert cmd in r.output, f"CLI missing top-level command '{cmd}'"
 
@@ -243,15 +253,20 @@ def test_pipeline_all_stages_rse_repo():
     """P10.6: per-stage output traces on a real large indexed project.
 
     Validates: chunk+embed → tree-sitter symbols → call edges → Leiden
-    communities → LLM-enriched symbols+communities → wiki pages.
+    communities → community labels.
 
-    Uses RSE (this repo) — always registered, has all 6 stages. L2 hierarchy
-    removed in WS-B; wiki now generates community pages (flat-L1 only).
+    Uses RSE (this repo) — always registered, has all 5 surviving stages. L2 hierarchy
+    removed in WS-B; the sixth stage (wiki pages) left with tier 3, and so did
+    `core.config.project_wiki_dir`, which had no caller outside this file and the wiki.
+    Stage 5 is unchanged as an assertion but no longer as a mechanism: titles used to come
+    from DeepSeek narration and now come from `label_community_structural` (Leiden member
+    counts and file names, no LLM), so the assertion is strictly harder to satisfy by
+    accident than it was — a NULL title now means the labeller itself did not run.
     """
     import sqlite3
     from pathlib import Path
 
-    from rag_search.core.config import project_graph_db, project_vector_db, project_wiki_dir
+    from rag_search.core.config import project_graph_db, project_vector_db
     from rag_search.index.store import VectorStore
 
     project = str(Path(__file__).resolve().parents[3])
@@ -263,9 +278,7 @@ def test_pipeline_all_stages_rse_repo():
         assert c.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "stage 2 tree-sitter: 0 symbols"
         assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] > 0, "stage 2b call-edges: 0 edges"
         assert c.execute("SELECT COUNT(*) FROM communities").fetchone()[0] > 0, "stage 3 leiden: 0 communities"
-        assert c.execute("SELECT COUNT(*) FROM communities WHERE title IS NOT NULL").fetchone()[0] > 0, "stage 5 enrich-comm: no titles"
-    wiki = project_wiki_dir(project)
-    assert list(wiki.glob("*.md")), f"stage 6 wiki: no pages in {wiki}"
+        assert c.execute("SELECT COUNT(*) FROM communities WHERE title IS NOT NULL").fetchone()[0] > 0, "stage 5 label-comm: no titles"
 
 
 def test_maintenance_vacuums_orphan():
@@ -330,8 +343,10 @@ def test_api_reload_returns_reloading():
     Systemd restarts the daemon within ~1s; we wait for readiness before finishing.
 
     Marked slow: daemon restart un-pauses sweeps (new daemon doesn't inherit
-    pause_sweeps HTTP state), triggering a full BPRE rebuild for all federation
-    roots (37+ min for large fleets). Run as part of the full suite only.
+    pause_sweeps HTTP state), so the fresh process runs a full reconcile walk over the
+    registered fleet. The 37+ min figure was BPRE's rebuild across every federation root
+    and is gone with it; the walk itself still costs minutes on a large fleet, and it
+    still runs unpaused, which is the part that makes this full-suite-only.
     """
     import time
     import urllib.request
@@ -377,7 +392,11 @@ def test_no_heuristic_regression():
     src = Path(__file__).parents[2] / "rag_search"
     assert src.is_dir(), f"source dir not found at {src} — path calculation wrong"
     patterns = [
-        (r"\b_FW\s*=\s*\{", "kb/patterns.py _FW static dict"),
+        # The module this named (kb/patterns.py) is deleted, but the pattern is not
+        # re-pointed at a survivor — it is deliberately homeless. The guard scans the whole
+        # tree, so it forbids a hardcoded framework dict from reappearing *anywhere*, which
+        # is a wider statement than it could make while its subject file existed.
+        (r"\b_FW\s*=\s*\{", "static framework dict (was kb/patterns.py::_FW)"),
         (r"keywords\s*=\s*set\(query\.lower\(\)\.split\(\)\)", "ask.py keyword MAP"),
         (r"re\.match\(r..\[A-Z\]", "CamelCase heuristic in _extract_symbol"),
     ]
@@ -673,7 +692,13 @@ def test_p21_community_count_stable_on_redetect(tmp_path):
 
 
 def test_p21_community_labels_set_without_llm(tmp_path):
-    """P21.2: every community has a non-empty title BEFORE LLM enrichment runs."""
+    """P21.2: every community has a non-empty title from detect_communities alone.
+
+    This was written as a race guard — titles must exist *before* the DeepSeek pass
+    overwrote them — and R0 turned it into the whole contract: there is no second pass, so
+    an empty title is now permanently empty, and `_needs_labels` would spin on it forever.
+    Same assertion, and the reason DK4a can rely on the gate terminating.
+    """
     from rag_search.graph.community import detect_communities
     from rag_search.graph.extractor import extract_symbols, symbol_id
     from rag_search.graph.store import GraphStore
@@ -699,7 +724,7 @@ def test_p21_community_labels_set_without_llm(tmp_path):
         assert rows, "no communities detected"
         for cid, title in rows:
             assert title and title.strip(), (
-                f"P21.2: community {cid} has no title (cheap labeler must set title before LLM)"
+                f"P21.2: community {cid} has no title (structural labeller is the only labeller)"
             )
     finally:
         gs.close()
@@ -955,7 +980,7 @@ def test_p35_label_project_prunes_orphan_communities(safe_tmp_path):
     try:
         gs = GraphStore(project_graph_db(proj))
         gs.upsert_symbol("s0", "real_func", "real_func", "function", "f.py", 1, 2, "python")
-        gs.upsert_community(0, level=1, title="Real", summary="Already enriched.", member_count=1)
+        gs.upsert_community(0, level=1, title="Real", summary="Already labelled.", member_count=1)
         gs._con.execute("UPDATE symbols SET community_id=0 WHERE sid='s0'")
         gs.upsert_community(99, level=1, title="Orphan", summary="", member_count=0)
         gs.commit()
@@ -1151,7 +1176,9 @@ def test_env_thread_caps_set_at_import():
     assert os.environ.get("TOKENIZERS_PARALLELISM") == "false", "TOKENIZERS_PARALLELISM must be false"
 
 
-# ── Gap 5 F3: BPRE metrics surface ───────────────────────────────────────────
+# ── GPU residency after idle-unload ──────────────────────────────────────────
+# (Banner was "Gap 5 F3: BPRE metrics surface" — it had already drifted off its own
+#  section before R0 deleted the subject; the test below is and was a CUDA-EP guard.)
 
 @pytest.mark.slow
 def test_idle_unload_then_cuda_reload():

@@ -103,35 +103,10 @@ def test_semantic_trace_returns_structured_json():
     assert "summary" in data, "semantic_trace must include 'summary' string"
 
 
-# ── A2: service_mesh from bpre_ast (not regex) ───────────────────────────────
-
-def test_service_mesh_detect_services_uses_bpre_ast():
-    """A2 source-guard: _detect_services in server/_overview.py imports bpre_ast / federation_discover
-    (not a regex pattern or manual service list).
-    """
-    import inspect
-
-    from rag_search.server import _overview
-    src = inspect.getsource(_overview)
-    assert "federation_discover" in src or "bpre_ast" in src, (
-        "_detect_services must delegate to bpre_ast.federation_discover — no regex fallback"
-    )
-    assert not re.search(r're\.compile\(', src), (
-        "server/_overview.py must not use re.compile for service detection"
-    )
-
-
-# ── A3: patterns framework labelling → LLM (no static map) ──────────────────
-
-def test_patterns_no_static_framework_map():
-    """A3 source-guard: kb/patterns.py must not define a static framework-to-label dict (_KNOWN)."""
-    import inspect
-
-    from rag_search.kb import patterns
-    src = inspect.getsource(patterns)
-    assert "_KNOWN" not in src, (
-        "kb/patterns.py still has _KNOWN static framework map — A3 regression"
-    )
-    assert "_llm_frameworks" in src or "deepseek_chat" in src, (
-        "kb/patterns.py must use LLM (_llm_frameworks / deepseek_chat) for framework labelling"
-    )
+# A2 and A3 were the no-regex half of HR15 applied to two tier-3 modules, and both had to leave
+# rather than be re-pointed. A2 read `server/_overview.py`'s `_detect_services`, one of the five
+# overview variants R0a deleted; its "no re.compile in _overview.py" half is now carried tree-wide
+# by test_no_code_semantic_regex.py, which screens every module outside four exempt files against
+# the wide `re` surface. A3 asserted the *opposite* of what R0 established — that `kb/patterns.py`
+# must contain `_llm_frameworks` or `deepseek_chat` — so keeping it would have made this file a
+# guard against the deletion. That call was the only DeepSeek round trip left on a query path.
