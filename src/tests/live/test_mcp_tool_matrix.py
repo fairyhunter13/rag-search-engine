@@ -1,9 +1,9 @@
 """MCP tool matrix — all 5 tools × all variants not already in test_p5_server.
 
 Covers (no duplication of test_p5 or test_p21):
-  - graph: all 7 relations (definition/callers/callees/impact/impact_narrative/path/semantic_trace)
+  - graph: all 6 relations (definition/callers/callees/impact/impact_narrative/path)
   - search: 3 scopes (code/docs/all) + federated project_paths
-  - ask: scope variants (architecture/global/feature/business; `wiki` left with tier 3)
+  - ask: both scopes (all/architecture)
   - overview: metrics / projects (the what= values that fail on a stale index; `patterns` was
     the third and left with tier 3)
 
@@ -23,7 +23,7 @@ from tests.live._sample_workspace import SampleWorkspace
 pytestmark = pytest.mark.live
 
 _GRAPH_RELATIONS_SIMPLE = ["definition", "callers", "callees", "impact", "impact_narrative"]
-_ASK_SCOPES = ["architecture", "global", "feature", "business"]
+_ASK_SCOPES = ["all", "architecture"]
 
 
 @pytest.fixture(scope="module")
@@ -62,10 +62,19 @@ class TestGraphRelations:
         data = json.loads(result)
         assert "error" in data or "path" in data
 
-    def test_graph_semantic_trace_without_to_symbol(self, graph_proj, any_symbol):
+    def test_graph_unknown_relation_errors_with_valid_set(self, graph_proj, any_symbol):
+        """An unadvertised relation must error, not answer.
+
+        `semantic_trace` outlived its implementation here for exactly one reason: the old
+        fallthrough answered it with `path` semantics, and the test this replaces asserted only
+        that the result was a dict — true of every branch, so it never discriminated.
+        """
         from rag_search.server.mcp import graph as graph_tool
-        result = asyncio.run(graph_tool(any_symbol, graph_proj, "semantic_trace"))
-        assert isinstance(json.loads(result), dict)
+        data = json.loads(asyncio.run(graph_tool(any_symbol, graph_proj, "semantic_trace")))
+        assert "error" in data, f"unknown relation must error; got {data}"
+        assert "semantic_trace" not in data.get("valid", []), (
+            "semantic_trace must not be advertised as valid — it has no implementation"
+        )
 
     def test_graph_nonexistent_returns_error(self):
         from rag_search.server.mcp import graph as graph_tool

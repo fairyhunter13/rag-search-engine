@@ -479,7 +479,7 @@ def test_e2_ask_context_is_rerank_ordered(service_path):
 
 @pytest.mark.slow
 def test_e3_community_context_is_reranked(service_path):
-    """E3/HR8/D2: compose_answer(scope=global) top community differs between distinct queries."""
+    """E3/HR8/D2: compose_answer(scope=architecture) top community differs between distinct queries."""
     from rag_search.core.config import project_graph_db
     from rag_search.graph.store import GraphStore
     from rag_search.query.ask import compose_answer
@@ -489,14 +489,15 @@ def test_e3_community_context_is_reranked(service_path):
     )
     gs = GraphStore(gdb)
     try:
-        a = compose_answer("how does coupon validation work", [], [gs], scope="global")
-        b = compose_answer("how does checkout integration work", [], [gs], scope="global")
+        a = compose_answer("how does coupon validation work", [], [gs], scope="architecture")
+        b = compose_answer("how does checkout integration work", [], [gs], scope="architecture")
     finally:
         gs.close()
     assert a, "E3: compose_answer empty for query A"
     assert b, "E3: compose_answer empty for query B"
-    # scope="global" always starts with structural "## Architecture (community map)";
-    # compare full response content — if semantic reranking is query-aware, a != b.
+    # scope="architecture" always leads with the "## Architecture" section, so both assemblies
+    # share their framing; anything that differs is the reranked community order itself.
+    # (This scope carries the ordering `global` used to name — see ask.py::_SCOPES.)
     assert a != b, "E3: compose_answer identical for two distinct queries (reranking is static?)"
     ask_src = (Path(__file__).parents[2] / "rag_search" / "query" / "ask.py").read_text()
     assert "rerank_passages" in ask_src, "E3 guard: ask.py must use rerank_passages"

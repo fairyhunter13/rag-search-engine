@@ -1,6 +1,6 @@
 """V: index validity e2e — overview(what="validate") must return VALID for the 3 canonical projects.
 Checks: no orphan chunks/vectors, no dangling edges, no bad community refs,
-no placeholder L1 titles, no path leakage, process edges anchored + in-band.
+no placeholder L1 titles, no path leakage.
 """
 from __future__ import annotations
 
@@ -54,14 +54,6 @@ def _chk(reports: dict, key: str) -> dict:
     return reports[key].get("checks", {})
 
 
-def _root_member_chk(reports: dict, projects: dict[str, str], key: str) -> dict | None:
-    path = projects[key]
-    return next(
-        (m["checks"] for m in reports[key].get("members", []) if m["path"] == path),
-        None,
-    )
-
-
 class TestIndexValidity:
     @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
     def test_verdict_valid(self, key: str, validate_reports: dict) -> None:
@@ -106,26 +98,10 @@ class TestIndexValidity:
     def test_indexed_at_fresh(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("indexed_at_fresh") is True
 
-    def test_federation_root_has_process_graph(self, validate_reports: dict) -> None:
-        chk = _chk(validate_reports, "federation")
-        pg = chk.get("process_graph")
-        assert pg is not None, "federation root should carry process_graph summary"
-        assert "error" not in pg, f"process_graph error: {pg.get('error')}"
-
-    def test_federation_process_edges_anchored(self, validate_reports: dict) -> None:
-        pg = _chk(validate_reports, "federation").get("process_graph", {})
-        assert pg.get("unanchored", 0) == 0, f"unanchored process edges: {pg}"
-
-    def test_federation_process_edges_confidence_in_band(self, validate_reports: dict) -> None:
-        pg = _chk(validate_reports, "federation").get("process_graph", {})
-        assert pg.get("out_of_band", 0) == 0, f"out-of-band confidence: {pg}"
-
-    @pytest.mark.parametrize("key", ["service", "standalone"])
-    def test_standalone_no_process_graph(
-        self, key: str, validate_reports: dict, index_projects: dict[str, str]
-    ) -> None:
-        root_chk = _root_member_chk(validate_reports, index_projects, key)
-        assert root_chk is not None, f"root member not found for {key}"
-        assert root_chk.get("process_graph") is None, (
-            f"{key} is standalone but has process_graph: {root_chk.get('process_graph')}"
-        )
+    # Four process_graph checks stood here until 2026-07-28 — one red, three vacuous. The
+    # `process_graph` block in a validate report was written by BPRE, which left with tier 3, so
+    # the key is now absent everywhere: "federation root has one" fails, and the two edge checks
+    # read `.get("process_graph", {})` and then assert `.get(k, 0) == 0` against that empty dict,
+    # which no defect can disturb. `test_standalone_no_process_graph` went the other way — it
+    # asserted absence, and absence is now unconditional. test_feature_proof.py is where tier-3
+    # reintroduction is guarded; these were validity checks with no subject left.

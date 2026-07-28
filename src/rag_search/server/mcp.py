@@ -191,7 +191,7 @@ async def ask(
     scope: str = "all",
     ctx: Context | None = None,
 ) -> str:
-    """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture|global|feature|business. LLM synthesis is the HTTP /api/ask path."""
+    """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture — `all` leads with the code axis, `architecture` leads with the community map. LLM synthesis is the HTTP /api/ask path."""
     note_query(query)
     project_path, err = await _default_or_error(ctx, project_path)
     if err:
@@ -208,7 +208,7 @@ async def graph(
     to_symbol: str = "",
     ctx: Context | None = None,
 ) -> str:
-    """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|path|semantic_trace."""
+    """Analyze call graph. relation: definition|callers|callees|impact|impact_narrative|path."""
     note_activity()
     project_path, err = await _default_or_error(ctx, project_path)
     if err:

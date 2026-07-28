@@ -1,4 +1,7 @@
-"""CLI↔dashboard parity: ask/graph/overview/wiki are reachable from the CLI.
+"""CLI↔dashboard parity: ask/graph/overview are reachable from the CLI.
+
+`wiki` was the fourth. Its builder was generative and left with tier 3 (R0), so the command it
+tested is gone; the check below now asserts the CLI does not still advertise it.
 
 Uses typer.testing.CliRunner (in-process, real GPU embedder singleton, no mock).
 All tests bind to the sample_workspace projects via --project / explicit path,
@@ -78,27 +81,17 @@ def test_cli_ask_matches_run_ask(sample_workspace):
     )
 
 
-# ── wiki ──────────────────────────────────────────────────────────────────────
-
-def test_cli_wiki_builds_pages(sample_workspace):
-    """CLI wiki runs without error and reports pages_written."""
-    from rag_search.cli import app
-
-    fed = sample_workspace.fed_root
-    r = _runner().invoke(app, ["wiki", fed])
-    assert r.exit_code == 0, f"wiki exit {r.exit_code}: {r.output}"
-    assert "pages_written=" in r.output, f"wiki output missing pages_written: {r.output!r}"
-    n = int(r.output.strip().split("pages_written=")[1])
-    assert n >= 0, f"pages_written must be non-negative; got {n}"
-
-
 # ── commands present in --help ────────────────────────────────────────────────
 
 def test_new_commands_in_help():
-    """ask/graph/overview/wiki appear in top-level --help."""
+    """ask/graph/overview appear in top-level --help, and retired `wiki` does not."""
     from rag_search.cli import app
 
     r = _runner().invoke(app, ["--help"])
     assert r.exit_code == 0
-    for cmd in ("ask", "graph", "overview", "wiki"):
+    for cmd in ("ask", "graph", "overview"):
         assert cmd in r.output, f"CLI missing command '{cmd}' in --help"
+    assert "wiki" not in r.output, (
+        "CLI still advertises `wiki` — its builder left with tier 3, so the name can only "
+        "resolve to an error or, worse, to something else's behaviour (see semantic_trace)"
+    )

@@ -55,8 +55,11 @@ def test_gg2_docs_round_trip(safe_tmp_path, embedder):
     store_path = safe_tmp_path / "v2.db"
     vs = VectorStore(store_path)
     try:
-        n1 = index_project(root, embedder, vs, federation_mode=False)
+        # index_project returns (files, chunks) — this unpacked it as a bare int until
+        # 2026-07-28, which read as a TypeError rather than a failure of anything it tests.
+        f1, n1 = index_project(root, embedder, vs, federation_mode=False)
         assert n1 > 0, f"index_project must embed at least one chunk; got {n1}"
+        assert f1 >= 3, f"index_project must walk app.py + both docs files; got {f1} file(s)"
 
         results = search("prose content guide", embedder, vs, scope="docs", top_k=5)
         assert results, "search(scope=docs) returned no results after index_project"
@@ -66,7 +69,7 @@ def test_gg2_docs_round_trip(safe_tmp_path, embedder):
         ), f"scope=docs results must be text langs: {[r.get('language') for r in results]}"
 
         # Idempotent: 2nd call gives same chunk count (clear + reinsert, net 0 new)
-        n2 = index_project(root, embedder, vs, federation_mode=False)
+        _f2, n2 = index_project(root, embedder, vs, federation_mode=False)
         assert n2 == n1, f"2nd index_project must be idempotent: got {n2} vs {n1}"
         assert vs.count() == n1, "vector store count must be unchanged after 2nd index"
     finally:
