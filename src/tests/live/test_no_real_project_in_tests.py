@@ -191,6 +191,17 @@ def test_no_unscoped_search_asserting_results():
                 continue
             if "project_paths" in line:
                 continue
+            if "unscoped-ok" in line:
+                # A test whose *subject* is the unscoped rejection, marked per call rather than
+                # allowlisted per file. `_RESULTS_ASSERT_RE` cannot tell "asserts results exist"
+                # from "asserts results absent" — T2 in test_path_resolution.py trips it twice
+                # over, once on `assert "results" not in payload` and once on an assertion
+                # *message* containing the word. Widening the regex to understand either would
+                # be guesswork about English; adding the file to _UNSCOPED_SEARCH_ALLOWLIST
+                # would exempt every future unscoped search beside it, which is the failure mode
+                # [[feedback_allowlist_needs_sufficiency_test]] names. Same shape as SC3's
+                # `sc3-exempt` in test_surface_consistency.py.
+                continue
             window = "\n".join(lines[i:min(i + 6, len(lines))])
             if _RESULTS_ASSERT_RE.search(window):
                 violations.append(f"{f.name}:{i + 1}: {line.strip()[:80]}")
