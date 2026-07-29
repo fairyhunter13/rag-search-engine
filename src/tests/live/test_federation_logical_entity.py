@@ -50,12 +50,12 @@ def _clean(paths):
 
 @pytest.mark.slow
 def test_inv4_root_scoped_search_fanout(safe_tmp_path):
-    """Invariant #4: search([root]) and ask(root) fan out to member content."""
+    """Invariant #4: search([root]) and run_ask(root) fan out to member content."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import upsert_project
     from rag_search.daemon.federation import index_members
     from rag_search.daemon.sweeps import _index_project
-    from rag_search.server.mcp import ask as mcp_ask
+    from rag_search.query.ask import run_ask
     from rag_search.server.mcp import search as mcp_search
 
     root, member, marker = _federate(safe_tmp_path)
@@ -74,10 +74,12 @@ def test_inv4_root_scoped_search_fanout(safe_tmp_path):
         assert any(str(member) in p for p in data.get("projects_searched", [])), \
             f"member not listed in projects_searched: {data.get('projects_searched')}"
 
-        # ask scoped to root must surface content (non-empty assembled context)
-        answer = asyncio.run(mcp_ask(marker, str(root), "all"))
+        # Context assembly scoped to root must surface content (non-empty assembled context).
+        # `expand_federation` is called inside run_ask, so this reaches the fan-out the retired
+        # MCP `ask` tool reached — the tool never added anything of its own here.
+        answer = run_ask(marker, str(root), "all")
         assert answer and len(answer.strip()) > 10, \
-            f"ask(root) returned empty context: {answer!r}"
+            f"run_ask(root) returned empty context: {answer!r}"
     finally:
         _clean([root, member])
 

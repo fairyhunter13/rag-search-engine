@@ -4,8 +4,9 @@ test_mcp_tool_matrix.py binds to any indexed project via a single promo-svc scop
 This file proves every feature works for the 3 roles: federation member (promo-svc),
 federation root (shop-federation), and standalone (ledger-standalone). All 3 are sourced
 from sample_workspace — no real device projects used.
-No duplication of matrix tests — focuses on per-root binding and the 8 overview what= values
-(every member of `_overview._VALID` except `validate`, which test_index_validity.py owns).
+No duplication of matrix tests — focuses on per-root binding across the overview what= values
+this file can afford to sweep (see `_OVERVIEW_WHATS_FAST` below for the two it leaves out and
+who owns them instead).
 """
 from __future__ import annotations
 
@@ -88,17 +89,30 @@ class TestNamedProjectsOverview:
 
 
 class TestNamedProjectsAsk:
-    """T3c: ask returns non-empty context for each named root."""
+    """T3c: context assembly returns non-empty context for each named root.
+
+    This case was the expensive half of one drift, and worth keeping the record of. It called the
+    MCP `ask` tool with scope `"global"`, which 5f3033a removed from `_SCOPES`; `run_ask` answers
+    an unlisted scope with a 49-character rejection string, and this assertion asked only for >20
+    characters — so all three roles went on passing **against the error message**, proving nothing
+    about any of them. The sibling case fp14 demanded >100 and went loudly red on the same day
+    from the same cause, which is the whole difference between a threshold that discriminates and
+    one that does not ([[feedback_guard_tests_must_discriminate]]). Both are corrected to
+    `"architecture"`, and SC3 in test_surface_consistency.py now fails on any future straggler.
+
+    The tool is gone too (retired 2026-07-29); `run_ask` is where the assembly always happened and
+    still serves the CLI and the dashboard chat.
+    """
 
     @pytest.mark.slow
     @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
-    def test_ask_global_non_empty(self, named_projects: dict, key: str) -> None:
-        from rag_search.server.mcp import ask as ask_tool
+    def test_ask_architecture_non_empty(self, named_projects: dict, key: str) -> None:
+        from rag_search.query.ask import run_ask
         path = named_projects.get(key, "")
         assert path, f"{key} not in registry — all 3 project roles must be registered"
-        result = asyncio.run(ask_tool("What is the overall architecture?", path, "global"))
-        assert isinstance(result, str) and len(result.strip()) > 20, (
-            f"{key}: ask(global) returned empty/short: {result!r}"
+        result = run_ask("What is the overall architecture?", path, "architecture")
+        assert isinstance(result, str) and len(result.strip()) > 100, (
+            f"{key}: run_ask(architecture) returned empty/short: {result!r}"
         )
 
 
