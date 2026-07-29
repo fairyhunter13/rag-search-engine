@@ -454,7 +454,14 @@ def test_search_reranks_full_pool(mini_stores, embedder):
 
 @pytest.mark.slow
 def test_e1_rerank_reorders_search_results(service_path):
-    """E1/HR8: MCP search on sample service — rerank_score sorted desc, lift detected on ≥1 of 4 queries."""
+    """E1/HR8: MCP search on sample service — rerank_score sorted desc, lift detected on ≥1 of 4 queries.
+
+    Read at verbosity="full" since 2026-07-29. The compact projection reports a single
+    `score` = `rerank_score` *or* the vector score if reranking never happened, so both of
+    this gate's assertions go blind on it: `rerank_score` is absent, and comparing "top by
+    score" against "first result" is comparing a list to itself, which finds lift always and
+    a dead reranker never. Full is the only shape that still carries the two scores apart.
+    """
     from rag_search.server.mcp import search as _mcp_search
     queries = [
         "discount rule application",
@@ -464,7 +471,9 @@ def test_e1_rerank_reorders_search_results(service_path):
     ]
     lift_found = False
     for q in queries:
-        data = json.loads(asyncio.run(_mcp_search(q, project_paths=[service_path])))
+        data = json.loads(
+            asyncio.run(_mcp_search(q, project_paths=[service_path], verbosity="full"))
+        )
         res = data.get("results", [])
         assert res, f"E1: no results for {q!r}"
         rs = [r.get("rerank_score") for r in res]
