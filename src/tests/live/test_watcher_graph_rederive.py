@@ -13,7 +13,8 @@ walk-the-whole-repo implementation cannot satisfy.
 
 WG1  a new symbol must reach graph.db through on_change alone
 WG2  docs-only churn must NOT re-extract (HR38 must survive)
-WG3  a federation root must NOT re-extract (HR4 carve-out)
+WG3  a federation root must NOT re-extract on the watcher's cadence (HR40 cost carve-out)
+RC1  ...but reconcile MUST re-derive it — the other half of WG3's hand-off
 WG4  on_change must not deadlock on _HEAVY_LOCK when it takes the extraction branch
 WG5  a deleted symbol disappears; an untouched file keeps its symbols AND its cross-file edges
 WG6  a changed file the watcher did NOT report must not be parsed (no whole-repo walk)
@@ -132,8 +133,11 @@ def _forget_sig(proj: str) -> None:
 
 
 def test_wg3_federation_root_is_not_the_watchers_job(safe_tmp_path):
-    """WG3: HR4 — a federation root has 0 own communities by design, so it never re-extracts.
+    """WG3: a federation root is deferred to reconcile on cost (HR40), never re-extracted here.
 
+    The reason used to be given as HR4 ("0 own communities by design"), which HR4 does not say
+    and the fleet's one root refutes — see RC1. The carve-out survives on its real justification:
+    extraction scales with repo size, so a 193-member root would re-extract on every member edit.
     Paired against a plain project under identical drift: without the control assertion this
     would also pass against a _graph_needs_update that simply always answered False.
     """
@@ -160,7 +164,52 @@ def test_wg3_federation_root_is_not_the_watchers_job(safe_tmp_path):
         "WG3 control: real code drift on a plain project must need an update"
     )
     assert _graph_needs_update(str(root)) is False, (
-        "WG3: a federation root must be left to reconcile (HR4 carve-out)"
+        "WG3: a federation root must be left to reconcile (HR40 cost carve-out)"
+    )
+
+
+_RC_SRC = "def rc_leaf():\n    return %d\n\ndef rc_root():\n    return rc_leaf()\n"
+
+
+def test_rc1_reconcile_owns_the_federation_root_wg3_defers(safe_tmp_path):
+    """RC1: the other half of WG3's hand-off — reconcile must re-derive the root WG3 skipped.
+
+    WG3's message says a root is "left to reconcile"; reconcile then declined the identical
+    case on `not entry.federation`, so neither owned it and the fleet's one root sat two algo
+    generations stale. Three arms, because one proves nothing here: A is the behavioural red
+    (a role predicate returns None), B fails any blunt "always re-derive" fix, C pins that the
+    159 non-root projects are unaffected. Roles are not read at all now — only stamps.
+    """
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.daemon.sweeps import _graph_reconcile_action, _index_project
+
+    root, member = safe_tmp_path / "rcroot", safe_tmp_path / "rcmember"
+    root.mkdir()
+    member.mkdir()
+    (root / "app.py").write_text(_RC_SRC % 1)
+    (member / "svc.py").write_text("def rc_member():\n    return 1\n")
+    _index_project(str(root))
+    _index_project(str(member))
+    upsert_project(ProjectEntry(path=str(root), enabled=True, federation=[str(member)]))
+    upsert_project(ProjectEntry(path=str(member), enabled=True))
+
+    assert _graph_reconcile_action(str(root)) is None, (
+        "RC1-B: a freshly indexed root is current — re-deriving it anyway would make the "
+        "predicate unconditional, which arm A alone cannot distinguish from the fix"
+    )
+
+    time.sleep(1.1)
+    (root / "app.py").write_text(_RC_SRC % 2)
+    (member / "svc.py").write_text("def rc_member():\n    return 2\n")
+    _forget_sig(str(root))
+    _forget_sig(str(member))
+    assert _graph_reconcile_action(str(member)) == "rederive", (
+        "RC1-C control: drift on a plain project must still be reconcile's job"
+    )
+    assert _graph_reconcile_action(str(root)) == "rederive", (
+        "RC1-A: a federation root with its own drifted code must be re-derived — HR4 forbids "
+        "cross-repo edges, it does not claim a root has no code of its own"
     )
 
 

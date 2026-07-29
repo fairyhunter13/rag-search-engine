@@ -592,7 +592,10 @@ def _graph_needs_update(project_path: str) -> bool:
 
     Mirrors reconcile's own conditions so the two paths cannot drift apart, minus the cases
     that belong to reconcile: a project with no graph.db yet has never been indexed, and a
-    federation root has 0 own communities by design (HR4), so neither is the watcher's job.
+    federation root is deferred on **cost**, not on HR4 — extraction is single-worker-bound
+    and scales with repo size rather than edit size (HR40), so a 193-member root would
+    re-extract in full on every member edit. `_graph_reconcile_action` owns that case on the
+    slower cadence; this is a hand-off, and the root is not exempt from maintenance.
     Reuses the memoised code-only fingerprint on_change has already computed — no second walk.
     """
     from rag_search.core.config import project_graph_db
@@ -606,6 +609,35 @@ def _graph_needs_update(project_path: str) -> bool:
     gs = GraphStore(gdb)
     try:
         return _graph_stale(project_path, gs)
+    finally:
+        gs.close()
+
+
+def _graph_reconcile_action(project_path: str) -> str | None:
+    """What reconcile owes this project's graph: "index", "rederive", or nothing.
+
+    Reconcile's half of the hand-off `_graph_needs_update` defers on. Deliberately reads
+    only *state* — the graph's own stamps — never the project's role. The role predicate
+    that stood here (`not entry.federation`) skipped every federation root on the claim
+    that a root has "0 own communities by design (HR4)", which HR4 does not say: HR4
+    forbids cross-repo *edges*. Measured when it was removed, the sole root in the fleet
+    carried 342 own symbols and 20 communities, so the guard was wrong for 100% of the
+    population it governed, and had frozen that graph two algorithm generations behind
+    the 159 members it fans out into. A root is shard 0 of the union, not its broker.
+
+    The symbol-free case the role predicate was reaching for is already handled, and for
+    the true reason: `_graph_needs_full_index` requires `symbol_count() > 0`.
+    """
+    from rag_search.core.config import project_graph_db
+    from rag_search.graph.store import GraphStore
+    gdb = project_graph_db(project_path)
+    if not gdb.exists():
+        return None
+    gs = GraphStore(gdb)
+    try:
+        if _graph_needs_full_index(gs):
+            return "index"
+        return "rederive" if _graph_stale(project_path, gs) else None
     finally:
         gs.close()
 
@@ -758,10 +790,8 @@ def reconcile_projects() -> None:
         # because both this and the mid-walk return below logged nothing.
         log.info("reconcile: abandoned before start (sweeps paused)")
         return
-    from rag_search.core.config import project_graph_db
     from rag_search.core.registry import list_projects
     from rag_search.daemon.federation import register_all_members
-    from rag_search.graph.store import GraphStore
 
     try:
         register_all_members()
@@ -852,18 +882,10 @@ def reconcile_projects() -> None:
                     _index_files(entry.path, batch)
                 except Exception as exc:
                     log.warning("%s: set-drift reindex failed: %s", entry.path, exc)
-        # Federation roots have 0 own communities by design (HR4) — skip staleness checks.
-        if not needs_idx and not entry.federation:
-            gdb = project_graph_db(entry.path)
-            if gdb.exists():
-                gs = GraphStore(gdb)
-                try:
-                    if _graph_needs_full_index(gs):
-                        needs_idx = True
-                    elif _graph_stale(entry.path, gs):
-                        needs_rederive = True
-                finally:
-                    gs.close()
+        if not needs_idx:
+            action = _graph_reconcile_action(entry.path)
+            needs_idx = action == "index"
+            needs_rederive = action == "rederive"
         try:
             # Orthogonal to the chain below, not a branch of it: re-embedding touches
             # only vectors.db, so it neither satisfies nor preempts a graph rederive.
