@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import typing
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 from rag_search.embed.embedder import Embedder, Reranker
@@ -20,6 +21,16 @@ _MIN_POOL = 50
 # implementation reported through 2026 still uses; it is deliberately large relative to the ranks
 # that matter, which is what stops a single lane's #1 from dominating a chunk both lanes like.
 _RRF_K = 60
+
+# Federation fan-out width. Both lanes are pure sqlite — vec0 KNN and FTS5 — so they release the
+# GIL and genuinely overlap; the GPU is untouched here (one embed before the loop, one rerank
+# after), so this never contends with `_GPU_INFER_LOCK`. Threads rather than processes because
+# each member already holds its own connection opened `check_same_thread=False`, and no two
+# workers ever touch the same one.
+#
+# Sized against the measurement that motivated this: inosoft-project's 157 priced members cost
+# 36.68 s of sequential dense KNN (mean 233.6 ms, worst 3.28 s) against 3.00 s of lexical.
+_FANOUT_WORKERS = 8
 
 
 def fuse_rrf(lanes: list[list[dict]], k: int = _RRF_K) -> list[dict]:
@@ -147,13 +158,29 @@ def search_federation(
     Fusion is per store, then pooled. RRF scores are comparable across members by construction
     (they are functions of rank alone), where the raw lane scores are not — a store whose whole
     corpus is slightly off-topic still returns high cosines within itself.
+
+    The fan-out is parallel but **order-preserving**, and that is load-bearing rather than
+    incidental: `ex.map` yields in *input* order, so the pooled list is assembled exactly as the
+    sequential loop assembled it, and `chunks.sort` is stable — so ties break identically and the
+    ranking cannot move. Consuming completions as they land (`as_completed`) would reorder ties
+    and turn a performance change into a silent retrieval change; `test_t4_fanout_preserves_store_order`
+    is the gate that says so.
     """
     q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
     langs = scope_languages(scope)
     per_store = max(top_k * 3, 10)
+
+    def lanes(vs: VectorStore) -> list[dict]:
+        return fuse_rrf([vs.search(q_vec, top_k=per_store, languages=langs),
+                         vs.search_lexical(query, top_k=per_store, languages=langs)])
+
     chunks: list[dict] = []
-    for vs in stores:
-        chunks.extend(fuse_rrf([vs.search(q_vec, top_k=per_store, languages=langs),
-                                vs.search_lexical(query, top_k=per_store, languages=langs)]))
+    if len(stores) < 2:
+        for vs in stores:
+            chunks.extend(lanes(vs))
+    else:
+        with ThreadPoolExecutor(max_workers=min(_FANOUT_WORKERS, len(stores))) as ex:
+            for part in ex.map(lanes, stores):
+                chunks.extend(part)
     chunks.sort(key=_pool_key, reverse=True)
     return _rank(query, chunks[: max(_MIN_POOL, top_k * 5)], top_k)

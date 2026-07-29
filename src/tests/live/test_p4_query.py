@@ -107,3 +107,74 @@ def test_chat_stream_sse_sends_done(live_client):
             break
     r.close()
     assert done_seen, "SSE stream never sent done:true event"
+
+
+# ── query/search: federation fan-out ──────────────────────────────────────────
+
+class _CannedStore:
+    """One federation member's two sqlite lanes, canned. Touches no model.
+
+    Not a model fake: there is no embedder, no reranker and no recorded inference here — the
+    lanes it stands in for are pure sqlite (vec0 KNN + FTS5), which is exactly why they could be
+    priced without a GPU in the first place. What it fakes is *latency*, and that is the point.
+
+    The delay is inverted against position, so the slowest member is first in and last out.
+    Completion order is therefore the reverse of input order, which is the only arrangement that
+    can tell an order-preserving fan-out from one that consumes completions as they land.
+    """
+
+    def __init__(self, name: str, delay: float, cid: int) -> None:
+        self.name, self.delay, self.cid = name, delay, cid
+
+    def _rows(self, lane: str) -> list[dict]:
+        # Distinct chunk_id per (store, lane): fuse_rrf merges on it, so a collision would fuse
+        # two members into one row and quietly shorten the pool this gate counts.
+        return [{"chunk_id": self.cid + (0 if lane == "dense" else 1),
+                 "path": f"{self.name}/{lane}.py", "text": self.name, "score": 1.0,
+                 "start_line": 1, "end_line": 2, "language": "python"}]
+
+    def search(self, q_vec, top_k=8, languages=None):
+        import time
+        time.sleep(self.delay)
+        return self._rows("dense")
+
+    def search_lexical(self, query, top_k=8, languages=None):
+        return self._rows("lex")
+
+
+def test_t4_fanout_preserves_store_order(monkeypatch):
+    """T4: the parallel fan-out pools members in *input* order, not completion order.
+
+    `search_federation` fans out over a thread pool because inosoft-project's 157 priced members
+    cost 36.68 s of sequential dense KNN. The speedup is only legitimate if the ranking cannot
+    move, and what protects the ranking is subtle: `chunks.sort(key=_pool_key)` is *stable*, so
+    two members whose chunks tie on RRF score break the tie by pooling position. Preserve input
+    order and ties break exactly as the sequential loop broke them; pool by completion order and
+    they break by whichever sqlite call happened to finish first — a retrieval change wearing a
+    performance change's clothes, and one no recall gate would reliably catch.
+
+    Demonstrated red: swapping `ex.map` for `as_completed` over the same futures returns
+    ['s0', 's0', 's1', 's1', 's2', 's2'] against the expected ['s2', 's2', 's1', 's1', 's0', 's0']
+    — a full inversion, because the delays are inverted against position. The assertion is on the
+    whole order rather than a spot check, so a partial reordering fails it too.
+
+    Touches no model: `_rank` is replaced by identity, so the pooled list is returned before the
+    cross-encoder, and the embedder is a constant vector the canned stores ignore.
+    """
+    import numpy as np
+
+    from rag_search.query import search as search_mod
+
+    monkeypatch.setattr(search_mod, "_rank", lambda query, chunks, top_k: chunks)
+
+    class _Emb:
+        def embed(self, texts, batch_size=1):
+            return np.zeros((1, 8), dtype="float32")
+
+    stores = [_CannedStore("s2", 0.30, 10), _CannedStore("s1", 0.15, 20),
+              _CannedStore("s0", 0.0, 30)]
+    out = search_mod.search_federation("q", _Emb(), stores, top_k=8)
+
+    seen = [c["text"] for c in out]
+    assert seen == ["s2", "s2", "s1", "s1", "s0", "s0"], (
+        f"fan-out pooled in completion order, not input order: {seen}")
