@@ -357,17 +357,30 @@ def test_api_reload_returns_reloading():
     )
     body = __import__("json").loads(r.read())
     assert r.status == 200 and body.get("status") == "reloading"
-    # Wait for systemd to restart the daemon (up to 8s) — assert recovery, don't just poll.
-    recovered = False
-    for _ in range(16):
+    # Wait for systemd to restart the daemon — assert recovery, don't just poll.
+    #
+    # The budget was 8 s and recovery is measured at 21.4 s, so this failed on every run and
+    # `@pytest.mark.slow` meant nothing reported it. Timed off the journal on 2026-07-29:
+    # reload accepted 17:56:52.4 → systemd re-exec 17:56:56.2 (RestartSec=3s) → serving
+    # 17:57:13.8, i.e. ~3 s of restart delay and ~17 s loading the embedder onto the GPU
+    # before the first request is served. 8 s could never have covered that; the eager warm-up
+    # is deliberate (GPU-only, no CPU fallback), so the budget is what was wrong.
+    # Elapsed is reported on failure rather than a bare bool, so the next drift says how far.
+    deadline = time.monotonic() + 60.0
+    recovered = 0.0
+    t_reload = time.monotonic()
+    while time.monotonic() < deadline:
         time.sleep(0.5)
         try:
             urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=2)
-            recovered = True
+            recovered = time.monotonic() - t_reload
             break
         except Exception:
             continue
-    assert recovered, "daemon did not come back up after /api/reload (exit-code split regressed?)"
+    assert recovered, (
+        "daemon did not come back up within 60s of /api/reload (exit-code split regressed?) "
+        "— measured 21.4s on 2026-07-29, of which ~17s is the GPU embedder warm-up"
+    )
     # NOTE: the restart=false ("daemon stop") path is intentionally NOT exercised as a live SIGTERM
     # here — it requests exit 0, which systemd's Restart=on-failure will NOT auto-recover from, so
     # sending it to the shared singleton daemon would leave it down for the rest of the suite. Its

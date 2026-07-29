@@ -101,16 +101,22 @@ class TestFederationComposedEntity:
         )
 
     @pytest.mark.slow
-    def test_all_members_kb_state_ready(self, fed_root: str, fed_status: dict) -> None:
-        """T2f: every federation LEAF member must be kb_state=ready.
+    def test_all_members_index_state_ready(self, fed_root: str, fed_status: dict) -> None:
+        """T2f: every federation LEAF member must be index_state=ready.
 
         The federation root itself is excluded: it has its own source files (federation.go)
         whose communities are not golden-replayed in the sample workspace, so it legitimately
-        stays kb_state=searchable.  Only leaf members (cart, checkout, promo) are checked.
+        stays index_state=searchable.  Only leaf members (cart, checkout, promo) are checked.
+
+        Renamed from kb_state on 2026-07-29, a day after the field itself was renamed with
+        tier 3 (_overview.py). Three sibling tests were re-pointed in that sweep and this one
+        was not, for the only reason that matters here: it is `@pytest.mark.slow`, so the
+        standard `-m "not slow"` gate never ran it and `KeyError: 'kb_state'` went unseen.
+        A `.get()` default would have hidden it permanently — the subscript is deliberate.
         """
         not_ready = [
-            f"{m['path']}: {m['kb_state']}"
+            f"{m['path']}: {m['index_state']}"
             for m in fed_status.get("members", [])
-            if m.get("kb_state") != "ready" and m["path"] != fed_root
+            if m.get("index_state") != "ready" and m["path"] != fed_root
         ]
         assert not not_ready, "Leaf members not ready:\n" + "\n".join(not_ready)
