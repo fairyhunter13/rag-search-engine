@@ -1,7 +1,8 @@
 """HTTP surface matrix — all mounted routes not covered by test_p5_server.
 
 Routes excluded (already in test_p5): /healthz, /dashboard, /api/projects,
-/api/overview, /api/suggested_questions, /api/auto_pipeline_status, /mcp.
+/api/overview, /api/auto_pipeline_status, /mcp. (/api/suggested_questions was on this list and
+is now on test_p5's `deleted` one.)
 
 Routes verified here — this is the *surviving* half after R0; the tier-3 rows this
 docstring used to list are asserted absent by test_p5_server.py::test_e7_trimmed_http_surface:
