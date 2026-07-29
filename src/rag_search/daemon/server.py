@@ -178,6 +178,21 @@ def _start_background() -> None:
     scheduler = Scheduler()
     scheduler.register("maintenance", maintenance, interval_s=21600.0)  # 6 h; CPU/disk only
     scheduler.register("idle_unload", _idle_unload, interval_s=60.0)
+    # The registry has a second writer. `sync_watcher` is called from *this* process's registry
+    # write path and from a reconcile pass, but periodic reconcile is off by default, so a write
+    # from the CLI (`init`, `index`, `stop-watching` all call upsert/remove_project directly) or
+    # from the test suite was never observed at all: a project disabled out-of-process stayed
+    # armed until the daemon restarted. Measured on the live daemon — 6 roots armed for projects
+    # the registry no longer held, and no path by which that could ever converge.
+    #
+    # Deliberately on the scheduler rather than watching projects.json: `idle_unload` already
+    # ticks at 60 s, so sharing that interval adds *no* wake-up, only 9.8 ms of registry read on
+    # a tick that was happening anyway (`Watcher.sync` returns immediately when the set is
+    # unchanged, which is every tick but the interesting one). An inotify watch would be the
+    # doctrinal shape, but the registry sits in the same data dir as every project's vectors.db,
+    # so it would route an indexing write storm through a Python `watch_filter` — the exact cost
+    # HR35 exists to avoid, paid to observe a file that changes a few times a day.
+    scheduler.register("watcher_sync", sync_watcher, interval_s=60.0)
     watchdog_us = int(os.environ.get("WATCHDOG_USEC", "0"))
     if watchdog_us > 0:
         scheduler.register("watchdog", lambda: _sd_notify("WATCHDOG=1"), interval_s=max(1.0, watchdog_us / 2_000_000))
