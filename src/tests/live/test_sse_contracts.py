@@ -89,10 +89,42 @@ def test_chat_stream_model_in_allowed_set(live_client, project):
 
 @pytest.mark.slow
 def test_chat_stream_done_has_sources(live_client, project):
-    """done event must include a sources list (context provenance)."""
+    """done event must include a sources list and the grounding behind it (D2)."""
     events = _collect_chat_events(live_client, project, "What does this project do?")
     done_evs = [e for e in events if e.get("type") == "done"]
     assert done_evs, "No done event"
     done = done_evs[0]
     assert "sources" in done, f"done event must have sources; got keys={list(done)}"
     assert isinstance(done["sources"], list), "sources must be a list"
+    assert done.get("grounded") is True, f"an answered chat must report grounded; got {done}"
+    assert done.get("chunks", 0) > 0, f"grounded answer must name its chunk count; got {done}"
+    assert done.get("members"), f"grounded answer must name the members behind it; got {done}"
+
+
+# Not @slow, deliberately: this is the gate for "chat cannot answer ungrounded", and a gate
+# nothing runs is not a gate. It touches no model precisely because passing means no model
+# was reached, so it costs a few seconds and belongs in the standard lane.
+def test_d2_chat_refuses_to_answer_without_context(live_client, safe_tmp_path):
+    """D2: an unindexed project yields an error event and never reaches claude -p.
+
+    The discriminator is the ABSENCE of `token` events, not the presence of `error`. Against
+    the previous code this path streamed a confident answer built from context="" — it emitted
+    no error at all — so an assertion that merely looked for an error event somewhere would
+    fail red for the wrong reason and pass on any change that logged while still answering.
+    Tokens can only come from the model, so "no token" is the behavioural proof it never ran.
+    """
+    unindexed = safe_tmp_path / "never-indexed"
+    unindexed.mkdir()
+    events = _collect_chat_events(live_client, str(unindexed), "What is this codebase?")
+    types = [e.get("type") for e in events]
+    assert "error" in types, f"chat must say it could not ground the question; got {types}"
+    assert "token" not in types, (
+        f"chat answered with no context — the ungrounded path D2 removed; got {types}"
+    )
+    done_evs = [e for e in events if e.get("type") == "done"]
+    assert done_evs, f"stream must still terminate with done; got {types}"
+    done = done_evs[0]
+    assert done.get("grounded") is False, f"done must report ungrounded; got {done}"
+    assert done.get("model") == "", (
+        f"no model may be named when none ran; got {done.get('model')!r}"
+    )
