@@ -1,4 +1,5 @@
 import contextlib
+import os
 import sys
 
 import pytest
@@ -141,6 +142,46 @@ def pause_sweeps():
     yield
     with contextlib.suppress(Exception):
         requests.post(f"{_DAEMON}/api/sweeps/resume", timeout=5)
+
+
+# Peak VRAM the suite itself needs, measured: a green run started with 15,771 MiB free and
+# bottomed out at 7,401 MiB, i.e. ~8.4 GB for its own in-process embedder + reranker on top of
+# whatever the daemon holds. The gate sits above that with room to spare, because the failure
+# it prevents is not a clean shortfall message — it is ~60 tests dying inside onnxruntime with
+# CUBLAS/BFCArena errors that name neither the GPU nor the daemon. Env-driven per P18/HR34.
+_MIN_FREE_VRAM_MB = float(os.environ.get("RSE_TEST_MIN_VRAM_MB", "10000"))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reclaim_daemon_gpu(pause_sweeps):
+    """Make the daemon hand back its VRAM before the suite loads its own models.
+
+    Pausing sweeps stops the daemon starting *new* GPU work; it does nothing about memory
+    already held. ORT's BFC arena keeps the high-water mark of the largest batch it has served
+    until the session is destroyed, and the daemon's only path to destroying it is a 300 s idle
+    unload that cannot fire while anyone is working against it. Measured: 12.2 GB of a 16 GB
+    card still held at `active_clients: 0`, which starved this suite into 60 failures.
+
+    Ordered after `pause_sweeps` (it takes it as an argument) so nothing reloads the models
+    between the release and the first test.
+    """
+    from rag_search.core.gpu import vram_free_mb
+
+    released = None
+    with contextlib.suppress(Exception):
+        released = requests.post(f"{_DAEMON}/api/gpu/release", timeout=30).status_code
+
+    free_mb = vram_free_mb()
+    assert free_mb >= _MIN_FREE_VRAM_MB, (
+        f"only {free_mb:.0f} MiB VRAM free, need {_MIN_FREE_VRAM_MB:.0f} MiB. The live suite "
+        f"loads a real embedder + reranker in-process on the same GPU as the daemon, so it "
+        f"cannot start from here — without this gate it fails ~60 tests inside onnxruntime "
+        f"(CUBLAS failure 3 / BFCArena) that look like broken code. POST /api/gpu/release "
+        f"returned {released!r}: if that is 404 the running daemon predates the route, so "
+        f"`systemctl --user restart rag-search-mcp-daemon` and re-run; if it is 200 something "
+        f"other than the daemon holds the card (check the GPU's own process list)."
+    )
+    yield
 
 
 @pytest.fixture(scope="session")
