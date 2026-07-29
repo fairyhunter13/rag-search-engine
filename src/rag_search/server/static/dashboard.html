@@ -934,7 +934,7 @@ async function sendChat(){
         appendMsg('ai','Error: '+errMsg,'ai-err');
         toast(errMsg,'err');
       }else if(evt.type==='done'){
-        const meta={intent:evt.intent,sources:evt.sources,elapsed:evt.elapsed_ms,model:evt.model};
+        const meta={intent:evt.intent,sources:evt.sources,elapsed:evt.elapsed_ms,model:evt.model,chunks:evt.chunks,members:evt.members};
         if(streamMsgId){finalizeStreamMsg(streamMsgId,meta);}
         else{removeMsg(thinkId);appendMsg('ai',accumulated||'(no response)','',meta);}
         _chatHistory.push({role:'user',content:query});
@@ -1005,6 +1005,13 @@ function appendMsg(role,text,extraClass='',meta=null){
     if(meta.intent)tags.push(`<span class="intent-tag">${esc(meta.intent)}</span>`);
     if(meta.elapsed)tags.push(`<span class="elapsed">${meta.elapsed}ms</span>`);
     if(meta.model)tags.push(`<span class="elapsed">${esc(meta.model)}</span>`);
+    // Grounding (D2): chat now refuses to answer without retrieved context, so say what
+    // backed the answer. On a federation "8 chunks" hides whether they came from one repo
+    // or five, which is exactly the signal an operator needs when an answer looks thin.
+    if(meta.chunks){
+      const mem=meta.members||[];
+      tags.push(`<span class="elapsed" title="${esc(mem.join(', '))}">${meta.chunks} chunks · ${mem.length} repo${mem.length===1?'':'s'}</span>`);
+    }
     const srcs=(meta.sources||[]).slice(0,4);
     srcs.forEach(s=>{
       const base=s.split('/').pop();
