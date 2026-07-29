@@ -36,6 +36,12 @@ def unit_text(exec_path: str | None = None) -> str:
         # kernel-enforced 1-core ceiling (HR40) to actually cap and be readable via cpu.stat.
         "CPUAccounting=yes\n"
         "CPUQuota=100%\n"
+        # One federated query opens one sqlite store per member — 157 on the largest federation
+        # here — and WAL costs ~3 fds each (db, -wal, -shm). Against systemd's *default* 1024 that
+        # is one query landing within a factor of two of the ceiling, and on 2026-07-29 it went
+        # over: accept() itself ran out of fds and /healthz served 500 until a restart. The limit
+        # has to be derived from the member count, not left at a default chosen for shells.
+        "LimitNOFILE=65536\n"
         "\n"
         "[Install]\n"
         "WantedBy=default.target\n"

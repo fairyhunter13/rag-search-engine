@@ -89,23 +89,31 @@ def _search_sync(
     t0 = time.monotonic()
     searched: list[str] = []
     stores: list[VectorStore] = []
-    for path in paths:
-        vdb = project_vector_db(path)
-        if not vdb.exists():
-            continue
-        # migrate=False: a query must never pay a store's one-time FTS backfill. Measured at
-        # 11.3 s for a single 99 k-chunk member, and this loop opens one store per federation
-        # member. Reconcile does open stores writable and so does migrate them, but it is not the
-        # convergence path it looks like: measured across the hours after this shipped it moved
-        # 137 owed stores to 136, because its walk is spent on real indexing work and every live
-        # test run pauses it. The backfill is run as an explicit one-time fleet migration.
-        stores.append(VectorStore(vdb, migrate=False))
-        searched.append(path)
-    # One embed and one global rerank for the whole federation. Looping search() per project
-    # instead costs an extra GPU embed and an extra rerank batch per member — 194 of each for
-    # one question on the largest federation here — and concatenates rankings that were never
-    # scored against each other.
+    # The opening loop is inside the try, and that placement is the whole point. It used to sit
+    # above it, so an exception raised *while* opening orphaned every store already opened in
+    # that call — the list was still local, nothing closed it, and the fds were held until the
+    # process died. On 2026-07-29 that wedged the live daemon: one search over the 194-member
+    # root opens 157 stores (~3 fds each under WAL) against systemd's default 1024, three
+    # attempts each leaked their partial set, and it ended holding 957 fds with `/healthz`
+    # returning 500 because `accept()` itself could no longer get an fd. A failure to open must
+    # cost one query, not the daemon.
     try:
+        for path in paths:
+            vdb = project_vector_db(path)
+            if not vdb.exists():
+                continue
+            # migrate=False: a query must never pay a store's one-time FTS backfill. Measured at
+            # 11.3 s for a single 99 k-chunk member, and this loop opens one store per federation
+            # member. Reconcile does open stores writable and so does migrate them, but it is not
+            # the convergence path it looks like: measured across the hours after this shipped it
+            # moved 137 owed stores to 136, because its walk is spent on real indexing work and
+            # every live test run pauses it. The backfill is an explicit one-time fleet migration.
+            stores.append(VectorStore(vdb, migrate=False))
+            searched.append(path)
+        # One embed and one global rerank for the whole federation. Looping search() per project
+        # instead costs an extra GPU embed and an extra rerank batch per member — 194 of each for
+        # one question on the largest federation here — and concatenates rankings that were never
+        # scored against each other.
         results = search_federation(query, get_embedder(), stores, scope=scope, top_k=top_k)
     finally:
         for vs in stores:
