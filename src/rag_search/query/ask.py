@@ -16,6 +16,29 @@ def _scope_error(scope: str) -> str:
     return f"unknown scope={scope!r} — valid: {', '.join(_SCOPES)}"
 
 
+def rank_community_rows(query: str, rows: list, text_index: int = 3) -> list:
+    """Reorder community rows by cross-encoder relevance of one text column.
+
+    Lives here rather than in the caller because `test_inference_lanes.py`'s B2 lane holds the
+    cross-encoder to `query/`: only that layer may reach it, which is what makes "local GPU =
+    embedding and reranking, never generation" a structural claim instead of a habit. The
+    architecture axis moved from the retired `ask` tool onto `overview(what="communities")`, and
+    the first cut of that move called `rerank_passages` from `server/_overview.py` — B2 caught it.
+    Widening the allowlist to admit the server layer would have been the smaller diff and the
+    wrong one; the lane is the invariant.
+
+    Only the score is the sort key, so tied rows never fall through to comparing the tuples
+    themselves — which would raise on a NULL summary.
+    """
+    from rag_search.query.search import rerank_passages
+
+    if not query or not rows:
+        return rows
+    scores = rerank_passages(query, [r[text_index] or "" for r in rows])
+    return [r for _, r in sorted(zip(scores, rows, strict=False),
+                                 key=lambda x: x[0], reverse=True)]
+
+
 def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
     """Top-k L1 community summaries across federated stores, ranked by cross-encoder.
 

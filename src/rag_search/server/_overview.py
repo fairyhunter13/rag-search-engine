@@ -131,13 +131,10 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                     key=lambda r: r[4] or 0, reverse=True,
                 )[:50]
                 if query:
-                    # Same cross-encoder `_community_summaries` uses. Only the score is the sort
-                    # key, so tied rows never fall through to comparing the tuples themselves —
-                    # which would raise on a NULL summary.
-                    from rag_search.query.search import rerank_passages
-                    scores = rerank_passages(query, [r[3] or "" for r in rows])
-                    rows = [r for _, r in sorted(zip(scores, rows, strict=False),
-                                                 key=lambda x: x[0], reverse=True)]
+                    # Same cross-encoder `_community_summaries` uses, reached through the query
+                    # layer because B2 (test_inference_lanes.py) allows no other layer to touch it.
+                    from rag_search.query.ask import rank_community_rows
+                    rows = rank_community_rows(query, rows)
                 return json.dumps({"communities": [
                     {"id": r[0], "title": r[1], "level": r[2],
                      "summary": r[3], "member_count": r[4]} for r in rows],
