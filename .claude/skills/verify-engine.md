@@ -8,13 +8,15 @@ Every feature of rag-search-engine, end-to-end, against your registered indexed 
 
 ### MCP tool surfaces
 - `search` — code, docs, all scopes; multiple queries; non-empty results
-- `ask` — scopes: all, architecture; non-empty answers. Rewritten 2026-07-28: `global`, `feature`
-  and `business` were names for orderings of the same two ingredients once their distinguishing
-  filters left with tier 3, and an unrecognized scope now errors instead of returning chunk context
 - `graph` — definition, callers, callees, impact, impact_narrative, path; non-empty responses.
   `semantic_trace` was deleted 2026-07-28: the implementation went in 3fe4b29 and only the name
   survived, silently answering with `path` semantics
-- `overview` — structure, projects, status, metrics, communities, import_cycles, surprising_connections, suggested_questions, validate. The five generative variants (patterns, service_mesh, feature_map, process_flows, business_rules) were deleted with tier 3 on 2026-07-28
+- `overview` — structure, projects, status, metrics, communities, import_cycles, surprising_connections, validate. The five generative variants (patterns, service_mesh, feature_map, process_flows, business_rules) were deleted with tier 3 on 2026-07-28; `suggested_questions` followed on 07-29 with the chat box it seeded
+- `ask` was the fifth tool and was retired 2026-07-29. It assembled a prose context blob, which is
+  the shape a client that cannot loop needs — MCP clients can loop, so they get ranked locations
+  from `search` and the architecture axis from `overview(what="communities", query=…)`, which now
+  carries community summaries and reranks against the query. `query/ask.py` itself survives as the
+  CLI's and the dashboard chat's context builder
 - `index` — register/remove roundtrip
 
 ### Retrieval question categories

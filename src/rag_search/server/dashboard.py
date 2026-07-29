@@ -4,6 +4,11 @@ The wiki view left with tier 3: it rendered kb/wiki.py's generated pages, and wi
 behind it the tab would open on a permanently empty pane. The literal below is the fallback the
 daemon serves when static/dashboard.html is missing, so it has to lose the tab too — otherwise
 the degraded page advertises a view the real page no longer has.
+
+That last sentence was written as a rule and then only half applied: this docstring and this
+fallback said four views while static/dashboard.html carried six (docs and hierarchy). The count
+is true of both again — the operator-console pass deleted those two panes — and the drift is
+worth naming, because a fallback page is exactly where nobody looks to notice it.
 """
 from pathlib import Path
 

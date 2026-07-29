@@ -17,9 +17,10 @@ pytestmark = pytest.mark.live
 
 _RSE_SRC = Path(__file__).resolve().parents[3]  # source-file reads only; NOT passed to daemon
 _REMOVED = ["hierarchy", "architecture_domains", "world_model",
-            "patterns", "process_flows", "service_mesh", "business_rules", "feature_map"]
+            "patterns", "process_flows", "service_mesh", "business_rules", "feature_map",
+            "suggested_questions"]
 _WHATS = ["structure","status","projects","metrics","import_cycles",
-          "surprising_connections","suggested_questions","validate"]
+          "surprising_connections","communities","validate"]
 
 
 def _sym(path: str) -> str:
@@ -54,8 +55,19 @@ def test_fp1_removed_whats_error(live_client, service_path):
 
 
 def test_fp2_valid_set():
+    """_REMOVED is absent from _VALID, and _WHATS is exactly _VALID.
+
+    The equality is the half that was missing. This module's docstring has always claimed the two
+    lists are complements, but only the _REMOVED direction was checked — so `communities` sat
+    outside both for as long as it has existed, answered by the tool and exercised by no fp7 case.
+    Deriving the positive side from _VALID means a new `what` cannot be added without a row here
+    ([[feedback_allowlist_needs_sufficiency_test]]).
+    """
     from rag_search.server._overview import _VALID
     for w in _REMOVED: assert w not in _VALID, f"{w!r} still in _VALID"
+    assert set(_WHATS) == _VALID, (
+        f"_WHATS must equal _VALID; missing={_VALID - set(_WHATS)} extra={set(_WHATS) - _VALID}"
+    )
 
 
 def test_fp3_l1_only_in_all_dbs(sample_workspace):
