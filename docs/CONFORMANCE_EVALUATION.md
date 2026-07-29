@@ -62,7 +62,7 @@
 | HR27 | *(retired 2026-07-28 — docgen deleted, `RSE_DOCGEN` has no reader)* | — | Retired |
 | HR28 | *(retired 2026-07-28 with OKF — no bundle is written)* | — | Retired |
 | HR29 | *(retired 2026-07-28 with OKF — `RSE_OKF` has no reader)* | — | Retired |
-| HR30 | MCP surface = 5 tools only | `test_mcp_has_five_tools` | Pass |
+| HR30 | MCP surface = 4 tools only (`ask` retired 2026-07-29) | `test_mcp_has_four_tools` | Pass |
 
 **HR32–HR40 are deliberately not listed here.** They post-date this snapshot, and duplicating the
 register into a second table is what let the rows above rot unnoticed while `model.yaml` stayed

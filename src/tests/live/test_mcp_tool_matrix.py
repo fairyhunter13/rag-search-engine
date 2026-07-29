@@ -1,11 +1,15 @@
-"""MCP tool matrix — all 5 tools × all variants not already in test_p5_server.
+"""MCP tool matrix — all 4 tools × all variants not already in test_p5_server.
 
 Covers (no duplication of test_p5 or test_p21):
   - graph: all 6 relations (definition/callers/callees/impact/impact_narrative/path)
   - search: 3 scopes (code/docs/all) + federated project_paths
-  - ask: both scopes (all/architecture)
   - overview: metrics / projects (the what= values that fail on a stale index; `patterns` was
     the third and left with tier 3)
+
+`ask` was the fifth tool and its scope matrix stood here. It is off the MCP surface — the
+scopes live on for the CLI and the dashboard's chat, and are exercised by
+test_retrieval_routing (RR1-RR8) against compose_answer directly, which is where they are
+actually decided.
 
 Requires daemon at :8765 with ≥1 indexed project.
 """
@@ -23,7 +27,6 @@ from tests.live._sample_workspace import SampleWorkspace
 pytestmark = pytest.mark.live
 
 _GRAPH_RELATIONS_SIMPLE = ["definition", "callers", "callees", "impact", "impact_narrative"]
-_ASK_SCOPES = ["all", "architecture"]
 
 
 @pytest.fixture(scope="module")
@@ -99,16 +102,6 @@ class TestSearchScopes:
             search_tool("function", project_paths=[indexed_proj])
         ))
         assert indexed_proj in data.get("projects_searched", [])
-
-
-class TestAskScopes:
-
-    @pytest.mark.slow
-    @pytest.mark.parametrize("scope", _ASK_SCOPES)
-    def test_ask_scope_returns_string(self, indexed_proj, scope):
-        from rag_search.server.mcp import ask as ask_tool
-        result = asyncio.run(ask_tool("What does this project do?", indexed_proj, scope))
-        assert isinstance(result, str) and len(result) > 0, f"ask(scope={scope!r}) returned empty"
 
 
 class TestOverviewNewWhats:

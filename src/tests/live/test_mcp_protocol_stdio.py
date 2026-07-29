@@ -15,7 +15,7 @@ from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
 
-_EXPECTED_TOOLS = {"ask", "graph", "index", "overview", "search"}
+_EXPECTED_TOOLS = {"graph", "index", "overview", "search"}
 
 
 @pytest.fixture(scope="module")
@@ -76,15 +76,15 @@ def stdio_mcp():
     client.close()
 
 
-def test_stdio_initialize_returns_5_tool_serverinfo(stdio_mcp):
-    """P15.3a: bridge-stdio initialize — server name + 5-tool instructions."""
+def test_stdio_initialize_returns_4_tool_serverinfo(stdio_mcp):
+    """P15.3a: bridge-stdio initialize — server name + 4-tool instructions."""
     r = stdio_mcp._init_result
     assert r["result"]["serverInfo"]["name"] == "rag-search"
-    assert "5-tool" in r["result"].get("instructions", "")
+    assert "4-tool" in r["result"].get("instructions", "")
 
 
-def test_stdio_tools_list_returns_exactly_5(stdio_mcp):
-    """P15.3a: tools/list over stdio returns exactly the 5 expected tools."""
+def test_stdio_tools_list_returns_exactly_4(stdio_mcp):
+    """P15.3a: tools/list over stdio returns exactly the 4 expected tools."""
     r = stdio_mcp.request("tools/list")
     names = {t["name"] for t in r["result"]["tools"]}
     assert names == _EXPECTED_TOOLS, f"wrong tool set: {names}"

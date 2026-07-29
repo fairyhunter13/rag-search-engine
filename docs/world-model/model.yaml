@@ -15,7 +15,7 @@ L1_invariants:
     principle: "No local generative LLM. Chat=claude-haiku-4-5 via `claude -p` only — the one generative lane left after tier 3 (2026-07-28)."
     check: {grep: "ollama|qwen3|llama|local.*model", paths: "src/rag_search/", verdict_if_match: AT_RISK}
   - id: P2
-    principle: "MCP query path (search/ask/graph/overview) runs NO generative LLM — only embed+rerank. The deepseek_* tokens stay in the check after tier 3's deletion: they now match nothing, which is the point — this is the reintroduction guard, not a description of a live call site."
+    principle: "MCP query path (search/graph/overview) runs NO generative LLM — only embed+rerank. The deepseek_* tokens stay in the check after tier 3's deletion: they now match nothing, which is the point — this is the reintroduction guard, not a description of a live call site."
     check: {grep: "deepseek_extract|deepseek_chat|claude.*ask|haiku.*ask", paths: "src/rag_search/query/", verdict_if_match: AT_RISK}
   - id: P3
     principle: "Federation = query-time union; no cross-repo edges; members have independent stores."
@@ -112,8 +112,8 @@ L3_specs:
     spec: "Partition quality gate: degenerate=True demotes index_state below ready. The field was called kb_state until 2026-07-28; the gate itself is tier 2 (igraph + SQL, no LLM) and is unchanged."
     test: test_index_state_demoted_when_degenerate
   - id: HR30
-    spec: "MCP surface = index+search+ask+graph+overview only; nothing else appears in _MCP_TOOLS."
-    test: test_mcp_has_five_tools
+    spec: "MCP surface = index+search+graph+overview only, asserted by set equality against mcp.list_tools(). `ask` was retired 2026-07-29: it returned assembled, hard-truncated prose to clients that can call again, and the architecture axis it uniquely reached moved to overview(what='communities', query=...). The spec used to name a static _MCP_TOOLS list; that list had no readers and was deleted, so the live registry is the only source of truth."
+    test: test_mcp_has_four_tools
   - id: HR32
     spec: "Idle-efficiency — the on_change heavy pass (graph re-derive + structural community labelling) is gated by source-fingerprint drift; metadata-only and non-source events skip it entirely; idle-unload frees the ORT arena after MODEL_IDLE_UNLOAD_S; CPU < 1 % when idle. The cascade this named until 2026-07-28 was enrich/wiki/BPRE and left with tier 3; the gate did not, because what it protects is the expensive half that survived."
     test: test_drift_gate_skips_labelling_when_sig_unchanged

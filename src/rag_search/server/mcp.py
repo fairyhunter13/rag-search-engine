@@ -1,10 +1,23 @@
-"""FastMCP server: 5 MCP tools — search, ask, graph, overview, index."""
+"""FastMCP server: 4 MCP tools — search, graph, overview, index.
+
+`ask` was the fifth. It returned assembled prose — chunk bodies and community summaries
+concatenated and hard-truncated at 3000 chars each — which is the shape an MCP tool should not
+return: the client is an agent that can call again, so it wants compact references it chooses to
+expand, not context someone else assembled and cut off mid-chunk. It was also the most expensive
+tool here (a GPU embed, the full federation fan-out, and *two* cross-encoder passes) and its code
+half duplicated `search` while returning a worse shape. The architecture half it uniquely reached
+now lives on `overview(what="communities", query=...)`, and `query/ask.py` survives as the context
+builder for the two callers that genuinely cannot loop: the CLI and the dashboard's chat.
+
+A static `_MCP_TOOLS` list stood here, described as "update when adding/removing @mcp.tool()
+handlers". Nothing read it. `mcp.list_tools()` is the registry, and a mirror nobody consults is a
+second source of truth that can only ever be wrong.
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import time
-from typing import NamedTuple
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -13,19 +26,6 @@ from rag_search.daemon.runtime_state import note_activity, note_query
 from rag_search.embed.embedder import get_embedder
 
 mcp = FastMCP("rag-search", instructions=_PROMPT)
-
-
-class _ToolInfo(NamedTuple):
-    name: str
-
-# Static list of all MCP tools. Update when adding/removing @mcp.tool() handlers.
-_MCP_TOOLS: list[_ToolInfo] = [
-    _ToolInfo("search"),
-    _ToolInfo("ask"),
-    _ToolInfo("graph"),
-    _ToolInfo("overview"),
-    _ToolInfo("index"),
-]
 
 
 def _resolve_roots(requested: list[str]) -> list[str]:
@@ -246,22 +246,6 @@ async def search(
 
 
 @mcp.tool()
-async def ask(
-    query: str,
-    project_path: str = "",
-    scope: str = "all",
-    ctx: Context | None = None,
-) -> str:
-    """Return assembled context (code chunks + community map) for a codebase question — no LLM synthesis. scope: all|architecture — `all` leads with the code axis, `architecture` leads with the community map. LLM synthesis is the HTTP /api/ask path."""
-    note_query(query)
-    project_path, err = await _default_or_error(ctx, project_path)
-    if err:
-        return err
-    from rag_search.query.ask import run_ask
-    return await asyncio.to_thread(run_ask, query, project_path, scope)
-
-
-@mcp.tool()
 async def graph(
     symbol: str,
     project_path: str = "",
@@ -279,8 +263,14 @@ async def graph(
 
 
 @mcp.tool()
-async def overview(project_path: str = "", what: str = "structure", ctx: Context | None = None) -> str:
-    """Overview of a project. what: structure|communities|status|projects|metrics|import_cycles|surprising_connections|suggested_questions|validate."""
+async def overview(project_path: str = "", what: str = "structure", query: str = "",
+                   ctx: Context | None = None) -> str:
+    """Overview of a project. what: structure|communities|status|projects|metrics|import_cycles|surprising_connections|validate.
+
+    `query` applies to what="communities" only: it ranks the community map by relevance to your
+    question, which is the architecture axis — use it when you need what a project is *shaped*
+    like rather than where a symbol is. Use `search` for locations.
+    """
     note_activity()
     from rag_search.server._overview import _VALID
     # Only a known, project-scoped `what` needs a project. 'projects'/'metrics' are global, and an
@@ -292,7 +282,7 @@ async def overview(project_path: str = "", what: str = "structure", ctx: Context
         if err:
             return err
     from rag_search.server._overview import handle_overview
-    return await asyncio.to_thread(handle_overview, project_path, what)
+    return await asyncio.to_thread(handle_overview, project_path, what, query)
 
 
 @mcp.tool()

@@ -152,7 +152,7 @@ def check_daemon() -> None:
 # Section: MCP tools registered
 # ---------------------------------------------------------------------------
 
-EXPECTED_MCP_TOOLS = {"search", "ask", "graph", "overview", "index"}
+EXPECTED_MCP_TOOLS = {"search", "graph", "overview", "index"}
 
 
 def check_mcp_tools() -> None:

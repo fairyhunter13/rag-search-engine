@@ -1,7 +1,7 @@
 # rag-search-engine (RSE)
 
 Semantic code-search, knowledge-graph, and AI-assistant integration via a 5-tool MCP API
-(search / ask / graph / overview / index). Backed by GPU-accelerated embeddings, a GPU
+(search / graph / overview / index). Backed by GPU-accelerated embeddings, a GPU
 reranker, and a deterministic tree-sitter call-graph store.
 
 **No generative LLM runs anywhere in this pipeline.** The generative knowledge-base tier
