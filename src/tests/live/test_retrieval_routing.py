@@ -7,6 +7,7 @@ RR4  community context grounded — every cited community exists in DB
 RR5  adaptive MR — architecture query cites >= refs as narrow query
 RR6  determinism MR — same query produces byte-identical context
 RR7  _community_summaries returns '' when no summaries exist
+RR8  candidate selection survives colliding titles, and the pool cap keeps the largest
 """
 from __future__ import annotations
 
@@ -140,3 +141,60 @@ def test_rr7_empty_fallback_no_summaries(safe_tmp_path):
     gs.commit()
     assert _community_summaries("architecture", [gs]) == "", "RR7: expected '' when no summaries"
     gs.close()
+
+
+def test_rr8_candidates_survive_colliding_titles(safe_tmp_path, monkeypatch):
+    """RR8: distinct communities are not discarded because their labels collide.
+
+    `_label_from_names` reduces a community to its single most frequent snake_case token, so on a
+    test-heavy repo the labels collide hard — claude-code-workflows has 22 communities titled
+    `Test` among 65, and only 37 distinct labels. Deduping the candidate pool on that label threw
+    the rest away before the cross-encoder ever saw them: 29 of 50 candidates survived on ccw,
+    35 of 50 on rag-search-engine.
+
+    Two properties, and both must hold at once or the fix is half a fix:
+
+    - **Colliding titles must not collapse distinct summaries.** Three of the four communities
+      here are called `Test`; only two of them say the same thing.
+    - **A genuine duplicate must still collapse.** `beta` appears twice, and dedup that keeps
+      both is not dedup — which is what rules out the tempting "just delete the dedup" fix.
+
+    The ordering assertion is load-bearing rather than decorative: with the reranker stubbed to a
+    constant, `sorted` is stable, so the rendered order is exactly the SQL order. That makes this
+    one assertion also pin `ORDER BY member_count DESC` — beta(30), gamma(20), alpha(10).
+
+    Demonstrated red against the pre-fix code: `['alpha', 'gamma']`. Both properties fail at once
+    — `beta` is missing entirely (both its rows lost to the `Test` label alpha already claimed),
+    and the survivors are in insertion order rather than by size.
+
+    Community `id` would be the obvious dedup key and is wrong: it is unique only *within* a
+    store, and this pool spans a federation.
+
+    Touches no model: `rerank_passages` is replaced by a constant, which is what lets this gate
+    run before the fleet has converged.
+    """
+    from rag_search.graph.store import GraphStore
+    from rag_search.query import search as search_mod
+    from rag_search.query.ask import _community_summaries
+
+    monkeypatch.setattr(search_mod, "rerank_passages", lambda q, passages: [1.0] * len(passages))
+
+    gs = GraphStore(safe_tmp_path / "g.db")
+    # (cid, title, summary, member_count) — 2 and 3 share a summary, 1/2/3 share a title.
+    for cid, title, summary, mc in [
+        (1, "Test", "alpha", 10),
+        (2, "Test", "beta", 30),
+        (3, "Test", "beta", 5),
+        (4, "Run", "gamma", 20),
+    ]:
+        gs.upsert_community(cid, 1, title, summary, mc)
+    gs.commit()
+    try:
+        ctx = _community_summaries("architecture", [gs])
+    finally:
+        gs.close()
+
+    seen = [ln for ln in ctx.splitlines() if ln in {"alpha", "beta", "gamma"}]
+    assert seen == ["beta", "gamma", "alpha"], (
+        f"RR8: expected the three distinct summaries in member_count order, got {seen}"
+    )

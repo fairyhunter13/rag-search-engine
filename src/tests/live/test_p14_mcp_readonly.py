@@ -3,7 +3,7 @@
 Static guard: mcp.py must not reference the synthesis/LLM-generation functions
 (chat, _ask synthesis, impact_narrative LLM call, semantic_trace LLM call).
 
-Runtime smoke: ask + graph(impact_narrative) + graph(path) return
+Runtime smoke: overview(communities) + graph(impact_narrative) + graph(path) return
 structured data assembled from pre-built DB artifacts, NOT prose from LLM.
 
 The static guard still names `semantic_trace` deliberately: the function is long deleted, so
@@ -40,44 +40,83 @@ def test_mcp_handlers_have_no_llm_generation():
         "server/mcp.py calls gh.semantic_trace() — this calls LLM; "
         "use gh.path_between() + structured JSON instead (P14.2)"
     )
-    # The full ask() (LLM version) must not be imported into mcp.py for tool use
-    assert "from rag_search.query.ask import ask as _ask" not in text, (
-        "server/mcp.py imports ask as _ask — MCP handler must use run_ask() instead"
+    # `assert "run_ask" in text` stood here, and in E5. Its intent was "the MCP ask handler must
+    # delegate to the LLM-free helper rather than inlining generation". The `ask` tool is gone from
+    # MCP, so that subject no longer exists and the assertion would now demand mcp.py import a
+    # module it has no reason to touch. The invariant it was protecting outlives it and is stated
+    # directly below: mcp.py reaches no context-assembly path at all.
+    assert "query.ask" not in text and "run_ask" not in text, (
+        "server/mcp.py references query/ask.py — `ask` was retired from the MCP surface; "
+        "the architecture axis is overview(what='communities'), and ask.py is now reachable only "
+        "from the CLI and the dashboard's chat"
     )
     # Positive: MCP handlers must delegate to the shared LLM-free helpers
-    assert "run_ask" in text, (
-        "server/mcp.py must call run_ask() — the shared LLM-free context helper; "
-        "do not inline LLM generation in the MCP handler"
-    )
     assert "run_graph" in text, (
         "server/mcp.py must call run_graph() — the shared DB-reads-only graph helper"
     )
-    # Verify the helpers themselves are LLM-free (inspect source, not just delegation)
-    from rag_search.query.ask import run_ask as _run_ask
+    # Verify the helper itself is LLM-free (inspect source, not just delegation)
     from rag_search.query.graph_handler import run_graph as _run_graph
-    ask_src = inspect.getsource(_run_ask)
-    assert "compose_answer" in ask_src, (
-        "run_ask() must call compose_answer() — the LLM-free context assembler"
-    )
-    assert not re.search(r"\bchat\s*\(", ask_src), (
-        "run_ask() must not call chat() — LLM generation is forbidden on the query path"
-    )
     graph_src = inspect.getsource(_run_graph)
     assert not re.search(r"\bchat\s*\(", graph_src), (
         "run_graph() must not call chat() — it is deterministic DB-reads only"
     )
 
 
-def test_ask_mcp_returns_structured_context():
-    """P14.4 runtime: MCP ask returns pre-built artifacts (non-empty, fast, no generative LLM on query path)."""
-    from rag_search.server.mcp import ask as ask_tool
+def test_run_ask_is_llm_free():
+    """P14.4: run_ask() assembles context from DB artifacts and never generates.
+
+    Split out of the mcp.py guard above, where it rode along because `ask` was an MCP tool. It is
+    not vestigial now that it is off the MCP surface — it matters *more*. run_ask()'s two remaining
+    callers are the CLI and the dashboard's chat, and chat is the only surviving LLM consumer in
+    the system. If the thing that builds chat's context could itself generate, "grounded in
+    retrieval" would stop being checkable at the seam.
+    """
+    from rag_search.query.ask import run_ask as _run_ask
+    src = inspect.getsource(_run_ask)
+    assert "compose_answer" in src, (
+        "run_ask() must call compose_answer() — the LLM-free context assembler"
+    )
+    assert not re.search(r"\bchat\s*\(", src), (
+        "run_ask() must not call chat() — LLM generation is forbidden on the query path"
+    )
+
+
+def test_overview_communities_carries_the_architecture_axis():
+    """P14.4 runtime: overview(what='communities') is what `ask`'s architecture scope used to be.
+
+    This replaces test_ask_mcp_returns_structured_context, which asserted only that the retired
+    `ask` tool returned a string longer than 20 characters — true of every error message it could
+    produce, so it never discriminated anything. The successor surface deserves a real one.
+
+    Two assertions, each aimed at a specific way the move could have been botched:
+
+    - **The payload actually carries the axis.** `communities` previously returned `{id,title,level}`
+      only. Without `summary` there is nothing to read and nothing to rank, and the architecture
+      question would have been silently downgraded rather than moved.
+    - **`query` is wired, not decorative.** Comparing against the unranked order would be the
+      obvious check and is the flaky one — the reranker is free to agree with `member_count DESC`.
+      Two semantically opposed queries agreeing with *each other* across 50 communities is what an
+      ignored parameter looks like, and is not something a working cross-encoder does.
+    """
+    from rag_search.server.mcp import overview as overview_tool
     from tests.live._projects import federation_root
 
     fed_root = federation_root()
-    result = asyncio.run(ask_tool("How does authentication work?", fed_root, "all"))
-    assert isinstance(result, str) and len(result) > 20, (
-        f"ask() returned empty/tiny response: {result!r}"
+    plain = json.loads(asyncio.run(overview_tool(fed_root, "communities")))["communities"]
+    assert plain, "overview(what='communities') returned no communities for the federation root"
+    assert all("summary" in c and "member_count" in c for c in plain), (
+        "communities rows must carry summary + member_count — the architecture axis `ask` reached"
     )
+    counts = [c["member_count"] for c in plain]
+    assert counts == sorted(counts, reverse=True), (
+        f"communities must be ordered by member_count DESC so the cap keeps the largest; got {counts[:8]}"
+    )
+
+    _ids = lambda q: [c["id"] for c in json.loads(  # noqa: E731
+        asyncio.run(overview_tool(fed_root, "communities", q)))["communities"]]
+    a = _ids("database storage and persistence")
+    b = _ids("http request routing and handlers")
+    assert a != b, "query= did not change the community ordering — the parameter is inert"
 
 
 def test_impact_narrative_returns_structured_json():

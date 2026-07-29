@@ -56,7 +56,7 @@ def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def
 _VALID = {
     "structure", "projects", "metrics", "communities",
     "status", "import_cycles",
-    "surprising_connections", "suggested_questions", "validate",
+    "surprising_connections", "validate",
 }
 
 
@@ -75,7 +75,7 @@ def _require_project(projects) -> tuple[str, str | None]:  # type: ignore[no-unt
     })
 
 
-def handle_overview(project_path: str, what: str) -> str:
+def handle_overview(project_path: str, what: str, query: str = "") -> str:
     from rag_search.core.registry import list_projects
 
     if what not in _VALID:
@@ -114,9 +114,34 @@ def handle_overview(project_path: str, what: str) -> str:
         _gstores = [GraphStore(project_graph_db(p)) for p in _paths]
         try:
             if what == "communities":
-                rows = [r for gs in _gstores for r in gs.conn.execute("SELECT id,title,level FROM communities WHERE level>=1 ORDER BY level,id LIMIT 50").fetchall()]
-                return json.dumps({"communities": [{"id": r[0], "title": r[1], "level": r[2]} for r in rows],
-                                    "resolved_project": project_path})
+                # Carries `summary` and `member_count`, and ranks by `query` when one is given.
+                # This is the architecture axis the `ask` tool used to reach: `ask` re-ran a whole
+                # federated chunk search to get here, then returned it as a 3000-char prose blob.
+                # Current practice is the opposite — consolidate into a parameterised tool, and
+                # return structured rows the caller can act on rather than assembled context.
+                # The cap is global, not per store. `LIMIT 50` inside the loop bounds each
+                # federation *member* — inosoft has 194, so the payload would have been up to
+                # 9,700 rows and the rerank below would have scored every one of them. Sorting
+                # after the concatenation is required for the same reason: each store returns its
+                # own descending run, and concatenated descending runs are not descending.
+                rows = sorted(
+                    (r for gs in _gstores for r in gs.conn.execute(
+                        "SELECT id,title,level,summary,member_count FROM communities "
+                        "WHERE level>=1 ORDER BY member_count DESC LIMIT 50").fetchall()),
+                    key=lambda r: r[4] or 0, reverse=True,
+                )[:50]
+                if query:
+                    # Same cross-encoder `_community_summaries` uses. Only the score is the sort
+                    # key, so tied rows never fall through to comparing the tuples themselves —
+                    # which would raise on a NULL summary.
+                    from rag_search.query.search import rerank_passages
+                    scores = rerank_passages(query, [r[3] or "" for r in rows])
+                    rows = [r for _, r in sorted(zip(scores, rows, strict=False),
+                                                 key=lambda x: x[0], reverse=True)]
+                return json.dumps({"communities": [
+                    {"id": r[0], "title": r[1], "level": r[2],
+                     "summary": r[3], "member_count": r[4]} for r in rows],
+                    "resolved_project": project_path})
             if what == "status":
                 from rag_search.core.config import project_vector_db
                 from rag_search.graph.quality import partition_quality
@@ -200,14 +225,10 @@ def handle_overview(project_path: str, what: str) -> str:
                 ).fetchall()]
                 return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]],
                                     "resolved_project": project_path})
-            if what == "suggested_questions":
-                rows = [r for gs in _gstores for r in gs.conn.execute(
-                    "SELECT title FROM communities WHERE title IS NOT NULL AND level>=1 ORDER BY member_count DESC LIMIT 5"
-                ).fetchall()]
-                qs = list(dict.fromkeys(f"How does {r[0]} work?" for r in rows if r[0]))[:5]
-                if not qs:
-                    qs = ["What is the overall architecture?", "What are the main modules?"]
-                return json.dumps({"questions": qs, "resolved_project": project_path})
+            # `suggested_questions` stood here. It rendered f"How does {title} work?" over the top
+            # 5 communities by member_count, and `_label_from_names` gives ccw 22 communities
+            # called `Test` — so the dashboard offered "How does Test work?" five times. It
+            # existed to seed a chat box, which no longer prompts for questions.
             # default: structure
             fc = sum(gs.conn.execute("SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0] for gs in _gstores)
             return json.dumps({"path": project_path, "symbols": sum(gs.symbol_count() for gs in _gstores),
