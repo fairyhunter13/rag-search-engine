@@ -1,15 +1,40 @@
-"""Self-healing pipeline — slow e2e tests (require GPU + DeepSeek key).
+"""Self-healing pipeline — slow e2e tests (require GPU; there is no LLM in this lane).
 
 T2 — algorithm-version drift triggers reconcile to re-derive the graph
 T3 — source-fingerprint drift triggers reconcile to re-extract new symbols
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.live
+
+
+@pytest.fixture()
+def _no_code_scan_memo():
+    """Set `_code_scan`'s TTL to zero for one test, restoring whatever was there before.
+
+    Deliberately `os.environ` + `try/finally` rather than pytest's monkey-patching fixture,
+    matching `test_federation_exclude.py`'s FE1-FE3. `test_no_mocks_or_fakes.py` bans that
+    fixture by name, and the bluntness is worth keeping: narrowing the ban to its attribute-
+    substituting methods would be defeated by binding the fixture to any other name, whereas
+    `os.environ` cannot substitute a component at all — it can only set config, which is what
+    this is. Setting a knob production reads is real integration, not a double. (That guard
+    matches raw lines, so it sees prose too; naming the fixture here would trip it.)
+    """
+    key = "RSE_CODE_SCAN_TTL_S"
+    orig = os.environ.get(key)
+    os.environ[key] = "0"
+    try:
+        yield
+    finally:
+        if orig is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = orig
 
 
 @pytest.fixture()
@@ -71,7 +96,7 @@ def test_algo_drift_triggers_rederive(_proj):
 
 
 @pytest.mark.slow
-def test_source_drift_triggers_rederive(_proj, monkeypatch):
+def test_source_drift_triggers_rederive(_proj, _no_code_scan_memo):
     """T3: adding a new source file changes the fingerprint; reconcile re-extracts it.
 
     `_code_scan` memoises on *elapsed time* (`_CODE_SCAN_TTL_S = 300`), so a fingerprint taken
@@ -85,7 +110,6 @@ def test_source_drift_triggers_rederive(_proj, monkeypatch):
     It must cover `reconcile_projects()` too: with a warm pre-write entry reconcile compares
     stored sig against cached sig, finds them equal, and skips the re-extract this asserts.
     """
-    monkeypatch.setenv("RSE_CODE_SCAN_TTL_S", "0")
     from rag_search.core.config import project_graph_db
     from rag_search.daemon.sweeps import (
         _code_source_fingerprint,
