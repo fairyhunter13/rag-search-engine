@@ -1027,16 +1027,47 @@ def test_needs_labels_clears_after_a_labelling_pass(safe_tmp_path):
 
 
 def test_reconcile_gates_the_community_check_on_symbols():
-    """Wiring: a bare community_count() in reconcile is the ungated trigger this replaced."""
+    """Wiring: a bare community_count() in reconcile is the ungated trigger this replaced.
+
+    The decision moved out of `reconcile_projects` into `_graph_reconcile_action`, so this
+    follows it and pins the whole chain instead of one frame — otherwise the next extraction
+    silently retires the guard again. The federation clause is asserted absent for the same
+    reason it was removed: a role predicate here skipped the fleet's only root for two algo
+    generations, and nothing failed while it did.
+    """
+    import ast
     import inspect
+    import textwrap
 
     from rag_search.daemon import sweeps
 
-    src = inspect.getsource(sweeps.reconcile_projects)
-    assert "_graph_needs_full_index" in src, "reconcile must gate through the helper"
-    assert "community_count" not in src, (
-        "reconcile reads community_count() directly again — the re-index loop is back"
-    )
+    def _parse(fn):
+        """Statements only — the docstrings discuss the removed predicate by name."""
+        node = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+        stmts = node.body[1:] if isinstance(node.body[0], ast.Expr) else node.body
+        return stmts, "\n".join(ast.unparse(s) for s in stmts)
+
+    stmts_r, src = _parse(sweeps.reconcile_projects)
+    stmts_d, decision = _parse(sweeps._graph_reconcile_action)
+    assert "_graph_reconcile_action" in src, "reconcile must delegate the graph decision"
+    assert "_graph_needs_full_index" in decision, "the decision must gate through the helper"
+    for name, stmts, body in (
+        ("reconcile_projects", stmts_r, src), ("_graph_reconcile_action", stmts_d, decision),
+    ):
+        assert "community_count" not in body, (
+            f"{name} reads community_count() directly again — the re-index loop is back"
+        )
+        # Structural, not substring: `from daemon.federation import register_all_members` is
+        # correct and required here — member discovery. What must not come back is a *read of
+        # the role attribute*, which is what `not entry.federation` was.
+        reads_role = [
+            n for s in stmts for n in ast.walk(s)
+            if isinstance(n, ast.Attribute) and n.attr == "federation"
+        ]
+        assert not reads_role, (
+            f"{name} branches on a project's federation role again — that predicate froze the "
+            "fleet's only root at fg1 while the other 159 converged; decide on stored state"
+        )
 
 
 def test_symbol_free_graph_does_not_force_a_full_reindex(safe_tmp_path):
