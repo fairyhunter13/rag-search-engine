@@ -39,6 +39,31 @@ def rank_community_rows(query: str, rows: list, text_index: int = 3) -> list:
                                  key=lambda x: x[0], reverse=True)]
 
 
+def _candidate_summaries(stores: list) -> list[tuple[str, str]]:
+    """Gather, dedup and order the community pool the reranker then scores. Touches no model.
+
+    The selection rules `_community_summaries` documents at length — dedup on **summary** rather
+    than the colliding structural title, and `member_count DESC` so the 50-row cap keeps the
+    largest communities — all live here, and none of them involve the GPU. Separating them is
+    what lets `test_rr8_candidates_survive_colliding_titles` assert the pool directly instead of
+    monkeypatching `rerank_passages` to a constant and reading the order back out through a
+    stable sort. That indirection was both forbidden (zero-fake policy) and weaker: it could only
+    observe the pool through the ranked output, so a pool bug and a ranking bug looked alike.
+    """
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for store in stores:
+        for ctitle, csumm in store._con.execute(
+            "SELECT title,summary FROM communities WHERE level=1 "
+            "AND summary IS NOT NULL AND summary!='' "
+            "ORDER BY member_count DESC LIMIT 50"
+        ).fetchall():
+            if csumm and csumm not in seen:
+                seen.add(csumm)
+                candidates.append((ctitle or "(unlabelled)", csumm))
+    return candidates
+
+
 def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
     """Top-k L1 community summaries across federated stores, ranked by cross-encoder.
 
@@ -71,17 +96,7 @@ def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
     """
     from rag_search.query.search import rerank_passages
 
-    candidates: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for store in stores:
-        for ctitle, csumm in store._con.execute(
-            "SELECT title,summary FROM communities WHERE level=1 "
-            "AND summary IS NOT NULL AND summary!='' "
-            "ORDER BY member_count DESC LIMIT 50"
-        ).fetchall():
-            if csumm and csumm not in seen:
-                seen.add(csumm)
-                candidates.append((ctitle or "(unlabelled)", csumm))
+    candidates = _candidate_summaries(stores)
     if not candidates:
         return ""
     scores = rerank_passages(query, [c[1] for c in candidates])

@@ -266,7 +266,7 @@ def test_t2_unscoped_search_fails_loud_instead_of_scanning_the_fleet():
     from rag_search.server.mcp import search as mcp_search
 
     payload = json.loads(asyncio.run(
-        mcp_search("reconcile loop", "code", None, 8, "compact", _UrlCtx())))
+        mcp_search("reconcile loop", "code", None, 8, "compact", _UrlCtx())))  # unscoped-ok
     assert "error" in payload, f"unscoped search still returned results: {str(payload)[:300]}"
     assert "project_path required" in payload["error"]
     assert "results" not in payload
