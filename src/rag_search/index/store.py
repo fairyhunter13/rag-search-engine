@@ -378,16 +378,26 @@ class VectorStore:
         if languages is not None and not languages:
             return []
         params: list = [expr]
-        lang_clause = ""
+        lang_join = lang_clause = ""
         if languages is not None:
             marks = ",".join("?" * len(languages))
-            # Filtered by rowid, not by joining `chunks` — the join is what phase 1 exists to
-            # avoid, and `idx_chunks_language` already serves this shape. Same construction the
-            # dense lane uses for its own pre-filter.
-            lang_clause = (
-                f" AND chunks_fts.rowid IN (SELECT chunk_id FROM chunks "
-                f"WHERE language IN ({marks}))"
-            )
+            # Joined to `chunks`, NOT `AND f.rowid IN (SELECT chunk_id FROM chunks WHERE ...)`.
+            # That IN-list reads like the cheaper shape and is catastrophically slower, because
+            # sqlite hands a rowid set to an FTS5 table as a *constraint FTS5 can serve* — the
+            # plan flips from `SCAN chunks_fts VIRTUAL TABLE INDEX 0:M1` to `0:=M1`, i.e. the
+            # full-text query is re-run once per candidate rowid instead of once. On a
+            # 118 k-chunk member here that is 0.018 s against 17.0 s, and `scope="code"` names
+            # 302 languages, so the candidate list is nearly the whole corpus. Across
+            # redacted-name-10-project's 157 members it was the difference between a search that answers
+            # and one that spent 700 s of a pinned core and was abandoned by the client at 300.
+            #
+            # Narrowing the language list does not fix it — what costs is the *rowid* count, not
+            # the placeholder count, so filtering to one language still measured 4.1 s. The join
+            # keeps the FTS index driving (`0:M1`) and probes `chunks` by integer primary key per
+            # match, which is 18 k lookups rather than 100 k re-matches: 0.049 s, and the rows
+            # returned are identical — this is still a pre-filter, not a post-filter over-fetch.
+            lang_join = " JOIN chunks cc ON cc.chunk_id = chunks_fts.rowid"
+            lang_clause = f" AND cc.language IN ({marks})"
             params.extend(languages)
         params.append(top_k)
         # Two phases, and the split is the difference between reading `top_k` chunk bodies and
@@ -402,7 +412,7 @@ class VectorStore:
             SELECT c.chunk_id, c.path, c.start_line, c.end_line, c.language, c.content, t.rk
             FROM (
                 SELECT chunks_fts.rowid AS rid, bm25(chunks_fts) AS rk
-                FROM chunks_fts
+                FROM chunks_fts{lang_join}
                 WHERE chunks_fts MATCH ?{lang_clause}
                 ORDER BY rk
                 LIMIT ?

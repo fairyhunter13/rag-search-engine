@@ -42,10 +42,11 @@ def _pick_claude_env() -> dict[str, str] | None:
 def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
     if not project_path:
         return "", []
+    from contextlib import ExitStack, closing
+
     from rag_search.core.config import index_dir, project_graph_db, project_vector_db
     from rag_search.embed.embedder import get_embedder
     from rag_search.graph.store import GraphStore
-    from rag_search.index.store import VectorStore
     from rag_search.query.answer_cache import get as _cache_get
     from rag_search.query.answer_cache import set as _cache_set
     from rag_search.query.ask import compose_answer
@@ -63,27 +64,19 @@ def _build_context(project_path: str, query: str) -> tuple[str, list[str]]:
 
     embedder = get_embedder()
     all_paths = expand_federation(project_path)
-    graph_stores: list[GraphStore] = []
-    vector_stores: list[VectorStore] = []
-    # Opened inside the try, one append at a time — see mcp.py and ask.py. A comprehension that
-    # raises partway holds the fds of everything it already built until the process exits.
-    try:
-        for p in all_paths:
-            if project_graph_db(p).exists():
-                graph_stores.append(GraphStore(project_graph_db(p)))
-            # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never a query.
-            if project_vector_db(p).exists():
-                vector_stores.append(VectorStore(project_vector_db(p), migrate=False))
-        chunks = _search_fed(query, embedder, vector_stores, top_k=8)
+    # Paths for the vector side (`_search_fed` opens a batch at a time and closes each), ExitStack
+    # for the graph side, which compose_answer does need open all at once — see ask.py.
+    vector_dbs = [project_vector_db(p) for p in all_paths if project_vector_db(p).exists()]
+    with ExitStack() as es:
+        graph_stores = [
+            es.enter_context(closing(GraphStore(project_graph_db(p))))
+            for p in all_paths if project_graph_db(p).exists()
+        ]
+        chunks = _search_fed(query, embedder, vector_dbs, top_k=8)
         answer = compose_answer(query, chunks, graph_stores, scope="all")
         sources = list(dict.fromkeys(c["path"] for c in chunks[:4]))
         _cache_set(cache_dir, f"chat2:{query}", json.dumps({"a": answer, "s": sources}), ttl_s=3600)
         return answer, sources
-    finally:
-        for vs in vector_stores:
-            vs.close()
-        for gs in graph_stores:
-            gs.close()
 
 
 async def _stream_answer(prompt: str, model_used: list[str]):
