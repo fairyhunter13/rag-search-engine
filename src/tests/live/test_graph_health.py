@@ -147,3 +147,65 @@ def test_index_project_clears_graph_before_rebuild():
     from rag_search.daemon import sweeps
     src = inspect.getsource(sweeps._index_project)
     assert "gs.clear()" in src, "_index_project must call gs.clear() before upserting symbols"
+
+
+_LABEL_SHAPE = [
+    # (names, files) — the ccw shape in miniature: one dominant token across most communities,
+    # distinguished only by a second token and by where the members live.
+    (["test_login", "test_logout", "test_session"], ["src/auth/a.py"] * 3),
+    (["test_render", "test_paint", "test_draw"], ["src/ui/b.py"] * 3),
+    (["test_index", "test_reindex", "test_purge"], ["src/index/c.py"] * 3),
+    (["test_embed", "test_rerank"], ["src/embed/d.py"] * 2),
+    (["test_login", "test_logout"], ["src/api/e.py"] * 2),
+    (["run_sweep", "run_reconcile"], ["src/daemon/f.py"] * 2),
+]
+
+
+def test_community_labels_discriminate():
+    """GH6: structurally-labelled communities must not collapse onto one token.
+
+    `_label_from_names` returned the single most frequent snake_case token capitalised, so every
+    community whose members are mostly `test_*` was called `Test`. Measured on real fleet graphs
+    before the fix, over each community's full member list:
+
+        project                 communities   distinct titles   worst collision
+        claude-code-workflows        65        37 (57%)         'Test' x 22
+        rag-search-engine            53        38 (72%)         'Test' x 14
+
+    After: 61/65 (94%) and 51/53 (96%), worst collisions 4 and 3. That 57% is what makes this a
+    defect rather than a tidiness complaint — `overview(what="communities")` is the whole
+    architecture axis since `ask` was retired into it, and it was naming 22 of ccw's 65 domains
+    identically. The candidate pool in `ask._candidate_summaries` is the other casualty; RR8 had
+    to move its dedup off the title precisely because of this collision.
+
+    The pair, so neither half passes alone:
+
+    - **Discrimination.** Six communities, five dominated by `test`, must yield >=5 distinct
+      labels (>=80%, the ratio the fix measures at 94% on ccw). The old one-token label scores
+      2 here — `Test` and `Run` — so this is red before the fix, not decoration
+      ([[feedback_guard_tests_must_discriminate]]).
+    - **Determinism.** Labels are stored, and one that varies run to run re-derives the fleet
+      forever. This is the half that rules out the tempting "append a hash" fix, which would
+      score 100% on discrimination and be worthless.
+
+    Cases 1 and 5 are the load-bearing pair: identical member names, different directory. They
+    separate only if the label uses where the members live — which is why the directory is in
+    the label rather than just a second token.
+
+    Touches no model; structural labelling never did, which is what let it survive tier 3.
+    """
+    from rag_search.graph.community import _label_from_names
+
+    labels = [_label_from_names(names, files) for names, files in _LABEL_SHAPE]
+    distinct = len(set(labels))
+    assert distinct >= 5, (
+        f"GH6: {distinct} distinct labels from {len(_LABEL_SHAPE)} distinct communities — "
+        f"structural labels are collapsing onto a shared token: {labels}"
+    )
+    assert labels[0] != labels[4], (
+        "GH6: two communities with identical member names in different directories got the same "
+        f"label ({labels[0]!r}) — the label ignores where the members live"
+    )
+    again = [_label_from_names(names, files) for names, files in _LABEL_SHAPE]
+    assert labels == again, "GH6: labelling must be deterministic; it is stored and diffed"
+    assert all(lbl for lbl in labels), f"GH6: no community may go unlabelled: {labels}"
