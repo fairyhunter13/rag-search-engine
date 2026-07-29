@@ -13,8 +13,8 @@ walk-the-whole-repo implementation cannot satisfy.
 
 WG1  a new symbol must reach graph.db through on_change alone
 WG2  docs-only churn must NOT re-extract (HR38 must survive)
-WG3  a federation root must NOT re-extract on the watcher's cadence (HR40 cost carve-out)
-RC1  ...but reconcile MUST re-derive it — the other half of WG3's hand-off
+WG3  a federation root re-extracts like any member, and absorbs none of their symbols
+RC1  reconcile owns the same root on state, not on role
 WG4  on_change must not deadlock on _HEAVY_LOCK when it takes the extraction branch
 WG5  a deleted symbol disappears; an untouched file keeps its symbols AND its cross-file edges
 WG6  a changed file the watcher did NOT report must not be parsed (no whole-repo walk)
@@ -132,14 +132,20 @@ def _forget_sig(proj: str) -> None:
     sweeps._fingerprint_cache.pop(proj, None)
 
 
-def test_wg3_federation_root_is_not_the_watchers_job(safe_tmp_path):
-    """WG3: a federation root is deferred to reconcile on cost (HR40), never re-extracted here.
+def test_wg3_federation_root_is_maintained_like_any_member(safe_tmp_path):
+    """WG3: a root is shard 0 of the union, not an exempt broker — same maintenance as a member.
 
-    The reason used to be given as HR4 ("0 own communities by design"), which HR4 does not say
-    and the fleet's one root refutes — see RC1. The carve-out survives on its real justification:
-    extraction scales with repo size, so a 193-member root would re-extract on every member edit.
-    Paired against a plain project under identical drift: without the control assertion this
-    would also pass against a _graph_needs_update that simply always answered False.
+    This asserted the opposite twice, on two reasons that both failed. HR4 ("0 own communities
+    by design") does not say that, and the fleet's one root refuted it with 342 own symbols.
+    The fallback cost argument (HR40) died to measurement: `iter_files(federation_mode=True)`
+    prunes symlinks escaping the root, so that root walks 5,966 files — fewer than the 7,697
+    of the member beside it. Federation changes what *reads* do (union the shards), not what
+    maintenance does.
+
+    The second assertion is what keeps that union well-formed: re-extracting a root whose
+    members are symlinked *inside* it must not absorb their symbols into the root's own graph,
+    or every federated query would double-count. Without it this gate would pass against an
+    implementation that treats a root as one big repo — the opposite error to the old one.
     """
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import upsert_project
@@ -150,6 +156,8 @@ def test_wg3_federation_root_is_not_the_watchers_job(safe_tmp_path):
     member.mkdir()
     (root / "main.py").write_text("def wg_root():\n    return 1\n")
     (member / "svc.py").write_text("def wg_member():\n    return 1\n")
+    (root / "repositories").mkdir()
+    (root / "repositories" / "member").symlink_to(member, target_is_directory=True)
     _index_project(str(root))
     _index_project(str(member))
     upsert_project(ProjectEntry(path=str(root), enabled=True, federation=[str(member)]))
@@ -163,8 +171,14 @@ def test_wg3_federation_root_is_not_the_watchers_job(safe_tmp_path):
     assert _graph_needs_update(str(member)) is True, (
         "WG3 control: real code drift on a plain project must need an update"
     )
-    assert _graph_needs_update(str(root)) is False, (
-        "WG3: a federation root must be left to reconcile (HR40 cost carve-out)"
+    assert _graph_needs_update(str(root)) is True, (
+        "WG3: a federation root's own code drift is the watcher's job like anyone else's"
+    )
+    _fire(str(root), [root / "main.py"])
+    assert "wg_root" in _syms(str(root)), "WG3: the root's own re-extract must reach its graph"
+    assert "wg_member" not in _syms(str(root)), (
+        "WG3: a symlinked member's symbols must stay in the member's own store (HR4/HR5) — "
+        "absorbing them would double-count every federated read"
     )
 
 
