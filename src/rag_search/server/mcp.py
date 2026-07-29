@@ -71,21 +71,21 @@ def _search_sync(
     query: str, scope: str, project_paths: list[str] | None, top_k: int, verbosity: str
 ) -> str:
     from rag_search.core.config import project_vector_db
-    from rag_search.core.registry import list_projects
+    from rag_search.daemon.federation import expand_federation
     from rag_search.index.store import VectorStore
     from rag_search.query.search import search_federation
 
-    if project_paths:
-        from rag_search.daemon.federation import expand_federation
-        _seen: set[str] = set()
-        paths = []
-        for _root in _resolve_roots(project_paths):
-            for _p in expand_federation(_root):
-                if _p not in _seen:
-                    _seen.add(_p)
-                    paths.append(_p)
-    else:
-        paths = [p.path for p in list_projects() if p.enabled]
+    # `project_paths` is guaranteed non-empty: `search` runs the resolution ladder first and
+    # returns an error rather than calling in unscoped. There is deliberately no else-branch —
+    # the one this replaced opened all 160 enabled stores whenever roots inference came up
+    # empty, which is every client that doesn't advertise the roots capability.
+    _seen: set[str] = set()
+    paths = []
+    for _root in _resolve_roots(project_paths):
+        for _p in expand_federation(_root):
+            if _p not in _seen:
+                _seen.add(_p)
+                paths.append(_p)
     t0 = time.monotonic()
     searched: list[str] = []
     stores: list[VectorStore] = []
@@ -147,17 +147,70 @@ async def _roots_paths(ctx: Context) -> list[str]:
 def _needs_project_error(candidates: list[str]) -> str:
     return json.dumps({
         "error": "project_path required — could not infer a single project from the client's roots. "
-                 "Pass project_path explicitly.",
+                 "Pass project_path explicitly, or add ?project=<path> to the MCP server URL.",
         "candidates": candidates[:12],
     })
 
 
+def _scope_from_request(ctx: Context | None) -> tuple[str, str | None]:
+    """The project this *connection* was configured for, from `?project=` on the MCP URL.
+
+    Returns (project, error). An empty project with no error means the URL carried no scope at
+    all, which is the pre-existing case and falls through to roots inference.
+
+    This rung exists because the daemon is one global HTTP server with no cwd of its own, and
+    MCP roots are an *optional* client capability — a client that doesn't advertise them leaves
+    every tool guessing, and `search` used to guess "all 160 projects". The URL is the one
+    channel every client carries regardless of capability, which makes scoping a property of
+    the configuration rather than of what the client volunteers.
+
+    An unregistered `?project=` is a loud error, not an empty result set: a typo in the URL
+    would otherwise open zero stores and return a confident "no matches" for every query.
+    """
+    from urllib.parse import unquote
+    try:
+        req = ctx.request_context.request if ctx is not None else None
+        raw = req.query_params.get("project", "") if req is not None else ""
+    except Exception:
+        return "", None
+    if not raw:
+        return "", None
+    from rag_search.core.config import project_vector_db
+    from rag_search.core.registry import list_projects, resolve_registered_root
+    target = resolve_registered_root(unquote(raw))
+    enabled = [p.path for p in list_projects() if p.enabled]
+    # Enabled *or* holding a store: a federation member is a legitimate scope even when it is
+    # not a registry entry in its own right — 157 of inosoft's 194 members are enabled, and the
+    # rest are still searched when the root is the scope.
+    if target not in enabled and not project_vector_db(target).exists():
+        return "", json.dumps({
+            "error": f"MCP URL is scoped to ?project={raw!r}, which is neither a registered "
+                     "enabled project nor an indexed federation member. Fix the server URL, "
+                     "or register it with index().",
+            "resolved_to": target,
+            "candidates": enabled[:12],
+        })
+    return target, None
+
+
 async def _default_or_error(ctx: Context, project_path: str) -> tuple[str, str | None]:
-    """Resolve an omitted project_path from the client's roots. Returns (path, error_or_None):
-    a chosen project when the roots imply exactly one, else a fail-loud error — never a silent
-    fall-through to the arbitrary first registry entry."""
+    """Resolve an omitted project_path. Returns (path, error_or_None).
+
+    The ladder, most specific first: the explicit argument, then the `?project=` this
+    connection was configured with, then the client's roots when they imply exactly one
+    project, then a fail-loud error. Never a silent fall-through — not to the arbitrary first
+    registry entry, and not to "everything".
+
+    Whatever comes out is a *root*, and callers hand it to `expand_federation`, so scoping to a
+    federation root still serves the root and all of its members.
+    """
     if project_path:
         return project_path, None
+    scoped, err = _scope_from_request(ctx)
+    if err:
+        return "", err
+    if scoped:
+        return scoped, None
     from rag_search.core.registry import infer_default_project
     chosen, cands = infer_default_project(await _roots_paths(ctx))
     if chosen:
@@ -181,12 +234,14 @@ async def search(
     """
     note_query(query)
     if not project_paths:
-        # Scope to the project the client is actually in, when inferable from its roots;
-        # otherwise keep the existing search-all behavior (broad, never misleading).
-        from rag_search.core.registry import infer_default_project
-        chosen, _ = infer_default_project(await _roots_paths(ctx))
-        if chosen:
-            project_paths = [chosen]
+        # Same ladder as every other tool, and the same fail-loud ending. This used to fall
+        # through to "search all enabled projects", which measured 164.78 s against 7.01 s for
+        # the same query scoped to one — and answered a question about *this* repo with
+        # mcms-lp JavaScript. Breadth was not free and it was not "never misleading".
+        chosen, err = await _default_or_error(ctx, "")
+        if err:
+            return err
+        project_paths = [chosen]
     return await asyncio.to_thread(_search_sync, query, scope, project_paths, top_k, verbosity)
 
 

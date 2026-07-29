@@ -185,6 +185,92 @@ def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_pa
         _clean([root, member])
 
 
+class _UrlCtx:
+    """A tool's view of one HTTP request, carrying `?project=` from the MCP server URL.
+
+    Stands in for the transport, not for a model — nothing here reaches the GPU, so the
+    zero-fake policy is untouched. The MCP SDK populates `RequestContext.request` from the
+    HTTP request (`mcp/server/lowlevel/server.py:765`); this reproduces exactly the attribute
+    chain `_scope_from_request` reads, and nothing else.
+    """
+
+    def __init__(self, project: str | None = None):
+        from types import SimpleNamespace
+        params = {} if project is None else {"project": project}
+        self.request_context = SimpleNamespace(request=SimpleNamespace(query_params=params))
+
+
+def test_t1_url_scope_is_read_when_the_client_offers_no_roots(safe_tmp_path):
+    """T1: `?project=` on the server URL scopes a call, with no roots capability involved.
+
+    This is the rung that makes scoping a property of the configuration. `_UrlCtx` advertises
+    no roots at all, which is precisely the client that used to get a 160-store fleet scan.
+    """
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import upsert_project
+    from rag_search.server.mcp import _default_or_error, _scope_from_request
+
+    root, member, sub, _marker = _federate(safe_tmp_path)
+    _clean([root, member])
+    try:
+        upsert_project(ProjectEntry(path=str(member), enabled=True))
+        assert _scope_from_request(_UrlCtx(str(member))) == (str(member), None)
+        # Same resolution the arguments get: a subdir maps to its enclosing registered project.
+        assert _scope_from_request(_UrlCtx(str(sub))) == (str(member), None)
+        # No scope on the URL is not an error — it falls through to the roots rung.
+        assert _scope_from_request(_UrlCtx()) == ("", None)
+        assert _scope_from_request(None) == ("", None)
+
+        # The ladder prefers an explicit argument over the URL, so a caller on a scoped
+        # connection can still ask about another project.
+        assert asyncio.run(_default_or_error(_UrlCtx(str(member)), "")) == (str(member), None)
+        assert asyncio.run(_default_or_error(_UrlCtx(str(member)), str(root))) == (
+            str(root), None), "explicit argument must outrank the URL"
+    finally:
+        _clean([root, member])
+
+
+def test_t1_unregistered_url_scope_fails_loud(safe_tmp_path):
+    """A typo in the server URL must be an error, not zero stores and a confident 'no matches'.
+
+    Without this the T3 config migration has no failure signal: a mistyped `?project=` opens no
+    stores, and `search` answers every question with an empty result list that reads like a
+    correct negative.
+    """
+    from rag_search.server.mcp import _scope_from_request
+
+    scoped, err = _scope_from_request(_UrlCtx(str(safe_tmp_path / "not-a-project")))
+    assert scoped == ""
+    assert err is not None, "an unregistered ?project= resolved silently"
+    payload = json.loads(err)
+    assert "not-a-project" in payload["error"]
+    assert payload["candidates"], "the error must name registered projects to fix the URL"
+
+
+def test_t2_unscoped_search_fails_loud_instead_of_scanning_the_fleet():
+    """T2: `search` with no project and no inferable scope must error, not search all 160.
+
+    Red twice, and the two are worth separating. Against the *deployed* daemon on 2026-07-29
+    the same query reported `projects_searched` of ~160 in **164.78 s** unscoped versus **1**
+    in **7.01 s** scoped, and its top hit for a question about *this* repo's reconcile loop was
+    `Tubestream/mcms-lp` JavaScript. Against the pre-change code in-process, this gate failed
+    by *reaching the GPU at all* — an ONNX BFC arena OOM, because it genuinely set out to
+    search the fleet while the repair held the card. Neither red is the assertion below
+    tripping, so state it plainly: what this pins is that the unscoped path now returns before
+    it opens a single store.
+
+    `_UrlCtx()` carries neither roots nor `?project=`, so it lands on the last rung.
+    """
+    from rag_search.server.mcp import search as mcp_search
+
+    payload = json.loads(asyncio.run(
+        mcp_search("reconcile loop", "code", None, 8, "compact", _UrlCtx())))
+    assert "error" in payload, f"unscoped search still returned results: {str(payload)[:300]}"
+    assert "project_path required" in payload["error"]
+    assert "results" not in payload
+    assert payload["candidates"], "the error must list candidates the caller can pick from"
+
+
 @pytest.mark.slow
 def test_s2_search_symlinked_member_does_not_fanout(safe_tmp_path):
     """S2: search() scoped to a symlinked member must resolve to that member alone, not fan
