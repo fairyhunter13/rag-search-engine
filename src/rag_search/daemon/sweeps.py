@@ -590,21 +590,22 @@ def _rederive_graph(project_path: str) -> None:
 def _graph_needs_update(project_path: str) -> bool:
     """True if the watcher should re-extract this project's graph for the current change.
 
-    Mirrors reconcile's own conditions so the two paths cannot drift apart, minus the cases
-    that belong to reconcile: a project with no graph.db yet has never been indexed, and a
-    federation root is deferred on **cost**, not on HR4 — extraction is single-worker-bound
-    and scales with repo size rather than edit size (HR40), so a 193-member root would
-    re-extract in full on every member edit. `_graph_reconcile_action` owns that case on the
-    slower cadence; this is a hand-off, and the root is not exempt from maintenance.
+    Mirrors reconcile's own conditions so the two paths cannot drift apart, minus the one case
+    that belongs to reconcile: a project with no graph.db yet has never been indexed.
+
+    A federation root is not one of those cases, though it was exempted here on two reasons that
+    both failed. First HR4 ("0 own communities by design"), which HR4 does not say. Then a cost
+    argument from HR40 — refuted by measuring it: `iter_files` takes `federation_mode=True`,
+    which prunes the symlinks escaping the root, so the fleet's one root walks **5,966 files in
+    1.41 s**, fewer than the 7,697 of the first member the watcher already re-extracts on every
+    edit. A root is shard 0 of the query-time union, not its broker — it owns its own store like
+    any member, and the only thing federation changes is that *reads* union the shards.
     Reuses the memoised code-only fingerprint on_change has already computed — no second walk.
     """
     from rag_search.core.config import project_graph_db
-    from rag_search.core.registry import list_projects
     from rag_search.graph.store import GraphStore
     gdb = project_graph_db(project_path)
     if not gdb.exists():
-        return False
-    if any(e.path == project_path and e.federation for e in list_projects()):
         return False
     gs = GraphStore(gdb)
     try:
