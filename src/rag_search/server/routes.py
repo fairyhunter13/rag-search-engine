@@ -68,9 +68,10 @@ def _register_all(app) -> None:
         routes_ops,
         routes_pipeline,
         routes_project,
-        routes_search,
     )
-    for mod in (routes_admin, routes_project, routes_search, routes_graph,
+    # routes_search held one route, `/api/suggested_questions`, and left with the chat box's
+    # question prompts. The name was always a misnomer — search itself is served over MCP.
+    for mod in (routes_admin, routes_project, routes_graph,
                 routes_ops, routes_pipeline, routes_chat):
         mod.register(app)
 

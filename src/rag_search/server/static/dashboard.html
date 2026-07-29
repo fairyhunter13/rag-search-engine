@@ -82,18 +82,15 @@ a{color:inherit;text-decoration:none}
 .tile-spark{margin-top:auto;padding-top:8px}
 .tile-spark svg{width:100%;height:32px;overflow:visible}
 /* bottom section */
-.pulse-bottom{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex-shrink:0}
-@media(max-width:700px){.pulse-bottom{grid-template-columns:1fr}}
+.pulse-bottom{display:grid;grid-template-columns:1fr;gap:12px;flex-shrink:0}
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
 .panel-hdr{font-size:.68rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.1em;flex-shrink:0}
-.act-item{font-size:.76rem;color:var(--text-2);padding:5px 0;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:baseline}
-.act-item:last-child{border-bottom:none}
-.act-time{color:var(--text-3);font-size:.68rem;flex-shrink:0}
-.act-msg{flex:1}
-.sq-btn{display:block;width:100%;text-align:left;background:none;border:1px solid var(--border);
-  border-radius:var(--radius);color:var(--text-2);padding:7px 10px;font-size:.76rem;
-  cursor:pointer;margin-bottom:5px;transition:all var(--trans)}
-.sq-btn:hover{border-color:var(--purple);color:var(--text);background:rgba(123,97,255,.07)}
+/* Indexing queue. `.act-*` (Live Activity) and `.sq-btn` (suggested questions) styled the two
+   panels this replaced; both panels are gone, so their rules went with them. */
+.q-item{font-size:.76rem;color:var(--text-2);padding:5px 0;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:baseline}
+.q-item:last-child{border-bottom:none}
+.q-path{flex:1;font-family:'JetBrains Mono','Fira Code',monospace;word-break:break-all}
+.q-empty{font-size:.76rem;color:var(--text-3)}
 /* ── Chat view ──────────────────────────────────────────────────────────── */
 #view-chat{flex-direction:column}
 .chat-history{flex:1;overflow-y:auto;padding:20px 22px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
@@ -182,60 +179,27 @@ a{color:inherit;text-decoration:none}
 .gd-neighbours{display:flex;flex-wrap:wrap;gap:4px}
 .gd-nb{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:2px 8px;font-size:.68rem;cursor:pointer;transition:border-color var(--trans)}
 .gd-nb:hover{border-color:var(--purple);color:var(--text)}
-/* ── Docs view ──────────────────────────────────────────────────────────── */
-/* Was the Wiki view. The wiki half (kb/wiki.py's generated pages, /api/wiki*) left with tier 3;
-   the docs browser it shared this pane with — /api/docs + /api/docs/page, the repo's own
-   human-authored tree — is tier 1 and survives, so the view is renamed rather than deleted.
-   The lint panel went whole: it rendered /api/wiki_lint over wiki pages only. */
-#view-docs{flex-direction:row;overflow:hidden}
-.docs-sidebar{width:220px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:var(--surface);overflow:hidden}
-#docs-search{background:var(--surface-2);border:none;border-bottom:1px solid var(--border);color:var(--text);padding:10px 14px;font-size:.78rem;width:100%;transition:background var(--trans)}
-#docs-search:focus{background:var(--surface-3);outline:none}
-#docs-pages{flex:1;overflow-y:auto;padding:6px 0;scrollbar-width:thin}
-.docs-page-link{display:block;width:100%;background:none;border:none;text-align:left;padding:7px 14px;font-size:.77rem;color:var(--text-2);cursor:pointer;transition:background var(--trans),color var(--trans)}
-.docs-page-link:hover,.docs-page-link.active{background:rgba(123,97,255,.1);color:var(--text)}
-.docs-content-pane{flex:1;display:flex;flex-direction:column;overflow:hidden}
-#docs-content{flex:1;overflow-y:auto;padding:20px 24px;font-size:.83rem;line-height:1.65;color:var(--text);scrollbar-width:thin}
-#docs-content h1,#docs-content h2,#docs-content h3{color:var(--text);font-weight:600;margin:.8em 0 .4em;line-height:1.3}
-#docs-content h1{font-size:1.2rem}#docs-content h2{font-size:1rem}#docs-content h3{font-size:.9rem}
-#docs-content p{margin:.4em 0}
-#docs-content ul,#docs-content ol{padding-left:1.4em;margin:.4em 0}
-#docs-content li{margin:.15em 0}
-#docs-content code{font-family:'JetBrains Mono','Fira Code',monospace;font-size:.8rem;background:var(--surface-3);border:1px solid var(--border);border-radius:3px;padding:0 4px}
-#docs-content pre{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;overflow-x:auto;margin:.5em 0}
-#docs-content pre code{background:none;border:none;padding:0;font-size:.78rem}
-#docs-content blockquote{border-left:3px solid var(--purple);padding-left:10px;color:var(--text-2);margin:.5em 0}
-#docs-content a{color:var(--cyan);text-decoration:underline}
-#docs-content strong{color:var(--text);font-weight:600}
-#docs-content table{border-collapse:collapse;width:100%;margin:.5em 0;font-size:.8rem}
-#docs-content th,#docs-content td{border:1px solid var(--border);padding:6px 10px;text-align:left}
-#docs-content th{background:var(--surface-2);color:var(--text-3);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em}
-.docs-empty{display:flex;align-items:center;justify-content:center;flex:1;color:var(--text-3);font-size:.83rem}
+/* The Docs view stood here — a sidebar of `<project>/docs/*.md` and a markdown pane, plus the
+   ~30 rules that styled the rendered output. It was the Wiki view before kb/wiki.py left with
+   tier 3, kept on because the human-authored half of the tree survived. It is gone now for a
+   different reason than the wiki was: the dashboard is an operator console, and reading a repo's
+   own markdown is what the editor and Claude Code are for. mdSafe() stays — chat renders through
+   it, and the table rules directly below are its. */
 /* ── mdSafe table (chat bubbles) */
 .msg.ai .msg-bubble table{border-collapse:collapse;width:100%;margin:.4em 0;font-size:.78rem}
 .msg.ai .msg-bubble th,.msg.ai .msg-bubble td{border:1px solid var(--border);padding:5px 8px;text-align:left}
 .msg.ai .msg-bubble th{background:var(--surface-2);color:var(--text-3);font-size:.7rem;text-transform:uppercase}
 /* The Processes view left with tier 3 — both its data sources were BPRE: overview(what=
    "process_flows") for the list and /api/process/bpmn for the download. */
-/* ── Hierarchy view ─────────────────────────────────────────────────────── */
-#view-hierarchy{flex-direction:row;overflow:hidden}
-.hier-sidebar{width:260px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--surface);padding:4px 0}
-.hier-group-hdr{padding:8px 12px 4px;font-size:.68rem;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;user-select:none}
-.hier-node{display:block;width:100%;background:none;border:none;text-align:left;font-size:.76rem;color:var(--text-2);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:4px 12px;transition:background var(--trans),color var(--trans)}
-.hier-node:hover,.hier-node.active{background:rgba(123,97,255,.1);color:var(--text)}
-.hier-detail{flex:1;overflow-y:auto;padding:20px 24px;font-size:.83rem;color:var(--text)}
-.hier-detail h2{font-size:1rem;font-weight:600;margin:0 0 6px;color:var(--text)}
-.hier-detail .hier-meta{font-size:.73rem;color:var(--text-3);margin-bottom:12px}
-.hier-detail .hier-summary{color:var(--text-2);line-height:1.6;font-size:.82rem}
-.hier-quality{margin-top:20px;padding:10px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);font-size:.76rem;color:var(--text-2)}
-/* ── Admin auto-pipeline ────────────────────────────────────────────────── */
-/* The job chips read /api/events/stream, whose only publisher was the pipeline job runner
-   (build_wiki / docgen / okf). That left with tier 3, so the route and the chips went with it. */
-#admin-autopipeline-log{margin-top:10px;font-size:.72rem;color:var(--text-2);max-height:120px;overflow-y:auto;scrollbar-width:thin}
-.ap-entry{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)}
-.ap-entry:last-child{border-bottom:none}
-.ap-ts{color:var(--text-3);flex-shrink:0}
-.ap-msg{flex:1;word-break:break-word}
+/* The Knowledge view stood here. It fetched `/api/overview?…&what=hierarchy`, and `hierarchy`
+   is not one of handle_overview's eight valid `what` values — the pane answered
+   {"error": "unknown what='hierarchy'"} on every load, so it had already been dead for as long
+   as the value has been absent. The architecture axis it was reaching for is
+   overview(what="communities"), which now carries summaries and ranks by an optional query. */
+/* The Admin auto-pipeline log stood here (#admin-autopipeline-log, .ap-*). Its job chips had
+   already left with /api/events/stream and tier 3; the log itself rendered `d.events`, a key
+   /api/auto_pipeline_status does not return, so it was permanently empty. That route's actual
+   payload is on Pulse now — see .q-* above. */
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:2px}
 </style>
@@ -251,8 +215,6 @@ a{color:inherit;text-decoration:none}
     <button class="vbtn" id="vbtn-chat" onclick="switchView('chat')">Chat</button>
     <button class="vbtn" id="vbtn-admin" onclick="switchView('admin')">Admin</button>
     <button class="vbtn" id="vbtn-graph" onclick="switchView('graph')">Graph</button>
-    <button class="vbtn" id="vbtn-docs" onclick="switchView('docs')">Docs</button>
-    <button class="vbtn" id="vbtn-hierarchy" onclick="switchView('hierarchy')">Knowledge</button>
   </div>
   <div class="nav-right">
     <span class="sdot" id="daemon-dot" title="Daemon status"></span>
@@ -320,15 +282,16 @@ a{color:inherit;text-decoration:none}
       </div>
     </div>
 
-    <!-- Activity feed + suggested questions -->
+    <!-- Two panels stood here. "Live Activity" was fed by /api/kb_health's last_pipeline_event
+         and had rendered a fixed "No recent pipeline events" since tier 3 left. "Ask the Codebase"
+         rendered /api/suggested_questions — f"How does {title} work?" over the top communities,
+         and _label_from_names titles 22 of this repo's 65 communities `Test`, so it offered
+         "How does Test work?" five times. Both are replaced by the one thing an operator console
+         should show about the pipeline: what the sweeps are actually going to do next. -->
     <div class="pulse-bottom">
       <div class="panel">
-        <div class="panel-hdr">Live Activity</div>
-        <div id="activity-list"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-hdr">Ask the Codebase</div>
-        <div id="suggested-list"></div>
+        <div class="panel-hdr">Indexing Queue <span id="sweeps-state" class="tile-badge"></span></div>
+        <div id="pending-list"></div>
       </div>
     </div>
   </div>
@@ -366,8 +329,6 @@ a{color:inherit;text-decoration:none}
                  to re-point at. Indexing is driven by the reconcile sweep, not by a button. -->
             <button class="op-btn" onclick="loadAdmin()">🔄 Refresh</button>
           </div>
-          <div class="panel-hdr" style="margin-top:10px">Auto-Pipeline Events</div>
-          <div id="admin-autopipeline-log"></div>
         </div>
       </div>
       <div>
@@ -399,27 +360,7 @@ a{color:inherit;text-decoration:none}
     <div id="graph-detail" style="color:var(--text-3);font-size:.78rem">Click a node to see details</div>
   </div>
 
-  <!-- ── Docs ──────────────────────────────────────────────────────────── -->
-  <!-- The export button went with tier 3 (/api/wiki/export bundled generated wiki pages;
-       the docs tree is already files on disk). -->
-  <div id="view-docs" class="view">
-    <div class="docs-sidebar">
-      <input id="docs-search" placeholder="Search pages…" oninput="searchDocs(this.value)" autocomplete="off"/>
-      <div id="docs-pages"><div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div></div>
-    </div>
-    <div class="docs-content-pane">
-      <div id="docs-content"><div class="docs-empty">← Pick a page to read</div></div>
-    </div>
-  </div>
-
-  <div id="view-hierarchy" class="view">
-    <div class="hier-sidebar" id="hier-tree">
-      <div style="padding:12px;color:var(--text-3);font-size:.76rem">Select a project to load hierarchy.</div>
-    </div>
-    <div class="hier-detail" id="hier-detail">
-      <div style="color:var(--text-3);font-size:.8rem">← Select a node to see details</div>
-    </div>
-  </div>
+  <!-- The Docs and Knowledge panes stood here. Pulse / Chat / Admin / Graph are the console. -->
 
 </div><!-- /views -->
 
@@ -524,9 +465,9 @@ async function fetchWithTimeout(url,opts={},ms=30000){
 
 /* ── View switching ──────────────────────────────────────────────────────── */
 function switchView(name){
-  // 'wiki' became 'docs' (the generated-page half left with tier 3, the docs browser stayed) and
-  // 'processes' left whole — both its sources were BPRE.
-  ['pulse','chat','admin','graph','docs','hierarchy'].forEach(v=>{
+  // 'wiki'/'docs' and 'processes' left with tier 3 and the operator-console pass; 'hierarchy'
+  // (Knowledge) went with them. These four are the whole surface.
+  ['pulse','chat','admin','graph'].forEach(v=>{
     $('view-'+v).classList.toggle('active',v===name);
     $('vbtn-'+v).classList.toggle('active',v===name);
   });
@@ -534,8 +475,6 @@ function switchView(name){
   else if(name==='admin')loadAdmin();
   else if(name==='chat'&&$('chat-in'))$('chat-in').focus();
   else if(name==='graph'&&!window.__graph)loadGraph();
-  else if(name==='docs')loadDocs();
-  else if(name==='hierarchy')loadHierarchy();
 }
 
 /* ── Project selector ────────────────────────────────────────────────────── */
@@ -563,14 +502,11 @@ function switchProject(path){
   _sparkHistory={};
   _chatHistory=[];
   _chatInFlight=false;
-  _docsTree=[];
   if(window.__graph){try{window.__graph.sigma.kill();}catch(_){}window.__graph=null;}
   const active=document.querySelector('.view.active');
   if(active&&active.id==='view-pulse')loadPulse();
   else if(active&&active.id==='view-admin')loadAdmin();
   else if(active&&active.id==='view-graph')loadGraph();
-  else if(active&&active.id==='view-docs')loadDocs();
-  else if(active&&active.id==='view-hierarchy')loadHierarchy();
 }
 
 /* ── Sparkline ───────────────────────────────────────────────────────────── */
@@ -604,11 +540,11 @@ async function loadPulse(){
     // /api/kb_health left with tier 3 — it reported DeepSeek narration coverage and wiki page
     // counts. The one number the Pulse still wants from it, the community count, is in
     // overview(what="status"), which is structural and needs no LLM.
-    const [ovr,st,met,sug]=await Promise.allSettled([
+    const [ovr,st,met,ap]=await Promise.allSettled([
       fetchWithTimeout('/api/overview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:_proj,what:'structure'})}).then(r=>r.json()),
       fetchWithTimeout('/api/overview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:_proj,what:'status'})}).then(r=>r.json()),
       fetchWithTimeout('/api/metrics').then(r=>r.json()),
-      fetchWithTimeout(`/api/suggested_questions?project=${encodeURIComponent(_proj)}`).then(r=>r.json()),
+      fetchWithTimeout('/api/auto_pipeline_status').then(r=>r.json()),
     ]);
 
     // Files tile
@@ -656,7 +592,7 @@ async function loadPulse(){
     );
 
     const _metOk=met.status==='fulfilled';
-    const _secondaryOk=[ovr,st,sug].every(s=>s.status==='fulfilled');
+    const _secondaryOk=[ovr,st,ap].every(s=>s.status==='fulfilled');
     setDot(!_metOk?'err':_secondaryOk?'ok':'warn');
 
     // Sparklines (push current value into rolling history)
@@ -667,25 +603,29 @@ async function loadPulse(){
     pushSpark('uptime',uptS);
     renderSparks();
 
-    // The activity feed was fed by /api/kb_health's last_pipeline_event, which left with tier 3.
-    // /api/auto_pipeline_status returns only {enabled, pending} — no event list — so there is
-    // nothing to re-point it at, and the placeholder below is now the whole feed.
-    const actList=$('activity-list');
-    if(!actList.children.length){
-      actList.innerHTML='<div class="act-item"><span class="act-msg" style="color:var(--text-3)">No recent pipeline events</span></div>';
-    }
-
-    // Suggested questions
-    const sugD=sug.status==='fulfilled'?sug.value:{};
-    const qs=(sugD.questions||[]).slice(0,6);
-    $('suggested-list').innerHTML=qs.length
-      ?qs.map(q=>`<button class="sq-btn" data-q="${esc(q.question||q)}" onclick="askQuestion(this.dataset.q)">${esc(q.question||q)}</button>`).join('')
-      :'<div style="color:var(--text-3);font-size:.75rem">Run the full pipeline to generate questions</div>';
+    renderPipelineQueue(ap.status==='fulfilled'?ap.value:null);
 
   }catch(e){
     setDot('err');
     toast('Pulse load error: '+e.message,'err');
   }
+}
+
+/* Renders exactly what /api/auto_pipeline_status returns: {enabled, pending}. The pane this
+   replaces read `d.events`, a key the route has never had, so it rendered "No auto-pipeline
+   events yet" unconditionally — a dead panel that looked like a healthy idle one.
+   `enabled` is `not sweeps._PAUSED`, and paused sweeps are the single most common reason a
+   project sits un-indexed, so it is a badge rather than a footnote. */
+function renderPipelineQueue(d){
+  const badge=$('sweeps-state'),list=$('pending-list');
+  if(!d){badge.textContent='unknown';badge.className='tile-badge warn';
+    list.innerHTML='<div class="q-empty">Could not read pipeline status</div>';return;}
+  const pending=d.pending||[];
+  badge.textContent=d.enabled?'sweeps running':'sweeps paused';
+  badge.className='tile-badge '+(d.enabled?'ok':'warn');
+  list.innerHTML=pending.length
+    ?pending.map(p=>`<div class="q-item"><span class="q-path">${esc(p)}</span></div>`).join('')
+    :'<div class="q-empty">Nothing queued — every enabled project is indexed and labelled</div>';
 }
 
 function setTile(id,value,badge,status,sub){
@@ -865,143 +805,25 @@ function _showNodeDetail(nodeId){
   $('graph-detail').innerHTML=`<div class="gd-name">${esc(label)}</div><div class="gd-meta">${esc(kind)} · degree ${degree}</div><div class="gd-neighbours">${nbHtml||'<span style="color:var(--text-3)">No neighbours</span>'}</div>`;
 }
 
-/* ── Docs ────────────────────────────────────────────────────────────────── */
-/* Was the Wiki block. /api/wiki, /api/wiki/page, /api/wiki/export and /api/wiki_lint all left
-   with tier 3 (kb/wiki.py generated those pages); /api/docs + /api/docs/page are tier 1 — the
-   repo's own human-authored tree — so what is left is a docs browser with no second list to
-   merge, no section headers to distinguish them, and no lint panel. */
-let _docsTree=[];
-
-async function loadDocs(){
-  if(!_proj)return;
-  const pagesEl=$('docs-pages');
-  pagesEl.innerHTML='<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">Loading…</div>';
-  $('docs-content').innerHTML='<div class="docs-empty">← Pick a page to read</div>';
-  try{
-    const r=await fetchWithTimeout(`/api/docs?project=${encodeURIComponent(_proj)}`);
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    _docsTree=(await r.json()).tree||[];
-    _renderDocsPages(_docsTree,null);
-  }catch(e){
-    pagesEl.innerHTML='<div style="padding:12px 14px;color:var(--red);font-size:.76rem">'+esc(e.message)+'</div>';
-  }
-}
-
-function _renderDocsPages(pages,active){
-  const el=$('docs-pages');
-  el.innerHTML=pages.length
-    ?pages.map(p=>`<button class="docs-page-link${p===active?' active':''}" onclick="openDocsPage(${JSON.stringify(p)})">${esc(p)}</button>`).join('')
-    :'<div style="padding:12px 14px;color:var(--text-3);font-size:.76rem">No docs in this project.</div>';
-}
-
-async function openDocsPage(relPath){
-  if(!_proj)return;
-  _renderDocsPages(_docsTree,relPath);
-  const content=$('docs-content');
-  content.innerHTML='<div class="docs-empty" style="color:var(--text-3)">Loading…</div>';
-  try{
-    const r=await fetchWithTimeout(`/api/docs/page?project=${encodeURIComponent(_proj)}&path=${encodeURIComponent(relPath)}`);
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    content.innerHTML=mdSafe(d.content||'');
-    renderMermaid(content);
-  }catch(e){content.innerHTML='<div class="docs-empty" style="color:var(--red)">'+esc(e.message)+'</div>';}
-}
-
-/* Lazy-load mermaid from CDN ONLY when a page has a diagram (never at page-load — a hanging CDN
-   request would keep `networkidle` from settling and break every browser test). Fails silently
-   offline: the ```mermaid fence then just stays as code. */
-let _mermaidPromise=null;
-function _loadMermaid(){
-  if(_mermaidPromise)return _mermaidPromise;
-  _mermaidPromise=import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')
-    .then(m=>{m.default.initialize({startOnLoad:false,theme:'neutral',securityLevel:'loose'});window.mermaid=m.default;return m.default;})
-    .catch(()=>null);
-  return _mermaidPromise;
-}
-async function renderMermaid(root){
-  const blocks=root.querySelectorAll('code.language-mermaid');
-  if(!blocks.length)return;
-  const mm=await _loadMermaid();
-  if(!mm)return;  // offline — leave fences as code, no crash
-  blocks.forEach(code=>{
-    const pre=code.closest('pre')||code;
-    const div=document.createElement('div');
-    div.className='mermaid';
-    div.textContent=code.textContent;
-    pre.replaceWith(div);
-  });
-  try{await mm.run({nodes:root.querySelectorAll('.mermaid')});}catch(_){}
-}
-
-/* exportWiki() left with tier 3 — /api/wiki/export bundled generated wiki pages, and the docs
-   tree is already files on disk, so there is nothing to bundle. */
-
-function searchDocs(q){
-  const lower=q.trim().toLowerCase();
-  _renderDocsPages(lower?_docsTree.filter(p=>p.toLowerCase().includes(lower)):_docsTree,null);
-}
-
-/* The Processes view left with tier 3: loadProcesses() read overview(what="process_flows") and
-   showProcess() linked /api/process/bpmn, both BPRE. _loadMermaid/renderMermaid stay — the docs
-   browser renders ```mermaid fences too. */
-/* ── Hierarchy view ──────────────────────────────────────────────────────── */
-let _hierData=null;
-async function loadHierarchy(){
-  if(!_proj)return;
-  const tree=$('hier-tree');tree.innerHTML='<div style="padding:12px;color:var(--text-3);font-size:.76rem">Loading…</div>';
-  $('hier-detail').innerHTML='<div style="color:var(--text-3);font-size:.8rem">← Select a node to see details</div>';
-  try{const r=await fetchWithTimeout(`/api/overview?project=${encodeURIComponent(_proj)}&what=hierarchy`);if(!r.ok)throw new Error('HTTP '+r.status);_hierData=await r.json();_renderHierTree(_hierData);}
-  catch(e){tree.innerHTML='<div style="padding:12px;color:var(--red);font-size:.76rem">Error: '+esc(e.message)+'</div>';}
-}
-function _renderHierTree(data){
-  const tree=$('hier-tree'),nodes=data.hierarchy||[];
-  if(!nodes.length){tree.innerHTML='<div style="padding:12px;color:var(--text-3)">No hierarchy built yet.</div>';return;}
-  const byLevel={};nodes.forEach(n=>{(byLevel[n.level]=byLevel[n.level]||[]).push(n);});
-  const levels=Object.keys(byLevel).map(Number).sort((a,b)=>a-b);
-  const ICONS={0:'📁',1:'◈',2:'⬡',3:'◻'},LABELS={0:'Structure',1:'Communities',2:'Domains',3:'Arch Domains'};
-  tree.innerHTML=levels.map(lvl=>{const all=byLevel[lvl],items=all.slice(0,60),icon=ICONS[lvl]||'◻',label=LABELS[lvl]||('Level '+lvl);
-    return '<div class="hier-group"><div class="hier-group-hdr">'+icon+' '+label+' ('+all.length+')</div>'
-      +items.map(n=>'<button class="hier-node" style="padding-left:'+(12+lvl*8)+'px" onclick="showHierNode('+n.id+','+lvl+',this)">'+esc(n.title||'(untitled)')+'</button>').join('')
-      +(all.length>60?'<div style="padding:3px 12px;color:var(--text-3);font-size:.7rem">…+'+(all.length-60)+' more</div>':'')+'</div>';
-  }).join('');
-  const q=data.quality||{};if(q.modularity!==undefined)tree.innerHTML+='<div class="hier-quality">Q='+(q.modularity||0).toFixed(3)+' · '+(q.community_count||0)+' L1 communities</div>';
-}
-function showHierNode(id,level,btn){
-  document.querySelectorAll('.hier-node').forEach(b=>b.classList.remove('active'));if(btn)btn.classList.add('active');
-  const detail=$('hier-detail');if(!_hierData)return;
-  const node=(_hierData.hierarchy||[]).find(n=>n.id===id);
-  if(!node){detail.innerHTML='<div style="color:var(--text-3)">Node not found</div>';return;}
-  const ph=node.path?'<code style="font-size:.72rem;background:var(--surface-2);padding:1px 5px;border-radius:3px;border:1px solid var(--border)">'+esc(node.path)+'</code>':'';
-  detail.innerHTML='<h2>'+esc(node.title||'(untitled)')+'</h2><div class="hier-meta">Level '+level+(node.kind?' · '+node.kind:'')+(ph?' · '+ph:'')+'</div>'+(node.summary?'<div class="hier-summary">'+esc(node.summary)+'</div>':'<div style="color:var(--text-3);font-size:.8rem">No summary yet.</div>');
-}
-/* loadWikiLint()/toggleWikiLint() left with tier 3 — /api/wiki_lint checked generated wiki pages
-   for broken links and stub sections. The docs tree is hand-written, so there is nothing to lint. */
+/* The Docs block (loadDocs/_renderDocsPages/openDocsPage/searchDocs) and the Knowledge block
+   (loadHierarchy/_renderHierTree/showHierNode) stood here, ~110 lines, and left with their
+   panes. _loadMermaid/renderMermaid went too: the docs pane was their only caller — they were
+   kept through the tier-3 deletions on the grounds that the surviving human-authored docs still
+   used ```mermaid fences, and with no pane rendering markdown the CDN import has nothing to
+   render. Chat renders through mdSafe(), which is untouched and never called them. */
 
 /* ── Admin ───────────────────────────────────────────────────────────────── */
 /* _setupAdminSSE()/_upsertJobChip() left with tier 3. The only event the stream ever carried was
    type==='job' from the pipeline job runner (build_wiki/docgen/okf); with no publisher left the
-   route itself is gone (routes_ops.py), so opening an EventSource here would only 404. The
-   auto-pipeline log below is polled, not pushed, and is unaffected. */
+   route itself is gone (routes_ops.py), so opening an EventSource here would only 404. */
 
-async function loadAutoPipeline(){
-  try{
-    const r=await fetchWithTimeout('/api/auto_pipeline_status');
-    if(!r.ok)return;
-    const d=await r.json();
-    const events=(d.events||[]).slice(-20).reverse();
-    const log=$('admin-autopipeline-log');
-    if(!events.length){log.innerHTML='<div style="color:var(--text-3)">No auto-pipeline events yet</div>';return;}
-    log.innerHTML=events.map(ev=>{
-      const ts=(ev.scheduled_at||ev.ts||'').slice(0,16);
-      const msg=ev.project?ev.project.split('/').slice(-2).join('/')+' → '+(ev.status||'?'):'event';
-      return `<div class="ap-entry"><span class="ap-ts">${esc(ts)}</span><span class="ap-msg">${esc(msg)}</span></div>`;
-    }).join('');
-  }catch(_){}
-}
+/* loadAutoPipeline() and the "Auto-Pipeline Events" panel it filled left with the operator-console
+   pass. It read `d.events` from /api/auto_pipeline_status, and that route returns
+   {enabled, pending} — it has no `events` key and never had one — so the panel rendered
+   "No auto-pipeline events yet" on every load, which reads as a healthy idle queue rather than
+   as a pane wired to nothing. The route's real payload is now on Pulse, in renderPipelineQueue. */
 
 async function loadAdmin(){
-  loadAutoPipeline();
   loadStorageHealth();
   const projs=await loadProjects();
   const tbody=$('projects-body');
@@ -1051,11 +873,8 @@ async function loadStorageHealth(){
    is no live route to re-point either at. Indexing is driven by the reconcile sweep. */
 
 /* ── Chat ────────────────────────────────────────────────────────────────── */
-function askQuestion(q){
-  switchView('chat');
-  $('chat-in').value=q;
-  sendChat();
-}
+/* askQuestion() left with the "Ask the Codebase" panel — its only caller was that panel's
+   buttons, which were seeded from /api/suggested_questions. */
 
 async function sendChat(){
   if(_chatInFlight)return;
@@ -1210,8 +1029,8 @@ const _CMD_ITEMS=[
   {label:'Chat — Ask the codebase',action:()=>switchView('chat'),cat:'view'},
   {label:'Admin — Projects & ops',action:()=>switchView('admin'),cat:'view'},
   {label:'Graph — Knowledge graph',action:()=>switchView('graph'),cat:'view'},
-  {label:'Docs — Repository documentation',action:()=>switchView('docs'),cat:'view'},
-  /* The Processes entry left with tier 3 (BPRE), and the two op entries pointed at
+  /* The Docs entry left with its pane; the Processes entry left with tier 3 (BPRE), and the two
+     op entries pointed at
      runReindex/runWiki, which are gone — a dangling reference here is not a dead menu item but a
      ReferenceError at script-evaluation time, since this is a top-level array literal. */
   {label:'Refresh Admin',action:loadAdmin,cat:'op'},

@@ -76,7 +76,7 @@ test that proves it.
 ```
 ┌──────────── QUERY PATH (synchronous, read) ────────────┐
 │ MCP tools: search·graph·overview·index (HTTP :8765)     │
-│ routes → mcp.py / _overview.py / routes_search.py       │
+│ routes → mcp.py / _overview.py                          │
 │ FEDERATION FAN-OUT  federation.py                        │
 │   expand_federation(root) = [root] + symlink members     │
 │   federated_map(fn) → fn on each member's OWN stores     │

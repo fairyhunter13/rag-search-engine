@@ -32,8 +32,13 @@ def named_projects(sample_workspace: SampleWorkspace) -> dict[str, str]:
 # is a dict, so the rows stayed green against variants that no longer exist. Whether a deleted
 # what= is rejected is asserted by name in test_feature_proof.py's fp1; what this file uniquely
 # covers is that a *surviving* what= binds for all three project roles.
+# `suggested_questions` was an eighth row here and left with the chat box it seeded. It is not
+# swapped for another variant: the two `_VALID` values this list still omits are `communities`
+# (already the slow row below) and `validate`, which walks the index and does not belong in a fast
+# lane. That gap is asserted deliberately elsewhere — test_feature_proof's fp2 now requires its
+# `_WHATS` to equal `_VALID` exactly, which is the list that has to stay complete.
 _OVERVIEW_WHATS_FAST = [
-    "structure", "status", "projects", "metrics", "suggested_questions",
+    "structure", "status", "projects", "metrics",
     "surprising_connections", "import_cycles",
 ]
 _OVERVIEW_WHATS_SLOW = ["communities"]
@@ -56,7 +61,7 @@ class TestNamedProjectsSearch:
 
 
 class TestNamedProjectsOverview:
-    """T3b: all 8 overview what= values return valid JSON for each named root."""
+    """T3b: the fast overview what= values return valid JSON for each named root."""
 
     @pytest.mark.parametrize("key,what", [
         (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_FAST

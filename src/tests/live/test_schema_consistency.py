@@ -56,8 +56,11 @@ def test_sc3_community_count_excludes_structural_spine():
 
 _FIXED_SITES: list[tuple[str, str, str]] = [
     # (module dotted path, function/context description, expected substring in source)
-    ("rag_search.server._overview", "suggested_questions", "level>=1"),
-    ("rag_search.server.routes_search", "_api_suggested_questions", "level>=1"),
+    # The two `suggested_questions` readers were the original leak sites and both are gone —
+    # `routes_search` (whole module) and `_overview`'s variant. `_overview` stays on this list
+    # because its `communities` branch is now the only community read left on a served surface,
+    # and it is the one that must keep the scope.
+    ("rag_search.server._overview", "communities", "level>=1"),
 ]
 
 

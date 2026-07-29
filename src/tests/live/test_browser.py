@@ -8,8 +8,10 @@ Zero mocks — real daemon, real chromium, real SSE.
 
 The wiki and processes views left with tier 3, so every assertion that drove them is deleted
 rather than re-pointed: the wiki pane rendered kb/wiki.py's generated pages and the processes
-pane read BPRE. `docs` is the surviving half of the old wiki view — the repo's own
-human-authored tree over /api/docs — so its tests are re-pointed, not dropped.
+pane read BPRE. The `docs` pane (the surviving human-authored half of the old wiki view) and the
+`hierarchy` pane went next, when the dashboard became an operator console — reading a repo's own
+markdown is the editor's job, and the hierarchy loader had been calling a `what` value that does
+not exist. Four views remain.
 """
 from __future__ import annotations
 
@@ -22,13 +24,12 @@ pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
 _DASH = f"{_BASE}/dashboard"
-# `hierarchy` (the "Knowledge" tab) was never in this list, so #vbtn-hierarchy was the one nav
-# button no test clicked — a gap the P12.10 completeness guard would have reported, except this
-# whole module is excluded from CI's line. It is added here rather than deleted because the view
-# is not tier 3: its loader calls overview(what="hierarchy"), a variant that never existed, over
-# GET against a POST-only route. That dead surface predates R0 and is deliberately left in place;
-# what these tests cover is the nav wiring, which works.
-_VIEWS = ["pulse", "chat", "admin", "graph", "docs", "hierarchy"]
+# `hierarchy` (the "Knowledge" tab) was added to this list once, on the reasoning that the nav
+# wiring worked even though the pane behind it did not — its loader called
+# overview(what="hierarchy"), a variant that has never existed, over GET against a POST-only
+# route. Covering the nav button of a pane that cannot load is exactly the shape of a test that
+# passes through a dead path, so the pane is deleted rather than covered.
+_VIEWS = ["pulse", "chat", "admin", "graph"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -148,12 +149,28 @@ def test_project_selector_populated(page: Page) -> None:
     assert opts >= 1, f"#project-sel has no options, got {opts}"
 
 
-def test_pulse_suggested_questions_populated(page: Page, _sample_promo: str) -> None:
-    """P12.4: suggested questions list has >=1 button after selecting sample promo-svc."""
+def test_pulse_indexing_queue_reports_sweep_state(page: Page, _sample_promo: str) -> None:
+    """P12.4: the Indexing Queue panel reports a real sweep state, not the unread-fetch fallback.
+
+    Replaces test_pulse_suggested_questions_populated. That panel is gone, and the assertion it
+    carried had a second problem worth recording: it required >=1 `.sq-btn`, which
+    /api/suggested_questions produced by templating "How does {title} work?" over community
+    labels — so it went green on five buttons all reading "How does Test work?".
+
+    The badge is the discriminating half here. renderPipelineQueue writes "unknown" whenever the
+    fetch fails or the payload is unreadable, so demanding one of the two real words is what
+    separates a wired panel from a rendered placeholder — the failure mode the panel this
+    replaces lived in for months.
+    """
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
-    btns = page.locator("#suggested-list .sq-btn").count()
-    assert btns >= 1, f"no suggested question buttons rendered for sample, got {btns}"
+    state = (page.locator("#sweeps-state").inner_text() or "").strip()
+    assert state in ("sweeps running", "sweeps paused"), (
+        f"#sweeps-state must report a real /api/auto_pipeline_status `enabled`; got {state!r}"
+    )
+    assert (page.locator("#pending-list").inner_text() or "").strip(), (
+        "#pending-list rendered nothing — it must show the queue or say the queue is empty"
+    )
 
 
 # ── P12.5: SSE live feed / daemon dot ────────────────────────────────────────
@@ -205,7 +222,6 @@ _CMD_VIEW_ITEMS = [
     ("Chat — Ask", "chat"),
     ("Admin — Proj", "admin"),
     ("Graph — Know", "graph"),
-    ("Docs — Repo", "docs"),
 ]
 
 
@@ -268,11 +284,12 @@ def test_admin_storage_health_populated(page: Page) -> None:
 
 
 # ── P12.5: SSE live feed elements ─────────────────────────────────────────
-
-def test_activity_list_element_present(page: Page) -> None:
-    """P12.5: #activity-list is rendered in the pulse panel (SSE events append here)."""
-    page.goto(_DASH, wait_until="networkidle")
-    expect(page.locator("#activity-list")).to_be_attached()
+#
+# test_activity_list_element_present stood here, asserting #activity-list was attached. Its
+# publisher — /api/kb_health's last_pipeline_event — left with tier 3, and its docstring's premise
+# ("SSE events append here") stopped being true then; the panel was still attached, so the test
+# kept passing over a feed with no writer. The pane it belonged to is now the Indexing Queue,
+# covered by test_pulse_indexing_queue_reports_sweep_state on content rather than attachment.
 
 
 # ── P12.7: graph interactions ─────────────────────────────────────────────
@@ -316,64 +333,18 @@ def test_graph_layout_sel_change_no_crash(page: Page) -> None:
 # job runner was deleted, so the route, the chips and the sink are all gone.
 
 
-def test_admin_autopipeline_present(page: Page) -> None:
-    """P12.8: #admin-autopipeline-log is rendered in admin view."""
-    page.goto(_DASH, wait_until="networkidle")
-    page.locator("#vbtn-admin").click()
-    expect(page.locator("#admin-autopipeline-log")).to_be_attached()
+# test_admin_autopipeline_present stood here and asserted only that #admin-autopipeline-log was
+# *attached*. The panel read `d.events` from /api/auto_pipeline_status, which returns
+# {enabled, pending} and has no `events` key — so it was permanently empty and the test was green
+# throughout. An attachment assertion cannot see the difference between a fed panel and an empty
+# div, which is why the defect survived every run. The route's real payload is on Pulse now and is
+# covered by test_pulse_indexing_queue_reports_sweep_state, which asserts on content.
 
 
-# ── P12.8b: docs view ─────────────────────────────────────────────────────
-#
-# Re-pointed from the wiki view rather than deleted: the wiki pane listed kb/wiki.py's generated
-# pages, and the docs pane lists the project's own human-authored docs/ tree over /api/docs. The
-# lint (#wiki-lint-*) and export (#wiki-export-btn) tests have no successor here — both operated on
-# generated pages — so they are gone with the generator.
-#
-# The count assertion below is only meaningful because the promo-svc fixture now carries
-# docs/README.md. /api/docs returns {"tree": []} for a project with no docs/ directory
-# (routes_project.py:36-37), and _renderDocsPages then writes a "No docs in this project."
-# placeholder with no <button> in it — so on the old fixture this would have been red, and an
-# attached-only assertion would have been decoration passing on a broken fetch.
-
-def test_docs_view_loads_pages(page: Page, _sample_promo: str) -> None:
-    """P12.8b: switching to docs view loads page buttons into #docs-pages for sample promo-svc."""
-    page.goto(_DASH, wait_until="networkidle")
-    _select_project(page, _sample_promo)
-    page.locator("#vbtn-docs").click()
-    page.wait_for_timeout(3000)
-    btns = page.locator("#docs-pages button").count()
-    assert btns >= 1, f"#docs-pages has no page buttons for sample promo-svc: {btns}"
-
-
-def test_docs_page_loads_content(page: Page, _sample_promo: str) -> None:
-    """P12.8b: clicking a docs page button populates #docs-content for sample promo-svc."""
-    page.goto(_DASH, wait_until="networkidle")
-    _select_project(page, _sample_promo)
-    page.locator("#vbtn-docs").click()
-    page.wait_for_timeout(3000)
-    page.locator("#docs-pages button").first.click()
-    page.wait_for_timeout(3000)
-    text = page.locator("#docs-content").inner_text() or ""
-    assert text.strip(), f"#docs-content empty after page open for sample promo-svc: {text[:80]!r}"
-    assert "Pick a page" not in text, f"#docs-content still shows the empty placeholder: {text[:80]!r}"
-
-
-def test_docs_search_filters_pages(page: Page, _sample_promo: str) -> None:
-    """P12.8b: typing in #docs-search filters #docs-pages down.
-
-    Replaces the wiki-lint test's slot in this block. #docs-search is the only interactive control
-    left in the docs sidebar, and nothing else exercised it.
-    """
-    page.goto(_DASH, wait_until="networkidle")
-    _select_project(page, _sample_promo)
-    page.locator("#vbtn-docs").click()
-    page.wait_for_timeout(3000)
-    before = page.locator("#docs-pages button").count()
-    page.locator("#docs-search").fill("zzz-no-such-page")
-    page.wait_for_timeout(500)
-    after = page.locator("#docs-pages button").count()
-    assert before >= 1 and after == 0, f"#docs-search did not filter: before={before} after={after}"
+# The P12.8b docs-view block stood here — three tests over #docs-pages / #docs-content /
+# #docs-search, themselves re-pointed from the wiki view when kb/wiki.py left. The pane is gone
+# with the operator-console pass, and there is nothing to re-point them at a third time: the
+# surface they exercised was a markdown reader for files already on disk.
 
 
 def test_graph_detail_present_after_load(page: Page) -> None:
@@ -402,18 +373,19 @@ def test_p12_completeness_guard() -> None:
     key_ids = {
         "cmd-overlay", "cmd-input", "cmd-results", "chat-in", "send-btn",
         "chat-history", "graph-search", "graph-filter-sel", "graph-layout-sel",
-        "graph-node-count", "graph-detail", "docs-pages", "docs-content",
-        "docs-search",
-        "admin-autopipeline-log", "projects-body", "project-sel",
-        "storage-health-body", "activity-list", "suggested-list", "daemon-dot",
+        "graph-node-count", "graph-detail",
+        "projects-body", "project-sel",
+        "storage-health-body", "pending-list", "sweeps-state", "daemon-dot",
         "kpi-files", "kpi-communities", "theme-btn",
     }
     # wiki-pages/wiki-content/wiki-lint-panel/wiki-lint-count/kpi-enrichment/op-log/admin-job-chips
-    # left with tier 3 — the last two because their writers (opLog, the SSE job feed) did;
-    # docs-pages/docs-content/docs-search are the surviving half of that view. Keeping a deleted id
-    # in this list would fail the guard forever; dropping one that still exists would let it go
-    # untested — so this list has to track dashboard.html on both sides, which is what the `tagged`
-    # scan above does automatically for onclick-bearing elements.
+    # left with tier 3 — the last two because their writers (opLog, the SSE job feed) did.
+    # docs-pages/docs-content/docs-search and admin-autopipeline-log left with the operator-console
+    # pass, and activity-list/suggested-list with the two Pulse panels the Indexing Queue replaced;
+    # pending-list and sweeps-state are that panel's ids. Keeping a deleted id in this list would
+    # fail the guard forever; dropping one that still exists would let it go untested — so this
+    # list has to track dashboard.html on both sides, which is what the `tagged` scan above does
+    # automatically for onclick-bearing elements.
     # vbtn-* ids are covered by the f-string f"#vbtn-{view}" parametrize pattern
     pattern_covered = {f"vbtn-{v}" for v in _VIEWS}
     all_ids = tagged | key_ids
@@ -423,9 +395,10 @@ def test_p12_completeness_guard() -> None:
     # Every interactive id must be exercised with an action verb within 5 lines of its reference.
     interactive_ids = {
         "send-btn", "chat-in", "graph-filter-sel", "project-sel",
-        # wiki-lint-items left with tier 3; docs-search takes its place as the docs view's one
-        # interactive control, and is driven by test_docs_search_filters_pages.
-        "graph-canvas", "docs-search",
+        # wiki-lint-items left with tier 3 and docs-search, which took its slot, left with the docs
+        # pane. The Indexing Queue that replaced it has no interactive control — it is a readout —
+        # so it belongs in key_ids above and not here.
+        "graph-canvas",
     }
     action_verbs = (".click(", ".fill(", ".select_option(", ".press(", "page.mouse.click", ".evaluate(")
     all_lines = tests.splitlines()
@@ -444,21 +417,26 @@ def test_p12_completeness_guard() -> None:
 
 # ── P35 behavioral e2e: drive interactive elements to real outcomes ───────────
 
-def test_suggested_question_click_routes_to_chat(page: Page) -> None:
-    """P35 DB2: clicking a .sq-btn routes to chat view and produces a streamed answer."""
+def test_chat_input_routes_to_a_streamed_answer(page: Page) -> None:
+    """P35 DB2: a question typed into the chat bar produces a streamed answer.
+
+    Was test_suggested_question_click_routes_to_chat, which clicked a `.sq-btn` from the deleted
+    "Ask the Codebase" panel. Two things were bundled in that click — the panel's routing into the
+    chat view, and chat answering at all — and only the second has a subject left. Routing is what
+    switchView already does under the nav test above; asking is the property worth keeping, and it
+    is stated here without a dead entry point in front of it.
+    """
     page.goto(_DASH, wait_until="networkidle")
-    page.wait_for_timeout(3000)
-    btns = page.locator(".sq-btn")
-    count = btns.count()
-    assert count >= 1, f"no suggested question buttons rendered: {count}"
-    btns.first.click()
+    page.locator("#vbtn-chat").click()
     expect(page.locator("#view-chat")).to_be_visible()
+    page.locator("#chat-in").fill("How does this project handle promotions?")
+    page.locator("#send-btn").click()
     page.wait_for_function(
         "document.getElementById('chat-history').innerText.trim().length > 10",
         timeout=30000,
     )
     text = page.locator("#chat-history").inner_text()
-    assert len(text.strip()) > 10, f"sq-btn click must populate chat-history: {text!r}"
+    assert len(text.strip()) > 10, f"chat must populate chat-history: {text!r}"
 
 
 def test_graph_node_click_updates_detail(page: Page) -> None:
@@ -513,8 +491,8 @@ def test_journey_user_empty_chat_is_ignored(page: Page) -> None:
 
 # DB6b (the wiki-lint disclosure) left with tier 3 along with toggleWikiLint() and the lint panel
 # itself. The lint ran over kb/wiki.py's generated pages — broken links between generated pages,
-# citations into a KB that no longer exists — so there is nothing in the docs view for it to
-# inspect. The reader journey it covered is now test_docs_page_loads_content.
+# citations into a KB that no longer exists. Its reader journey moved to the docs pane, which has
+# since gone too, so the journey has no successor: reading documents is not what this console does.
 
 
 def test_journey_analyst_filters_graph_to_files(page: Page) -> None:
@@ -607,4 +585,4 @@ def test_chat_debug_question_via_browser(page: Page) -> None:
 # The Processes view and the Wiki Docs group both left with tier 3, so their tests are deleted
 # rather than re-pointed. #view-processes rendered kb/bpre.py's reconstructed process flows, which
 # no longer exist in any form. #vbtn-wiki/#wiki-pages/#wiki-content listed kb/wiki.py's generated
-# pages; the docs view above is the surviving half of that surface and carries its assertions.
+# pages; the docs view carried their assertions for one release and has now gone the same way.

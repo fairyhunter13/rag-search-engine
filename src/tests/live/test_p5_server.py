@@ -84,7 +84,7 @@ def test_dashboard_views_present(live_client):
     r = live_client.get("/dashboard")
     assert r.status_code == 200
     body = r.text.lower()
-    for view in ("pulse", "chat", "admin", "graph", "docs", "hierarchy"):
+    for view in ("pulse", "chat", "admin", "graph"):
         assert f'id="vbtn-{view}"' in body, f"dashboard missing '{view}' nav button"
     assert 'id="vbtn-wiki"' not in body, "wiki nav button must not survive tier 3's deletion"
     assert 'id="vbtn-processes"' not in body, "processes nav button must not survive tier 3"
@@ -183,9 +183,10 @@ def test_overview_all_whats_real_federation_root(sample_workspace):
     # service_mesh / feature_map / business_rules / process_flows were the tier-3 half of this
     # list; R0a deleted them from _VALID, so leaving them here would fail on the "unknown what="
     # branch — the list has to shrink with the tool, not outlive it.
+    # `suggested_questions` was the seventh and left with the chat box it seeded.
     whats = [
         "structure", "communities", "status", "import_cycles",
-        "surprising_connections", "suggested_questions",
+        "surprising_connections",
     ]
     for what in whats:
         result = asyncio.run(overview_tool(fed_root, what))
@@ -199,11 +200,20 @@ def test_overview_all_whats_real_federation_root(sample_workspace):
 # gRPC/HTTP service-surface view it produced does not exist any more.
 
 
-def test_suggested_questions_and_chat_context_no_operationalerror(live_client, service_path):
-    """P23.2: ORDER BY member_count (not node_count) — no OperationalError on real graph DBs."""
-    r = live_client.get(f"/api/suggested_questions?project={service_path}")
-    assert r.status_code == 200, f"suggested_questions 500 (likely node_count bug): {r.text}"
-    assert "questions" in r.json()
+def test_community_read_orders_by_member_count_no_operationalerror(service_path):
+    """P23.2: ORDER BY member_count (not node_count) — no OperationalError on real graph DBs.
+
+    The regression this guards is a column that does not exist in the communities table, and it
+    was originally caught through /api/suggested_questions. That route is gone; the same SQL is
+    now the only community read on a served surface, in _overview's `communities` branch, which
+    orders by member_count for the cap and again after the federation concatenation. Asserting the
+    rows come back is what witnesses the column name — an OperationalError would surface as an
+    `error` key rather than an exception, so the payload has to be inspected, not just the call.
+    """
+    from rag_search.server.mcp import overview as overview_tool
+    data = json.loads(asyncio.run(overview_tool(service_path, "communities")))
+    assert "error" not in data, f"communities read failed (likely node_count bug): {data}"
+    assert "communities" in data, f"communities payload missing its rows: {data}"
 
 
 def test_mcp_search_subdir_resolves_to_root(service_path):
@@ -634,6 +644,12 @@ def test_e7_trimmed_http_surface(live_client):
         # a surviving-but-empty stream still answers 200 with an SSE content-type, so only a
         # 404/405 assertion can tell "deleted" from "publishes nothing".
         ("GET", "/api/events/stream"),
+        # The operator-console pass added the last three: the Docs pane's two routes and the
+        # question-seeding route behind the "Ask the Codebase" panel. All three answered 200 with
+        # real payloads right up to their deletion, so unlike the tier-3 rows above there is no
+        # earlier test to inherit from — this is their only absence assertion.
+        ("GET", "/api/docs"), ("GET", "/api/docs/page"),
+        ("GET", "/api/suggested_questions"),
     ]
     for method, path in deleted:
         r = live_client.request(method, path)

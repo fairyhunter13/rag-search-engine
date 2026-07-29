@@ -15,7 +15,9 @@ OVERVIEW_SHAPE: list[tuple[str, set[str], bool]] = [
     ("status",               {"path", "symbols", "communities"},              True),
     ("import_cycles",        {"cycles", "cycle_count", "has_cycles"},         False),
     ("surprising_connections", {"connections"},                                False),
-    ("suggested_questions",  {"questions"},                                    True),
+    # `suggested_questions`/{questions} was the sixth row and left with the chat box it seeded;
+    # like the five below it is now asserted *unanswerable* by test_feature_proof's fp1/fp2
+    # rather than shape-checked here.
     # Five rows left with tier 3: service_mesh/{services}, feature_map/{features},
     # business_rules/{rules}, process_flows/{flows}, patterns/{frameworks}. Each was RED the
     # moment R0a dropped the variant from `_VALID` — handle_overview answers an unknown `what`
