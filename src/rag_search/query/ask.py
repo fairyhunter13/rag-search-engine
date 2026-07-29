@@ -172,13 +172,19 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     if not project_vector_db(project_path).exists():
         return f"Project not indexed: {project_path}"
     embedder = get_embedder()
-    graph_stores = [GraphStore(project_graph_db(p)) for p in all_paths if project_graph_db(p).exists()]
-    # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never to a query.
-    vector_stores = [
-        VectorStore(project_vector_db(p), migrate=False)
-        for p in all_paths if project_vector_db(p).exists()
-    ]
+    graph_stores: list[GraphStore] = []
+    vector_stores: list[VectorStore] = []
+    # Opened inside the try — see mcp.py: a comprehension that raises partway leaves every store
+    # it already built unreachable and its fds held for the life of the process.
     try:
+        # Appended one at a time rather than by comprehension: a comprehension builds its whole
+        # list before binding it, so one that raises partway orphans every store in the temporary.
+        for p in all_paths:
+            if project_graph_db(p).exists():
+                graph_stores.append(GraphStore(project_graph_db(p)))
+            # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never a query.
+            if project_vector_db(p).exists():
+                vector_stores.append(VectorStore(project_vector_db(p), migrate=False))
         chunks = _search_fed(query, embedder, vector_stores, top_k=8)
         answer = compose_answer(query, chunks, graph_stores, scope=scope)
         _cache_set(cache_dir, cache_key, answer, ttl_s=3600)
