@@ -69,6 +69,44 @@ def test_ts8_calls_resolve_within_a_language_family(safe_tmp_path):
     )
 
 
+def test_ts0_same_file_calls_become_edges(safe_tmp_path):
+    """S0 rung 0: a call to a definition in the same file must become an edge.
+
+    `_extract_graph` discarded every same-file edge (`callee_file != fstr`) until 2026-07-29.
+    Measured before the change: ccw's stored graph held **0 same-file edges out of 1,934**, and
+    five of the twelve-query graph gate's seven misses were same-file relations — `run_and_log`
+    read as 8 callers / 0 callees, `evaluate_recall` as 7 callees / 0 callers, the mirror-image
+    signature of that one condition.
+
+    Three assertions, because two of the three failure modes are invisible to the first:
+    keeping the same-file edge alone also passes if resolution is inverted, and dropping the
+    condition outright — rather than narrowing it to self-edges — passes both.
+    """
+    root = safe_tmp_path / "s0"
+    _write(root, "mod.py",
+           "def helper():\n    return 1\n\n\n"
+           "def main():\n    return helper()\n\n\n"
+           "def fact(n):\n    return fact(n - 1)\n")
+    _write(root, "app.py", "from mod import main\n\n\ndef run():\n    return main()\n")
+    gs, _ = _graph_for(root)
+    named = {(a, b) for a, b in gs._con.execute(
+        "SELECT a.name, b.name FROM edges e "
+        "JOIN symbols a ON a.sid=e.caller_sid JOIN symbols b ON b.sid=e.callee_sid"
+    )}
+    assert ("main", "helper") in named, (
+        "a same-file call produced no edge — the graph cannot answer callers/callees for any "
+        f"relation that does not cross a file boundary; edges were {sorted(named)}"
+    )
+    assert ("run", "main") in named, (
+        "cross-file resolution regressed while restoring same-file edges; "
+        f"edges were {sorted(named)}"
+    )
+    assert ("fact", "fact") not in named, (
+        "a recursive call became a self-edge — the exclusion must narrow to caller == callee, "
+        f"not disappear; edges were {sorted(named)}"
+    )
+
+
 def test_ts8b_family_table_only_widens(safe_tmp_path):
     """A language with no relatives is its own family, so the table can never over-merge."""
     assert language_family("typescript") == language_family("javascript")

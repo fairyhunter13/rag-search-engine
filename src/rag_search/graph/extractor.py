@@ -12,7 +12,14 @@ from pathlib import Path
 # History, so the next bump knows what it is joining:
 #   e1  2026-07-28  S8 family-gated call resolution; S1 grammar-decided names; S4 token-matched
 #                   call nodes (+`macro` field, `*_signature` excluded); S7 shebang fallback.
-EXTRACTOR_REV = "e1"
+#   e2  2026-07-29  S0 same-file call edges restored in `sweeps._extract_graph` — the resolution
+#                   loop discarded every call whose target was defined in the same file, so ccw's
+#                   stored graph held 0 same-file edges out of 1,934. Bundled deliberately with
+#                   community.py's ALGO_VERSION fg1->fg2 (structural labels): both invalidate
+#                   every stored graph, and they compose into ONE `_pipeline_algo_version`
+#                   string, so shipping them together re-derives the 160-graph fleet once
+#                   instead of twice.
+EXTRACTOR_REV = "e2"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.

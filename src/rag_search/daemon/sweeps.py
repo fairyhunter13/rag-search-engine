@@ -38,7 +38,11 @@ log = logging.getLogger(__name__)
 # stood here until 2026-07-28; it was deleted with tier 3 and the suppress() below meant a missing
 # file contributed nothing — so dropping it leaves the hash bit-identical and re-derives nothing.
 # test_self_heal_code_fp.py::SH2b now asserts every entry exists, so the next one can't go dead
-# unnoticed. Editing this tuple, or any file it names, re-derives all fleet graphs.
+# unnoticed. Editing this tuple, or any file it names, re-derives all fleet graphs — and it takes
+# effect the moment the bytes change on disk, because `_fingerprint_paths` re-reads them per call
+# with no memo. Under an editable install that means a live daemon, no restart and no deploy: an
+# edit to extractor.py during a fleet repair puts a 160-graph re-derive in contention with it.
+
 _FINGERPRINT_MODULES = ("graph/extractor.py", "graph/community.py")
 
 
@@ -67,7 +71,13 @@ def _pipeline_algo_version() -> str:
     is deliberately not fingerprinted — hashing a module this large would re-derive 160 graphs
     for an unrelated log line. So a resolution change is invisible to `_code_fingerprint` and
     would have served stale edges forever. Bump `EXTRACTOR_REV` in the same commit as any change
-    to what extraction emits; `test_extractor_rev.py` is the gate that says so.
+    to what extraction emits.
+
+    No test can force that bump — it is a human step, and this docstring named a
+    `test_extractor_rev.py` that was never written, which is worse than naming nothing. What the
+    suite does hold is the pair either side of it: `test_extraction_phase5.py`'s TS3 pins the
+    identity's *composition* (a pre-S3 stamp must read stale), and TS0/TS8 pin what extraction
+    *emits*, so a silent change to edge semantics goes red there even though the stamp cannot.
     """
     from rag_search.graph.community import ALGO_VERSION
     from rag_search.graph.extractor import EXTRACTOR_REV
@@ -527,8 +537,15 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
                         best_span, caller_sid = span, sid
             if not caller_sid:
                 continue
-            for (callee_sid, callee_file) in name_to_entries.get((_fam(fstr), callee_name), []):
-                if callee_file != fstr:
+            for (callee_sid, _callee_file) in name_to_entries.get((_fam(fstr), callee_name), []):
+                # S0 rung 0: this read `callee_file != fstr`, which discarded every call whose
+                # target was defined in the same file. Measured 2026-07-29 — ccw's stored graph
+                # held **0 same-file edges out of 1,934**, so `callers`/`callees` could not answer
+                # any relation that stays inside one file: `run_and_log` showed 8 callers and 0
+                # callees, `evaluate_recall` 7 callees and 0 callers, and five of the twelve-query
+                # graph gate's seven misses were same-file. Restoring them grows ccw's graph ~43%.
+                # A self-edge is what the condition plausibly meant to stop, and that is this one.
+                if callee_sid != caller_sid:
                     gs.upsert_edge(caller_sid, callee_sid)
     gs.commit()
 
