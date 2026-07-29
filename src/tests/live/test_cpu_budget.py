@@ -43,18 +43,27 @@ def _sse_json(r: requests.Response) -> dict:
     raise AssertionError(f"no data: line in SSE response: {r.text[:300]}")
 
 
+# CB4 deliberately saturates the daemon's 1-core cgroup, and the daemon serves its control
+# plane from inside that same cgroup — so while the cap is biting (which is the whole point of
+# the test) even an `initialize` handshake queues behind throttled work. Measured idle it is
+# 0.01 s; under CB4's load the old 10 s ceiling was reached and the test failed in *setup*,
+# never reaching the assertions it exists for. The budget is the client's patience, not the
+# invariant, so it is generous; the invariant is still avg_frac <= 1.05 plus throttle growth.
+_MCP_TIMEOUT_S = 60
+
+
 def _mcp_session() -> dict:
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05", "capabilities": {},
                    "clientInfo": {"name": "test-cpu-budget", "version": "0.1"}},
-    }, headers=_HDR, timeout=10)
+    }, headers=_HDR, timeout=_MCP_TIMEOUT_S)
     assert r.status_code == 200, f"initialize failed {r.status_code}"
     sid = r.headers.get("mcp-session-id", "")
     return {**_HDR, "mcp-session-id": sid} if sid else _HDR
 
 
-def _mcp_call(name: str, arguments: dict, timeout: float = 10) -> dict:
+def _mcp_call(name: str, arguments: dict, timeout: float = _MCP_TIMEOUT_S) -> dict:
     h = _mcp_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
@@ -187,7 +196,7 @@ def test_cb4_active_work_capped_and_throttled(safe_tmp_path):
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=_CB4_PROJECT_COUNT) as pool:
         futures = [
-            pool.submit(_mcp_call, "index", {"project_path": str(d), "enabled": True}, 15)
+            pool.submit(_mcp_call, "index", {"project_path": str(d), "enabled": True})
             for d in project_dirs
         ]
         results = [f.result() for f in futures]

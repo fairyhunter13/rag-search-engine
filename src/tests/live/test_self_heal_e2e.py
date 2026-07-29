@@ -71,8 +71,21 @@ def test_algo_drift_triggers_rederive(_proj):
 
 
 @pytest.mark.slow
-def test_source_drift_triggers_rederive(_proj):
-    """T3: adding a new source file changes the fingerprint; reconcile re-extracts it."""
+def test_source_drift_triggers_rederive(_proj, monkeypatch):
+    """T3: adding a new source file changes the fingerprint; reconcile re-extracts it.
+
+    `_code_scan` memoises on *elapsed time* (`_CODE_SCAN_TTL_S = 300`), so a fingerprint taken
+    immediately after a write is served from the pre-write cache entry by construction — this
+    test asserted the memo did not exist and had failed on every run since the memo landed,
+    invisibly, because it is `@pytest.mark.slow`. The memo is correct: it bounds how often a
+    43 s fleet-wide stat-walk is paid, against a reconcile cadence measured in half-hours, and
+    live edits are the watcher's job rather than reconcile's. So the fix is to opt out through
+    the knob production already exposes for exactly this, not to weaken the assertion — the
+    invariant under test is "a new file reaches the graph", never "no cache stands in front".
+    It must cover `reconcile_projects()` too: with a warm pre-write entry reconcile compares
+    stored sig against cached sig, finds them equal, and skips the re-extract this asserts.
+    """
+    monkeypatch.setenv("RSE_CODE_SCAN_TTL_S", "0")
     from rag_search.core.config import project_graph_db
     from rag_search.daemon.sweeps import (
         _code_source_fingerprint,

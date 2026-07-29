@@ -100,8 +100,20 @@ def test_inv1_no_inlining(safe_tmp_path):
 
 @pytest.mark.slow
 def test_inv2_members_first_class(safe_tmp_path):
-    """Invariant #2: member registered, enabled, and searchable across all projects."""
-    from rag_search.core.registry import get_project
+    """Invariant #2: a member is registered, enabled, and reachable BOTH ways.
+
+    "First-class" used to be asserted with an unscoped `mcp_search(marker, "code", None)`,
+    i.e. "findable without naming any project". T2 deliberately deleted that fleet-wide
+    fallback — unscoped now returns `{"error": "project_path required", "candidates": [...]}`
+    — so this test had been asserting the absence of a feature that was removed on purpose,
+    and `@pytest.mark.slow` kept it from ever saying so. Restoring the unscoped call would be
+    re-asserting the deleted behaviour; the honest reading of "first-class" under scatter-
+    gather is that the member is reachable through the federation union *and* on its own,
+    which is what the two arms below check. The second arm is not redundant: a member that
+    only ever answered through its root would be an inlined shard, not a first-class project.
+    """
+    from rag_search.core.config import ProjectEntry
+    from rag_search.core.registry import get_project, upsert_project
     from rag_search.daemon.federation import index_members
     from rag_search.daemon.sweeps import _index_project
     from rag_search.server.mcp import search as mcp_search
@@ -109,13 +121,20 @@ def test_inv2_members_first_class(safe_tmp_path):
     root, member, marker = _federate(safe_tmp_path)
     _clean([root, member])
     try:
+        upsert_project(ProjectEntry(path=str(root), enabled=True))
         n = index_members(str(root))
         assert n == 1, f"expected 1 new member, got {n}"
         assert get_project(str(member)) is not None
         _index_project(str(member))
-        data = json.loads(asyncio.run(mcp_search(marker, "code", None)))
-        files = [r["path"] for r in data.get("results", [])]
-        assert any(str(member) in f for f in files), f"member not in search: {files}"
+        # A LIST — `search`'s third parameter is `project_paths`, plural. Passing the bare
+        # string iterates it character by character, and each character is a *relative* path
+        # that resolve_registered_root then resolves against the cwd, so a run from inside a
+        # registered repo answers confidently out of that repo instead.
+        for label, scope_path in (("root union", str(root)), ("own path", str(member))):
+            data = json.loads(asyncio.run(mcp_search(marker, "code", [scope_path])))
+            files = [r["path"] for r in data.get("results", [])]
+            assert any(str(member) in f for f in files), \
+                f"member unreachable via {label}: {data.get('error') or files}"
     finally:
         _clean([root, member])
 
