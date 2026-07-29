@@ -16,12 +16,17 @@ def service_path(sample_workspace: SampleWorkspace) -> str:
     return sample_workspace.promo
 
 
-def test_mcp_has_five_tools():
-    """All 5 MCP tools registered in FastMCP app."""
+def test_mcp_has_four_tools():
+    """HR30: the MCP surface is exactly these 4 tools — `ask` was retired (see server/mcp.py).
+
+    Asserted with `==`, not the `<=` this used. HR30 is stated as "MCP surface = 5 tools only" and
+    a subset check cannot see a sixth tool, so the "only" half was never enforced — which is also
+    why nothing failed when the surface was meant to be closed. Equality is the claim.
+    """
     from rag_search.server.mcp import mcp
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
-    assert {"search", "ask", "graph", "overview", "index"} <= names
+    assert names == {"search", "graph", "overview", "index"}, f"unexpected MCP surface: {names}"
 
 
 def test_mcp_graph_nonexistent_returns_error():
@@ -530,15 +535,11 @@ def test_e5_mcp_query_path_no_generation():
     ask_src = (base / "query" / "ask.py").read_text()
     assert "graph.llm" not in mcp_src, "E5: mcp.py imports graph.llm (HR9 violation)"
     assert "import chat" not in mcp_src, "E5: mcp.py imports chat"
-    # After PART-3 refactor: mcp.ask delegates to run_ask(), which calls compose_answer()
-    assert "run_ask" in mcp_src, "E5: mcp.py must delegate to run_ask() (LLM-free helper)"
+    # `assert "run_ask" in mcp_src` stood here. It guarded "the MCP ask handler delegates rather
+    # than inlining generation"; `ask` is off the MCP surface, so the subject is gone and the
+    # assertion now points at an import mcp.py should not have. run_ask()'s own LLM-freedom is
+    # guarded at its new home in test_p14_mcp_readonly.test_run_ask_is_llm_free.
     assert "run_graph" in mcp_src, "E5: mcp.py must delegate to run_graph() (DB-reads helper)"
-    import inspect
-
-    from rag_search.query.ask import run_ask as _ra
-    assert "compose_answer" in inspect.getsource(_ra), (
-        "E5: run_ask() must call compose_answer() (LLM-free context assembler)"
-    )
     assert "graph.llm" not in ask_src, "E5: ask.py imports graph.llm (HR9 violation)"
     assert "def ask(" not in ask_src, "E5: ask.py must not have ask() (was LLM-generative)"
 
@@ -646,12 +647,28 @@ def test_e7_trimmed_http_surface(live_client):
 
 
 def test_e8_global_prompt_tool_accuracy():
-    """E8: _PROMPT is the canonical Phase-100 body — 5 tools + RESILIENCE + no drift."""
-    from rag_search.daemon.global_prompt import _PROMPT
+    """E8: _PROMPT is the canonical body — every registered tool, RESILIENCE, and no drift.
 
-    for tool in ("search", "ask", "graph", "overview", "index"):
-        assert tool in _PROMPT, f"E8: _PROMPT missing tool '{tool}'"
-    assert "5-tool" in _PROMPT, "E8: _PROMPT is not Phase-100 canonical (missing '5-tool')"
+    The tool names are **derived from the live registry**, not written out here. The hand-written
+    tuple this replaced (`("search", "ask", "graph", "overview", "index")`) could only ever catch a
+    tool deleted from _PROMPT, never one added to the server and never documented — and _PROMPT is
+    the entire briefing an MCP client gets. Deriving makes both directions fail
+    ([[feedback_allowlist_needs_sufficiency_test]]).
+
+    The count marker is derived for the same reason: `assert "5-tool" in _PROMPT` was a literal
+    that had to be remembered, and retiring `ask` is precisely the edit that would have been
+    forgotten.
+    """
+    from rag_search.daemon.global_prompt import _PROMPT
+    from rag_search.server.mcp import mcp as _mcp
+
+    names = sorted(t.name for t in asyncio.run(_mcp.list_tools()))
+    for tool in names:
+        assert tool in _PROMPT, f"E8: _PROMPT does not mention registered tool '{tool}'"
+    assert f"{len(names)}-tool" in _PROMPT, (
+        f"E8: _PROMPT must state the surface size; {len(names)} tools registered ({names}), "
+        f"but '{len(names)}-tool' is absent from the prompt"
+    )
     assert "RESILIENCE" in _PROMPT, "E8: _PROMPT missing RESILIENCE rule"
     assert "NEVER auto-index" in _PROMPT, "E8: _PROMPT missing NEVER auto-index rule"
     assert "whenever the current project is indexed" in _PROMPT, (

@@ -11,15 +11,15 @@ from pathlib import Path
 _START = "[rag-search-global-instructions:start]"
 _END = "[rag-search-global-instructions:end]"
 
-# Canonical MCP doctrine (June 2026 Phase 100). Mirrors scripts/integrations/canonical.py.
+# Canonical MCP doctrine (July 2026 Phase 101). Mirrors scripts/integrations/canonical.py.
 _PROMPT = """\
 MANDATORY: Use the rag-search MCP server as the primary code lookup tool whenever the current project is indexed.
 
-5-tool API (v3 — June 2026 Phase 100): search · ask · graph · overview · index
+4-tool API (v4 — July 2026 Phase 101): search · graph · overview · index
 See MCP tool schemas for full parameter reference (scope/relation/what variants, etc.).
 
 Rules (no exceptions):
-- Call search/ask/graph/overview BEFORE any Bash grep/find, Glob, or Grep tool call.
+- Call search/graph/overview BEFORE any Bash grep/find, Glob, or Grep tool call.
 - Never delegate codebase questions to sub-agents via the Agent tool.
 - GPU-only inference — CPU fallback is forbidden for all RSE operations.
 - RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs/errors,
@@ -27,7 +27,9 @@ Rules (no exceptions):
 - NEVER auto-index. Only call index(enabled=True) when the user explicitly asks.
 - If not indexed, say so and ask before indexing.
 - `search` returns ranked LOCATIONS (path + line range + a short preview), not file bodies.
-  Read the ranges you actually want. Pass verbosity="full" only when you need bodies inline.\
+  Read the ranges you actually want. Pass verbosity="full" only when you need bodies inline.
+- For "what is this project shaped like" rather than "where is X", use
+  overview(what="communities", query=...) — the `ask` tool was retired in favour of it.\
 """
 
 

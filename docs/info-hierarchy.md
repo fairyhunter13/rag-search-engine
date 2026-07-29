@@ -20,7 +20,7 @@ WISDOM    §1a Principles (P0–P18) + §13b HRs — the governing laws.
 
 KNOWLEDGE Community summaries + labels (L1, level=1 in graph.db).
           Derived from: symbols + edges → fastgreedy community detection → structural labelling.
-          Surfaced as: overview(communities), ask() Architecture section.
+          Surfaced as: overview(communities, query=...); ask() Architecture section (CLI/chat only).
           Generation: label_community_structural (graph/community.py) — templated from the
                       community's own members, deterministic. DeepSeek narration and the
                       wiki community_*.md surface left with tier 3 on 2026-07-28.
@@ -34,7 +34,7 @@ INFORMATION Symbols + call edges (graph.db symbols/edges tables).
 
 DATA      Source code chunks + file tree.
           Derived from: iter_files() + chunk_file() with cAST structural-path header.
-          Surfaced as: search() results, ask() Code section.
+          Surfaced as: search() results; ask() Code section (CLI/chat only).
           Generation: index_project() → VectorStore (sqlite-vec, FLOAT[768]).
           LLM cost: $0 (embed-only, GPU).
 ```
@@ -106,7 +106,7 @@ The former L2 (domain aggregations) and L3 (federation themes) layers between Kn
 
 ## How to use
 
-- **search/ask/overview** — consumes Data+Information+Knowledge rungs.
+- **search/overview** (MCP), **ask** (CLI/chat) — consume Data+Information+Knowledge rungs.
 - **overview(what='communities')** — Knowledge layer (structural labels, `$0`).
 - **overview(what='import_cycles')** — Information layer (edges only, deterministic).
 - **check_world_model.py** — enforces Wisdom layer against working-tree diffs.

@@ -30,6 +30,21 @@ def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
     information spine. A fleet census found `kind` holding one value across all 160 graphs, so the
     clause had nothing to exclude. The cross-encoder discriminates instead, and it scores filler
     low without being told to.
+
+    Dedup is on the **summary**, not the title. `_label_from_names` picks the single most frequent
+    snake_case token, which collides hard on any test-heavy repo — ccw has 22 communities titled
+    `Test` out of 65, only 37 distinct labels. Keying on that label silently discarded distinct
+    communities: 29 of 50 candidates survived on ccw and 35 of 50 on rag-search-engine. Keying on
+    the summary recovers 18 and 13 of them respectively, and is the semantically right key anyway
+    — the summary names member count, kinds and files, so two communities sharing one genuinely
+    are interchangeable as context. It still collapses 3 on ccw, which is the dedup doing its job
+    rather than failing to. Community `id` would be the obvious key and is wrong: it is unique
+    only *within* a store, and this pool spans a whole federation.
+
+    Ordered by `member_count DESC` rather than `id`, so the 50-row cap keeps the largest
+    communities instead of the earliest-inserted — the "first N by id" selection this docstring
+    criticises above was still deciding which rows the ranker ever saw. On ccw that lifts the
+    member count reachable through this pool from 1185 to 1399.
     """
     from rag_search.query.search import rerank_passages
 
@@ -39,11 +54,11 @@ def _community_summaries(query: str, stores: list, top_k: int = 8) -> str:
         for ctitle, csumm in store._con.execute(
             "SELECT title,summary FROM communities WHERE level=1 "
             "AND summary IS NOT NULL AND summary!='' "
-            "ORDER BY id LIMIT 50"
+            "ORDER BY member_count DESC LIMIT 50"
         ).fetchall():
-            if ctitle and ctitle not in seen:
-                seen.add(ctitle)
-                candidates.append((ctitle, csumm))
+            if csumm and csumm not in seen:
+                seen.add(csumm)
+                candidates.append((ctitle or "(unlabelled)", csumm))
     if not candidates:
         return ""
     scores = rerank_passages(query, [c[1] for c in candidates])

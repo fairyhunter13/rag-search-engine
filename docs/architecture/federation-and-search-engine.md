@@ -21,7 +21,7 @@
 ## 1. Purpose & scope
 
 rag-search is a local, GPU-only semantic code-search and **deterministic structure** engine. It
-indexes one or more project trees and serves five MCP tools (`search`, `ask`, `graph`, `overview`,
+indexes one or more project trees and serves four MCP tools (`search`, `graph`, `overview`,
 `index`) plus an HTTP dashboard from a single daemon at `127.0.0.1:8765`.
 
 It was *"a code-search and KB engine"* until 2026-07-28. The KB half — the part that spent cloud
@@ -43,7 +43,7 @@ The governing principle is **P0: most efficient + most effective, for *everythin
 3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26, HR32, P16). Idle target: < 1 % CPU, constant RAM floor (models unload after `RSE_MODEL_IDLE_UNLOAD_S`). The heavy pass — graph re-derive + structural community labelling — runs only on real source-fingerprint drift (`_code_source_fingerprint` gate in `on_change`; the `_last_enriched_sig` gate it replaced went with the enrich/wiki/BPRE cascade on 2026-07-28, and the gate survived because the re-derive it protects is the expensive half that did). File-watching is event-driven via `watchfiles`/Rust `notify` — one thread + one inotify instance for all roots, `watch_filter` ignore-aware via the same HR35 resolver as the drift gate (P17, HR33, HR37); polling, if ever needed, is the Rust library's own `force_polling` path, never a hand-rolled loop.
 4. **No local generative LLM, and since 2026-07-28 no cloud one either except chat** — `claude -p` at claude-haiku-4-5 on the dashboard chat route is the *whole* generative surface, and `routes_chat.py` is its only caller. The cloud DeepSeek KB lane and the doc-tooling lane both left with tier 3 (HR12, P1/P14).
 5. **Determinism + idempotence** — byte-identical reruns, now unconditionally rather than "with LLM off", because there is no LLM left to turn off. Community labelling is gated on `summary IS NULL` and never re-labels settled rows (HR3, HR20, HR21, HR24, HR25; **HR11, HR13 and HR23 governed the deleted narration — the DeepSeek `semantic_type` classifier, the wiki artifact, and the DIKW token budget — and retired with it**. HR24 stays: fastgreedy detection was always LLM-free).
-6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`ask`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval. **Since 2026-07-28 that is true of the write path too**: there is no enrichment-time generative spend to pre-build, so the read-path serves what deterministic indexing produced. The invariant used to be "no generation *here*"; it is now "no generation *anywhere* but dashboard chat" (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
+6. **Federation = query-time union; MCP read-path is retrieval-only.** Every MCP action (`search`/`graph`/`overview`) returns **root + all federated members combined** (query-time union; no cross-repo edges). The MCP query lane runs **no generative LLM inference** — only GPU **embedding** (+ cross-encoder rerank) for retrieval. **Since 2026-07-28 that is true of the write path too**: there is no enrichment-time generative spend to pre-build, so the read-path serves what deterministic indexing produced. The invariant used to be "no generation *here*"; it is now "no generation *anywhere* but dashboard chat" (HR4; §9b Lane A; read-only-MCP invariant). Federated readiness = **worst-of-members** (HR7); one absolute path = one index dir, per-project content-addressed stores (HR5).
 7. **Self-healing** — event-driven (watcher) + reconcile re-derive on algo/source drift (HR1, HR2, HR25, §10).
 8. **`docs/` is ordinary source + universal config** — nothing generates a `docs/` tree any more (docgen deleted 2026-07-28); `docs/` is walked, chunked and embedded like any other directory, and `.rse-index.yaml` is honored by every enumerator (HR28, HR29; HR27 retired).
 9. **Two-stage retrieval; rerank is the relevance authority.** Query = hybrid recall (bi-encoder `sqlite-vec` + FTS5 BM25, fused by RRF) → cross-encoder rerank (`gte-reranker-modernbert-base`, GPU); results ordered by `rerank_score`, **never the bare retrieval score**; **both** AXIS A (code chunks) and AXIS B (community/architecture context) are reranked; reranking runs **at query time only**, never at index/KB-build time (HR8; inv#10, inv#11).
@@ -237,13 +237,20 @@ any key. The system's whole generative surface is one `claude -p` per dashboard 
 - **`search(query, scope, project_paths?)`**: when explicit paths are given, each resolved
   root is expanded through `expand_federation` (dedup), so a root-scoped query fans out
   across all members. No-path branch already covers members (they are enabled projects).
-- **`ask(query, project_path?, scope)`**: gathers chunks from all `expand_federation` paths
-  (each member's `VectorStore`, top_k per member), merges, then the GPU **cross-encoder
-  re-ranks (Stage 2)** to global top-k by `rerank_score`, then `compose_answer` over the
-  root's `GraphStore`. No LLM synthesis; persistent cache TTL 3600 s.
+- ~~**`ask(query, project_path?, scope)`**~~ — retired from the MCP surface 2026-07-29. It
+  returned assembled prose (chunk bodies + community summaries, each hard-truncated at 3000
+  chars) to clients that can call again and would rather have references; it duplicated `search`
+  at higher cost (one GPU embed, the full fan-out, and *two* cross-encoder passes). The
+  architecture axis it uniquely reached is now `overview(what="communities", query=...)`.
+  `query/ask.py` itself lives on as the context builder for the two callers that genuinely
+  cannot loop — the CLI, and the dashboard chat route.
 - **`graph`**: per-project call-graph queries (definition/callers/callees/impact/…).
-- **`overview`**: `what=` views (`_overview.py::_VALID`, nine): structure, communities, status,
-  projects, metrics, import_cycles, surprising_connections, suggested_questions, validate.
+- **`overview`**: `what=` views (`_overview.py::_VALID`, eight): structure, communities, status,
+  projects, metrics, import_cycles, surprising_connections, validate. `communities` takes an
+  optional `query` that cross-encoder-ranks the map — the architecture axis, inherited from `ask`.
+  (`suggested_questions` was the ninth; it rendered "How does {title} work?" over labels that
+  collide hard — 22 of ccw's 65 communities are titled `Test` — to seed a chat box that no
+  longer prompts.)
   *(`architecture_domains`, `hierarchy`, `world_model` deleted WS-B 2026-06-26. `patterns`,
   `feature_map`, `business_rules`, `process_flows` and `service_mesh` deleted 2026-07-28 with
   tier 3 — `patterns` was also the system's **only** generative call on a query path, a
@@ -269,7 +276,8 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
   chunk shape and `embed_signature` are unchanged; `FTS_REV` versions the lexical index alone
   and a `fts_rev` meta key runs FTS5's `rebuild`/`optimize` backfill once per store
   (10.8 s + 1.8 s and +17 % on disk, measured on the fleet's largest store at 207 k chunks).
-- **AXIS B — community/architecture context** (`_community_summaries`, both `ask` scopes):
+- **AXIS B — community/architecture context** (`_community_summaries` for CLI/chat scopes,
+  and `overview(what="communities", query=...)` for MCP clients):
   pool ≤50 L1 community summaries per store, then cross-encoder rerank → sort by `rerank_score`
   → top_k. Replaced former bi-encoder cosine (`s_vecs @ q_vec`) approach.
   *Updated 2026-07-28:* three near-duplicate selectors stood here (`_top_communities_semantic`,
@@ -285,7 +293,7 @@ All MCP query paths run a **two-stage retrieval** pipeline (GPU; no CPU fallback
 
 | Lane | Surface | LLM(s) | Notes |
 |------|---------|---------|-------|
-| **A — MCP query** | `search`/`ask`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
+| **A — MCP query** | `search`/`graph`/`overview` via `/mcp` | embedding + reranking ONLY | No generation; delegated to the calling agent |
 | **B — Dashboard chat** | `POST /api/chat_stream` | **claude-haiku-4-5** only (Claude Code CLI); emits SSE error event when CLI unavailable | The whole generative surface of the system; no fallback engine on this path (HR12) |
 
 *(Lanes **D — KB enrichment** and **E — Doc-tooling** were both deleted 2026-07-28 with tier 3.
@@ -302,7 +310,7 @@ labelling that survives is a deterministic template.)*
 `DEEPSEEK_API_KEY` must have no reader. `core/claude_profiles.py` is allowlisted by name because it
 opens `api.anthropic.com/api/oauth/usage` — a *usage* read for profile rotation, never a completion.
 
-**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`ask`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). *(The 3-tier BPRE resolution ladder this paragraph used to close on — Tier-1.75 GPU rerank, Tier-2 cloud DeepSeek — retired 2026-07-28; see §7a. The GPU rerank lane survives, but it serves `search`/`ask`, not edge resolution.)*
+**No local generative LLM exists in the engine.** Ollama/qwen3 were decommissioned 2026-06-20. MCP query actions (`search`/`graph`/`overview`) perform embedding + reranking ONLY — no generation (HR9). *(The 3-tier BPRE resolution ladder this paragraph used to close on — Tier-1.75 GPU rerank, Tier-2 cloud DeepSeek — retired 2026-07-28; see §7a. The GPU rerank lane survives, but it serves `search` and the community map, not edge resolution.)*
 
 ## 16. Per-project config & federation inheritance
 
