@@ -5,6 +5,8 @@ import fcntl
 import json
 import os
 import re as _re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -17,11 +19,26 @@ def _load() -> dict:
     return json.loads(REGISTRY_PATH.read_text()) if REGISTRY_PATH.exists() else {}
 
 
-def _save(data: dict) -> None:
+@contextmanager
+def _mutate() -> Iterator[dict]:
+    """Read-modify-write the registry under one exclusive lock.
+
+    The load used to sit *outside* the lock that guarded the store, which made every
+    mutator a lost update: two writers read the same snapshot and whichever saved last
+    silently dropped the other's rows. Measured rather than theorised — six uncoordinated
+    writers doing 30 registrations each kept 34 of 180 (RG1). Three writers share this file
+    in production (reconcile, the server, the CLI), and a dropped row is a project that is
+    no longer watched or reconciled, so it rots with nothing left to report it.
+
+    Not reentrant: flock is per open file description, so a nested `_mutate()` in the same
+    process blocks on itself. Nothing nests today.
+    """
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_LOCK_PATH, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
+        data = _load()
+        yield data
         tmp = Path(str(REGISTRY_PATH) + ".tmp")
         tmp.write_text(json.dumps(data, indent=2))
         os.replace(tmp, REGISTRY_PATH)
@@ -94,35 +111,41 @@ def _migrate(data: dict) -> dict:
     """Normalize legacy registry format: strip tier-suffix paths, ensure required fields,
     re-key entries to their canonical real path (repairs registrations made from a raw
     symlink/relative path before query-time resolution existed), and prune entries whose
-    path no longer exists on disk (self-heal dead registrations)."""
-    changed = False
+    path no longer exists on disk (self-heal dead registrations).
+
+    Pure — it used to persist itself, which put a whole-file write on the *read* path with
+    nothing holding the lock. Callers that want the normalisation kept persist it inside
+    `_mutate()`; `migrated != data` says whether there is anything to keep.
+    """
     migrated: dict = {}
     for path, meta in data.items():
         clean = _TIER_SUFFIX.sub("", path)
-        if clean != path:
-            changed = True
         if "enabled" not in meta:
             meta = dict(meta, enabled=True, indexed_at=None)
-            changed = True
         canon = canonicalize_path(clean)
         if canon != clean and canon not in migrated and canon not in data and Path(canon).exists():
-            changed = True
             clean = canon
         if not Path(clean).exists():
             # Registered path is gone (repo deleted/moved) — drop it instead of surfacing a
             # dead project that can never be searched. Only top-level keys are pruned here;
             # `federation` member lists are untouched.
-            changed = True
             continue
         migrated[clean] = meta
-    if changed:
-        _save(migrated)
     return migrated
 
 
 def list_projects() -> list[ProjectEntry]:
     from dataclasses import fields
-    data = _migrate(_load())
+    raw = _load()
+    data = _migrate(raw)
+    if data != raw:
+        # Re-migrate whatever is on disk *now*, not the snapshot taken before the lock —
+        # another writer may have landed in between, and persisting the stale one is the
+        # lost update this lock exists to prevent.
+        with _mutate() as fresh:
+            migrated = _migrate(dict(fresh))
+            fresh.clear()
+            fresh.update(migrated)
     known = {f.name for f in fields(ProjectEntry)} - {"path"}
     return [
         ProjectEntry(path=p, **{k: v for k, v in meta.items() if k in known})
@@ -160,12 +183,11 @@ def upsert_project(entry: ProjectEntry) -> None:
     from rag_search.index.discover import is_forbidden_root
     if is_forbidden_root(Path(entry.path)):
         raise ValueError(f"refusing to register forbidden path: {entry.path}")
-    data = _load()
     d = asdict(entry)
     d.pop("path")
-    prior = data.get(entry.path)
-    data[entry.path] = d
-    _save(data)
+    with _mutate() as data:
+        prior = data.get(entry.path)
+        data[entry.path] = d
     # Only on a membership change. This function also carries every index stamp, and each
     # `sync()` that finds a changed set costs a watch teardown/re-arm — so re-arming on a
     # stamp would tear the watch down hundreds of times a day for no gain.
@@ -174,10 +196,9 @@ def upsert_project(entry: ProjectEntry) -> None:
 
 
 def remove_project(path: str) -> bool:
-    data = _load()
-    if path not in data:
-        return False
-    del data[path]
-    _save(data)
-    _notify_watcher()
-    return True
+    with _mutate() as data:
+        found = path in data
+        data.pop(path, None)
+    if found:
+        _notify_watcher()
+    return found
