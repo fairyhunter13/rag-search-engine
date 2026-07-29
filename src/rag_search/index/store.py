@@ -421,6 +421,18 @@ class VectorStore:
     def count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
+    def indexed_paths(self) -> set[str]:
+        """Every path this store holds anything for — a chunk, a hash row, or both.
+
+        The union, not `chunks` alone, and deliberately the same asymmetry the set-drift
+        trigger uses: a path with a hash row but no chunks is just as orphaned as the reverse,
+        and reading only one table is how 42,952 chunks stayed invisible to every staleness
+        predicate ([[project_rse_index_set_drift]]).
+        """
+        return {p for (p,) in self._con.execute(
+            "SELECT path FROM chunks UNION SELECT path FROM file_hashes"
+        )}
+
     def clear(self) -> None:
         """Drop all chunk metadata + vectors (for idempotent full reindex)."""
         self._con.execute("DELETE FROM vec_chunks")
