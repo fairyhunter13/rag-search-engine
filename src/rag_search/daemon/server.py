@@ -24,24 +24,44 @@ def _deprioritize_current_thread(delta: int = 5) -> None:
         os.nice(delta)
 
 
+def release_models() -> None:
+    """Drop the GPU-resident singletons so their CUDA arena goes back to the driver.
+
+    ONNX Runtime's BFC arena only ever grows. It keeps the high-water mark of the largest
+    batch the session has served and returns it to the driver only when the session object
+    itself is destroyed — `arena_extend_strategy: kSameAsRequested` (core/gpu.py) bounds how
+    *eagerly* it grows, not whether it ever shrinks. Measured on a 16 GB card, an ordinary
+    working session of federated searches left the daemon holding 12.2 GB while completely
+    idle, with 3.5 GB free; the live suite loads its own real models on that same GPU and
+    needs ~8.4 GB, so it died in cublasCreate/BFCArena with errors that named neither the
+    daemon nor the budget.
+
+    Factored out of `_idle_unload` because holding the only copy of this behind a 300 s idle
+    check made it unreachable exactly when it is needed: a daemon being actively worked
+    against is never idle for 300 s, so the high-water mark stood for the whole session.
+    `POST /api/gpu/release` and `_shutdown_exit` are the other two callers.
+    """
+    import ctypes
+    import gc
+
+    import rag_search.embed.embedder as emb_mod
+    import rag_search.query.search as search_mod
+
+    emb_mod._default = None
+    search_mod._reranker = None
+    gc.collect()  # force native ONNX session + CPU thread pool to free now
+    with contextlib.suppress(Exception):
+        ctypes.CDLL("libc.so.6").malloc_trim(0)  # return freed host arena to OS
+
+
 def _idle_unload() -> None:
     global _idle_unload_done
     from rag_search.daemon.runtime_state import seconds_since_activity
     idle = seconds_since_activity()
     if idle > _MODEL_IDLE_UNLOAD_S and not _idle_unload_done:
         try:
-            import rag_search.server.mcp as mcp_mod
-            mcp_mod._embedder = None
-            import rag_search.query.search as search_mod
-            search_mod._reranker = None
-            import rag_search.embed.embedder as _emb_mod
-            _emb_mod._default = None
+            release_models()
             _idle_unload_done = True
-            import ctypes
-            import gc
-            gc.collect()  # force native ONNX session + CPU thread pool to free now
-            with contextlib.suppress(Exception):
-                ctypes.CDLL("libc.so.6").malloc_trim(0)  # return freed arena to OS
             log.info("model idle unload after %.0fs idle", idle)
         except Exception as exc:
             log.warning("idle unload failed: %s", exc)
@@ -61,17 +81,8 @@ def _shutdown_exit(code: int) -> None:
     """Free CUDA sessions, then os._exit(code) — skip finalization to dodge the
     onnxruntime teardown abort so `daemon stop` (restart=false) delivers exit 0
     exactly, never a spurious 134 that would trip systemd Restart=on-failure."""
-    import gc
-    try:
-        import rag_search.server.mcp as mcp_mod
-        mcp_mod._embedder = None
-        import rag_search.query.search as search_mod
-        search_mod._reranker = None
-        import rag_search.embed.embedder as _emb_mod
-        _emb_mod._default = None
-        gc.collect()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception):
+        release_models()
     os._exit(code)
 
 def serve(host: str | None = None, port: int | None = None) -> None:

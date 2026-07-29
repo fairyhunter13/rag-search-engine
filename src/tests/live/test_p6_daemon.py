@@ -434,16 +434,21 @@ def test_p22_embedder_singleton_no_leak():
 
 
 def test_p22_idle_unload_clears_embed_singleton():
-    """P22.1: _idle_unload must null embed.embedder._default so VRAM frees when idle."""
+    """P22.1: the idle path must null embed.embedder._default so VRAM frees when idle.
+
+    Split in two because the null-out moved into `release_models()` — the substance is asserted
+    where it lives, and the wiring is asserted separately, so this cannot pass on a daemon that
+    kept the helper but stopped calling it from the idle tick.
+    """
     import inspect
 
     from rag_search.daemon import server
-    src = inspect.getsource(server._idle_unload)
-    assert "_emb_mod._default = None" in src or "embedder" in src.lower(), (
-        "_idle_unload must clear embed.embedder._default on idle"
+    src = inspect.getsource(server.release_models)
+    assert "emb_mod._default = None" in src, "release_models must clear embed.embedder._default"
+    assert "rag_search.embed.embedder" in src, "release_models must import embed.embedder to clear its singleton"
+    assert "release_models()" in inspect.getsource(server._idle_unload), (
+        "_idle_unload must route its unload through release_models()"
     )
-    # Verify the specific null-out is present by checking the import+assignment.
-    assert "rag_search.embed.embedder" in src, "_idle_unload must import embed.embedder to clear its singleton"
 
 
 def test_conftest_hard_exits_at_teardown():
@@ -465,8 +470,8 @@ def test_daemon_shutdown_exit_frees_models_and_hard_exits():
 
     from rag_search.daemon import server
     src = inspect.getsource(server._shutdown_exit)
-    assert "os._exit" in src and "_emb_mod._default = None" in src, (
-        "_shutdown_exit must free the embed singleton then os._exit(code)"
+    assert "os._exit" in src and "release_models()" in src, (
+        "_shutdown_exit must free the embed singleton via release_models() then os._exit(code)"
     )
     assert "_shutdown_exit" in inspect.getsource(server.serve), (
         "serve() must route its exit through _shutdown_exit, not a finalizing sys.exit"
@@ -1244,13 +1249,17 @@ def test_ort_thread_cap_in_monkeypatch():
 
 
 def test_idle_unload_gc_and_malloc_trim_present():
-    """gc.collect + malloc_trim must be in _idle_unload so RSS returns to OS floor after idle."""
+    """gc.collect + malloc_trim must survive in the release path so RSS returns to its OS floor.
+
+    Reads `release_models`, which the idle tick now delegates to; `test_p22_idle_unload_clears_
+    embed_singleton` holds the other half, that the idle tick still calls it.
+    """
     import inspect
 
     from rag_search.daemon import server
-    src = inspect.getsource(server._idle_unload)
-    assert "gc.collect()" in src, "_idle_unload must call gc.collect() to free ONNX threads"
-    assert "malloc_trim" in src, "_idle_unload must call malloc_trim(0) to return arena to OS"
+    src = inspect.getsource(server.release_models)
+    assert "gc.collect()" in src, "release_models must call gc.collect() to free ONNX threads"
+    assert "malloc_trim" in src, "release_models must call malloc_trim(0) to return arena to OS"
 
 
 def test_env_thread_caps_set_at_import():
