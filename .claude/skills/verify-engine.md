@@ -25,8 +25,8 @@ Each must return a non-empty, grounded answer — not a "no data" fallback. Rewr
 `overview(what='service_mesh')` had no surface left to answer them once tier 3 was deleted,
 so they now ask the same thing of the deterministic graph, which is what survived.
 1. "Which code is related to checkout / key feature?" → `search` + `graph(callers)`
-2. "How does service communication work?" → `ask(scope='all')` + `graph(callers)`
-3. "What is the root cause of a bug?" → `ask` (debug) + `graph(impact_narrative)`
+2. "How does service communication work?" → `search(scope='all')` + `graph(callers)`
+3. "What is the root cause of a bug?" → `search` + `graph(impact_narrative)`
 4. "How do we trace a function call?" → `graph(path, --to-symbol)` + `graph(callers/callees)`
 5. "What are the main modules?" → `overview(what='communities')` — structural labels, no narration
 6. "Where does this project import cycles?" → `overview(what='import_cycles')`
@@ -49,7 +49,8 @@ so they now ask the same thing of the deterministic graph, which is what survive
 6. CHECK GPU enforcement: CUDA provider active, no CPU fallback
 7. CHECK auto-pipeline: GET /api/auto_pipeline_status → enabled must be true
 8. RECONCILE global prompts: run scripts/configure_integrations.py --apply-all (idempotent)
-9. DASHBOARD drive: each view (Pulse/Chat/Admin/Graph/Docs) loads — Wiki left with tier 3; send one chat query;
+9. DASHBOARD drive: each view (Pulse/Chat/Admin/Graph) loads — Wiki left with tier 3, Docs and
+   Hierarchy with the operator-console pass; send one chat query;
    confirm SSE streams a real answer (non-empty, intent != null)
 10. COMMIT + PUSH: git add source + tests; commit message; git push origin main
 11. If any step failed: loop back to step 1

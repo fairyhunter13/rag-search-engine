@@ -372,15 +372,19 @@ def test_graph_no_project_path_no_roots_fails_loud(sample_workspace):
     assert isinstance(data.get("candidates"), list) and data["candidates"], data
 
 
-def test_ask_and_overview_no_project_path_fail_loud(sample_workspace):
-    """G5b (updated 2026-07-14): ask()/overview() with an empty project_path and no client roots
+def test_graph_and_overview_no_project_path_fail_loud(sample_workspace):
+    """G5b (updated 2026-07-14): a tool called with an empty project_path and no client roots
     must fail loud (listing candidates), not silently answer about an arbitrary first-enabled
     project. This closes the transparency gap the old disclosure-prefix only papered over: a
     silent projects[0] pick mis-answered about unrelated projects (e.g. payment-gateway). Correct
     cwd-aware auto-resolution now comes from MCP client roots — see test_roots_default_project.py.
+
+    `ask` was the second witness until 2026-07-29. `graph` replaces it rather than the case being
+    halved: the property belongs to `_default_or_error`, which both reach identically, and two
+    witnesses are what proves the ladder is shared rather than reimplemented per tool.
     """
     from rag_search.core.registry import list_projects
-    from rag_search.server.mcp import ask as ask_tool
+    from rag_search.server.mcp import graph as graph_tool
     from rag_search.server.mcp import overview as overview_tool
 
     assert len([p for p in list_projects() if p.enabled]) > 1, (
@@ -390,9 +394,9 @@ def test_ask_and_overview_no_project_path_fail_loud(sample_workspace):
     assert "project_path required" in overview_data.get("error", ""), overview_data
     assert overview_data.get("candidates"), overview_data
 
-    ask_result = asyncio.run(ask_tool("what does this do?", ""))
-    assert "project_path required" in ask_result, (
-        f"ask() must fail loud on empty project_path, got: {ask_result[:200]!r}"
+    graph_result = asyncio.run(graph_tool("anything", ""))
+    assert "project_path required" in graph_result, (
+        f"graph() must fail loud on empty project_path, got: {graph_result[:200]!r}"
     )
 
 
@@ -477,11 +481,17 @@ def test_e1_rerank_reorders_search_results(service_path):
 
 @pytest.mark.slow
 def test_e2_ask_context_is_rerank_ordered(service_path):
-    """E2/HR8: MCP ask returns assembled context with path markers, first chunk = rerank top-1."""
-    from rag_search.server.mcp import ask as _mcp_ask
+    """E2/HR8: assembled context carries path markers, first chunk = rerank top-1.
+
+    Read through `run_ask` since 2026-07-29 rather than the retired MCP tool. That is where the
+    property always lived — the tool was a one-line `asyncio.to_thread(run_ask, …)` — and it is
+    now the dashboard chat's context builder, which is the consumer that cannot loop and so
+    depends on this ordering being right the first time.
+    """
+    from rag_search.query.ask import run_ask
     from rag_search.server.mcp import search as _mcp_search
     q = "how does the promotion rule engine apply discounts"
-    ctx = asyncio.run(_mcp_ask(q, service_path, "all"))
+    ctx = run_ask(q, service_path, "all")
     assert ctx and "[" in ctx, f"E2: empty or no path markers: {ctx[:80]}"
     top = json.loads(asyncio.run(_mcp_search(q, project_paths=[service_path])))["results"]
     assert top, "E2: search returned no results"

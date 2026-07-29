@@ -7,10 +7,11 @@ semantics, because `path` was the fallthrough. Both its tests passed: one assert
 a dict, the other asserted the `path` contract. Neither would have failed if it were named `banana`.
 
 `test_p21_capability_parity.py` already ties the `graph`/`overview` MCP docstrings to the
-implementation's own constants. Added here: SC1/SC2 the CLI help, SC3 the `ask` docstring, and — the
+implementation's own constants. Added here: SC1/SC2 the CLI help, SC3 the callers, and — the
 two that matter — SC4 every advertised relation reaches a branch, SC5 every advertised scope is a
 distinct assembly. SC4/SC5 fail on the two shapes these surfaces actually had: a name with no
-branch, and several names sharing one branch.
+branch, and several names sharing one branch; SC3 on the third, a caller left behind when the
+advertised set shrank.
 """
 from __future__ import annotations
 
@@ -58,18 +59,75 @@ def test_sc2_cli_scope_help_matches_implementation():
     )
 
 
-def test_sc3_mcp_ask_docstring_matches_scopes():
-    """SC3: the MCP `ask` docstring lists exactly the implemented scopes.
+def test_sc3_no_caller_passes_an_unlisted_scope():
+    """SC3: every literal scope handed to run_ask/compose_answer is in `_SCOPES`.
 
-    P21's A2 covers `graph` and A1 covers `overview`; `ask` had no equivalent, which is why five
-    scope names went on being advertised after three of them stopped selecting anything.
+    SC3 used to read the MCP `ask` docstring, and left with that tool on 2026-07-29. What it was
+    reaching for survives, so the slot gets a stronger occupant rather than a tombstone: the drift
+    it existed to catch had *already happened on the other side of the call*, and it could not see
+    it. 5f3033a narrowed `_SCOPES` from five names to two and left two callers passing `"global"` —
+    fp14 and T3c. `run_ask` rejects it with a 49-character string, so fp14 (which demands >100
+    chars) went red and T3c (which demands >20) stayed **green on the error message**. A false
+    green is the expensive half, and no docstring check could have reached it.
+
+    SC4/SC5 ask whether an advertised name is real. This asks the converse — whether a name in use
+    is advertised — which is the direction a shrinking list breaks
+    ([[feedback_allowlist_needs_sufficiency_test]]: derive the check from the code, don't
+    hand-write the roster). Tests are in scope deliberately: both stragglers were tests.
+
+    What it does not claim: run against 5f3033a it finds nothing, because those two callers reached
+    the scope through the MCP `ask` tool, and keying on a deleted function would be dead weight.
+    It covers the entry points that survive — `run_ask` and `compose_answer` — which is every way
+    in that now exists. Demonstrated red on a synthetic aliased caller (both positional and
+    keyword) and on removing SC5b's marker; the marker is checked per-call, not per-file, so
+    exempting a deliberate bad scope cannot silently exempt an accidental one beside it.
     """
-    from rag_search.server.mcp import ask
+    import ast
+    from pathlib import Path
 
-    m = re.search(r"scope:\s*([\w|]+)", ask.__doc__ or "")
-    assert m, f"ask docstring has no `scope:` value list: {ask.__doc__!r}"
-    assert set(m.group(1).split("|")) == set(_SCOPES), (
-        f"ask docstring scopes {sorted(m.group(1).split('|'))} != _SCOPES {sorted(_SCOPES)}"
+    targets = {"run_ask", "compose_answer"}
+    src_root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for py in src_root.rglob("*.py"):
+        text = py.read_text()
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:  # pragma: no cover - fixture corpora may hold deliberate junk
+            continue
+        lines = text.splitlines()
+        # Resolve `from … import run_ask as ra` before matching, or the check is alias-blind —
+        # which is not hypothetical: the first draft of SC3 matched bare names, and found *zero*
+        # offenders against the very commit that motivated it, because both stragglers called the
+        # tool through `import ask as t` / `as ask_tool`. `mod.run_ask(…)` needs no resolving; the
+        # Attribute branch below reads `.attr`.
+        bound = {a.asname or a.name
+                 for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+                 for a in n.names if a.name in targets}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+            if name not in targets and name not in bound:
+                continue
+            # run_ask(query, project_path, scope) — third positional; compose_answer takes
+            # `scope` keyword-only. Non-literal scopes (a variable, a parametrize) are skipped:
+            # SC5 already walks `_SCOPES` itself, so the parametrized callers are covered there.
+            arg = next((k.value for k in node.keywords if k.arg == "scope"), None)
+            if arg is None and len(node.args) >= 3:
+                arg = node.args[2]
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                continue
+            if arg.value in _SCOPES:
+                continue
+            span = "\n".join(lines[node.lineno - 1:(node.end_lineno or node.lineno)])
+            if "sc3-exempt" in span:  # SC5b passes a bad scope on purpose — that is its subject
+                continue
+            offenders.append(f"{py.relative_to(src_root)}:{node.lineno} {name}"
+                             f"(scope={arg.value!r})")
+
+    assert not offenders, (
+        f"callers pass scopes outside _SCOPES {sorted(_SCOPES)}:\n  " + "\n  ".join(offenders)
     )
 
 
@@ -144,7 +202,7 @@ def test_sc5b_unlisted_scope_is_rejected():
     """
     from rag_search.query.ask import compose_answer
 
-    ctx = compose_answer("what does this do", [], [], scope="not_a_scope")
+    ctx = compose_answer("what does this do", [], [], scope="not_a_scope")  # sc3-exempt
     assert ctx.startswith("unknown scope"), f"an unlisted scope must be rejected; got {ctx[:200]!r}"
     for scope in _SCOPES:
         assert scope in ctx, f"the rejection must name {scope!r} so a caller can correct itself"
