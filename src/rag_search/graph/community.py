@@ -8,7 +8,7 @@ from collections import Counter
 from rag_search.graph.store import GraphStore
 
 # Bump when the detection algorithm changes so reconcile re-derives stale graphs.
-ALGO_VERSION = "fg1"  # fastgreedy modularity + directory-group for edgeless, v1
+ALGO_VERSION = "fg2"  # fastgreedy modularity + directory-group for edgeless; v2 = dir+2-token labels
 
 # Seed igraph's RNG once so fastgreedy tie-breaks are byte-reproducible.
 # community_fastgreedy is agglomerative-greedy (no stochastic step), but
@@ -22,15 +22,48 @@ except Exception:
     pass
 
 
-def _label_from_names(names: list[str]) -> str:
-    """Cheap structural label: most-frequent snake_case token from member names."""
+def _label_from_names(names: list[str], files: list[str] | None = None) -> str:
+    """Cheap structural label: dominant directory + the two most-frequent snake_case tokens.
+
+    One token was not enough to name a domain. Measured over every community on two real fleet
+    graphs before this changed:
+
+        project                 communities   distinct titles   worst collision
+        claude-code-workflows        65        37 (57%)         'Test' x 22
+        rag-search-engine            53        38 (72%)         'Test' x 14
+
+    and after: 61/65 (94%) and 51/53 (96%), worst collisions 4 and 3. `overview(what=
+    "communities")` is the whole architecture axis now that `ask` was retired into it, so it was
+    reporting 22 of ccw's 65 domains under one name.
+
+    The directory is not decoration — it is the half that separates two communities whose member
+    names genuinely coincide (`test_login`/`test_logout` under `auth/` and under `api/`), which
+    no amount of extra tokens can. GH6 pins exactly that pair.
+
+    Deterministic, which is load-bearing rather than nice: titles are stored, so a label that
+    varied per run would restamp and re-derive the fleet forever. `Counter.most_common` breaks
+    ties by first-insertion order, and both callers feed it names in a sorted-by-sid order, so
+    equal counts resolve the same way every time. That determinism is also what rules out the
+    obvious "append a hash to force uniqueness" fix, which would score 100% distinct and mean
+    nothing.
+
+    `files` is optional so the label degrades to the token half rather than raising when a caller
+    has names but no paths.
+    """
     tokens: list[str] = []
     for n in names:
         tokens.extend(p for p in n.split("_") if len(p) > 2)
-    if not tokens:
-        return names[0][:30] if names else ""
-    word, _ = Counter(t.lower() for t in tokens).most_common(1)[0]
-    return word.capitalize()
+    counted = Counter(t.lower() for t in tokens).most_common(2)
+    words = " ".join(w.capitalize() for w, _ in counted)
+    if not words:
+        words = names[0][:30] if names else ""
+    scope = ""
+    if files:
+        dirs = Counter(os.path.dirname(f) for f in files if f)
+        if dirs:
+            top = dirs.most_common(1)[0][0]
+            scope = os.path.basename(top) or top
+    return f"{scope}/{words}" if scope and words else words
 
 
 def detect_communities(store: GraphStore) -> dict[str, int]:
@@ -95,12 +128,15 @@ def detect_communities(store: GraphStore) -> dict[str, int]:
     for cid, cnt in counts.items():
         store.upsert_community(cid, level=1, title=None,
                                summary=None, member_count=cnt)
-    sid_to_name = {s["sid"]: s["name"] for s in symbols}
-    cid_to_names: dict[int, list[str]] = {}
+    sid_to_sym = {s["sid"]: (s["name"], s["file"] or "") for s in symbols}
+    cid_to_members: dict[int, tuple[list[str], list[str]]] = {}
     for sid, cid in mapping.items():
-        cid_to_names.setdefault(cid, []).append(sid_to_name.get(sid, ""))
-    for cid, names in cid_to_names.items():
-        label = _label_from_names(names)
+        name, file = sid_to_sym.get(sid, ("", ""))
+        ns, fs = cid_to_members.setdefault(cid, ([], []))
+        ns.append(name)
+        fs.append(file)
+    for cid, (names, files) in cid_to_members.items():
+        label = _label_from_names(names, files)
         if label:
             store._con.execute(
                 "UPDATE communities SET title=? WHERE id=? AND title IS NULL",
@@ -124,8 +160,12 @@ def label_community_structural(store: GraphStore, cid: int) -> None:
     the Knowledge-rung judgment the LLM made on head paths (HR23). Both the column and the
     judgment left with tier 3; the abstention has nothing left to abstain from.
     """
+    # ORDER BY is not cosmetic: `LIMIT 30` with none left the sampled 30 up to sqlite, so the
+    # title and the summary's kind/file lists could differ between two runs over identical data
+    # — against this function's own "byte-identical on repeated runs" claim, and a stored title
+    # that moves re-derives the fleet forever. Ordering by name makes the sample the same 30.
     rows = store._con.execute(
-        "SELECT name, kind, file FROM symbols WHERE community_id=? LIMIT 30",
+        "SELECT name, kind, file FROM symbols WHERE community_id=? ORDER BY name LIMIT 30",
         (cid,),
     ).fetchall()
     if not rows:
@@ -134,7 +174,7 @@ def label_community_structural(store: GraphStore, cid: int) -> None:
         "SELECT title, member_count FROM communities WHERE id=?", (cid,)
     ).fetchone()
     title = (existing[0] if existing and existing[0] else None) or _label_from_names(
-        [r[0] for r in rows]
+        [r[0] for r in rows], [r[2] or "" for r in rows]
     )
     _label_community_structural_finish(store, cid, rows, title,
                                         (existing[1] if existing else None) or len(rows))
