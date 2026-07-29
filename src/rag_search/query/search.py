@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import typing
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, closing
 from functools import lru_cache
+from pathlib import Path
 
 from rag_search.embed.embedder import Embedder, Reranker
 from rag_search.index.discover import _TEXT_LANGS
@@ -172,15 +175,31 @@ def _pool_federation(
 def search_federation(
     query: str,
     embedder: Embedder,
-    stores: list[VectorStore],
+    db_paths: Sequence[Path],
     *,
     scope: str = "all",
     top_k: int = 8,
+    batch: int = _FANOUT_WORKERS,
 ) -> list[dict]:
-    """Embed query ONCE, ANN-search all stores, one global rerank.
+    """Embed query ONCE, ANN-search all members, one global rerank.
 
     Use instead of calling search() in a loop over federation members — avoids
     N redundant GPU embeds and produces a single cross-member ranking.
+
+    Takes *paths* and owns the store lifecycle, rather than taking stores the caller opened.
+    That is a file-descriptor bound, not a style preference. A SQLite WAL connection costs three
+    descriptors (db + `-wal` + `-shm`), so the previous shape — every caller opening all 157 of
+    inosoft-project's priced members before calling in — held 471 of them for the length of one
+    question, against systemd's default `LimitNOFILESoft` of 1024. Two federated operations
+    overlapping (a `search` and an `overview(what="communities")`, which opens a GraphStore per
+    member) exhausted the table, and the resulting EMFILE surfaced as `unable to open database
+    file` on every project until the daemon was restarted. Opening a batch at a time bounds the
+    peak at `batch * 3` regardless of how large the federation grows.
+
+    The `ExitStack` is the other half: it closes what was opened even when a *later* open in the
+    same batch raises. The caller loops this replaced built their list *outside* the `try/finally`
+    that closed it, so an EMFILE partway through orphaned every handle already opened — which is
+    what turned a transient shortage into a permanent wedge.
 
     Two-stage by construction: each store contributes a few candidates, the retrieval score
     picks the best _MIN_POOL of them fleet-wide, and only those reach the cross-encoder.
@@ -197,7 +216,34 @@ def search_federation(
     break identically and the ranking cannot move. Consuming completions as they land
     (`as_completed`) would reorder ties and turn a performance change into a silent retrieval
     change; `test_t4_fanout_preserves_store_order` is the gate that says so.
+
+    Batching preserves that same invariant, and the ranking it produces is *identical* to the
+    unbatched one rather than merely close. Batches are consumed in input order and each one
+    pools in input order, so the concatenation is still overall member order and the stable sorts
+    still break ties by pooling position. Per-batch truncation is safe for the same reason global
+    truncation was: a chunk in the global top-`pool` has at most `pool - 1` chunks above it
+    anywhere, so it cannot be cut by its own batch, whose competitors are a subset.
     """
     q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
-    pooled = _pool_federation(query, q_vec, stores, scope_languages(scope), top_k)
-    return _rank(query, pooled, top_k)
+    langs = scope_languages(scope)
+    pool = max(_MIN_POOL, top_k * 5)
+    pooled: list[dict] = []
+    for i in range(0, len(db_paths), batch):
+        with ExitStack() as es:
+            # migrate=False: a query must never pay a store's one-time FTS backfill. Measured at
+            # 11.3 s for a single 99 k-chunk member, and this loop opens every federation member.
+            # Reconcile opens stores writable and so does migrate them, but it is not the
+            # convergence path it looks like: measured across the hours after that shipped it
+            # moved 137 owed stores to 136, because its walk is spent on real indexing work and
+            # every live test run pauses it. The backfill is an explicit one-time fleet migration.
+            #
+            # `closing` rather than `with VectorStore(...)`: the class exposes close() and no
+            # __enter__/__exit__, and a bare pair of dunders added only to satisfy this call site
+            # would be more code than the stdlib adapter that already means exactly this.
+            stores = [
+                es.enter_context(closing(VectorStore(p, migrate=False)))
+                for p in db_paths[i : i + batch]
+            ]
+            pooled.extend(_pool_federation(query, q_vec, stores, langs, top_k))
+    pooled.sort(key=_pool_key, reverse=True)
+    return _rank(query, pooled[:pool], top_k)

@@ -132,11 +132,12 @@ def compose_answer(query: str, chunks: list[dict], stores: list, *, scope: str =
 
 def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     """Assemble context from DB artifacts (no LLM). Shared by MCP + CLI."""
+    from contextlib import ExitStack, closing
+
     from rag_search.core.config import index_dir, project_graph_db, project_vector_db
     from rag_search.core.registry import list_projects
     from rag_search.embed.embedder import get_embedder
     from rag_search.graph.store import GraphStore
-    from rag_search.index.store import VectorStore
     from rag_search.query.answer_cache import get as _cache_get
     from rag_search.query.answer_cache import set as _cache_set
     from rag_search.query.search import search_federation as _search_fed
@@ -172,25 +173,19 @@ def run_ask(query: str, project_path: str = "", scope: str = "all") -> str:
     if not project_vector_db(project_path).exists():
         return f"Project not indexed: {project_path}"
     embedder = get_embedder()
-    graph_stores: list[GraphStore] = []
-    vector_stores: list[VectorStore] = []
-    # Opened inside the try — see mcp.py: a comprehension that raises partway leaves every store
-    # it already built unreachable and its fds held for the life of the process.
-    try:
-        # Appended one at a time rather than by comprehension: a comprehension builds its whole
-        # list before binding it, so one that raises partway orphans every store in the temporary.
-        for p in all_paths:
-            if project_graph_db(p).exists():
-                graph_stores.append(GraphStore(project_graph_db(p)))
-            # migrate=False — see mcp.py: the FTS backfill belongs to reconcile, never a query.
-            if project_vector_db(p).exists():
-                vector_stores.append(VectorStore(project_vector_db(p), migrate=False))
-        chunks = _search_fed(query, embedder, vector_stores, top_k=8)
+    # The vector side is paths only: `_search_fed` opens and closes each member itself, a batch at
+    # a time, so this never holds a connection per member. The graph side still needs every store
+    # open at once — `compose_answer` reads across all of them — so it goes on an ExitStack, which
+    # unwinds what it already built when a later open raises. A comprehension cannot: it builds
+    # its whole list before binding it, so one that raises partway orphans every store in the
+    # temporary and holds their fds for the life of the process.
+    vector_dbs = [project_vector_db(p) for p in all_paths if project_vector_db(p).exists()]
+    with ExitStack() as es:
+        graph_stores = [
+            es.enter_context(closing(GraphStore(project_graph_db(p))))
+            for p in all_paths if project_graph_db(p).exists()
+        ]
+        chunks = _search_fed(query, embedder, vector_dbs, top_k=8)
         answer = compose_answer(query, chunks, graph_stores, scope=scope)
         _cache_set(cache_dir, cache_key, answer, ttl_s=3600)
         return _prefix + answer
-    finally:
-        for vs in vector_stores:
-            vs.close()
-        for gs in graph_stores:
-            gs.close()

@@ -260,6 +260,65 @@ def test_lx2_lexical_query_ranks_before_it_hydrates(embedder, safe_tmp_path):
         vs.close()
 
 
+_ROWID_IN_SQL = """
+SELECT chunks_fts.rowid, bm25(chunks_fts) AS rk
+FROM chunks_fts
+WHERE chunks_fts MATCH 'ledger'
+  AND chunks_fts.rowid IN (SELECT chunk_id FROM chunks WHERE language IN ('python'))
+ORDER BY rk LIMIT 5
+"""
+
+
+def _fts_scan_step(con, sql: str) -> tuple[str, list[str]]:
+    """The plan line for the FTS5 table itself, plus the whole plan for the failure message."""
+    plan = [r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql)]
+    return next(d for d in plan if "VIRTUAL TABLE INDEX" in d), plan
+
+
+def test_lx4_scope_filter_never_becomes_an_fts_rowid_constraint(embedder, safe_tmp_path):
+    """LX4: a language scope must not be pushed into the MATCH as a rowid set.
+
+    `AND chunks_fts.rowid IN (SELECT chunk_id FROM chunks WHERE language IN (...))` reads like
+    the cheap pre-filter and is the single most expensive line this engine has had. sqlite treats
+    a rowid set as a constraint FTS5 can serve, so the plan flips from `VIRTUAL TABLE INDEX 0:M1`
+    to `0:=M1` and the full-text query is re-run once per candidate rowid. Measured on a
+    118 k-chunk member: 0.018 s unfiltered, 17.0 s filtered. `scope="code"` names 302 languages,
+    so the candidate set is nearly the whole corpus, and across inosoft-project's 157 federation
+    members that shape cost 700 s of a pinned core for one search — past the 300 s the MCP client
+    waits, which is why every federated search "timed out". Joining `chunks` in phase 1 instead
+    keeps the FTS index driving and probes by integer primary key per match: 0.049 s, same rows.
+
+    Asserted on the plan for the statement `search_lexical` *actually ran*, read off a trace
+    callback rather than retyped here, so it cannot drift from production — the same construction
+    LX2 uses, and for the same reason. Elapsed time is not the assertion: the cost only shows at
+    a corpus size no hermetic fixture has, while the plan flip is visible at any size.
+    """
+    vs, _ = _reconcile_store(embedder, safe_tmp_path / "lx4.db")
+    try:
+        control, cplan = _fts_scan_step(vs._con, _ROWID_IN_SQL)
+        assert control.endswith(":=M1"), (
+            f"LX4 is vacuous: the rowid IN-list does not become an FTS5 equality constraint on "
+            f"this sqlite, so the assertion below would pass without the join. Plan was {cplan}"
+        )
+        seen: list[str] = []
+        vs._con.set_trace_callback(seen.append)
+        hits = vs.search_lexical("reconcile the ledger statements", top_k=5,
+                                 languages=("python", "javascript"))
+        vs._con.set_trace_callback(None)
+        assert hits, "LX4 is vacuous: the scoped query matched nothing"
+        assert all(h["language"] == "python" for h in hits), (
+            "LX4: the filter admitted a language it was not given — phase 1 must pre-filter"
+        )
+        live, plan = _fts_scan_step(
+            vs._con, next(s for s in seen if "chunks_fts" in s and "MATCH" in s))
+        assert not live.endswith(":=M1"), (
+            f"LX4: the language scope reached FTS5 as a rowid constraint, so the match re-runs "
+            f"per candidate row. Filter by joining `chunks` in phase 1 instead. Plan was {plan}"
+        )
+    finally:
+        vs.close()
+
+
 @pytest.mark.parametrize("raw", [
     'worker-side validation (async)', 'a OR b NOT c', 'foo* "bar" col:val', '-- ***', '',
 ])

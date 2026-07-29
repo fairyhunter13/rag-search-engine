@@ -111,8 +111,17 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
         _paths = [p for p in expand_federation(project_path) if project_graph_db(p).exists()]
         if not _paths:
             return json.dumps({"what": what, "status": "no project available"})
-        _gstores = [GraphStore(project_graph_db(p)) for p in _paths]
+        _gstores: list[GraphStore] = []
         try:
+            # Opened one at a time *inside* the `try`, not by a comprehension outside it. A
+            # comprehension binds its whole list only after the last element, so an exception
+            # partway through orphans every store it already opened — and each SQLite WAL
+            # connection is three descriptors (db + -wal + -shm), so on inosoft-project's 157
+            # graph-bearing members the first EMFILE leaked ~150 handles permanently. That is
+            # what turned a transient descriptor shortage into a wedge only a restart cleared;
+            # `finally` below could not help because `try` was never entered.
+            for _p in _paths:
+                _gstores.append(GraphStore(project_graph_db(_p)))
             if what == "communities":
                 # Carries `summary` and `member_count`, and ranks by `query` when one is given.
                 # This is the architecture axis the `ask` tool used to reach: `ask` re-ran a whole
