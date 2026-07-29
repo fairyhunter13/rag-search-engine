@@ -115,9 +115,12 @@ def project_graph_db(project_path: str) -> Path:
 # project_wiki_dir and root_process_db stood here and left with tier 3. Both were
 # pure path builders, so neither had a test of its own — their only callers were
 # kb/wiki.py and kb/bpre.py, and with those deleted a surviving helper would just be
-# a path nothing ever opens. The directories they named (index_dir/wiki,
-# index_dir/process_graph.db) are stale on disk for already-indexed projects; nothing
-# reads them and reconcile does not walk them, so they are inert rather than a leak.
+# a path nothing ever opens. The data they named outlived them by a day: deleting a
+# writer does not delete what it wrote, and a census found index_dir/wiki and
+# index_dir/process_graph.db still on disk across 161 index dirs — 9,016 files, 97.1 MB.
+# Purged 2026-07-29. The population is closed (no writer survives), so this was a
+# one-off removal and not a recurring sweep. Note what is NOT residue despite the
+# tier-3-era name: index_dir/ask_cache is live on routes_chat.py and query/ask.py.
 def federation_exclude_paths() -> frozenset[str]:
     """Resolved absolute paths excluded from federation discovery + reconcile indexing.
 
