@@ -1,5 +1,7 @@
-"""P20.6: E2E proof that all 5 wired capabilities work together (no mocks)."""
-import asyncio
+"""P20.6: E2E proof that all 5 wired capabilities work together (no mocks).
+
+The five are A-E below, not the MCP tool count — worth saying now that the tool count is 4.
+"""
 import json
 import subprocess
 import sys
@@ -12,7 +14,7 @@ pytestmark = pytest.mark.live
 
 @pytest.mark.slow
 def test_p20_capabilities_e2e(safe_tmp_path):
-    """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, ask context."""
+    """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, context assembly."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import get_project, remove_project, upsert_project
     from rag_search.daemon.federation import index_members
@@ -56,13 +58,15 @@ def test_p20_capabilities_e2e(safe_tmp_path):
         r = subprocess.run([sys.executable, str(script), "--check"], capture_output=True, text=True)
         assert r.returncode == 0, f"D: --check failed:\n{r.stdout}\n{r.stderr}"
 
-        # E: MCP ask returns non-empty composed context from the indexed project
-        from rag_search.server.mcp import ask as ask_tool
+        # E: context assembly returns non-empty composed context from the indexed project.
+        # Was the MCP `ask` tool until 2026-07-29; `run_ask` is the same call one layer down and
+        # still has two consumers (the CLI and the dashboard chat), so the capability is intact.
+        from rag_search.query.ask import run_ask
         from tests.live._projects import federation_root
         sample_fed_root = federation_root()  # sample shop-federation, not a real project
-        context = asyncio.run(ask_tool("How does authentication work?", sample_fed_root, "all"))
+        context = run_ask("How does authentication work?", sample_fed_root, "all")
         assert isinstance(context, str) and len(context) > 20, (
-            f"E: MCP ask returned empty/tiny context: {context!r}"
+            f"E: run_ask returned empty/tiny context: {context!r}"
         )
     finally:
         remove_project(root_path)

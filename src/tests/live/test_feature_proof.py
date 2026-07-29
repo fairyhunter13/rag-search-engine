@@ -168,8 +168,13 @@ def test_fp11_federation_status(fed_root):
 
 @pytest.mark.slow
 def test_fp14_ask_flat_l1(service_path):
-    from rag_search.server.mcp import ask as t
-    result = asyncio.run(t("What is the overall architecture?", service_path, "global"))
+    # Two corrections on 2026-07-29, from one root cause. The tool this called was retired, so it
+    # reads `run_ask` directly; and the scope it passed, "global", stopped being a scope in
+    # 5f3033a — `run_ask` has been answering with a 49-character rejection string ever since, so
+    # this case has been red on `>100` rather than testing anything. "architecture" is the scope
+    # that now selects what the question asks for. SC3 is the gate that finds the next one.
+    from rag_search.query.ask import run_ask
+    result = run_ask("What is the overall architecture?", service_path, "architecture")
     assert len(result.strip()) > 100
     assert any(k in result.lower() for k in ("cart","checkout","promo","order","discount","coupon","fulfillment","price","rule"))
 

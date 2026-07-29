@@ -160,7 +160,7 @@ def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_pa
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import upsert_project
     from rag_search.daemon.sweeps import _index_project
-    from rag_search.server.mcp import ask as mcp_ask
+    from rag_search.query.ask import run_ask
     from rag_search.server.mcp import graph as mcp_graph
     from rag_search.server.mcp import overview as mcp_overview
 
@@ -175,7 +175,9 @@ def test_s1_overview_ask_graph_resolve_symlink_subdir_trailing_slash(safe_tmp_pa
             # Renamed from kb_state with tier 3 (HR7, _overview.py:155-161).
             assert ov.get("index_state") is not None, (probe, ov)
 
-            answer = asyncio.run(mcp_ask(marker, probe, "all"))
+            # Was the MCP `ask` tool; `run_ask` is the layer that does the resolving
+            # (`resolve_registered_root`), so the witness moved down rather than away.
+            answer = run_ask(marker, probe, "all")
             assert "not indexed" not in answer.lower(), (probe, answer)
 
             gd = json.loads(asyncio.run(mcp_graph(marker, probe, "definition", "")))
