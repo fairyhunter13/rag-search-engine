@@ -22,8 +22,10 @@ Rules (no exceptions):
 - Call search/graph/overview BEFORE any Bash grep/find, Glob, or Grep tool call.
 - Never delegate codebase questions to sub-agents via the Agent tool.
 - GPU-only inference — CPU fallback is forbidden for all RSE operations.
-- RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs/errors,
+- RESILIENCE: if an MCP call returns {"status":"timeout","fallback":true} or hangs,
   immediately fall back to native Read/Grep/Glob/Bash — never wait or retry the MCP call.
+  If it fails with an *error* instead, fall back the same way but quote the error first.
+  Never narrate an error as a timeout: the two have different causes and only one is transient.
 - NEVER auto-index. Only call index(enabled=True) when the user explicitly asks.
 - If not indexed, say so and ask before indexing.
 - `search` returns ranked LOCATIONS (path + line range + a short preview), not file bodies.
