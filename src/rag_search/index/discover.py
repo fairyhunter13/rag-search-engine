@@ -261,6 +261,11 @@ def is_generated_path(rel: str | os.PathLike) -> bool:
     file never wakes the graph re-derive. The second reader it used to name, bpre._bpre_code_sig,
     left with tier 3; the guard is still load-bearing because the re-derive it gates is the
     expensive half that survived.
+
+    Screening by line geometry instead (S10, mean line >= 200 chars, to reject minified bundles)
+    was measured on 2026-07-28 and rejected: it deleted 54.4% of the fleet graph and *raised* the
+    cross-family ratio it targeted, 5.968% -> 6.144%, because bundles are internally consistent
+    and the top offenders included jQuery and codemirror. Screen on provenance, not shape.
     """
     name = os.path.basename(str(rel))
     if ".generated." in name or ".gen." in name:
