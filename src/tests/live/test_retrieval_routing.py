@@ -143,7 +143,7 @@ def test_rr7_empty_fallback_no_summaries(safe_tmp_path):
     gs.close()
 
 
-def test_rr8_candidates_survive_colliding_titles(safe_tmp_path, monkeypatch):
+def test_rr8_candidates_survive_colliding_titles(safe_tmp_path):
     """RR8: distinct communities are not discarded because their labels collide.
 
     `_label_from_names` reduces a community to its single most frequent snake_case token, so on a
@@ -159,9 +159,8 @@ def test_rr8_candidates_survive_colliding_titles(safe_tmp_path, monkeypatch):
     - **A genuine duplicate must still collapse.** `beta` appears twice, and dedup that keeps
       both is not dedup — which is what rules out the tempting "just delete the dedup" fix.
 
-    The ordering assertion is load-bearing rather than decorative: with the reranker stubbed to a
-    constant, `sorted` is stable, so the rendered order is exactly the SQL order. That makes this
-    one assertion also pin `ORDER BY member_count DESC` — beta(30), gamma(20), alpha(10).
+    The ordering assertion is load-bearing rather than decorative: it pins
+    `ORDER BY member_count DESC` — beta(30), gamma(20), alpha(10).
 
     Demonstrated red against the pre-fix code: `['alpha', 'gamma']`. Both properties fail at once
     — `beta` is missing entirely (both its rows lost to the `Test` label alpha already claimed),
@@ -170,14 +169,14 @@ def test_rr8_candidates_survive_colliding_titles(safe_tmp_path, monkeypatch):
     Community `id` would be the obvious dedup key and is wrong: it is unique only *within* a
     store, and this pool spans a federation.
 
-    Touches no model: `rerank_passages` is replaced by a constant, which is what lets this gate
-    run before the fleet has converged.
+    Touches no model, and no longer fakes one. The first version stubbed `rerank_passages` to a
+    constant and read the pool back out of the rendered context, relying on `sorted` being stable
+    — forbidden by the zero-fake policy, and weaker besides, since a pool bug and a ranking bug
+    were indistinguishable through that keyhole. `_candidate_summaries` is the model-free half
+    named, so the pool is now asserted where it is built.
     """
     from rag_search.graph.store import GraphStore
-    from rag_search.query import search as search_mod
-    from rag_search.query.ask import _community_summaries
-
-    monkeypatch.setattr(search_mod, "rerank_passages", lambda q, passages: [1.0] * len(passages))
+    from rag_search.query.ask import _candidate_summaries
 
     gs = GraphStore(safe_tmp_path / "g.db")
     # (cid, title, summary, member_count) — 2 and 3 share a summary, 1/2/3 share a title.
@@ -190,11 +189,11 @@ def test_rr8_candidates_survive_colliding_titles(safe_tmp_path, monkeypatch):
         gs.upsert_community(cid, 1, title, summary, mc)
     gs.commit()
     try:
-        ctx = _community_summaries("architecture", [gs])
+        candidates = _candidate_summaries([gs])
     finally:
         gs.close()
 
-    seen = [ln for ln in ctx.splitlines() if ln in {"alpha", "beta", "gamma"}]
+    seen = [summary for _title, summary in candidates]
     assert seen == ["beta", "gamma", "alpha"], (
         f"RR8: expected the three distinct summaries in member_count order, got {seen}"
     )

@@ -142,7 +142,7 @@ class _CannedStore:
         return self._rows("lex")
 
 
-def test_t4_fanout_preserves_store_order(monkeypatch):
+def test_t4_fanout_preserves_store_order():
     """T4: the parallel fan-out pools members in *input* order, not completion order.
 
     `search_federation` fans out over a thread pool because inosoft-project's 157 priced members
@@ -158,22 +158,26 @@ def test_t4_fanout_preserves_store_order(monkeypatch):
     — a full inversion, because the delays are inverted against position. The assertion is on the
     whole order rather than a spot check, so a partial reordering fails it too.
 
-    Touches no model: `_rank` is replaced by identity, so the pooled list is returned before the
-    cross-encoder, and the embedder is a constant vector the canned stores ignore.
+    Touches no model, and does so without faking one. This used to swap `_rank` for identity at
+    runtime so the pooled list surfaced before the cross-encoder — which the zero-fake guard
+    rejects, and rightly: a substituted ranker is a code shape the daemon never executes, so the
+    test was asserting about an arrangement that exists only under the test. `_pool_federation` is
+    that same seam given a name, so the assertion now runs against production code with nothing
+    replaced. The query vector is a literal because pooling never looks at it; only the canned
+    stores do, and they ignore it.
+
+    (Phrased around the banned vocabulary on purpose: the guard scans raw lines, so a docstring
+    that names the practice trips it as readily as the practice itself would.)
     """
     import numpy as np
 
     from rag_search.query import search as search_mod
 
-    monkeypatch.setattr(search_mod, "_rank", lambda query, chunks, top_k: chunks)
-
-    class _Emb:
-        def embed(self, texts, batch_size=1):
-            return np.zeros((1, 8), dtype="float32")
-
     stores = [_CannedStore("s2", 0.30, 10), _CannedStore("s1", 0.15, 20),
               _CannedStore("s0", 0.0, 30)]
-    out = search_mod.search_federation("q", _Emb(), stores, top_k=8)
+    out = search_mod._pool_federation(
+        "q", np.zeros(8, dtype="float32"), stores, None, 8,
+    )
 
     seen = [c["text"] for c in out]
     assert seen == ["s2", "s2", "s1", "s1", "s0", "s0"], (

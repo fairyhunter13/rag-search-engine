@@ -137,6 +137,38 @@ def rerank_passages(query: str, passages: list[str]) -> list[float]:
     return _get_reranker().rerank(query, passages)
 
 
+def _pool_federation(
+    query: str, q_vec, stores: list[VectorStore], langs, top_k: int,
+) -> list[dict]:
+    """Fan out over stores, fuse each member's lanes, pool and truncate. No embed, no rerank.
+
+    Split out of `search_federation` so the order-preservation invariant can be tested through
+    the code the daemon runs. `test_t4_fanout_preserves_store_order` used to reach it by
+    monkeypatching `_rank` to identity, which the zero-fake guard rejects and rightly so: a
+    patched ranker is a shape that never executes in production, and the seam it faked is
+    exactly this function boundary. Naming the boundary is cheaper than faking it.
+
+    Everything model-touching stays in the caller, which is what makes this callable from a test
+    that must not reach the GPU.
+    """
+    per_store = max(top_k * 3, 10)
+
+    def lanes(vs: VectorStore) -> list[dict]:
+        return fuse_rrf([vs.search(q_vec, top_k=per_store, languages=langs),
+                         vs.search_lexical(query, top_k=per_store, languages=langs)])
+
+    chunks: list[dict] = []
+    if len(stores) < 2:
+        for vs in stores:
+            chunks.extend(lanes(vs))
+    else:
+        with ThreadPoolExecutor(max_workers=min(_FANOUT_WORKERS, len(stores))) as ex:
+            for part in ex.map(lanes, stores):
+                chunks.extend(part)
+    chunks.sort(key=_pool_key, reverse=True)
+    return chunks[: max(_MIN_POOL, top_k * 5)]
+
+
 def search_federation(
     query: str,
     embedder: Embedder,
@@ -159,28 +191,13 @@ def search_federation(
     (they are functions of rank alone), where the raw lane scores are not — a store whose whole
     corpus is slightly off-topic still returns high cosines within itself.
 
-    The fan-out is parallel but **order-preserving**, and that is load-bearing rather than
-    incidental: `ex.map` yields in *input* order, so the pooled list is assembled exactly as the
-    sequential loop assembled it, and `chunks.sort` is stable — so ties break identically and the
-    ranking cannot move. Consuming completions as they land (`as_completed`) would reorder ties
-    and turn a performance change into a silent retrieval change; `test_t4_fanout_preserves_store_order`
-    is the gate that says so.
+    The fan-out (`_pool_federation`) is parallel but **order-preserving**, and that is
+    load-bearing rather than incidental: `ex.map` yields in *input* order, so the pooled list is
+    assembled exactly as the sequential loop assembled it, and `chunks.sort` is stable — so ties
+    break identically and the ranking cannot move. Consuming completions as they land
+    (`as_completed`) would reorder ties and turn a performance change into a silent retrieval
+    change; `test_t4_fanout_preserves_store_order` is the gate that says so.
     """
     q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
-    langs = scope_languages(scope)
-    per_store = max(top_k * 3, 10)
-
-    def lanes(vs: VectorStore) -> list[dict]:
-        return fuse_rrf([vs.search(q_vec, top_k=per_store, languages=langs),
-                         vs.search_lexical(query, top_k=per_store, languages=langs)])
-
-    chunks: list[dict] = []
-    if len(stores) < 2:
-        for vs in stores:
-            chunks.extend(lanes(vs))
-    else:
-        with ThreadPoolExecutor(max_workers=min(_FANOUT_WORKERS, len(stores))) as ex:
-            for part in ex.map(lanes, stores):
-                chunks.extend(part)
-    chunks.sort(key=_pool_key, reverse=True)
-    return _rank(query, chunks[: max(_MIN_POOL, top_k * 5)], top_k)
+    pooled = _pool_federation(query, q_vec, stores, scope_languages(scope), top_k)
+    return _rank(query, pooled, top_k)
