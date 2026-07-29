@@ -40,6 +40,12 @@ pytestmark = pytest.mark.live
 _SETTLE_S = 30.0
 _RARE = "WK1_ZQXJV_RARE_TOKEN"
 
+# Comfortably over the 60 s `watcher_sync` interval in `daemon/server.py::_start_background`,
+# since a registry write landing just after a tick waits nearly a full one. Not derived from that
+# constant on purpose: this asserts the daemon that is actually running, which may be older than
+# the source tree, and importing the interval would let a source-side change move the goalposts.
+_SYNC_CONVERGE_S = 90.0
+
 
 def _wait_for(pred, timeout: float = _SETTLE_S) -> bool:
     deadline = time.monotonic() + timeout
@@ -239,16 +245,33 @@ def test_wk2_http_the_daemon_reports_no_root_armed_for_a_disabled_project(live_c
     projects the daemon never hears about, so `missing` is legitimately dirty mid-run, while
     `extra` means a root is armed for a project the registry has since disabled — the
     `_worktrees/redacted-name-5` state py-spy found.
+
+    Convergence, not a snapshot: the registry has writers outside the daemon process (the CLI,
+    and this suite), and those reach the armed set only through the `watcher_sync` scheduler
+    job. So the property is "the armed set *reaches* the registry", and the wait is what makes
+    the test say that. It costs nothing in the ordinary case — the first sample is clean and
+    the loop returns at once — and the budget is only ever spent on a real divergence, which is
+    the run that should be paying for a diagnosis.
     """
-    r = live_client.get("/api/watcher", timeout=10)
-    assert r.status_code == 200, (
-        f"WK2: GET /api/watcher returned {r.status_code} — the running daemon predates W0, so "
-        "the armed root set is still reachable only by py-spy"
-    )
-    body = r.json()
-    assert body.get("running") is True
-    assert body.get("extra") == [], (
-        f"WK2: armed for {body.get('extra')}, which the registry no longer enables"
+    deadline = time.monotonic() + _SYNC_CONVERGE_S
+    while True:
+        r = live_client.get("/api/watcher", timeout=10)
+        assert r.status_code == 200, (
+            f"WK2: GET /api/watcher returned {r.status_code} — the running daemon predates W0, "
+            "so the armed root set is still reachable only by py-spy"
+        )
+        body = r.json()
+        assert body.get("running") is True
+        extra = body.get("extra")
+        if extra == [] or time.monotonic() >= deadline:
+            break
+        time.sleep(2.0)
+
+    assert extra == [], (
+        f"WK2: still armed for {extra} after {_SYNC_CONVERGE_S:.0f}s, which the registry no "
+        f"longer enables. Nothing re-reads the registry on behalf of another process's write "
+        f"unless `watcher_sync` is on the scheduler, and reconcile's periodic pass is off by "
+        f"default — so without it this never converges at all, it waits for a restart."
     )
 
 
