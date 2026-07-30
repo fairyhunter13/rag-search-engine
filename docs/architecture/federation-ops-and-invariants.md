@@ -35,6 +35,12 @@
 - **`index(path, enabled=False)`** (MCP): `expand_federation(path)` → `remove_project` +
   `rmtree(index_dir)` for each path. Removing a root cascades to its members; response
   reports `members_removed`.
+  When the expansion returns more than the path asked for, the first call returns
+  `status: "confirm_required"` with the member list and each store's size and deletes
+  **nothing**; `confirm_members=True` performs the cascade. The asymmetry is the reason:
+  membership rows are rediscovered by the next federation walk, embeddings are not, so the
+  recoverable half self-heals and the expensive half is GPU time proportional to the members.
+  A project with no members removes in one call — the gate is on fan-out, not on deletion.
 - **Orphan vacuum** (§6 of part 1) is the backstop that reconciles storage to the registry
   if anything is left behind.
 

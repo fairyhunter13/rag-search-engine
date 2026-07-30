@@ -180,7 +180,10 @@ def test_inv8_cascade_remove(safe_tmp_path):
     try:
         upsert_project(ProjectEntry(path=str(root), enabled=True))
         index_members(str(root))
-        result = json.loads(asyncio.run(mcp_index(str(root), enabled=False)))
+        # confirm_members: the cascade is what this invariant is about, and removing a root now
+        # previews the fan-out first. IR1/IR4 own that gate; passing it here keeps this test on its
+        # own claim instead of silently becoming a second, weaker copy of the confirmation test.
+        result = json.loads(asyncio.run(mcp_index(str(root), enabled=False, confirm_members=True)))
         assert result.get("status") == "removed", f"unexpected: {result}"
         assert str(member) in result.get("members_removed", [])
         assert get_project(str(root)) is None
