@@ -225,3 +225,106 @@ def test_el10_bytes_that_contradict_the_extension_are_recorded_not_parsed_as_cla
         _, st = _stats(name, src, lang)
         assert st.rung != "language_mismatch", (
             f"{name}: degraded-but-correct {lang} was called a language mismatch")
+
+
+_ASTRO = "---\nconst x = 1;\nfunction load() { return 2 }\n---\n<h1>{x}</h1>\n<script>function go(){return 3}</script>\n"
+_VUE = '<template><button @click="go">x</button></template>\n<script>\nfunction go(){return 1}\n</script>\n'
+_TS_SVELTE = '<script lang="ts">\nfunction typed(n: number){ return n }\n</script>\n'
+_README = "# t\n\n```python\ndef readme_example():\n    return 1\n```\n"
+
+
+def test_el11_injections_supplement_the_script_walk_and_never_replace_it() -> None:
+    """EL11 — rung 1, and the three things that make it safe rather than a rewrite.
+
+    (a) It **adds**: astro's frontmatter is a `frontmatter_js_block`, not a `script_element`, so
+    `_iter_script_blocks` cannot see it and `load` was invisible. (b) It **does not replace**: the
+    plan proposed swapping the hand-rolled walk for injections, but vue's injections query is
+    *empty* and vue is the fleet's highest-coverage host grammar (92 %, 2,020 of 2,190 files), so
+    the swap would have been a straight regression on the case that matters most. php's and erb's
+    are empty too. (c) Ties go to the better-informed source: html's `#set!` says javascript for
+    every script element, while the hand-rolled walk reads `<script lang="ts">` — keyed on the
+    triple rather than the region, both would be kept and the file would report double symbols.
+    """
+    astro = {s.name for s in _stats("a.astro", _ASTRO, "astro")[0]}
+    assert {"load", "go"} <= astro, f"astro frontmatter or script lost: {sorted(astro)}"
+
+    for name, src, lang, want in [("a.vue", _VUE, "vue", "go"),
+                                  ("a.svelte", _SVELTE, "svelte", "build"),
+                                  ("t.svelte", _TS_SVELTE, "svelte", "typed")]:
+        syms, _st = _stats(name, src, lang)
+        names = [s.name for s in syms]
+        assert want in names, f"{name}: host regressed, {want!r} not in {names}"
+        assert names.count(want) == 1, f"{name}: {want!r} extracted twice — dedup failed: {names}"
+    assert [s.language for s in _stats("t.svelte", _TS_SVELTE, "svelte")[0]] == ["typescript"], \
+        'lang="ts" lost to an injection #set! that can only say javascript'
+
+
+def test_el12_a_documentation_fence_does_not_become_a_project_definition() -> None:
+    """EL12 — why rung 1 takes only *statically* declared injection languages.
+
+    A `(#set! injection.language "php")` is the grammar author stating a property of the host
+    grammar. A dynamic `@injection.language` capture takes the language from the document's own
+    text — a markdown fence's info string — which is reading a token to choose a grammar, the
+    thing P6 forbids. It is also simply wrong: an example in a README is not a definition in the
+    project, and enrolling one makes `graph(relation="definition")` answer with documentation.
+
+    Measured across the pack's 110 injection-capable languages: 64 declare statically, 12 capture
+    dynamically, 31 mark content with no language, 3 use the capture name. The rule keeps 64.
+    """
+    syms, st = _stats("README.md", _README, "markdown")
+    assert "readme_example" not in {s.name for s in syms}, (
+        f"a fenced README example became a symbol (rung={st.rung}): {[s.name for s in syms]}")
+
+
+def test_au1_coverage_must_be_read_by_something_that_can_see_the_wal(safe_tmp_path) -> None:
+    """AU1 — the guard against the measurement error that voided the first baseline.
+
+    A first coverage pass reported 5,179 files / 49.8 %, with svelte at 0 of 86. The number was
+    void: every store is `journal_mode=wal`, the fleet rebuild was writing throughout, and the
+    identical query returned **0** before a checkpoint and **78** after, on a `graph.db` whose
+    mtime never changed. A *stable wrong answer* is the failure mode here — it survived four
+    independent cross-checks — so agreement between two readers proves nothing unless one of them
+    is known to be able to go stale.
+
+    Hence both halves. The positive half is the rule: coverage is read from the process that owns
+    the writer, or by a connection that attaches the WAL. The negative half is the witness, and it
+    is what makes the positive half non-vacuous: with 30 committed rows sitting in a ~100 KB
+    `-wal`, an `immutable=1` connection does not merely under-count — it reports **no such table**,
+    because it reads the main database alone and the table was created in the WAL too.
+
+    If the negative half ever goes green, SQLite's behaviour changed and this test is measuring
+    nothing; re-derive the witness before trusting any fleet coverage figure again.
+    """
+    from rag_search.graph.store import GraphStore
+
+    db = safe_tmp_path / "au1" / "graph.db"
+    gs = GraphStore(db)
+    try:
+        _au1_body(gs, db)
+    finally:
+        gs.close()
+
+
+def _au1_body(gs, db) -> None:
+    import sqlite3
+    for i in range(30):
+        gs.record_extraction(f"/x/f{i}.py", "python", "structure", 2, 0, 0)
+    gs.commit()
+    from_writer = sum(r["files"] for r in gs.extraction_summary())
+    assert from_writer == 30, from_writer
+    assert (db.parent / "graph.db-wal").stat().st_size > 0, \
+        "nothing in the -wal — this test cannot witness the hazard it exists for"
+
+    wal_aware = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        assert wal_aware.execute("SELECT COUNT(*) FROM file_extraction").fetchone()[0] == 30, \
+            "a WAL-attaching reader disagreed with the writer"
+    finally:
+        wal_aware.close()
+
+    stale = sqlite3.connect(f"file:{db}?immutable=1", uri=True)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            stale.execute("SELECT COUNT(*) FROM file_extraction").fetchone()
+    finally:
+        stale.close()
