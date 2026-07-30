@@ -10,6 +10,15 @@ from pathlib import Path
 # real name was doing the work. test_systemd_dropins_target_deployed_unit ties them together.
 UNIT_NAME = "rag-search-mcp-daemon.service"
 
+# The unit systemd activates when the daemon lands in `failed`. It existed on this host for months
+# as a `static` unit that nothing could ever start: `unit_text()` emitted no `OnFailure=` and neither
+# did any drop-in, and the repo's copy was deleted in 18aca54 for having the wrong name without one
+# being put back. With `Restart=always` against `StartLimitBurst=20`, the daemon can exhaust its
+# restarts, enter `failed` and sit there — which is precisely what the notifier was written for and
+# precisely when it was unreachable. Named here so the unit, the `OnFailure=` and the test that
+# proves it fires all derive from one string.
+NOTIFY_UNIT = "rag-search-mcp-failure-notify.service"
+
 
 def unit_text(exec_path: str | None = None) -> str:
     if exec_path is None:
@@ -25,6 +34,10 @@ def unit_text(exec_path: str | None = None) -> str:
         "[Unit]\n"
         "Description=rag-search singleton MCP daemon (GPU-enforced)\n"
         "After=network.target\n"
+        # Fires when the unit reaches `failed` — i.e. after Restart= has given up — not on each
+        # restart, so an ordinary crash-and-recover stays silent and only a daemon that has
+        # stopped recovering reaches the desktop.
+        f"OnFailure={NOTIFY_UNIT}\n"
         "\n"
         "[Service]\n"
         "Type=simple\n"
@@ -55,10 +68,50 @@ def unit_text(exec_path: str | None = None) -> str:
     )
 
 
+def notify_unit_text() -> str:
+    """The unit `OnFailure=` activates. Oneshot; notifies only if the daemon is still down.
+
+    It re-checks after a pause rather than trusting the transition that woke it. `OnFailure=` fires
+    on the way into `failed`, and a unit can be restarted out of that state moments later — a
+    notifier without the re-check would page for outages that were over before the popup rendered,
+    and a critical notification that is usually wrong gets dismissed reflexively, which is the same
+    as not having one.
+
+    `notify-send` is probed rather than required: on a headless host there is no session bus to
+    notify, and a notifier that fails the unit it was called about would turn one problem into two.
+    """
+    check = (
+        "sleep 8; "
+        f"state=$(systemctl --user is-active {UNIT_NAME} 2>/dev/null || echo unknown); "
+        "case $state in active|activating|reloading) exit 0 ;; esac; "
+        'command -v notify-send >/dev/null 2>&1 && notify-send -u critical -a rag-search '
+        '"rag-search: daemon stopped" '
+        '"Daemon crashed and is not recovering automatically.\\n'
+        "Check the real cause in the journal, then recover:\\n"
+        f"  journalctl --user -u {UNIT_NAME.removesuffix('.service')} -n 40\\n"
+        f"  systemctl --user reset-failed {UNIT_NAME.removesuffix('.service')}\\n"
+        f'  systemctl --user start {UNIT_NAME.removesuffix(".service")}" || true'
+    )
+    return (
+        "[Unit]\n"
+        "Description=rag-search MCP daemon hard-fail desktop notification\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecStart=/bin/sh -c '{check}'\n"
+    )
+
+
 def install(dest: Path | None = None) -> Path:
-    """Write the unit file; returns the path written."""
+    """Write the unit file and its failure notifier; returns the path of the main unit.
+
+    The notifier ships with the unit that references it. `OnFailure=` naming a unit that does not
+    exist is not an error systemd reports at load time — it is discovered when the daemon fails,
+    which is the one moment nobody is in a position to notice.
+    """
     if dest is None:
         dest = Path.home() / ".config" / "systemd" / "user" / UNIT_NAME
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(unit_text())
+    (dest.parent / NOTIFY_UNIT).write_text(notify_unit_text())
     return dest
