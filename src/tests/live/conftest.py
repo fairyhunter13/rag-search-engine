@@ -10,7 +10,7 @@ from tests.live._sample_workspace import (
     build_sample_workspace,
     teardown_sample_workspace,
 )
-from tests.live._sweeps import sweeps_state
+from tests.live._sweeps import renew_pause_lease, sweeps_state
 
 _DAEMON = "http://127.0.0.1:8765"
 
@@ -145,12 +145,18 @@ def _drain_graph_lane():
 
     Only pays for itself when there is something to drain: with an empty queue and no pass in
     flight the join returns on its first predicate check.
+
+    It also renews the daemon's pause lease, because this is the one hook that already fires after
+    every test: the session pause now expires on its own (that is how a killed session stops
+    wedging the daemon for hours), and the suite outlives any single lease. See
+    `_sweeps.renew_pause_lease` for why it is conditional.
     """
     yield
     sweeps = sys.modules.get("rag_search.daemon.sweeps")
     if sweeps is not None:
         with contextlib.suppress(Exception):
             sweeps._graph_lane_join(timeout=300.0)
+    renew_pause_lease()
 
 
 @pytest.fixture(scope="session", autouse=True)

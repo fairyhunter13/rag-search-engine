@@ -51,14 +51,28 @@ async def _api_reload(request: Request) -> JSONResponse:
 
 
 async def _api_sweeps_pause(request: Request) -> JSONResponse:
-    return _set_paused(True, "paused")
+    return _set_paused(True, "paused", _parse_ttl_param(request.query_params.get("ttl_s")))
 
 
 async def _api_sweeps_resume(request: Request) -> JSONResponse:
     return _set_paused(False, "resumed")
 
 
-def _set_paused(paused: bool, status: str) -> JSONResponse:
+def _parse_ttl_param(value: str | None) -> float | None:
+    """?ttl_s= for the pause route; anything unparseable or non-positive falls back to the default.
+
+    A caller that mistypes the lease length gets the 30 min default, not an unbounded pause: the
+    parameter exists to make a *longer* pause explicit, so failing it open to "forever" would
+    reintroduce the state the lease removes.
+    """
+    try:
+        ttl = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return ttl if ttl > 0 else None
+
+
+def _set_paused(paused: bool, status: str, ttl_s: float | None = None) -> JSONResponse:
     """Flip sweeps._PAUSED and report what it was, so a caller can put it back.
 
     `_PAUSED` is a bare global with no nesting or ownership (sweeps.py:10), so "resume" means
@@ -73,9 +87,16 @@ def _set_paused(paused: bool, status: str) -> JSONResponse:
     correctly restoring the "already paused" it found, still added up to a 4 h outage of every
     sweep. `sweeps.set_paused` therefore also stamps how long the pause has run, which /healthz
     exposes as `sweeps_paused_s` — the state itself, rather than the handoff between callers.
+
+    Observability was not recovery, though: the four sweeps that honoured the flag had no path back
+    at all. The pause is now a lease, so the reply also carries `lease_remaining_s` — a caller that
+    means to hold it for longer than the default renews by pausing again, which is what the live
+    suite's per-test fixture does, and a caller that dies stops renewing.
     """
     from rag_search.daemon import sweeps
-    return JSONResponse({"status": status, "previously_paused": sweeps.set_paused(paused)})
+    was = sweeps.set_paused(paused) if ttl_s is None else sweeps.set_paused(paused, ttl_s)
+    return JSONResponse({"status": status, "previously_paused": was,
+                         "lease_remaining_s": round(sweeps.pause_lease_remaining_s(), 1)})
 
 
 async def _api_gpu_release(request: Request) -> JSONResponse:

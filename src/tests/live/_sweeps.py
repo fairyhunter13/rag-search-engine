@@ -40,6 +40,33 @@ def sweeps_state(paused: bool, *, base: str = _DAEMON) -> Iterator[dict]:
         _post(base, "pause" if body["previously_paused"] else "resume")
 
 
+def renew_pause_lease(*, base: str = _DAEMON) -> None:
+    """Re-arm the daemon's pause lease if it is paused, so a long run is never cut off mid-flight.
+
+    The pause now expires (`sweeps._PAUSE_DEADLINE`), which is what stops a killed session wedging
+    every sweep for hours — but the live suite runs far longer than one lease, and an expiry
+    mid-run resumes exactly the sweeps `pause_sweeps` exists to stop: GPU contention with the
+    in-process embedder, and reconcile indexing the suite's own temp projects behind tests that
+    assert un-indexed state. Called after every test, so the lease only ever has to outlive a
+    single test rather than the whole session.
+
+    Conditional on the daemon reporting itself paused, and never the reverse: pausing a sweeping
+    daemon here would be the clobber `sweeps_state` was written to prevent. Best-effort — a renewal
+    that cannot reach the daemon must not fail the test that just passed.
+
+    Keyed on `sweeps_pause_lease_s`, not `sweeps_paused_s`: the latter is elapsed time rounded to one
+    decimal, so a pause set less than 50 ms ago reports 0.0 — the field meaning "paused" and the
+    value meaning "not paused" collide. Lease-remaining is positive exactly while a lease is live,
+    which is the thing being renewed. A lease already at 0.0 is deliberately *not* re-armed: the
+    mechanism has decided to resume, and reinstating it from here would race that decision and hide
+    the one signal that says a 30-minute pause went unrenewed.
+    """
+    with contextlib.suppress(Exception):
+        health = requests.get(f"{base}/healthz", timeout=5).json()
+        if health.get("sweeps_pause_lease_s", 0.0) > 0.0:
+            _post(base, "pause")
+
+
 def _post(base: str, route: str) -> dict:
     r = requests.post(f"{base}/api/sweeps/{route}", timeout=5)
     r.raise_for_status()
@@ -59,12 +86,18 @@ def local_sweeps_paused(paused: bool) -> Iterator[None]:
     Tests that call `reconcile_projects()` directly are driving their own imported module, not
     the daemon's process, so the HTTP routes cannot reach them. Same discipline regardless:
     restore what was read, never a constant.
+
+    Goes through `set_paused` rather than assigning the flag, so the in-process twin exercises the
+    same lease the daemon does — a bare assignment leaves `_PAUSE_DEADLINE` at None, and a pause
+    with no deadline is the un-leased pause this replaced. `_PAUSED` is still read directly to
+    learn what to restore: that read is the one thing `is_paused()` cannot answer, since it would
+    resume an expired pause as a side effect of asking about it.
     """
     from rag_search.daemon import sweeps
 
     was = sweeps._PAUSED
-    sweeps._PAUSED = paused
+    sweeps.set_paused(paused)
     try:
         yield
     finally:
-        sweeps._PAUSED = was
+        sweeps.set_paused(was)
