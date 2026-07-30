@@ -29,7 +29,7 @@ convention to the letter and still collide.
 
 ```bash
 # Fast smoke check — skips LLM quality tests + browser tests (~5 min)
-.venv/bin/pytest src/tests/live/ -m "live and not slow" --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
+.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
 
 # Full live suite — all intents, quality scoring, watcher (~40 min, no browser)
 .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
@@ -44,7 +44,18 @@ python -m compileall -q src/rag_search
 
 **Test markers**:
 - `live` — requires daemon at :8765, GPU
-- `slow` — LLM-heavy tests (>30s each); skip with `-m "live and not slow"` for fast feedback
+- `costly` — spends real Claude session quota (`claude -p` via `/api/chat_stream`); 13 tests
+- `exclusive` — needs a quiescent daemon to measure it (CB3/CB4/CB6); 3 tests
+
+**`slow` is retired (2026-07-30).** It meant "LLM-heavy" and "just takes a while" at once, and the
+one `-m "not slow"` gate excluded both from every push. Measured before the split: of **47** `slow`
+tests only **13** reached a model and **3** needed a quiet daemon — the other **31 cost wall clock
+alone** yet ran only on a manual dispatch nobody dispatches, which is where six gates rotted in a
+single week (`test_federation_composed_entity.py`'s `KeyError: 'kb_state'`, `test_self_heal_e2e.py`'s
+memo assertion failing on every run since the memo landed, `test_p6_daemon.py`'s 8 s budget against
+21.4 s recovery — each invisible for exactly this reason). Those 31 are unmarked now and run on
+every push. **Skipping is still forbidden** (`test_no_skip_markers_in_live_suite`): a marker chooses
+which suite a test belongs to, it never lets one pass without running.
 
 **Memory profile**: the live suite loads a real embedder in-process (~1 GB) — intrinsic to the no-mock invariant. Use the fast smoke command above as the default to keep peak RSS lower. Browser tests run in a separate process; don't run them together with the live suite.
 
@@ -81,9 +92,11 @@ are `push` to main (owner) and manual `workflow_dispatch` (owner). There is deli
 session quota mid-workday. Fork-PR workflow approval is set to `all_external_contributors`, so
 nothing external runs without explicit owner approval.
 
-**`live-fast` vs `live-slow`**: every push runs `live-fast` (`-m "live and not slow"`, <5 min); the
-full `@slow` sweep (`live-slow`, ~15–30 min) is **manual only** — `gh workflow run CI`, or the "Run
-workflow" button. There is no commit-message trigger: `contains()` matches the whole message
+**`live-fast` vs `live-slow`**: every push runs `live-fast`
+(`-m "live and not costly and not exclusive"`); the full sweep (`live-slow`, ~15–30 min) is
+**manual only** — `gh workflow run CI`, or the "Run workflow" button. `live-fast` is no longer the
+"<5 min" job it was: the marker split moved 31 wall-clock-heavy tests onto every push deliberately,
+which is the whole point — a gate that only runs on a dispatch nobody dispatches is not a gate. There is no commit-message trigger: `contains()` matches the whole message
 including the body, so a commit that merely mentioned the tag in prose fired a 60-minute real-model
 run. **The convergence prescription that used to sit here is retired (2026-07-28).** It named
 `test_converge_smoke_standalone` and `test_kb_state_ready_all_projects` guarding

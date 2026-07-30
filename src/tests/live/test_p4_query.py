@@ -82,7 +82,7 @@ def test_graph_callees_real_be(sample_workspace):
 
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_stream_sse_sends_done(live_client):
     """P10.5/P15.2: /api/chat_stream SSE sends tokens and ends with done:true (LIVE daemon)."""
     import json as _json

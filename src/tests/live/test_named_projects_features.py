@@ -75,7 +75,6 @@ class TestNamedProjectsOverview:
         data = json.loads(result)
         assert isinstance(data, dict), f"{key} overview({what!r}) must return JSON object"
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("key,what", [
         (k, w) for k in ("service", "federation", "standalone") for w in _OVERVIEW_WHATS_SLOW
     ])
@@ -104,7 +103,6 @@ class TestNamedProjectsAsk:
     still serves the CLI and the dashboard chat.
     """
 
-    @pytest.mark.slow
     @pytest.mark.parametrize("key", ["service", "federation", "standalone"])
     def test_ask_architecture_non_empty(self, named_projects: dict, key: str) -> None:
         from rag_search.query.ask import run_ask
