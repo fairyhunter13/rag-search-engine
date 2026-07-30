@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from tests.live._sample_workspace import SampleWorkspace
+from tests.live._sweeps import sweeps_state
 
 pytestmark = pytest.mark.live
 
@@ -45,10 +46,24 @@ def test_api_metrics_no_llm_accounting(live_client):
 
 
 def test_api_sweeps_pause_resume(live_client):
-    """Pause then resume — both 200; leave sweeps paused (autouse fixture expects it paused)."""
-    assert live_client.post("/api/sweeps/pause").status_code == 200
-    assert live_client.post("/api/sweeps/resume").status_code == 200
-    assert live_client.post("/api/sweeps/pause").status_code == 200  # restore paused state
+    """Both routes work, and each reports the state it replaced.
+
+    The inner `previously_paused is True` is also this suite's ordering gate: the session
+    fixture pauses sweeps for the whole run, so if any earlier-sorting file resumed
+    unconditionally instead of restoring what it found, the pause is gone by the time this
+    runs and the assert says so. `test_cpu_budget` (c) sorts before `test_http_surface` (h),
+    which is exactly the pair that regressed. `live_client` is taken (unused) so an
+    unreachable daemon fails with conftest's actionable message, not a raw ConnectionError.
+    """
+    with sweeps_state(paused=True) as paused:
+        assert paused["status"] == "paused"
+        with sweeps_state(paused=False) as resumed:
+            assert resumed["status"] == "resumed"
+            assert resumed["previously_paused"] is True, (
+                "sweeps were already running when this test began — the session-scoped "
+                "pause_sweeps fixture was cancelled by an earlier test resuming "
+                "unconditionally instead of restoring the state it found"
+            )
 
 
 # /api/events/stream left with tier 3. Its only publisher was the pipeline job runner

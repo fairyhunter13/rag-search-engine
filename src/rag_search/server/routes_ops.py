@@ -51,15 +51,28 @@ async def _api_reload(request: Request) -> JSONResponse:
 
 
 async def _api_sweeps_pause(request: Request) -> JSONResponse:
-    from rag_search.daemon import sweeps
-    sweeps._PAUSED = True
-    return JSONResponse({"status": "paused"})
+    return _set_paused(True, "paused")
 
 
 async def _api_sweeps_resume(request: Request) -> JSONResponse:
+    return _set_paused(False, "resumed")
+
+
+def _set_paused(paused: bool, status: str) -> JSONResponse:
+    """Flip sweeps._PAUSED and report what it was, so a caller can put it back.
+
+    `_PAUSED` is a bare global with no nesting or ownership (sweeps.py:10), so "resume" means
+    "resume for everyone", not "undo my pause". Without `previously_paused` in the reply there
+    is no way to tell an unpause from a clobber: the live suite pauses sweeps for its whole
+    session to keep the daemon off the GPU (HR41), and one test resuming unconditionally
+    cancelled that for every test after it — silently, as downstream flakiness naming neither
+    sweeps nor the GPU. Reporting the prior state makes the pair restorable without a second
+    round trip to /api/auto_pipeline_status, which walks the whole registry to answer it.
+    """
     from rag_search.daemon import sweeps
-    sweeps._PAUSED = False
-    return JSONResponse({"status": "resumed"})
+    was = sweeps._PAUSED
+    sweeps._PAUSED = paused
+    return JSONResponse({"status": status, "previously_paused": was})
 
 
 async def _api_gpu_release(request: Request) -> JSONResponse:
