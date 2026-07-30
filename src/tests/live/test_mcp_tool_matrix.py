@@ -22,6 +22,7 @@ import sqlite3
 import pytest
 
 from rag_search.core.config import project_graph_db
+from rag_search.query.search import SCOPES
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -87,7 +88,7 @@ class TestGraphRelations:
 
 class TestSearchScopes:
 
-    @pytest.mark.parametrize("scope", ["code", "docs", "all"])
+    @pytest.mark.parametrize("scope", SCOPES)
     def test_search_scope(self, indexed_proj, scope):
         from rag_search.server.mcp import search as search_tool
         data = json.loads(asyncio.run(
@@ -95,6 +96,32 @@ class TestSearchScopes:
         ))
         assert "total" in data and "results" in data, f"search(scope={scope!r}) missing keys"
         assert isinstance(data["results"], list)
+
+    def test_search_unknown_scope_errors_with_valid_set(self, indexed_proj):
+        """An unknown scope must error, not silently widen the corpus.
+
+        This is `test_graph_unknown_relation_errors_with_valid_set` for the one tool of the three
+        that did not have it. `scope_languages` answers "no restriction" and "I don't recognise
+        that scope" with the same `None`, so the fallthrough searched *more* than was asked for
+        while looking like a normal result — undetectable from the results, unlike a narrowing.
+
+        The case is a project path rather than a typo because that is the one that actually
+        happened: `scope=<path>` with the project selector left defaulted was accepted and
+        answered from a different project entirely, which reads as a scope-routing defect in the
+        engine rather than a bad argument. Asserting the valid set and the `project_paths` hint
+        are both present is what makes the reply self-correcting.
+        """
+        from rag_search.server.mcp import search as search_tool
+        data = json.loads(asyncio.run(
+            search_tool("function", scope=indexed_proj, project_paths=[indexed_proj])
+        ))
+        assert "error" in data, f"unknown scope must error, not answer; got {data}"
+        assert sorted(data.get("valid", [])) == sorted(SCOPES), (
+            f"the error must advertise the valid scopes; got {data.get('valid')}")
+        assert "project_paths" in data.get("hint", ""), (
+            "the hint must name the parameter that actually selects projects, since confusing "
+            f"the two is the failure this catches; got {data.get('hint')!r}")
+        assert "results" not in data, "an unknown scope must not also return results"
 
     def test_search_federated_project_paths(self, indexed_proj):
         from rag_search.server.mcp import search as search_tool
