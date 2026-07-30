@@ -325,9 +325,8 @@ async def index(project_path: str, enabled: bool = True, confirm_members: bool =
     project_path = canonicalize_path(project_path)
 
     if not enabled:
-        import shutil
-
         from rag_search.core.config import index_dir
+        from rag_search.core.orphans import quarantine
         from rag_search.daemon.federation import expand_federation
         targets = expand_federation(project_path)
         # The asymmetry that makes this worth a round trip: a membership row the daemon deletes here
@@ -346,9 +345,13 @@ async def index(project_path: str, enabled: bool = True, confirm_members: bool =
         for p in targets:
             if remove_project(p):
                 removed.append(p)
-            shutil.rmtree(index_dir(p), ignore_errors=True)
+            quarantine(index_dir(p))
+        # The confirmation above is honest about the cost of undoing this, and the quarantine is
+        # what makes undoing it possible at all for a week. Both, not either: the note tells a
+        # caller who is about to be wrong, the trash serves the one who already was.
         return json.dumps({"status": "removed", "path": project_path,
-                           "members_removed": removed[1:] if len(removed) > 1 else []})
+                           "members_removed": removed[1:] if len(removed) > 1 else [],
+                           "recoverable_until_days": 7})
     from pathlib import Path
 
     from rag_search.index.discover import is_forbidden_root

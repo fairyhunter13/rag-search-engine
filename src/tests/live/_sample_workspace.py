@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rag_search.core.config import ProjectEntry
+from rag_search.core.orphans import TRASH_DIRNAME
 from rag_search.core.registry import remove_project, upsert_project
 
 _REPO_ROOT = Path(__file__).parents[3]
@@ -189,9 +190,18 @@ def purge_rows_under(base: Path) -> list[str]:
 
 
 def index_dir_names() -> set[str]:
-    """Every dir name under INDEX_ROOT right now — the run's before-picture."""
+    """Every store dir name under INDEX_ROOT right now — the run's before-picture.
+
+    `.trash` is not a store and is excluded from both ends of this: it holds quarantined fleet
+    stores, and it is created lazily by the first `quarantine()` — so a run during which the daemon
+    or a test quarantines anything would find it "appeared since the snapshot" and unowned, which is
+    both conditions `purge_unowned_index_dirs_created_since` deletes on, with no `--yes` in front of
+    it. Quarantine that the test suite eats is worse than none, because it looks like a control.
+    """
     from rag_search.core.config import INDEX_ROOT
-    return {d.name for d in INDEX_ROOT.iterdir() if d.is_dir()} if INDEX_ROOT.exists() else set()
+    if not INDEX_ROOT.exists():
+        return set()
+    return {d.name for d in INDEX_ROOT.iterdir() if d.is_dir() and d.name != TRASH_DIRNAME}
 
 
 def purge_unowned_index_dirs_created_since(before: set[str]) -> list[str]:
@@ -217,7 +227,7 @@ def purge_unowned_index_dirs_created_since(before: set[str]) -> list[str]:
     owned = {index_dir(e.path).name for e in list_projects()}
     removed: list[str] = []
     for d in sorted(INDEX_ROOT.iterdir()):
-        if not d.is_dir() or d.name in before or d.name in owned:
+        if not d.is_dir() or d.name in before or d.name in owned or d.name == TRASH_DIRNAME:
             continue
         shutil.rmtree(d, ignore_errors=True)
         removed.append(d.name)
