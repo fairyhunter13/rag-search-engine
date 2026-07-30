@@ -7,9 +7,15 @@ import pytest
 import requests
 
 from tests.live._sample_workspace import SampleWorkspace
-from tests.live._sweeps import local_sweeps_paused
+from tests.live._sweeps import local_sweeps_paused, renew_or_repair_lease
 
 pytestmark = pytest.mark.live
+
+
+def _lease_remaining_s() -> float:
+    """Seconds left on the daemon's sweeps pause lease; 0.0 when it is not paused at all."""
+    return requests.get("http://127.0.0.1:8765/healthz", timeout=5).json().get(
+        "sweeps_pause_lease_s", 0.0)
 
 
 def test_scheduler_runs_job():
@@ -170,29 +176,82 @@ def test_federation_discover_empty_dir(tmp_path):
     assert discover_members(str(tmp_path)) == []
 
 
+_RECONCILE_SKIP_CHILD = r'''
+import json, sys
+from pathlib import Path
+from rag_search.core.config import ProjectEntry
+from rag_search.core.registry import get_project, upsert_project
+from rag_search.daemon.sweeps import _index_project, _needs_index, reconcile_projects
+
+proj = sys.argv[1]
+p = Path(proj)
+p.mkdir(parents=True, exist_ok=True)
+(p / "m.py").write_text("def f():\n    return 1\n")
+
+upsert_project(ProjectEntry(path=proj, enabled=True))
+_index_project(proj)
+
+out = {"needs_index_before": _needs_index(proj),
+       "indexed_at_before": get_project(proj).indexed_at}
+
+reconcile_projects()
+
+out["indexed_at_after"] = get_project(proj).indexed_at
+print(json.dumps(out))
+'''
+
+
 def test_sweeps_reconcile_skips_complete_project(safe_tmp_path):
-    """reconcile_projects must skip an already-indexed project.
+    """reconcile_projects must skip an already-indexed project — and now actually checks it.
 
-    Still marked slow, for a different reason than it was: the unconditional
-    federation-root pass that ran reconstruct_processes over every fleet root left with
-    BPRE, so no cloud call remains here. What is left is the walk itself — reconcile
-    visits every registered project and will index or re-embed any that is stale, which
-    on this fleet is minutes, not seconds.
+    Two things were wrong. **It asserted nothing**: it called `reconcile_projects()` and passed on
+    the absence of an exception, so it was green whether reconcile skipped the project or indexed
+    it. And its precondition was the wrong one — the comment said "should skip because
+    `vdb.exists()` (not empty)", but `_needs_index` keys on the registry's `indexed_at`, which a
+    bare `upsert_project` leaves at None. A touched 0-byte vdb is *not* a complete project, so the
+    test named "skips" was in fact exercising the index path.
+
+    The child establishes the precondition by *indexing for real* rather than by seeding a store
+    by hand. A first attempt wrote its own two-column `chunks` table and it failed outright —
+    `_vectors_stale` opens the path with the production `VectorStore`, which migrates and hit
+    `no such column: language`. A hand-built store is a fake of the one thing this test needs to be
+    genuine, and it could only ever have been right by tracking a schema it does not own.
+
+    `indexed_at` is the witness: `_index_project` stamps it `datetime.now(UTC).isoformat()`, at
+    microsecond resolution, so a re-index cannot collide with the value reconcile was asked to
+    leave alone. It also needs no knowledge of the store's schema, which is what went wrong above.
+
+    Run in a child with `RSE_REGISTRY_PATH`/`RSE_INDEX_ROOT` redirected, because
+    `reconcile_projects()` walks the registry via `list_projects` — *all* of it. In-process that is
+    the fleet's, so this test paid a full 149-store walk (measured 2026-07-31 at over seven minutes,
+    a bounded-parse worker pinned at 98 % of a core) to assert something about one temp project, and
+    the cost scaled with the fleet rather than with anything under test. `test_reconcile_midpass`
+    was moved off the real registry the same day for the same reason. Both env vars are read at
+    import, so only a fresh interpreter can redirect them; nothing is substituted.
     """
-    from rag_search.core.config import ProjectEntry, project_vector_db
-    from rag_search.core.registry import remove_project, upsert_project
-    from rag_search.daemon.sweeps import reconcile_projects
+    import json
+    import os
+    import subprocess
+    import sys
 
-    proj_path = str(safe_tmp_path)
-    vdb = project_vector_db(proj_path)
-    vdb.parent.mkdir(parents=True, exist_ok=True)
-    vdb.touch()
-    upsert_project(ProjectEntry(path=proj_path, enabled=True))
-    try:
-        reconcile_projects()  # should skip because vdb.exists() (not empty)
-    finally:
-        remove_project(proj_path)
-        vdb.unlink(missing_ok=True)
+    root = safe_tmp_path / "skip"
+    (root / "ws").mkdir(parents=True)
+    env = {**os.environ,
+           "RSE_INDEX_ROOT": str(root / "indexes"),
+           "RSE_REGISTRY_PATH": str(root / "projects.json")}
+    r = subprocess.run([sys.executable, "-c", _RECONCILE_SKIP_CHILD, str(root / "ws" / "proj")],
+                       capture_output=True, text=True, env=env, timeout=600)
+    assert r.returncode == 0, f"child exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert got["needs_index_before"] is False, (
+        f"precondition failed: the project must look complete to _needs_index before reconcile "
+        f"runs, or this exercises the index path instead of the skip path: {got}")
+    assert got["indexed_at_before"] is not None, (
+        f"_index_project must stamp indexed_at, or the witness below cannot move either: {got}")
+    assert got["indexed_at_after"] == got["indexed_at_before"], (
+        f"reconcile re-indexed a complete project instead of skipping it — indexed_at was "
+        f"restamped: {got}")
 
 
 def test_sweeps_paused_skips_reconcile(safe_tmp_path):
@@ -299,14 +358,10 @@ def test_lease_is_renewed_on_a_clock_not_only_between_tests():
     """
     from tests.live.conftest import _renew_lease_until
 
-    def lease_s() -> float:
-        r = requests.get("http://127.0.0.1:8765/healthz", timeout=5)
-        return r.json().get("sweeps_pause_lease_s", 0.0)
-
-    before = lease_s()
+    before = _lease_remaining_s()
     assert before > 0.0, f"the session pause must hold a lease; got {before}s"
     time.sleep(1.5)
-    decayed = lease_s()
+    decayed = _lease_remaining_s()
     assert decayed < before, f"lease did not decay ({before}s -> {decayed}s); nothing to observe"
 
     stop = threading.Event()
@@ -314,7 +369,7 @@ def test_lease_is_renewed_on_a_clock_not_only_between_tests():
     renewer.start()
     try:
         time.sleep(0.5)
-        renewed = lease_s()
+        renewed = _lease_remaining_s()
     finally:
         stop.set()
         renewer.join(timeout=5)
@@ -575,6 +630,11 @@ def test_api_reload_returns_reloading():
     import time
     import urllib.request
 
+    # Seed the pre-restart uptime that `renew_or_repair_lease` compares against, so F4d below
+    # holds when this file runs alone: in a full suite `_drain_graph_lane` has already seeded it
+    # after every prior test, and a guard that only works with company is not a guard.
+    renew_or_repair_lease()
+
     r = urllib.request.urlopen(
         urllib.request.Request(
             # ?force=true because RL2's interlock refuses a reload while the suite's pause lease
@@ -612,6 +672,21 @@ def test_api_reload_returns_reloading():
         "daemon did not come back up within 60s of /api/reload (exit-code split regressed?) "
         "— measured 21.4s on 2026-07-29, of which ~17s is the GPU embedder warm-up"
     )
+    # F4d: the restart just took the suite's pause lease with it, and `renew_pause_lease` is
+    # deliberately one-way, so before this fix every run spent everything *after* this test
+    # competing with reconcile and label sweeps for the same card — the docstring above records
+    # the unpaused fleet walk as this test's own cost, when the rest of the run pays it too.
+    #
+    # Asserting the clobber first is what makes the repair non-vacuous: "the lease is held" is
+    # equally true of a restart that never happened.
+    assert _lease_remaining_s() == 0.0, (
+        "the restarted daemon reports a pause lease it cannot have inherited — module globals do "
+        "not survive a new process, so either the restart did not happen or something re-paused "
+        "it, and the repair below would prove nothing")
+    renew_or_repair_lease()
+    assert _lease_remaining_s() > 0.0, (
+        "the pause lease was not re-taken after the daemon restarted; the rest of this run will "
+        "share the GPU with sweeps, which reads as unrelated slowness and flakiness later")
     # NOTE: the restart=false ("daemon stop") path is intentionally NOT exercised as a live SIGTERM
     # here — it requests exit 0, which systemd's Restart=on-failure will NOT auto-recover from, so
     # sending it to the shared singleton daemon would leave it down for the rest of the suite. Its
