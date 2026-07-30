@@ -187,3 +187,113 @@ def test_co4_the_final_backstop_takes_only_new_unowned_dirs(safe_tmp_path):
     got = json.loads(r.stdout.strip().splitlines()[-1])
     assert got == {"preexisting": True, "owned": True, "unowned": False}, (
         f"the backstop took the wrong dirs: {got}")
+
+
+_CO5_CHILD = """
+import json, sys
+from pathlib import Path
+from rag_search.core.config import INDEX_ROOT, ProjectEntry, index_dir
+from rag_search.core.registry import get_project, upsert_project
+from tests.live._sample_workspace import purge_rows_under
+
+base = Path(sys.argv[1])
+INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+inside, outside = str(base / "member"), str(base.parent / "real-project")
+for p in (inside, outside):
+    Path(p).mkdir(parents=True)
+    index_dir(p).mkdir(parents=True)
+    upsert_project(ProjectEntry(path=p, enabled=True))   # as federation discovery would restore it
+removed = purge_rows_under(base)
+print(json.dumps({
+    "removed": removed == [inside],
+    "inside_row": get_project(inside) is not None,
+    "inside_dir": index_dir(inside).exists(),
+    "outside_row": get_project(outside) is not None,
+    "outside_dir": index_dir(outside).exists(),
+}))
+"""
+
+
+_CO6_CHILD = """
+import json, sys
+from pathlib import Path
+from rag_search.core.config import INDEX_ROOT, ProjectEntry, index_dir
+from rag_search.core.registry import get_project, upsert_project
+from tests.live._sample_workspace import purge_project
+
+# Never created on disk, and it does not need to be: the row goes in the redirected registry and the
+# store under the redirected INDEX_ROOT, so this exercises the real refusal with no real project
+# anywhere near it.
+outside = "/home/nobody/git/some-fleet-project"
+inside = str(Path(sys.argv[1]) / "member")
+INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+for p in (outside, inside):
+    upsert_project(ProjectEntry(path=p, enabled=True))
+    index_dir(p).mkdir(parents=True, exist_ok=True)
+Path(inside).mkdir(parents=True, exist_ok=True)
+
+raised = False
+try:
+    purge_project(outside)
+except AssertionError:
+    raised = True
+purge_project(inside)
+print(json.dumps({
+    "raised": raised,
+    "outside_row": get_project(outside) is not None,
+    "outside_dir": index_dir(outside).exists(),
+    "inside_row": get_project(inside) is not None,
+    "inside_dir": index_dir(inside).exists(),
+}))
+"""
+
+
+def test_co5_a_restored_row_under_the_test_base_does_not_protect_its_store(safe_tmp_path):
+    """CO5: rows the daemon puts back must not shield the run's own stores from the backstop.
+
+    This is what let five stores per run through CO3 and CO4 both. Federation discovery upserts
+    every member it finds under a registered root, so rows this suite deleted come back while the
+    run is still going; CO4's registry check — correct, and deliberately kept — then spares the dirs
+    those rows point at. Minutes later the daemon notices the tree is gone, drops the rows, and
+    leaves stores that nothing owns and no name can find.
+
+    The outside arm is the one that must not regress: a row anywhere else, restored or not, is a
+    real project, and this function walking one row too far is the fleet-deleting shape.
+    """
+    tmp = safe_tmp_path / "co5"
+    (tmp / "ws").mkdir(parents=True)
+    env = {**os.environ,
+           "RSE_INDEX_ROOT": str(tmp / "indexes"),
+           "RSE_REGISTRY_PATH": str(tmp / "projects.json")}
+    r = subprocess.run([sys.executable, "-c", _CO5_CHILD, str(tmp / "ws")],
+                       capture_output=True, text=True, env=env, timeout=180)
+    assert r.returncode == 0, f"child exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert got == {"removed": True, "inside_row": False, "inside_dir": False,
+                   "outside_row": True, "outside_dir": True}, (
+        f"purge_rows_under took the wrong rows: {got}")
+
+
+def test_co6_purging_a_path_outside_the_test_base_is_refused(safe_tmp_path):
+    """CO6: the destructive helper checks the path itself, independently of its caller.
+
+    The incident this exists for: a red demo of `purge_rows_under` ran a broken predicate in-process,
+    through the session fixture that calls it against the real registry, and took 198 fleet rows and
+    138 stores with it. Every guard above this one lives in the *caller* — which is the thing that
+    was wrong — so the last check has to sit at the point of deletion.
+
+    Both arms are asserted: a guard that refuses everything protects the fleet, breaks the suite, and
+    would pass the outside arm on its own.
+    """
+    tmp = safe_tmp_path / "co6"
+    (tmp / "ws").mkdir(parents=True)
+    env = {**os.environ,
+           "RSE_INDEX_ROOT": str(tmp / "indexes"),
+           "RSE_REGISTRY_PATH": str(tmp / "projects.json")}
+    r = subprocess.run([sys.executable, "-c", _CO6_CHILD, str(tmp / "ws")],
+                       capture_output=True, text=True, env=env, timeout=180)
+    assert r.returncode == 0, f"child exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert got == {"raised": True, "outside_row": True, "outside_dir": True,
+                   "inside_row": False, "inside_dir": False}, (
+        f"the path guard did not hold: {got}")

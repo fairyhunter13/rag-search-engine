@@ -168,21 +168,17 @@ def _purge_leaked_test_state():
     That is where the index-dir snapshot below is settled up — see
     `purge_unowned_index_dirs_created_since` for why a listing diff is the only handle left by then.
     """
-    import os
     import shutil
 
-    from rag_search.core.registry import list_projects
     from tests.live._projects import _SAFE_BASE
     from tests.live._sample_workspace import (
         index_dir_names,
         purge_index_dirs_under,
-        purge_project,
+        purge_rows_under,
         purge_unowned_index_dirs_created_since,
     )
 
-    for e in list_projects():
-        if e.path == str(_SAFE_BASE) or e.path.startswith(str(_SAFE_BASE) + os.sep):
-            purge_project(e.path)  # row *and* store: the row is the only handle on the dir name
+    purge_rows_under(_SAFE_BASE)
     if _SAFE_BASE.exists():
         for child in _SAFE_BASE.iterdir():
             with contextlib.suppress(Exception):
@@ -190,6 +186,9 @@ def _purge_leaked_test_state():
                 shutil.rmtree(child, ignore_errors=True)
     before = index_dir_names()
     yield
+    # Again, before the listing diff: the daemon may have restored rows mid-run, and a restored row
+    # would make the diff spare the very dirs it exists to take.
+    purge_rows_under(_SAFE_BASE)
     leftover = purge_unowned_index_dirs_created_since(before)
     if leftover:
         # Reported, not silent: this is the backstop, and a backstop that keeps quiet is how the

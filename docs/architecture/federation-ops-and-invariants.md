@@ -254,7 +254,10 @@ it drifted, and rebuilding one is the standing follow-up.
 | Federation exclusion in force on the live daemon (§15.3) | `test_fe8_daemon_env_carries_federation_exclude`, `test_fe9_no_enabled_project_is_federation_excluded`, `test_fe10_armed_disabled_rows_are_covered_by_the_exclusion`, `test_fe11_the_gates_fire_when_the_exclusion_is_lost` (sufficiency); drop-in wiring: `test_systemd_dropins_target_deployed_unit` | `test_federation_exclude.py`, `test_p6_daemon.py` |
 | Sweep pause is a lease that expires (§15.4) | `test_pause_lease_expires_past_its_deadline_and_says_so`, `test_re_pause_re_arms_the_deadline_without_restamping_the_leak_signal`, `test_on_change_runs_again_once_the_pause_lease_has_expired`, `test_healthz_reports_how_long_sweeps_have_been_paused` (both fields); guard: `test_production_reads_go_through_the_leasing_accessor` | `test_p6_daemon.py`, `test_p5_server.py`, `test_no_raw_sweeps_toggle.py` |
 | Heavy periodic jobs run on their interval, not at every start (§15.4) | `test_scheduler_defers_first_run_by_one_interval`, `test_maintenance_job_is_not_registered_to_run_at_start` | `test_p6_daemon.py` |
-| The suite deletes the index dirs it creates (§15.4) | `test_co3_test_teardown_leaves_no_index_dir_behind` | `test_clean_orphans.py` |
+| The suite deletes the index dirs it creates (§15.4, §15.5) | `test_co3_test_teardown_leaves_no_index_dir_behind` (row-driven and tree-walk paths), `test_co4_the_final_backstop_takes_only_new_unowned_dirs` (listing diff spares pre-existing and registered dirs), `test_co5_a_restored_row_under_the_test_base_does_not_protect_its_store` (**the residue's actual cause** — federation discovery restores member rows mid-run, and CO4's registry check then spared the very dirs it exists to take), `test_co6_purging_a_path_outside_the_test_base_is_refused` | `test_clean_orphans.py` |
+| Deletion is authorised at the point of deletion, not by its caller (§15.5) | `test_co6_purging_a_path_outside_the_test_base_is_refused` — `purge_project`/`purge_index_dirs_under` re-derive authority from the path itself via `assert_under_test_base`, and **raise** rather than skip. Written after a red demo of `purge_rows_under` ran a deliberately-broken predicate in-process, through the session fixture that calls it against the *real* registry, deleting 198 fleet rows and 138 stores with no backup and no filesystem snapshot. Every guard above this one lived in the caller, which was the thing that was wrong. Both arms asserted: a guard that refuses everything protects the fleet and breaks the suite. | `test_clean_orphans.py` |
+| A live run never overlaps another live run | `test_sc1_no_contender_is_reported_for_our_own_process_tree`, `test_sc2_a_real_pytest_process_in_this_checkout_is_reported` — the gate had already produced two false positives, including seeing its own process tree, so both directions are pinned | `test_suite_concurrency_gate.py` |
+| Watcher activity is observable, so an idle measurement can validate its own window | `test_hl6_status_counts_completed_passes` (`dispatched` rises once per completed pass and only then); consumed by `test_cb3_idle_cpu_under_one_percent_core`, which discards contaminated windows instead of relaxing its 1% threshold. `pending`/`inflight` are instantaneous and answer "busy now"; they cannot answer "did anything happen while I wasn't looking", and keying on `dispatched` alone let a window falling entirely inside one long pass read as quiet at 2.9% of a core — hence all three, both ends. | `test_watcher_dispatch.py`, `test_cpu_budget.py` |
 | L3 traceability guard | `test_l3_rtm_all_tests_resolve` — machine-verifies every `model.yaml` L3 `test:` name resolves to a live `def test_…` | `test_world_model_traceability.py` |
 
 ## 15. Design rationale
@@ -407,3 +410,32 @@ hand, and a heavy job firing at every restart. Fixing either one in isolation **
 orphan lag. So the run that creates a store now deletes it — `purge_project` by row, and
 `purge_index_dirs_under` by symlink-safe tree walk for the many tests that drop their own row in a
 `finally` — and `maintenance()`'s sweep stays as the backstop for dirs whose name nobody remembers.
+
+### 15.5 The daemon puts the rows back, and the guard belongs at the deletion (2026-07-30)
+
+Five stores per run still survived all of the above, and the reason is a race nobody had modelled:
+**the thing being cleaned up is concurrently restored by production.** `register_all_members()` upserts
+every member it discovers under a registered root, so a row the suite deleted at 14:00 exists again at
+14:05 — and the listing-diff backstop deliberately spares any dir a registry row owns, so a restored
+row protected exactly the dirs it existed to take. Minutes later the daemon noticed the tree was gone,
+dropped the row, and left a store nothing owned and no name could find. `purge_rows_under` now runs at
+*both* ends of the session, and a row under the suite's own base is treated as never a legitimate
+owner — `test_no_real_project_in_tests.py` is the standing invariant that makes that safe.
+
+**Then the red demo of that function destroyed the fleet.** Per the sufficiency rule, a new guard must
+be shown failing before it is trusted; the predicate was broken to `if True:` — and that broken version
+was picked up *in-process* by the session-scoped autouse fixture that calls `purge_rows_under(_SAFE_BASE)`
+against the **real** registry. It matched every row: 198 registry rows and 138 index stores deleted, an
+hour of GPU embedding each, with no `projects.json` backup and no filesystem snapshot on ext4. Recovery
+meant mining absolute paths out of 14 days of journal and the Claude profiles' project lists, filtered
+to "still a git repo", then re-registering with `indexed_at` unset so reconcile rebuilt each store.
+The federation member lists self-healed from symlink discovery at the next start; the embeddings did not.
+
+Three things follow, and only the third is about tests. **Authority is re-derived at the point of
+deletion**: `assert_under_test_base` is called by `purge_project` and `purge_index_dirs_under`, and it
+raises rather than skipping, because every other guard on this path lives in the caller — which is the
+component that was wrong. **A red demo runs in a subprocess**, never in-process, whenever the function
+under test is one a fixture calls against production state; the counterfactual is worth nothing if
+proving it can execute against the real registry. And **the mining recipe is the backup we actually
+have**: the journal is the only durable record of which projects exist, which is an argument for
+`projects.json` being versioned or snapshotted, not for trusting a careful hand.
