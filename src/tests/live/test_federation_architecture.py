@@ -74,7 +74,6 @@ def test_gdup_duplicate_symlink_members_deduped(safe_tmp_path):
         _clean([root, member])
 
 
-@pytest.mark.slow
 def test_inv1_no_inlining(safe_tmp_path):
     """Invariant #1: root index must not contain symbols from the member path."""
     from rag_search.daemon.federation import index_members
@@ -98,7 +97,6 @@ def test_inv1_no_inlining(safe_tmp_path):
         _clean([root, member])
 
 
-@pytest.mark.slow
 def test_inv2_members_first_class(safe_tmp_path):
     """Invariant #2: a member is registered, enabled, and reachable BOTH ways.
 

@@ -316,7 +316,6 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
 # survived: the labelling pass keys on summary, not title.
 
 
-@pytest.mark.slow
 def test_label_project_uses_summary_gate(safe_tmp_path):
     """P27: _label_project labels titled-but-unsummarized communities."""
     import sqlite3  # noqa: I001
@@ -459,7 +458,6 @@ def test_reranking_is_query_time_only():
             )
 
 
-@pytest.mark.slow
 def test_search_reranks_full_pool(mini_stores, embedder):
     """T-R3/C2: search() reranks the entire scope-filtered pool (no pre-truncation).
 
@@ -483,7 +481,6 @@ def test_search_reranks_full_pool(mini_stores, embedder):
     )
 
 
-@pytest.mark.slow
 def test_e1_rerank_reorders_search_results(service_path):
     """E1/HR8: MCP search on sample service — rerank_score sorted desc, lift detected on ≥1 of 4 queries.
 
@@ -519,7 +516,6 @@ def test_e1_rerank_reorders_search_results(service_path):
     assert 'sort(key=lambda r: r.get("score"' not in src, "E1 guard: bare score sort in mcp.py"
 
 
-@pytest.mark.slow
 def test_e2_ask_context_is_rerank_ordered(service_path):
     """E2/HR8: assembled context carries path markers, first chunk = rerank top-1.
 
@@ -542,7 +538,6 @@ def test_e2_ask_context_is_rerank_ordered(service_path):
     assert ctx.startswith("## "), "E2: LLM prose in ctx — assembled context must start with ## section marker"
 
 
-@pytest.mark.slow
 def test_e3_community_context_is_reranked(service_path):
     """E3/HR8/D2: compose_answer(scope=architecture) top community differs between distinct queries."""
     from rag_search.core.config import project_graph_db
@@ -569,7 +564,6 @@ def test_e3_community_context_is_reranked(service_path):
     assert "argsort" not in ask_src, "E3 guard: ask.py must not use argsort"
 
 
-@pytest.mark.slow
 def test_e4_rerank_lift_metric(live_client, service_path):
     """E4/D3: /api/metrics exposes rerank block; in-process search increments the counter."""
     from rag_search.query.search import rerank_stats
@@ -604,7 +598,7 @@ def test_e5_mcp_query_path_no_generation():
     assert "def ask(" not in ask_src, "E5: ask.py must not have ask() (was LLM-generative)"
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_e6_dashboard_chat_haiku_only(live_client, service_path):
     """E6/HR10: POST /api/chat_stream streams tokens via claude-haiku-4-5 primary + DeepSeek fallback (codex removed)."""
     r = live_client.post(
@@ -643,7 +637,7 @@ def test_e6_dashboard_chat_haiku_only(live_client, service_path):
     )
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_e6b_chat_model_is_haiku(live_client, service_path):
     """E6b/HR10: done.model is claude-haiku-4-5 — the only chat model (codex removed).
 
@@ -779,7 +773,7 @@ def _collect_chat_tokens(live_client, question: str, project_path: str, **extra)
     return "".join(tokens), done_seen
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 @pytest.mark.parametrize("question,kws", [
     (
         "What happens when a discount code is applied to an order?",
@@ -808,7 +802,7 @@ def test_chat_comprehensive_question_a(live_client, service_path, question, kws)
     assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 @pytest.mark.parametrize("question,kws", [
     (
         "What is the overall architecture of this service?",
@@ -859,7 +853,7 @@ def test_chat_with_no_project_refuses_instead_of_inventing(live_client):
         f"chat answered with no project selected — the ungrounded path 709b936 removed: {answer!r}")
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_sse_event_ordering(live_client, service_path):
     """SSE contract: thinking must be first event, at least one token, done must be last."""
     events: list[str] = []
@@ -886,7 +880,7 @@ def test_chat_sse_event_ordering(live_client, service_path):
     assert events[-1] == "done", f"Last event must be 'done', got: {events[-3:]}"
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_done_event_metadata(live_client, service_path):
     """done event must carry model, elapsed_ms, and non-empty sources for indexed project."""
     done_evt = None
@@ -915,7 +909,7 @@ def test_chat_done_event_metadata(live_client, service_path):
     # sources may be empty if no chunks matched; field presence and type is what matters
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_multiturn_history_influences_answer(live_client, service_path):
     """Multi-turn: history prepended to prompt makes follow-up context-aware."""
     history = [

@@ -57,7 +57,7 @@ def _collect_chat_events(live_client, project: str, msg: str, timeout: int = 60)
 # the surviving SSE surface and the rest of this module covers it.
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_stream_done_event_present(live_client, project):
     """chat_stream must end with a 'done' typed event."""
     events = _collect_chat_events(live_client, project, "What is this codebase?")
@@ -65,7 +65,7 @@ def test_chat_stream_done_event_present(live_client, project):
     assert "done" in types, f"chat_stream must emit done; got types={types}"
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_stream_done_not_first(live_client, project):
     """done must not be the first event — at least one prior event (thinking or token)."""
     events = _collect_chat_events(live_client, project, "What is this codebase?")
@@ -74,7 +74,7 @@ def test_chat_stream_done_not_first(live_client, project):
     assert types.index("done") > 0, "done must not be the first SSE event"
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_stream_model_in_allowed_set(live_client, project):
     """done event model must be claude-haiku-4-5 (chat lane is Haiku-only — EC2)."""
     events = _collect_chat_events(live_client, project, "List the main packages.")
@@ -87,7 +87,7 @@ def test_chat_stream_model_in_allowed_set(live_client, project):
     )
 
 
-@pytest.mark.slow
+@pytest.mark.costly
 def test_chat_stream_done_has_sources(live_client, project):
     """done event must include a sources list and the grounding behind it (D2)."""
     events = _collect_chat_events(live_client, project, "What does this project do?")
