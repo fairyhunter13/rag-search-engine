@@ -875,6 +875,43 @@ def _needs_labels(path: str) -> bool:
         return False
 
 
+def _has_vectors(path: str) -> bool:
+    """Cheap "has this project ever been embedded" test — one stat, no sqlite open."""
+    from rag_search.core.config import index_dir
+    try:
+        return (index_dir(path) / "vectors.db").exists()
+    except OSError:
+        return False
+
+
+def reconcile_order(rows: list) -> list:
+    """Never-embedded projects first, then most-recently-touched.
+
+    The second key alone was here first, and it fixed a real starvation: an unordered walk ground
+    through 198 projects for 7.6 h without reaching either repo edited that day. But it is keyed on
+    `last_change_seen`, which a project that has never been indexed does not have — so `or ""` sorts
+    all of them to the *end* of a `reverse=True` walk. Measured on this host 07-30, after the
+    registry wipe: 157 of 210 enabled rows held zero chunks and **157 of 157** had an empty key.
+
+    That is only latent until something stops the walk early, and `is_paused()` does exactly that
+    with no resume cursor — every pass restarts at position 0. So the walk repeatedly re-paid the
+    full `_index_set_drift` tree scan for the 53 converged projects at the head and never once
+    reached the 157 at the tail. A live suite holds the pause lease for its whole run, which made
+    running the tests the thing preventing the rebuild the tests were waiting on.
+
+    Ordering by need rather than by recency breaks that: a project with no vectors returns *nothing*
+    for a search, while a stale one returns slightly old results, so "never embedded" outranks "not
+    touched lately" whenever the two disagree. In steady state nothing has an empty store and this
+    key is constant, which is why the original ordering keeps working — this only changes the walk
+    when there is a backlog, which is precisely when the walk gets cut short.
+
+    Kept out of `reconcile_projects` so the ordering can be asserted without a GPU, a daemon, or the
+    six-hour job that calls it.
+    """
+    return sorted(rows, key=lambda e: (not _has_vectors(e.path), e.last_change_seen or ""),
+                  reverse=True)
+
+
 def reconcile_projects() -> None:
     """Idempotent: discover+register members, index any unindexed/stalled project, label any
     project with missing community summaries (any level).  Safe to call repeatedly.
@@ -904,11 +941,9 @@ def reconcile_projects() -> None:
 
     from rag_search.core.config import is_federation_excluded
 
-    # Most-recently-touched projects first. The pass is one linear walk with no ordering,
-    # and it is startup-once by design, so an unordered registry starves exactly the repos
-    # being worked on: a measured pass here ground through 198 projects for 7.6 h without
-    # reaching either repo edited that day. One sort key, no new timer, same work per pass.
-    walk = sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True)
+    # Never-embedded first, then most-recently-touched. See `reconcile_order` — the second key
+    # alone sent every unindexed project to the tail of a walk that `is_paused()` truncates.
+    walk = reconcile_order(list_projects())
     for pos, entry in enumerate(walk):
         if is_paused():
             # Name the position: "reconcile stopped" is not actionable, "stopped at
