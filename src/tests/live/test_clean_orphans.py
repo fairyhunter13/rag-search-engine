@@ -47,14 +47,18 @@ def _layout(tmp: Path) -> tuple[Path, Path, Path]:
     return project, live, orphan
 
 
-def _run(tmp: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(tmp: Path, *args: str, expect_ok: bool = True) -> subprocess.CompletedProcess:
     env = {**os.environ,
            "RSE_INDEX_ROOT": str(tmp / "indexes"),
            "RSE_REGISTRY_PATH": str(tmp / "projects.json")}
     exe = Path(sys.executable).with_name("rag-search")
     r = subprocess.run([str(exe), "clean-orphans", *args],
                        capture_output=True, text=True, env=env, timeout=180)
-    assert r.returncode == 0, f"clean-orphans exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    if expect_ok:
+        assert r.returncode == 0, f"clean-orphans exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    else:
+        assert r.returncode != 0, (
+            f"clean-orphans was expected to refuse and exited 0: {r.stdout}\n{r.stderr}")
     return r
 
 
@@ -300,3 +304,124 @@ def test_co6_purging_a_path_outside_the_test_base_is_refused(safe_tmp_path):
     assert got == {"raised": True, "outside_row": True, "outside_dir": True,
                    "inside_row": False, "inside_dir": False}, (
         f"the path guard did not hold: {got}")
+
+
+def _fleet(tmp: Path, registered: int, orphans: int) -> tuple[list[Path], list[Path]]:
+    """A registry of `registered` projects and an index tree holding their stores plus `orphans`.
+
+    Live dir names come from `index_dir` and the unowned ones are obviously synthetic, so the two
+    groups cannot be told apart by anything but the ownership test under examination.
+    """
+    from rag_search.core.config import index_dir
+
+    indexes = tmp / "indexes"
+    rows, live = {}, []
+    for i in range(registered):
+        project = tmp / f"proj{i}"
+        (project / "src").mkdir(parents=True)
+        rows[str(project)] = {"enabled": True}
+        live.append(indexes / index_dir(str(project)).name)
+    (tmp / "projects.json").write_text(json.dumps(rows))
+
+    unowned = [indexes / f"nobody{i}-0123456789abcdef" for i in range(orphans)]
+    for d in live + unowned:
+        d.mkdir(parents=True)
+        (d / "vectors.db").write_bytes(b"SQLite format 3\x00")
+    return live, unowned
+
+
+def test_co7_an_empty_registry_beside_a_full_index_tree_is_refused(safe_tmp_path):
+    """CO7: zero rows and N stores is a lost registry, and no flag may talk the sweep out of it.
+
+    This is the 07-30 incident's downstream half. The wipe took 198 rows; every one of the 138
+    surviving stores was then, correctly and unanswerably, an orphan. The sweep that would have
+    deleted them was not wrong about anything — it was asked a question whose premise had been
+    destroyed, and a floor is the only thing that can tell that from a finished cleanup.
+
+    `--force` is asserted *not* to lift this one. With the registry gone there is nothing left for
+    an operator to check the decision against, so the flag would collect consent without
+    information; the third arm is what stops a later "make --force mean force" reopening the door.
+    """
+    tmp = safe_tmp_path / "co7"
+    tmp.mkdir(parents=True)
+    _live, unowned = _fleet(tmp, registered=0, orphans=3)
+
+    for args in ((), ("--yes",), ("--yes", "--force")):
+        r = _run(tmp, *args, expect_ok=False)
+        assert "Refused" in r.stderr, f"the refusal was not reported for {args}: {r.stderr}"
+        assert all(d.exists() for d in unowned), (
+            f"stores were deleted with an empty registry, args={args}: {r.stdout}\n{r.stderr}")
+
+
+def test_co8_taking_most_of_the_tree_is_refused_until_forced(safe_tmp_path):
+    """CO8: a majority-orphan verdict is a broken premise by default, and an operator call by hand.
+
+    Both arms are load-bearing and neither means anything alone. Without the refusal, the two
+    fleet-scale deletions this command has already caused stay one bad predicate away. Without
+    `--force` working, the cap is indistinguishable from a command that no longer functions — and
+    CO1/CO2 are the third leg: a guard that refused everything would take those down instead.
+    """
+    tmp = safe_tmp_path / "co8"
+    tmp.mkdir(parents=True)
+    live, unowned = _fleet(tmp, registered=1, orphans=11)
+
+    r = _run(tmp, "--yes", expect_ok=False)
+    assert "Refused" in r.stderr, f"11 of 12 dirs were not refused: {r.stderr}"
+    assert all(d.exists() for d in unowned), f"a refused sweep still deleted: {r.stderr}"
+
+    out = _run(tmp, "--yes", "--force").stdout
+    assert not any(d.exists() for d in unowned), f"--force did not delete the orphans: {out}"
+    assert (live[0] / "vectors.db").exists(), f"--force took a registered store too: {out}"
+    assert "Removed 11." in out, f"expected 11 removals, got: {out}"
+
+
+_CO9_CHILD = """
+import json, sys
+from pathlib import Path
+from rag_search.core.config import INDEX_ROOT, ProjectEntry, index_dir
+from rag_search.core.registry import upsert_project
+from rag_search.daemon.sweeps import maintenance
+
+base, mode = Path(sys.argv[1]), sys.argv[2]
+INDEX_ROOT.mkdir(parents=True, exist_ok=True)
+proj = base / "proj"
+proj.mkdir(parents=True)
+live = index_dir(str(proj))
+live.mkdir(parents=True)
+count = 1 if mode == "routine" else 11
+orphans = [INDEX_ROOT / ("nobody%d-0123456789abcdef" % i) for i in range(count)]
+for d in orphans:
+    d.mkdir(parents=True)
+if mode != "wiped":
+    upsert_project(ProjectEntry(path=str(proj), enabled=True))
+maintenance()
+print(json.dumps({"live": live.exists(), "left": sum(d.exists() for d in orphans)}))
+"""
+
+
+@pytest.mark.parametrize(("mode", "expected"), [
+    ("routine", {"live": True, "left": 0}),   # 1 orphan of 2 — the everyday cleanup, must proceed
+    ("capped", {"live": True, "left": 11}),   # 11 of 12 — majority verdict, refused
+    ("wiped", {"live": True, "left": 11}),    # 0 rows, 12 stores — lost registry, refused
+])
+def test_co9_the_unattended_sweep_has_the_same_floor_as_the_command(safe_tmp_path, mode, expected):
+    """CO9: `maintenance()` is the site that fires on its own, so the floor has to hold there too.
+
+    CO7 and CO8 exercise the human-triggered path, and a fix applied only there would leave the
+    6-hourly sweep deleting on the same broken premise with nobody watching. That asymmetry is not
+    hypothetical: the corrected ownership comparison lived in `cli.py` while `sweeps.py` kept
+    comparing a registry path against a dir name, because the two were separate copies of one rule.
+
+    `routine` is the arm that keeps the other two honest — refusing everything would satisfy both
+    refusal cases and quietly turn the orphan sweep off.
+    """
+    tmp = safe_tmp_path / f"co9-{mode}"
+    (tmp / "ws").mkdir(parents=True)
+    env = {**os.environ,
+           "RSE_INDEX_ROOT": str(tmp / "indexes"),
+           "RSE_REGISTRY_PATH": str(tmp / "projects.json")}
+    r = subprocess.run([sys.executable, "-c", _CO9_CHILD, str(tmp / "ws"), mode],
+                       capture_output=True, text=True, env=env, timeout=180)
+    assert r.returncode == 0, f"child exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert got == expected, f"maintenance() took the wrong dirs in {mode}: {got}\n{r.stderr}"

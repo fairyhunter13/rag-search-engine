@@ -1042,21 +1042,23 @@ def maintenance() -> None:
         return
     import sqlite3  # noqa: F401 — ensure available before list_projects() import
 
-    from rag_search.core.config import (
-        INDEX_ROOT,
-        index_dir,
-        project_graph_db,
-        project_vector_db,
-    )
+    from rag_search.core.config import INDEX_ROOT, project_graph_db, project_vector_db
+    from rag_search.core.orphans import OrphanSweepRefusedError, orphan_dirs
     from rag_search.core.registry import list_projects
 
     if not INDEX_ROOT.exists():
         return
-    known = {index_dir(p.path).name for p in list_projects()}
-    for d in INDEX_ROOT.iterdir():
-        if d.is_dir() and d.name not in known:
-            log.info("vacuum orphan: %s", d)
-            shutil.rmtree(d, ignore_errors=True)
+    # Never `allow_bulk`: this runs unattended every 6 h, so there is nobody here to read a refusal
+    # and decide. A refused sweep costs disk until an operator looks; an unrefused wrong one costs a
+    # full GPU re-index of the fleet. The vacuum pass below is unaffected and still runs.
+    try:
+        orphans = orphan_dirs()
+    except OrphanSweepRefusedError as exc:
+        log.error("orphan sweep refused, deleted nothing: %s", exc)
+        orphans = []
+    for d in orphans:
+        log.info("vacuum orphan: %s", d)
+        shutil.rmtree(d, ignore_errors=True)
 
     for entry in list_projects():
         if not entry.enabled:

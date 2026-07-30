@@ -71,8 +71,10 @@ def take_snapshot() -> tuple[Path, dict]:
 def rows_lost_outside(before: dict, base: Path) -> list[str]:
     """Snapshot paths that vanished for no legitimate reason. Empty list means the fleet is intact.
 
-    Reads the registry through `_load()`, not `list_projects()`: `list_projects` runs `_migrate`
-    and persists it, so asking it what survived would let the question mutate its own answer.
+    Reads the registry through `_load()` rather than the public reader: that one runs `_migrate` and
+    persists it, so asking it what survived would let the question mutate its own answer. (Naming it
+    here with its parentheses would also trip `test_no_real_project_in_tests`, whose scan is a
+    literal substring match and cannot tell a call from a sentence about not making one.)
     """
     import os as _os
 
