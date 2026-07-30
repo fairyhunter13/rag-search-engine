@@ -92,6 +92,14 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.11.0",
 
+    # The instrument for consolidating the live suite. Merging N per-test corpora into one
+    # shared fixture is the move that loses coverage quietly: "the suite got faster" and "I
+    # deleted assertions" produce the same wall clock. The gate is a set difference over
+    # covered lines, before and after — never a percentage, which holds flat while the lines
+    # underneath it move. No test may import this; it wraps the run from outside, so it does
+    # not touch the no-mock invariant.
+    "coverage>=7.6.0",
+
     # Sampling profiler. It is the only oracle for the daemon's threads (Python thread
     # names are not exported to the OS here), has been the instrument behind every
     # CPU/latency diagnosis in this repo, and until now lived in .venv/ without being
