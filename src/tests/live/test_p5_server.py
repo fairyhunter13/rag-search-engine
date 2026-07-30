@@ -859,10 +859,16 @@ def test_chat_with_no_project_refuses_instead_of_inventing(live_client):
         f"chat answered with no project selected — the ungrounded path 709b936 removed: {answer!r}")
 
 
-@pytest.mark.costly
-def test_chat_sse_event_ordering(live_client, service_path):
-    """SSE contract: thinking must be first event, at least one token, done must be last."""
-    events: list[str] = []
+@pytest.fixture(scope="module")
+def sse_contract_events(live_client, service_path) -> list[dict]:
+    """One real Haiku stream for the two contracts below, which used to post the same body twice.
+
+    The ordering test and the metadata test issued byte-identical requests — same query, same
+    project_path — and each drained the stream to read a different part of it. No argument about
+    prompt-independence is needed here: the prompts were the same string, so the second
+    round-trip re-bought a stream the first already had.
+    """
+    events: list[dict] = []
     r = live_client.post(
         "/api/chat_stream",
         json={"query": "What does this service do?", "project_path": service_path},
@@ -876,10 +882,17 @@ def test_chat_sse_event_ordering(live_client, service_path):
             evt = json.loads(line[5:].lstrip())
         except json.JSONDecodeError:
             continue
-        events.append(evt.get("type", ""))
+        events.append(evt)
         if evt.get("done"):
             break
     r.close()
+    return events
+
+
+@pytest.mark.costly
+def test_chat_sse_event_ordering(sse_contract_events):
+    """SSE contract: thinking must be first event, at least one token, done must be last."""
+    events = [e.get("type", "") for e in sse_contract_events]
     assert events, "No SSE events received"
     assert events[0] == "thinking", f"First event must be 'thinking', got: {events[:3]}"
     assert "token" in events, f"No token events received: {events}"
@@ -887,26 +900,9 @@ def test_chat_sse_event_ordering(live_client, service_path):
 
 
 @pytest.mark.costly
-def test_chat_done_event_metadata(live_client, service_path):
+def test_chat_done_event_metadata(sse_contract_events):
     """done event must carry model, elapsed_ms, and non-empty sources for indexed project."""
-    done_evt = None
-    r = live_client.post(
-        "/api/chat_stream",
-        json={"query": "What does this service do?", "project_path": service_path},
-        stream=True, timeout=(5, 60),
-    )
-    assert r.status_code == 200
-    for line in r.iter_lines(decode_unicode=True):
-        if not line or not line.startswith("data:"):
-            continue
-        try:
-            evt = json.loads(line[5:].lstrip())
-        except json.JSONDecodeError:
-            continue
-        if evt.get("done"):
-            done_evt = evt
-            break
-    r.close()
+    done_evt = next((e for e in sse_contract_events if e.get("done")), None)
     assert done_evt is not None, "No done event received"
     from rag_search.core.config import QUERY_LLM_MODEL
     assert done_evt.get("model") == QUERY_LLM_MODEL, f"done.model wrong: {done_evt.get('model')!r}"
