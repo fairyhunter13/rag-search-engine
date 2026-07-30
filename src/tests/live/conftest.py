@@ -167,10 +167,15 @@ def _purge_leaked_test_state():
     finalize), which is the only point at which every store this run created is already written.
     That is where the index-dir snapshot below is settled up — see
     `purge_unowned_index_dirs_created_since` for why a listing diff is the only handle left by then.
+
+    Being first to set up is also why the registry snapshot is taken here and not in a fixture of
+    its own: it has to be the very first thing the session does, *before* this fixture's own
+    `purge_rows_under` call — the one that fired on 2026-07-30. See `_registry_guard`.
     """
     import shutil
 
     from tests.live._projects import _SAFE_BASE
+    from tests.live._registry_guard import restore_rows, rows_lost_outside, take_snapshot
     from tests.live._sample_workspace import (
         index_dir_names,
         purge_index_dirs_under,
@@ -178,6 +183,7 @@ def _purge_leaked_test_state():
         purge_unowned_index_dirs_created_since,
     )
 
+    snapshot, rows_at_start = take_snapshot()
     purge_rows_under(_SAFE_BASE)
     if _SAFE_BASE.exists():
         for child in _SAFE_BASE.iterdir():
@@ -195,6 +201,25 @@ def _purge_leaked_test_state():
         # 19-dir residue went unnoticed. A name here means some earlier teardown missed it.
         print(f"\n[teardown] removed {len(leftover)} unowned index dir(s) this run created: "
               f"{', '.join(leftover)}")
+
+    # Last of all, and after the suite's own rows are already gone, so the only rows this can name
+    # are ones no legitimate mechanism removed. Restore first, then fail: a run that dies between
+    # the two must still leave the fleet whole.
+    lost = rows_lost_outside(rows_at_start, _SAFE_BASE)
+    if lost:
+        failed = restore_rows(rows_at_start, lost)
+        pytest.fail(
+            f"this run deleted {len(lost)} real registry row(s) that nothing legitimate would "
+            f"remove — they existed at session start, their paths still exist on disk, and they "
+            f"live outside {_SAFE_BASE}:\n  "
+            + "\n  ".join(lost[:20])
+            + (f"\n  ... and {len(lost) - 20} more" if len(lost) > 20 else "")
+            + f"\n\nRestored {len(lost) - len(failed)} of {len(lost)} from the session snapshot at "
+            f"{snapshot}."
+            + ("\nCOULD NOT RESTORE:\n  " + "\n  ".join(failed) if failed else "")
+            + "\n\nA live test reached a mutating registry API in-process against the real "
+            "projects.json. Find it and give it a subprocess with RSE_REGISTRY_PATH redirected."
+        )
 
 
 @pytest.fixture(autouse=True)
