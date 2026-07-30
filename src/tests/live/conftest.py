@@ -158,10 +158,20 @@ def _purge_leaked_test_state():
     still exists on disk. The next session's IS2 guard
     (test_no_junk_paths_in_live_registry) then fails on that leaked junk.
 
-    At session START the current run hasn't built its own workspace yet, so anything
-    under rse-test-dirs belongs to a dead prior session: purge every such registry
-    entry and stale child dir. Idempotent, and the fix's whole point is that it runs
-    regardless of how the prior session died.
+    C1, 2026-07-30 — the premise this docstring used to assert is false, and asserting it is
+    what made the bug invisible. It read "at session START the current run hasn't built its own
+    workspace yet, so anything under rse-test-dirs belongs to a dead prior session". That holds
+    only when runs never overlap, and in this checkout they routinely do: three agent profiles
+    share one tree, and the pytest-vs-pytest gate catches a *concurrent start* but not a run that
+    began while another was already mid-suite. Purging on existence then deleted a live run's
+    workspace out from under it, and the damage surfaced downstream as unrelated assertion
+    errors — never as "someone deleted my files".
+
+    So the purge now asks who owns each child (`owner_is_live`, `_projects.py`): dirs owned by a
+    pytest process alive on this boot are left alone, everything else is purged exactly as
+    before. Untagged dirs still count as dead, so the self-heal keeps working for the state a
+    killed session actually leaks — which is what this fixture was built for. Idempotent, and it
+    still runs regardless of how the prior session died.
 
     It is also the *last* teardown in the session (first session autouse to set up, so last to
     finalize), which is the only point at which every store this run created is already written.
@@ -172,24 +182,18 @@ def _purge_leaked_test_state():
     its own: it has to be the very first thing the session does, *before* this fixture's own
     `purge_rows_under` call — the one that fired on 2026-07-30. See `_registry_guard`.
     """
-    import shutil
-
     from tests.live._projects import _SAFE_BASE
     from tests.live._registry_guard import restore_rows, rows_lost_outside, take_snapshot
     from tests.live._sample_workspace import (
         index_dir_names,
-        purge_index_dirs_under,
+        purge_dead_owned_dirs,
         purge_rows_under,
         purge_unowned_index_dirs_created_since,
     )
 
     snapshot, rows_at_start = take_snapshot()
     purge_rows_under(_SAFE_BASE)
-    if _SAFE_BASE.exists():
-        for child in _SAFE_BASE.iterdir():
-            with contextlib.suppress(Exception):
-                purge_index_dirs_under(child)
-                shutil.rmtree(child, ignore_errors=True)
+    purge_dead_owned_dirs(_SAFE_BASE)
     before = index_dir_names()
     yield
     # Again, before the listing diff: the daemon may have restored rows mid-run, and a restored row
@@ -348,14 +352,11 @@ def service_member_path(sample_workspace: SampleWorkspace) -> str:
 def safe_tmp_path():
     """Temporary directory outside /tmp and ~/.cache — safe for registry registration tests."""
     import shutil
-    import tempfile
-    from pathlib import Path
 
     from rag_search.core.registry import list_projects
+    from tests.live._projects import make_run_dir
     from tests.live._sample_workspace import purge_index_dirs_under, purge_project
-    safe_base = Path.home() / ".local" / "share" / "rse-test-dirs"
-    safe_base.mkdir(parents=True, exist_ok=True)
-    d = Path(tempfile.mkdtemp(dir=safe_base))
+    d = make_run_dir()
     yield d
     prefix = str(d) + "/"
     for e in list_projects():
