@@ -552,7 +552,7 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         extract_symbols_with_stats,
         symbol_id,
     )
-    from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
+    from rag_search.index.bounded_parse import PARSE_CRASHED, PARSE_TIMEOUT, run_bounded
     from rag_search.index.discover import detect_language, iter_files, language_family
     targets = list(only) if only is not None else None
     # S8: the host language of a file, cached. Symbols carry the *inner* language — a symbol
@@ -575,11 +575,16 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         lang = detect_language(fpath)
         res = run_bounded(extract_symbols_with_stats, (fpath, content, lang),
                           path_for_log=str(fpath))
-        # A timeout is recorded, not skipped silently. `run_bounded` returns PARSE_TIMEOUT for
-        # a worker that *died at spawn* as well as one that ran too long, so this row is the
-        # only place the two are even distinguishable from the outside — see the "timeout" rung.
-        if res == PARSE_TIMEOUT or res is None:
-            gs.record_extraction(str(fpath), lang, "timeout", 0, 0, 1)
+        # Recorded, never skipped silently — and recorded as the three *different* things they
+        # are. A worker that ran past its deadline is load-dependent and may pass next sweep; a
+        # worker that died is reproducible and points at the input (measured: `process()`
+        # segfaults on a 10,000-deep expression); a worker-side exception is a bug in the
+        # extraction function itself. They were one rung until `run_bounded` learned to tell the
+        # first two apart, which meant a systematically crashing grammar read as a scattering of
+        # slow files and `parse_timeout_count` corroborated it.
+        if res is None or res in (PARSE_TIMEOUT, PARSE_CRASHED):
+            rung = {PARSE_TIMEOUT: "timeout", PARSE_CRASHED: "crashed"}.get(res, "error")
+            gs.record_extraction(str(fpath), lang, rung, 0, 0, 1)
             continue
         syms, st = res
         gs.record_extraction(str(fpath), lang, st.rung, st.symbol_count,
@@ -617,7 +622,7 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             continue
         call_sites = run_bounded(extract_calls_with_lines, (content, detect_language(fpath)),
                                   path_for_log=fstr)
-        if not call_sites or call_sites == PARSE_TIMEOUT:
+        if not call_sites or call_sites in (PARSE_TIMEOUT, PARSE_CRASHED):
             continue
         for callee_name, call_line in call_sites:
             caller_sid, best_span = "", -1

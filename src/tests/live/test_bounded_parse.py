@@ -42,6 +42,26 @@ def _unpicklable():
     return threading.Lock()
 
 
+def _die_by_signal() -> None:
+    """Kill this worker mid-task, the way a segfaulting native parser does."""
+    import signal
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def _deep_js_bomb() -> tuple:
+    """Real input that killed a worker on this machine: a 10,000-deep call expression.
+
+    `tree_sitter_language_pack.process()` segfaults on it (measured 2026-07-30; 5,000 is fine,
+    and both the raw `parse()` and the symbol walk survive 10,000 — it is `process()` alone).
+    Whether *this* depth kills *this* machine's worker depends on the thread stack limit, so the
+    test built on it asserts containment and honest reporting, never that a crash occurs.
+    """
+    from rag_search.graph.extractor import extract_symbols_with_stats
+    n = 10_000
+    src = "const x = " + "f(" * n + "1" + ")" * n + ";\n"
+    return extract_symbols_with_stats(Path("bomb.js"), src, "javascript")
+
+
 def _new_pool():
     from rag_search.index.bounded_parse import BoundedParsePool
     return BoundedParsePool(size=2)
@@ -210,6 +230,34 @@ def test_metrics_reports_timeout_count() -> None:
         bounded_parse._pool = None
 
 
+def test_bp3_a_dead_worker_is_reported_as_a_crash_not_a_timeout() -> None:
+    """BP3: the two must not share a sentinel, a counter, or a wall-clock cost.
+
+    A worker killed by a signal puts nothing on the result queue, so a single blocking
+    `get(timeout=deadline_s)` waited out the whole deadline and returned PARSE_TIMEOUT. Three
+    things were wrong with that and only the third is cosmetic: a crash is reproducible where a
+    timeout is load-dependent, so the investigation starts in the wrong place; `parse_timeout_count`
+    then corroborates the wrong story with a number; and every crash costs a full deadline of
+    wall clock for information already available from `is_alive()`.
+    """
+    from rag_search.index import bounded_parse
+    pool = _new_pool()
+    bounded_parse._pool = pool
+    try:
+        t0 = time.monotonic()
+        got = pool.run(_die_by_signal, (), deadline_s=20, path_for_log="/x/crash.js")
+        elapsed = time.monotonic() - t0
+        assert got == "PARSE_CRASHED", f"a killed worker reported {got!r}"
+        assert elapsed < 5, f"waited {elapsed:.1f}s of a 20s deadline for a worker already dead"
+        assert bounded_parse.metrics()["parse_crash_count"] == 1
+        assert bounded_parse.metrics()["parse_timeout_count"] == 0, \
+            "a crash was counted as a timeout"
+        assert pool.run(_add, (2, 3), deadline_s=5) == 5, "pool did not recover from the crash"
+    finally:
+        pool.idle_shutdown(idle_s=0)
+        bounded_parse._pool = None
+
+
 def test_cobol_grammar_parity_through_bounded_path() -> None:
     """Real cobol grammar (the historically pathological one) parses correctly when bounded."""
     from rag_search.graph.extractor import extract_symbols
@@ -219,6 +267,23 @@ def test_cobol_grammar_parity_through_bounded_path() -> None:
                           deadline_s=10, path_for_log="hello.cob")
     assert result != PARSE_TIMEOUT
     assert isinstance(result, list)
+
+
+def test_bp4_a_real_pathological_input_is_contained_and_honestly_reported() -> None:
+    """BP4: HR39 containment on input that actually kills a worker, not an injected signal.
+
+    Deliberately does not assert *that* it crashes — the depth at which `process()` dies is a
+    function of the machine's thread stack limit, and a test asserting a segfault would be
+    asserting a property of the host. What must hold everywhere: the pool survives, the next
+    file parses, and a crash is never reported as a timeout on the machines where it does die.
+    """
+    pool = _new_pool()
+    try:
+        got = pool.run(_deep_js_bomb, (), deadline_s=30, path_for_log="/x/bomb.js")
+        assert got != "PARSE_TIMEOUT" or pool.parse_timeout_count == 1
+        assert pool.run(_add, (8, 1), deadline_s=5) == 9, "pool did not survive the bomb"
+    finally:
+        pool.idle_shutdown(idle_s=0)
 
 
 def test_unpicklable_result_times_out_gracefully_not_a_crash() -> None:

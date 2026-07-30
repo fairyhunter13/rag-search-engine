@@ -19,8 +19,13 @@ def _snapshot() -> dict:
         cpu_throttle_stat,
         cpu_usage_nsec,
     )
+    from rag_search.index.bounded_parse import metrics as parse_metrics
     from rag_search.query.search import rerank_stats
-    return {**_metrics, "rerank": rerank_stats(),
+    # HR39's counters had no reader. `bounded_parse.metrics()` existed and both the module
+    # docstring and CLAUDE.md said it was served here, but nothing in the tree called it — so the
+    # one number that would say "extraction is losing files to dead workers" was unobservable
+    # from outside the process, which is the same defect as a write-only column.
+    return {**_metrics, "rerank": rerank_stats(), "parse": parse_metrics(),
             "cpu": {"percent_core": round(cpu_percent_core(), 4),
                     "quota_cores": cpu_quota_cores(), "usage_nsec": cpu_usage_nsec(),
                     **cpu_throttle_stat()}}

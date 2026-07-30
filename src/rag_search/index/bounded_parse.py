@@ -15,7 +15,9 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 PARSE_TIMEOUT = "PARSE_TIMEOUT"  # sentinel result, distinct from any real return value
+PARSE_CRASHED = "PARSE_CRASHED"  # worker died mid-task — NOT the same event as a timeout
 _DEADLINE_S = float(os.environ.get("RSE_BOUNDED_PARSE_DEADLINE_S", "10"))
+_POLL_S = 0.25  # how often the wait re-checks whether the worker is still alive
 _POOL_SIZE = int(os.environ.get("RSE_BOUNDED_PARSE_WORKERS", "1"))  # HR40: 1-core quota
 _IDLE_SHUTDOWN_S = float(os.environ.get("RSE_BOUNDED_PARSE_IDLE_S", "120"))
 _PARENT_CHECK_S = float(os.environ.get("RSE_BOUNDED_PARSE_PARENT_CHECK_S", "30"))
@@ -70,6 +72,7 @@ class BoundedParsePool:
         self._free: queue.Queue = queue.Queue()
         self._slots: list[_Slot | None] = [None] * self._size
         self.parse_timeout_count = 0
+        self.parse_crash_count = 0
         self._last_used = time.monotonic()
 
     def _ensure_started(self) -> None:
@@ -104,11 +107,10 @@ class BoundedParsePool:
                     self._spawn_slot(idx)
                 slot = self._slots[idx]
             slot.task_q.put((func, args))
-            try:
-                status, payload = slot.result_q.get(timeout=deadline_s)
-            except queue.Empty:
-                self._on_timeout(idx, path_for_log)
-                return PARSE_TIMEOUT
+            got = self._await_result(slot, idx, deadline_s, path_for_log)
+            if got is PARSE_TIMEOUT or got is PARSE_CRASHED:
+                return got
+            status, payload = got
             if status == "error":
                 log.warning("bounded_parse worker error path_hash=%s: %s",
                             _path_hash(path_for_log), payload)
@@ -117,16 +119,53 @@ class BoundedParsePool:
         finally:
             self._free.put(idx)
 
-    def _on_timeout(self, idx: int, path_for_log: str) -> None:
+    def _await_result(self, slot, idx: int, deadline_s: float, path_for_log: str):
+        """Wait for a result, distinguishing a worker that *died* from one that ran too long.
+
+        A single blocking `get(timeout=deadline_s)` cannot tell those apart: a worker killed by a
+        signal never puts anything on the queue, so the wait runs to the full deadline and reports
+        `PARSE_TIMEOUT`. That is not a pedantic distinction — a crash is reproducible and a timeout
+        is load-dependent, so folding them together points every investigation at the wrong one,
+        and it inflates `parse_timeout_count` with events that were never slow. Measured
+        2026-07-30: `tree_sitter_language_pack.process()` **segfaults** on a 10,000-deep
+        `f(f(f(…)))` javascript expression (5,000 is fine, and the raw `parse()` + the symbol walk
+        both survive 10,000 — it is `process()` alone). HR39 contained it exactly as designed, the
+        pool respawned and the next file extracted normally, and the whole event was recorded as a
+        parse timeout.
+
+        The re-`get` after `is_alive()` goes false is not belt-and-braces: `Queue.put` hands off to
+        a feeder thread, so a worker can legitimately produce a result and then die before the
+        parent drains it. Without that second read a successful parse would be reported as a crash.
+        """
+        deadline = time.monotonic() + deadline_s
+        while True:
+            try:
+                return slot.result_q.get(timeout=min(_POLL_S, max(0.0, deadline - time.monotonic())))
+            except queue.Empty:
+                pass
+            if not slot.proc.is_alive():
+                with contextlib.suppress(queue.Empty):
+                    return slot.result_q.get(timeout=0.5)  # in-flight result from a since-dead worker
+                self._on_worker_gone(idx, path_for_log, PARSE_CRASHED, slot.proc.exitcode)
+                return PARSE_CRASHED
+            if time.monotonic() >= deadline:
+                self._on_worker_gone(idx, path_for_log, PARSE_TIMEOUT, None)
+                return PARSE_TIMEOUT
+
+    def _on_worker_gone(self, idx: int, path_for_log: str, why: str, exitcode) -> None:
         with self._lock:
-            self.parse_timeout_count += 1
+            if why == PARSE_TIMEOUT:
+                self.parse_timeout_count += 1
+            else:
+                self.parse_crash_count += 1
             slot = self._slots[idx]
             slot.proc.terminate()
             slot.proc.join(timeout=5)
             if slot.proc.is_alive():
                 slot.proc.kill(); slot.proc.join()
             self._spawn_slot(idx)
-        log.warning("bounded_parse PARSE_TIMEOUT path_hash=%s", _path_hash(path_for_log))
+        log.warning("bounded_parse %s path_hash=%s exitcode=%s",
+                    why, _path_hash(path_for_log), exitcode)
 
     def idle_shutdown(self, idle_s: float = _IDLE_SHUTDOWN_S) -> None:
         """Free workers after inactivity (P16/P17); no-op if a task is in flight."""
@@ -162,7 +201,8 @@ def _get_pool() -> BoundedParsePool:
 
 def run_bounded(func, args: tuple, deadline_s: float = _DEADLINE_S, path_for_log: str = ""):
     """Run `func` (a module-level, picklable extraction fn) in the bounded pool. Returns its
-    return value, `PARSE_TIMEOUT` past `deadline_s`, or `None` on a worker-side exception."""
+    return value, `PARSE_TIMEOUT` past `deadline_s`, `PARSE_CRASHED` if the worker died mid-task
+    (a signal, or a failure to bootstrap), or `None` on a worker-side exception."""
     return _get_pool().run(func, args, deadline_s, path_for_log)
 
 
@@ -172,4 +212,5 @@ def idle_shutdown_check() -> None:
         _pool.idle_shutdown()
 
 def metrics() -> dict:
-    return {"parse_timeout_count": 0 if _pool is None else _pool.parse_timeout_count}
+    return {"parse_timeout_count": 0 if _pool is None else _pool.parse_timeout_count,
+            "parse_crash_count": 0 if _pool is None else _pool.parse_crash_count}
