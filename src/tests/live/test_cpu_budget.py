@@ -122,6 +122,26 @@ def test_cb2_daemon_cpu_quota_enforced():
 
 _IDLE_WINDOW_S = 20.0
 _IDLE_THRESHOLD = 0.01  # < 1% of one core
+_IDLE_ATTEMPTS = 5
+
+
+def _watcher_activity() -> tuple[int, int, int]:
+    """(completed passes, projects in flight, files queued) — the window's contamination probe.
+
+    All three, because completions alone do not describe a busy watcher: `dispatched` ticks when a
+    pass *ends*, so a 20 s window falling entirely inside one long pass shows a delta of zero. That
+    is not a corner case — the first pass after an idle unload loads the ONNX embedder, which is
+    exactly the multi-second work worth excluding, and it was measured reading as "quiet" at 2.9%
+    of a core.
+    """
+    r = requests.get(f"{_BASE}/api/watcher", timeout=5)
+    assert r.status_code == 200, f"/api/watcher {r.status_code}: {r.text[:200]}"
+    body = r.json()
+    return (
+        int(body.get("dispatched", -1)),
+        len(body.get("inflight") or []),
+        sum((body.get("pending") or {}).values()),
+    )
 
 
 @pytest.mark.slow
@@ -131,19 +151,43 @@ def test_cb3_idle_cpu_under_one_percent_core():
     `sweeps_state` restores what it found rather than resuming: the session fixture pauses
     sweeps for the whole run, and this file sorts 7th of 76, so an unconditional resume here
     left ~70 files' worth of tests racing the daemon for the GPU.
+
+    A window in which the watcher ran a pass is **discarded, not reported**. Pausing sweeps
+    quiesces the daemon's own timers but says nothing about the 139 watched repos: on
+    2026-07-30 this read 0.0783 of a core while another profile's session was editing
+    inosoft-project, and 0.4424 while a second live suite shared the cgroup. Both were true
+    measurements of a daemon doing the work it exists to do, and neither says anything about
+    idle cost. Re-taking the window is the only honest way to separate them — raising the
+    threshold to swallow them would retire the gate instead ([[perf numbers warm and quiet]]).
+    A quiet window is still held to the original 1%.
     """
     with sweeps_state(paused=True):
-        time.sleep(2.0)  # settle any work in flight from a preceding test
-        before = _cpu_snapshot()
-        t0 = time.monotonic()
-        time.sleep(_IDLE_WINDOW_S)
-        after = _cpu_snapshot()
-        wall_s = time.monotonic() - t0
-        delta_cpu_s = (after["usage_nsec"] - before["usage_nsec"]) / 1_000_000_000
-        frac = delta_cpu_s / wall_s
-        assert frac < _IDLE_THRESHOLD, (
-            f"idle CPU {frac:.4f} of one core over {wall_s:.1f}s "
-            f"(usage_nsec {before['usage_nsec']}->{after['usage_nsec']}) -- exceeds the < 1% gate"
+        busy: list[str] = []
+        for _ in range(_IDLE_ATTEMPTS):
+            time.sleep(2.0)  # settle any work in flight from a preceding test
+            act_before, before = _watcher_activity(), _cpu_snapshot()
+            t0 = time.monotonic()
+            time.sleep(_IDLE_WINDOW_S)
+            after, act_after = _cpu_snapshot(), _watcher_activity()
+            wall_s = time.monotonic() - t0
+            delta_cpu_s = (after["usage_nsec"] - before["usage_nsec"]) / 1_000_000_000
+            frac = delta_cpu_s / wall_s
+            if act_after != act_before or any(a[1:] != (0, 0) for a in (act_before, act_after)):
+                busy.append(f"watcher {act_before} -> {act_after}, {frac:.4f} core")
+                continue
+            assert frac < _IDLE_THRESHOLD, (
+                f"idle CPU {frac:.4f} of one core over {wall_s:.1f}s with an idle watcher "
+                f"(usage_nsec {before['usage_nsec']}->{after['usage_nsec']}) -- exceeds the < 1% "
+                f"gate. Sweeps were paused and no file event was served, so this is the daemon "
+                f"burning CPU with nothing to do."
+            )
+            return
+        pytest.fail(
+            f"no quiet window in {_IDLE_ATTEMPTS} attempts of {_IDLE_WINDOW_S:.0f}s: "
+            + "; ".join(busy)
+            + ". Something is writing continuously into a watched root (check "
+            "`GET /api/watcher` pending, and the journal's 'N changes detected' lines) -- the "
+            "idle cost of this daemon cannot be measured while that holds."
         )
 
 
