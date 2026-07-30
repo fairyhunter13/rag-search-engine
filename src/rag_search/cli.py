@@ -112,12 +112,16 @@ def clean_orphans(yes: bool = typer.Option(False, "--yes", "-y")) -> None:
     """Remove orphan index dirs (dry-run by default)."""
     import shutil
 
-    from rag_search.core.config import INDEX_ROOT
+    from rag_search.core.config import INDEX_ROOT, index_dir
     from rag_search.core.registry import list_projects
-    known = {p.path for p in list_projects()}
+    # Compare resolved index dirs, never path substrings. A dir is named `<basename>-<sha16>`, so a
+    # registry path like /home/.../redacted-name-6 is not a substring of `gen2-ledger-3f2a…` and the old
+    # test matched nothing at all: it called every one of 179 dirs an orphan, live stores included,
+    # so `--yes` deleted the whole fleet's index and cost a full GPU re-index to get back.
+    known = {index_dir(p.path).resolve() for p in list_projects()}
     removed = 0
     for d in (list(INDEX_ROOT.iterdir()) if INDEX_ROOT.exists() else []):
-        if not any(k in str(d) for k in known):
+        if d.is_dir() and d.resolve() not in known:
             if yes:
                 shutil.rmtree(d, ignore_errors=True)
                 removed += 1
