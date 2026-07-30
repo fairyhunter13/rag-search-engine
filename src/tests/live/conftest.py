@@ -1,6 +1,7 @@
 import contextlib
 import os
 import sys
+import threading
 
 import pytest
 import requests
@@ -253,6 +254,35 @@ def _drain_graph_lane():
     renew_pause_lease()
 
 
+# Well inside `sweeps._PAUSE_TTL_S` (1800 s), so the lease is re-armed twice over before it can
+# lapse. The margin is the point: a renewal that only just beats the deadline turns any hiccup —
+# a slow /healthz, a GC pause — straight into a resumed sweep.
+_LEASE_RENEW_INTERVAL_S = float(os.environ.get("RSE_TEST_LEASE_RENEW_S", "600"))
+
+
+def _renew_lease_until(stop: threading.Event, interval_s: float = _LEASE_RENEW_INTERVAL_S) -> None:
+    """Re-arm the daemon's pause lease on a clock, until `stop` is set.
+
+    `_drain_graph_lane` already renews after every test, which covers the ordinary case and is
+    where the renewal belongs. What a *between-tests* hook structurally cannot cover is a single
+    test that runs longer than the whole lease — the hook does not fire, so nothing renews, and
+    `sweeps` resumes underneath a suite that is still working.
+
+    That is not hypothetical. Measured 2026-07-31 against a run of six test files: the daemon
+    logged `pause lease expired after 1808s (ttl 1800s) - resuming` while the suite was alive and
+    on the GPU, and for the next several minutes it indexed and labelled unrelated fleet projects
+    against the same card — 17 index/label passes in one 5-minute window, GPU at 86 C.  The
+    expiry log blames a session that "died mid-run", which is the one case it was not.
+
+    Keeps `renew_pause_lease`'s one-way rule rather than working around it: a lease already at 0.0
+    is still not re-armed from here, because that decision belongs to the mechanism that resumed.
+    Renewing on a clock means the lease never reaches 0.0 in the first place, which is the
+    difference between preventing the resume and racing it.
+    """
+    while not stop.wait(interval_s):
+        renew_pause_lease()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def pause_sweeps():
     """Pause background sweeps for the whole session to avoid GPU contention.
@@ -263,9 +293,21 @@ def pause_sweeps():
     No `contextlib.suppress` here any more: a daemon that cannot be paused is a suite that
     should not start, for the same reason `reclaim_daemon_gpu` below asserts rather than warns.
     Suppressing it ran the whole suite unpaused and let the consequences land somewhere else.
+
+    The renewer is a daemon thread joined on teardown: it must not outlive the session it renews
+    for, or it would hold the whole fleet paused after the suite that wanted it has gone.
     """
     with sweeps_state(paused=True):
-        yield
+        stop = threading.Event()
+        renewer = threading.Thread(
+            target=_renew_lease_until, args=(stop,), name="rse-lease-renewer", daemon=True,
+        )
+        renewer.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            renewer.join(timeout=10)
 
 
 # Peak VRAM the suite itself needs, measured: a green run started with 15,771 MiB free and

@@ -1,8 +1,10 @@
 """P6 daemon tests: scheduler, watcher, sweeps, federation, systemd, CLI (no mocks)."""
 import logging
+import threading
 import time
 
 import pytest
+import requests
 
 from tests.live._sample_workspace import SampleWorkspace
 from tests.live._sweeps import local_sweeps_paused
@@ -280,6 +282,46 @@ def test_re_pause_re_arms_the_deadline_without_restamping_the_leak_signal():
             "sweeps_paused_s would under-report every repeated-pause leak")
     finally:
         sweeps.set_paused(was)
+
+
+def test_lease_is_renewed_on_a_clock_not_only_between_tests():
+    """F4c: a test longer than the whole lease must not let sweeps resume under the suite.
+
+    `_drain_graph_lane` renews after every test, which cannot cover this case: if no test
+    *finishes* for longer than the TTL, the hook never fires. Measured 2026-07-31 — the daemon
+    logged `pause lease expired after 1808s (ttl 1800s) - resuming` while a live suite was still
+    on the GPU, then indexed unrelated fleet projects against the same card (17 index/label
+    passes in one 5-minute window, GPU at 86 C). The suite was alive throughout, so the expiry
+    log's guess that the session "died mid-run" names the one cause that was ruled out.
+
+    **The decay assertion is what makes this non-vacuous**: the lease sits at its 1800 s ceiling
+    right after any renewal, and "still 1800" is equally true of a renewer that never ran.
+    """
+    from tests.live.conftest import _renew_lease_until
+
+    def lease_s() -> float:
+        r = requests.get("http://127.0.0.1:8765/healthz", timeout=5)
+        return r.json().get("sweeps_pause_lease_s", 0.0)
+
+    before = lease_s()
+    assert before > 0.0, f"the session pause must hold a lease; got {before}s"
+    time.sleep(1.5)
+    decayed = lease_s()
+    assert decayed < before, f"lease did not decay ({before}s -> {decayed}s); nothing to observe"
+
+    stop = threading.Event()
+    renewer = threading.Thread(target=_renew_lease_until, args=(stop, 0.05), daemon=True)
+    renewer.start()
+    try:
+        time.sleep(0.5)
+        renewed = lease_s()
+    finally:
+        stop.set()
+        renewer.join(timeout=5)
+    assert renewed > decayed, (
+        f"the clock renewer did not re-arm the lease ({decayed}s -> {renewed}s); a test outlasting "
+        "the TTL would hand the GPU back to sweeps mid-run")
+    assert not renewer.is_alive(), "the renewer must stop when its session does"
 
 
 def test_global_prompt_inject_remove(tmp_path):
