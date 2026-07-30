@@ -23,7 +23,12 @@ from pathlib import Path
 #                    when process() and the generic walk both come back empty. Reaches 237 of
 #                    306 languages against `tags`' 48, which is why the ladder skips a tags rung
 #                    entirely — measured, `tags` is empty for every language that gets this far.
-EXTRACTOR_REV = "e3"
+#   e4  2026-07-30  Rung 5 (`_data_walk`, `data_extraction=True` -> `ProcessResult.data`) gives
+#                    yaml/json/toml/hcl their top-level structure instead of a blank row, and
+#                    the X2 rung `language_mismatch` records a file whose bytes do not parse as
+#                    the language its extension claims. Both fire only where every earlier rung
+#                    came back empty, so no file that already extracted changes.
+EXTRACTOR_REV = "e4"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -385,9 +390,25 @@ def extract_calls(content: str, language: str) -> list[str]:
 # metrics block and the guard test cannot drift apart — the earlier version had each of them
 # spelling the strings itself, which is how "timeout" came to mean three different events.
 EXTRACTION_RUNGS: tuple[str, ...] = (
-    "structure", "generic", "highlights", "embedded", "unparsed", "no_grammar", "no_language",
-    "timeout", "crashed", "error",
+    "structure", "generic", "highlights", "data", "embedded", "language_mismatch",
+    "unparsed", "no_grammar", "no_language", "timeout", "crashed", "error",
 )
+
+# Rung 5's bounds. Depth 2 because that is where the useful key lives in every shape this rung
+# exists for — `services.web`, `scripts.build`, `jobs.build` — while depth 1 alone would yield
+# only the section headers. The cap is a flood guard, not a visibility one: `package-lock.json`
+# has thousands of depth-2 keys, and a file that emitted 500 symbols has conspicuously not
+# disappeared, which is the invariant the rung column exists to protect.
+_DATA_MAX_DEPTH = 2
+_DATA_MAX_SYMBOLS = 500
+
+# X2's threshold: the fraction of a file's bytes sitting under ERROR/MISSING nodes above which
+# the bytes are taken to contradict the language the extension claims. Measured 2026-07-30, and
+# the margin is why one number suffices: XML bytes parsed as rust/typescript/python/go score
+# 0.916-1.000 and python bytes parsed as rust score 1.000, while *degraded but correct* source
+# scores far below — truncation mid-token 0.000 (tree-sitter recovers), minified javascript
+# 0.000, NUL bytes injected into python 0.120. Nothing measured lands between 0.12 and 0.92.
+_MISMATCH_ERROR_RATIO = 0.5
 
 
 @dataclass(frozen=True)
@@ -483,6 +504,82 @@ def _node_has_error(root) -> bool:
         return False
 
 
+def _error_byte_ratio(root, total_bytes: int) -> float:
+    """Fraction of the file covered by ERROR/MISSING nodes — X2's evidence, and only that.
+
+    Deliberately not called "is this the wrong language": what it measures is that the bytes do
+    not parse as the grammar the extension claims, which wrong-language bytes and catastrophically
+    broken source both produce. The rung is named for the common case because that is what the
+    fleet actually holds — a Katalon project's `.rs`/`.ts` files are XML, 2,439 of them — but this
+    docstring is where the honest reading lives, so a later reader does not take the rung as a
+    claim that the *real* language was identified. It was not; nothing here guesses one.
+
+    Nested errors are not double-counted: an ERROR node's subtree is not descended into.
+    """
+    if root is None or total_bytes <= 0:
+        return 0.0
+    bad, stack = 0, [root]
+    while stack:
+        node = stack.pop()
+        try:
+            if node.kind() in ("ERROR", "MISSING"):
+                rng = node.byte_range()
+                bad += rng.end - rng.start
+                continue
+            stack.extend(node.named_child(i) for i in range(node.named_child_count()))
+        except Exception:
+            return 0.0
+    return bad / total_bytes
+
+
+def _data_root(code_bytes: bytes, language: str):
+    """`ProcessResult.data` for `language`, or None. Separate call — `data_extraction` is off in
+    the rung-3 `ProcessConfig`, and paying for it on every file to serve the fallback path would
+    invert the ladder's whole economy."""
+    try:
+        from tree_sitter_language_pack import ProcessConfig
+        from tree_sitter_language_pack import process as ts_process
+        return ts_process(code_bytes.decode("utf-8", errors="replace"),
+                          ProcessConfig(data_extraction=True, language=language)).data
+    except Exception:
+        return None
+
+
+def _data_walk(code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
+    """Rung 5: top-level structure of a data file, from `process(data_extraction=True).data`.
+
+    The output lands on `ProcessResult.data` as a `DataNode` tree (`key` / `value` / `span` /
+    `children`) — **not** on `.data_extraction`, which does not exist and cost one probe to find
+    out. Measured: hcl yields `resource."aws_s3_bucket"."b"` and `variable."v"`, yaml a compose
+    file's `services` and its services, json its `scripts` and each script, toml its tables.
+
+    These are the files X4 called "legitimately symbol-free", and for markdown or a `.env.example`
+    that stays true. For a compose file, a k8s manifest, a `package.json` or a CI workflow it never
+    was: the file has structure, tree-sitter can see it, and nothing was asking. `kind="data"`
+    keeps it distinguishable downstream, and call resolution cannot confuse it with code because
+    `sweeps._extract_graph` keys on `(family, name)` and `language_family` makes yaml/json/toml/hcl
+    each their own family — a Go `build()` cannot bind to a `package.json` `build` key.
+    """
+    root = _data_root(code_bytes, language)
+    out: list[Symbol] = []
+    stack: list[tuple[object, int, str]] = [(root, 0, "")] if root is not None else []
+    while stack and len(out) < _DATA_MAX_SYMBOLS:
+        node, depth, prefix = stack.pop()
+        key = getattr(node, "key", None)
+        qual = f"{prefix}.{key}" if prefix and key else (key or prefix)
+        if key and _is_name_text(str(key)):
+            span = getattr(node, "span", None)
+            line = (span.start_line + 1) if span is not None else 1
+            out.append(Symbol(
+                file=file_str, name=str(key), qualified_name=str(qual), kind="data",
+                start_line=line, end_line=(span.end_line + 1) if span is not None else line,
+                language=language))
+        if depth < _DATA_MAX_DEPTH:
+            for child in reversed(getattr(node, "children", None) or []):
+                stack.append((child, depth + 1, str(qual)))
+    return out
+
+
 def _extract_symbols_from(
     r, outer_root, code_bytes: bytes, file_str: str, language: str
 ) -> tuple[list[Symbol], str, int]:
@@ -530,12 +627,24 @@ def _extract_symbols_from(
     generic = _generic_walk(outer_root, code_bytes, file_str, language)
     if generic:
         return generic, "generic", 0
-    # Rung 4 last, because it is the weakest evidence in the ladder: `highlights.scm` says what a
-    # token *is*, never where it is defined, so it is trusted only where nothing stronger spoke.
-    # An empty result stays `generic` — "parsed, nothing found", which is what it has always
-    # meant — rather than claiming a rung that produced no symbol.
+    # Rung 4 before 5, because it is the weakest *code* evidence in the ladder: `highlights.scm`
+    # says what a token *is*, never where it is defined, so it is trusted only where nothing
+    # stronger spoke.
     highlights = _highlight_walk(code_bytes, file_str, language)
-    return (highlights, "highlights", 0) if highlights else ([], "generic", 0)
+    if highlights:
+        return highlights, "highlights", 0
+    data = _data_walk(code_bytes, file_str, language)
+    if data:
+        return data, "data", 0
+    # Nothing extracted. Only now is the mismatch check worth its tree walk, and only now can its
+    # answer matter: a file that reached a rung parsed well enough to yield symbols, whatever its
+    # extension claims. Running it first would cost every file in the fleet a second walk to
+    # diagnose the few thousand that produce nothing.
+    if _error_byte_ratio(outer_root, len(code_bytes)) >= _MISMATCH_ERROR_RATIO:
+        return [], "language_mismatch", 0
+    # `generic` — "parsed, nothing found", which is what it has always meant. Reached only when
+    # the bytes *do* parse as the claimed language and simply define nothing (X4).
+    return [], "generic", 0
 
 
 # The ordered-call-site layer (CallSite / _BRANCH_NODE_KINDS / _collect_sites /
