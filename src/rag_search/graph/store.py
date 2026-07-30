@@ -182,6 +182,24 @@ class GraphStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def code_files_extracted(self) -> tuple[int, int]:
+        """`(code files this store attempted, how many yielded a symbol)`.
+
+        The evidence H1's hollow check needs, and the reason it can be evidence-based at all: until
+        `file_extraction` existed, "this store has no symbols" and "this store holds nothing that
+        could have any" were the same observation. Restricted to code languages because a store
+        whose only files are a README and a LICENCE has zero symbols *correctly* — counting those
+        as attempts would turn every container directory into a health alarm.
+
+        Distinct rows only: `file` is the primary key, so a COUNT is a file count.
+        """
+        from rag_search.index.discover import is_code_language
+        rows = self._con.execute(
+            "SELECT language, COUNT(*) AS files, SUM(symbol_count > 0) AS with_syms "
+            "FROM file_extraction GROUP BY language").fetchall()
+        code = [r for r in rows if is_code_language(r["language"] or "")]
+        return sum(r["files"] for r in code), sum(r["with_syms"] or 0 for r in code)
+
     def delete_file_symbols(self, file: str) -> int:
         """Drop one file's symbols and the edges *out of* them (incremental re-extract).
 
