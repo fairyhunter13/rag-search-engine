@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -73,10 +72,8 @@ def test_maintenance_vacuums_bloated_project_db():
     from rag_search.core.config import ProjectEntry, project_vector_db
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon.sweeps import maintenance
-
-    safe_base = Path.home() / ".local" / "share" / "rse-test-dirs"
-    safe_base.mkdir(parents=True, exist_ok=True)
-    proj_dir = Path(tempfile.mkdtemp(dir=safe_base))
+    from tests.live._projects import make_run_dir
+    proj_dir = make_run_dir()
     try:
         upsert_project(ProjectEntry(path=str(proj_dir), enabled=True))
         vdb = project_vector_db(str(proj_dir))
