@@ -69,15 +69,21 @@ def test_su2_a_scope_with_a_real_store_still_returns_results(sample_workspace):
 
     Without this arm SU1 is satisfied by a `_search_sync` that always errors. This runs the real
     embedder over the real session corpus — the same end-to-end path a client takes.
+
+    Scoped to `ledger`, the corpus's *standalone* project, so `expand_federation` returns it alone
+    and `projects_searched` can be asserted by equality. A federation member would pull in siblings
+    and the assertion could only be a membership check, which passes just as well when the scope
+    was ignored entirely — the failure this test exists to catch.
     """
     from rag_search.server.mcp import _search_sync
 
     payload = json.loads(_search_sync("function definition", "code",
-                                      [str(sample_workspace)], 8, "compact"))
+                                      [sample_workspace.ledger], 8, "compact"))
 
     assert "error" not in payload, (
         f"the unindexed guard fired on a project that has a store: {payload}")
-    assert payload.get("projects_searched") == [str(sample_workspace)], payload
+    assert payload.get("results"), f"a real store returned nothing for a generic query: {payload}"
+    assert payload.get("projects_searched") == [sample_workspace.ledger], payload
 
 
 def test_su3_a_partial_federation_stays_a_result_not_an_error(sample_workspace):
@@ -90,10 +96,10 @@ def test_su3_a_partial_federation_stays_a_result_not_an_error(sample_workspace):
     from rag_search.server.mcp import _search_sync
 
     payload = json.loads(_search_sync("function definition", "code",
-                                      [str(sample_workspace), "/nonexistent/not-indexed"],
+                                      [sample_workspace.ledger, "/nonexistent/not-indexed"],
                                       8, "compact"))
 
     assert "error" not in payload, (
         f"a partial federation was escalated to an error: {payload}")
-    assert payload.get("projects_searched") == [str(sample_workspace)], (
+    assert payload.get("projects_searched") == [sample_workspace.ledger], (
         f"projects_searched must name exactly the stores actually opened: {payload}")
