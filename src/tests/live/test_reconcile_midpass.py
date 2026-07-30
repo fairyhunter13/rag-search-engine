@@ -40,12 +40,13 @@ def _run():
 thread = threading.Thread(target=_run, daemon=True)
 thread.start()
 
-# The flip below is the thing under test, so it stays a bare assignment: is_paused() returns True
-# on _PAUSED with no deadline, which is exactly the state POST /api/sweeps/pause sets.
+# Through set_paused, not a bare flag write: that is the call the daemon's own pause route makes,
+# so the flip carries a stamp and a lease deadline exactly as it does in production. A raw
+# assignment would leave _PAUSE_DEADLINE at None — the un-leased pause 4928c43 removed.
 deadline, paused_at = time.monotonic() + 240, None
 while not done.is_set():
     if any(v.exists() for v in vdbs):
-        sweeps._PAUSED = True
+        sweeps.set_paused(True)
         paused_at = time.monotonic()
         break
     if time.monotonic() > deadline:
