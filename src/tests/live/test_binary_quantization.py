@@ -122,6 +122,46 @@ def test_bq3_language_filter_returns_a_full_page(embedder, safe_tmp_path):
     vs.close()
 
 
+def _recall_at_k(vs, queries, k=10) -> float:
+    """Share of the exact scan's top-k that the two-stage recovers, averaged over queries."""
+    got = 0
+    for q in queries:
+        vs._bin_ready = False
+        truth = {h["chunk_id"] for h in vs.search(q, k)}
+        vs._bin_ready = True
+        got += len(truth & {h["chunk_id"] for h in vs.search(q, k)})
+    return got / (len(queries) * k)
+
+
+def test_bq5_oversample_earns_its_value(embedder, safe_tmp_path, monkeypatch):
+    """BQ5: gate BIN_OVERSAMPLE against the exact scan it approximates.
+
+    The end-to-end recall gate cannot do this job: over its 40 golden queries, oversample 1 and a
+    *disabled* rescore score identically to the shipped config (gnDCG differs by 3e-4) because a
+    cross-encoder re-sorts a 10-deep page and recall@10 is saturated. Hence a gap assertion, not
+    just a floor: a floor alone passes on a broken shortlist that a small corpus flatters.
+    """
+    import rag_search.index.store as mod
+
+    texts = [f"{v} {n}(self, {a}):\n    return self.{a}.{v}({n}_id)\n"
+             for v in ("fetch", "delete", "render", "validate", "publish", "resolve", "queue")
+             for n in ("invoice", "session", "webhook", "manifest", "checkout", "ledger")
+             for a in ("client", "cache", "broker", "store", "index", "pool", "shard")]
+    over = mod.BIN_OVERSAMPLE
+    assert len(texts) > 10 * over, "shortlist must be smaller than the corpus to measure anything"
+    vs, vecs = _store(embedder, safe_tmp_path / "bq5.db", texts, ["python"] * len(texts))
+    queries = [np.asarray(v, dtype=np.float32) for v in vecs[::6]]
+
+    shipped = _recall_at_k(vs, queries)
+    monkeypatch.setattr(mod, "BIN_OVERSAMPLE", 1)
+    narrow = _recall_at_k(vs, queries)
+    vs.close()
+    assert shipped >= 0.90, f"oversample {over} recovers only {shipped:.3f} of the exact top-10"
+    assert shipped - narrow >= 0.05, (
+        f"widening bought nothing: {shipped:.3f} at {over}x vs {narrow:.3f} at 1x — either the "
+        "rescore is not running or this corpus is too small to tell the two apart")
+
+
 def test_bq4_unquantized_store_still_answers(embedder, safe_tmp_path):
     """BQ4: a store whose codes were never built falls back to the exact scan, not to nothing.
 
