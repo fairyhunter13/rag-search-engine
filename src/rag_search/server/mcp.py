@@ -256,6 +256,18 @@ async def search(
     Pass verbosity="full" when you need the whole chunk body inline instead.
     """
     note_query(query)
+    from rag_search.query.search import SCOPES
+    if scope not in SCOPES:
+        # The same rejection `graph` gives an unknown `relation` and `overview` an unknown `what`.
+        # `search` was the one tool of the three that took anything, and `scope_languages` maps
+        # anything it doesn't recognise to "no restriction" — so a bad scope silently *widened*
+        # the corpus instead of failing. Found 2026-07-31 by passing a project path here (the
+        # project selector is `project_paths`); the call was accepted and answered from the
+        # caller's own project, which reads exactly like a scope-routing defect in the engine.
+        # An argument error that impersonates an engine defect costs more than the wrong answer.
+        return json.dumps({"error": f"unknown scope={scope!r}", "valid": list(SCOPES),
+                           "hint": "scope filters languages; use project_paths=[...] to choose "
+                                   "which projects to search"})
     if not project_paths:
         # Same ladder as every other tool, and the same fail-loud ending. This used to fall
         # through to "search all enabled projects", which measured 164.78 s against 7.01 s for

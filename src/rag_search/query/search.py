@@ -78,11 +78,22 @@ def _code_languages() -> tuple[str, ...]:
     return tuple(sorted(set(typing.get_args(SupportedLanguage)) - set(_TEXT_LANGS)))
 
 
+# Every scope `scope_languages` implements, and the set the MCP + CLI docstrings must agree with.
+# Declared once so a caller can *reject* an unknown scope: the function below cannot, because its
+# "no restriction" answer and its "I don't know that scope" answer are the same `None`.
+SCOPES = ("code", "docs", "all")
+
+
 def scope_languages(scope: str) -> tuple[str, ...] | None:
     """Languages a scope admits, or None for no restriction.
 
     Same membership test the old post-filter applied — hoisted ahead of the KNN so the
     scope narrows the corpus instead of the result set.
+
+    **Unknown scopes fall through to `None`, so validate against `SCOPES` before calling.** The
+    fall-through widens rather than narrows — a typo'd `scope="cdoe"` searches prose and every
+    other language while the caller believes it asked for code — and it is silent in the one
+    direction a caller cannot detect from the results.
     """
     if scope == "docs":
         return tuple(sorted(_TEXT_LANGS))
