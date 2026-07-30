@@ -19,7 +19,11 @@ from pathlib import Path
 #                   every stored graph, and they compose into ONE `_pipeline_algo_version`
 #                   string, so shipping them together re-derives the 160-graph fleet once
 #                   instead of twice.
-EXTRACTOR_REV = "e2"
+#   e3  2026-07-30  Rung 4: `_highlight_walk` extracts from the grammar's own highlights.scm
+#                    when process() and the generic walk both come back empty. Reaches 237 of
+#                    306 languages against `tags`' 48, which is why the ladder skips a tags rung
+#                    entirely — measured, `tags` is empty for every language that gets this far.
+EXTRACTOR_REV = "e3"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -34,6 +38,28 @@ _STRUCTURE_KIND_MAP: dict[str, str] = {
 _GENERIC_DEF_SUFFIXES: tuple[str, ...] = (
     "_definition", "_declaration", "_item", "_specification",
 )
+
+# Rung 4: the capture names in a grammar's own `highlights.scm` that name a *definition*, and
+# the kind each maps to. Authored upstream by the grammar, exactly like `_STRUCTURE_KIND_MAP`
+# above — this is not a vocabulary invented about source text, and nothing here reads an
+# identifier. Plain `type` is deliberately absent: in SQL it captures every `object_reference`,
+# so a table merely *selected from* would enter the symbol table as a definition. Mainstream
+# grammars reach rung 3 anyway, so excluding it costs nothing and avoids inventing symbols.
+_HIGHLIGHT_DEF_CAPTURES: dict[str, str] = {
+    "function": "function", "function.method": "method", "method": "method",
+    "constructor": "method", "class": "class", "type.definition": "class",
+}
+
+# Rung 4's filter, and the whole reason it is safe: a highlights capture says "this token is a
+# function", not "this token is *defined* here". Measured — python's `@function` fires on the
+# callee of `helper(a)`, and bash's on the `echo` of a command — so an unfiltered rung 4 would
+# invent a definition for every call site. A definition is accepted only when its parent node
+# kind carries one of these `_`-separated tokens, which is what `_GENERIC_DEF_SUFFIXES` already
+# encodes plus `statement` (scss spells them `mixin_statement` / `function_statement`). Call
+# parents are rejected outright via `_is_call_node`.
+_DEF_PARENT_TOKENS: frozenset[str] = frozenset({
+    "definition", "declaration", "item", "specification", "statement",
+})
 
 # H2: member/attribute node kinds — unwrap to extract rightmost identifier
 _MEMBER_KINDS: frozenset[str] = frozenset({
@@ -173,6 +199,64 @@ def _callee_node(node):  # type: ignore[return]
     return node.named_child(0) if node.named_child_count() else None
 
 
+def _highlight_walk(code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
+    """Rung 4: symbols from the grammar's own `highlights.scm`, for grammars with no structure.
+
+    Reach is the point — `highlights` exists for 237 of the pack's 306 languages, against 48 for
+    `tags`, and the languages that arrive here are exactly the ones `process()` and the generic
+    walk both come back empty on. Measured on that fallback set: scss yields `@mixin fc` and
+    `@function double`, bash yields its two function definitions; dockerfile, hcl and groovy
+    yield nothing and stay honestly at rung 6 (groovy and gradle ship no query files at all, so
+    their 2,222 fleet files can never leave it, whatever rungs get built).
+    """
+    out: list[Symbol] = []
+    seen: set[tuple[str, int]] = set()
+    for capture, nodes in _highlight_captures(code_bytes, language).items():
+        kind = _HIGHLIGHT_DEF_CAPTURES.get(capture)
+        if kind is None:
+            continue
+        for node in nodes:
+            parent = node.parent
+            if parent is None or not _is_definition_parent(parent.type):
+                continue
+            name = code_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+            line = node.start_point[0] + 1
+            if not _is_name_text(name) or (name, line) in seen:
+                continue
+            seen.add((name, line))
+            out.append(Symbol(
+                file=file_str, name=name, qualified_name=name, kind=kind,
+                start_line=line, end_line=node.end_point[0] + 1, language=language,
+            ))
+    return out
+
+
+def _is_definition_parent(kind: str) -> bool:
+    """Does this parent node kind name a definition? Token-split, like `_is_call_node`."""
+    return not _is_call_node(kind) and bool(set(kind.split("_")) & _DEF_PARENT_TOKENS)
+
+
+def _highlight_captures(code_bytes: bytes, language: str):
+    """`(capture_name -> [node])` from the grammar's own highlights.scm, or `{}`.
+
+    Parses a *second* time, with the raw `tree_sitter` binding rather than the pack's: the two
+    ship different node APIs (`.type` / `.start_byte` / `.root_node` here, `.kind()` /
+    `.byte_range()` / `.root_node()` there) and a `QueryCursor` only accepts nodes from its own
+    binding. The cost is paid only on the path where the alternative is zero symbols.
+    """
+    try:
+        import tree_sitter as ts
+        from tree_sitter_language_pack import get_highlights_query, get_language
+        qtext = get_highlights_query(language)
+        if not qtext:
+            return {}
+        lang_obj = get_language(language)
+        root = ts.Parser(lang_obj).parse(code_bytes).root_node
+        return ts.QueryCursor(ts.Query(lang_obj, qtext)).captures(root)
+    except Exception:
+        return {}
+
+
 def _is_call_node(kind: str) -> bool:
     """S4: is this grammar node a call site? Matched on node-type *tokens*, not substring.
 
@@ -301,7 +385,7 @@ def extract_calls(content: str, language: str) -> list[str]:
 # metrics block and the guard test cannot drift apart — the earlier version had each of them
 # spelling the strings itself, which is how "timeout" came to mean three different events.
 EXTRACTION_RUNGS: tuple[str, ...] = (
-    "structure", "generic", "embedded", "unparsed", "no_grammar", "no_language",
+    "structure", "generic", "highlights", "embedded", "unparsed", "no_grammar", "no_language",
     "timeout", "crashed", "error",
 )
 
@@ -440,10 +524,18 @@ def _extract_symbols_from(
                 if s.name not in known
             )
         return syms, "structure", anon
-    # process() returned no structure — fall back to generic AST walk
+    # process() returned no structure — fall back to generic AST walk, then to rung 4.
     if outer_root is None:
         return [], "unparsed", 0
-    return _generic_walk(outer_root, code_bytes, file_str, language), "generic", 0
+    generic = _generic_walk(outer_root, code_bytes, file_str, language)
+    if generic:
+        return generic, "generic", 0
+    # Rung 4 last, because it is the weakest evidence in the ladder: `highlights.scm` says what a
+    # token *is*, never where it is defined, so it is trusted only where nothing stronger spoke.
+    # An empty result stays `generic` — "parsed, nothing found", which is what it has always
+    # meant — rather than claiming a rung that produced no symbol.
+    highlights = _highlight_walk(code_bytes, file_str, language)
+    return (highlights, "highlights", 0) if highlights else ([], "generic", 0)
 
 
 # The ordered-call-site layer (CallSite / _BRANCH_NODE_KINDS / _collect_sites /
