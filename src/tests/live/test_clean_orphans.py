@@ -76,7 +76,13 @@ def test_co1_dry_run_names_the_orphan_and_spares_the_live_store(safe_tmp_path):
 
 
 def test_co2_yes_deletes_the_orphan_and_keeps_the_registered_store(safe_tmp_path):
-    """CO2: the consequence that matters — deleting a live store means re-embedding it."""
+    """CO2: the consequence that matters — deleting a live store means re-embedding it.
+
+    The orphan leaves `INDEX_ROOT` but is not destroyed: R5 moves it to `.trash` for a week. The
+    count is read off the report rather than the disk here, and the report says where they went —
+    "Removed 11." after the incident would have been the last chance to learn the stores were still
+    recoverable, spent on a word implying they were not.
+    """
     tmp = safe_tmp_path / "co2"
     tmp.mkdir(parents=True)
     _project, live, orphan = _layout(tmp)
@@ -85,7 +91,10 @@ def test_co2_yes_deletes_the_orphan_and_keeps_the_registered_store(safe_tmp_path
     assert not orphan.exists(), f"the orphan survived --yes: {out}"
     assert (live / "vectors.db").read_bytes() == b"SQLite format 3\x00", (
         f"--yes deleted a registered project's store: {out}")
-    assert "Removed 1." in out, f"expected exactly one removal, got: {out}"
+    assert "Quarantined 1 to" in out, f"expected exactly one quarantine, got: {out}"
+    trash = list((tmp / "indexes" / ".trash").iterdir())
+    assert len(trash) == 1 and (trash[0] / "vectors.db").exists(), (
+        f"the report claims a quarantine but the store's bytes are not in .trash: {trash}")
 
 
 _CO3_CHILD = """
@@ -372,7 +381,7 @@ def test_co8_taking_most_of_the_tree_is_refused_until_forced(safe_tmp_path):
     out = _run(tmp, "--yes", "--force").stdout
     assert not any(d.exists() for d in unowned), f"--force did not delete the orphans: {out}"
     assert (live[0] / "vectors.db").exists(), f"--force took a registered store too: {out}"
-    assert "Removed 11." in out, f"expected 11 removals, got: {out}"
+    assert "Quarantined 11 to" in out, f"expected 11 quarantines, got: {out}"
 
 
 _CO9_CHILD = """

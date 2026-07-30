@@ -36,6 +36,16 @@ from pathlib import Path
 _ALWAYS_ALLOWED = 5
 _MAX_FRACTION = 0.5
 
+# Quarantine, not deletion. The floor above makes a wrong sweep loud; this makes it survivable —
+# they answer different halves, because a refusal only helps against the wrong sweeps it recognises.
+# A store dir is the expensive half of a project: the registry row it belongs to is re-derivable
+# from a federation walk in milliseconds, the embeddings under it cost GPU minutes to rebuild and
+# the whole fleet cost hours. Seven days is chosen against how these failures were noticed, not
+# against disk: both incidents surfaced when someone searched a repo and got nothing, which is the
+# next time that repo is touched, not the next time anyone reads a log.
+TRASH_DIRNAME = ".trash"
+_TRASH_TTL_S = 7 * 86400
+
 
 class OrphanSweepRefusedError(RuntimeError):
     """The orphan set is not credible. Raised before anything is deleted, never after."""
@@ -56,7 +66,12 @@ def orphan_dirs(*, allow_bulk: bool = False) -> list[Path]:
 
     if not INDEX_ROOT.exists():
         return []
-    stores = [d for d in INDEX_ROOT.iterdir() if d.is_dir()]
+    # `.trash` is skipped here, in the one place both sweep sites read from, rather than at each of
+    # them — a rule copied to two callers is how `.name` and `.resolve()` came to disagree. It is
+    # excluded from `stores` and not merely from `orphans`, because a quarantine dir counted in the
+    # denominator would make the majority cap harder to trip exactly as the tree got emptier. A
+    # quarantine the sweep re-collects is not a quarantine; it is a slower delete.
+    stores = [d for d in INDEX_ROOT.iterdir() if d.is_dir() and d.name != TRASH_DIRNAME]
     if not stores:
         return []
 
@@ -83,3 +98,67 @@ def orphan_dirs(*, allow_bulk: bool = False) -> list[Path]:
             "accumulate a few at a time; a majority means the registry or the ownership test is "
             "wrong, and re-embedding is the cost of being wrong. Refusing.")
     return orphans
+
+
+def quarantine(store: Path) -> Path | None:
+    """Move a store dir into `INDEX_ROOT/.trash/<ts>-<name>`. Returns the new path, or None.
+
+    Never falls back to deleting. A quarantine that silently becomes an `rmtree` when the rename
+    fails is worse than no quarantine, because the operator reading this code believes there is a
+    week of undo and there is not. On failure the store is left exactly where it is: the sweep will
+    offer it again next pass, which costs disk and nothing else.
+    """
+    import logging
+    import time
+
+    from rag_search.core.config import INDEX_ROOT
+
+    log = logging.getLogger(__name__)
+    if not store.exists():
+        return None
+    trash = INDEX_ROOT / TRASH_DIRNAME
+    try:
+        trash.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())
+        dest = trash / f"{stamp}-{store.name}"
+        # Two stores quarantined inside the same second collide, and `rename` onto an existing
+        # directory fails on Linux rather than merging — so uniquify rather than lose the second one.
+        n = 1
+        while dest.exists():
+            dest = trash / f"{stamp}-{n}-{store.name}"
+            n += 1
+        store.rename(dest)
+        return dest
+    except OSError as exc:
+        log.warning("could not quarantine %s, leaving it in place: %s", store, exc)
+        return None
+
+
+def expire_trash(ttl_s: float = _TRASH_TTL_S) -> list[Path]:
+    """Delete quarantined stores older than `ttl_s`. Returns what was removed.
+
+    Called from the same 6-hourly `maintenance()` that fills the trash, so the quarantine is bounded
+    by the pass that creates it rather than by anyone remembering to empty it.
+    """
+    import logging
+    import shutil
+    import time
+
+    from rag_search.core.config import INDEX_ROOT
+
+    log = logging.getLogger(__name__)
+    trash = INDEX_ROOT / TRASH_DIRNAME
+    if not trash.exists():
+        return []
+    cutoff = time.time() - ttl_s
+    expired = []
+    for d in sorted(trash.iterdir()):
+        try:
+            if d.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        log.info("expiring quarantined store after %.0f days: %s", ttl_s / 86400, d)
+        shutil.rmtree(d, ignore_errors=True)
+        expired.append(d)
+    return expired
