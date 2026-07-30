@@ -462,6 +462,57 @@ def test_parse_restart_param():
     assert _parse_restart_param("anything-else") is True
 
 
+def test_parse_force_param():
+    """RL1 unit: ?force= parsing — default false, only the literal 'true' overrides a held lease.
+
+    The inverse default of `_parse_restart_param` above, and that asymmetry is the point: a typo'd
+    `?force=ture` must not silently take the daemon away from a running suite, whereas a typo'd
+    `?restart=` still reloads (the fail-open case is the harmless one).
+    """
+    from rag_search.server.routes_ops import _parse_force_param
+
+    assert _parse_force_param(None) is False  # no query param -> respect the lease
+    assert _parse_force_param("true") is True
+    assert _parse_force_param("True") is True  # case-insensitive
+    assert _parse_force_param("false") is False
+    assert _parse_force_param("ture") is False  # a typo declines the override, never grants it
+
+
+def test_rl2_api_reload_refuses_while_this_suite_holds_the_lease():
+    """RL2: POST /api/reload (no ?force) is refused 409 while the suite's pause lease is held.
+
+    Only meaningful because of where it runs: the session-scoped `pause_sweeps` fixture holds a
+    lease for the whole suite, so *this very run* is the "someone owns the daemon" condition. It
+    asserts the interlock against real state rather than a synthetic one — and it is safe by
+    construction, because refusal is the outcome under test: nothing restarts, so the shared
+    singleton daemon survives. Reaching the un-refused branch is exactly the bug (a 19 s hole
+    under a live suite, 2026-07-29), and it announces itself here as the daemon vanishing.
+
+    Deliberately NOT marked slow: this is the gate that was missing when CI went red, so it has
+    to run on every push, and it costs one HTTP round trip.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    lease = _json.loads(
+        urllib.request.urlopen("http://127.0.0.1:8765/healthz", timeout=5).read()
+    ).get("sweeps_pause_lease_s", 0.0)
+    assert lease > 0, (
+        "the suite's pause lease is not held, so this test cannot prove the interlock — "
+        "if `pause_sweeps` stopped renewing, RL2 is vacuous rather than green")
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            "http://127.0.0.1:8765/api/reload", data=b"", method="POST"), timeout=5)
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 409, f"expected 409 while a lease is held, got {exc.code}"
+        body = _json.loads(exc.read())
+        assert body["status"] == "refused" and body["lease_remaining_s"] > 0, body
+    else:
+        pytest.fail("/api/reload accepted a reload while this suite held the sweeps pause lease "
+                    "— the daemon is now restarting underneath the rest of the run")
+
+
 @pytest.mark.slow
 def test_api_reload_returns_reloading():
     """P10.7/P15.2: POST /api/reload on the LIVE daemon — handler sends SIGTERM
@@ -479,7 +530,10 @@ def test_api_reload_returns_reloading():
 
     r = urllib.request.urlopen(
         urllib.request.Request(
-            "http://127.0.0.1:8765/api/reload",
+            # ?force=true because RL2's interlock refuses a reload while the suite's pause lease
+            # is held — and this suite holds one. This is the one caller that genuinely means to
+            # restart the daemon mid-run, so it is the one caller that has to say so.
+            "http://127.0.0.1:8765/api/reload?force=true",
             data=b"",
             method="POST",
         ),
