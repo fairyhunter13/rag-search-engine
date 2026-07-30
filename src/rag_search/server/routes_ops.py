@@ -68,11 +68,14 @@ def _set_paused(paused: bool, status: str) -> JSONResponse:
     cancelled that for every test after it — silently, as downstream flakiness naming neither
     sweeps nor the GPU. Reporting the prior state makes the pair restorable without a second
     round trip to /api/auto_pipeline_status, which walks the whole registry to answer it.
+
+    Reporting it is not the same as anyone reading it: eleven consecutive pause calls, each
+    correctly restoring the "already paused" it found, still added up to a 4 h outage of every
+    sweep. `sweeps.set_paused` therefore also stamps how long the pause has run, which /healthz
+    exposes as `sweeps_paused_s` — the state itself, rather than the handoff between callers.
     """
     from rag_search.daemon import sweeps
-    was = sweeps._PAUSED
-    sweeps._PAUSED = paused
-    return JSONResponse({"status": status, "previously_paused": was})
+    return JSONResponse({"status": status, "previously_paused": sweeps.set_paused(paused)})
 
 
 async def _api_gpu_release(request: Request) -> JSONResponse:

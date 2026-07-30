@@ -1,6 +1,7 @@
 """P5 server tests: MCP tools, HTTP routes, dashboard (no mocks)."""
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,32 @@ def test_healthz(live_client):
     r = live_client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+def test_healthz_reports_how_long_sweeps_have_been_paused(live_client):
+    """`sweeps_paused_s` distinguishes sweeping from paused — the 4 h outage nothing could see.
+
+    On 2026-07-30 eleven pause calls from separate live sessions, each correctly restoring the
+    "already paused" state it found, left the daemon paused from ~12:03 to ~16:21. Every reconcile
+    tick logged "abandoned before start (sweeps paused)" and nothing else disagreed: /healthz was
+    green, searches answered from the existing index, and a purge of 373,387 chunks was wrongly
+    suspected first. `_PAUSED` has no refcount and no lease, so a leaked pause is permanent.
+
+    Both arms are asserted because only the pair discriminates: a field hardcoded to 0.0 passes the
+    paused arm's absence, and one that merely counts uptime passes the sweeping arm's presence.
+    The `sweeps_state(False)` window is one GET wide on purpose — it really does let the daemon
+    sweep and contend for the GPU (HR41), so it must not hold a sleep.
+    """
+    with sweeps_state(False):
+        sweeping = live_client.get("/healthz").json()["sweeps_paused_s"]
+    with sweeps_state(True):
+        time.sleep(1.2)
+        paused = live_client.get("/healthz").json()["sweeps_paused_s"]
+    assert sweeping == 0.0, f"sweeps resumed but /healthz reports {sweeping}s paused"
+    assert paused >= 1.0, (
+        f"sweeps held paused for 1.2s but /healthz reports {paused}s — a pause that reads as zero "
+        "is exactly the blind spot this field exists to close"
+    )
 
 
 def test_dashboard_views_present(live_client):

@@ -8,6 +8,12 @@ import threading
 import time
 
 _PAUSED: bool = False
+# Monotonic start of the current pause, None while sweeping. Written only by `set_paused` and read
+# only by /healthz, so that "paused and forgotten" is observable at all. Pausing has no refcount
+# and no lease (see `reconcile_projects`), and what that hides is total rather than partial: on
+# 2026-07-30 eleven consecutive pause calls from separate live-test sessions left `_PAUSED` True for
+# ~4 h, every reconcile tick logged "abandoned before start", and no other signal looked wrong.
+_PAUSED_SINCE: float | None = None
 _LANE_DEBOUNCE_S: float = 45.0  # min seconds between graph-lane passes per project after a change
 _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
 _INCREMENTAL_COMPACT_AT: int = 50  # incremental graph passes before one authoritative re-derive
@@ -31,6 +37,36 @@ _last_labelled_sig: dict[str, str] = {}
 _HEAVY_LOCK = threading.Lock()
 
 log = logging.getLogger(__name__)
+
+
+def set_paused(paused: bool) -> bool:
+    """Set the pause flag, returning what it was, keeping `_PAUSED_SINCE` in step.
+
+    Re-pausing while already paused deliberately does **not** restamp. The timestamp measures how
+    long the pause has been in force, and the leak it exists to expose is repeated pause calls from
+    callers that never resume — restamping would reset the clock on precisely the signal it is for.
+    """
+    global _PAUSED, _PAUSED_SINCE
+    was = _PAUSED
+    _PAUSED = paused
+    if not paused:
+        _PAUSED_SINCE = None
+    elif _PAUSED_SINCE is None:
+        _PAUSED_SINCE = time.monotonic()
+    return was
+
+
+def paused_seconds() -> float:
+    """Seconds sweeps have been paused; 0.0 while sweeping. The /healthz view of `_PAUSED`.
+
+    Reads the stamp rather than repairing a missing one, because in the daemon the unstamped-while-
+    paused state is unreachable by construction: `set_paused` is the only writer of `_PAUSED` in
+    `rag_search/`, which `test_no_raw_sweeps_toggle.py` enforces statically. A test that assigns the
+    flag directly drives its own imported module in its own process, never the daemon serving this.
+    """
+    since = _PAUSED_SINCE
+    return 0.0 if not _PAUSED or since is None else time.monotonic() - since
+
 
 # Composite pipeline algorithm version — bump either component constant to trigger re-derive.
 # Also folds a SHA-4 of key pipeline modules so code-only changes self-heal without a manual bump.
@@ -794,6 +830,7 @@ def reconcile_projects() -> None:
     from rag_search.core.registry import list_projects
     from rag_search.daemon.federation import register_all_members
 
+    t0 = time.monotonic()
     try:
         register_all_members()
     except Exception as exc:
@@ -904,6 +941,13 @@ def reconcile_projects() -> None:
                 _label_project(entry.path)  # label-only; skip expensive re-index
         except Exception as exc:
             log.warning("reconcile %s: %s", entry.path, exc)
+    # A pass that repairs nothing used to log nothing at all, so "reconcile is healthy" and
+    # "reconcile has not run since lunchtime" produced byte-identical journals — and the two
+    # `abandoned` lines above, added for the same reason, only cover the paused case. That is how
+    # a 4 h sweep outage stayed invisible on 2026-07-30 while every other signal read green.
+    # Success is the common case, so it is the one that most needs a line to point at.
+    log.info("reconcile: pass complete over %d project(s) in %.1fs", len(walk),
+             time.monotonic() - t0)
 
 
 _VACUUM_BLOAT_BYTES: int = 256 * 1024 * 1024  # VACUUM when freelist > 256 MB

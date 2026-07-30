@@ -8,14 +8,18 @@ sorts 7th of 76, ~70 files after it ran against a sweeping daemon. Nothing faile
 toggle — it surfaced as flakiness elsewhere, naming neither sweeps nor the GPU, which is
 exactly why a static guard is worth more here than a runtime one.
 
-Three invariants, same shape as test_no_unbounded_parse.py:
+Five invariants, same shape as test_no_unbounded_parse.py — the last two extend the same rule to
+production code, where a raw assignment now also skips the pause stamp /healthz publishes:
 1. only `_sweeps.py` may name the pause/resume routes — everyone else goes through
    `sweeps_state`, which restores what it read;
 2. any file assigning `sweeps._PAUSED` must import `local_sweeps_paused` — this permits the
    deliberate mid-loop flip in test_reconcile_midpass.py while still requiring the file to be
    wrapped in the restoring CM;
 3. the allowlist entry must still describe something real, so a refactor of `_sweeps.py` fails
-   loudly rather than leaving the guard scanning for text that no longer exists.
+   loudly rather than leaving the guard scanning for text that no longer exists;
+4. no file under `rag_search/` may assign `_PAUSED` except `sweeps.py`, which owns it — everyone
+   else calls `sweeps.set_paused`, the only path that stamps when the pause began;
+5. `sweeps.py` must still be that writer and still keep the stamp, for the same reason as (3).
 """
 from __future__ import annotations
 
@@ -28,6 +32,8 @@ import pytest
 pytestmark = pytest.mark.live
 
 _LIVE_DIR = Path(__file__).resolve().parent
+_SRC_DIR = _LIVE_DIR.parents[1] / "rag_search"
+_OWNER = "sweeps.py"  # the only production file allowed to assign the flag it owns
 _HELPER = "_sweeps.py"
 # This file names the routes in order to ban them, so it exempts itself alongside the helper.
 _EXEMPT = {_HELPER, Path(__file__).name}
@@ -86,6 +92,41 @@ def test_paused_assignments_go_through_the_restoring_helper() -> None:
         "Assigns sweeps._PAUSED without importing `tests.live._sweeps.local_sweeps_paused` — "
         "the in-process pause must be wrapped in the CM that restores what it read:\n"
         + "\n".join(violations)
+    )
+
+
+def test_production_pauses_only_through_the_stamping_setter() -> None:
+    """`sweeps.set_paused` is the sole writer in `rag_search/`, so the pause stamp cannot be bypassed.
+
+    `paused_seconds()` — what /healthz publishes as `sweeps_paused_s` — reads `_PAUSED_SINCE` and
+    does not repair a missing stamp, because a reader that invents one reports 0.0 on the first poll
+    of a real pause, which is the blind spot rather than a fix for it. That is only sound while
+    every production write goes through `set_paused`, and the write it replaced was a bare
+    `sweeps._PAUSED = paused` in `server/routes_ops.py`. A second route or CLI path added the same
+    way would be silently invisible to /healthz, so the constraint is asserted rather than assumed
+    ([[feedback_allowlist_needs_sufficiency_test]]: delete the setter call and this must go red).
+    """
+    violations = [
+        str(py.relative_to(_SRC_DIR)) for py in sorted(_SRC_DIR.rglob("*.py"))
+        if py.name != _OWNER and _PAUSED_ASSIGN_RE.search(py.read_text(errors="replace"))
+    ]
+    assert not violations, (
+        "Assigns sweeps._PAUSED directly instead of calling `sweeps.set_paused()` — the pause "
+        "would not be stamped, so /healthz `sweeps_paused_s` would read 0.0 while paused:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_owner_still_assigns_and_stamps() -> None:
+    """Allowlist accuracy for `_OWNER`: the exemption must still describe a real writer."""
+    src = (_SRC_DIR / "daemon" / _OWNER).read_text(errors="replace")
+    assert _PAUSED_ASSIGN_RE.search(src), (
+        f"{_OWNER} is exempted as the sole production writer of _PAUSED but no longer assigns it — "
+        "the guard above now bans a write nothing is left to make legitimately"
+    )
+    assert "_PAUSED_SINCE" in src and "def paused_seconds" in src, (
+        f"{_OWNER} no longer keeps the pause stamp, so /healthz `sweeps_paused_s` cannot be "
+        "reporting how long sweeps have been paused — the guard's whole purpose"
     )
 
 
