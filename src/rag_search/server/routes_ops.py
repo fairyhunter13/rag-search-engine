@@ -42,8 +42,51 @@ def _parse_restart_param(value: str | None) -> bool:
     return (value or "true").lower() != "false"
 
 
+def _parse_force_param(value: str | None) -> bool:
+    """?force= for the reload route, default false; only the literal 'true' (any case) overrides.
+
+    Deliberately the mirror image of `_parse_restart_param`'s fail-open default: reload happens
+    unless you say otherwise, but *taking the daemon away from a job holding it* happens only when
+    you say so exactly. An unrecognised value declines the override rather than granting it.
+    """
+    return (value or "false").lower() == "true"
+
+
 async def _api_reload(request: Request) -> JSONResponse:
+    """Reload/stop the daemon — unless a sweeps pause lease says someone is mid-job on it.
+
+    A held lease already means precisely "a long-running client owns this daemon": the only two
+    things that take one are the live suite's session fixture (renewed per-test by
+    `_drain_graph_lane`) and `scripts/purge_unindexable.py`. So the lease is reused as the
+    interlock rather than teaching this route to recognise pytest — production code that knows
+    what a test run looks like is the wrong shape, and it would miss the purge script anyway.
+
+    Why it needed an interlock: on 2026-07-29 a second agent in the same checkout ran
+    `POST /api/reload` while a CI live suite was mid-run against the same singleton daemon.
+    Journal timings — reload accepted 20:15:55, `Scheduled restart` 20:15:59, Uvicorn bound
+    20:16:14 — put a **19-second hole** under a suite issuing requests throughout; CB2 hit :8765
+    at 20:16:01 and the run went red with a connection error naming neither the reload nor the
+    other session. A bounded readiness wait at job start could not have caught it (that check
+    passed at 20:15:16), and the pytest-vs-pytest concurrency gate does not cover it either —
+    the colliding party was a bare curl, not a second suite.
+
+    Refusal is a 409 carrying the remaining lease seconds, so the caller learns what holds the
+    daemon and for how long. The lease self-expires (`_PAUSE_TTL_S`, 30 min), so a client that
+    dies mid-hold cannot wedge this route shut: `pause_lease_remaining_s()` is 0.0 past the
+    deadline.
+    """
     import signal
+
+    from rag_search.daemon import sweeps
+    lease = sweeps.pause_lease_remaining_s()
+    if lease > 0 and not _parse_force_param(request.query_params.get("force")):
+        return JSONResponse(
+            {"status": "refused",
+             "reason": "a sweeps pause lease is held — a live suite or purge run owns this daemon",
+             "lease_remaining_s": round(lease, 1),
+             "override": "retry with ?force=true"},
+            status_code=409,
+        )
     restart = _parse_restart_param(request.query_params.get("restart"))
     _reload_exit_code(restart)
     os.kill(os.getpid(), signal.SIGTERM)
