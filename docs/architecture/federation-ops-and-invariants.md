@@ -445,3 +445,71 @@ under test is one a fixture calls against production state; the counterfactual i
 proving it can execute against the real registry. And **the mining recipe is the backup we actually
 have**: the journal is the only durable record of which projects exist, which is an argument for
 `projects.json` being versioned or snapshotted, not for trusting a careful hand.
+
+### 15.6 What shipped against the blast radius, and how to use it (2026-07-30)
+
+The recipe in 15.5 is a recovery, not a control. Four things now sit between a wrong premise and a
+destroyed fleet, and they are deliberately of different kinds — a refusal only helps against the
+wrong sweeps it can recognise, so the third assumes the refusal failed.
+
+**The sweep refuses an answer that is not credible.** `orphan_dirs()` raises
+`OrphanSweepRefusedError` when the registry holds zero rows while `INDEX_ROOT` holds stores — a
+self-contradictory state, since stores are only ever written for a registered project — and when
+orphans are both more than 5 and more than half the tree. Small deletions are always allowed: one
+orphan beside one live store is 50% of the tree and completely routine. `--allow-bulk` lifts the
+majority cap for an operator who has read the refusal; it deliberately does **not** lift the
+empty-registry refusal, because with zero rows there is nothing left to check the decision against.
+If you see this, restore `projects.json` first — the sweep is reporting a broken premise, not a
+dirty disk.
+
+**`projects.json` rotates on shrink.** `_mutate` compares the row count across the write and keeps
+`.bak.1..5` only when the count *falls*. Rotating on every write was the original proposal and would
+have been useless: `register_all_members()` reaches `_mutate` once per discovered member at every
+daemon start, so a 5-deep ring is consumed by a single startup and every backup would post-date the
+accident you wanted to undo. The ring only ever holds deletions, which is the only thing anyone
+wants back.
+
+**Deleting a store is a move, not an `rmtree`.** All three production sites — `maintenance()`'s
+sweep, `clean-orphans --yes`, and the MCP federated remove — relocate to
+`INDEX_ROOT/.trash/<YYYYmmddTHHMMSS>-<slug>-<sha16>`, expired after 7 days by the same 6-hourly
+`maintenance()` that fills it. Seven days is chosen against how these failures get noticed: both
+incidents surfaced when someone searched a repo and got nothing back, which is the next time that
+repo is touched, not the next time anyone reads a log. `quarantine()` never falls back to deleting
+when the rename fails — a quarantine that silently degrades to an `rmtree` is worse than none,
+because the operator reading the code believes there is a week of undo and there is not.
+
+To restore one, strip the timestamp prefix and move it back:
+
+```bash
+ls ~/.local/share/rag-search/indexes/.trash
+mv ~/.local/share/rag-search/indexes/.trash/20260730T230028-cart-svc-cb164afc4c19a4df \
+   ~/.local/share/rag-search/indexes/cart-svc-cb164afc4c19a4df
+```
+
+Then confirm a registry row still points at the project path, **with `indexed_at` set**. This is
+deliberately the opposite of 15.5's recipe: `_needs_index` returns True when `indexed_at is None`,
+when the store is missing, or when it holds zero chunks, so an unset stamp discards the embeddings
+you just restored and re-earns them on the GPU. Unset it only when you *want* the rebuild. A second
+quarantine of the same store inside one second gets a `-1`, `-2` uniquifier, because `rename` onto
+an existing directory fails on Linux rather than merging.
+
+**Three things would otherwise eat the trash**, and `.trash` satisfies both of the tests each of
+them applies — it owns no registry row, and it appears mid-run. Two collapse into `orphan_dirs()`,
+where the shared rule lives precisely so the two sweep sites cannot drift apart again as they once
+did (`.name` versus `.resolve()`). `.trash` is excluded from `stores` rather than only from
+`orphans`, or a quarantine dir counted in the denominator would make the majority cap *harder* to
+trip exactly as the tree emptied. The third is the live suite's own
+`purge_unowned_index_dirs_created_since`, and it is the one with no `--yes` in front of it.
+
+**The walk order decides what a rebuild ever reaches.** `reconcile_projects` returns on
+`is_paused()` and keeps no resume cursor, so each pass restarts at position 0 and only ever
+completes a prefix — which makes ordering a question of reachability, not of politeness. It was
+keyed on `last_change_seen`, which a never-indexed project does not have, so `or ""` sent every one
+of them to the tail of a `reverse=True` walk. Measured during this rebuild: **157 of 210 enabled
+rows held zero chunks, and 157 of 157 had an empty key.** Because a live suite holds the pause lease
+for its whole run, running the tests was the thing preventing the rebuild the tests were waiting on.
+`reconcile_order()` now puts never-embedded projects first — a project with no vectors returns
+*nothing* for a search, while a stale one returns slightly old results — and falls back to recency
+wherever that key does not discriminate, which is the ordering that fixed an earlier starvation
+(a pass once ground through 198 projects for 7.6 h without reaching either repo edited that day)
+and still has to hold in steady state.
