@@ -66,37 +66,54 @@ def symbol_id(file: str, name: str, start_line: int) -> str:
     return hashlib.sha256(f"{file}:{name}:{start_line}".encode()).hexdigest()[:16]
 
 
+def _named_children(node) -> list:
+    """`node`'s named children, left to right. One place, so the stack walks agree."""
+    return [node.named_child(i) for i in range(node.named_child_count())]
+
+
 def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
                   parent: str = "") -> list[Symbol]:
     """Thin generic AST walk for grammars where process() returns empty structure.
 
     Matches universal node-kind suffixes and extracts the 'name' child field —
     no per-language vocabulary.
+
+    D6: an explicit stack, not recursion. A tree-sitter AST's depth is bounded by the *source*,
+    not by anything this module controls — minified JS, a generated parser table, or a long
+    chained expression all nest linearly, and CPython's 1000-frame default is reached long
+    before any of those is unusual. The recursive form raised `RecursionError` out of the
+    bounded-parse worker, which `run_bounded` reports as `PARSE_TIMEOUT` — so a file too deep to
+    walk was indistinguishable from a file too slow to parse, and both then read as "0 symbols".
+    Stack order is children-reversed so the visit order is byte-for-byte the pre-order the
+    recursion produced; nothing downstream is allowed to notice this change.
     """
     result: list[Symbol] = []
-    k = node.kind()
-    if any(k.endswith(s) for s in _GENERIC_DEF_SUFFIXES):
-        name_node = node.child_by_field_name("name")
-        if name_node:
-            br = name_node.byte_range()
-            name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
-            if _is_name_text(name):
-                qname = f"{parent}.{name}" if parent else name
-                if "function" in k or "method" in k or "func" in k:
-                    sym_kind = "function"
-                elif "class" in k or "struct" in k or "trait" in k or "interface" in k:
-                    sym_kind = "class"
-                else:
-                    sym_kind = "function"  # conservative default
-                result.append(Symbol(
-                    file=file, name=name, qualified_name=qname, kind=sym_kind,
-                    start_line=node.start_position().row + 1,
-                    end_line=node.end_position().row + 1,
-                    language=lang,
-                ))
-                parent = name
-    for i in range(node.named_child_count()):
-        result.extend(_generic_walk(node.named_child(i), code_bytes, file, lang, parent))
+    stack: list[tuple] = [(node, parent)]
+    while stack:
+        cur, par = stack.pop()
+        k = cur.kind()
+        child_parent = par
+        if any(k.endswith(s) for s in _GENERIC_DEF_SUFFIXES):
+            name_node = cur.child_by_field_name("name")
+            if name_node:
+                br = name_node.byte_range()
+                name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+                if _is_name_text(name):
+                    qname = f"{par}.{name}" if par else name
+                    if "function" in k or "method" in k or "func" in k:
+                        sym_kind = "function"
+                    elif "class" in k or "struct" in k or "trait" in k or "interface" in k:
+                        sym_kind = "class"
+                    else:
+                        sym_kind = "function"  # conservative default
+                    result.append(Symbol(
+                        file=file, name=name, qualified_name=qname, kind=sym_kind,
+                        start_line=cur.start_position().row + 1,
+                        end_line=cur.end_position().row + 1,
+                        language=lang,
+                    ))
+                    child_parent = name
+        stack.extend((c, child_parent) for c in reversed(_named_children(cur)))
     return result
 
 
@@ -174,12 +191,15 @@ def _is_call_node(kind: str) -> bool:
 
 
 def _collect_call_names(node, code_bytes: bytes, out: list[str]) -> None:
-    if _is_call_node(node.kind()):
-        name = _unwrap_callee(_callee_node(node), code_bytes)
-        if name:
-            out.append(name)
-    for i in range(node.named_child_count()):
-        _collect_call_names(node.named_child(i), code_bytes, out)
+    """D6: stack, not recursion — see `_generic_walk`. Same pre-order."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if _is_call_node(cur.kind()):
+            name = _unwrap_callee(_callee_node(cur), code_bytes)
+            if name:
+                out.append(name)
+        stack.extend(reversed(_named_children(cur)))
 
 
 def _get_parser_for(language: str):  # type: ignore[return]
@@ -226,30 +246,35 @@ def _iter_script_blocks(node, code_bytes: bytes) -> list[tuple[str, bytes, int]]
     F2: these grammars parse <script> content as one opaque `raw_text` leaf — this walk
     locates that leaf plus its `lang` attribute so callers can sub-parse it with the
     js/ts grammar and remap line numbers by `line_offset`.
+
+    D6: stack, not recursion — see `_generic_walk`. A `script_element` is not descended into
+    (it never nests another), which is why its children are simply not pushed.
     """
     out: list[tuple[str, bytes, int]] = []
-    if node.kind() == "script_element":
-        start_tag = _child_of_kind(node, "start_tag")
-        raw = _child_of_kind(node, "raw_text")
-        if raw is not None:
-            lang_attr = ""
-            for i in range(start_tag.named_child_count() if start_tag else 0):
-                attr = start_tag.named_child(i)
-                if attr.kind() != "attribute":
-                    continue
-                name_node = _child_of_kind(attr, "attribute_name")
-                if name_node is None:
-                    continue
-                nbr = name_node.byte_range()
-                if code_bytes[nbr.start:nbr.end].decode("utf-8", "replace") == "lang":
-                    lang_attr = _attr_value_text(attr, code_bytes)
-                    break
-            inner_lang = _EMBEDDED_SCRIPT_LANG.get(lang_attr.lower(), "javascript")
-            br = raw.byte_range()
-            out.append((inner_lang, code_bytes[br.start:br.end], raw.start_position().row))
-        return out  # script_element never nests another script_element
-    for i in range(node.named_child_count()):
-        out.extend(_iter_script_blocks(node.named_child(i), code_bytes))
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.kind() != "script_element":
+            stack.extend(reversed(_named_children(cur)))
+            continue
+        start_tag = _child_of_kind(cur, "start_tag")
+        raw = _child_of_kind(cur, "raw_text")
+        if raw is None:
+            continue
+        lang_attr = ""
+        for attr in _named_children(start_tag) if start_tag else []:
+            if attr.kind() != "attribute":
+                continue
+            name_node = _child_of_kind(attr, "attribute_name")
+            if name_node is None:
+                continue
+            nbr = name_node.byte_range()
+            if code_bytes[nbr.start:nbr.end].decode("utf-8", "replace") == "lang":
+                lang_attr = _attr_value_text(attr, code_bytes)
+                break
+        inner_lang = _EMBEDDED_SCRIPT_LANG.get(lang_attr.lower(), "javascript")
+        br = raw.byte_range()
+        out.append((inner_lang, code_bytes[br.start:br.end], raw.start_position().row))
     return out
 
 
@@ -268,6 +293,17 @@ def extract_calls(content: str, language: str) -> list[str]:
     for inner_lang, inner_bytes, _offset in _iter_script_blocks(root, code_bytes):
         out.extend(extract_calls(inner_bytes.decode("utf-8", errors="replace"), inner_lang))
     return out
+
+
+# Every value `graph.store.file_extraction.rung` may hold: the ladder rungs this module can
+# report, then the three outcomes only the caller can observe (`daemon/sweeps.py`), because by
+# then the extraction function never ran. Declared in one place so the store, the sweep, the
+# metrics block and the guard test cannot drift apart — the earlier version had each of them
+# spelling the strings itself, which is how "timeout" came to mean three different events.
+EXTRACTION_RUNGS: tuple[str, ...] = (
+    "structure", "generic", "embedded", "unparsed", "no_grammar", "no_language",
+    "timeout", "crashed", "error",
+)
 
 
 @dataclass(frozen=True)
@@ -418,12 +454,15 @@ def _extract_symbols_from(
 
 
 def _collect_calls_with_lines(node, code_bytes: bytes, out: list) -> None:
-    if _is_call_node(node.kind()):
-        name = _unwrap_callee(_callee_node(node), code_bytes)
-        if name:
-            out.append((name, node.start_position().row + 1))
-    for i in range(node.named_child_count()):
-        _collect_calls_with_lines(node.named_child(i), code_bytes, out)
+    """D6: stack, not recursion — see `_generic_walk`. Same pre-order."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if _is_call_node(cur.kind()):
+            name = _unwrap_callee(_callee_node(cur), code_bytes)
+            if name:
+                out.append((name, cur.start_position().row + 1))
+        stack.extend(reversed(_named_children(cur)))
 
 
 def extract_calls_with_lines(content: str, language: str) -> list[tuple[str, int]]:
