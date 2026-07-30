@@ -114,8 +114,8 @@ def clean_orphans(yes: bool = typer.Option(False, "--yes", "-y")) -> None:
 
     from rag_search.core.config import INDEX_ROOT, index_dir
     from rag_search.core.registry import list_projects
-    # Compare resolved index dirs, never path substrings. A dir is named `<basename>-<sha16>`, so a
-    # registry path like /home/.../octg_ledger is not a substring of `octg-ledger-3f2a…` and the old
+    # Compare resolved index dirs, never path substrings. A dir is named `<basename>-<sha16>`, so an
+    # absolute registry path ending in `octg_ledger` is not a substring of `octg-ledger-3f2a…`, and the old
     # test matched nothing at all: it called every one of 179 dirs an orphan, live stores included,
     # so `--yes` deleted the whole fleet's index and cost a full GPU re-index to get back.
     known = {index_dir(p.path).resolve() for p in list_projects()}
