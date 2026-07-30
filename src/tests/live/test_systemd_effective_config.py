@@ -76,19 +76,23 @@ def _systemctl(*args: str) -> str:
 def _require_live_unit() -> str:
     from rag_search.daemon.systemd import UNIT_NAME
 
-    if _systemctl("show", "-p", "LoadState", "--value", UNIT_NAME).strip() != "loaded":
-        pytest.skip(f"{UNIT_NAME} is not loaded — nothing to compare the versioned config against")
+    assert _systemctl("show", "-p", "LoadState", "--value", UNIT_NAME).strip() == "loaded", (
+        f"{UNIT_NAME} is not loaded, so there is no deployed configuration to compare the versioned "
+        "drop-ins against — the drift this file exists to catch would simply go unmeasured")
     return UNIT_NAME
 
 
 def _daemon_environ() -> dict[str, str]:
     pid = _systemctl("show", "-p", "MainPID", "--value", _require_live_unit()).strip()
-    if not pid or pid == "0":
-        pytest.skip("daemon has no MainPID — cannot read the environment actually in force")
+    assert pid and pid != "0", (
+        "the unit is loaded but reports no MainPID, so the environment actually in force cannot be "
+        "read and SE1 would compare the versioned drop-ins against nothing")
     try:
         raw = Path(f"/proc/{pid}/environ").read_bytes()
     except OSError as exc:
-        pytest.skip(f"cannot read /proc/{pid}/environ: {exc}")
+        raise AssertionError(
+            f"cannot read /proc/{pid}/environ ({exc}) — the in-force environment is the only "
+            "evidence SE1 has that a drop-in is deployed rather than merely versioned") from exc
     env = {}
     for item in raw.split(b"\0"):
         k, _, v = item.decode("utf-8", "replace").partition("=")
@@ -133,8 +137,9 @@ def test_se2_every_versioned_service_directive_is_still_read():
     """
     unit = _require_live_unit()
     text = _systemctl("cat", unit)
-    if not text:
-        pytest.skip(f"systemctl cat {unit} returned nothing")
+    assert text, (
+        f"`systemctl cat {unit}` returned nothing, so `effective` below is empty and every "
+        "versioned directive would be reported as present in a set that contains none of them")
     effective = {
         line.strip() for line in text.splitlines()
         if line.strip() and not line.strip().startswith(("#", ";", "["))
