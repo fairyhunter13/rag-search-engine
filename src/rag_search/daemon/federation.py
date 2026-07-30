@@ -82,10 +82,33 @@ def index_members(root_path: str) -> int:
 
 
 def register_all_members() -> None:
-    """Register federation members for all enabled projects (idempotent)."""
-    from rag_search.core.registry import list_projects
+    """Register federation members for all enabled projects, and un-enable excluded ones.
+
+    The second half is not tidiness. `RSE_FEDERATION_EXCLUDE` reaches only the processes that
+    were given it, and the daemon's copy comes from a systemd drop-in — so *every* out-of-daemon
+    entry point (the CLI, the live suite, a script) runs `index_members` with the variable unset,
+    rediscovers the excluded members and upserts them back as `enabled=True`. `index_members`
+    cannot undo that on the next daemon start: exclusion filters at *discovery* time, so those
+    paths are no longer members of anything, and a row nothing discovers is a row nothing
+    revisits. Measured 2026-07-30 on this fleet: 58 `_worktrees` rows enabled and 58 stale entries
+    in one root's `federation` list, both re-created after the drop-in was already installed and
+    in force, with the daemon having restarted since.
+
+    So the exclusion is applied to the registry directly, by the one process that reliably holds
+    the value, at the one moment it already walks every row. `enabled=False` (rather than deleting
+    the row) is deliberate: it is what `index_members` does for a member discovery drops, it keeps
+    `indexed_at` so the store is still reclaimable, and it is reversible by an operator who
+    decides the path belongs after all. Guarded by FE9.
+    """
+    from rag_search.core.config import is_federation_excluded
+    from rag_search.core.registry import list_projects, upsert_project
     for entry in list_projects():
         if not entry.enabled:
+            continue
+        if is_federation_excluded(entry.path):
+            log.info("federation-excluded, disabling: %s", entry.path)
+            entry.enabled = False
+            upsert_project(entry)
             continue
         try:
             index_members(entry.path)
