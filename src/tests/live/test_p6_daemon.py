@@ -1,4 +1,5 @@
 """P6 daemon tests: scheduler, watcher, sweeps, federation, systemd, CLI (no mocks)."""
+import logging
 import time
 
 import pytest
@@ -209,6 +210,77 @@ def test_sweeps_paused_skips_reconcile(safe_tmp_path):
             assert not vdb.exists(), "paused reconcile_projects must not create the vector DB"
     finally:
         remove_project(proj_path)
+
+
+class _Warnings(logging.Handler):
+    """Real handler on the live sweeps logger; observes only, substitutes nothing."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record) -> None:
+        self.messages.append(record.getMessage())
+
+
+def test_pause_lease_expires_past_its_deadline_and_says_so():
+    """F4: the pause is a lease, and expiry both resumes and logs how long it had been held.
+
+    Third occurrence of the same fault: eleven pause calls from separate live-test sessions held
+    `_PAUSED` True for ~4 h, and every sweep honoured it because the flag had no path back. Making
+    it observable was not making it recover. The clock is injected as an argument rather than slept
+    through — the deadline is 30 min out and the assertion is about what happens well past it.
+
+    Both directions matter. Expiring early would resume the sweeps a live run needs stopped, and
+    the silent version of the recovery is nearly as bad as none: a fault that heals itself without
+    a trace is the one nobody ever fixes upstream.
+    """
+    from rag_search.daemon import sweeps
+
+    t0, ttl = 1_000_000.0, 1800.0
+    was = sweeps._PAUSED
+    handler = _Warnings()
+    slog = logging.getLogger("rag_search.daemon.sweeps")
+    slog.addHandler(handler)
+    try:
+        sweeps.set_paused(False)  # start from a known state: no stamp, no deadline
+        sweeps.set_paused(True, ttl, now=t0)
+        assert sweeps.is_paused(now=t0 + ttl - 1.0), "a pause inside its lease must be honoured"
+        assert sweeps.pause_lease_remaining_s(now=t0 + ttl - 1.0) == 1.0
+        assert not sweeps.is_paused(now=t0 + 4 * 3600.0), "the lease must expire, not merely report"
+        assert not sweeps._PAUSED, "expiry must release the flag, not only answer False once"
+        assert sweeps.paused_seconds() == 0.0 and sweeps.pause_lease_remaining_s() == 0.0
+        assert any("lease expired after 14400s" in m for m in handler.messages), (
+            f"expiry must name how long the pause ran, got {handler.messages}")
+    finally:
+        slog.removeHandler(handler)
+        sweeps.set_paused(was)
+
+
+def test_re_pause_re_arms_the_deadline_without_restamping_the_leak_signal():
+    """F4: renewal must extend the lease and *not* reset `_PAUSED_SINCE` — opposite rules, one call.
+
+    The two fields answer different questions, and a single rule for both loses one of them.
+    Re-arming is what lets the live suite hold a pause across a run far longer than one lease
+    (renewed after every test) while a session that dies simply stops renewing. Not restamping is
+    what keeps `sweeps_paused_s` a leak signal: the 4 h outage was eleven *separate* pause calls, so
+    a stamp that moved on each of them would have read a few minutes throughout.
+    """
+    from rag_search.daemon import sweeps
+
+    t0, ttl = 2_000_000.0, 1800.0
+    was = sweeps._PAUSED
+    try:
+        sweeps.set_paused(False)
+        sweeps.set_paused(True, ttl, now=t0)
+        sweeps.set_paused(True, ttl, now=t0 + 1700.0)  # a renewal 100 s before expiry
+        assert sweeps.is_paused(now=t0 + 1900.0), "renewal did not extend the lease past its deadline"
+        assert sweeps.pause_lease_remaining_s(now=t0 + 1700.0) == ttl
+        assert t0 == sweeps._PAUSED_SINCE, (
+            f"re-pause restamped the start to {sweeps._PAUSED_SINCE} instead of keeping {t0} — "
+            "sweeps_paused_s would under-report every repeated-pause leak")
+    finally:
+        sweeps.set_paused(was)
 
 
 def test_global_prompt_inject_remove(tmp_path):
@@ -1226,6 +1298,30 @@ def test_on_change_respects_pause(safe_tmp_path):
             assert not reindexed, "_index_files must not be called when _PAUSED"
     finally:
         sweeps_mod._index_files = orig_idx
+
+
+def test_on_change_runs_again_once_the_pause_lease_has_expired(safe_tmp_path):
+    """F4 at a call site: the recovery has to reach the four sweeps, not just the accessor.
+
+    `on_change` is the cheapest of the four to drive (no GPU, no registry walk), and its early
+    return is the same `if is_paused():` shape as reconcile's two and maintenance's. A zero-length
+    lease is an already-expired one, which is the state a killed session leaves behind.
+    """
+    import rag_search.daemon.sweeps as sweeps_mod
+
+    (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
+    reindexed: list = []
+    orig_idx = sweeps_mod._index_files
+    sweeps_mod._index_files = lambda *a, **kw: reindexed.append(a)
+    was = sweeps_mod._PAUSED
+    try:
+        sweeps_mod.set_paused(True, ttl_s=0.0)  # paused, and the lease is already up
+        sweeps_mod.on_change(str(safe_tmp_path), [str(safe_tmp_path / "a.py")])
+        assert reindexed, "an expired pause must not still block on_change — that is the 4 h outage"
+        assert not sweeps_mod._PAUSED, "the site read must release the expired pause too"
+    finally:
+        sweeps_mod._index_files = orig_idx
+        sweeps_mod.set_paused(was)
 
 
 def test_on_change_backoff_after_failure(safe_tmp_path):

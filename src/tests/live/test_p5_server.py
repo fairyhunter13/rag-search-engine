@@ -87,16 +87,27 @@ def test_healthz_reports_how_long_sweeps_have_been_paused(live_client):
     paused arm's absence, and one that merely counts uptime passes the sweeping arm's presence.
     The `sweeps_state(False)` window is one GET wide on purpose — it really does let the daemon
     sweep and contend for the GPU (HR41), so it must not hold a sleep.
+
+    `sweeps_pause_lease_s` is asserted beside it because the two answer different questions and a
+    poller needs both: the elapsed field says someone forgot, the lease field says whether it is
+    about to heal itself. A published field nothing asserts is one a refactor can drop in silence.
     """
     with sweeps_state(False):
-        sweeping = live_client.get("/healthz").json()["sweeps_paused_s"]
+        sweeping = live_client.get("/healthz").json()
     with sweeps_state(True):
         time.sleep(1.2)
-        paused = live_client.get("/healthz").json()["sweeps_paused_s"]
-    assert sweeping == 0.0, f"sweeps resumed but /healthz reports {sweeping}s paused"
-    assert paused >= 1.0, (
-        f"sweeps held paused for 1.2s but /healthz reports {paused}s — a pause that reads as zero "
-        "is exactly the blind spot this field exists to close"
+        paused = live_client.get("/healthz").json()
+    assert sweeping["sweeps_paused_s"] == 0.0, (
+        f"sweeps resumed but /healthz reports {sweeping['sweeps_paused_s']}s paused")
+    assert sweeping["sweeps_pause_lease_s"] == 0.0, (
+        "a resumed daemon still reports a live pause lease — the deadline outlived the pause")
+    assert paused["sweeps_paused_s"] >= 1.0, (
+        f"sweeps held paused for 1.2s but /healthz reports {paused['sweeps_paused_s']}s — a pause "
+        "that reads as zero is exactly the blind spot this field exists to close"
+    )
+    assert 0.0 < paused["sweeps_pause_lease_s"] <= 1800.0, (
+        f"a paused daemon reports {paused['sweeps_pause_lease_s']}s of lease left; an unbounded or "
+        "absent lease is the 4 h outage, and this is the only field that would show it"
     )
 
 
@@ -633,17 +644,23 @@ def test_e6_dashboard_chat_haiku_only(live_client, service_path):
 
 
 @pytest.mark.slow
-def test_e6b_chat_model_is_haiku(live_client):
+def test_e6b_chat_model_is_haiku(live_client, service_path):
     """E6b/HR10: done.model is claude-haiku-4-5 — the only chat model (codex removed).
 
     Asserts the literal model the daemon serves, not config QUERY_LLM_MODEL (which a stray
     RSE_QUERY_LLM_MODEL env in the test process could shadow); the live daemon is the
     source of truth and is pinned to claude-haiku-4-5 via its systemd drop-in.
+
+    Grounded on a real fixture project because 709b936 stopped spawning `claude -p` at all when
+    retrieval cannot ground the question: unscoped, this asked which model answered a request that
+    now deliberately never reaches one, and read back `model: ""`. The claim is unchanged — only a
+    request that actually reaches the model can testify to which model it is.
     """
     r = live_client.post(
         "/api/chat_stream",
-        json={"query": "What is the MCP server name in this engine?"},
-        stream=True, timeout=(5, 45),
+        json={"query": "What is the MCP server name in this engine?",
+              "project_path": service_path},
+        stream=True, timeout=(5, 90),
     )
     assert r.status_code == 200
     done_evt = None
@@ -820,12 +837,26 @@ def test_chat_comprehensive_question_b(live_client, service_path, question, kws)
     assert any(k in al for k in kws), f"Answer missing {kws}: {al[:300]!r}"
 
 
-@pytest.mark.slow
-def test_chat_no_project_path_returns_answer(live_client):
-    """Chat with empty project_path still returns a coherent answer (LLM-only, no community context)."""
+def test_chat_with_no_project_refuses_instead_of_inventing(live_client):
+    """709b936's contract on the branch D2 does not reach: an *absent* project_path.
+
+    This test used to assert the opposite — "empty project_path must still produce answer" — which
+    is precisely the ungrounded path 709b936 removed, and it survived that commit only because
+    `@slow` deselected it from the default run. Two tests then asserted opposite contracts for
+    months. The mark is dropped along with the stale assertion: passing now means no model was
+    reached, so it costs a second, and per that commit's own reasoning a gate nothing runs is
+    not a gate.
+
+    `_build_context` raises on two distinct branches — no project_path at all, and a project with
+    no index. `test_d2_chat_refuses_to_answer_without_context` covers the second one; this covers
+    the first. The discriminator is the absence of `token` events, borrowed from D2 for the same
+    reason: tokens can only come from the model, and the defect emitted no error at all, so
+    asserting an error appears would pass on any change that merely logged while still answering.
+    """
     answer, done_seen = _collect_chat_tokens(live_client, "What is a code knowledge base?", "")
-    assert done_seen
-    assert len(answer) > 20, f"Empty project_path must still produce answer: {answer!r}"
+    assert done_seen, "the stream must still terminate with done"
+    assert answer == "", (
+        f"chat answered with no project selected — the ungrounded path 709b936 removed: {answer!r}")
 
 
 @pytest.mark.slow

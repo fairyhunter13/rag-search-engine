@@ -14,6 +14,12 @@ _PAUSED: bool = False
 # 2026-07-30 eleven consecutive pause calls from separate live-test sessions left `_PAUSED` True for
 # ~4 h, every reconcile tick logged "abandoned before start", and no other signal looked wrong.
 _PAUSED_SINCE: float | None = None
+# Monotonic instant the pause stops being honoured. Unlike `_PAUSED_SINCE` this *is* re-armed by a
+# re-pause: the caller that pauses again is demonstrably still alive, and a live suite run lasts far
+# longer than one lease. What the lease bounds is the caller that stops calling — a killed session
+# now decays in `_PAUSE_TTL_S` instead of holding every sweep until an operator notices.
+_PAUSE_DEADLINE: float | None = None
+_PAUSE_TTL_S: float = 1800.0  # a pause nobody renews for this long is a leak, not a decision
 _LANE_DEBOUNCE_S: float = 45.0  # min seconds between graph-lane passes per project after a change
 _INDEX_BACKOFF_S: float = 120.0  # min seconds before retrying a failed incremental reindex
 _INCREMENTAL_COMPACT_AT: int = 50  # incremental graph passes before one authoritative re-derive
@@ -39,20 +45,28 @@ _HEAVY_LOCK = threading.Lock()
 log = logging.getLogger(__name__)
 
 
-def set_paused(paused: bool) -> bool:
-    """Set the pause flag, returning what it was, keeping `_PAUSED_SINCE` in step.
+def set_paused(paused: bool, ttl_s: float = _PAUSE_TTL_S, now: float | None = None) -> bool:
+    """Set the pause flag, returning what it was, keeping stamp and lease deadline in step.
 
-    Re-pausing while already paused deliberately does **not** restamp. The timestamp measures how
-    long the pause has been in force, and the leak it exists to expose is repeated pause calls from
-    callers that never resume — restamping would reset the clock on precisely the signal it is for.
+    Re-pausing while already paused deliberately does **not** restamp `_PAUSED_SINCE`. The timestamp
+    measures how long the pause has been in force, and the leak it exists to expose is repeated
+    pause calls from callers that never resume — restamping would reset the clock on precisely the
+    signal it is for. The *deadline* is re-armed on every call, which is the opposite rule for the
+    opposite reason: see `_PAUSE_DEADLINE`.
+
+    `now` is injected only by the lease's own tests, which must assert what happens minutes past a
+    deadline without sleeping through it.
     """
-    global _PAUSED, _PAUSED_SINCE
+    global _PAUSED, _PAUSED_SINCE, _PAUSE_DEADLINE
     was = _PAUSED
     _PAUSED = paused
     if not paused:
-        _PAUSED_SINCE = None
-    elif _PAUSED_SINCE is None:
-        _PAUSED_SINCE = time.monotonic()
+        _PAUSED_SINCE = _PAUSE_DEADLINE = None
+        return was
+    at = time.monotonic() if now is None else now
+    if _PAUSED_SINCE is None:
+        _PAUSED_SINCE = at
+    _PAUSE_DEADLINE = at + ttl_s
     return was
 
 
@@ -66,6 +80,39 @@ def paused_seconds() -> float:
     """
     since = _PAUSED_SINCE
     return 0.0 if not _PAUSED or since is None else time.monotonic() - since
+
+
+def is_paused(now: float | None = None) -> bool:
+    """Whether sweeps are paused *and* the pause is still within its lease.
+
+    The single read every sweep goes through, because the flag alone had no way back: four early
+    returns honoured `_PAUSED` forever, so a killed live-test session held the daemon's whole
+    maintenance until someone thought to read /healthz. Expiry resumes and says so at WARNING,
+    naming the duration — the resume is the recovery, the log line is what stops it being silent
+    (a fault that heals itself without a trace is indistinguishable from one that never happened).
+    """
+    if not _PAUSED:
+        return False
+    deadline = _PAUSE_DEADLINE
+    at = time.monotonic() if now is None else now
+    if deadline is None or at < deadline:
+        return True
+    held = at - _PAUSED_SINCE if _PAUSED_SINCE is not None else 0.0
+    set_paused(False)
+    log.warning(
+        "sweeps: pause lease expired after %.0fs (ttl %.0fs) — resuming. Whoever paused never "
+        "resumed; if that was a live-test session, it died mid-run.", held, _PAUSE_TTL_S,
+    )
+    return False
+
+
+def pause_lease_remaining_s(now: float | None = None) -> float:
+    """Seconds left on the current pause lease; 0.0 while sweeping, or once expired."""
+    deadline = _PAUSE_DEADLINE
+    if not _PAUSED or deadline is None:
+        return 0.0
+    at = time.monotonic() if now is None else now
+    return max(0.0, deadline - at)
 
 
 # Composite pipeline algorithm version — bump either component constant to trigger re-derive.
@@ -820,7 +867,7 @@ def reconcile_projects() -> None:
     """Idempotent: discover+register members, index any unindexed/stalled project, label any
     project with missing community summaries (any level).  Safe to call repeatedly.
     """
-    if _PAUSED:
+    if is_paused():
         # Suspension is a state, not a discard (cf. Flux `suspend`) — but _PAUSED is a bare
         # global with no nesting, so a pause landing inside the startup grace silently
         # abandoned the whole pass. It cost days of a fleet migration to find, precisely
@@ -851,7 +898,7 @@ def reconcile_projects() -> None:
     # reaching either repo edited that day. One sort key, no new timer, same work per pass.
     walk = sorted(list_projects(), key=lambda e: e.last_change_seen or "", reverse=True)
     for pos, entry in enumerate(walk):
-        if _PAUSED:
+        if is_paused():
             # Name the position: "reconcile stopped" is not actionable, "stopped at
             # 105/160" tells you how much of the walk never ran.
             log.info("reconcile: abandoned at %d/%d (sweeps paused)", pos, len(walk))
@@ -978,7 +1025,7 @@ def _vacuum_if_bloated(db_path, threshold: int = _VACUUM_BLOAT_BYTES) -> bool:
 
 def maintenance() -> None:
     """Vacuum orphan index dirs; reclaim fragmented SQLite space (bloat-gated)."""
-    if _PAUSED:
+    if is_paused():
         return
     import sqlite3  # noqa: F401 — ensure available before list_projects() import
 
@@ -1247,7 +1294,7 @@ def on_change(project_path: str, files: list) -> None:
     """Watcher callback: incremental reindex; then the graph pass (debounced) if not recent."""
     import time
 
-    if _PAUSED:
+    if is_paused():
         return
     now = time.monotonic()
     if now - _last_index_fail.get(project_path, 0.0) < _INDEX_BACKOFF_S:

@@ -18,7 +18,7 @@ async def _healthz(request: Request) -> JSONResponse:
 
     from rag_search.daemon.cpu_budget import cpu_percent_core, cpu_quota_cores
     from rag_search.daemon.runtime_state import seconds_since_activity
-    from rag_search.daemon.sweeps import paused_seconds
+    from rag_search.daemon.sweeps import pause_lease_remaining_s, paused_seconds
     la = psutil.getloadavg()
     return JSONResponse({
         "ok": True, "service": "rag-search", "transport": "streamable-http",
@@ -34,6 +34,11 @@ async def _healthz(request: Request) -> JSONResponse:
         # belongs beside `idle_seconds` rather than in /api/auto_pipeline_status because the fault
         # it names is being forgotten, and a field nothing polls at rest is not a monitor.
         "sweeps_paused_s": round(paused_seconds(), 1),
+        # The pair answers the two different questions: `sweeps_paused_s` is how long this has been
+        # true (large = someone forgot), `sweeps_pause_lease_s` is how long it stays true unrenewed
+        # (small = it is about to heal itself). Without the second, a poller cannot tell a leak that
+        # will clear in a minute from one that needs a hand.
+        "sweeps_pause_lease_s": round(pause_lease_remaining_s(), 1),
     })
 
 
