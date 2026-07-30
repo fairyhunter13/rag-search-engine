@@ -21,6 +21,7 @@ destructive, and `assert_under_test_base`'s docstring records what a wrong predi
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -105,11 +106,24 @@ def test_cl2_a_live_runs_registry_rows_survive_the_purge(tmp_path: Path) -> None
     still fails, because a test that resolves its project by registry lookup no longer finds it.
     Both halves key on the same `owner_is_live`, so this is a second call site of one rule rather
     than a second rule; testing only the directory half would leave the other free to drift.
+
+    **They do not key on the same *input*, and the first draft of this test got that wrong.** The
+    directory purge asks about a child's `name`; the registry purge asks about a whole `path`, and
+    `_OWNER_RE.search` finds a tag anywhere in it — so every file under a live-tagged workspace is
+    spared by its ancestor's tag, which is exactly what keeps `…/sample-ws-<tag>/shop-federation/
+    promo-svc` alive. Both are right for what they are given, but it means the sandbox here cannot
+    itself be tagged: under `make_run_dir` the dead-owner row inherited *this* run's live tag and
+    survived, and the failure read as the fix not working. An untagged sandbox is the price, and it
+    is a real one — a concurrent run's session-start purge would take it — so it is created and
+    torn down inside one test rather than held.
     """
+    import tempfile
+
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import list_projects, remove_project, upsert_project
+    from tests.live._projects import _SAFE_BASE
 
-    sandbox = make_run_dir("c1-rows-")
+    sandbox = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="c1-rows-"))
     holder = _holder(tmp_path)
     live = sandbox / f"rseown-{_boot_id()}-{holder.pid}-proj"
     dead = sandbox / f"rseown-{_boot_id()}-{_IMPOSSIBLE_PID}-proj"
@@ -129,6 +143,7 @@ def test_cl2_a_live_runs_registry_rows_survive_the_purge(tmp_path: Path) -> None
         holder.kill()
         holder.wait(timeout=30)
         remove_project(str(live))
+        shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def test_cl3_ownership_is_keyed_on_the_boot_and_the_process_kind() -> None:

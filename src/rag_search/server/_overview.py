@@ -240,7 +240,18 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                     tot_fc += ep.file_count if ep else 0
                     # Federation roots legitimately have 0 edges (HR4: synthesis L3 rows only).
                     _is_fedroot = bool(ep and ep.federation)
-                    _hollow = ((s == 0 and cm > 0) or (ec == 0 and cm > 0)) and not _is_fedroot
+                    # H1. The exemption used to be `and not _is_fedroot` across *both* arms, while
+                    # the comment above it justified only the edge arm. So a federation root that
+                    # held its own code and extracted none of it reported healthy — the one store
+                    # in the fleet where "0 symbols" is ambiguous was the one store that could
+                    # never say so. The edge arm keeps its exemption, because HR4 really does mean
+                    # a root's L3 synthesis rows carry no edges. The symbol arm now asks for
+                    # evidence instead: a root with no code files of its own is empty by design and
+                    # stays exempt; one that attempted code files and got nothing back is hollow
+                    # like any member. That question is only answerable since `file_extraction`.
+                    _code_files = gs.code_files_extracted()[0] if _is_fedroot else 0
+                    _hollow = ((s == 0 and cm > 0 and (not _is_fedroot or _code_files > 0))
+                               or (ec == 0 and cm > 0 and not _is_fedroot))
                     # §2b: read cached partition-quality verdict from meta; recompute only on miss/mismatch.
                     _pq_sig = f"{s}:{ec}:{cm}"
                     _pq_raw = gs.get_meta("partition_quality")
