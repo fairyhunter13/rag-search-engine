@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+from tests.live._sweeps import local_sweeps_paused
+
 pytestmark = pytest.mark.live
 
 
@@ -46,35 +48,37 @@ def test_reconcile_pause_stops_mid_pass(safe_tmp_path):
         sweeps.reconcile_projects()
         done.set()
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-
-    paused_at: float | None = None
-    while not done.is_set():
-        if any(v.exists() for v in vdbs):
-            sweeps._PAUSED = True
-            paused_at = time.monotonic()
-            break
-        time.sleep(0.05)
-
-    thread.join(timeout=300)
-    indexed = sum(1 for v in vdbs if v.exists())
-
     try:
-        assert paused_at is not None, (
-            "reconcile finished before first vdb appeared — all members indexed before pause "
-            "arrived; N too small or embed faster than poll granularity"
-        )
-        assert indexed < N, (
-            f"pause mid-pass must stop before all {N} members are indexed; "
-            f"got indexed={indexed}/{N} — loop-top _PAUSED guard missing from reconcile_projects()"
-        )
-        print(
-            f"\n[PAUSE-MID] indexed={indexed}/{N}, "
-            f"stop-latency={time.monotonic()-paused_at:.2f}s, total={time.monotonic()-t0:.1f}s"
-        )
+        # The mid-loop flip below is the thing under test, so it stays a bare assignment —
+        # this CM is what puts the found value back afterwards, instead of assuming False.
+        with local_sweeps_paused(False):
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+
+            paused_at: float | None = None
+            while not done.is_set():
+                if any(v.exists() for v in vdbs):
+                    sweeps._PAUSED = True
+                    paused_at = time.monotonic()
+                    break
+                time.sleep(0.05)
+
+            thread.join(timeout=300)
+            indexed = sum(1 for v in vdbs if v.exists())
+
+            assert paused_at is not None, (
+                "reconcile finished before first vdb appeared — all members indexed before pause "
+                "arrived; N too small or embed faster than poll granularity"
+            )
+            assert indexed < N, (
+                f"pause mid-pass must stop before all {N} members are indexed; got "
+                f"indexed={indexed}/{N} — loop-top _PAUSED guard missing from reconcile_projects()"
+            )
+            print(
+                f"\n[PAUSE-MID] indexed={indexed}/{N}, "
+                f"stop-latency={time.monotonic()-paused_at:.2f}s, total={time.monotonic()-t0:.1f}s"
+            )
     finally:
-        sweeps._PAUSED = False
         for m in members:
             remove_project(str(m))
             shutil.rmtree(m, ignore_errors=True)

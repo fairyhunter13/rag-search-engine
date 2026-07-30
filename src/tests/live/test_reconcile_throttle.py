@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.live._sweeps import local_sweeps_paused
+
 pytestmark = pytest.mark.live
 
 
@@ -122,17 +124,16 @@ def test_reconcile_pause_stops_all_members(safe_tmp_path):
         (m / "a.py").write_text("def f(): pass\n")
         upsert_project(ProjectEntry(path=str(m), enabled=True))
 
-    sweeps._PAUSED = True
     try:
-        sweeps.reconcile_projects()
-        for m in members:
-            vdb = project_vector_db(str(m))
-            assert not vdb.exists(), (
-                f"paused reconcile must not index {m.name}; "
-                "loop-top _PAUSED guard missing from reconcile_projects()"
-            )
+        with local_sweeps_paused(True):
+            sweeps.reconcile_projects()
+            for m in members:
+                vdb = project_vector_db(str(m))
+                assert not vdb.exists(), (
+                    f"paused reconcile must not index {m.name}; "
+                    "loop-top _PAUSED guard missing from reconcile_projects()"
+                )
     finally:
-        sweeps._PAUSED = False
         for m in members:
             remove_project(str(m))
             shutil.rmtree(m, ignore_errors=True)

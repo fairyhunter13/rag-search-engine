@@ -21,6 +21,8 @@ import time
 import pytest
 import requests
 
+from tests.live._sweeps import sweeps_state
+
 pytestmark = pytest.mark.live
 
 _BASE = "http://127.0.0.1:8765"
@@ -124,10 +126,13 @@ _IDLE_THRESHOLD = 0.01  # < 1% of one core
 
 @pytest.mark.slow
 def test_cb3_idle_cpu_under_one_percent_core():
-    """With sweeps quiescent, the daemon's own DeltaCPU/Deltawall must stay < 1% of one core."""
-    r = requests.post(f"{_BASE}/api/sweeps/pause", timeout=5)
-    assert r.status_code == 200
-    try:
+    """With sweeps quiescent, the daemon's own DeltaCPU/Deltawall must stay < 1% of one core.
+
+    `sweeps_state` restores what it found rather than resuming: the session fixture pauses
+    sweeps for the whole run, and this file sorts 7th of 76, so an unconditional resume here
+    left ~70 files' worth of tests racing the daemon for the GPU.
+    """
+    with sweeps_state(paused=True):
         time.sleep(2.0)  # settle any work in flight from a preceding test
         before = _cpu_snapshot()
         t0 = time.monotonic()
@@ -140,8 +145,6 @@ def test_cb3_idle_cpu_under_one_percent_core():
             f"idle CPU {frac:.4f} of one core over {wall_s:.1f}s "
             f"(usage_nsec {before['usage_nsec']}->{after['usage_nsec']}) -- exceeds the < 1% gate"
         )
-    finally:
-        requests.post(f"{_BASE}/api/sweeps/resume", timeout=5)
 
 
 # --------------------------------------------------------------------------- CB4
