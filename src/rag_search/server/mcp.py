@@ -109,6 +109,25 @@ def _search_sync(
             continue
         dbs.append(vdb)
         searched.append(path)
+    if paths and not dbs:
+        # Every resolved project lacks a store, so there is nothing to search. Returning the
+        # ordinary empty result here reports "your query matched nothing" for what is actually
+        # "nothing was searched" — the two are indistinguishable to the caller, and the second is
+        # not a fact about the query at all. The whole resolution ladder above this is written to
+        # be fail-loud ("Never a silent fall-through"); this `continue` was the one step that
+        # quietly undid it at the end.
+        #
+        # Not hypothetical: the 07-30 registry wipe left 96 of 158 enabled rows with no store, so
+        # a search scoped to any of them answered "no results" while the index was merely absent.
+        # The partial case stays a normal result — `projects_searched` already names the subset
+        # that was reached, so a caller can see what was skipped. Only total blindness is an error.
+        return json.dumps({
+            "error": "no index to search — every resolved project has no vector store yet. "
+                     "This is not an empty result set: the projects are unindexed or still "
+                     "rebuilding. Check `overview(what=\"status\")`, or scope to an indexed "
+                     "project with project_paths=[...].",
+            "unindexed": paths[:12],
+        })
     # One embed and one global rerank for the whole federation. Looping search() per project
     # instead costs an extra GPU embed and an extra rerank batch per member — 194 of each for
     # one question on the largest federation here — and concatenates rankings that were never
