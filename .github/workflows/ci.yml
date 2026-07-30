@@ -162,6 +162,17 @@ jobs:
         # In the indexed dev tree ($RSE_DEV_REPO) with its .venv. Flags mirror the
         # documented CLAUDE.md fast smoke command; job-level timeout-minutes bounds
         # runaway runs (pytest-timeout is not a project dep).
+        #
+        # `--maxfail=5`, not `-x`. Eight of the last twelve runs before this were red, and `-x`
+        # meant each reported exactly one failure — so a push that broke five things looked
+        # identical to one that broke one, and the count you read was the count `-x` chose to
+        # show you. The marker split made this worse rather than better: 31 wall-clock-heavy
+        # tests moved onto every push, so the run now stops earlier in a longer suite. 5 still
+        # fails fast on a broken push and still hands back a list.
+        #
+        # `--durations=25` because the cost distribution of this lane has only ever been
+        # reconstructed from job timestamps and source reading. A speedup that cannot be
+        # attributed is indistinguishable from a deletion.
         run: |
           : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
           cd "$RSE_DEV_REPO"
@@ -169,7 +180,7 @@ jobs:
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live and not costly and not exclusive" \
-            -x --strict-markers --strict-config -ra -q --tb=short
+            --maxfail=5 --durations=25 --strict-markers --strict-config -ra -q --tb=short
 
   # ──────────────────────────────────────────────
   # Slow live tests: full E2E, chat quality, browser
@@ -229,10 +240,11 @@ jobs:
 
       - name: Run full live suite (all tests including slow)
         # Same indexed-dev-tree model as live-fast; job-level timeout-minutes bounds the run.
-        # NO `-x` here (unlike live-fast): this is the full/convergence sweep, and an
-        # environment-sensitive @slow test (e.g. test_cb3 idle-CPU, which needs a quiescent
-        # daemon) must not abort the run before the convergence sweep reports. Run everything,
-        # let `-ra` summarize; per-test failures still fail the job.
+        # No failure cap at all here, where live-fast caps at 5: this is the full sweep and it
+        # includes the `exclusive` tests that need a quiescent daemon (CB3's idle-CPU window),
+        # which are the ones most likely to fail for a reason that says nothing about the diff.
+        # Aborting on those would hide every result behind them. Run everything, let `-ra`
+        # summarize; per-test failures still fail the job.
         run: |
           : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
           cd "$RSE_DEV_REPO"
@@ -240,7 +252,7 @@ jobs:
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
             -m "live" \
-            --strict-markers --strict-config -ra -q --tb=short
+            --durations=25 --strict-markers --strict-config -ra -q --tb=short
 
       - name: Run browser tests
         run: |
