@@ -109,7 +109,16 @@ jobs:
     name: Live Tests Fast (GPU runner)
     runs-on: self-hosted
     needs: quality
-    timeout-minutes: 20  # kernel-independent hang guard (no pytest-timeout plugin needed)
+    # Kernel-independent hang guard (pytest-timeout is not a project dep). 20 until 2026-07-31,
+    # where it was calibrated against the old `-m "not slow"` set and a "<5 min" fast smoke. The
+    # marker split moved 31 wall-clock-heavy tests onto every push deliberately, and the number
+    # that settles it needs no new measurement: this job now collects **822 of 844** tests —
+    # 97.4 % of what live-slow's pytest step runs — while allowing a third of live-slow's 60. A
+    # timeout that kills a healthy run is worse than none, because the kill is indistinguishable
+    # from the hang it exists to catch. 45 leaves live-slow's browser-step share as the margin.
+    # **Provisional by construction**: the step below prints its own wall clock, so the first
+    # green run replaces this reasoning with a measurement instead of inviting a fourth re-derive.
+    timeout-minutes: 45
     # Self-hosted runner = the maintainer's device. Hard-gate to the owner account:
     # this job may only ever execute when fairyhunter13 is the triggering actor.
     if: github.actor == 'fairyhunter13' && github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
@@ -158,7 +167,7 @@ jobs:
           curl -sv http://localhost:8765/api/projects 2>&1 | tail -20
           exit 1
 
-      - name: Run fast live tests (all non-slow)
+      - name: Run fast live tests (live, not costly, not exclusive)
         # In the indexed dev tree ($RSE_DEV_REPO) with its .venv. Flags mirror the
         # documented CLAUDE.md fast smoke command; job-level timeout-minutes bounds
         # runaway runs (pytest-timeout is not a project dep).
@@ -173,9 +182,21 @@ jobs:
         # `--durations=25` because the cost distribution of this lane has only ever been
         # reconstructed from job timestamps and source reading. A speedup that cannot be
         # attributed is indistinguishable from a deletion.
+        #
+        # The elapsed line is banked to the step summary, and that is not cosmetic: the job's
+        # `timeout-minutes` was set against a test set that no longer exists, and the only reason
+        # nobody noticed is that its duration was never recorded anywhere durable. Reconstructing
+        # it from job timestamps needs a run that reached the pytest step at all — and every run
+        # since the marker split failed in ~10 s on the dirty-tree gate above, so no such run
+        # exists. Printed on failure too (`trap`), because a run that dies at minute 40 is exactly
+        # the one whose duration decides whether the ceiling is right.
         run: |
           : "${RSE_DEV_REPO:?set RSE_DEV_REPO in the runner .env to the indexed repo path}"
           cd "$RSE_DEV_REPO"
+          start=$SECONDS
+          trap 'printf "live-fast pytest step: %dm%02ds (timeout-minutes: %s)\n" \
+            $(( (SECONDS-start)/60 )) $(( (SECONDS-start)%60 )) 45 \
+            | tee -a "$GITHUB_STEP_SUMMARY"' EXIT
           .venv/bin/pytest \
             src/tests/live/ \
             --ignore=src/tests/live/test_browser.py \
