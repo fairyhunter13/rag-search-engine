@@ -251,6 +251,10 @@ it drifted, and rebuilding one is the standing follow-up.
 | HR38 code-only labelling-cascade drift gate *(was "enrich-cascade … unified with HR36", 2026-07-28 — HR36 is retired, so this row is the whole gate rather than half of a pair)* | `test_fcg1_docs_wiki_churn_quiescent`, `test_fcg2_config_image_churn_quiescent`, `test_fcg3_real_code_drift_fires_cascade_once`, `test_fcg4_convergence_second_call_reuses` | `test_idle_stability.py` |
 | HR39 bounded parse (spawn-context worker pool, timeout kill/respawn) | `test_pool_timeout_kills_and_respawns_only_that_slot`, `test_pool_healthy_after_timeout`, `test_sigkill_mid_task_recovers`, `test_cobol_grammar_parity_through_bounded_path`, `test_metrics_reports_timeout_count`; guard: `test_no_direct_parse_outside_worker_modules` | `test_bounded_parse.py`, `test_no_unbounded_parse.py` |
 | HR40 two-tier CPU budget (idle <1% live gate + kernel CPUQuota active cap) | `test_cb1_unit_text_has_cpu_accounting_and_quota`, `test_cb2_daemon_cpu_quota_enforced`, `test_cb3_idle_cpu_under_one_percent_core`, `test_cb4_active_work_capped_and_throttled`, `test_cb5_parse_cpu_max_synthetic`, `test_cb5_parse_cpu_stat_synthetic`, `test_cb5_cpu_throttle_stat_shape`, `test_cb5_cpu_percent_core_non_negative`, `test_cb6_systemd_scope_delegation_hermetic_proof` | `test_cpu_budget.py` |
+| Federation exclusion in force on the live daemon (§15.3) | `test_fe8_daemon_env_carries_federation_exclude`, `test_fe9_no_enabled_project_is_federation_excluded`, `test_fe10_armed_disabled_rows_are_covered_by_the_exclusion`, `test_fe11_the_gates_fire_when_the_exclusion_is_lost` (sufficiency); drop-in wiring: `test_systemd_dropins_target_deployed_unit` | `test_federation_exclude.py`, `test_p6_daemon.py` |
+| Sweep pause is a lease that expires (§15.4) | `test_pause_lease_expires_past_its_deadline_and_says_so`, `test_re_pause_re_arms_the_deadline_without_restamping_the_leak_signal`, `test_on_change_runs_again_once_the_pause_lease_has_expired`, `test_healthz_reports_how_long_sweeps_have_been_paused` (both fields); guard: `test_production_reads_go_through_the_leasing_accessor` | `test_p6_daemon.py`, `test_p5_server.py`, `test_no_raw_sweeps_toggle.py` |
+| Heavy periodic jobs run on their interval, not at every start (§15.4) | `test_scheduler_defers_first_run_by_one_interval`, `test_maintenance_job_is_not_registered_to_run_at_start` | `test_p6_daemon.py` |
+| The suite deletes the index dirs it creates (§15.4) | `test_co3_test_teardown_leaves_no_index_dir_behind` | `test_clean_orphans.py` |
 | L3 traceability guard | `test_l3_rtm_all_tests_resolve` — machine-verifies every `model.yaml` L3 `test:` name resolves to a live `def test_…` | `test_world_model_traceability.py` |
 
 ## 15. Design rationale
@@ -329,3 +333,77 @@ Note the counting asymmetry this exposed: a "stored text contains a NUL" query f
 where the purge removed **17**. One `calendar-hr.js` chunk's slice landed on a NUL-free stretch of
 the mojibake. Detecting bad content by sampling its own symptom undercounts it; the file-level
 decision is the one to trust.
+
+### 15.3 The exclusion that saved 541,718 chunks lived in one unversioned file (2026-07-30)
+
+§15.1's worktree exclusion is enforced entirely by `is_federation_excluded()` reading
+`RSE_FEDERATION_EXCLUDE` **from the daemon's process environment**, and that value existed in exactly
+one place: `~/.config/systemd/user/rag-search-mcp-daemon.service.d/federation-exclude.conf`, untracked.
+Four more live drop-ins (`indexing-throughput`, `reconcile-resync`, `self-heal`, `llm-haiku`) were in
+the same state, and the one drop-in the repo *did* carry was filed under `rag-search.service.d` — a
+unit name that has never been deployed, so systemd ignored it.
+
+The regression path needs no code change and no operator mistake beyond losing the file: 58 registry
+rows sit disabled with `indexed_at: null`, so `_needs_index()` is True for every one, and
+`register_all_members()` runs synchronously at each daemon start and re-enables whatever discovery
+finds. Reconcile then re-indexes 541,718 duplicate chunks under a one-core `CPUQuota`.
+
+**Nothing went red, and FE1–FE7 are why.** Every one of them sets `RSE_FEDERATION_EXCLUDE` itself
+before asserting, so they test the predicate and are blind to whether production is configured at
+all — the same shape as a hand-written list with only an existence test behind it. Three additions
+close it, and the third is the one that matters:
+
+- **FE8** reads the daemon's env from `/proc/<MainPID>/environ`. Not `os.environ` (this pytest
+  process is not production) and not `systemctl show -p Environment` (that is what systemd *would*
+  set on the next start). Reading a shell's own env instead of the daemon's is precisely what
+  produced a false "reconcile is about to re-index 541k deleted chunks" alarm the day before.
+- **FE9** asserts no *enabled* row is excluded — the exclusion and discovery not contradicting.
+- **FE10** asserts every *armed* row (disabled, never indexed, path still present) **is** covered by
+  the value in force. The covering set is derived from live registry state, not written down here, so
+  removing the worktree glob from the drop-in turns this red without anyone remembering to edit a
+  list. **FE11** proves FE9/FE10 can go red — it feeds the same detectors the empty value (what the
+  daemon would get if the file were deleted) plus injected rows for the four-way truth table, because
+  the live drop-in is the only copy of the production value and is not an experiment to run on.
+
+`systemd.UNIT_NAME` now names the deployed unit once, `scripts/systemd/<UNIT_NAME>.d/` holds all five
+drop-ins, and `test_systemd_dropins_target_deployed_unit` derives the expected dir name from that
+constant — the wrong-unit-name bug cannot come back silently. `install()` deliberately still writes
+only the base unit: an `install()` from a checkout must not overwrite host-tuned values. `%h` *is*
+expanded inside `Environment=` in a drop-in file (probed on a throwaway unit, 2026-07-30) though not
+for `systemd-run -p Environment=`, which is what keeps the tracked copies free of absolute home paths
+(HR34/P18). The now-deleted `rag-search-failure-notify.service` went with the old name: a *system*
+unit cannot be ordered after a *user* unit, it was never installed, and nothing referenced it.
+
+### 15.4 Three mechanisms leaning on each other: the pause, the sweep, and the run (2026-07-30)
+
+Orphan index dirs were being cleaned, but by accident. Untangling that took three changes that only
+make sense together, because each one alone makes the situation worse.
+
+**The pause had no way back.** `_PAUSED` was a bare global honoured by four early returns. Eleven
+pause calls from separate live-test sessions — each *correctly* restoring the "already paused" it
+found — left every sweep off for ~4 h, and the previous pass made that state observable
+(`_PAUSED_SINCE`, `sweeps_paused_s`) without making it recoverable. Observability is not recovery: a
+field only helps an operator who is already looking. The pause is now a lease. `set_paused` stamps
+`_PAUSE_DEADLINE`, and `is_paused()` — the single read path, statically enforced — releases the pause
+past that deadline and logs at WARNING how long it ran. The two timestamps take **opposite** rules on
+a re-pause, which is the whole design: the deadline is re-armed (a caller that pauses again is alive,
+and the live suite renews after every test from `_drain_graph_lane`), while `_PAUSED_SINCE` is never
+restamped, because the fault it exposes is *repeated* pause calls and a moving stamp would have read
+a few minutes throughout that 4 h. A killed session now decays in ≤30 min instead of indefinitely.
+
+**A 6 h job was running ~20×/day.** `_Job._last_run` defaulted to `0.0` and was compared against
+`time.monotonic()` — seconds since *boot* (~415,000 s on this host) — so every registered job was due
+at process t=0. Measured: 35 orphan-vacuum bursts in 3 days, **34 of them within 0–1 s of a daemon
+start**, exactly one at the real 21,580 s interval. That put an `rmtree` pass plus freelist checks on
+278 SQLite files (VACUUMs measured at 8.6 s) in contention with member discovery and watcher sync on
+a 1-core `CPUQuota`, at the busiest moment the daemon has. `register()` now stamps an absolute
+`_next_run` deadline, with `run_at_start=True` for the cheap liveness ticks that genuinely want t=0.
+
+**Nothing owned the mess.** The live suite created index dirs and deleted only the registry rows —
+and the row is the only handle on the `<slug>-<sha16>` name, so once dropped the store is unreachable
+by name forever (19 dirs / 62 MB from one day of runs). It looked bounded only because the orphan
+sweep collected them, i.e. *because of* the two bugs above: a pause that eventually got resumed by
+hand, and a heavy job firing at every restart. Fixing either one in isolation **lengthens** the
+orphan lag. So the run that creates a store now deletes it — `purge_project` by row, and
+`purge_index_dirs_under` by symlink-safe tree walk for the many tests that drop their own row in a
+`finally` — and `maintenance()`'s sweep stays as the backstop for dirs whose name nobody remembers.
