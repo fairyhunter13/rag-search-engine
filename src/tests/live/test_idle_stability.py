@@ -435,12 +435,20 @@ def test_is_ignored_path_agrees_with_iter_files():
             "spec/oversize.yaml": "a: 1\n" * 30_000,   # ~180 kB, data cap is 100 kB
             "spec/under.yaml": "a: 1\n",
             "src/empty.py": "",                        # zero bytes is also a discovery rule
-            # The text screen, which asks the bytes rather than the extension. All three files
-            # are needed: the .png pair is what distinguishes the shipped rule from an extension
-            # list, and the .py is what proves a known language never pays the read.
+            # The text screen, which asks the bytes rather than the extension. Each file fails
+            # red against a different wrong implementation: dropping the rule fails on the
+            # NUL-bearing .png, a suffix set fails on the plain-text .png, and the .py and .pkl
+            # fail if the rule is gated on `lang == "unknown"` — which is how it originally
+            # shipped, and how five sklearn pickles got in (`.pkl` is Apple's Pkl language to
+            # the pack, so they were "named" and handed the 500 kB code cap).
             "assets/image-1.png": "\x00" + "\xd9g\xc3E_\x16" * 20,
             "assets/notes.png": "misnamed, but plainly text\n",
             "src/nulled.py": "x = 1\n\x00\n",
+            "models/scaler.pkl": "\x80\x04\x95\x5c\x01\x00\x00\x00\x00\x00\x00sklearn\n",
+            # The boundary the rule claims and no fixture tested: non-ASCII *text* stays. A
+            # printable-ASCII-ratio proxy rejects both of these; the NUL test keeps both.
+            "locale/id/messages.po": 'msgid "save"\nmsgstr "simépan — selesai"\n',
+            "docs/accents.md": "# Résumé\n\ncałość — über\n",
         })
         root = Path(tmp)
         cfg = ProjectConfig()
@@ -448,13 +456,18 @@ def test_is_ignored_path_agrees_with_iter_files():
         # Derived, not hand-listed. The previous three-name list could not see a rule its own
         # fixtures never triggered, which is how the size disagreement survived this gate.
         candidates = [Path(dp) / f for dp, _d, fs in os.walk(root) for f in fs]
-        assert len(candidates) >= 10, f"fixture tree did not materialise: {candidates}"
+        assert len(candidates) >= 13, f"fixture tree did not materialise: {candidates}"
         # Agreement alone is satisfied by deleting the rule from both screens, so pin the rule.
         assert root / "spec" / "oversize.yaml" not in kept, "size cap not applied"
         assert root / "spec" / "under.yaml" in kept, "size cap swallowed a file under the cap"
         assert root / "assets" / "image-1.png" not in kept, "non-text file was not screened out"
         assert root / "assets" / "notes.png" in kept, "text screen keyed on the name, not the bytes"
-        assert root / "src" / "nulled.py" in kept, "text screen ran on a known-language file"
+        assert root / "src" / "nulled.py" not in kept, "text screen skipped a known-language file"
+        assert root / "models" / "scaler.pkl" not in kept, (
+            "a pickle survived: the screen is trusting the pack's language name over the bytes"
+        )
+        assert root / "locale" / "id" / "messages.po" in kept, "non-ASCII text was screened out"
+        assert root / "docs" / "accents.md" in kept, "non-ASCII text was screened out"
         for candidate in candidates:
             assert is_ignored_path(candidate, root, cfg) == (candidate not in kept), (
                 f"is_ignored_path/iter_files disagree on {candidate}"

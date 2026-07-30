@@ -123,9 +123,10 @@ _TEXT_SNIFF_BYTES = 8192
 def _has_text_bytes(path: Path) -> bool:
     """True if path's first 8 kB contain no NUL byte — git's text/binary test.
 
-    Rides on a read that mostly already happens: this is only consulted for files
-    `detect_language` returned "unknown" for, and that function has already opened
-    the file to sniff a shebang. Known-extension files never reach here.
+    Consulted for every file that survives every cheaper rule, whatever language the pack
+    named it (see `_should_drop`: restricting this to "unknown" let sklearn pickles through
+    on an extension collision). The read is the last thing discovery does and the chunker is
+    about to read the same bytes, so it measured at +3% of a warm walk.
 
     An unreadable file is reported as text, matching the `stat()` failure above:
     "cannot evaluate the policy" must not become "drop it", or a deleted file stops
@@ -194,11 +195,25 @@ def _should_drop(
     # real code.
     #
     # NUL in the first 8 kB is git's own text test, derived from the file instead of from a
-    # list of extensions to keep sufficient. Deliberately narrow: it does NOT try to catch
-    # minified/bundled JS (screening bundles by line geometry was measured on 2026-07-28
-    # and refuted — it deleted 54.4% of the fleet graph), and it keeps non-ASCII *text*
-    # such as gettext .po catalogues, which a printable-ASCII-ratio rule wrongly rejects.
-    return lang == "unknown" and not _has_text_bytes(full)
+    # list of extensions to keep sufficient. Still deliberately narrow in *what it tests*: it
+    # does NOT try to catch minified/bundled JS (screening bundles by line geometry was measured
+    # on 2026-07-28 and refuted — it deleted 54.4% of the fleet graph), and it keeps non-ASCII
+    # *text* such as gettext .po catalogues, which a printable-ASCII-ratio rule wrongly rejects.
+    #
+    # It used to be `lang == "unknown" and ...`, on the reasoning that a file the pack could name
+    # should be trusted and should not pay the read. Both halves were wrong, measured 2026-07-30:
+    #   - A named language does not mean text bytes. `.pkl` collides with Apple's **Pkl** config
+    #     language, so five sklearn pickles (`\x80\x04\x95...MinMaxScaler`) were named `pkl`,
+    #     given the 500 kB *code* cap, and indexed. At 719 bytes each that was 5 junk chunks by
+    #     luck; the cap is what makes it a hole, since a 400 kB model artifact chunks in full.
+    #   - The read costs +3% of a warm discovery walk (1,010 files), because every file that gets
+    #     this far is about to be opened and read in full by the chunker anyway.
+    # Widening it drops exactly 7 files across the whole fleet (66,911 walked): those 5 pickles
+    # plus two UTF-16LE files whose every other byte is NUL. Dropping those two is deliberate and
+    # matches git, which also calls UTF-16 binary — the reader has no BOM handling, so they were
+    # stored as UTF-8-with-replace mojibake, and absent from the index is more honest than wrong
+    # in it. A BOM carve-out would be a hand-written list whose whole effect is to keep junk.
+    return not _has_text_bytes(full)
 
 
 # H3: non-parseable text/data formats kept explicitly; code = any language
