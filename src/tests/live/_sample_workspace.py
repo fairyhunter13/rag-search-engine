@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -176,16 +175,48 @@ def purge_rows_under(base: Path) -> list[str]:
     dropped it again minutes later once reconcile noticed the tree was gone, leaving a dir nothing
     owns and nobody remembers. A row under the suite's own base is never a legitimate owner:
     `test_no_real_project_in_tests.py` is the invariant that nothing real may live there.
+
+    C1: "never a legitimate owner" means *this* run's rows, not another live run's. A row whose
+    path carries a live pytest owner tag is skipped — dropping it deregisters a project a
+    concurrent suite is actively asserting against, which is the registry half of the same
+    collision the directory purge caused.
     """
     import os as _os
 
     from rag_search.core.registry import list_projects
+    from tests.live._projects import owner_is_live
     removed: list[str] = []
     base_str = str(base)
     for e in list_projects():
+        if owner_is_live(e.path):
+            continue
         if e.path == base_str or e.path.startswith(base_str + _os.sep):
             purge_project(e.path)  # row *and* store: the row is the only handle on the dir name
             removed.append(e.path)
+    return removed
+
+
+def purge_dead_owned_dirs(base: Path) -> list[str]:
+    """Delete every child of `base` **except** those a live pytest run owns. Returns what went.
+
+    Lives here rather than inline in the conftest fixture so the collision can be *driven* in a
+    test instead of restated there. A test that re-implements the loop it is checking asserts only
+    that two copies of the same idea agree — the FE12 lesson, and the C1 bug was in this exact
+    shape: the fixture's premise was stated in its own docstring and never executed against a
+    second live run.
+    """
+    assert_under_test_base(base)
+    from tests.live._projects import owner_is_live
+    removed: list[str] = []
+    if not base.is_dir():
+        return removed
+    for child in base.iterdir():
+        if owner_is_live(child.name):
+            continue  # a live run is using this — deleting it is the collision itself
+        with contextlib.suppress(Exception):
+            purge_index_dirs_under(child)
+            shutil.rmtree(child, ignore_errors=True)
+            removed.append(child.name)
     return removed
 
 
@@ -260,8 +291,8 @@ def _cleanup_stale_workspaces(keep: Path) -> None:
 def build_sample_workspace() -> SampleWorkspace:
     # The `no_deepseek()` context manager that used to wrap this whole body is gone with the client
     # it suppressed. Nothing here reaches a network at all now, so there is no lane left to close.
-    _SAFE_BASE.mkdir(parents=True, exist_ok=True)
-    base = Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix="sample-ws-"))
+    from tests.live._projects import make_run_dir
+    base = make_run_dir("sample-ws-")
     _cleanup_stale_workspaces(base)
     fed_base, ledger_dir = _copy_fixtures(base)
     fed_root, member_paths, ledger = _register(fed_base, ledger_dir)

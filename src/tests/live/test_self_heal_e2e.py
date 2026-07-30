@@ -40,13 +40,11 @@ def _no_code_scan_memo():
 @pytest.fixture()
 def _proj():
     import shutil
-    import tempfile
 
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import remove_project, upsert_project
-    base = Path.home() / ".local" / "share" / "rse-test-dirs"
-    base.mkdir(parents=True, exist_ok=True)
-    d = Path(tempfile.mkdtemp(dir=base, prefix="self-heal-"))
+    from tests.live._projects import make_run_dir
+    d = make_run_dir("self-heal-")
     try:
         upsert_project(ProjectEntry(path=str(d), enabled=True))
         yield str(d)

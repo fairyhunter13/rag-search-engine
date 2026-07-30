@@ -10,11 +10,67 @@ Prefer using the `federation_root_path`, `standalone_project_path`, and
 """
 from __future__ import annotations
 
+import os
+import re
+import tempfile
 from pathlib import Path
 
 import pytest
 
 _SAFE_BASE = Path.home() / ".local" / "share" / "rse-test-dirs"
+
+# C1. Every temp dir this suite builds under `_SAFE_BASE` carries the identity of the run that
+# owns it, so the session-start purge can tell "leaked by a dead run" from "in use by a live one".
+# Without it the purge deleted on *existence*, and its docstring asserted the premise that made
+# that safe — "anything under rse-test-dirs belongs to a dead prior session" — which is false the
+# moment two runs overlap, and overlapping runs are the normal state in this checkout: three agent
+# profiles share it. Each run then destroyed the other's workspace mid-test, and the failures
+# surfaced as unrelated assertion errors somewhere downstream.
+#
+# The pid alone is not enough: pids are recycled, and across a reboot a stale dir's pid is very
+# likely live again as something else. The boot id makes the pair unique for as long as the dirs
+# can survive, and the cmdline check turns "some process holds this pid" into "a pytest process
+# holds this pid" — the only claim that licenses skipping a purge.
+_OWNER_RE = re.compile(r"rseown-([0-9a-f]{8})-(\d+)")
+
+
+def _boot_id() -> str:
+    """8 hex chars of this boot's id, or `nobootid` where the kernel does not publish one."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip().replace("-", "")[:8]
+    except OSError:
+        return "nobootid"
+
+
+def owner_tag() -> str:
+    """The token embedded in every temp dir name this run creates."""
+    return f"rseown-{_boot_id()}-{os.getpid()}"
+
+
+def owner_is_live(name: str) -> bool:
+    """True when `name` is owned by a *pytest* process alive on this boot.
+
+    Untagged names answer False: they predate C1 or come from something else, and
+    purge-on-existence is the right answer for them. Erring towards False keeps the self-heal
+    working for genuinely leaked state, which is the fixture's original purpose.
+    """
+    m = _OWNER_RE.search(name)
+    if not m or m.group(1) != _boot_id():
+        return False
+    pid = int(m.group(2))
+    if pid == os.getpid():
+        return True
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return False
+    return b"pytest" in cmdline
+
+
+def make_run_dir(prefix: str = "") -> Path:
+    """`mkdtemp` under `_SAFE_BASE`, stamped with this run's owner tag."""
+    _SAFE_BASE.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(dir=_SAFE_BASE, prefix=f"{prefix}{owner_tag()}-"))
 
 # These resolvers only *find* a workspace that some fixture already built, so calling one directly
 # makes a test pass in a full run and fail when its file is run alone — which is how it reads as a

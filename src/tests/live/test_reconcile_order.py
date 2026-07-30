@@ -98,10 +98,9 @@ def order() -> dict:
     `assert_under_test_base` and `test_no_real_project_in_tests.py` are written against.
     """
     import shutil
-    import tempfile
-    base = Path.home() / ".local" / "share" / "rse-test-dirs"
-    base.mkdir(parents=True, exist_ok=True)
-    d = Path(tempfile.mkdtemp(dir=base, prefix="ro-"))
+
+    from tests.live._projects import make_run_dir
+    d = make_run_dir("ro-")
     try:
         yield _run(d)
     finally:
