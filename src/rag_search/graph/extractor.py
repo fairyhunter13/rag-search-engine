@@ -28,7 +28,14 @@ from pathlib import Path
 #                    the X2 rung `language_mismatch` records a file whose bytes do not parse as
 #                    the language its extension claims. Both fire only where every earlier rung
 #                    came back empty, so no file that already extracted changes.
-EXTRACTOR_REV = "e4"
+#   e5  2026-07-30  Rung 1: `_injection_blocks` reads embedded regions out of the host grammar's
+#                    own `injections.scm`, supplementing `_iter_script_blocks` rather than
+#                    replacing it — vue's injections query is *empty*, and vue is the fleet's
+#                    highest-coverage host grammar, so the replacement the plan proposed would
+#                    have been a straight regression. Unlike e4 this *does* change files that
+#                    already extracted (an astro file gains its frontmatter's symbols), so it
+#                    carries its own rev rather than riding e4's re-derive silently.
+EXTRACTOR_REV = "e5"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -367,6 +374,83 @@ def _iter_script_blocks(node, code_bytes: bytes) -> list[tuple[str, bytes, int]]
     return out
 
 
+def _injection_regions(query, matches, code_bytes: bytes, language: str
+                       ) -> list[tuple[str, bytes, int]]:
+    """`(inner_language, bytes, line_offset)` for each statically-declared injection match.
+
+    `inner == language` is skipped: several grammars inject themselves (a template re-entering
+    its own body), and following that is an unbounded re-parse of the same file.
+    """
+    from tree_sitter_language_pack import has_language
+    out: list[tuple[str, bytes, int]] = []
+    for pattern_index, caps in matches:
+        try:
+            inner = (query.pattern_settings(pattern_index) or {}).get("injection.language", "")
+            if not inner or inner == language or not has_language(inner):
+                continue
+            for node in caps.get("injection.content", []):
+                out.append((inner, code_bytes[node.start_byte:node.end_byte],
+                            node.start_point[0]))
+        except Exception:
+            continue
+    return out
+
+
+def _injection_blocks(code_bytes: bytes, language: str) -> list[tuple[str, bytes, int]]:
+    """Rung 1: embedded regions the host grammar itself declares, via its `injections.scm`.
+
+    **Only statically-declared languages are taken**, and that line is structural, not convenient.
+    A `(#set! injection.language "php")` is the grammar author stating that this region is always
+    php — a property of the host grammar, same species as `_STRUCTURE_KIND_MAP`. A dynamic
+    `@injection.language` *capture* instead takes the language from the document's own text (a
+    markdown fence's info string), which is reading a token to choose a grammar: the thing P6
+    forbids, and it would enrol every fenced example in a README as a project definition.
+
+    Measured across the pack's 110 injection-capable languages: **64 declare statically**, 12
+    capture dynamically, 31 mark content with no language at all, and 3 (svelte, cairo, squirrel)
+    encode it as the capture *name* in a third convention. Reading the static ones needs
+    `matches()` rather than `captures()` — the language lives on the pattern, via
+    `Query.pattern_settings(i)`, and `captures()` discards the pattern index.
+
+    Parses a second time with the raw binding, for the reason `_highlight_captures` documents.
+    """
+    try:
+        import tree_sitter as ts
+        from tree_sitter_language_pack import get_injections_query, get_language
+        qtext = get_injections_query(language)
+        if not qtext:
+            return []
+        lang_obj = get_language(language)
+        root = ts.Parser(lang_obj).parse(code_bytes).root_node
+        query = ts.Query(lang_obj, qtext)
+        matches = ts.QueryCursor(query).matches(root)
+    except Exception:
+        return []
+    return _injection_regions(query, matches, code_bytes, language)
+
+
+def _embedded_blocks(root, code_bytes: bytes, language: str) -> list[tuple[str, bytes, int]]:
+    """Every embedded block in this file: the `script_element` walk, then rung 1's injections.
+
+    **Rung 1 supplements `_iter_script_blocks`; it does not replace it**, which is what the plan
+    proposed. Measured: **vue's injections query is empty**, and vue is the highest-coverage host
+    grammar in the fleet (92 %, 2,020 of 2,190 files) — so the swap would have been a straight
+    regression on the case that matters most. php's and erb's are empty too.
+
+    Dedup is on the content *region*, not the triple, and the hand-rolled walk wins ties because
+    it is strictly better informed: it reads `<script lang="ts">` and says typescript, where
+    html's `#set!` can only say javascript for every script element. Keyed on the triple, those
+    two would disagree, both be kept, and the file would report double its symbols.
+    """
+    out = list(_iter_script_blocks(root, code_bytes))
+    seen = {(off, len(blk)) for _, blk, off in out}
+    for inner_lang, blk, off in _injection_blocks(code_bytes, language):
+        if (off, len(blk)) not in seen:
+            seen.add((off, len(blk)))
+            out.append((inner_lang, blk, off))
+    return out
+
+
 def extract_calls(content: str, language: str) -> list[str]:
     """Return called function/method names (H2: generic call-node detection, any language)."""
     parser, ok = _get_parser_for(language)
@@ -379,7 +463,7 @@ def extract_calls(content: str, language: str) -> list[str]:
     code_bytes = content.encode("utf-8", errors="replace")
     out: list[str] = []
     _collect_call_names(root, code_bytes, out)
-    for inner_lang, inner_bytes, _offset in _iter_script_blocks(root, code_bytes):
+    for inner_lang, inner_bytes, _offset in _embedded_blocks(root, code_bytes, language):
         out.extend(extract_calls(inner_bytes.decode("utf-8", errors="replace"), inner_lang))
     return out
 
@@ -467,13 +551,20 @@ def extract_symbols_with_stats(
         r = None
     syms, rung, anon = _extract_symbols_from(r, outer_root, code_bytes, file_str, language)
     if outer_root is not None:
-        for inner_lang, inner_bytes, line_offset in _iter_script_blocks(outer_root, code_bytes):
+        host_produced = bool(syms)
+        for inner_lang, inner_bytes, line_offset in _embedded_blocks(
+                outer_root, code_bytes, language):
             inner_src = inner_bytes.decode("utf-8", errors="replace")
             inner_syms, inner_stats = extract_symbols_with_stats(path, inner_src, inner_lang)
             # An embedded block's anonymous drops belong to the *host* file — a .svelte whose
             # <script> is all arrow functions must not read as an empty .svelte.
             anon += inner_stats.anon_count
-            if inner_syms and rung in ("unparsed", "generic"):
+            # Keyed on "the host contributed nothing", not on a list of rung names. The old
+            # `rung in ("unparsed", "generic")` predated rungs 4/5 and `language_mismatch`, and
+            # would have left a file reporting a rung that found no symbols while holding
+            # symbols the embedded pass found — the exact contradiction the column exists to
+            # prevent.
+            if inner_syms and not host_produced:
                 rung = "embedded"
             for s in inner_syms:
                 syms.append(Symbol(
@@ -562,6 +653,12 @@ def _data_walk(code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
     """
     root = _data_root(code_bytes, language)
     out: list[Symbol] = []
+    # A data node's span ends at the byte *after* its last character, so a block that owns its
+    # trailing newline reports the row of a line that does not exist — measured on yaml, where the
+    # final mapping of a 4-line file came back `end_line=5`. `graph(relation="definition")` slices
+    # source by these lines, so a row past the end is a wrong answer rather than a cosmetic one.
+    # Clamping here rather than in the reader keeps the store's spans true of the file they name.
+    last_line = max(1, code_bytes.count(b"\n") + (0 if code_bytes.endswith(b"\n") else 1))
     stack: list[tuple[object, int, str]] = [(root, 0, "")] if root is not None else []
     while stack and len(out) < _DATA_MAX_SYMBOLS:
         node, depth, prefix = stack.pop()
@@ -569,11 +666,11 @@ def _data_walk(code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
         qual = f"{prefix}.{key}" if prefix and key else (key or prefix)
         if key and _is_name_text(str(key)):
             span = getattr(node, "span", None)
-            line = (span.start_line + 1) if span is not None else 1
+            line = min((span.start_line + 1) if span is not None else 1, last_line)
+            end = min((span.end_line + 1) if span is not None else line, last_line)
             out.append(Symbol(
                 file=file_str, name=str(key), qualified_name=str(qual), kind="data",
-                start_line=line, end_line=(span.end_line + 1) if span is not None else line,
-                language=language))
+                start_line=line, end_line=max(line, end), language=language))
         if depth < _DATA_MAX_DEPTH:
             for child in reversed(getattr(node, "children", None) or []):
                 stack.append((child, depth + 1, str(qual)))
