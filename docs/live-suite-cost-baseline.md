@@ -95,9 +95,55 @@ and that window is the production constant under test. Faking it is banned by
 - **S5 (`scripts/affected_tests.py`) — shipped in `c7caab9`**, and it stays an inner-loop convenience,
   never a gate. See below for why that matters more than it looks.
 
-**The fast lane costs 157 seconds on a quiet host. It does not need optimising.** What made it feel
-slow was host contention and one test that hung for 51 minutes (`test_reconcile_midpass.py`, fixed in
-`071da96` — it called `reconcile_projects()` in-process, so it walked the entire 216-row fleet).
+**The fast lane cost 157 seconds on a quiet host at `d9860a0`. It did not need optimising.** What
+made it feel slow was host contention and one test that hung for 51 minutes
+(`test_reconcile_midpass.py`, fixed in `071da96` — it called `reconcile_projects()` in-process, so it
+walked the entire 216-row fleet).
+
+## Re-measured 40 minutes later — and the number moved 3.2x
+
+Same lane, same markers, same `HEAD`:
+
+| | 03:0x, at `d9860a0` | 03:46, at `d9860a0` |
+|---|---|---|
+| selected | 604 | **848** (+244) |
+| wall | 157.4 s | **497.3 s** (+216%) |
+
+`HEAD` did not move. All 244 tests came from another session's **uncommitted** working-tree edits —
+12 modified live test files plus one untracked new file. The new tests cost **~1.39 s each** against
+the incumbent average of **0.26 s**: roughly 5x more expensive per test than what was already here.
+
+**This finding outranks everything above.** The plan's premise was that the fast lane needed
+structural work, and its largest lever (S1, corpus promotion) had a measured ceiling of 5.2% — about
+8 seconds. In the 40 minutes spent proving that, the suite grew by 340 seconds. **Growth is the cost
+driver; per-test inefficiency is not.** Future effort aimed at making this suite fast belongs on what
+new tests are allowed to cost, not on re-plumbing the fixtures of the ones already here.
+
+Corollary for this document: a baseline is a perishable measurement of a moving tree. Quote it with
+its commit *and* its collected count, and re-measure rather than cite. The count is what catches
+drift — a wall clock alone cannot tell "the host was busy" from "the suite grew".
+
+## The single most expensive test: WK2, at 59 s
+
+`test_watcher_registry_sync.py::test_wk2_http_the_daemon_reports_no_root_armed_for_a_disabled_project`
+takes **59.08 s — 12% of the whole lane**, and more than a third of what the entire lane used to cost.
+
+Its docstring claims the opposite: *"It costs nothing in the ordinary case — the first sample is clean
+and the loop returns at once — and the budget is only ever spent on a real divergence."* Measurement
+refutes that. The test polls `GET /api/watcher` until `extra == []`, and the armed set reaches the
+registry only through the `watcher_sync` scheduler job, registered at `interval_s=60.0`
+(`daemon/server.py:208`). 59.08 s is one full scheduler period — exactly what the mechanism predicts.
+
+The docstring's error is in *population*, not arithmetic: it assumed divergence is exceptional, but
+**the live suite itself registers and disables temp projects throughout the run**, so a dirty armed
+set is the normal state by the time WK2 observes it. The test's cost is imposed by the rest of the
+suite's churn, not by its own subject.
+
+There is no cheap fix inside the test. `/api/watcher` is GET-only (`server/routes_admin.py:36`) and
+nothing can force a sync. The honest options are to add a real ops action — `POST /api/watcher/sync`
+calling the same `sync_watcher` the scheduler calls, which an operator hitting the original incident
+would also want, since today the only remedy is a daemon restart — or to accept the 59 s. Shortening
+the 60 s interval is not on the table: that interval is the production behaviour under test.
 
 ## The other half of the result: the failures
 
