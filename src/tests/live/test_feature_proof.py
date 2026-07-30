@@ -166,7 +166,6 @@ def test_fp11_federation_status(fed_root):
 
 # ── L3: quality (@slow) ──────────────────────────────────────────────────
 
-@pytest.mark.slow
 def test_fp14_ask_flat_l1(service_path):
     # Two corrections on 2026-07-29, from one root cause. The tool this called was retired, so it
     # reads `run_ask` directly; and the scope it passed, "global", stopped being a scope in

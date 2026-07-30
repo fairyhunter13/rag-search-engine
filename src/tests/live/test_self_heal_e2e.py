@@ -55,7 +55,6 @@ def _proj():
         shutil.rmtree(d, ignore_errors=True)
 
 
-@pytest.mark.slow
 def test_algo_drift_triggers_rederive(_proj):
     """T2: poisoning meta[algo_version] causes reconcile to re-derive the graph."""
     from rag_search.core.config import project_graph_db
@@ -95,14 +94,14 @@ def test_algo_drift_triggers_rederive(_proj):
         gs2.close()
 
 
-@pytest.mark.slow
 def test_source_drift_triggers_rederive(_proj, _no_code_scan_memo):
     """T3: adding a new source file changes the fingerprint; reconcile re-extracts it.
 
     `_code_scan` memoises on *elapsed time* (`_CODE_SCAN_TTL_S = 300`), so a fingerprint taken
     immediately after a write is served from the pre-write cache entry by construction — this
     test asserted the memo did not exist and had failed on every run since the memo landed,
-    invisibly, because it is `@pytest.mark.slow`. The memo is correct: it bounds how often a
+    invisibly, because it *was* `@pytest.mark.slow` (that mark is gone since S1/S2,
+    2026-07-30 — it cost wall clock, never a model). The memo is correct: it bounds how often a
     43 s fleet-wide stat-walk is paid, against a reconcile cadence measured in half-hours, and
     live edits are the watcher's job rather than reconcile's. So the fix is to opt out through
     the knob production already exposes for exactly this, not to weaken the assertion — the

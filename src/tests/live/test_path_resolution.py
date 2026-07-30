@@ -118,7 +118,6 @@ def test_s3_index_tool_canonicalizes_symlink(safe_tmp_path):
         _clean([root, member])
 
 
-@pytest.mark.slow
 def test_infer_default_project(safe_tmp_path):
     """infer_default_project: a root that is/encloses exactly one registered project -> that
     project; an unregistered root -> (None, candidates); two distinct registered roots ->
@@ -273,7 +272,6 @@ def test_t2_unscoped_search_fails_loud_instead_of_scanning_the_fleet():
     assert payload["candidates"], "the error must list candidates the caller can pick from"
 
 
-@pytest.mark.slow
 def test_s2_search_symlinked_member_does_not_fanout(safe_tmp_path):
     """S2: search() scoped to a symlinked member must resolve to that member alone, not fan
     out to the enclosing federation root's whole member list."""

@@ -80,7 +80,6 @@ class TestFederationComposedEntity:
             f"Aggregate communities={root_total} ≠ Σ member={member_sum}"
         )
 
-    @pytest.mark.slow
     def test_root_scoped_search_reaches_member_content(self, fed_root: str) -> None:
         """T2e: metamorphic fan-out — search([root]) reaches member content.
 
@@ -100,7 +99,6 @@ class TestFederationComposedEntity:
             f"members: {member_paths[:3]}\nsearched: {searched[:5]}"
         )
 
-    @pytest.mark.slow
     def test_all_members_index_state_ready(self, fed_root: str, fed_status: dict) -> None:
         """T2f: every federation LEAF member must be index_state=ready.
 
@@ -110,8 +108,10 @@ class TestFederationComposedEntity:
 
         Renamed from kb_state on 2026-07-29, a day after the field itself was renamed with
         tier 3 (_overview.py). Three sibling tests were re-pointed in that sweep and this one
-        was not, for the only reason that matters here: it is `@pytest.mark.slow`, so the
+        was not, for the only reason that matters here: it *was* `@pytest.mark.slow`, so the
         standard `-m "not slow"` gate never ran it and `KeyError: 'kb_state'` went unseen.
+        That mark is gone (S1/S2, 2026-07-30) — this test cost wall clock, never a model, and
+        now runs on every push, which is the whole point of having split the mark in two.
         A `.get()` default would have hidden it permanently — the subscript is deliberate.
         """
         not_ready = [

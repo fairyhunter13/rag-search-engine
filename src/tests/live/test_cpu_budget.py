@@ -144,7 +144,7 @@ def _watcher_activity() -> tuple[int, int, int]:
     )
 
 
-@pytest.mark.slow
+@pytest.mark.exclusive
 def test_cb3_idle_cpu_under_one_percent_core():
     """With sweeps quiescent, the daemon's own DeltaCPU/Deltawall must stay < 1% of one core.
 
@@ -225,7 +225,7 @@ def _write_cb4_workspace(root, tag: str) -> None:
         (root / f"mod_{tag}_{i}.py").write_text("\n".join(lines) + "\n")
 
 
-@pytest.mark.slow
+@pytest.mark.exclusive
 def test_cb4_active_work_capped_and_throttled(safe_tmp_path):
     """Sustained real indexing work must never exceed ~1 core, and cpu.stat's throttle
     counters must climb -- proof the ceiling is physically kernel-enforced, not merely that
@@ -330,7 +330,7 @@ _CB6_BURN_PY = (
 )
 
 
-@pytest.mark.slow
+@pytest.mark.exclusive
 def test_cb6_systemd_scope_delegation_hermetic_proof(tmp_path):
     """Independent of the RSE daemon: a fresh `systemd-run --user --scope` with
     CPUQuota=100% must actually throttle a 4-process CPU burn -- proves the `cpu`

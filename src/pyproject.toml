@@ -166,5 +166,11 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["src/tests"]
 markers = [
     "live: requires daemon at :8765, CUDA GPU — hard-fails if daemon/GPU absent (never skipped)",
-    "slow: LLM-heavy tests (>30s each) — skip for fast smoke checks with -m 'live and not slow'",
+    # `slow` used to mean both of the below at once, and that conflation is what rotted gates.
+    # Measured 2026-07-30: of 47 `slow` tests only 13 reached a model and 3 needed a quiet daemon.
+    # The other 31 cost wall clock alone, yet one `-m 'not slow'` excluded all 47 from every push —
+    # so a third of the suite ran only on a manual dispatch nobody dispatches. Six gates rotted in
+    # one week behind that mark. Two narrow reasons replace one broad one.
+    "costly: spends real Claude session quota (`claude -p` via /api/chat_stream) — dispatch only",
+    "exclusive: needs a quiescent daemon to measure it (CB3/CB4/CB6) — never beside other load",
 ]

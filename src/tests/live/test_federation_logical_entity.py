@@ -48,7 +48,6 @@ def _clean(paths):
 # Invariant #4: search + ask fan out through expand_federation to members
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 def test_inv4_root_scoped_search_fanout(safe_tmp_path):
     """Invariant #4: search([root]) and run_ask(root) fan out to member content."""
     from rag_search.core.config import ProjectEntry
@@ -88,7 +87,6 @@ def test_inv4_root_scoped_search_fanout(safe_tmp_path):
 # Invariant #5: graph(definition) resolves symbols from member's graph.db
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 def test_inv5_graph_definition_fanout(safe_tmp_path):
     """Invariant #5: graph(symbol, root) unions definition matches across members."""
     from rag_search.core.config import ProjectEntry
@@ -120,7 +118,6 @@ def test_inv5_graph_definition_fanout(safe_tmp_path):
 # Invariant #7: overview(status, root) aggregates counts + includes members[]
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 def test_inv7_overview_status_aggregates(safe_tmp_path):
     """Invariant #7: overview(status, root) sums symbols+communities across members."""
     from rag_search.core.config import ProjectEntry

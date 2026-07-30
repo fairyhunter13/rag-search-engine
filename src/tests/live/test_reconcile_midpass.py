@@ -14,7 +14,6 @@ from tests.live._sweeps import local_sweeps_paused
 pytestmark = pytest.mark.live
 
 
-@pytest.mark.slow
 def test_reconcile_pause_stops_mid_pass(safe_tmp_path):
     """Cooperative-cancellation: pause mid-pass; fewer than N members must be indexed.
 

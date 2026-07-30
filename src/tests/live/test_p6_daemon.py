@@ -168,7 +168,6 @@ def test_federation_discover_empty_dir(tmp_path):
     assert discover_members(str(tmp_path)) == []
 
 
-@pytest.mark.slow
 def test_sweeps_reconcile_skips_complete_project(safe_tmp_path):
     """reconcile_projects must skip an already-indexed project.
 
@@ -520,7 +519,6 @@ def test_rl2_api_reload_refuses_while_this_suite_holds_the_lease():
                     "— the daemon is now restarting underneath the rest of the run")
 
 
-@pytest.mark.slow
 def test_api_reload_returns_reloading():
     """P10.7/P15.2: POST /api/reload on the LIVE daemon — handler sends SIGTERM
     to os.getpid() so in-process TestClient would kill the test process.
@@ -731,7 +729,6 @@ def test_p20_index_members_discovers_federation_members(safe_tmp_path):
         remove_project(str(member))
 
 
-@pytest.mark.slow
 def test_p20_indexed_at_stamped(safe_tmp_path):
     """P20.2: _index_project() stamps indexed_at + file_count on the registry entry."""
     from rag_search.core.config import ProjectEntry
@@ -802,7 +799,6 @@ def test_daemon_startup_imports_resolve():
     assert Scheduler is not None
 
 
-@pytest.mark.slow
 def test_p22_incremental_reindex_idempotent(safe_tmp_path):
     """P22.3: incremental reindex is idempotent — chunk count stable, no UNIQUE constraint error."""
     from rag_search.core.config import ProjectEntry, project_vector_db
@@ -935,7 +931,6 @@ def test_p21_community_labels_set_without_llm(tmp_path):
         gs.close()
 
 
-@pytest.mark.slow
 def test_p21_burst_labels_all_communities(safe_tmp_path):
     """P21.3: _label_project labels ALL title IS NULL communities (no LIMIT 20 cap)."""
     from rag_search.core.config import ProjectEntry, project_graph_db
@@ -969,7 +964,6 @@ def test_p21_burst_labels_all_communities(safe_tmp_path):
         remove_project(proj)
 
 
-@pytest.mark.slow
 def test_p21_burst_label_federation(safe_tmp_path):
     """P21.4: burst_label_federation labels root + member, reports aggregate totals."""
     from rag_search.core.config import ProjectEntry, project_graph_db
@@ -1007,7 +1001,6 @@ def test_p21_burst_label_federation(safe_tmp_path):
         remove_project(member_path)
 
 
-@pytest.mark.slow
 def test_p34_watcher_updates_vector_index(tmp_path):
     """P34.1: watcher fires on_change → _index_files; new file found in vector search."""
     import time
@@ -1105,7 +1098,6 @@ def test_registry_filters_legacy_watch_field(safe_tmp_path):
     assert "watch" not in {f.name for f in fields(ProjectEntry)}
 
 
-@pytest.mark.slow
 def test_on_change_lane_debounce(safe_tmp_path):
     """Debounce: on_change within _LANE_DEBOUNCE_S of a prior pass skips the graph lane."""
     import time
@@ -1489,7 +1481,6 @@ def test_env_thread_caps_set_at_import():
 # (Banner was "Gap 5 F3: BPRE metrics surface" — it had already drifted off its own
 #  section before R0 deleted the subject; the test below is and was a CUDA-EP guard.)
 
-@pytest.mark.slow
 def test_idle_unload_then_cuda_reload():
     """Force idle-unload in-process; reload must rebind CUDA EP (GPU-only invariant holds)."""
     import gc
