@@ -114,9 +114,13 @@ def clean_orphans(
                                help="Proceed even when the sweep would take most of the tree."),
 ) -> None:
     """Remove orphan index dirs (dry-run by default)."""
-    import shutil
-
-    from rag_search.core.orphans import OrphanSweepRefusedError, orphan_dirs
+    from rag_search.core.config import INDEX_ROOT
+    from rag_search.core.orphans import (
+        TRASH_DIRNAME,
+        OrphanSweepRefusedError,
+        orphan_dirs,
+        quarantine,
+    )
     # The ownership test and its floor both live in `core.orphans`: this command deleted the whole
     # fleet's index once by comparing a registry path against a dir name, and the corrected
     # comparison then lived here while `maintenance()` kept the broken one. One copy, one fix.
@@ -132,11 +136,16 @@ def clean_orphans(
     removed = 0
     for d in orphans:
         if yes:
-            shutil.rmtree(d, ignore_errors=True)
-            removed += 1
+            if quarantine(d) is not None:
+                removed += 1
         else:
             typer.echo(f"orphan: {d}")
-    typer.echo(f"Removed {removed}." if yes else "Run with --yes to delete.")
+    if yes:
+        # Say where they went. "Removed 179." after the incident would have been the last chance to
+        # learn the stores were still on disk, spent on a word that implies they are not.
+        typer.echo(f"Quarantined {removed} to {INDEX_ROOT / TRASH_DIRNAME} (expires after 7 days).")
+    else:
+        typer.echo("Run with --yes to quarantine.")
 
 
 @app.command()

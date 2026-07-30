@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import shutil
 import threading
 import time
 
@@ -1043,11 +1042,19 @@ def maintenance() -> None:
     import sqlite3  # noqa: F401 — ensure available before list_projects() import
 
     from rag_search.core.config import INDEX_ROOT, project_graph_db, project_vector_db
-    from rag_search.core.orphans import OrphanSweepRefusedError, orphan_dirs
+    from rag_search.core.orphans import (
+        OrphanSweepRefusedError,
+        expire_trash,
+        orphan_dirs,
+        quarantine,
+    )
     from rag_search.core.registry import list_projects
 
     if not INDEX_ROOT.exists():
         return
+    # Before filling the trash, not after: an expiry that ran afterwards would measure the age of
+    # dirs this very pass created, and on a clock skew or a zero TTL would collect them immediately.
+    expire_trash()
     # Never `allow_bulk`: this runs unattended every 6 h, so there is nobody here to read a refusal
     # and decide. A refused sweep costs disk until an operator looks; an unrefused wrong one costs a
     # full GPU re-index of the fleet. The vacuum pass below is unaffected and still runs.
@@ -1057,8 +1064,8 @@ def maintenance() -> None:
         log.error("orphan sweep refused, deleted nothing: %s", exc)
         orphans = []
     for d in orphans:
-        log.info("vacuum orphan: %s", d)
-        shutil.rmtree(d, ignore_errors=True)
+        dest = quarantine(d)
+        log.info("vacuum orphan: %s -> %s", d, dest or "(left in place, quarantine failed)")
 
     for entry in list_projects():
         if not entry.enabled:
