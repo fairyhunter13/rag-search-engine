@@ -42,3 +42,46 @@ def test_mp1_the_gate_refuses_a_measurement_taken_inside_the_live_suite() -> Non
     assert any("bin/pytest" in p for p in conditions["heavy_processes"]), (
         "the gate refused, but not for the pytest process it is running inside — its process scan "
         f"is not seeing this run: {conditions['heavy_processes']}")
+
+
+def test_mp2_a_shell_merely_naming_a_heavy_pass_is_not_counted_as_one() -> None:
+    """MP2 — a `sh -c` payload that mentions a heavy pass must not be counted as running one.
+
+    MP1 above is satisfied by a scan that matches any command line containing `bin/pytest`,
+    including the wrapper shell that launched this run — so on its own it does not prove the scan
+    finds real interpreters. Measured 2026-07-31: with the wrapper counted, three consecutive
+    readings against a *single* live suite reported 3, 6 and 4 heavy passes, the variation being
+    the probe commands' own shells. A gate that counts its own observation cannot reach zero once
+    any such wrapper lingers, which is a gate that never lets a measurement happen.
+
+    Driven with a real subprocess rather than a synthetic cmdline: the property is about what
+    `/proc` actually contains, so anything short of a live pid would assert the fixture instead.
+    """
+    import importlib.util
+    import subprocess
+    import time
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "measure_preconditions.py"
+    spec = importlib.util.spec_from_file_location("_measure_preconditions_mp2", script)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # The payload names a heavy pass but runs none. The trailing `true` is load-bearing: `sh -c`
+    # *execs* its last simple command, which would replace the payload in /proc with a bare
+    # `sleep 10` and leave nothing for the scan to wrongly match — the test would then pass
+    # against the unfixed scan too.
+    decoy = subprocess.Popen(
+        ["/bin/sh", "-c", "# MP2-DECOY .venv/bin/pytest src/tests/live/\nsleep 10\ntrue"])
+    try:
+        time.sleep(0.5)  # let the fork land in /proc before scanning it
+        assert "MP2-DECOY" in (Path(f"/proc/{decoy.pid}/cmdline").read_bytes().decode(
+            errors="replace")), "the decoy exec'd away its payload, so this proves nothing"
+        found = mod._heavy_processes()
+        assert not any("MP2-DECOY" in p for p in found), (
+            "a shell whose payload merely mentions bin/pytest was counted as a heavy pass; the "
+            f"scan is reading command-line text as execution: {found}")
+    finally:
+        decoy.kill()
+        decoy.wait(timeout=10)
