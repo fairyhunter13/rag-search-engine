@@ -115,8 +115,21 @@ jobs:
     if: github.actor == 'fairyhunter13' && github.ref == 'refs/heads/main' && github.repository == 'fairyhunter13/rag-search-engine'
 
     steps:
-      - name: Verify daemon is running
-        run: curl -sf http://localhost:8765/api/projects > /dev/null
+      - name: Wait for daemon readiness (bounded, 30s)
+        # C4: a cold daemon and a broken one both fail `curl -sf` with exit 7, so the previous
+        # one-shot check reported "still warming up" as "CI is red". Post-restart recovery is
+        # measured at ~21 s, ~17 s of which is the GPU embedder warm-up (GPU-only, no CPU
+        # fallback), so a single probe could lose that race whenever anything had just restarted
+        # the daemon. Poll to 30 s, then fail loudly with the actual curl diagnostics so the two
+        # cases are distinguishable in the log instead of both reading as exit 7.
+        run: |
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8765/api/projects > /dev/null && exit 0
+            sleep 1
+          done
+          echo "::error::daemon at :8765 not ready after 30s"
+          curl -sv http://localhost:8765/api/projects 2>&1 | tail -20
+          exit 1
 
       - name: Run fast live tests (all non-slow)
         # In the indexed dev tree ($RSE_DEV_REPO) with its .venv. Flags mirror the
@@ -153,8 +166,21 @@ jobs:
     if: github.actor == 'fairyhunter13' && github.event_name == 'workflow_dispatch'
 
     steps:
-      - name: Verify daemon is running
-        run: curl -sf http://localhost:8765/api/projects > /dev/null
+      - name: Wait for daemon readiness (bounded, 30s)
+        # C4: a cold daemon and a broken one both fail `curl -sf` with exit 7, so the previous
+        # one-shot check reported "still warming up" as "CI is red". Post-restart recovery is
+        # measured at ~21 s, ~17 s of which is the GPU embedder warm-up (GPU-only, no CPU
+        # fallback), so a single probe could lose that race whenever anything had just restarted
+        # the daemon. Poll to 30 s, then fail loudly with the actual curl diagnostics so the two
+        # cases are distinguishable in the log instead of both reading as exit 7.
+        run: |
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8765/api/projects > /dev/null && exit 0
+            sleep 1
+          done
+          echo "::error::daemon at :8765 not ready after 30s"
+          curl -sv http://localhost:8765/api/projects 2>&1 | tail -20
+          exit 1
 
       - name: Run full live suite (all tests including slow)
         # Same indexed-dev-tree model as live-fast; job-level timeout-minutes bounds the run.

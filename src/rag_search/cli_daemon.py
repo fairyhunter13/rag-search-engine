@@ -51,8 +51,16 @@ def daemon_stop(
     from rag_search.core.config import DAEMON_HOST, DAEMON_PORT
     h, p = host or DAEMON_HOST, port or DAEMON_PORT
     try:
-        requests.post(f"http://{h}:{p}/api/reload?restart=false", timeout=3)
-        typer.echo("Stop signal sent.")
+        r = requests.post(f"http://{h}:{p}/api/reload?restart=false", timeout=3)
+        # 409 = a sweeps pause lease is held, i.e. a live suite or purge run owns this daemon.
+        # Report it rather than printing "Stop signal sent." over a stop that did not happen —
+        # the operator would otherwise go on to debug a daemon they believe they took down.
+        if r.status_code == 409:
+            typer.echo(f"Refused: {r.json().get('reason', 'daemon is in use')} "
+                       f"— override with `curl -X POST "
+                       f"'http://{h}:{p}/api/reload?restart=false&force=true'`.")
+        else:
+            typer.echo("Stop signal sent.")
     except Exception as exc:
         typer.echo(f"Could not reach daemon: {exc}")
 
