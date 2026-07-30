@@ -19,6 +19,10 @@ FE8  — the daemon's OWN environment carries a non-empty RSE_FEDERATION_EXCLUDE
 FE9  — no enabled registry row is excluded under that value (discovery/exclusion agree).
 FE10 — every armed disabled row (indexed_at is None, path still on disk) IS excluded by it,
        so no row is one member-discovery pass away from being re-enabled and re-indexed.
+FE11 — sufficiency: FE8-FE10 would ALL stay green with the drop-in deleted, because a member
+       that was never registered appears in no row FE9/FE10 inspect. So FE11 runs the real
+       discovery walker twice — with the daemon's value and with none — and requires the
+       second to return strictly more. That is the fact the fleet actually rests on.
 """
 from __future__ import annotations
 
@@ -269,6 +273,21 @@ def _armed_but_uncovered(projects, value: str) -> list[str]:
         ]
 
 
+def _members_the_exclusion_removes(root: str, value: str) -> list[str]:
+    """Members `discover_members` would return under no exclusion that `value` keeps out.
+
+    Asks the production walker instead of re-deriving its filter here, so it measures the path
+    that actually creates registry rows: `index_members` upserts every returned member as
+    `enabled=True`, and reconcile indexes it from there. Re-deriving the filter would only prove
+    the filter agrees with itself.
+    """
+    from rag_search.daemon.federation import discover_members
+    with _under_exclusion(""):
+        without = set(discover_members(root))
+    with _under_exclusion(value):
+        return sorted(without - set(discover_members(root)))
+
+
 def test_fe8_daemon_env_carries_federation_exclude():
     """FE8: the live daemon process has a non-empty, parseable RSE_FEDERATION_EXCLUDE."""
     from rag_search.core.config import _federation_exclude_entries
@@ -305,8 +324,12 @@ def test_fe10_armed_disabled_rows_are_covered_by_the_exclusion():
     `enabled=False, indexed_at=None` is an *armed* row: `_needs_index()` returns True, and
     `register_all_members()` re-enables any discovered member at every daemon start. The only
     thing between such a row and a re-index is the exclusion, so the covering set is derived
-    from live registry state rather than hand-written here — drop the worktree glob from the
-    drop-in and this goes red without anyone having to remember to update a list in this file.
+    from live registry state rather than hand-written here.
+
+    It does NOT follow that dropping the glob turns this red — that claim stood here until
+    2026-07-30 and is measurably false. Discovery would register the worktrees as `enabled=True`,
+    which this test does not look at; the registry currently holds zero disabled rows, so this
+    assertion is vacuously true today. FE11's live half is what actually catches a lost drop-in.
     """
     from rag_search.core.registry import list_projects
 
@@ -319,20 +342,40 @@ def test_fe10_armed_disabled_rows_are_covered_by_the_exclusion():
 
 
 def test_fe11_the_gates_fire_when_the_exclusion_is_lost(tmp_path):
-    """FE11 sufficiency: prove FE9/FE10 can go red — without touching the live drop-in.
+    """FE11 sufficiency: prove the exclusion is load-bearing — without touching the live drop-in.
 
     The drop-in is the only copy of the production value, so "unset it and watch" is not an
-    available experiment. Losing it is modelled as the empty value (exactly what the daemon
-    would receive if the file were deleted and the unit reloaded) fed to the same detectors.
-    Real registry rows for FE10, injected rows for FE9: injection, not patching.
+    available experiment. Losing it is modelled as the empty value (exactly what the daemon would
+    receive if the file were deleted and the unit reloaded) fed to the same production code.
+
+    The live half used to ask a different question — "does any armed disabled row go un-excluded
+    with the value gone?" — and it was **flaky by construction**, passing locally and failing on
+    the runner 40 min later with no code change between. Measured 2026-07-30: 152 registry rows,
+    every one enabled, **zero disabled and zero armed**. That is not the exclusion decaying, it is
+    the exclusion *working* — it filters at discovery time, so the rows FE10 looks for are never
+    created. FE10 is a downstream guard whose subject is empty precisely because the upstream one
+    holds, and an assertion about an empty set is a coin flip, not a gate.
+
+    Worse, the pair is not sufficient without this: delete the drop-in and discovery registers the
+    58 worktrees as `enabled=True` (`index_members`), which FE10 does not look at and FE9 does not
+    flag because nothing excludes them any more. **Both would stay green.** So the live half now
+    asserts the fact that actually holds them out — that member discovery, run for real, returns
+    strictly fewer members under the daemon's value than under none. Measured: 193 -> 135, i.e. 58
+    `_worktrees` members and ~10 s of walking, which is what this test costs. It self-retires
+    honestly: when nothing on disk needs excluding any more, the count goes to zero and the message
+    says to retire FE8-FE10 with it.
     """
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import list_projects
 
-    assert _armed_but_uncovered(list_projects(), ""), (
-        "FE10 is vacuous: with the exclusion gone, not one armed disabled row is reported, so "
-        "FE10 would stay green with the drop-in deleted. Either nothing in the fleet depends "
-        "on the exclusion any more (retire FE10 with it) or the filter is wrong."
+    roots = [p.path for p in list_projects() if p.federation]
+    kept_out = [m for r in roots
+                for m in _members_the_exclusion_removes(r, _daemon_env().get(_VAR, ""))]
+    assert kept_out, (
+        f"the exclusion keeps nothing out of member discovery across {len(roots)} federation "
+        "root(s), so FE9 and FE10 would BOTH stay green with the drop-in deleted — neither "
+        "looks at a member that was never registered. Either nothing on disk depends on the "
+        f"exclusion any more (retire FE8-FE10 with it) or discovery changed. Roots: {roots}"
     )
     covered = tmp_path / "excluded-repo"
     covered.mkdir()
