@@ -43,6 +43,11 @@ _LIST_PROJECTS_ALLOWLIST = {
     # synthetic registry would assert the exclusion covers rows the exclusion invented. No path is
     # extracted for data use; the rows are counted and matched against the daemon's env.
     "test_federation_exclude.py",
+    # CL2: asserts `purge_rows_under` kept the live run's row and dropped the dead one. Both paths
+    # are created by the test under `_SAFE_BASE` and matched by equality against the listing — it
+    # reads the registry to check *its own two rows' membership*, never to pick a project out of
+    # it, which is the thing this guard exists to stop. Landed red in d5ef403.
+    "test_run_isolation.py",
     "test_no_real_project_in_tests.py",  # this file
 }
 
