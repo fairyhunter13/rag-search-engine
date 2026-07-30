@@ -267,9 +267,15 @@ def test_mcp_search_subdir_resolves_to_root(service_path):
     )
     assert result["total"] > 0, "Expected results from indexed project"
 
+    # A scope that resolved to no store at all is an error naming what went unread, not an empty
+    # result set (cc3d208 / SU1). This arm used to assert `total == 0`, which is a statement about
+    # the *query* standing in for one about the *index* — the two are indistinguishable at the call
+    # site and only one of them means "look somewhere else".
     outside = json.loads(asyncio.run(search_tool("function definition", project_paths=["/nonexistent/path"])))
-    assert outside["total"] == 0
-    assert outside["projects_searched"] == []
+    assert "error" in outside, f"a search that opened zero stores reported an ordinary miss: {outside}"
+    assert "/nonexistent/path" in outside.get("unindexed", []), (
+        f"the error must name the scope it could not read, or it cannot be acted on: {outside}")
+    assert not outside.get("results"), outside
 
 
 def test_auto_pipeline_status_real(live_client, safe_tmp_path):
