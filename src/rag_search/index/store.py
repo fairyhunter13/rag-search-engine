@@ -39,6 +39,17 @@ BIN_REV = "vec0-bit-signbit-1"
 # constant rather than a literal so the gate can be re-run against a different value.
 BIN_OVERSAMPLE = 4
 
+# Below this many chunks the two-stage costs more than the scan it replaces, so `search` stays on
+# the float32 lane. The rescore is priced per candidate and is near-constant in store size — vec0
+# fetches each shortlisted vector by rowid, and one batched statement measured identical to 40
+# point queries (13.6 ms either way), so it cannot be amortised — while the exact scan grows with
+# the store: 3.0 ms exact vs 8.5 ms two-stage at 2,536 chunks, 152 ms vs 24 ms at 111,918.
+# Ignoring that made a 193-member federated query 36% *slower* even as its largest member got
+# 1.20x faster, because 97 of 139 stores were paying the overhead to lose. Set above the
+# 6k-12k band, where repeated runs put the two lanes within +-30% of each other in both
+# directions — the crossover is real but not sharp, and the wrong side of it costs ~5 ms.
+BIN_MIN_CHUNKS = 12_000
+
 # Stores already reported as lexically unavailable, so the warning is one line per store per
 # process instead of one per query against a 189-member federation.
 _WARNED_UNMIGRATED: set[str] = set()
@@ -273,9 +284,15 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
 class VectorStore:
     """sqlite-vec backed vector store for code chunk embeddings (float32 ANN)."""
 
-    def __init__(self, db_path: Path, dim: int = 768, *, migrate: bool = True):
+    def __init__(self, db_path: Path, dim: int = 768, *, migrate: bool = True,
+                 oversample: int = BIN_OVERSAMPLE, min_two_stage: int = BIN_MIN_CHUNKS):
+        """`oversample` and `min_two_stage` are the bit lane's two tunables, taken here rather
+        than read from the module so a caller can hold two differently-configured handles on one
+        real store — which is how the gates compare the lanes without patching either constant."""
         self._con, self._lexical_ready, self._bin_ready = _open(db_path, dim, migrate)
         self._dim = dim
+        self._oversample = oversample
+        self._min_two_stage = min_two_stage
 
     @property
     def lexical_ready(self) -> bool:
@@ -399,15 +416,22 @@ class VectorStore:
         a docs query against a code-heavy repo comes back near-empty while the matching
         docs sit just past the cut. Pre-filtering asks for k rows that already qualify.
 
-        Two stages when the bit index is built: hamming over the codes for
-        `top_k * BIN_OVERSAMPLE` candidates, then exact float32 to rank them. Scores are the
-        same `1.0 - l2` on the same vectors either way, so the only difference from the exact
-        scan is *which* candidates get considered — hybrid fusion weights stay valid, and the
-        recall gate measures the approximation rather than a changed scale.
+        Two stages when the bit index is built *and* the store is big enough to pay for it
+        (`BIN_MIN_CHUNKS`): hamming over the codes for `top_k * BIN_OVERSAMPLE` candidates, then
+        exact float32 to rank them. Scores are the same `1.0 - l2` on the same vectors either way,
+        so the only difference from the exact scan is *which* candidates get considered — hybrid
+        fusion weights stay valid, and the recall gate measures the approximation rather than a
+        changed scale.
         """
         if languages is not None and not languages:
             return []
-        if self._bin_ready:
+        # Counted per query, not snapshotted at open: a store is empty when its indexing handle
+        # opens, so a snapshot would leave every freshly built store on the exact lane, and
+        # caching it means invalidating at the three write sites BQ1 already exists to police.
+        # COUNT(*) is 0.4 ms on the fleet's largest store against a 24 ms query there, and 0.004 ms
+        # on a small one. Nothing cheaper substitutes: chunk_ids are content hashes, so max(id)
+        # (1.15e18) says nothing about the row count.
+        if self._bin_ready and self.count() >= self._min_two_stage:
             return self._search_two_stage(query_vector, top_k, languages)
         v = query_vector.astype(np.float32).tobytes()
         params: list = [v, top_k]
@@ -440,7 +464,7 @@ class VectorStore:
     ) -> list[dict]:
         """Hamming shortlist over the bit codes, then exact float32 ranking of the shortlist."""
         q = query_vector.astype(np.float32)
-        params: list = [q.tobytes(), top_k * BIN_OVERSAMPLE]
+        params: list = [q.tobytes(), top_k * self._oversample]
         lang_clause = ""
         if languages is not None:
             marks = ",".join("?" * len(languages))
