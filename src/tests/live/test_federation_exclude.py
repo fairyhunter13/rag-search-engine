@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -386,3 +387,54 @@ def test_fe11_the_gates_fire_when_the_exclusion_is_lost(tmp_path):
     assert _enabled_but_excluded(rows, "") == [], "must not flag when nothing is excluded"
     assert _armed_but_uncovered(rows, "") == [both], "must flag an armed row nothing covers"
     assert _armed_but_uncovered(rows, both) == [], "must not flag a covered armed row"
+
+
+_FE12_CHILD = """
+import json, sys
+from pathlib import Path
+from rag_search.core.config import ProjectEntry
+from rag_search.core.registry import get_project, upsert_project
+from rag_search.daemon.federation import register_all_members
+
+base = Path(sys.argv[1])
+kept, excluded = base / "kept", base / "_worktrees" / "excluded"
+for p in (kept, excluded):
+    p.mkdir(parents=True)
+    (p / "main.go").write_text("package main\\n")
+    upsert_project(ProjectEntry(path=str(p), enabled=True))
+register_all_members()
+print(json.dumps({"kept": get_project(str(kept)).enabled,
+                  "excluded": get_project(str(excluded)).enabled}))
+"""
+
+
+def test_fe12_register_all_members_disables_an_excluded_row(safe_tmp_path):
+    """FE12: the daemon repairs the contradiction FE9 reports, instead of only reporting it.
+
+    FE9 asserts a *state*, and a state assertion cannot distinguish "nothing can break this" from
+    "nothing has broken it lately". It broke: 58 `_worktrees` rows sat enabled on 2026-07-30 with
+    the drop-in installed, in force, and the daemon restarted since. The reason is structural —
+    `RSE_FEDERATION_EXCLUDE` reaches only processes that were handed it, and the daemon's copy
+    comes from a systemd drop-in, so the CLI, this suite and any script run `index_members` with
+    it unset and upsert the excluded members straight back as `enabled=True`. Nothing then undid
+    it, because exclusion filters at discovery time: those paths are members of nothing any more,
+    and a row nothing discovers is a row nothing revisits.
+
+    Subprocess because `core.registry` binds `REGISTRY_PATH` at import (same reason as CO3/CO4),
+    so this drives the real `register_all_members` against a real registry file without going near
+    the fleet's. Under `safe_tmp_path` rather than `tmp_path` because `upsert_project` refuses a
+    forbidden root, `/tmp` included. `kept` is asserted alongside `excluded` on purpose: a repair
+    that disables everything would satisfy the interesting half on its own.
+    """
+    import json
+    tmp = safe_tmp_path / "fe12"
+    (tmp / "ws").mkdir(parents=True)
+    env = {**os.environ,
+           "RSE_REGISTRY_PATH": str(tmp / "projects.json"),
+           _VAR: "*/_worktrees/*"}
+    r = subprocess.run([sys.executable, "-c", _FE12_CHILD, str(tmp / "ws")],
+                       capture_output=True, text=True, env=env, timeout=180)
+    assert r.returncode == 0, f"child exit {r.returncode}: {r.stdout}\n{r.stderr}"
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert got == {"kept": True, "excluded": False}, (
+        f"register_all_members left the registry contradicting the exclusion: {got}")
