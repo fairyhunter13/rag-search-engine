@@ -62,6 +62,10 @@ class Watcher:
         self._inflight: set[str] = set()           # projects a worker is currently passing over
         self._cv = threading.Condition()
         self._workers: list[threading.Thread] = []
+        # Monotonic count of completed passes. `pending`/`inflight` are instantaneous, so they
+        # answer "is it busy now" and cannot answer "did anything happen while I wasn't looking" —
+        # which is the question an idle-CPU measurement has to ask about its own window.
+        self._dispatched = 0
 
     def watch(self, project_path: str) -> None:
         self.sync(self._paths | {project_path})
@@ -165,6 +169,7 @@ class Watcher:
             "inflight": inflight,
             "reader_alive": bool(self._thread is not None and self._thread.is_alive()),
             "workers_alive": sum(1 for t in self._workers if t.is_alive()),
+            "dispatched": self._dispatched,
         }
 
     def _enqueue(self, root: str, files: list[Path]) -> None:
@@ -196,6 +201,7 @@ class Watcher:
             finally:
                 with self._cv:
                     self._inflight.discard(root)
+                    self._dispatched += 1
                     self._cv.notify()
 
     def _loop(self) -> None:
