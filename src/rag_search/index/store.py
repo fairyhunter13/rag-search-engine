@@ -31,10 +31,18 @@ EMBED_PREFIX_REV = "noprefix-1"
 # embeddings, so changing it costs a re-tokenise and never a re-embed. Bump when the tokenizer
 # or column set changes; the guarded `rebuild` in `_open` then backfills each store once.
 FTS_REV = "fts5-unicode61-1"
+BIN_REV = "vec0-bit-signbit-1"
+# Candidates pulled from the coarse bit index per result finally returned. Measured against
+# exact float32 over 127,083 real vectors: recall@10 is 0.794 at 1x, 0.976 at 3x, 0.987 at 4x,
+# 0.993 at 8x — and 8x costs 34% more time for those 0.6 points. Flat at 0.794 for hamming
+# alone at *every* oversample, so it is the rescore that recovers rank, not the widening; a
+# constant rather than a literal so the gate can be re-run against a different value.
+BIN_OVERSAMPLE = 4
 
 # Stores already reported as lexically unavailable, so the warning is one line per store per
 # process instead of one per query against a 189-member federation.
 _WARNED_UNMIGRATED: set[str] = set()
+_WARNED_UNQUANTIZED: set[str] = set()
 
 # The pooling and prefix every stored index in the fleet was built with. While the pipeline still
 # matches these the signature stays in its four-field form, byte-identical to what is stamped
@@ -120,8 +128,10 @@ def fts_query(text: str) -> str:
     return " OR ".join(phrases)
 
 
-def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, bool]:
-    """Open (creating if absent) and return the connection plus whether the FTS index is usable."""
+def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, bool, bool]:
+    """Open (creating if absent); returns the connection and whether the FTS and bit lanes are
+    usable. Both flags mean the same thing: the index exists *and* has been backfilled, so a
+    caller must never maintain one that is merely present."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db_path), check_same_thread=False)
     con.enable_load_extension(True)
@@ -161,6 +171,22 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
             embedding FLOAT[{dim}]
         )
     """)
+    # The coarse lane: one sign bit per dimension, 96 B per chunk against 3 KB of float32. That
+    # is the whole point — the fleet's codes fit in page cache where 3.71 GB of float32 cannot,
+    # which is what removes the 10.8x cold cliff rather than merely making the scan narrower.
+    # `language` is a vec0 metadata column so a scoped query filters *inside* the KNN; vec0
+    # returns exactly k rows, so a filter on its output would silently shrink the result.
+    # Sound only because stored vectors are L2-normalised (measured mean norm 1.0000, std
+    # 0.0000), which is what makes a sign threshold a reasonable split of each dimension.
+    bin_ok = dim % 8 == 0  # vec_quantize_binary rejects anything else, at insert not at create
+    if bin_ok:
+        con.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks_bin USING vec0(
+                chunk_id INTEGER PRIMARY KEY,
+                code     bit[{dim}],
+                language TEXT
+            )
+        """)
     con.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
     # Content hash of each file whose chunks are currently embedded here, so an incremental
     # reindex can skip a file that was rewritten with identical bytes (generators and
@@ -214,21 +240,52 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
             _WARNED_UNMIGRATED.add(db_path.parent.name)
             _log.warning("fts5 index not built for %s — lexical lane disabled for this store "
                          "until it is next indexed", db_path.parent.name)
+    # Same shape as the FTS backfill above, and for the same reason: the codes derive entirely
+    # from vectors already on disk, so this needs no GPU and no re-embedding, but it must not
+    # happen on the query path. `migrate` is already the flag that means "write-path handle".
+    # Reversible by construction — the float32 vectors are untouched, so rolling back is
+    # dropping one table. The DELETE makes a half-finished previous attempt idempotent.
+    bin_owed = bin_ok and con.execute(
+        "SELECT value FROM meta WHERE key='bin_rev'"
+    ).fetchone() != (BIN_REV,)
+    if bin_owed and migrate:
+        t0 = time.monotonic()
+        con.execute("DELETE FROM vec_chunks_bin")
+        con.execute("""
+            INSERT INTO vec_chunks_bin(chunk_id, code, language)
+            SELECT v.chunk_id, vec_quantize_binary(v.embedding), c.language
+            FROM vec_chunks v JOIN chunks c USING (chunk_id)
+        """)
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('bin_rev', ?)", (BIN_REV,))
+        _log.info("bit backfill %s: %.1fs", db_path.parent.name, time.monotonic() - t0)
+        bin_owed = False
+    elif bin_owed and db_path.parent.name not in _WARNED_UNQUANTIZED:
+        # Correct but slow, exactly like the unmigrated FTS case: `search` falls back to the
+        # exact float32 KNN for this store. Announced once per process so a store that never
+        # gets a write-path open is visible instead of just being 15x slower than its siblings.
+        _WARNED_UNQUANTIZED.add(db_path.parent.name)
+        _log.warning("bit index not built for %s — exact float32 scan for this store "
+                     "until it is next indexed", db_path.parent.name)
     con.commit()
-    return con, not owed
+    return con, not owed, bin_ok and not bin_owed
 
 
 class VectorStore:
     """sqlite-vec backed vector store for code chunk embeddings (float32 ANN)."""
 
     def __init__(self, db_path: Path, dim: int = 768, *, migrate: bool = True):
-        self._con, self._lexical_ready = _open(db_path, dim, migrate)
+        self._con, self._lexical_ready, self._bin_ready = _open(db_path, dim, migrate)
         self._dim = dim
 
     @property
     def lexical_ready(self) -> bool:
         """Whether this store's FTS index is built, and so whether the lexical lane can run."""
         return self._lexical_ready
+
+    @property
+    def bin_ready(self) -> bool:
+        """Whether the coarse bit index is built, and so whether search runs in two stages."""
+        return self._bin_ready
 
     def stamp(self) -> None:
         """Record which pipeline built the vectors now held here. Call after a full reindex."""
@@ -282,6 +339,10 @@ class VectorStore:
                     (chunk_id, old[0]),
                 )
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
+            if self._bin_ready:
+                self._con.execute(
+                    "DELETE FROM vec_chunks_bin WHERE chunk_id=?", (chunk_id,)
+                )
         self._con.execute(
             "INSERT OR REPLACE INTO chunks VALUES (?,?,?,?,?,?)",
             (chunk_id, path, start, end, language, content),
@@ -296,6 +357,14 @@ class VectorStore:
         self._con.execute(
             "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?,?)", (chunk_id, v),
         )
+        # Quantised in SQL, never in numpy: vec_quantize_binary packs bits little-endian, and
+        # np.packbits defaults to big — a mismatch no test would catch as an error, only as
+        # quietly worse ranking. Same float32 blob, so the code cannot drift from the vector.
+        if self._bin_ready:
+            self._con.execute(
+                "INSERT INTO vec_chunks_bin(chunk_id, code, language)"
+                " VALUES (?, vec_quantize_binary(?), ?)", (chunk_id, v, language),
+            )
 
     def file_hash(self, path: str) -> str | None:
         """The content hash whose chunks are currently embedded for path, if any."""
@@ -329,9 +398,17 @@ class VectorStore:
         exactly k rows regardless, so filtering afterwards silently shrinks the result:
         a docs query against a code-heavy repo comes back near-empty while the matching
         docs sit just past the cut. Pre-filtering asks for k rows that already qualify.
+
+        Two stages when the bit index is built: hamming over the codes for
+        `top_k * BIN_OVERSAMPLE` candidates, then exact float32 to rank them. Scores are the
+        same `1.0 - l2` on the same vectors either way, so the only difference from the exact
+        scan is *which* candidates get considered — hybrid fusion weights stay valid, and the
+        recall gate measures the approximation rather than a changed scale.
         """
         if languages is not None and not languages:
             return []
+        if self._bin_ready:
+            return self._search_two_stage(query_vector, top_k, languages)
         v = query_vector.astype(np.float32).tobytes()
         params: list = [v, top_k]
         lang_clause = ""
@@ -356,6 +433,52 @@ class VectorStore:
             {"chunk_id": r[0], "path": r[1], "start_line": r[2], "end_line": r[3],
              "language": r[4], "content": r[5], "score": float(1.0 - r[6])}
             for r in rows
+        ]
+
+    def _search_two_stage(
+        self, query_vector: np.ndarray, top_k: int, languages: Sequence[str] | None,
+    ) -> list[dict]:
+        """Hamming shortlist over the bit codes, then exact float32 ranking of the shortlist."""
+        q = query_vector.astype(np.float32)
+        params: list = [q.tobytes(), top_k * BIN_OVERSAMPLE]
+        lang_clause = ""
+        if languages is not None:
+            marks = ",".join("?" * len(languages))
+            # A vec0 metadata column, so this constrains the KNN itself; the float32 lane has
+            # to reach into `chunks` for the same thing.
+            lang_clause = f" AND language IN ({marks})"
+            params.extend(languages)
+        candidates = [r[0] for r in self._con.execute(
+            "SELECT chunk_id FROM vec_chunks_bin"
+            f" WHERE code MATCH vec_quantize_binary(?) AND k = ?{lang_clause}", params)]
+        if not candidates:
+            return []
+        marks = ",".join("?" * len(candidates))
+        rows = self._con.execute(
+            f"""SELECT chunk_id, path, start_line, end_line, language, content
+                FROM chunks WHERE chunk_id IN ({marks})""", candidates).fetchall()
+        # One vector per statement, which looks wrong and is the fast path. vec0 answers a
+        # primary-key lookup in 0.25 ms but plans `chunk_id IN (...)` as a full table scan —
+        # 74 ms for 40 ids over 112k rows, measured, which alone was most of the query. An
+        # ordinary table like `chunks` takes the same IN in 0.05 ms. Ranking the shortlist with
+        # vec0's own MATCH plus a chunk_id pre-filter was tried and is worse still (85 ms).
+        #
+        # vec0's float `distance` is plain L2 (verified equal to numpy to 1e-6), so this
+        # reproduces the score the one-stage path returns, not merely the same order. Keyed on
+        # distance alone: 69.7% of fleet mass is duplicate content, so exact ties are ordinary,
+        # and a tuple sort would fall through to comparing rows whose start_line may be None.
+        scored = []
+        for r in rows:
+            blob = self._con.execute(
+                "SELECT embedding FROM vec_chunks WHERE chunk_id=?", (r[0],)
+            ).fetchone()[0]
+            vec = np.frombuffer(blob, dtype=np.float32)
+            scored.append((float(np.linalg.norm(q - vec)), r))
+        scored.sort(key=lambda t: t[0])
+        return [
+            {"chunk_id": r[0], "path": r[1], "start_line": r[2], "end_line": r[3],
+             "language": r[4], "content": r[5], "score": float(1.0 - dist)}
+            for dist, r in scored[:top_k]
         ]
 
     def search_lexical(
@@ -446,6 +569,8 @@ class VectorStore:
     def clear(self) -> None:
         """Drop all chunk metadata + vectors (for idempotent full reindex)."""
         self._con.execute("DELETE FROM vec_chunks")
+        if self._bin_ready:
+            self._con.execute("DELETE FROM vec_chunks_bin")
         self._con.execute("DELETE FROM chunks")
         # FTS5's own reset. Deleting row by row would re-tokenise the whole store on the way
         # out, and would have to read each `content` back to do it.
@@ -460,6 +585,8 @@ class VectorStore:
         ).fetchall()
         for cid, content in rows:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
+            if self._bin_ready:
+                self._con.execute("DELETE FROM vec_chunks_bin WHERE chunk_id=?", (cid,))
             if self._lexical_ready:
                 self._con.execute(
                     "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
