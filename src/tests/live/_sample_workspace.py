@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -89,6 +90,31 @@ def _index_members(paths: list[str]) -> None:
 # there is nothing left to re-key.
 
 
+def assert_under_test_base(path: str) -> None:
+    """Refuse to touch anything outside the suite's own base. Checked here, not by the caller.
+
+    Not hypothetical. A red demo of `purge_rows_under` ran a deliberately-broken predicate
+    in-process — through the session fixture that calls it against the *real* registry — and deleted
+    198 fleet rows and 138 stores, an hour of GPU embedding each, with no backup and no filesystem
+    snapshot to go back to. The predicate was wrong for about thirty seconds and the loss is
+    permanent.
+
+    So the destructive step re-derives authority from the path itself instead of trusting the loop
+    that selected it, and *raises* rather than skipping: a caller that has gone wrong must fail
+    loudly, not quietly do less than it believes it is doing. What makes "under the base" sufficient
+    authorisation is `test_no_real_project_in_tests.py`, the standing invariant that nothing real
+    may live there.
+    """
+    p = str(path)
+    if p != str(_SAFE_BASE) and not p.startswith(str(_SAFE_BASE) + os.sep):
+        raise AssertionError(
+            f"refusing to purge {p!r}: it is outside the test base {_SAFE_BASE}. Every registry row "
+            "and index store this suite may delete lives under that base; a path from anywhere else "
+            "belongs to a real project whose store costs an hour of GPU to rebuild. Fix the caller "
+            "that selected this path — do not relax this check."
+        )
+
+
 def purge_project(path: str) -> None:
     """Deregister a test project AND delete the index dir it created.
 
@@ -101,6 +127,7 @@ def purge_project(path: str) -> None:
     that made the mess. The sweep stays as the backstop for dirs whose name nobody remembers.
     """
     from rag_search.core.config import index_dir
+    assert_under_test_base(path)
     with contextlib.suppress(Exception):
         remove_project(path)
     shutil.rmtree(index_dir(path), ignore_errors=True)
@@ -122,6 +149,7 @@ def purge_index_dirs_under(base: Path) -> None:
     import os as _os
 
     from rag_search.core.config import index_dir
+    assert_under_test_base(base)
     base_str = str(base)
     if not base.is_dir():
         return
@@ -135,6 +163,29 @@ def purge_index_dirs_under(base: Path) -> None:
         d = index_dir(path)
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
+
+
+def purge_rows_under(base: Path) -> list[str]:
+    """Drop every registry row pointing into `base`, with the store each one owns.
+
+    Called at both ends of the session, because the daemon puts rows back: federation discovery
+    upserts every member it finds under a registered root, so a row this suite deleted at 14:00 can
+    exist again at 14:05. `purge_unowned_index_dirs_created_since` spares anything a row owns, so
+    five stores per run survived it — the row was restored by the time the diff ran, and the daemon
+    dropped it again minutes later once reconcile noticed the tree was gone, leaving a dir nothing
+    owns and nobody remembers. A row under the suite's own base is never a legitimate owner:
+    `test_no_real_project_in_tests.py` is the invariant that nothing real may live there.
+    """
+    import os as _os
+
+    from rag_search.core.registry import list_projects
+    removed: list[str] = []
+    base_str = str(base)
+    for e in list_projects():
+        if e.path == base_str or e.path.startswith(base_str + _os.sep):
+            purge_project(e.path)  # row *and* store: the row is the only handle on the dir name
+            removed.append(e.path)
+    return removed
 
 
 def index_dir_names() -> set[str]:
