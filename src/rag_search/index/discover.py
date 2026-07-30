@@ -117,6 +117,27 @@ def _include_reaches(rel_parts: tuple[str, ...], patterns: list[str]) -> bool:
     return False
 
 
+_TEXT_SNIFF_BYTES = 8192
+
+
+def _has_text_bytes(path: Path) -> bool:
+    """True if path's first 8 kB contain no NUL byte — git's text/binary test.
+
+    Rides on a read that mostly already happens: this is only consulted for files
+    `detect_language` returned "unknown" for, and that function has already opened
+    the file to sniff a shebang. Known-extension files never reach here.
+
+    An unreadable file is reported as text, matching the `stat()` failure above:
+    "cannot evaluate the policy" must not become "drop it", or a deleted file stops
+    surviving is_ignored_path and never gets purged from the index.
+    """
+    try:
+        with path.open("rb") as fh:
+            return b"\x00" not in fh.read(_TEXT_SNIFF_BYTES)
+    except OSError:
+        return True
+
+
 def _should_drop(
     full: Path, root: Path, rel_parts: tuple[str, ...], is_dir: bool,
     cfg: ProjectConfig, chain: _GitignoreChain,
@@ -161,7 +182,23 @@ def _should_drop(
         # has to survive that filter to be purged from the index at all. Caught by
         # test_daemon_incremental_reindex_purges_deleted_file, which is why that gate exists.
         return False
-    return size == 0 or size > _size_limit(detect_language(full))
+    lang = detect_language(full)
+    if size == 0 or size > _size_limit(lang):
+        return True
+    # Last rule, and only for files no grammar and no shebang could name: are these bytes
+    # even text? Nothing upstream ever asked. A .png under the 50 kB `unknown` cap was read
+    # as UTF-8 with errors="replace", chunked, embedded and returned as a search hit — one
+    # sampled chunk was literally `# Onboarding Docs/image-1.png\n\xd9g\xc3E_\x16...`. That
+    # is 174,039 chunks of mojibake fleet-wide (measured 2026-07-30), which is a precision
+    # problem before it is a cost one: those vectors sit in every KNN scan and can outrank
+    # real code.
+    #
+    # NUL in the first 8 kB is git's own text test, derived from the file instead of from a
+    # list of extensions to keep sufficient. Deliberately narrow: it does NOT try to catch
+    # minified/bundled JS (screening bundles by line geometry was measured on 2026-07-28
+    # and refuted — it deleted 54.4% of the fleet graph), and it keeps non-ASCII *text*
+    # such as gettext .po catalogues, which a printable-ASCII-ratio rule wrongly rejects.
+    return lang == "unknown" and not _has_text_bytes(full)
 
 
 # H3: non-parseable text/data formats kept explicitly; code = any language

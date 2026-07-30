@@ -435,6 +435,12 @@ def test_is_ignored_path_agrees_with_iter_files():
             "spec/oversize.yaml": "a: 1\n" * 30_000,   # ~180 kB, data cap is 100 kB
             "spec/under.yaml": "a: 1\n",
             "src/empty.py": "",                        # zero bytes is also a discovery rule
+            # The text screen, which asks the bytes rather than the extension. All three files
+            # are needed: the .png pair is what distinguishes the shipped rule from an extension
+            # list, and the .py is what proves a known language never pays the read.
+            "assets/image-1.png": "\x00" + "\xd9g\xc3E_\x16" * 20,
+            "assets/notes.png": "misnamed, but plainly text\n",
+            "src/nulled.py": "x = 1\n\x00\n",
         })
         root = Path(tmp)
         cfg = ProjectConfig()
@@ -442,10 +448,13 @@ def test_is_ignored_path_agrees_with_iter_files():
         # Derived, not hand-listed. The previous three-name list could not see a rule its own
         # fixtures never triggered, which is how the size disagreement survived this gate.
         candidates = [Path(dp) / f for dp, _d, fs in os.walk(root) for f in fs]
-        assert len(candidates) >= 7, f"fixture tree did not materialise: {candidates}"
+        assert len(candidates) >= 10, f"fixture tree did not materialise: {candidates}"
         # Agreement alone is satisfied by deleting the rule from both screens, so pin the rule.
         assert root / "spec" / "oversize.yaml" not in kept, "size cap not applied"
         assert root / "spec" / "under.yaml" in kept, "size cap swallowed a file under the cap"
+        assert root / "assets" / "image-1.png" not in kept, "non-text file was not screened out"
+        assert root / "assets" / "notes.png" in kept, "text screen keyed on the name, not the bytes"
+        assert root / "src" / "nulled.py" in kept, "text screen ran on a known-language file"
         for candidate in candidates:
             assert is_ignored_path(candidate, root, cfg) == (candidate not in kept), (
                 f"is_ignored_path/iter_files disagree on {candidate}"
