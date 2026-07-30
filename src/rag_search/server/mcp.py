@@ -289,9 +289,33 @@ async def overview(project_path: str = "", what: str = "structure", query: str =
     return await asyncio.to_thread(handle_overview, project_path, what, query)
 
 
+def _store_mb(store_dir) -> float:  # type: ignore[no-untyped-def]
+    """On-disk size of one index dir, in MB. 0.0 for a dir that is missing or unreadable.
+
+    The preview's whole job is to make the cost legible before it is paid, so a store it cannot
+    measure is reported as 0.0 rather than raising — a size lookup must not be what stops a caller
+    from removing a project.
+    """
+    if not store_dir.exists():
+        return 0.0
+    total = 0
+    for f in store_dir.rglob("*"):
+        try:
+            if f.is_file():
+                total += f.stat().st_size
+        except OSError:
+            continue
+    return total / 1_048_576
+
+
 @mcp.tool()
-async def index(project_path: str, enabled: bool = True) -> str:
-    """Register (enabled=True) or remove (enabled=False) a project."""
+async def index(project_path: str, enabled: bool = True, confirm_members: bool = False) -> str:
+    """Register (enabled=True) or remove (enabled=False) a project.
+
+    Removing a federation root removes every member with it and deletes their stores. That fans out
+    silently from one path to N, so it returns a preview instead and does nothing until you call it
+    again with confirm_members=True. A single project needs no confirmation.
+    """
     note_activity()
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import canonicalize_path, remove_project, upsert_project
@@ -305,8 +329,21 @@ async def index(project_path: str, enabled: bool = True) -> str:
 
         from rag_search.core.config import index_dir
         from rag_search.daemon.federation import expand_federation
+        targets = expand_federation(project_path)
+        # The asymmetry that makes this worth a round trip: a membership row the daemon deletes here
+        # is rediscovered on the next federation walk, but the embeddings under it are not. Undoing
+        # this costs GPU time proportional to the members, and the caller asked about one path.
+        if len(targets) > 1 and not confirm_members:
+            return json.dumps({
+                "status": "confirm_required", "path": project_path,
+                "members": targets[1:],
+                "stores": [{"path": p, "mb": round(_store_mb(index_dir(p)), 1)} for p in targets],
+                "note": (f"removing {project_path} also removes {len(targets) - 1} federation "
+                         "member(s) and deletes every store listed; re-embedding them is the cost "
+                         "of undoing it. Nothing was deleted. Repeat with confirm_members=True."),
+            })
         removed = []
-        for p in expand_federation(project_path):
+        for p in targets:
             if remove_project(p):
                 removed.append(p)
             shutil.rmtree(index_dir(p), ignore_errors=True)
