@@ -15,9 +15,75 @@ from tests.live._sweeps import renew_pause_lease, sweeps_state
 _DAEMON = "http://127.0.0.1:8765"
 
 
+def _contending_live_runs() -> list[str]:
+    """Other pytest processes running in this checkout, described well enough to go kill one.
+
+    Keyed on the contending *process*, not on whether it took the same lock file. Two sessions
+    already agreed to serialise with `flock` and still collided, because each had invented its own
+    lock name — a convention can be followed to the letter by both parties and still serialise
+    against nobody, which is why identity beats labels here ([[the migration-tracker lesson]]).
+
+    Our own ancestors are excluded, and that exclusion is the whole difficulty: the shell wrapper
+    and the `timeout` that launched this run both carry the word "pytest" in their command line, so
+    a check that skipped only `getpid()` reported *itself* as a contender and refused every run.
+    """
+    from pathlib import Path
+
+    def ppid_of(pid: int) -> int:
+        # Field 4 of /proc/<pid>/stat, read after the last ')': comm can hold spaces and parens.
+        stat = Path("/proc", str(pid), "stat").read_text()
+        return int(stat[stat.rindex(")") + 1:].split()[1])
+
+    repo, found = str(Path(__file__).parents[3]), []
+    mine, pid = set(), os.getpid()
+    while pid > 1 and pid not in mine:
+        mine.add(pid)
+        try:
+            pid = ppid_of(pid)
+        except (OSError, ValueError):
+            break
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) in mine:
+            continue
+        with contextlib.suppress(OSError):
+            argv = [a for a in entry.joinpath("cmdline").read_bytes().split(b"\0") if a]
+            # argv[0] must itself be pytest or an interpreter running it — not merely a process
+            # whose command line mentions it. `bash -c "... pytest ..."` and `flock lock pytest`
+            # match a substring test, and a wrapper shell that outlives its pytest would then
+            # block every later run forever. The wrapped run is still caught: its own pytest
+            # appears here the moment it starts, and whichever suite starts second sees the first.
+            head = os.path.basename(argv[0].decode("utf-8", "replace")) if argv else ""
+            is_pytest = head == "pytest" or (
+                head.startswith("python")
+                and any(os.path.basename(a.decode("utf-8", "replace")) == "pytest" for a in argv)
+            )
+            if not is_pytest or os.readlink(entry / "cwd") != repo:
+                continue
+            env = entry.joinpath("environ").read_bytes().decode("utf-8", "replace")
+            profile = next(
+                (v.split("=", 1)[1] for v in env.split("\0") if v.startswith("CLAUDE_CONFIG_DIR=")),
+                "unknown profile",
+            )
+            cmd = b" ".join(a for a in argv if a).decode("utf-8", "replace")
+            found.append(f"  pid {entry.name} [{profile}]: {cmd[:110]}")
+    return found
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "live: requires CUDA GPU + daemon at :8765")
     config.addinivalue_line("markers", "slow: LLM-heavy (>30s)")
+    contenders = _contending_live_runs()
+    if contenders:
+        raise pytest.UsageError(
+            "another pytest run is already working in this checkout:\n"
+            + "\n".join(contenders)
+            + "\n\nTwo live suites share one 1-core daemon cgroup, one GPU, one registry and one "
+            "global sweep pause, so they do not merely run slowly — they corrupt each other's "
+            "measurements. On 2026-07-30 an undetected overlap produced CB3 reading 0.44 core on "
+            "an 'idle' daemon, a 5s /api/metrics timeout, 106 pause calls against 4 resumes, two "
+            "leaked store sets and 11 setup errors that vanished on re-run; three were chased as "
+            "regressions before the second suite was found. Wait for it, or kill it, then re-run."
+        )
 
 
 _session_exitstatus: int | None = None

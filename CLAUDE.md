@@ -13,6 +13,20 @@ This rule applies to EVERY codebase question, even ones that seem simple. Traini
 
 ## Running tests and quality checks
 
+**One live suite at a time — the suite now enforces this itself.** Multiple agent profiles work in
+this checkout (`~/.claude`, `~/.claude-1`, `~/.claude-2`), and two concurrent live suites share one
+1-core daemon cgroup, one GPU, one registry and one global sweep pause, so they contaminate each
+other's measurements rather than merely running slowly. `pytest_configure` aborts with a
+`UsageError` naming the other run's pid and profile (`_contending_live_runs`,
+`src/tests/live/conftest.py`). Don't wrap runs in `flock` — that was the previous convention and it
+failed silently: on 2026-07-30 two sessions each invented their own lock name
+(`/tmp/rse-live.lock` vs `/tmp/rse-live-tests.lock`) and so serialised against nobody. A collision
+never announces itself as one; it surfaced as CB3 measuring 0.44 core on an "idle" daemon, a 5 s
+`/api/metrics` timeout, 106 pause calls against 4 resumes, two leaked sample-workspace store sets,
+and 11 session-setup errors that vanished on re-run — three chased as regressions first. The gate
+keys on the contending process, not on a shared lock name, because both parties can honour a
+convention to the letter and still collide.
+
 ```bash
 # Fast smoke check — skips LLM quality tests + browser tests (~5 min)
 .venv/bin/pytest src/tests/live/ -m "live and not slow" --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
