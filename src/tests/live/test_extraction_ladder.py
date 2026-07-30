@@ -125,3 +125,39 @@ def test_el6_stats_symbol_count_matches_returned_symbols() -> None:
                             ("a.txt", "hello", "unknown")]:
         syms, st = _stats(name, src, lang)
         assert st.symbol_count == len(syms), name
+
+
+_SCSS = "@mixin fc($a) { color: $a; }\n@function double($n) { @return $n * 2; }\n.btn { color: red }\n"
+
+
+def test_el7_a_structureless_grammar_reaches_rung_4_instead_of_zero() -> None:
+    """EL7 — scss has no `process()` structure and no definition-suffixed nodes, so rung 3 and
+    the generic walk both come back empty and it extracted **nothing** until rung 4 landed.
+
+    It stands in for the long tail generally: `highlights.scm` exists for 237 of the pack's 306
+    languages against 48 for `tags`, and measured on this fallback set `tags` is empty for every
+    one of them — which is why the ladder has no tags rung at all.
+    """
+    syms, st = _stats("a.scss", _SCSS, "scss")
+    assert st.rung == "highlights", f"expected rung 4, got {st.rung}"
+    assert {s.name for s in syms} == {"fc", "double"}, [s.name for s in syms]
+
+
+def test_el8_rung_4_does_not_invent_a_definition_for_a_call_site() -> None:
+    """EL8 — the failure rung 4 exists to avoid, and the reason it is trusted last.
+
+    `highlights.scm` says what a token *is*, never where it is defined: python's `@function`
+    capture fires on the callee of `helper(a)` and bash's on the `echo` of a command. An
+    unfiltered rung 4 would therefore mint a definition for every call site — "confidently
+    extracting the wrong thing", which is worse than extracting nothing, because a wrong symbol
+    is indistinguishable from a right one downstream.
+
+    Asserted through the whole extractor rather than against `_highlight_walk` directly, so it
+    still holds if the ladder is reordered and rung 4 starts firing where rung 3 does today.
+    """
+    cases = [("a.py", "def top(a):\n    return helper(a)\n", "python", "helper"),
+             ("a.sh", "foo() {\n  echo hi\n}\n", "bash", "echo")]
+    for name, src, lang, called in cases:
+        syms, _ = _stats(name, src, lang)
+        bogus = [s for s in syms if s.name == called and s.start_line > 1]
+        assert not bogus, f"{lang}: call site {called!r} became a symbol: {bogus}"
