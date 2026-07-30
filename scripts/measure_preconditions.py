@@ -42,18 +42,44 @@ def _load_1m() -> float:
     return os.getloadavg()[0]
 
 
+_SHELLS = ("bash", "sh", "dash", "zsh")
+
+
 def _heavy_processes() -> list[str]:
-    """Repo-owned heavy passes currently running, by full command line."""
+    """Repo-owned heavy passes currently running, by full command line.
+
+    A `sh -c '<script>'` wrapper is skipped even when its payload names one of the fragments,
+    because the payload is *text describing* a command, not a command being run — the pass it
+    launches shows up separately, under its own interpreter, and is what deserves to be counted.
+
+    Measured 2026-07-31, which is why this is not a tidy-up: against a single live suite the count
+    read 3, then 6, then 4 within seconds. The variation was **the act of checking** — every probe
+    ran under a wrapper whose command line contained the string `bin/pytest`, so the gate was
+    counting its own observation. Two consequences beyond a wrong number, and both are worse than
+    it: a wrapper that lingers after its pass exits keeps the gate refusing forever, which is a
+    gate that cannot clear; and MP1 asserts the reason *names the pytest process*, an assertion a
+    shell wrapper merely mentioning pytest satisfies just as well — so the witness was reading as
+    stronger than it was.
+
+    Over-counting is the safe direction for a refusal and that is exactly why it survived: the
+    gate went on refusing for a good reason while its stated reason was noise.
+    """
     found = []
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
         try:
-            argv = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            args = (entry / "cmdline").read_bytes().split(b"\0")
         except OSError:
             continue  # the process exited between listing and reading; not an error
-        if argv and any(frag in argv for frag in _HEAVY):
-            found.append(" ".join(argv.split())[:120])
+        argv = [a.decode(errors="replace") for a in args if a]
+        if not argv:
+            continue  # kernel thread
+        if Path(argv[0]).name in _SHELLS and "-c" in argv[1:]:
+            continue
+        line = " ".join(argv)
+        if any(frag in line for frag in _HEAVY):
+            found.append(" ".join(line.split())[:120])
     return found
 
 
