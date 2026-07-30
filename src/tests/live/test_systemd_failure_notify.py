@@ -44,8 +44,9 @@ def test_se3_the_unit_names_a_failure_handler_and_that_handler_exists():
 
     assert f"OnFailure={NOTIFY_UNIT}" in unit_text("/usr/bin/rag-search"), (
         "the generated unit emits no OnFailure= — the notifier can never be activated")
-    if not _loaded(UNIT_NAME):
-        pytest.skip(f"{UNIT_NAME} is not loaded on this host")
+    assert _loaded(UNIT_NAME), (
+        f"{UNIT_NAME} is not loaded, yet the live suite just reached a daemon it starts — the "
+        "host is in a state this test cannot interpret, which is a failure, not a pass")
     assert _loaded(NOTIFY_UNIT), (
         f"{NOTIFY_UNIT} is not loadable, so OnFailure= names a unit that is not there")
 
@@ -65,8 +66,9 @@ def test_se4_the_deployed_notifier_is_the_one_the_repo_generates():
         "dismissed reflexively, which is the same as not having one")
 
     live = os.path.expanduser(f"~/.config/systemd/user/{NOTIFY_UNIT}")
-    if not os.path.exists(live):
-        pytest.skip(f"{NOTIFY_UNIT} is not deployed on this host")
+    assert os.path.exists(live), (
+        f"{NOTIFY_UNIT} is not deployed to {live} — SE3 requires the daemon's OnFailure= to name a "
+        "loadable unit, so a missing one is the residue this file exists to close, not a skip")
     with open(live) as fh:
         assert fh.read() == generated, (
             f"the deployed {NOTIFY_UNIT} differs from what install() writes — the host was edited "
@@ -94,8 +96,9 @@ def test_se5_onfailure_actually_activates_the_notifier():
     """
     from rag_search.daemon.systemd import NOTIFY_UNIT
 
-    if not _loaded(NOTIFY_UNIT):
-        pytest.skip(f"{NOTIFY_UNIT} is not loaded on this host")
+    assert _loaded(NOTIFY_UNIT), (
+        f"{NOTIFY_UNIT} is not loaded, so the wiring SE3 asserts in the generated unit points at "
+        "nothing on the host that runs it — the one state this test must never report as a pass")
 
     def started_at() -> str:
         return _systemctl(
@@ -111,8 +114,10 @@ def test_se5_onfailure_actually_activates_the_notifier():
         # A non-zero exit is the *expected* path — systemd-run waits for the oneshot and reports the
         # failure it was asked to produce. So "did the probe run" is asked of systemd, not of the
         # exit code, which cannot tell a working probe from a host that refused to start one.
-        if not _loaded(probe):
-            pytest.skip(f"cannot start a transient probe unit here: {started.stderr.strip()}")
+        assert _loaded(probe), (
+            f"systemd-run could not start the transient probe: {started.stderr.strip()!r}. Without "
+            "it nothing fails, so the notifier is never activated and the assertion below would be "
+            "measuring the probe's absence rather than the wiring")
         # Sampled during the notifier's own `sleep 8`, before the cleanup below can collect it away.
         deadline = time.monotonic() + 25
         after = started_at()
