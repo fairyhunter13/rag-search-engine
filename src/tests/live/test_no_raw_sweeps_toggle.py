@@ -8,8 +8,9 @@ sorts 7th of 76, ~70 files after it ran against a sweeping daemon. Nothing faile
 toggle — it surfaced as flakiness elsewhere, naming neither sweeps nor the GPU, which is
 exactly why a static guard is worth more here than a runtime one.
 
-Five invariants, same shape as test_no_unbounded_parse.py — the last two extend the same rule to
-production code, where a raw assignment now also skips the pause stamp /healthz publishes:
+Six invariants, same shape as test_no_unbounded_parse.py — the last three extend the same rule to
+production code, where a raw assignment now also skips the pause stamp /healthz publishes, and a
+raw *read* skips the lease that expires the pause:
 1. only `_sweeps.py` may name the pause/resume routes — everyone else goes through
    `sweeps_state`, which restores what it read;
 2. any file assigning `sweeps._PAUSED` must import `local_sweeps_paused` — this permits the
@@ -19,7 +20,11 @@ production code, where a raw assignment now also skips the pause stamp /healthz 
    loudly rather than leaving the guard scanning for text that no longer exists;
 4. no file under `rag_search/` may assign `_PAUSED` except `sweeps.py`, which owns it — everyone
    else calls `sweeps.set_paused`, the only path that stamps when the pause began;
-5. `sweeps.py` must still be that writer and still keep the stamp, for the same reason as (3).
+5. `sweeps.py` must still be that writer and still keep the stamp, for the same reason as (3);
+6. no file under `rag_search/` may *read* `_PAUSED` except the accessors in `sweeps.py` that own
+   it — `is_paused()` is where the lease expires, so a sweep that reads the flag instead honours
+   a pause that has already been given up on. That is the exact shape of the original bug: four
+   early returns, none of them with a path back.
 """
 from __future__ import annotations
 
@@ -43,6 +48,33 @@ _ROUTE_PREFIX = "/api/sweeps/"
 # `sweeps._PAUSED = ...`, `sweeps_mod._PAUSED = ...` or a bare `_PAUSED = ...`, but not a
 # comparison, so `if _PAUSED ==` is left alone.
 _PAUSED_ASSIGN_RE = re.compile(r"^\s*(?:\w+\.)?_PAUSED\s*=(?!=)", re.MULTILINE)
+
+# The only functions in `sweeps.py` allowed to read the flag. Everything else asks `is_paused()`,
+# which is where the lease deadline is checked and, once past it, released.
+_READERS = {"set_paused", "paused_seconds", "is_paused", "pause_lease_remaining_s"}
+
+
+def _paused_read_sites(src: str) -> set[str]:
+    """Function names (or "<module>") containing a *load* of `_PAUSED` / `<mod>._PAUSED`.
+
+    AST rather than a regex because the distinction that matters here is read-vs-write, and the two
+    are the same token: `_PAUSED = x`, `x = _PAUSED` and `global _PAUSED` differ only by context.
+    A nested read is attributed to both the inner and the enclosing function, which can only ever
+    name an extra site — the guard is allowed to over-report, never to miss.
+    """
+    sites: set[str] = set()
+
+    def visit(node: ast.AST, where: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else where
+            named = (isinstance(child, ast.Name) and child.id == "_PAUSED") or (
+                isinstance(child, ast.Attribute) and child.attr == "_PAUSED")
+            if named and isinstance(child.ctx, ast.Load):  # type: ignore[union-attr]
+                sites.add(name)
+            visit(child, name)
+
+    visit(ast.parse(src), "<module>")
+    return sites
 
 
 def _live_py_files() -> list[Path]:
@@ -117,6 +149,28 @@ def test_production_pauses_only_through_the_stamping_setter() -> None:
     )
 
 
+def test_production_reads_go_through_the_leasing_accessor() -> None:
+    """`is_paused()` is the sole read path in `rag_search/`, so the lease cannot be read around.
+
+    The pause used to be honoured by four raw `if _PAUSED:` early returns with no path back, and a
+    live-test session that died mid-run held every sweep for ~4 h. The lease fixes that only for
+    callers who go through the accessor: a fifth raw read added later — say a new route reporting
+    "pipeline disabled", which `routes_pipeline.py` was — sees a pause the daemon has already given
+    up on, and, worse, never triggers the expiry, since checking the deadline *is* the release.
+    """
+    violations: list[str] = []
+    for py in sorted(_SRC_DIR.rglob("*.py")):
+        sites = _paused_read_sites(py.read_text(errors="replace"))
+        stray = sites - _READERS if py.name == _OWNER else sites
+        if stray:
+            violations.append(f"{py.relative_to(_SRC_DIR)}: {sorted(stray)}")
+    assert not violations, (
+        "Reads sweeps._PAUSED directly instead of calling `sweeps.is_paused()` — the pause lease is "
+        "checked and released inside that accessor, so this site honours an expired pause forever "
+        "and prevents anything else from noticing it:\n" + "\n".join(violations)
+    )
+
+
 def test_owner_still_assigns_and_stamps() -> None:
     """Allowlist accuracy for `_OWNER`: the exemption must still describe a real writer."""
     src = (_SRC_DIR / "daemon" / _OWNER).read_text(errors="replace")
@@ -127,6 +181,11 @@ def test_owner_still_assigns_and_stamps() -> None:
     assert "_PAUSED_SINCE" in src and "def paused_seconds" in src, (
         f"{_OWNER} no longer keeps the pause stamp, so /healthz `sweeps_paused_s` cannot be "
         "reporting how long sweeps have been paused — the guard's whole purpose"
+    )
+    assert "_PAUSE_DEADLINE" in src and _paused_read_sites(src) >= _READERS, (
+        f"{_OWNER} no longer holds the pause lease under the accessors the guard above allowlists "
+        f"({sorted(_READERS)}) — those exemptions now name functions that read the flag without "
+        "expiring it, or do not exist at all"
     )
 
 
@@ -141,7 +200,8 @@ def test_helper_still_describes_something_real() -> None:
         f"{_HELPER} no longer reads `previously_paused`, so it cannot be restoring the state "
         "it found — the whole point of routing callers through it"
     )
-    assert _PAUSED_ASSIGN_RE.search(src), (
-        f"{_HELPER} no longer assigns _PAUSED — `local_sweeps_paused` is gone or renamed, so "
-        "the second guard's import requirement points at nothing"
+    assert "set_paused" in src and "local_sweeps_paused" in src, (
+        f"{_HELPER} no longer drives the pause through `sweeps.set_paused` — the in-process twin "
+        "must take the same leased path the daemon does, or a test's pause has no deadline at all "
+        "and the second guard's import requirement points at nothing"
     )

@@ -14,7 +14,10 @@ async def _api_auto_pipeline_status(request: Request) -> JSONResponse:
             continue
         if sweeps._needs_index(p.path) or sweeps._needs_labels(p.path):
             pending.append(p.path)
-    return JSONResponse({"enabled": not sweeps._PAUSED, "pending": pending})
+    # `is_paused()`, not the raw flag: this route is what an operator polls to ask whether the
+    # pipeline is running, so reading round the lease would report "disabled" for a pause that has
+    # already expired and been resumed — and, worse, would never trigger the expiry itself.
+    return JSONResponse({"enabled": not sweeps.is_paused(), "pending": pending})
 
 
 def register(app) -> None:
