@@ -259,6 +259,32 @@ def test_el11_injections_supplement_the_script_walk_and_never_replace_it() -> No
         'lang="ts" lost to an injection #set! that can only say javascript'
 
 
+def test_el13_an_unresolvable_project_says_so_instead_of_reporting_an_empty_ladder() -> None:
+    """EL13 — the metrics block must never answer "I was not asked" with "I found nothing".
+
+    `_extraction_block` returned a bare `{}` when no `project_path` was given and none could be
+    inferred. Measured 2026-07-30 on this fleet: 152 projects are enabled, so `_require_project`
+    refuses on *every* unscoped call and `overview(what="metrics")` reported `extraction: {}`
+    fleet-wide while each store held rows. Read literally that says the ladder recorded nothing,
+    which is the one claim an instrument must never make when it simply was not asked — the same
+    defect class as a write-only column, and it hid the first post-ladder coverage reading until
+    the call was repeated with an explicit path.
+
+    Asserted on the shape rather than the wording: what matters is that the two cases are
+    distinguishable at all, not which sentence distinguishes them.
+    """
+    from rag_search.server._overview import _extraction_block
+
+    class _P:
+        def __init__(self, path: str) -> None:
+            self.path, self.enabled = path, True
+
+    ambiguous = _extraction_block("", [_P("/nonexistent/a"), _P("/nonexistent/b")])
+    assert ambiguous, "ambiguous project returned a bare {} — indistinguishable from 'no rows'"
+    assert "error" in ambiguous, ambiguous
+    assert _extraction_block("", []), "no-project-available returned a bare {} as well"
+
+
 def test_el12_a_documentation_fence_does_not_become_a_project_definition() -> None:
     """EL12 — why rung 1 takes only *statically* declared injection languages.
 
