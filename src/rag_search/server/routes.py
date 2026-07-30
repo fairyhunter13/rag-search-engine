@@ -18,6 +18,7 @@ async def _healthz(request: Request) -> JSONResponse:
 
     from rag_search.daemon.cpu_budget import cpu_percent_core, cpu_quota_cores
     from rag_search.daemon.runtime_state import seconds_since_activity
+    from rag_search.daemon.sweeps import paused_seconds
     la = psutil.getloadavg()
     return JSONResponse({
         "ok": True, "service": "rag-search", "transport": "streamable-http",
@@ -29,6 +30,10 @@ async def _healthz(request: Request) -> JSONResponse:
         "rss_mb": round(psutil.Process().memory_info().rss / (1024 * 1024)),
         "cpu_percent_core": round(cpu_percent_core(), 4),
         "cpu_quota_cores": cpu_quota_cores(),
+        # Non-zero means no sweep — reconcile, drift re-derive, purge — has run for that long. It
+        # belongs beside `idle_seconds` rather than in /api/auto_pipeline_status because the fault
+        # it names is being forgotten, and a field nothing polls at rest is not a monitor.
+        "sweeps_paused_s": round(paused_seconds(), 1),
     })
 
 
