@@ -45,6 +45,19 @@ FIXTURES = [
        "package m\n\nfunc Alpha(x int) int { return x }\n",
        "func Beta(y int) int { return y }\n",
        "// a comment\n", "Alpha", "RenamedAlpha"),
+    # Both of these carry a *container* — MM2 was blind without one. Every fixture beside them is
+    # two bare top-level functions, so "concatenation never loses a symbol" held while the e5
+    # extractor was dropping `area` from `class Shape` the moment an unrelated `def make` joined
+    # the file (found by GT1, fixed in e6). The property was right; the corpus it ran on could not
+    # express the bug. A metamorphic suite is only as general as the shapes its fixtures contain.
+    Fx("structure", "python", "cls.py",
+       "class Shape:\n    def alpha(self):\n        return 0\n",
+       "def beta():\n    return 1\n",
+       "# a comment\n", "alpha", "renamed_alpha"),
+    Fx("structure", "typescript", "cls.ts",
+       "export class Svc {\n  alpha() { return 1 }\n}\n",
+       "export function beta() { return 2 }\n",
+       "// a comment\n", "alpha", "renamed_alpha"),
     Fx("highlights", "scss", "a.scss",
        "@mixin alpha($a) { color: $a; }\n",
        "@function beta($n) { @return $n; }\n",

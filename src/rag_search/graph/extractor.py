@@ -35,7 +35,14 @@ from pathlib import Path
 #                    have been a straight regression. Unlike e4 this *does* change files that
 #                    already extracted (an astro file gains its frontmatter's symbols), so it
 #                    carries its own rev rather than riding e4's re-derive silently.
-EXTRACTOR_REV = "e5"
+#   e6  2026-07-30  The `_generic_walk` supplement gets a span-containment arm, so a class that
+#                    process() reported without its members no longer loses them the moment the
+#                    file also holds a top-level function. Found by W1-A part 5's ground-truth
+#                    fixtures on the first run — python and typescript both dropped a method that
+#                    the identical file *without* an unrelated function extracted fine. Strictly
+#                    additive (a union with the old arm), but it changes files that already
+#                    extract, so it carries its own rev.
+EXTRACTOR_REV = "e6"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -142,6 +149,14 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
                         sym_kind = "function"
                     elif "class" in k or "struct" in k or "trait" in k or "interface" in k:
                         sym_kind = "class"
+                    elif "field" in k or "property" in k or "parameter" in k:
+                        # Not a "conservative" default — calling a struct field a function is a
+                        # confident wrong answer, and it is what this branch used to emit. Go's
+                        # `type Point struct { X int }` yielded `X` with kind `function`, which
+                        # is exactly what W1-A part 5 exists to catch. These tokens are the
+                        # grammar's own node-kind spelling, like `struct`/`trait` above, so no
+                        # vocabulary about source text is being invented (P6/HR15).
+                        sym_kind = "field"
                     else:
                         sym_kind = "function"  # conservative default
                     result.append(Symbol(
@@ -711,12 +726,34 @@ def _extract_symbols_from(
             ))
         # process() may yield only class/module nodes (e.g. Java, Kotlin) with no methods.
         # Supplement via _generic_walk so method names enter the symbol table for call-edge resolution.
-        if not any(s.kind in ("function", "method") for s in syms) and outer_root is not None:
+        #
+        # The old gate was `if not any(function/method)` alone, and it asked the wrong question:
+        # "did this *file* yield a function anywhere", when what it means is "did this *class*
+        # yield its members". Measured 2026-07-30 by the ground-truth fixtures — `class Shape`
+        # with a method `area` extracts both, and then *adding an unrelated top-level* `def make`
+        # makes `area` disappear. Same shape in typescript: `class Svc { run() }` plus
+        # `export function go()` loses `run`. Adding code removed symbols, which no extractor may
+        # do, and it was invisible because every metamorphic property here is an invariance and
+        # MM2's fixtures were two bare functions with no container between them.
+        #
+        # The containment arm asks the intended question generically: a reported class/module
+        # whose span encloses a generic-walk name that structure did not report gets that name.
+        # No per-language vocabulary — the test is span nesting. Kept as a *union* with the old
+        # arm rather than a replacement so nothing that extracts today can lose a symbol.
+        if outer_root is not None:
             known = {s.name for s in syms}
-            syms.extend(
-                s for s in _generic_walk(outer_root, code_bytes, file_str, language)
-                if s.name not in known
-            )
+            extra = [s for s in _generic_walk(outer_root, code_bytes, file_str, language)
+                     if s.name not in known]
+            if not any(s.kind in ("function", "method") for s in syms):
+                syms.extend(extra)
+            elif extra:
+                spans = [(s.start_line, s.end_line) for s in syms
+                         if s.kind in ("class", "module")]
+                # Members only. A struct's *fields* are inside the container span too, and
+                # admitting them here is how this arm would have paid for a recovered method with
+                # a `Foo.x` that call resolution could bind a `x()` call to (measured on rust).
+                syms.extend(e for e in extra if e.kind != "field" and any(
+                    lo <= e.start_line and e.end_line <= hi for lo, hi in spans))
         return syms, "structure", anon
     # process() returned no structure — fall back to generic AST walk, then to rung 4.
     if outer_root is None:
