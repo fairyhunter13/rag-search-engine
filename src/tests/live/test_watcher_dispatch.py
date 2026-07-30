@@ -16,6 +16,7 @@ HL2  events arriving for A while A is in flight are coalesced into one follow-up
 HL3  a project's callback is never entered concurrently with itself
 HL4  stop() returns promptly even with a callback blocked
 HL5  the dispatch loop must wait without a timeout — notification-driven, never a poll clock
+HL6  status()["dispatched"] counts completed passes, and does not tick without one
 """
 from __future__ import annotations
 
@@ -256,3 +257,34 @@ def test_hl5_dispatch_workers_wait_without_a_timeout():
         f"HL5: dispatch wait() carries a timeout at {offenders} — that is a poll clock; the "
         "watcher must stay purely filesystem-notification driven"
     )
+
+
+def test_hl6_status_counts_completed_passes(two_roots):
+    """HL6: `status()["dispatched"]` rises by exactly one per completed pass, and only then.
+
+    CB3 discards an idle-CPU window in which this counter moved. A counter stuck at 0 makes that
+    check silently vacuous — every contaminated window would read as quiet and the < 1% gate would
+    pass on a daemon indexing three repos. So the increment is asserted directly, and so is the
+    lower bound: it must not tick without a pass, or CB3 could never find a quiet window at all.
+    """
+    from pathlib import Path
+
+    a, b = two_roots
+    rec = _Recorder()
+    w = _start(rec, a, b)
+    try:
+        start = int(w.status()["dispatched"])
+        Path(a, "hot.py").write_text("def a_one():\n    return 1\n")
+        assert _wait_for(lambda: a in rec.roots()), "HL6: A's event never arrived — setup is broken"
+        assert _wait_for(lambda: int(w.status()["dispatched"]) == start + 1), (
+            f"HL6: one pass ran but dispatched went {start} -> {w.status()['dispatched']}"
+        )
+
+        quiet = int(w.status()["dispatched"])
+        time.sleep(3.0)  # no writes: nothing may advance the counter
+        assert int(w.status()["dispatched"]) == quiet, (
+            f"HL6: dispatched advanced to {w.status()['dispatched']} with no file event — CB3 would "
+            "reject every window as contaminated and never measure anything"
+        )
+    finally:
+        w.stop(timeout=10.0)
