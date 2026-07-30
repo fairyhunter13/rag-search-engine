@@ -223,8 +223,11 @@ from tests.live._sample_workspace import purge_project
 
 # Never created on disk, and it does not need to be: the row goes in the redirected registry and the
 # store under the redirected INDEX_ROOT, so this exercises the real refusal with no real project
-# anywhere near it.
-outside = "/home/nobody/git/some-fleet-project"
+# anywhere near it. All the assertion needs is a path *outside the test base*, and this one is
+# picked to satisfy two other rules at the same time: P18's whole-tree scan bans a home-directory
+# literal even with a fictional user in it, and `is_forbidden_root` rejects anything under the
+# temp dir before `upsert_project` can even store the row.
+outside = "/srv/git/some-fleet-project"
 inside = str(Path(sys.argv[1]) / "member")
 INDEX_ROOT.mkdir(parents=True, exist_ok=True)
 for p in (outside, inside):
