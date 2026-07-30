@@ -4,6 +4,7 @@ import time
 import pytest
 
 from tests.live._sample_workspace import SampleWorkspace
+from tests.live._sweeps import local_sweeps_paused
 
 pytestmark = pytest.mark.live
 
@@ -144,12 +145,11 @@ def test_sweeps_paused_skips_reconcile(safe_tmp_path):
     vdb = project_vector_db(proj_path)
     upsert_project(ProjectEntry(path=proj_path, enabled=True))
     # vdb intentionally absent so _needs_index() returns True → would trigger indexing
-    sweeps._PAUSED = True
     try:
-        sweeps.reconcile_projects()
-        assert not vdb.exists(), "paused reconcile_projects must not create the vector DB"
+        with local_sweeps_paused(True):
+            sweeps.reconcile_projects()
+            assert not vdb.exists(), "paused reconcile_projects must not create the vector DB"
     finally:
-        sweeps._PAUSED = False
         remove_project(proj_path)
 
 
@@ -1159,16 +1159,14 @@ def test_on_change_respects_pause(safe_tmp_path):
     from rag_search.daemon.sweeps import on_change
 
     (safe_tmp_path / "a.py").write_text("def foo(): pass\n")
-    orig = sweeps_mod._PAUSED
-    sweeps_mod._PAUSED = True
     reindexed: list = []
     orig_idx = sweeps_mod._index_files
     sweeps_mod._index_files = lambda *a, **kw: reindexed.append(a)
     try:
-        on_change(str(safe_tmp_path), [str(safe_tmp_path / "a.py")])
-        assert not reindexed, "_index_files must not be called when _PAUSED"
+        with local_sweeps_paused(True):
+            on_change(str(safe_tmp_path), [str(safe_tmp_path / "a.py")])
+            assert not reindexed, "_index_files must not be called when _PAUSED"
     finally:
-        sweeps_mod._PAUSED = orig
         sweeps_mod._index_files = orig_idx
 
 

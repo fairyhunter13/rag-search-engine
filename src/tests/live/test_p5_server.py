@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.live._sample_workspace import SampleWorkspace
+from tests.live._sweeps import sweeps_state
 
 pytestmark = pytest.mark.live
 
@@ -239,43 +240,35 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
     Register an un-indexed tmp project → it must appear in pending.
     Pause sweeps → enabled must flip to False.
     """
-    import urllib.request
-
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import remove_project, upsert_project
 
     proj_path = str(safe_tmp_path)
-    try:
-        # Resume sweeps explicitly — autouse session fixture pauses them globally,
-        # so we must resume to test the enabled=True state, then re-pause.
-        urllib.request.urlopen(
-            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/resume", data=b"", method="POST"),
-            timeout=3,
-        )
+
+    # enabled=True is unreachable while the autouse session fixture holds sweeps paused, so
+    # resume for just this read. Sequential rather than nested with the block below: the
+    # project must never be registered-but-unindexed while sweeps are running, or the daemon
+    # races to index it. `sweeps_state` restores the session's pause either way.
+    with sweeps_state(paused=False):
         r0 = live_client.get("/api/auto_pipeline_status")
         assert r0.status_code == 200, f"unexpected status {r0.status_code}"
         d0 = r0.json()
         assert "enabled" in d0 and "pending" in d0, f"missing keys: {d0}"
         assert d0["enabled"] is True, f"expected enabled=True after explicit resume, got {d0}"
 
-        # Pause sweeps, THEN register — pending check is now race-free
-        urllib.request.urlopen(
-            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/pause", data=b"", method="POST"),
-            timeout=3,
-        )
-        upsert_project(ProjectEntry(path=proj_path, enabled=True))
-        r = live_client.get("/api/auto_pipeline_status")
-        d = r.json()
-        assert d["enabled"] is False, f"expected enabled=False after pause, got {d}"
-        assert proj_path in d["pending"], (
-            f"un-indexed {proj_path} must appear in pending; got {d['pending'][:3]}"
-        )
-    finally:
-        urllib.request.urlopen(
-            urllib.request.Request("http://127.0.0.1:8765/api/sweeps/pause", data=b"", method="POST"),
-            timeout=3,
-        )
-        remove_project(proj_path)
+    # Pause sweeps, THEN register — pending check is now race-free
+    with sweeps_state(paused=True):
+        try:
+            upsert_project(ProjectEntry(path=proj_path, enabled=True))
+            r = live_client.get("/api/auto_pipeline_status")
+            d = r.json()
+            assert d["enabled"] is False, f"expected enabled=False after pause, got {d}"
+            assert proj_path in d["pending"], (
+                f"un-indexed {proj_path} must appear in pending; got {d['pending'][:3]}"
+            )
+        finally:
+            # Inside the pause: deregister before sweeps can resume, for the same reason.
+            remove_project(proj_path)
 
 
 # P25.1 is gone with tier 3. It asserted /api/kb_health's enriched_pct counted communities with a

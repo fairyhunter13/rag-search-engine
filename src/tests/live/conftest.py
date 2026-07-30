@@ -10,6 +10,7 @@ from tests.live._sample_workspace import (
     build_sample_workspace,
     teardown_sample_workspace,
 )
+from tests.live._sweeps import sweeps_state
 
 _DAEMON = "http://127.0.0.1:8765"
 
@@ -136,12 +137,17 @@ def _drain_graph_lane():
 
 @pytest.fixture(scope="session", autouse=True)
 def pause_sweeps():
-    """Pause background sweeps for the whole session to avoid GPU contention."""
-    with contextlib.suppress(Exception):
-        requests.post(f"{_DAEMON}/api/sweeps/pause", timeout=5)
-    yield
-    with contextlib.suppress(Exception):
-        requests.post(f"{_DAEMON}/api/sweeps/resume", timeout=5)
+    """Pause background sweeps for the whole session to avoid GPU contention.
+
+    Teardown restores the state the daemon was actually in, so a run does not hand back a
+    daemon that is sweeping when the operator had deliberately paused it.
+
+    No `contextlib.suppress` here any more: a daemon that cannot be paused is a suite that
+    should not start, for the same reason `reclaim_daemon_gpu` below asserts rather than warns.
+    Suppressing it ran the whole suite unpaused and let the consequences land somewhere else.
+    """
+    with sweeps_state(paused=True):
+        yield
 
 
 # Peak VRAM the suite itself needs, measured: a green run started with 15,771 MiB free and
