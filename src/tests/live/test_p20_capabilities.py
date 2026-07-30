@@ -13,7 +13,7 @@ pytestmark = pytest.mark.live
 
 
 @pytest.mark.slow
-def test_p20_capabilities_e2e(safe_tmp_path):
+def test_p20_capabilities_e2e(safe_tmp_path, federation_root_path):
     """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, context assembly."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import get_project, remove_project, upsert_project
@@ -61,10 +61,11 @@ def test_p20_capabilities_e2e(safe_tmp_path):
         # E: context assembly returns non-empty composed context from the indexed project.
         # Was the MCP `ask` tool until 2026-07-29; `run_ask` is the same call one layer down and
         # still has two consumers (the CLI and the dashboard chat), so the capability is intact.
+        # Taken as a fixture, not by calling `federation_root()` here: the resolver only finds a
+        # workspace some *other* file's fixture already built, so this file passed in a full run and
+        # failed when run alone — an ordering dependency, not a capability gap.
         from rag_search.query.ask import run_ask
-        from tests.live._projects import federation_root
-        sample_fed_root = federation_root()  # sample shop-federation, not a real project
-        context = run_ask("How does authentication work?", sample_fed_root, "all")
+        context = run_ask("How does authentication work?", federation_root_path, "all")
         assert isinstance(context, str) and len(context) > 20, (
             f"E: run_ask returned empty/tiny context: {context!r}"
         )
