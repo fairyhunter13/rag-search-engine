@@ -174,9 +174,19 @@ class GraphStore:
         )
 
     def extraction_summary(self) -> list[dict]:
-        """Per-(language, rung) rollup for overview(what="metrics")'s `extraction` block."""
+        """Per-(language, rung) rollup for overview(what="metrics")'s `extraction` block.
+
+        `files_with_symbols` is counted here rather than inferred by the caller, and that is the
+        whole reason it exists. Without it `_extraction_totals` could only ask "does this *group*
+        have symbols", which credits every zero-symbol file in a group that any other file carried
+        — so a language/rung pair that mostly failed reported as fully covered. Measured
+        2026-07-30 on a 192-file store: 111 claimed against 100 real, i.e. 11 dark files invisible
+        to the one number the dark set is supposed to be read from. `file` is the primary key, so
+        `SUM(symbol_count > 0)` is a file count, not a symbol count.
+        """
         rows = self._con.execute(
             "SELECT language, rung, COUNT(*) AS files, SUM(symbol_count) AS symbols, "
+            "SUM(symbol_count > 0) AS files_with_symbols, "
             "SUM(anon_count) AS anon, SUM(error_count) AS errors "
             "FROM file_extraction GROUP BY language, rung ORDER BY files DESC"
         ).fetchall()

@@ -354,3 +354,40 @@ def _au1_body(gs, db) -> None:
             stale.execute("SELECT COUNT(*) FROM file_extraction").fetchone()
     finally:
         stale.close()
+
+
+def test_au2_coverage_counts_files_not_groups(safe_tmp_path) -> None:
+    """AU2 — the dark set must be counted per file, and one mixed group is enough to tell.
+
+    AU1 makes the reader trustworthy; this makes the arithmetic trustworthy, and the second was
+    wrong while the first was right. `_extraction_totals` used to ask `if r["symbols"]` — a
+    *group* predicate — so one file carrying a symbol credited every other file in its
+    (language, rung) group as covered. The block built to expose the dark set was therefore
+    hiding part of it, and monotonically: coverage overstated, `dark_files` understated, never
+    the reverse. Measured on a real 192-file store before the fix: 111 against 100, 57.81 %
+    against 52.08 %.
+
+    The fixture is one group of three files where a *minority* extracted, because that is the
+    shape the old predicate got wrong and a uniform group cannot distinguish — every earlier
+    check summed `files`, the one column that was already right, which is why this survived.
+    The second group is all-zero so `dark_files` has to come from both.
+    """
+    from rag_search.graph.store import GraphStore
+    from rag_search.server._overview import _extraction_totals
+
+    gs = GraphStore(safe_tmp_path / "au2" / "graph.db")
+    try:
+        gs.record_extraction("/x/a.go", "go", "structure", 4, 0, 0)
+        gs.record_extraction("/x/b.go", "go", "structure", 0, 0, 0)
+        gs.record_extraction("/x/c.go", "go", "structure", 0, 0, 0)
+        gs.record_extraction("/x/d.groovy", "groovy", "generic", 0, 0, 0)
+        gs.commit()
+        totals = _extraction_totals(gs.extraction_summary())
+    finally:
+        gs.close()
+    assert totals["files"] == 4, totals
+    assert totals["files_with_symbols"] == 1, (
+        "coverage credited files that extracted nothing to a group that did: "
+        f"{totals['files_with_symbols']} of {totals['files']}")
+    assert totals["dark_files"] == 3, totals
+    assert totals["coverage_pct"] == 25.0, totals

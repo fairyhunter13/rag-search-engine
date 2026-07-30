@@ -66,9 +66,17 @@ def _extraction_totals(rows: list[dict]) -> dict:
     `dark_files` is the number this whole apparatus exists to drive down, and it is reported
     beside the breakdown rather than alone — a single coverage percentage is what made the gap
     unactionable, because five different causes all landed in it.
+
+    It is summed from a per-group *file* count, never from `if r["symbols"]`. That predicate was
+    the original, and it credited every file in a group as covered as soon as one file in it
+    carried a symbol — so the number built to expose the dark set was hiding part of it. Found
+    2026-07-30 by cross-checking this block against a direct `mode=ro` read of the same store:
+    111 files claimed against 100 real, 57.81 % against 52.08 %. The disagreement looked at first
+    like the WAL staleness hazard this block exists to avoid, which is the trap — a second
+    plausible cause for the same symptom is how the real one goes unfixed.
     """
     files = sum(r["files"] for r in rows)
-    with_syms = sum(r["files"] for r in rows if r["symbols"])
+    with_syms = sum(r.get("files_with_symbols") or 0 for r in rows)
     return {"by_language_rung": rows, "files": files,
             "files_with_symbols": with_syms,
             "dark_files": files - with_syms,
@@ -116,9 +124,13 @@ def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untype
         try:
             for row in _gs.extraction_summary():
                 key = (row.get("language") or "unknown", row.get("rung") or "unknown")
-                acc = agg.setdefault(key, {"language": key[0], "rung": key[1],
-                                           "files": 0, "symbols": 0, "anon": 0, "errors": 0})
-                for _f in ("files", "symbols", "anon", "errors"):
+                acc = agg.setdefault(key, {"language": key[0], "rung": key[1], "files": 0,
+                                           "symbols": 0, "files_with_symbols": 0,
+                                           "anon": 0, "errors": 0})
+                # `files_with_symbols` is in this list, not derived after the loop: a federation
+                # root sums per-member rows, and a member contributing zero to a group that
+                # another member fills is exactly the case the group-level predicate got wrong.
+                for _f in ("files", "symbols", "files_with_symbols", "anon", "errors"):
                     acc[_f] += row.get(_f) or 0
         finally:
             _gs.close()
