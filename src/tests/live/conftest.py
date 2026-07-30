@@ -96,22 +96,40 @@ def _purge_leaked_test_state():
     under rse-test-dirs belongs to a dead prior session: purge every such registry
     entry and stale child dir. Idempotent, and the fix's whole point is that it runs
     regardless of how the prior session died.
+
+    It is also the *last* teardown in the session (first session autouse to set up, so last to
+    finalize), which is the only point at which every store this run created is already written.
+    That is where the index-dir snapshot below is settled up — see
+    `purge_unowned_index_dirs_created_since` for why a listing diff is the only handle left by then.
     """
     import os
     import shutil
 
-    from rag_search.core.registry import list_projects, remove_project
+    from rag_search.core.registry import list_projects
     from tests.live._projects import _SAFE_BASE
+    from tests.live._sample_workspace import (
+        index_dir_names,
+        purge_index_dirs_under,
+        purge_project,
+        purge_unowned_index_dirs_created_since,
+    )
 
     for e in list_projects():
         if e.path == str(_SAFE_BASE) or e.path.startswith(str(_SAFE_BASE) + os.sep):
-            with contextlib.suppress(Exception):
-                remove_project(e.path)
+            purge_project(e.path)  # row *and* store: the row is the only handle on the dir name
     if _SAFE_BASE.exists():
         for child in _SAFE_BASE.iterdir():
             with contextlib.suppress(Exception):
+                purge_index_dirs_under(child)
                 shutil.rmtree(child, ignore_errors=True)
+    before = index_dir_names()
     yield
+    leftover = purge_unowned_index_dirs_created_since(before)
+    if leftover:
+        # Reported, not silent: this is the backstop, and a backstop that keeps quiet is how the
+        # 19-dir residue went unnoticed. A name here means some earlier teardown missed it.
+        print(f"\n[teardown] removed {len(leftover)} unowned index dir(s) this run created: "
+              f"{', '.join(leftover)}")
 
 
 @pytest.fixture(autouse=True)
@@ -233,12 +251,12 @@ def service_member_path(sample_workspace: SampleWorkspace) -> str:
 @pytest.fixture()
 def safe_tmp_path():
     """Temporary directory outside /tmp and ~/.cache — safe for registry registration tests."""
-    import contextlib
     import shutil
     import tempfile
     from pathlib import Path
 
-    from rag_search.core.registry import list_projects, remove_project
+    from rag_search.core.registry import list_projects
+    from tests.live._sample_workspace import purge_index_dirs_under, purge_project
     safe_base = Path.home() / ".local" / "share" / "rse-test-dirs"
     safe_base.mkdir(parents=True, exist_ok=True)
     d = Path(tempfile.mkdtemp(dir=safe_base))
@@ -246,8 +264,11 @@ def safe_tmp_path():
     prefix = str(d) + "/"
     for e in list_projects():
         if e.path.startswith(prefix) or e.path == str(d):
-            with contextlib.suppress(Exception):
-                remove_project(e.path)
+            purge_project(e.path)
+    # Then by tree walk, for the tests that already dropped their own row: the row is the only
+    # handle on the index dir's <slug>-<sha16> name, and mkdtemp guarantees the next run picks a
+    # different path, so anything missed here is unreachable for good.
+    purge_index_dirs_under(d)
     shutil.rmtree(d, ignore_errors=True)
 
 
