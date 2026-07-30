@@ -270,6 +270,24 @@ def extract_calls(content: str, language: str) -> list[str]:
     return out
 
 
+@dataclass(frozen=True)
+class ExtractionStats:
+    """What one file's extraction actually did — the per-file record `file_extraction` stores.
+
+    Exists because "0 symbols" has at least five causes that were all rendered identically:
+    a grammar the pack does not serve (`rung="no_grammar"`), bytes that do not parse as the
+    detected language (`"unparsed"`), a grammar whose process() yields no structure
+    (`"generic"`), symbols dropped for having no name (`anon_count`), and a file that
+    genuinely defines nothing. Recording the rung is what separates them.
+    """
+
+    language: str
+    rung: str
+    symbol_count: int
+    anon_count: int
+    has_error: bool
+
+
 def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:
     """Return symbols for any language via pack-native process() + generic-suffix fallback.
 
@@ -277,15 +295,22 @@ def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:
     _generic_walk is a thin last-resort for empty-structure grammars (Elixir, Haskell…).
     No per-language node-kind tables.
     """
+    return extract_symbols_with_stats(path, content, language)[0]
+
+
+def extract_symbols_with_stats(
+    path: Path, content: str, language: str
+) -> tuple[list[Symbol], ExtractionStats]:
+    """`extract_symbols` plus the per-file extraction record. See `ExtractionStats`."""
     if not language or language == "unknown":
-        return []
+        return [], ExtractionStats(language or "unknown", "no_language", 0, 0, False)
     try:
         from tree_sitter_language_pack import ProcessConfig, has_language
         from tree_sitter_language_pack import process as ts_process
     except ImportError:
-        return []
+        return [], ExtractionStats(language, "no_grammar", 0, 0, False)
     if not has_language(language):
-        return []
+        return [], ExtractionStats(language, "no_grammar", 0, 0, False)
     file_str = str(path)
     code_bytes = content.encode("utf-8", errors="replace")
     outer_parser, outer_ok = _get_parser_for(language)
@@ -299,26 +324,71 @@ def extract_symbols(path: Path, content: str, language: str) -> list[Symbol]:
         r = ts_process(content, ProcessConfig(structure=True, language=language))
     except Exception:
         r = None
-    syms = _extract_symbols_from(r, outer_root, code_bytes, file_str, language)
+    syms, rung, anon = _extract_symbols_from(r, outer_root, code_bytes, file_str, language)
     if outer_root is not None:
         for inner_lang, inner_bytes, line_offset in _iter_script_blocks(outer_root, code_bytes):
             inner_src = inner_bytes.decode("utf-8", errors="replace")
-            for s in extract_symbols(path, inner_src, inner_lang):
+            inner_syms, inner_stats = extract_symbols_with_stats(path, inner_src, inner_lang)
+            # An embedded block's anonymous drops belong to the *host* file — a .svelte whose
+            # <script> is all arrow functions must not read as an empty .svelte.
+            anon += inner_stats.anon_count
+            if inner_syms and rung in ("unparsed", "generic"):
+                rung = "embedded"
+            for s in inner_syms:
                 syms.append(Symbol(
                     file=s.file, name=s.name, qualified_name=s.qualified_name, kind=s.kind,
                     start_line=s.start_line + line_offset, end_line=s.end_line + line_offset,
                     language=s.language, signature=s.signature, docstring=s.docstring,
                 ))
-    return syms
+    return syms, ExtractionStats(
+        language=language, rung=rung, symbol_count=len(syms), anon_count=anon,
+        has_error=_node_has_error(outer_root),
+    )
 
 
-def _extract_symbols_from(r, outer_root, code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
-    """Shared structure/generic-walk logic for extract_symbols, split out to keep sub-parse merge separate."""
+def _node_has_error(root) -> bool:
+    """`has_error` is a *method* on this binding's Node, not a property.
+
+    `bool(getattr(root, "has_error", False))` therefore returns True for every parsed file —
+    it measures "the attribute exists", not "the parse failed". Measured: 43/43 svelte and
+    50/50 python files reported errors, which is the tell. Call it when callable, and treat a
+    binding that exposes neither shape as "unknown" rather than inventing a verdict.
+    """
+    attr = getattr(root, "has_error", None)
+    if attr is None:
+        return False
+    try:
+        return bool(attr() if callable(attr) else attr)
+    except Exception:
+        return False
+
+
+def _extract_symbols_from(
+    r, outer_root, code_bytes: bytes, file_str: str, language: str
+) -> tuple[list[Symbol], str, int]:
+    """Shared structure/generic-walk logic, split out to keep the sub-parse merge separate.
+
+    Returns `(symbols, rung, anon_count)`. `rung` names which path produced the symbols, so a
+    caller can tell "this grammar has no structure output" from "this file has no code" — the
+    two were indistinguishable, which is why the extraction gap was never measurable.
+
+    `anon_count` is the number of structure entries dropped for having no name. process()
+    reports anonymous and arrow functions with `name=None`; this path built them straight into
+    `Symbol(name=None)` and `sweeps.py`'s `if not sym.name: continue` then discarded them
+    without a counter, so a file of arrow functions read exactly like a file with no code.
+    `_generic_walk` screens names via `_is_name_text`; this path did not, and that asymmetry
+    was the defect. The drop condition here is deliberately the *same* falsy-name test sweeps
+    already applied, so no symbol's fate changes — only whether the loss is visible.
+    """
     if r is not None and r.structure:
         syms: list[Symbol] = []
+        anon = 0
         for s in r.structure:
             kind = _STRUCTURE_KIND_MAP.get(str(s.kind).lower())
             if kind is None:
+                continue
+            if not s.name:
+                anon += 1
                 continue
             syms.append(Symbol(
                 file=file_str, name=s.name, qualified_name=s.name, kind=kind,
@@ -333,11 +403,11 @@ def _extract_symbols_from(r, outer_root, code_bytes: bytes, file_str: str, langu
                 s for s in _generic_walk(outer_root, code_bytes, file_str, language)
                 if s.name not in known
             )
-        return syms
+        return syms, "structure", anon
     # process() returned no structure — fall back to generic AST walk
     if outer_root is None:
-        return []
-    return _generic_walk(outer_root, code_bytes, file_str, language)
+        return [], "unparsed", 0
+    return _generic_walk(outer_root, code_bytes, file_str, language), "generic", 0
 
 
 # The ordered-call-site layer (CallSite / _BRANCH_NODE_KINDS / _collect_sites /

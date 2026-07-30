@@ -37,6 +37,21 @@ def _open(db_path: Path) -> sqlite3.Connection:
             summary TEXT,
             member_count INTEGER DEFAULT 0
         );
+        -- One row per file the derive attempted, whether or not it produced symbols. Without
+        -- it, "0 symbols" conflates a grammar the pack does not serve, bytes that do not parse,
+        -- a grammar with no structure output, symbols dropped for having no name, and a file
+        -- that genuinely defines nothing. `rung` names which path ran; `anon_count` counts the
+        -- unnamed drops. Read by overview(what="metrics"); SC6 bans write-only columns.
+        CREATE TABLE IF NOT EXISTS file_extraction (
+            file TEXT PRIMARY KEY,
+            language TEXT,
+            rung TEXT,
+            symbol_count INTEGER DEFAULT 0,
+            anon_count INTEGER DEFAULT 0,
+            error_count INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_fx_lang ON file_extraction(language);
+        CREATE INDEX IF NOT EXISTS idx_fx_rung ON file_extraction(rung);
     """)
     con.commit()
     # Schema migration: older DBs used node_count, new schema uses member_count.
@@ -144,6 +159,29 @@ class GraphStore:
             (cid, level, title, summary, member_count),
         )
 
+    def record_extraction(self, file: str, language: str, rung: str,
+                          symbol_count: int, anon_count: int, error_count: int) -> None:
+        """Stamp what the derive did to one file. Upsert, so a re-extract overwrites in place."""
+        self._con.execute(
+            """INSERT INTO file_extraction
+               (file,language,rung,symbol_count,anon_count,error_count)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(file) DO UPDATE SET
+                 language=excluded.language, rung=excluded.rung,
+                 symbol_count=excluded.symbol_count, anon_count=excluded.anon_count,
+                 error_count=excluded.error_count""",
+            (file, language, rung, symbol_count, anon_count, error_count),
+        )
+
+    def extraction_summary(self) -> list[dict]:
+        """Per-(language, rung) rollup for overview(what="metrics")'s `extraction` block."""
+        rows = self._con.execute(
+            "SELECT language, rung, COUNT(*) AS files, SUM(symbol_count) AS symbols, "
+            "SUM(anon_count) AS anon, SUM(error_count) AS errors "
+            "FROM file_extraction GROUP BY language, rung ORDER BY files DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def delete_file_symbols(self, file: str) -> int:
         """Drop one file's symbols and the edges *out of* them (incremental re-extract).
 
@@ -157,6 +195,11 @@ class GraphStore:
         stable for a symbol whose start_line did not move, so most of them are valid again the
         moment the file is re-extracted; call `purge_dangling_edges` afterwards for the rest.
         """
+        # Before the early return, not after: a file that produced *no* symbols still has a
+        # file_extraction row (that is the whole point of the table), so gating its removal on
+        # having had symbols would leak a row for every deleted zero-symbol file — exactly the
+        # files the table exists to account for.
+        self._con.execute("DELETE FROM file_extraction WHERE file=?", (file,))
         sids = [r[0] for r in self._con.execute("SELECT sid FROM symbols WHERE file=?", (file,))]
         if not sids:
             return 0
@@ -174,8 +217,16 @@ class GraphStore:
         return cur.rowcount
 
     def clear(self) -> None:
-        """Wipe symbols/edges/communities before a full re-index so stale rows don't persist."""
-        self._con.executescript("DELETE FROM symbols; DELETE FROM edges; DELETE FROM communities;")
+        """Wipe symbols/edges/communities before a full re-index so stale rows don't persist.
+
+        `file_extraction` goes too: a full re-derive re-records every file it walks, so keeping
+        the old rows would leave entries for files the new pass never saw and make the coverage
+        denominator larger than the corpus.
+        """
+        self._con.executescript(
+            "DELETE FROM symbols; DELETE FROM edges; DELETE FROM communities; "
+            "DELETE FROM file_extraction;"
+        )
         self._con.commit()
 
     def symbol_count(self) -> int:

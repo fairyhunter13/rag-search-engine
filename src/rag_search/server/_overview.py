@@ -60,6 +60,63 @@ _VALID = {
 }
 
 
+def _extraction_totals(rows: list[dict]) -> dict:
+    """Roll per-(language, rung) rows up into the dark-set headline numbers.
+
+    `dark_files` is the number this whole apparatus exists to drive down, and it is reported
+    beside the breakdown rather than alone — a single coverage percentage is what made the gap
+    unactionable, because five different causes all landed in it.
+    """
+    files = sum(r["files"] for r in rows)
+    with_syms = sum(r["files"] for r in rows if r["symbols"])
+    return {"by_language_rung": rows, "files": files,
+            "files_with_symbols": with_syms,
+            "dark_files": files - with_syms,
+            "anon_dropped": sum(r["anon"] for r in rows),
+            "files_with_errors": sum(r["errors"] for r in rows),
+            "coverage_pct": round(100.0 * with_syms / files, 2) if files else None}
+
+
+def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untyped-def]
+    """Per-(language, rung) extraction coverage, plus the dark-set totals it exists to expose.
+
+    Served from inside the daemon rather than by a caller opening `graph.db` itself, and that
+    is a correctness requirement, not a convenience: the stores are `journal_mode=WAL` and the
+    daemon is their writer, so an external read-only connection can be handed the
+    pre-checkpoint snapshot of the main DB while committed rows still sit in the `-wal`.
+    Measured 2026-07-30 — the identical `COUNT(*) … LIKE '%.svelte'` returned **0**, then **78**
+    after the checkpoint, against a `graph.db` whose mtime never moved. A wrong answer that is
+    stable and reproducible is the failure mode here, so the reader must be the writer.
+
+    Stores are opened and closed one at a time: the comprehension that opened all of them at
+    once leaked ~150 descriptors on a 157-member federation when it hit EMFILE partway.
+    """
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.federation import expand_federation
+    from rag_search.graph.store import GraphStore
+
+    if not project_path:
+        project_path, _err = _require_project(projects)
+    if not project_path:
+        return {}
+    agg: dict[tuple[str, str], dict] = {}
+    for _p in expand_federation(project_path):
+        _db = project_graph_db(_p)
+        if not _db.exists():
+            continue
+        _gs = GraphStore(_db)
+        try:
+            for row in _gs.extraction_summary():
+                key = (row.get("language") or "unknown", row.get("rung") or "unknown")
+                acc = agg.setdefault(key, {"language": key[0], "rung": key[1],
+                                           "files": 0, "symbols": 0, "anon": 0, "errors": 0})
+                for _f in ("files", "symbols", "anon", "errors"):
+                    acc[_f] += row.get(_f) or 0
+        finally:
+            _gs.close()
+    return _extraction_totals(sorted(agg.values(), key=lambda r: r["files"], reverse=True))
+
+
 def _require_project(projects) -> tuple[str, str | None]:  # type: ignore[no-untyped-def]
     """Resolve an omitted project for a project-scoped overview. One enabled project → use it;
     several → fail loud with candidates rather than silently answering about projects[0]."""
@@ -91,7 +148,8 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
         ]})
     if what == "metrics":
         from rag_search.server.routes_ops import _snapshot
-        return json.dumps(_snapshot())
+        return json.dumps({**_snapshot(),
+                           "extraction": _extraction_block(project_path, list_projects())})
     if what == "validate":
         if not project_path:
             project_path, _verr = _require_project(list_projects())
