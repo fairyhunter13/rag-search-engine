@@ -13,10 +13,51 @@ from pathlib import Path
 from rag_search.core.config import REGISTRY_PATH, ProjectEntry
 
 _LOCK_PATH = Path(str(REGISTRY_PATH) + ".lock")
+_BACKUP_DEPTH = 5
+# A burst of removals is one event, not N. The 07-30 wipe was a `for path in rows: remove_project(p)`
+# loop, so rotating per removal fills all five slots with the wipe's own intermediate states in a few
+# seconds — measured: after 8 sequential removals the *oldest* copy had already lost 3 rows. The ring
+# has to hold distinct points in time, so a rotation suppresses the next 10 minutes of them. Real
+# deletions arrive minutes to days apart (a `stop-watching`, a repo deleted off disk); nothing
+# legitimate deletes twice inside ten minutes, and if it does, the first copy is the one worth having.
+_BACKUP_COOLDOWN_S = 600.0
 
 
 def _load() -> dict:
     return json.loads(REGISTRY_PATH.read_text()) if REGISTRY_PATH.exists() else {}
+
+
+def _rotate_backups() -> bool:
+    """Push the current registry onto a 5-deep ring: `.bak.1` is newest, `.bak.5` oldest.
+
+    Called from inside `_mutate`'s lock and only when the pending write *drops keys*, which is the
+    whole design. Rotating on every write would be useless: `register_all_members()` upserts once
+    per discovered member at each daemon start — 193 rows on this host — so a single startup would
+    consume the ring several times over, and by the time anyone noticed an accident all five copies
+    would post-date it. Gated on removal, the ring holds only deletions, and a deletion is the only
+    thing anyone has ever wanted back.
+
+    Copy rather than rename: a rename would leave `projects.json` missing for the width of the
+    write, and every reader treats an absent registry as an empty one rather than as an error.
+
+    Returns True if it rotated. Within `_BACKUP_COOLDOWN_S` of the last rotation it does nothing, so
+    a removal burst is captured once, at the state it started from.
+    """
+    import shutil
+    import time
+
+    newest = Path(f"{REGISTRY_PATH}.bak.1")
+    if newest.exists() and time.time() - newest.stat().st_mtime < _BACKUP_COOLDOWN_S:
+        return False
+
+    for i in range(_BACKUP_DEPTH - 1, 0, -1):
+        older = Path(f"{REGISTRY_PATH}.bak.{i + 1}")
+        newer = Path(f"{REGISTRY_PATH}.bak.{i}")
+        if newer.exists():
+            os.replace(newer, older)
+    if REGISTRY_PATH.exists():
+        shutil.copy2(REGISTRY_PATH, newest)
+    return True
 
 
 @contextmanager
@@ -32,13 +73,20 @@ def _mutate() -> Iterator[dict]:
 
     Not reentrant: flock is per open file description, so a nested `_mutate()` in the same
     process blocks on itself. Nothing nests today.
+
+    A write that drops keys rotates the pre-write file onto a backup ring first — see
+    `_rotate_backups`. The predicate is set difference, not `len()`: a re-key removes one path and
+    adds another, so counting rows would call that a no-op and skip the one copy that could undo it.
     """
     REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_LOCK_PATH, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
         data = _load()
+        before = set(data)
         yield data
+        if before - set(data):
+            _rotate_backups()
         tmp = Path(str(REGISTRY_PATH) + ".tmp")
         tmp.write_text(json.dumps(data, indent=2))
         os.replace(tmp, REGISTRY_PATH)
