@@ -48,6 +48,23 @@ BIN_OVERSAMPLE = 4
 # 1.20x faster, because 97 of 139 stores were paying the overhead to lose. Set above the
 # 6k-12k band, where repeated runs put the two lanes within +-30% of each other in both
 # directions — the crossover is real but not sharp, and the wrong side of it costs ~5 ms.
+#
+# Re-validated 2026-07-30 after the fleet shrank from 2,203,331 chunks to 376,672, which retired
+# every store the numbers above were taken on (largest is now 27,974, was 106,685). ABA over a
+# real 193-member federated query, medians of 5, drift-adjudicated:
+#   - The gate is load-bearing. Ungated (bit lane on all 139 stores) measured 7.24s against
+#     4.12s gated — 1.85x slower, a gap 26x the A-to-A' drift. This is the same regression
+#     `ba1bc86` was written for, and it is still live if the threshold goes away.
+#   - The lane itself is now unmeasurable. Gated vs exact-only came back "no claim" on 3 of 4
+#     queries (gap under drift), and on the one member store above the threshold all four arms
+#     tied on medians (0.598/0.595/0.597/0.634). A first pass reporting min-of-5 on one query
+#     looked like a clean 0.91x win for exact; four queries showed that as the session's warming
+#     trend — A' beat B on 3 of 4 — so it was withdrawn, not shipped.
+# So 12,000 is kept and is *not* re-tuned: with no store big enough to make two-stage win, there
+# is no signal left to tune against, and the value's only remaining job is to keep small stores
+# off the lane, which it does. Deleting the lane is not supported either — nothing measured shows
+# it costing anything, and removal would re-expose the next >100k store. Revisit only when a store
+# in the 100k range comes back, which is the regime the 152ms-vs-24ms figure above describes.
 BIN_MIN_CHUNKS = 12_000
 
 # Stores already reported as lexically unavailable, so the warning is one line per store per
