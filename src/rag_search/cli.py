@@ -108,25 +108,34 @@ def mcp() -> None:
 
 
 @app.command("clean-orphans")
-def clean_orphans(yes: bool = typer.Option(False, "--yes", "-y")) -> None:
+def clean_orphans(
+    yes: bool = typer.Option(False, "--yes", "-y"),
+    force: bool = typer.Option(False, "--force",
+                               help="Proceed even when the sweep would take most of the tree."),
+) -> None:
     """Remove orphan index dirs (dry-run by default)."""
     import shutil
 
-    from rag_search.core.config import INDEX_ROOT, index_dir
-    from rag_search.core.registry import list_projects
-    # Compare resolved index dirs, never path substrings. A dir is named `<basename>-<sha16>`, so an
-    # absolute registry path ending in `octg_ledger` is not a substring of `octg-ledger-3f2a…`, and the old
-    # test matched nothing at all: it called every one of 179 dirs an orphan, live stores included,
-    # so `--yes` deleted the whole fleet's index and cost a full GPU re-index to get back.
-    known = {index_dir(p.path).resolve() for p in list_projects()}
+    from rag_search.core.orphans import OrphanSweepRefusedError, orphan_dirs
+    # The ownership test and its floor both live in `core.orphans`: this command deleted the whole
+    # fleet's index once by comparing a registry path against a dir name, and the corrected
+    # comparison then lived here while `maintenance()` kept the broken one. One copy, one fix.
+    #
+    # A dry run is refused too. Printing 179 orphan lines and leaving the operator to notice would
+    # make the refusal message — the single most useful thing this command can say in that state —
+    # the one output it withholds right up until `--yes`.
+    try:
+        orphans = orphan_dirs(allow_bulk=force)
+    except OrphanSweepRefusedError as exc:
+        typer.echo(f"Refused: {exc}", err=True)
+        raise typer.Exit(1) from None
     removed = 0
-    for d in (list(INDEX_ROOT.iterdir()) if INDEX_ROOT.exists() else []):
-        if d.is_dir() and d.resolve() not in known:
-            if yes:
-                shutil.rmtree(d, ignore_errors=True)
-                removed += 1
-            else:
-                typer.echo(f"orphan: {d}")
+    for d in orphans:
+        if yes:
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+        else:
+            typer.echo(f"orphan: {d}")
     typer.echo(f"Removed {removed}." if yes else "Run with --yes to delete.")
 
 

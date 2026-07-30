@@ -408,7 +408,14 @@ def test_pipeline_all_stages_rse_repo():
 
 
 def test_maintenance_vacuums_orphan():
-    """P10.7: maintenance() removes orphan index dirs not in the registry."""
+    """P10.7: maintenance() removes orphan index dirs not in the registry.
+
+    This one runs against the *real* INDEX_ROOT, so it now also depends on the sweep's blast cap
+    (`core.orphans`) not tripping: if this host's orphans ever exceed half its stores, the sweep
+    refuses wholesale and this goes red. That red is the guard reporting a lost or wrong registry —
+    read the ERROR line it logs before touching this test. CO9 covers the same removal in a
+    redirected subprocess, where the ratio is set deliberately rather than inherited from the fleet.
+    """
     from rag_search.core.config import INDEX_ROOT
     from rag_search.daemon.sweeps import maintenance
 
