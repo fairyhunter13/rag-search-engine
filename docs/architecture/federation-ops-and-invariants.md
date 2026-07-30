@@ -266,3 +266,66 @@ The *engineering principles* that govern all architectural choices are recorded 
 - **Event-driven + reconcile** is self-healing: stalled projects repaired at startup and on
   demand; edits flow incrementally through the debounced graph lane.
 - **One daemon over HTTP** removes the per-session ~1 GB engine cost of the stdio bridge.
+
+### 15.1 Duplicate mass across a federation: excluded, not deduplicated (2026-07-30)
+
+A 193-member federation carried **2,203,331 chunks / 6.77 GB** of float32, and the great majority of
+it was the same bytes over and over: vendored front-end and framework trees (ckeditor, jquery,
+PHPExcel, CodeIgniter `system/`, minified bundles, `public/assets/**`) copied into member after
+member. The designed fix was content-addressed sharing — a `file_aliases` table plus a per-federation
+`shared.db`, so one embedding could serve every member holding that file, keeping all of it findable.
+
+**It was not built.** Excluding the vendored trees in one member root's `.rse-index.yaml` reached the
+same mass with no engine change at all, because a root's `effective_config` unions its excludes into
+every member: a single file reached 135 members. Measured before committing to it — the exclusion
+patterns matched **917,890 of 1,295,061 chunks (70.9%)**, and **98.6%** of that was byte-identical to
+a copy in a sibling member. The fleet ended at **377,171 chunks**, below the sharing design's own
+computed floor of 395,026, with the whole of `index/store.py` untouched.
+
+What that trades away, stated plainly: excluded means **unfindable**, not deduplicated. A query for
+a symbol defined only inside vendored third-party code now returns nothing, where the sharing design
+would have returned one canonical hit. That was accepted deliberately — those trees are read as
+documentation at their upstream source, not searched here — and it is the reason the exclusions are
+scoped to vendored paths rather than to duplication in general.
+
+Two rules fell out of the measurement and should govern the next such pass:
+
+- **Exclude per pattern, on that pattern's own duplication.** `public/css/*` was dropped from the
+  candidate list because 69% of its chunks were single-copy: it looked like bulk in aggregate while
+  being mostly first-party CSS written once. A federation-wide "exclude what looks vendored" rule
+  would have taken it.
+- **First-party duplication stays.** 124,853 chunks are genuinely duplicated first-party code across
+  members. Excluding them would hide code someone works on daily, and they are exactly the mass the
+  sharing design is still the right answer for, if the cost ever justifies the table.
+
+### 15.2 The text screen asks the bytes, not the extension (2026-07-30)
+
+`_should_drop`'s last rule is git's binary test — a NUL byte in the first 8 kB. It originally ran
+only for files `detect_language` could not name (`lang == "unknown"`), on two premises, both of
+which measurement withdrew:
+
+- **"A language the pack can name is text."** It is not. `.pkl` collides with Apple's **Pkl**
+  configuration language, so five sklearn pickles (`\x80\x04\x95 … MinMaxScaler`) were named `pkl`,
+  handed the 500 kB *code* size cap, chunked and embedded. At 719 bytes each that was five junk
+  chunks; the cap is what made it a hole, because a 400 kB model artifact would have indexed in full.
+- **"A named file should not pay the read."** The read costs **+3% of a warm discovery walk** (1,010
+  files) and +44% of a cold one — and every file reaching this rule is about to be opened and read
+  in full by the chunker anyway, so the marginal cost is one extra `open()` per kept file.
+
+Widening it was checked against the whole fleet before shipping, not after: of **66,911** files
+walked across 139 projects, exactly **7** newly drop out — the 5 pickles plus two UTF-16LE files
+(`redacted-name-13/js/jscalendar/lang/calendar-hr.js`, `redacted-name-4/README.md`) whose every second byte is
+NUL. Zero collateral. The 7 files held 17 chunks, purged via `scripts/purge_unindexable.py`.
+
+**The two UTF-16 files are dropped deliberately, and this is the interesting half.** They are real
+text, not mojibake at the source: a Croatian i18n catalogue and a one-line README, both carrying a
+`\xff\xfe` BOM. But the reader has no BOM handling, so what was *stored* for them was UTF-8-with-
+replace over UTF-16 — junk. Absent from the index is more honest than wrong in it, and it matches
+git, which also calls UTF-16 binary. A BOM carve-out was considered and rejected: it is a
+hand-written list whose entire effect would be to keep those mojibake chunks searchable. Making the
+reader BOM-aware is the real fix for them and is not built.
+
+Note the counting asymmetry this exposed: a "stored text contains a NUL" query found **16** chunks
+where the purge removed **17**. One `calendar-hr.js` chunk's slice landed on a NUL-free stretch of
+the mojibake. Detecting bad content by sampling its own symptom undercounts it; the file-level
+decision is the one to trust.
