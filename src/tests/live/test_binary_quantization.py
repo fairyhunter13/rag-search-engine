@@ -1,4 +1,4 @@
-"""BQ1-BQ4 — gates for the coarse bit lane that fronts the float32 KNN.
+"""BQ1-BQ6 — gates for the coarse bit lane that fronts the float32 KNN.
 
 Its failure mode is silent, exactly like the external-content FTS index HY1 guards: nothing
 errors when `vec_chunks_bin` drifts from `vec_chunks`. A stale code keeps a deleted chunk in
@@ -23,12 +23,21 @@ _TEXTS = [
 ]
 
 
-def _store(embedder, path, texts=None, langs=None):
+def _exact(path):
+    """A second handle on the same store, configured above the size line so `search` takes the
+    float32 lane. Every corpus here is a few hundred chunks — far below BIN_MIN_CHUNKS, where the
+    bit lane costs more than it saves — so the lane under test is asked for by configuration."""
+    from rag_search.index.store import VectorStore
+
+    return VectorStore(path, migrate=False, min_two_stage=10**9)
+
+
+def _store(embedder, path, texts=None, langs=None, **kw):
     from rag_search.index.store import VectorStore
 
     texts = texts or _TEXTS
     langs = langs or ["python" if i % 2 == 0 else "markdown" for i in range(len(texts))]
-    vs = VectorStore(path)
+    vs = VectorStore(path, **kw)
     vecs = embedder.embed(texts, batch_size=16)
     for i, (text, vec, lang) in enumerate(zip(texts, vecs, langs, strict=True)):
         vs.insert(i, f"f{i}.py", 1, 3, lang, text, vec)
@@ -76,13 +85,12 @@ def test_bq1_bit_index_survives_insert_replace_delete_and_clear(embedder, safe_t
 
 def test_bq2_two_stage_scores_match_the_exact_scan(embedder, safe_tmp_path):
     """BQ2: same score scale as the float32 KNN, and a stored vector finds itself first."""
-    vs, vecs = _store(embedder, safe_tmp_path / "bq2.db")
+    path = safe_tmp_path / "bq2.db"
+    vs, vecs = _store(embedder, path, min_two_stage=0)
     q = np.asarray(vecs[7], dtype=np.float32)
 
     two = vs.search(q, top_k=5)
-    vs._bin_ready = False          # the exact path this must not diverge from
-    exact = vs.search(q, top_k=5)
-    vs._bin_ready = True
+    exact = _exact(path).search(q, top_k=5)   # the path this must not diverge from
 
     assert two[0]["chunk_id"] == exact[0]["chunk_id"] == 7, "query vector did not find its own chunk"
     by_id = {h["chunk_id"]: h["score"] for h in exact}
@@ -112,7 +120,7 @@ def test_bq3_language_filter_returns_a_full_page(embedder, safe_tmp_path):
 
     texts = _BQ3_CODE + _BQ3_DOCS
     langs = ["python"] * len(_BQ3_CODE) + ["markdown"] * len(_BQ3_DOCS)
-    vs, vecs = _store(embedder, safe_tmp_path / "bq3.db", texts, langs)
+    vs, vecs = _store(embedder, safe_tmp_path / "bq3.db", texts, langs, min_two_stage=0)
     assert 10 <= len(_BQ3_DOCS) < 10 * BIN_OVERSAMPLE < len(texts), "corpus cannot show the bug"
     q = np.asarray(vecs[0], dtype=np.float32)
     hits = vs.search(q, top_k=10, languages=["markdown"])
@@ -122,18 +130,16 @@ def test_bq3_language_filter_returns_a_full_page(embedder, safe_tmp_path):
     vs.close()
 
 
-def _recall_at_k(vs, queries, k=10) -> float:
-    """Share of the exact scan's top-k that the two-stage recovers, averaged over queries."""
+def _recall_at_k(exact, approx, queries, k=10) -> float:
+    """Share of the exact scan's top-k that a bit-lane handle recovers, averaged over queries."""
     got = 0
     for q in queries:
-        vs._bin_ready = False
-        truth = {h["chunk_id"] for h in vs.search(q, k)}
-        vs._bin_ready = True
-        got += len(truth & {h["chunk_id"] for h in vs.search(q, k)})
+        truth = {h["chunk_id"] for h in exact.search(q, k)}
+        got += len(truth & {h["chunk_id"] for h in approx.search(q, k)})
     return got / (len(queries) * k)
 
 
-def test_bq5_oversample_earns_its_value(embedder, safe_tmp_path, monkeypatch):
+def test_bq5_oversample_earns_its_value(embedder, safe_tmp_path):
     """BQ5: gate BIN_OVERSAMPLE against the exact scan it approximates.
 
     The end-to-end recall gate cannot do this job: over its 40 golden queries, oversample 1 and a
@@ -141,25 +147,49 @@ def test_bq5_oversample_earns_its_value(embedder, safe_tmp_path, monkeypatch):
     cross-encoder re-sorts a 10-deep page and recall@10 is saturated. Hence a gap assertion, not
     just a floor: a floor alone passes on a broken shortlist that a small corpus flatters.
     """
-    import rag_search.index.store as mod
+    from rag_search.index.store import BIN_OVERSAMPLE, VectorStore
 
     texts = [f"{v} {n}(self, {a}):\n    return self.{a}.{v}({n}_id)\n"
              for v in ("fetch", "delete", "render", "validate", "publish", "resolve", "queue")
              for n in ("invoice", "session", "webhook", "manifest", "checkout", "ledger")
              for a in ("client", "cache", "broker", "store", "index", "pool", "shard")]
-    over = mod.BIN_OVERSAMPLE
+    over = BIN_OVERSAMPLE
     assert len(texts) > 10 * over, "shortlist must be smaller than the corpus to measure anything"
-    vs, vecs = _store(embedder, safe_tmp_path / "bq5.db", texts, ["python"] * len(texts))
+    path = safe_tmp_path / "bq5.db"
+    vs, vecs = _store(embedder, path, texts, ["python"] * len(texts), min_two_stage=0)
     queries = [np.asarray(v, dtype=np.float32) for v in vecs[::6]]
 
-    shipped = _recall_at_k(vs, queries)
-    monkeypatch.setattr(mod, "BIN_OVERSAMPLE", 1)
-    narrow = _recall_at_k(vs, queries)
+    exact = _exact(path)
+    shipped = _recall_at_k(exact, vs, queries)
+    narrow = _recall_at_k(
+        exact, VectorStore(path, migrate=False, oversample=1, min_two_stage=0), queries)
     vs.close()
     assert shipped >= 0.90, f"oversample {over} recovers only {shipped:.3f} of the exact top-10"
     assert shipped - narrow >= 0.05, (
         f"widening bought nothing: {shipped:.3f} at {over}x vs {narrow:.3f} at 1x — either the "
         "rescore is not running or this corpus is too small to tell the two apart")
+
+
+def test_bq6_small_store_answers_on_the_exact_lane(embedder, safe_tmp_path):
+    """BQ6: under BIN_MIN_CHUNKS the two-stage must not run — below the crossover it only costs.
+
+    Which lane ran is invisible in a result (both score the same vectors identically), so the
+    codes are emptied while `bin_rev` stays stamped: the bit lane would then shortlist nothing and
+    answer [], while the exact scan is unaffected. Asserted in both directions, because a
+    predicate wired to a constant rather than to this store's size satisfies the first half alone.
+    """
+    from rag_search.index.store import BIN_MIN_CHUNKS, VectorStore
+
+    path = safe_tmp_path / "bq6.db"
+    vs, vecs = _store(embedder, path)
+    assert vs.bin_ready and vs.count() == len(_TEXTS) < BIN_MIN_CHUNKS, "not below the line"
+    vs._con.execute("DELETE FROM vec_chunks_bin")
+    vs.flush()
+    q = np.asarray(vecs[3], dtype=np.float32)
+    assert vs.search(q, top_k=5)[0]["chunk_id"] == 3, "small store did not take the exact lane"
+    assert VectorStore(path, migrate=False, min_two_stage=0).search(q, top_k=5) == [], (
+        "the lane choice ignores store size — the bit lane ran against an emptied index")
+    vs.close()
 
 
 def test_bq4_unquantized_store_still_answers(embedder, safe_tmp_path):
