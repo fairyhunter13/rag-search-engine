@@ -16,13 +16,20 @@ from pathlib import Path
 
 import pytest
 
-from rag_search.graph.extractor import ExtractionStats, extract_symbols_with_stats
+from rag_search.graph.extractor import (
+    EXTRACTION_RUNGS,
+    ExtractionStats,
+    extract_symbols_with_stats,
+)
 
 pytestmark = pytest.mark.live
 
-# Every rung `extract_symbols_with_stats` may report. A new rung must be added here
-# deliberately, so the ladder cannot grow a path that nothing accounts for.
-_KNOWN_RUNGS = {"structure", "generic", "embedded", "unparsed", "no_grammar", "no_language"}
+# Every rung `extract_symbols_with_stats` may report. Taken from the module's own declaration
+# rather than re-spelled here: the hand-written copy silently went stale the moment rung 4
+# landed — it never gained `highlights`, and EL1 stayed green because none of its cases reach
+# that rung. A guard that only fails when someone remembers to update it is not a guard.
+# Deliberateness lives at the `EXTRACTION_RUNGS` declaration, which is what it exists for.
+_KNOWN_RUNGS = set(EXTRACTION_RUNGS)
 
 _ARROW_JS = """
 const a = () => 1;
@@ -161,3 +168,60 @@ def test_el8_rung_4_does_not_invent_a_definition_for_a_call_site() -> None:
         syms, _ = _stats(name, src, lang)
         bogus = [s for s in syms if s.name == called and s.start_line > 1]
         assert not bogus, f"{lang}: call site {called!r} became a symbol: {bogus}"
+
+
+_COMPOSE = 'version: "3"\nservices:\n  web:\n    image: nginx\n  db:\n    image: postgres\n'
+_PKG_JSON = '{"name": "x", "scripts": {"build": "vite", "test": "vitest"}}'
+_TF = 'resource "aws_s3_bucket" "b" {\n  bucket = "x"\n}\nvariable "v" { default = 1 }\n'
+# The real X2 shape: a Katalon project ships 2,439 `.rs`/`.ts` files that are XML.
+_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<WebElementEntity>\n  <name>btn</name>\n</WebElementEntity>\n'
+
+
+def test_el9_a_data_file_yields_its_structure_instead_of_a_blank_row() -> None:
+    """EL9 — rung 5. These were filed under X4 "legitimately symbol-free", and for markdown or
+    a `.env.example` that is true. For a compose file, a `package.json` or a terraform module it
+    never was: the structure is there, tree-sitter can see it, and nothing was asking.
+
+    `qualified_name` is asserted, not just `name`, because the depth-2 key is the useful one —
+    `scripts.build`, `services.web` — and a rung that returned only the section headers would
+    satisfy a name-only assertion while delivering nothing anyone would search for.
+    """
+    for name, src, lang, want in [
+        ("compose.yaml", _COMPOSE, "yaml", {"services", "services.web", "services.db"}),
+        ("package.json", _PKG_JSON, "json", {"scripts", "scripts.build", "scripts.test"}),
+        ("main.tf", _TF, "hcl", {'resource."aws_s3_bucket"."b"', 'variable."v"'}),
+    ]:
+        syms, st = _stats(name, src, lang)
+        assert st.rung == "data", f"{name}: expected rung 5, got {st.rung}"
+        quals = {s.qualified_name for s in syms}
+        assert want <= quals, f"{name}: missing {want - quals} (got {sorted(quals)})"
+        assert all(s.start_line >= 1 for s in syms), [s.start_line for s in syms]
+
+
+def test_el10_bytes_that_contradict_the_extension_are_recorded_not_parsed_as_claimed() -> None:
+    """EL10 (X2) — a `.rs` file that is actually XML must not read as an empty rust file.
+
+    That is the whole defect: 2,439 files claiming a language their bytes do not parse as, and
+    an extraction record indistinguishable from a rust file that genuinely defines nothing.
+
+    The negative half is the load-bearing one. The evidence is "these bytes do not parse as this
+    grammar", which *degraded but correct* source can also produce — so the test pins the cases
+    that must NOT be called a mismatch. Measured 2026-07-30: source truncated mid-token scores
+    0.000 (tree-sitter recovers), minified javascript 0.000, NUL-injected python 0.120, against
+    0.916-1.000 for wrong-language bytes. Nothing measured lands between. If this half goes red,
+    the threshold is wrong and every broken file in the fleet is being mislabelled.
+    """
+    for name, lang in [("o.rs", "rust"), ("o.ts", "typescript"), ("o.go", "go")]:
+        _, st = _stats(name, _XML, lang)
+        assert st.rung == "language_mismatch", f"{name}: XML bytes read as {st.rung}"
+
+    real_py = "def top(a):\n    return helper(a)\n\n\ndef helper(b):\n    return b\n"
+    for name, src, lang in [
+        ("t.py", real_py[: len(real_py) // 2], "python"),                     # truncated
+        ("m.js", "function a(b){return b*2}var c=a(3);" * 40, "javascript"),  # minified
+        ("n.py", "def f():\n\x00\x00\x00    return 1\n", "python"),           # NUL bytes
+        ("x.xml", _XML, "xml"),                                # same bytes, told the truth
+    ]:
+        _, st = _stats(name, src, lang)
+        assert st.rung != "language_mismatch", (
+            f"{name}: degraded-but-correct {lang} was called a language mismatch")
