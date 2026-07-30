@@ -21,6 +21,44 @@ def test_scheduler_runs_job():
     assert len(results) >= 2, f"expected >=2 runs, got {len(results)}"
 
 
+def test_scheduler_defers_first_run_by_one_interval():
+    """Only run_at_start jobs may fire at t=0; everything else waits out one interval.
+
+    The old `_last_run = 0.0` default made every job due immediately, because it was compared
+    against time.monotonic() (seconds since boot). Both arms here run under the same scheduler
+    on the same interval, so the only difference is the flag — with the old default, `deferred`
+    fires too and this is red.
+    """
+    from rag_search.daemon.scheduler import Scheduler
+
+    ran: list[str] = []
+    s = Scheduler()
+    s.register("deferred", lambda: ran.append("deferred"), interval_s=30.0)
+    s.register("immediate", lambda: ran.append("immediate"), interval_s=30.0, run_at_start=True)
+    s.start()
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and "immediate" not in ran:
+        time.sleep(0.02)
+    s.stop()
+    assert ran == ["immediate"], f"expected only the run_at_start job to have fired; got {ran}"
+
+
+def test_maintenance_job_is_not_registered_to_run_at_start():
+    """`maintenance` sweeps orphan index dirs and VACUUMs up to 278 SQLite files — measured at
+    8.6 s on a 476 MB freelist. On a daemon restarted ~20x/day it ran on every one of those
+    starts, inside the window where member discovery and watcher sync already contend for the
+    single core it is allowed. It stays on its interval; this pins the wiring, not the default."""
+    import re
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "rag_search" / "daemon" / "server.py").read_text()
+    m = re.search(r"scheduler\.register\(\s*\"maintenance\".*?\)\n", src, re.S)
+    assert m, "no scheduler.register(\"maintenance\", ...) call found in daemon/server.py"
+    assert "run_at_start" not in m.group(0), (
+        f"maintenance is registered to run at startup: {m.group(0).strip()}"
+    )
+
+
 def test_scheduler_stop_is_clean():
     from rag_search.daemon.scheduler import Scheduler
 

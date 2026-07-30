@@ -187,8 +187,10 @@ def _start_background() -> None:
     from rag_search.daemon.sweeps import maintenance, reconcile_projects
 
     scheduler = Scheduler()
-    scheduler.register("maintenance", maintenance, interval_s=21600.0)  # 6 h; CPU/disk only
-    scheduler.register("idle_unload", _idle_unload, interval_s=60.0)
+    # 6 h; CPU/disk only — and no run_at_start: the orphan sweep and its VACUUMs are the one
+    # job here that must stay out of the startup window (see _Job._next_run).
+    scheduler.register("maintenance", maintenance, interval_s=21600.0)
+    scheduler.register("idle_unload", _idle_unload, interval_s=60.0, run_at_start=True)
     # The registry has a second writer. `sync_watcher` is called from *this* process's registry
     # write path and from a reconcile pass, but periodic reconcile is off by default, so a write
     # from the CLI (`init`, `index`, `stop-watching` all call upsert/remove_project directly) or
@@ -203,10 +205,15 @@ def _start_background() -> None:
     # doctrinal shape, but the registry sits in the same data dir as every project's vectors.db,
     # so it would route an indexing write storm through a Python `watch_filter` — the exact cost
     # HR35 exists to avoid, paid to observe a file that changes a few times a day.
-    scheduler.register("watcher_sync", sync_watcher, interval_s=60.0)
+    scheduler.register("watcher_sync", sync_watcher, interval_s=60.0, run_at_start=True)
     watchdog_us = int(os.environ.get("WATCHDOG_USEC", "0"))
     if watchdog_us > 0:
-        scheduler.register("watchdog", lambda: _sd_notify("WATCHDOG=1"), interval_s=max(1.0, watchdog_us / 2_000_000))
+        # Immediately: systemd starts counting the watchdog interval at startup, so a first ping
+        # deferred by a full interval is a restart, not a late tick.
+        scheduler.register(
+            "watchdog", lambda: _sd_notify("WATCHDOG=1"),
+            interval_s=max(1.0, watchdog_us / 2_000_000), run_at_start=True,
+        )
     scheduler.start()
 
     from rag_search.daemon.federation import register_all_members
