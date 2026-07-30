@@ -17,6 +17,7 @@ Both helpers below read the state they are about to change and put that value ba
 from __future__ import annotations
 
 import contextlib
+import threading
 from collections.abc import Iterator
 
 import requests
@@ -65,6 +66,42 @@ def renew_pause_lease(*, base: str = _DAEMON) -> None:
         health = requests.get(f"{base}/healthz", timeout=5).json()
         if health.get("sweeps_pause_lease_s", 0.0) > 0.0:
             _post(base, "pause")
+
+
+_last_uptime_s: float | None = None
+_uptime_lock = threading.Lock()
+
+
+def renew_or_repair_lease(*, base: str = _DAEMON) -> None:
+    """Renew the lease, or re-take it outright if the daemon restarted since the last call.
+
+    The one case `renew_pause_lease`'s one-way rule must not cover, which is why this lives beside
+    it: `_PAUSED`/`_PAUSE_DEADLINE` are module globals, so a restart destroys the lease with no
+    refusal and no log — and because the survivor then reports 0.0, the rule above declines to
+    re-arm it for the rest of the run. A restart is not "the mechanism decided to resume"; it is a
+    different process that never knew a lease existed, so re-pausing puts back what was lost rather
+    than racing a decision. The unconditional `_post` here is exactly that difference.
+
+    `uptime_s` is the witness and it costs nothing new: `time.monotonic() - _START` can only
+    *decrease* across a process boundary. A pause epoch would have been no better — it would be a
+    module global too, so a restart resets it as well.
+
+    Not hypothetical and not rare: `test_api_reload_returns_reloading` restarts the daemon on
+    purpose and `live-fast` collects it, so before this every run spent everything after that test
+    competing with reconcile and label sweeps for the same card.
+    """
+    global _last_uptime_s
+    uptime = None
+    with contextlib.suppress(Exception):
+        uptime = float(requests.get(f"{base}/healthz", timeout=5).json()["uptime_s"])
+    with _uptime_lock:
+        restarted = uptime is not None and _last_uptime_s is not None and uptime < _last_uptime_s
+        if uptime is not None:
+            _last_uptime_s = uptime
+    if restarted:
+        with contextlib.suppress(Exception):
+            _post(base, "pause")
+    renew_pause_lease(base=base)
 
 
 def _post(base: str, route: str) -> dict:

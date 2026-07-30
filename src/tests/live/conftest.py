@@ -11,7 +11,7 @@ from tests.live._sample_workspace import (
     build_sample_workspace,
     teardown_sample_workspace,
 )
-from tests.live._sweeps import renew_pause_lease, sweeps_state
+from tests.live._sweeps import renew_or_repair_lease, sweeps_state
 
 _DAEMON = "http://127.0.0.1:8765"
 
@@ -244,14 +244,15 @@ def _drain_graph_lane():
     It also renews the daemon's pause lease, because this is the one hook that already fires after
     every test: the session pause now expires on its own (that is how a killed session stops
     wedging the daemon for hours), and the suite outlives any single lease. See
-    `_sweeps.renew_pause_lease` for why it is conditional.
+    `_sweeps.renew_pause_lease` for why the renewal is conditional, and `renew_or_repair_lease`
+    for the one case that must not be — a daemon that restarted and never knew of the lease.
     """
     yield
     sweeps = sys.modules.get("rag_search.daemon.sweeps")
     if sweeps is not None:
         with contextlib.suppress(Exception):
             sweeps._graph_lane_join(timeout=300.0)
-    renew_pause_lease()
+    renew_or_repair_lease()
 
 
 # Well inside `sweeps._PAUSE_TTL_S` (1800 s), so the lease is re-armed twice over before it can
@@ -278,9 +279,23 @@ def _renew_lease_until(stop: threading.Event, interval_s: float = _LEASE_RENEW_I
     is still not re-armed from here, because that decision belongs to the mechanism that resumed.
     Renewing on a clock means the lease never reaches 0.0 in the first place, which is the
     difference between preventing the resume and racing it.
+
+    **The one case that rule must not cover is a daemon that restarted**, and it is the case
+    measured 2026-07-31: `_PAUSED`/`_PAUSE_DEADLINE` are module globals, so `systemctl --user
+    restart` destroys the lease with no refusal and no log — and because the survivor reports 0.0,
+    the one-way rule then declines to re-arm it for the rest of the run. A restart is not "the
+    mechanism decided to resume"; it is a different process that never knew a lease existed, so
+    re-pausing is putting back what was lost rather than racing a decision.
+
+    `uptime_s` is the witness and it costs nothing new: it is `time.monotonic() - _START`, so it
+    only ever decreases across a process boundary. No pause epoch had to be added to `/healthz`.
+
+    Both the restart repair and the plain renewal live in `_sweeps`, which is the one module
+    allowed to POST the sweeps routes (`test_no_raw_sweeps_toggle`) — and the right place for them
+    regardless, since the repair is precisely the exception to the one-way rule stated there.
     """
     while not stop.wait(interval_s):
-        renew_pause_lease()
+        renew_or_repair_lease()
 
 
 @pytest.fixture(scope="session", autouse=True)
