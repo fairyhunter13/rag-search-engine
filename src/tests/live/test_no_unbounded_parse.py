@@ -30,8 +30,14 @@ _ROOT = Path(__file__).resolve().parents[2] / "rag_search"
 _WORKER_MODULES = {"graph/extractor.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")
 _WORKER_FUNCS = (
-    "extract_symbols(", "extract_calls_with_lines(", "extract_calls(",
+    "extract_symbols(", "extract_symbols_with_stats(",
+    "extract_calls_with_lines(", "extract_calls(",
 )
+# `extract_symbols_with_stats(` is listed separately because `extract_symbols(` does not match
+# it — the next character is `_`, not `(`. It became the real entry point when the per-file
+# extraction record landed (`extract_symbols` is now a thin delegate), so an allowlist naming
+# only the delegate would let the function that actually parses be called unbounded. This is
+# the same stale-allowlist shape the comment above warns about, caught while adding it.
 # extract_call_sites( was the fourth entry and left with tier 3 (BPRE was its only caller).
 # Dropped rather than kept: an entry naming a function that no longer exists can never fire,
 # which is the stale-allowlist hole the comment above is about.

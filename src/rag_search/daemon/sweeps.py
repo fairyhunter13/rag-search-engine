@@ -549,7 +549,7 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
 
     from rag_search.graph.extractor import (
         extract_calls_with_lines,
-        extract_symbols,
+        extract_symbols_with_stats,
         symbol_id,
     )
     from rag_search.index.bounded_parse import PARSE_TIMEOUT, run_bounded
@@ -573,9 +573,17 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         except OSError:
             continue
         lang = detect_language(fpath)
-        syms = run_bounded(extract_symbols, (fpath, content, lang), path_for_log=str(fpath))
-        if not syms or syms == PARSE_TIMEOUT:
+        res = run_bounded(extract_symbols_with_stats, (fpath, content, lang),
+                          path_for_log=str(fpath))
+        # A timeout is recorded, not skipped silently. `run_bounded` returns PARSE_TIMEOUT for
+        # a worker that *died at spawn* as well as one that ran too long, so this row is the
+        # only place the two are even distinguishable from the outside — see the "timeout" rung.
+        if res == PARSE_TIMEOUT or res is None:
+            gs.record_extraction(str(fpath), lang, "timeout", 0, 0, 1)
             continue
+        syms, st = res
+        gs.record_extraction(str(fpath), lang, st.rung, st.symbol_count,
+                             st.anon_count, int(st.has_error))
         for sym in syms:
             if not sym.name:
                 continue
