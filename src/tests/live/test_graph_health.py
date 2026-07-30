@@ -13,6 +13,11 @@ Tests:
        diagnostic signal for operators, not an automatic self-heal trigger. See the
        2026-07-09 root-federation audit for the confirmed root cause and rationale.
   GH5: _index_project source-guard: calls gs.clear() before rebuild
+  GH6: structural community labels stay distinct and deterministic
+  GH7: H1 — a federation root's symbol-arm exemption is evidence-based, not categorical. A root
+       holding no code of its own stays exempt (it is empty by design); one that attempted code
+       files and got zero symbols back is hollow like any member. The edge arm keeps its blanket
+       exemption, because HR4's synthesis-only L3 rows really do carry no edges.
 """
 from __future__ import annotations
 
@@ -209,3 +214,76 @@ def test_community_labels_discriminate():
     again = [_label_from_names(names, files) for names, files in _LABEL_SHAPE]
     assert labels == again, "GH6: labelling must be deterministic; it is stored and diffed"
     assert all(lbl for lbl in labels), f"GH6: no community may go unlabelled: {labels}"
+
+
+def _fedroot_status(proj: str, files: list[tuple[str, str]]) -> dict:
+    """Register `proj` as a federation root, give its store communities but no symbols, and ask.
+
+    `files` is `(name, language)` — each recorded as an *attempted* extraction that produced
+    nothing, which is the state H1 has to be able to read. The federation list points at a member
+    path that is deliberately not registered: `expand_federation` still returns it, and the root's
+    own entry in `members` is what both arms below assert on, exactly as GH2 does.
+    """
+    import asyncio
+
+    from rag_search.core.config import ProjectEntry, project_graph_db
+    from rag_search.core.registry import upsert_project
+    from rag_search.graph.store import GraphStore
+    from rag_search.server.mcp import overview as overview_tool
+
+    upsert_project(ProjectEntry(path=proj, enabled=True, federation=[proj + "/member"]))
+    gs = GraphStore(project_graph_db(proj))
+    try:
+        gs.upsert_community(1, level=1, title="Core", summary="synthesis", member_count=1)
+        for name, lang in files:
+            gs.record_extraction(name, lang, "generic", 0, 0, 0)
+        gs.commit()
+    finally:
+        gs.close()
+    result = json.loads(asyncio.run(overview_tool(proj, "status")))
+    return next((m for m in result.get("members", []) if m["path"] == proj), {})
+
+
+def test_gh7a_a_root_with_no_code_of_its_own_is_not_hollow(safe_tmp_path):
+    """GH7a — the half of the old exemption that was right, kept.
+
+    A federation root is usually a container directory: a README, a licence, and the member trees
+    below it. Zero symbols there is the correct answer, not a fault, so flagging it would make the
+    signal useless by firing on every root in the fleet. The check must read "no code was
+    attempted", not "the store is a root".
+    """
+    from rag_search.core.registry import remove_project
+
+    proj = str(safe_tmp_path)
+    try:
+        member = _fedroot_status(proj, [("README.md", "markdown"), ("LICENSE", "text")])
+        assert member, "GH7a: the root did not appear among its own federation members"
+        assert member.get("symbols") == 0, f"GH7a: fixture is not symbol-free: {member}"
+        assert member.get("symbol_hollow") is False, (
+            "GH7a: a root whose only files are docs was flagged hollow — every container "
+            f"directory in the fleet would alarm: {member}")
+    finally:
+        remove_project(proj)
+
+
+def test_gh7b_a_root_that_extracted_none_of_its_own_code_is_hollow(safe_tmp_path):
+    """GH7b — the half that was wrong, fixed. Red before H1.
+
+    Same store, same zero symbols, same communities; the only difference is that the attempted
+    files are code. Under the old categorical `and not _is_fedroot` this was reported healthy —
+    so the one store in the fleet where "0 symbols" is genuinely ambiguous was the one store that
+    could never say so, and a root whose whole extraction lane had broken looked exactly like a
+    root that is a directory of members. `file_extraction` is what makes the two separable, which
+    is why this guard could not have been written before W1.
+    """
+    from rag_search.core.registry import remove_project
+
+    proj = str(safe_tmp_path)
+    try:
+        member = _fedroot_status(proj, [("main.go", "go"), ("util.go", "go")])
+        assert member, "GH7b: the root did not appear among its own federation members"
+        assert member.get("symbol_hollow") is True, (
+            "GH7b: a federation root attempted two Go files, extracted nothing from either, and "
+            f"still reported healthy — this is the categorical exemption H1 replaced: {member}")
+    finally:
+        remove_project(proj)
