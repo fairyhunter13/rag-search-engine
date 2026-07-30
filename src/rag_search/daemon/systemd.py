@@ -3,6 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# The deployed unit name, in one place: `scripts/systemd/<UNIT_NAME>.d/` holds the versioned
+# operator drop-ins, and systemd only reads a drop-in dir whose name matches the unit exactly.
+# It did not match for a year — the tracked dir said `rag-search.service.d`, so the CPU-budget
+# drop-in it carried was inert everywhere except this host, where a hand-made copy under the
+# real name was doing the work. test_systemd_dropins_target_deployed_unit ties them together.
+UNIT_NAME = "rag-search-mcp-daemon.service"
+
 
 def unit_text(exec_path: str | None = None) -> str:
     if exec_path is None:
@@ -51,7 +58,7 @@ def unit_text(exec_path: str | None = None) -> str:
 def install(dest: Path | None = None) -> Path:
     """Write the unit file; returns the path written."""
     if dest is None:
-        dest = Path.home() / ".config" / "systemd" / "user" / "rag-search-mcp-daemon.service"
+        dest = Path.home() / ".config" / "systemd" / "user" / UNIT_NAME
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(unit_text())
     return dest

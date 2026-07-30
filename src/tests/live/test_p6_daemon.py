@@ -103,6 +103,26 @@ def test_systemd_unit_matches_deployed_name():
         assert "--port 8765" in dest.read_text()
 
 
+def test_systemd_dropins_target_deployed_unit():
+    """Versioned drop-ins must live under `<UNIT_NAME>.d` — systemd matches the dir name to the
+    unit exactly, so a dir named for any other unit is a file that looks configured and is not.
+    Derived from UNIT_NAME, not from a literal: rename either side and this goes red."""
+    from pathlib import Path
+
+    from rag_search.daemon.systemd import UNIT_NAME
+    scripts = Path(__file__).resolve().parents[3] / "scripts" / "systemd"
+    dropin_dirs = sorted(d.name for d in scripts.iterdir() if d.name.endswith(".service.d"))
+    assert dropin_dirs == [f"{UNIT_NAME}.d"], (
+        f"drop-in dirs {dropin_dirs} in scripts/systemd/ — systemd only reads "
+        f"{UNIT_NAME}.d, anything else is silently ignored"
+    )
+    confs = sorted(p.name for p in (scripts / f"{UNIT_NAME}.d").glob("*.conf"))
+    assert confs, f"no *.conf under scripts/systemd/{UNIT_NAME}.d"
+    for name in confs:
+        text = (scripts / f"{UNIT_NAME}.d" / name).read_text()
+        assert "[Service]" in text, f"{name} has no [Service] section — systemd would reject it"
+
+
 def test_federation_discover_empty_dir(tmp_path):
     from rag_search.daemon.federation import discover_members
 

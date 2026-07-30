@@ -38,6 +38,11 @@ _LIST_PROJECTS_ALLOWLIST = {
     "test_index_validity.py",  # registry precondition check (verifies sample paths are registered)
     "test_idle_stability.py",  # IS2: registry health check — must see all entries to find junk
     "test_path_resolution.py",  # self-heal test: list_projects() triggers _migrate() re-keying
+    # FE9/FE10: the fleet's own registry *is* the subject. The claim is "no enabled row is excluded
+    # and every armed row is covered", which cannot be expressed against fixture projects — a
+    # synthetic registry would assert the exclusion covers rows the exclusion invented. No path is
+    # extracted for data use; the rows are counted and matched against the daemon's env.
+    "test_federation_exclude.py",
     "test_no_real_project_in_tests.py",  # this file
 }
 
