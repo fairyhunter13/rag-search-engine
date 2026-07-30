@@ -95,10 +95,18 @@ def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untype
     from rag_search.daemon.federation import expand_federation
     from rag_search.graph.store import GraphStore
 
+    _err = None
     if not project_path:
         project_path, _err = _require_project(projects)
     if not project_path:
-        return {}
+        # Never a bare `{}`. "I could not decide which project you meant" and "the ladder
+        # recorded nothing" are different answers, and returning the same empty dict for both is
+        # how a metrics block lies quietly — the defect class this whole block exists to end.
+        # Measured 2026-07-30: with 152 enabled projects this branch fires on *every* unscoped
+        # call, so `overview(what="metrics")` reported `extraction: {}` fleet-wide while each
+        # store held rows. That read as "the instrument sees nothing", which is the one thing it
+        # must never say when it simply was not asked.
+        return json.loads(_err) if _err else {"error": "no project available"}
     agg: dict[tuple[str, str], dict] = {}
     for _p in expand_federation(project_path):
         _db = project_graph_db(_p)
