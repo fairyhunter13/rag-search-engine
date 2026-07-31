@@ -33,12 +33,10 @@ graph — a store that held 1,708 symbols before the run and 1,708 after. The te
 in 0.51 s. It failed in the suite because something else in the suite triggered a full re-derive of
 that project and the assertion landed inside the window.
 
-The trigger is worth naming because it is a **second, separate defect**: `server/mcp.py`'s `index()`
-starts `threading.Thread(target=reconcile_projects, daemon=True)` and never joins it, so
-`test_index_tool_e2e` leaves a fleet-wide reconcile running across whatever tests follow. Fixing
-that would have made this particular failure go away without making the graph any safer to read
-during a rebuild — a re-derive is a normal background event, and any client can be reading during
-one. The leak is filed separately; the window is what this document closes.
+The trigger is a **second, separate defect**, addressed below. Fixing it alone would have made this
+particular failure go away without making the graph any safer to read during a rebuild — a
+re-derive is a normal background event and any client can be reading during one — so the window is
+closed first and on its own terms.
 
 ## What replaced it
 
@@ -75,6 +73,39 @@ subset is not evidence of anything. All three `if targets is None` guards are th
   reader connections this code does not own.
 - **Staging tables for the whole pipeline.** `detect_communities` is written against the real table
   names, so this becomes surgery on `community.py` to fix a bug in `sweeps.py`.
+
+## The trigger: a sweep that runs where the pause cannot reach it
+
+Closing the window did not make the next run green. `318559d` failed on
+`test_e1_rerank_reorders_search_results` — rerank produced scores and sorted them, but never
+reordered top-1 against vector order on any of four queries. Also passing in isolation, in 10.6 s.
+
+Same cause, different surface. `server/mcp.py`'s `index()` starts
+`threading.Thread(target=reconcile_projects, daemon=True)` and never joins it. In production that is
+correct and wanted: the MCP app is served by the daemon (`server/routes.py:91`), so the thread runs
+inside the daemon, reads the daemon's `_PAUSED`, and stops at the pause lease like everything else.
+
+Under pytest the tool is imported and called **in the test process**. `sweeps._PAUSED` is a module
+global (`sweeps.py:9`), and the suite pauses the *daemon* over HTTP — so the test process's copy is
+`False` and nothing in the suite ever sets it. The thread therefore walks all ~210 registered
+projects at full speed, indexing and re-deriving, for the remainder of the session, structurally
+exempt from the mechanism built to prevent exactly that. The registry is the receipt: a fleet
+project shows `indexed_at 10:12:05`, inside the 10:06–10:14 CI window.
+
+D1 did not cause this and did not hide it. It removed the graph-side symptom — the empty window the
+walk used to open — leaving the same walk to collide on the vector side, where a store being
+re-indexed under a running search has no equivalent write-through guarantee.
+
+The fix is on the test side, because the product side is not wrong: `test_index_tool_e2e` now holds
+`local_sweeps_paused(True)` across each `index()` call and **joins** the threads it spawned rather
+than trusting them to lose the race. `local_sweeps_paused` is the in-process twin that already
+existed for this exact process boundary (`tests/live/_sweeps.py:120`); it had simply never been
+applied here. With the local pause set the reconcile returns at its own `is_paused()` guard and the
+join costs nothing.
+
+Not made session-wide: `test_reconcile_order`, `test_reconcile_midpass` and `test_reconcile_throttle`
+call `reconcile_projects()` directly and need it to actually run. Default-paused would turn those
+into tests of an early return.
 
 ## Guards
 
