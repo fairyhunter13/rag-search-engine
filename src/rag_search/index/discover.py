@@ -11,8 +11,10 @@ from rag_search.core.config import IGNORED_DIRS
 from rag_search.core.index_config import ProjectConfig, effective_config, is_excluded
 
 _EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
-# Public alias used by registry path filtering.
-_REGISTRY_EXCLUDE_SEGMENTS = _EXCLUDE
+# `_REGISTRY_EXCLUDE_SEGMENTS = _EXCLUDE` stood here until 2026-07-31, commented "public alias
+# used by registry path filtering". It was a pure alias, read by nothing — including the registry.
+# A second name for one frozenset is how two callers come to believe they are filtering on
+# different rules; there is one rule and it is `_EXCLUDE`.
 
 _RSE_CFG_NAMES = (".rse-index.yaml", ".rse-index.yml")
 
@@ -154,6 +156,11 @@ def _should_drop(
     # so regenerating them can't wake the indexer/embedder or the drift gate (mirrors the
     # generated-docs/ tree skip in iter_files). Explicit RSE `include` above still wins.
     if not is_dir and is_generated_path(full.name):
+        return True
+    # Sits beside is_generated_path, and below `cfg.include`, on the same convention: an explicit
+    # RSE include is the user saying this file matters in their own repo, and overriding that
+    # silently would be the more surprising failure. Everything else drops.
+    if not is_dir and is_secret_path(full.name):
         return True
     if cfg.use_default_ignores:
         # Hidden-dir skip applies to directory segments only, never to a file's own name,
@@ -323,6 +330,32 @@ def is_generated_path(rel: str | os.PathLike) -> bool:
     if ".generated." in name or ".gen." in name:
         return True
     return name.endswith(_GENERATED_SUFFIXES)
+
+
+def is_secret_path(rel: str | os.PathLike) -> bool:
+    """True iff rel names a dotenv-family file, which holds credentials by convention.
+
+    Measured 2026-07-31: 509 chunks from these files were in the vector store across the fleet,
+    including `mysql-credentials.env` and `instance-secrets.env`. Being in the store means being
+    returned by `search` and pasteable into a `claude -p` chat prompt, so this is an exposure
+    rather than a coverage question — which is why the fix is subtractive where the surrounding
+    universality work is additive.
+
+    They reached the index because nothing excluded them: `IGNORED_DIRS` names `.env` as a
+    *directory*, and `_should_drop`'s hidden-name skip is deliberately restricted to directory
+    segments so tracked dotfiles (`.gitignore`, `.eslintrc`) still index. Both are correct;
+    neither covers a *file* called `.env`.
+
+    Deliberately the dotenv family only, matched on the name the format itself defines: `.env`,
+    anything under it (`.env.local`, `.env.production`), and the `<name>.env` spelling
+    (`mysql-credentials.env`). `.env.example` is included even though it usually holds
+    placeholders — the cost of dropping a template is a little lost documentation, and the cost
+    of keeping a mis-named real one is a leaked credential. This is not a general secrets
+    classifier and should not grow into one by guesswork; a new pattern comes with a measured
+    instance of it, the same standard `_GENERATED_SUFFIXES` is held to.
+    """
+    name = os.path.basename(str(rel))
+    return name == ".env" or name.startswith(".env.") or name.endswith(".env")
 
 
 def _size_limit(lang: str) -> int:
