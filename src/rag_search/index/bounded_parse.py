@@ -206,10 +206,13 @@ def run_bounded(func, args: tuple, deadline_s: float = _DEADLINE_S, path_for_log
     return _get_pool().run(func, args, deadline_s, path_for_log)
 
 
-def idle_shutdown_check() -> None:
-    """Scheduler hook (daemon/server.py) — frees pool workers after sustained inactivity."""
-    if _pool is not None:
-        _pool.idle_shutdown()
+# `idle_shutdown_check()` was deleted 2026-07-31. It described itself as a scheduler hook in
+# `daemon/server.py`, and `daemon/server.py` never called it — nothing did, in the whole tree. It
+# is the second half of a pair that documented a mechanism neither half implemented: the systemd
+# drop-in `self-heal.conf` reasoned about flap risk from a `check_idle_shutdown()` that has never
+# existed under that name either. `_pool.idle_shutdown()` is still there and still correct; what
+# is gone is the un-called wrapper that made it look scheduled.
+
 
 def metrics() -> dict:
     return {"parse_timeout_count": 0 if _pool is None else _pool.parse_timeout_count,
