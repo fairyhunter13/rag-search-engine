@@ -60,6 +60,100 @@ _VALID = {
 }
 
 
+# X2's rung says `language_mismatch`, which names a cause it cannot actually observe: the check
+# only sees that a file's bytes did not parse and that nothing extracted. Measured 2026-07-31
+# across 118 graphs, gherkin fails 138 of 147 files — and reading one shows ordinary, valid
+# English Gherkin. The bytes match the extension; the pack's grammar cannot parse its own
+# language. So the rung blames the file for an upstream grammar weakness, and the two causes were
+# untriageable.
+#
+# They are separable without touching extraction, and that is the point: a *file* that is genuinely
+# misnamed is rare within its language, while a *grammar* that cannot parse its language fails
+# nearly all of it. The rate is already in `extraction_summary()`'s (language, rung) rows, so this
+# costs no schema change, no EXTRACTOR_REV bump, and no 111-graph re-derive.
+#
+# Both bounds are measured, not guessed. Fleet rates split 93.9 % (gherkin) against a top
+# wrong-extension rate of 9.5 % (nginx), then vimdoc 5.2 %, php 2.0 %, scss 1.9 %, css 1.1 % — an
+# 84-point gap with nothing in it, which is why one ratio suffices. The floor exists because the
+# only other languages above the ratio are prolog at 1 file and batch at 2: a rate computed from
+# one file is not evidence, and `insufficient_sample` is the honest answer where the rung name
+# asserted a cause outright.
+_WEAK_GRAMMAR_RATE = 0.5
+_WEAK_GRAMMAR_MIN_FILES = 10
+
+
+def _mismatch_diagnosis(rows: list[dict]) -> list[dict]:
+    """Per-language verdict on `language_mismatch`: weak grammar, wrong extension, or too few."""
+    total: dict[str, int] = {}
+    bad: dict[str, int] = {}
+    for r in rows:
+        lang = r.get("language") or "unknown"
+        total[lang] = total.get(lang, 0) + (r.get("files") or 0)
+        if r.get("rung") == "language_mismatch":
+            bad[lang] = bad.get(lang, 0) + (r.get("files") or 0)
+    out = []
+    for lang, n in bad.items():
+        seen = total.get(lang, 0)
+        rate = n / seen if seen else 0.0
+        if seen < _WEAK_GRAMMAR_MIN_FILES:
+            verdict = "insufficient_sample"
+        elif rate >= _WEAK_GRAMMAR_RATE:
+            verdict = "weak_grammar"
+        else:
+            verdict = "wrong_extension"
+        out.append({"language": lang, "mismatch_files": n, "files": seen,
+                    "mismatch_pct": round(100.0 * rate, 2), "verdict": verdict})
+    return sorted(out, key=lambda r: r["mismatch_files"], reverse=True)
+
+
+def _grammar_ceilings(rows: list[dict]) -> list[dict]:
+    """Per-language `grammar_has_no_queries`: dark files rungs 4-5 can never reach, by construction.
+
+    Rung 4 (`highlights`) and rung 5 (`embedded`) both start by fetching the grammar's own
+    `highlights.scm` / `injections.scm` and return `{}` when the text is empty
+    (`extractor._highlight_captures`, `_iter_script_blocks`). A language whose pack ships neither
+    has a *ceiling*, not a coverage bug: no amount of ladder work reaches those files, and reading
+    their dark count as a gap is how effort gets spent where it cannot pay.
+
+    Measured 2026-07-31 against the installed pack: groovy, php, vimdoc and jinja2 ship neither
+    query — php being 20,014 fleet files at 33.4 % dark. Reported beside `by_language_rung` rather
+    than folded into it, because a ceiling and a miss are different claims and the whole point of
+    the rung column was to stop merging causes into one number.
+
+    `_mismatch_diagnosis`'s `weak_grammar` is deliberately left alone: that verdict is about a
+    grammar failing to *parse* its language (gherkin, 93.9 %), which is a different failure from a
+    grammar that parses fine and merely ships no queries.
+    """
+    langs: dict[str, dict] = {}
+    for r in rows:
+        acc = langs.setdefault(r.get("language") or "unknown",
+                               {"language": r.get("language") or "unknown",
+                                "files": 0, "files_with_symbols": 0})
+        acc["files"] += r.get("files") or 0
+        acc["files_with_symbols"] += r.get("files_with_symbols") or 0
+    out = []
+    for lang, acc in langs.items():
+        try:
+            from tree_sitter_language_pack import (
+                get_highlights_query,
+                get_injections_query,
+                has_language,
+            )
+            # `has_language` first, and not merely as a guard: without it the `no_language`
+            # bucket — 11,791 files filed under `unknown` — reads back as a grammar that ships
+            # no queries, which is the opposite claim. There is no grammar to have a ceiling.
+            # (`get_language` would answer this too, but by raising `DownloadError`; asking a
+            # membership question with an exception handler is how the real errors get swallowed.)
+            if not has_language(lang) or get_highlights_query(lang) or get_injections_query(lang):
+                continue
+        except Exception:
+            continue
+        out.append({"language": lang, "files": acc["files"],
+                    "dark_files": acc["files"] - acc["files_with_symbols"],
+                    "ceiling": "grammar_has_no_queries"})
+    return sorted(out, key=lambda r: r["dark_files"], reverse=True)
+
+
 def _extraction_totals(rows: list[dict]) -> dict:
     """Roll per-(language, rung) rows up into the dark-set headline numbers.
 
@@ -74,10 +168,36 @@ def _extraction_totals(rows: list[dict]) -> dict:
     111 files claimed against 100 real, 57.81 % against 52.08 %. The disagreement looked at first
     like the WAL staleness hazard this block exists to avoid, which is the trap — a second
     plausible cause for the same symptom is how the real one goes unfixed.
+
+    `symbols` and `by_rung` were added 2026-07-31 for a related reason: the rows carried a
+    per-group symbol total and this rollup discarded it, so the only way to ask "which rung is
+    the ladder actually paying for" was to open every `graph.db` by hand — which is exactly the
+    external read AU1 forbids. Measured that way across 118 graphs: `generic` is 15,106 files
+    (33 % of the fleet) and **43 symbols in total**, 0.2 % of its files yielding anything. It is
+    a failure rung whose name says "parsed, nothing found" and whose *occupancy* reads like
+    success, so any per-rung reading taken from `files` alone rates the fleet ~84 % productive
+    where per-file yield says 48 %. Reporting symbols beside files per rung is what makes those
+    two numbers impossible to confuse; the ladder itself is unchanged, so no graph is re-derived.
     """
     files = sum(r["files"] for r in rows)
     with_syms = sum(r.get("files_with_symbols") or 0 for r in rows)
-    return {"by_language_rung": rows, "files": files,
+    by_rung: dict[str, dict] = {}
+    for r in rows:
+        acc = by_rung.setdefault(r.get("rung") or "unknown",
+                                 {"rung": r.get("rung") or "unknown", "files": 0,
+                                  "symbols": 0, "files_with_symbols": 0})
+        for f in ("files", "symbols", "files_with_symbols"):
+            acc[f] += r.get(f) or 0
+    for acc in by_rung.values():
+        acc["dark_files"] = acc["files"] - acc["files_with_symbols"]
+        acc["coverage_pct"] = (round(100.0 * acc["files_with_symbols"] / acc["files"], 2)
+                               if acc["files"] else None)
+    return {"by_language_rung": rows,
+            "by_rung": sorted(by_rung.values(), key=lambda r: r["files"], reverse=True),
+            "mismatch_diagnosis": _mismatch_diagnosis(rows),
+            "grammar_ceilings": _grammar_ceilings(rows),
+            "files": files,
+            "symbols": sum(r.get("symbols") or 0 for r in rows),
             "files_with_symbols": with_syms,
             "dark_files": files - with_syms,
             "anon_dropped": sum(r["anon"] for r in rows),
@@ -116,12 +236,15 @@ def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untype
         # must never say when it simply was not asked.
         return json.loads(_err) if _err else {"error": "no project available"}
     agg: dict[tuple[str, str], dict] = {}
+    stamps: dict[str, int] = {}
     for _p in expand_federation(project_path):
         _db = project_graph_db(_p)
         if not _db.exists():
             continue
         _gs = GraphStore(_db)
         try:
+            _stamp = _gs.get_meta("algo_version") or "(unstamped)"
+            stamps[_stamp] = stamps.get(_stamp, 0) + 1
             for row in _gs.extraction_summary():
                 key = (row.get("language") or "unknown", row.get("rung") or "unknown")
                 acc = agg.setdefault(key, {"language": key[0], "rung": key[1], "files": 0,
@@ -134,7 +257,37 @@ def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untype
                     acc[_f] += row.get(_f) or 0
         finally:
             _gs.close()
-    return _extraction_totals(sorted(agg.values(), key=lambda r: r["files"], reverse=True))
+    return {**_extraction_totals(sorted(agg.values(), key=lambda r: r["files"], reverse=True)),
+            "pipeline_version": _pipeline_block(stamps)}
+
+
+def _pipeline_block(stamps: dict[str, int]) -> dict:
+    """Which pipeline revision each store's symbols were actually produced by.
+
+    The self-healing design is sound and the re-derive is driven by comparing a store's stored
+    `meta.algo_version` against `sweeps._pipeline_algo_version()` — but nothing reported the
+    comparison, so a fleet that had stopped converging looked identical to one that had. Measured
+    2026-07-31 by opening 144 stores by hand: **128 were stale**, 51 of them four extractor
+    revisions behind, and the only way to learn that was the external `mode=ro` read AU1 forbids.
+    That is the gap this closes; the walk fix that makes the number move lives in
+    `sweeps.reconcile_order` / `reconcile_projects`.
+
+    Free here: `_extraction_block` already holds each store open for `extraction_summary()`, so
+    this is one indexed `meta` lookup on a connection in hand — no extra open, no schema change,
+    and no re-derive of its own.
+
+    `stale_stores` is the number to watch: it must fall pass over pass. It counts `(unstamped)`
+    too — a store with no `meta` row has never completed a derive, which is staler, not exempt.
+    """
+    from rag_search.daemon.sweeps import _pipeline_algo_version
+    current = _pipeline_algo_version()
+    return {"current": current,
+            "stores": sum(stamps.values()),
+            "stores_current": stamps.get(current, 0),
+            "stale_stores": sum(n for s, n in stamps.items() if s != current),
+            "by_stamp": sorted(({"algo_version": s, "stores": n, "current": s == current}
+                                for s, n in stamps.items()),
+                               key=lambda r: r["stores"], reverse=True)}
 
 
 def _require_project(projects) -> tuple[str, str | None]:  # type: ignore[no-untyped-def]
