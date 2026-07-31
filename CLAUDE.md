@@ -15,15 +15,12 @@ stale and untrustworthy.
 
 ## Running tests
 
+Fast smoke, full live suite, and browser are the `run-tests` and `run-all-tests` skills —
+they own the exact invocations, so there is one copy of the flags to keep correct. Add `-x`
+when you want the manual inner loop to stop at the first red; the skills deliberately omit
+it because they are required to report every failure.
+
 ```bash
-# Fast smoke (~7-8 min) — the default
-.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" \
-  --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
-
-# Full live suite (~11 min): drop the -m filter, keep the browser --ignore
-# Browser (separate process — conflicts with pytest-asyncio mode=auto):
-#   .venv/bin/pytest src/tests/live/test_browser.py -v --browser chromium
-
 # Inner loop only — the tests a working-tree change can reach, via graph(relation="impact"):
 #   .venv/bin/pytest $(.venv/bin/python scripts/affected_tests.py)
 # Never a CI gate: a missed edge would silently shrink it. CI always runs the whole suite.
