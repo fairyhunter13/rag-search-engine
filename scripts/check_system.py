@@ -86,9 +86,13 @@ def check_imports() -> None:
 # Section: Config constants
 # ---------------------------------------------------------------------------
 
+# Must track core/config.py's defaults: a mismatch here is reported to the user as "env override
+# active", so a stale entry accuses a clean machine of a misconfiguration it does not have.
+# RERANK_MODEL read jinaai/jina-reranker-v1-turbo-en until 2026-07-31, four weeks after the
+# measured A/B moved the default to gte-reranker-modernbert-base — every clean setup run warned.
 EXPECTED_CONFIG: dict[str, str] = {
     "EMBED_MODEL": "jinaai/jina-embeddings-v2-base-code",
-    "RERANK_MODEL": "jinaai/jina-reranker-v1-turbo-en",
+    "RERANK_MODEL": "Alibaba-NLP/gte-reranker-modernbert-base",
     "QUERY_LLM_MODEL": "claude-haiku-4-5",
 }
 
