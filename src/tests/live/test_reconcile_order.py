@@ -1,9 +1,17 @@
-"""RO1-RO3: the reconcile walk reaches the projects that have nothing before the ones that are stale.
+"""RO1-RO6 + RC1-RC4: which projects a truncated reconcile walk actually reaches.
 
-`reconcile_projects` returns on `is_paused()` and keeps no resume cursor, so every pass restarts at
-position 0 and only ever completes the prefix. That makes the walk *order* the thing that decides
-which projects are reachable at all, not merely the order they are reached in — and the order was
-keyed on `last_change_seen`, which a never-indexed project does not have.
+`reconcile_projects` returns on `is_paused()`. It now records where it stopped and resumes there
+(RC1-RC4); before that it restarted at position 0 every pass and only ever completed the prefix,
+which made the walk *order* decide which projects were reachable at all rather than merely the
+order they were reached in — and the order was keyed on `last_change_seen`, which a never-indexed
+project does not have.
+
+RO4-RO6 cover the third key, added 2026-07-31: recency does not express *pipeline* drift. For a
+graph re-derive every store already has vectors, so the `_has_vectors` key is constant over the
+whole population and the sort collapses to recency — under which a stale store, being one nothing
+has touched lately, lands at the tail. Measured then: 128 of 144 stores carried a superseded
+`algo_version`, the 16 current ones sat at walk positions 59-74 and the stale ones at 58-201
+(median 137), while no pass had reached past position 16 since the stamp last moved.
 
 Measured on this host 07-30 after the registry wipe: 157 of 210 enabled rows held zero chunks, and
 157 of 157 had an empty key, so `or ""` put every one of them at the tail of the `reverse=True`
@@ -30,17 +38,25 @@ import pytest
 pytestmark = pytest.mark.live
 
 _CHILD = r"""
-import json, sys
+import json, sqlite3, sys
 from pathlib import Path
 from rag_search.core.config import INDEX_ROOT, ProjectEntry, index_dir
-from rag_search.daemon.sweeps import reconcile_order
+from rag_search.daemon.sweeps import (
+    _load_cursor, _pipeline_algo_version, _resume_at, _save_cursor, reconcile_order)
 
-def row(name, seen, vectors):
+def row(name, seen, vectors, algo=None):
     p = f"/nonexistent/{name}"
+    d = index_dir(p)
     if vectors:
-        d = index_dir(p)
         d.mkdir(parents=True, exist_ok=True)
         (d / "vectors.db").write_bytes(b"x")
+    if algo is not None:
+        # A real graph.db: the drift key reads the stored stamp, so a fake would prove nothing.
+        d.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(d / "graph.db")
+        con.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        con.execute("INSERT OR REPLACE INTO meta VALUES ('algo_version', ?)", (algo,))
+        con.commit(); con.close()
     return ProjectEntry(path=p, enabled=True, last_change_seen=seen)
 
 def names(rows):
@@ -73,6 +89,32 @@ out["empty_store_dir_after_mkdir"] = names([
     row("indexed", "2026-07-30T22:00:00", True),
     ProjectEntry(path="/nonexistent/dir-but-no-vectors", enabled=True, last_change_seen=""),
 ])
+
+# The drift key. `cur` is the live stamp, so "current" tracks whatever the extractor is today.
+cur = _pipeline_algo_version()
+out["drift_beats_recency"] = names([
+    row("current-newest", "2026-07-30T22:00:00", True, algo=cur),
+    row("stale-oldest", "2026-07-01T10:00:00", True, algo="fg2+e2+2db7"),
+])
+out["never_beats_drift"] = names([
+    row("stale-graph", "2026-07-30T22:00:00", True, algo="fg2+e2+2db7"),
+    row("never-any", "", False),
+])
+out["recency_within_stale"] = names([
+    row("s-mid", "2026-07-29T10:00:00", True, algo="fg2+e2+2db7"),
+    row("s-new", "2026-07-30T22:00:00", True, algo="fg2+e2+2db7"),
+    row("s-old", "2026-07-01T10:00:00", True, algo="fg2+e2+2db7"),
+])
+
+# The resume cursor. Plain entries — rotation is independent of how the walk was ordered.
+walk = [ProjectEntry(path=f"/p/{c}", enabled=True, last_change_seen="") for c in "abcde"]
+def rot(cursor):
+    return [Path(e.path).name for e in _resume_at(walk, cursor)]
+out["cursor_empty"] = rot("")
+out["cursor_rotates"] = rot("/p/c")
+out["cursor_unknown"] = rot("/p/zzz")
+_save_cursor("/p/c"); out["cursor_roundtrip"] = _load_cursor()
+_save_cursor(""); out["cursor_cleared"] = _load_cursor()
 print(json.dumps(out))
 """
 
@@ -91,7 +133,7 @@ def _run(tmp: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def order() -> dict:
-    """One child for all three arms — they read one ordering, they do not each need their own.
+    """One child for every arm — they read one ordering, they do not each need their own.
 
     Module-scoped rather than using function-scoped `safe_tmp_path` because nothing here mutates
     what it reads. The dir still lives under the suite's own base, which is what
@@ -135,3 +177,54 @@ def test_ro3_an_empty_store_dir_does_not_count_as_indexed(order):
     assert order["empty_store_dir_after_mkdir"][0] == "dir-but-no-vectors", (
         f"an empty store dir was treated as an indexed project: "
         f"{order['empty_store_dir_after_mkdir']}")
+
+
+def test_ro4_a_stale_stamp_outranks_a_newer_current_store(order):
+    """RO4: the drift key's whole purpose. Recency alone puts the store the current extractor has
+    never run on *behind* one it has, which is backwards — and measurably so: it is how 128 of 144
+    stores sat past walk position 58 while no pass got beyond position 16."""
+    assert order["drift_beats_recency"] == ["stale-oldest", "current-newest"], (
+        f"a store on a superseded algo_version was walked after a current one: "
+        f"{order['drift_beats_recency']}")
+
+
+def test_ro5_never_embedded_still_outranks_a_drifted_graph(order):
+    """RO5: the guard on RO1. A project with no vectors returns *nothing* for a search, while a
+    drifted one returns real results from an older extractor — so drift slots in beneath the
+    never-embedded key, not above it."""
+    assert order["never_beats_drift"][0] == "never-any", order["never_beats_drift"]
+
+
+def test_ro6_recency_survives_among_equally_drifted_stores(order):
+    """RO6: RO2's argument again, one key lower. Where drift does not discriminate, the recency
+    ordering it sits on top of has to come through intact."""
+    assert order["recency_within_stale"] == ["s-new", "s-mid", "s-old"], (
+        f"recency was lost among equally-stale stores: {order['recency_within_stale']}")
+
+
+def test_rc1_a_cursor_resumes_the_walk_where_it_stopped(order):
+    """RC1: the fix for restart-at-0. Rotation, not truncation — the prefix still gets walked, at
+    the end of the lap, so resuming can never starve what it skipped past."""
+    assert order["cursor_rotates"] == ["c", "d", "e", "a", "b"], order["cursor_rotates"]
+
+
+def test_rc2_no_cursor_and_an_unknown_cursor_both_start_at_the_head(order):
+    """RC2: a cleared cursor means "a lap finished, start at the priority head". An unknown one
+    means the cursor's project left the registry — same answer, and it must not raise or, worse,
+    return an empty walk, which would read as "nothing to reconcile"."""
+    assert order["cursor_empty"] == ["a", "b", "c", "d", "e"], order["cursor_empty"]
+    assert order["cursor_unknown"] == ["a", "b", "c", "d", "e"], order["cursor_unknown"]
+
+
+def test_rc3_the_cursor_survives_the_process_that_wrote_it(order):
+    """RC3: the cursor round-trips through the filesystem, not a module global. A daemon restart
+    is precisely when the walk resets to 0, and `_PAUSED` is this repo's own standing lesson about
+    a global that nothing can restore afterwards."""
+    assert order["cursor_roundtrip"] == "/p/c", order["cursor_roundtrip"]
+
+
+def test_rc4_a_completed_lap_clears_the_cursor(order):
+    """RC4: the other half of RC1. A lap that ran to the end must drop back to the priority head,
+    or the never-embedded and drifted projects at the front stay permanently mid-walk."""
+    assert order["cursor_cleared"] == "", (
+        f"a completed lap did not clear the cursor: {order['cursor_cleared']!r}")

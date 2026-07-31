@@ -884,6 +884,36 @@ def _has_vectors(path: str) -> bool:
         return False
 
 
+def _graph_algo_drifted(path: str, current: str) -> bool:
+    """Cheap "has the current extractor never run on this graph" test — one read-only sqlite open.
+
+    Deliberately *not* `_graph_stale`: that also compares `source_sig`, which costs a
+    `_code_source_fingerprint` tree walk per project, and this runs for every registry row on
+    every pass. The stamp alone separates the population this key exists to promote. A store
+    that matches the stamp but has drifted on the fingerprint is still repaired — by
+    `_graph_reconcile_action` once the walk reaches it — it just does not get promoted.
+
+    `mode=ro` without `immutable=1`: these stores are WAL and the daemon is their writer, and
+    `immutable=1` fails outright on a WAL database, which would read as "no drift" for every
+    project in the fleet — a silent unsort rather than a loud error.
+    """
+    import sqlite3
+
+    from rag_search.core.config import project_graph_db
+    try:
+        gdb = project_graph_db(path)
+        if not gdb.exists():
+            return False  # nothing to re-derive; `_has_vectors` is the key that covers this row
+        con = sqlite3.connect(f"file:{gdb}?mode=ro", uri=True, timeout=1.0)
+        try:
+            row = con.execute("SELECT value FROM meta WHERE key='algo_version'").fetchone()
+        finally:
+            con.close()
+    except (OSError, sqlite3.Error):
+        return False
+    return bool(row) and row[0] != current
+
+
 def reconcile_order(rows: list) -> list:
     """Never-embedded projects first, then most-recently-touched.
 
@@ -905,16 +935,79 @@ def reconcile_order(rows: list) -> list:
     key is constant, which is why the original ordering keeps working — this only changes the walk
     when there is a backlog, which is precisely when the walk gets cut short.
 
+    A third key sits between those two as of 2026-07-31: graphs the current extractor has never
+    run on. Recency does not cover *pipeline* drift — for a graph re-derive every store already
+    has vectors, so the first key is constant across the whole population and the sort degenerates
+    to recency, under which a stale store (by definition one nothing has touched lately) lands at
+    the *tail* of a `reverse=True` walk. Measured before this changed: the 16 current stores sat at
+    walk positions 59-74 while the 128 stale ones spanned 58-201, median 137, and no pass had
+    reached past position 16 since the stamp last moved.
+
+    Never-embedded still outranks drifted, on this function's own argument: no vectors returns
+    *nothing* for a search, drifted returns real results from an older extractor. That population
+    is small (14 rows here) and drains in a pass or two, so it does not hold the drifted set back.
+
     Kept out of `reconcile_projects` so the ordering can be asserted without a GPU, a daemon, or the
     six-hour job that calls it.
     """
-    return sorted(rows, key=lambda e: (not _has_vectors(e.path), e.last_change_seen or ""),
+    current = _pipeline_algo_version()  # hoisted: the key runs once per row, this must not
+    return sorted(rows, key=lambda e: (not _has_vectors(e.path),
+                                       _graph_algo_drifted(e.path, current),
+                                       e.last_change_seen or ""),
                   reverse=True)
+
+
+def _cursor_file():
+    """Beside the registry, so `RSE_REGISTRY_PATH` isolates the cursor along with the projects."""
+    from rag_search.core.config import REGISTRY_PATH
+    return REGISTRY_PATH.with_name("reconcile_cursor")
+
+
+def _load_cursor() -> str:
+    """Project path the last truncated pass stopped at, or "" for "start at the head"."""
+    import contextlib
+    with contextlib.suppress(OSError):
+        return _cursor_file().read_text(encoding="utf-8").strip()
+    return ""
+
+
+def _save_cursor(path: str) -> None:
+    """Persisted rather than held in a global: a restart is exactly when the walk resets, and
+    `_PAUSED` already taught this file what an un-restorable module global costs."""
+    import contextlib
+    with contextlib.suppress(OSError):
+        f = _cursor_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(path, encoding="utf-8")
+
+
+def _resume_at(walk: list, cursor: str) -> list:
+    """Rotate `walk` to begin at `cursor`, wrapping once. Unknown/empty cursor: unchanged.
+
+    Rotation rather than a stored integer offset because the walk is re-sorted and re-sized every
+    pass (198 -> 203 -> 210 -> 216 across one afternoon here), so an index points at an arbitrary
+    different project next time. Rotating preserves the priority ordering for everything after the
+    resume point and still reaches every row within one lap.
+    """
+    if not cursor:
+        return walk
+    for i, e in enumerate(walk):
+        if e.path == cursor:
+            return walk[i:] + walk[:i]
+    return walk  # cursor's project left the registry — fall back to the priority head
 
 
 def reconcile_projects() -> None:
     """Idempotent: discover+register members, index any unindexed/stalled project, label any
     project with missing community summaries (any level).  Safe to call repeatedly.
+
+    A truncated pass records where it stopped and the next pass resumes there. Without that, a
+    pause returned at position 0 and the next pass restarted at position 0, so the walk re-paid
+    the head forever and never reached the tail: measured 2026-07-31, nine consecutive passes
+    abandoned at 0-16 of 216 while all 128 stale stores sat at positions 58-201 — **none of them
+    reachable by any pass**. A live suite holds the pause lease for its whole run, so truncation
+    is the normal case, not the exception: running the tests was the thing preventing the rebuild
+    the tests were waiting on.
     """
     if is_paused():
         # Suspension is a state, not a discard (cf. Flux `suspend`) — but _PAUSED is a bare
@@ -943,12 +1036,14 @@ def reconcile_projects() -> None:
 
     # Never-embedded first, then most-recently-touched. See `reconcile_order` — the second key
     # alone sent every unindexed project to the tail of a walk that `is_paused()` truncates.
-    walk = reconcile_order(list_projects())
+    walk = _resume_at(reconcile_order(list_projects()), _load_cursor())
     for pos, entry in enumerate(walk):
         if is_paused():
             # Name the position: "reconcile stopped" is not actionable, "stopped at
             # 105/160" tells you how much of the walk never ran.
-            log.info("reconcile: abandoned at %d/%d (sweeps paused)", pos, len(walk))
+            log.info("reconcile: abandoned at %d/%d (sweeps paused), resuming there next pass",
+                     pos, len(walk))
+            _save_cursor(entry.path)
             return
         if not entry.enabled:
             continue
@@ -1040,6 +1135,9 @@ def reconcile_projects() -> None:
     # `abandoned` lines above, added for the same reason, only cover the paused case. That is how
     # a 4 h sweep outage stayed invisible on 2026-07-30 while every other signal read green.
     # Success is the common case, so it is the one that most needs a line to point at.
+    # Cleared only on a lap that ran to the end, so the next pass starts at the priority head
+    # again. Clearing it anywhere else would reintroduce the restart-at-0 bug it exists to fix.
+    _save_cursor("")
     log.info("reconcile: pass complete over %d project(s) in %.1fs", len(walk),
              time.monotonic() - t0)
 
