@@ -8,7 +8,8 @@ from collections import Counter
 from rag_search.graph.store import GraphStore
 
 # Bump when the detection algorithm changes so reconcile re-derives stale graphs.
-ALGO_VERSION = "fg2"  # fastgreedy modularity + directory-group for edgeless; v2 = dir+2-token labels
+# v3 = `kind="data"` config keys no longer contribute label tokens (they stay members).
+ALGO_VERSION = "fg3"  # fastgreedy modularity + directory-group for edgeless; v2 = dir+2-token labels
 
 # Seed igraph's RNG once so fastgreedy tie-breaks are byte-reproducible.
 # community_fastgreedy is agglomerative-greedy (no stochastic step), but
@@ -22,7 +23,8 @@ except Exception:
     pass
 
 
-def _label_from_names(names: list[str], files: list[str] | None = None) -> str:
+def _label_from_names(names: list[str], files: list[str] | None = None,
+                      kinds: list[str] | None = None) -> str:
     """Cheap structural label: dominant directory + the two most-frequent snake_case tokens.
 
     One token was not enough to name a domain. Measured over every community on two real fleet
@@ -47,16 +49,27 @@ def _label_from_names(names: list[str], files: list[str] | None = None) -> str:
     obvious "append a hash to force uniqueness" fix, which would score 100% distinct and mean
     nothing.
 
-    `files` is optional so the label degrades to the token half rather than raising when a caller
-    has names but no paths.
+    `files` and `kinds` are both optional so the label degrades rather than raising when a caller
+    has names but no paths, or names but no kinds.
+
+    `kind="data"` rows name the *tokens* half but stay members. They are config keys — 28.1% of
+    symbol rows fleet-wide (62,449 of 222,483, counted 2026-07-31) — and they have no call edges
+    by construction, so they cannot have influenced the partition they would otherwise be naming.
+    A community that is *entirely* data still gets named from its own keys: dropping to an empty
+    token list would leave `title` NULL and lose the label altogether, which is worse than a
+    config-flavoured name for a config-flavoured community.
     """
+    naming = names
+    if kinds is not None:
+        code = [n for n, k in zip(names, kinds, strict=True) if k != "data"]
+        naming = code or names
     tokens: list[str] = []
-    for n in names:
+    for n in naming:
         tokens.extend(p for p in n.split("_") if len(p) > 2)
     counted = Counter(t.lower() for t in tokens).most_common(2)
     words = " ".join(w.capitalize() for w, _ in counted)
     if not words:
-        words = names[0][:30] if names else ""
+        words = naming[0][:30] if naming else ""
     scope = ""
     if files:
         dirs = Counter(os.path.dirname(f) for f in files if f)
@@ -128,15 +141,16 @@ def detect_communities(store: GraphStore) -> dict[str, int]:
     for cid, cnt in counts.items():
         store.upsert_community(cid, level=1, title=None,
                                summary=None, member_count=cnt)
-    sid_to_sym = {s["sid"]: (s["name"], s["file"] or "") for s in symbols}
-    cid_to_members: dict[int, tuple[list[str], list[str]]] = {}
+    sid_to_sym = {s["sid"]: (s["name"], s["file"] or "", s["kind"] or "") for s in symbols}
+    cid_to_members: dict[int, tuple[list[str], list[str], list[str]]] = {}
     for sid, cid in mapping.items():
-        name, file = sid_to_sym.get(sid, ("", ""))
-        ns, fs = cid_to_members.setdefault(cid, ([], []))
+        name, file, kind = sid_to_sym.get(sid, ("", "", ""))
+        ns, fs, ks = cid_to_members.setdefault(cid, ([], [], []))
         ns.append(name)
         fs.append(file)
-    for cid, (names, files) in cid_to_members.items():
-        label = _label_from_names(names, files)
+        ks.append(kind)
+    for cid, (names, files, kinds) in cid_to_members.items():
+        label = _label_from_names(names, files, kinds)
         if label:
             store.conn.execute(
                 "UPDATE communities SET title=? WHERE id=? AND title IS NULL",
@@ -174,7 +188,7 @@ def label_community_structural(store: GraphStore, cid: int) -> None:
         "SELECT title, member_count FROM communities WHERE id=?", (cid,)
     ).fetchone()
     title = (existing[0] if existing and existing[0] else None) or _label_from_names(
-        [r[0] for r in rows], [r[2] or "" for r in rows]
+        [r[0] for r in rows], [r[2] or "" for r in rows], [r[1] or "" for r in rows]
     )
     _label_community_structural_finish(store, cid, rows, title,
                                         (existing[1] if existing else None) or len(rows))
