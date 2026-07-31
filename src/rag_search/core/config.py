@@ -41,29 +41,29 @@ RSE_GPU_DEVICE: str | None = os.environ.get("RSE_GPU_DEVICE")  # unset = auto-pi
 
 DAEMON_HOST = os.environ.get("RSE_MCP_DAEMON_HOST", "127.0.0.1")
 DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
-CLIENT_STALE_S = int(os.environ.get("RSE_MCP_CLIENT_STALE_S", "60"))
-MODEL_IDLE_UNLOAD_S = int(os.environ.get("RSE_MODEL_IDLE_UNLOAD_S", "300"))
+# RSE_MODEL_IDLE_UNLOAD_S is *not* declared here. It is a daemon-local timing knob and lives with
+# its siblings (RSE_RECONCILE_INITIAL_DELAY_S, _RESYNC_S) in `daemon/server.py:12`, which is the
+# only reader and what P16 and docs/decisions/2026-07-01-idle-cpu-root-causes.md both cite. A
+# second parse stood here until 2026-07-31 with the same var and the same 300 s default and no
+# reader, so editing this file's default silently did nothing.
 
 # Dashboard chat: claude-haiku-4-5 only. No fallback of any kind, no local generative LLM.
 # ("No DeepSeek fallback" until 2026-07-28 — there is no DeepSeek left to fall back to, and the
 # narrower wording would read as permitting some other one. Matches routes_chat.py:1 and HR10.)
-QUERY_LLM_PROVIDER = os.environ.get("RSE_QUERY_LLM_PROVIDER", "claude")
+# There is deliberately no provider knob: HR10 makes `claude -p` the only path, so a
+# RSE_QUERY_LLM_PROVIDER (removed 2026-07-31, never read by anything) advertised a choice the
+# invariant forbids. The model is the only part that varies.
 QUERY_LLM_MODEL = os.environ.get("RSE_QUERY_LLM_MODEL", "claude-haiku-4-5")
-QUERY_LLM_NUM_CTX = int(os.environ.get("RSE_QUERY_LLM_NUM_CTX", "4096"))
-QUERY_LLM_TIMEOUT = int(os.environ.get("RSE_QUERY_LLM_TIMEOUT", "180"))
 
-FINAL_TOP_K = int(os.environ.get("RSE_FINAL_TOP_K", "10"))
-
-DEBOUNCE_DELAY_MS = int(os.environ.get("RSE_DEBOUNCE_DELAY_MS", "1000"))
-MIN_FLUSH_INTERVAL_S = int(os.environ.get("RSE_MIN_FLUSH_INTERVAL_S", "5"))
-DEFAULT_SOURCE_FILE_SIZE_KB = int(os.environ.get("RSE_DEFAULT_SOURCE_FILE_SIZE_KB", "2048"))
-DEFAULT_TEXT_FILE_SIZE_KB = int(os.environ.get("RSE_DEFAULT_TEXT_FILE_SIZE_KB", "1024"))
-DEFAULT_UNKNOWN_FILE_SIZE_KB = int(os.environ.get("RSE_DEFAULT_UNKNOWN_FILE_SIZE_KB", "512"))
-EMBED_PASSAGES_MAX_TEXTS = int(os.environ.get("RSE_EMBED_PASSAGES_MAX_TEXTS", "256"))
-MAX_INLINE_BYTES = int(os.environ.get("RSE_MAX_INLINE_BYTES", str(8 * 1024 * 1024)))
-MAX_BYTES = int(os.environ.get("RSE_MAX_BYTES", str(24 * 1024 * 1024)))
-
-SCHEMA_VERSION = os.environ.get("RSE_SCHEMA_VERSION", "2")
+# Removed 2026-07-31: RSE_MCP_CLIENT_STALE_S, RSE_QUERY_LLM_NUM_CTX, RSE_QUERY_LLM_TIMEOUT,
+# RSE_FINAL_TOP_K, RSE_DEBOUNCE_DELAY_MS, RSE_MIN_FLUSH_INTERVAL_S, RSE_DEFAULT_*_FILE_SIZE_KB,
+# RSE_EMBED_PASSAGES_MAX_TEXTS, RSE_MAX_INLINE_BYTES, RSE_MAX_BYTES, RSE_SCHEMA_VERSION —
+# plus RSE_QUERY_LLM_PROVIDER and this file's duplicate RSE_MODEL_IDLE_UNLOAD_S (see above).
+# All 15 were read from the environment and then read by nothing — each outlived the call site it
+# was added for. Under P18 this file *is* the retargeting contract for a fresh clone, so a knob
+# that parses and silently does nothing is worse than an absent one: it fails without an error.
+# A knob comes back only together with the code that consumes it; test_sc9 in
+# test_schema_consistency.py now fails the build if one is added without a consumer.
 
 IGNORED_DIRS: frozenset[str] = frozenset({
     ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".ruff_cache",
@@ -90,7 +90,9 @@ class ProjectEntry:
     file_count: int = 0
     chunk_count: int = 0
     dims: int = 768
-    last_active: str | None = None
+    # `last_active` lived here until 2026-07-31 with no reader and no writer. Registries written
+    # before then still carry the key; `registry.py:_load` filters to known fields, so the stale
+    # key is dropped on read rather than raising.
     last_change_seen: str | None = None
     federation: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)

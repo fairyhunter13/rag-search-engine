@@ -147,7 +147,9 @@ class GraphStore:
     def assign_community(self, sid: str, community_id: int) -> None:
         self._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (community_id, sid))
 
-    def upsert_community(self, cid: int, level: int, title: str | None, summary: str,
+    # `summary: str` until 2026-07-31, while `community.py:129` has always passed None on the
+    # first pass and filled it in later. The annotation described a contract no caller kept.
+    def upsert_community(self, cid: int, level: int, title: str | None, summary: str | None,
                          member_count: int) -> None:
         self._con.execute(
             """INSERT INTO communities (id,level,title,summary,member_count)
@@ -264,7 +266,12 @@ class GraphStore:
         return self._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
 
     def community_count(self) -> int:
-        """Count semantic communities (level>=1). Excludes structural spine (level=0)."""
+        """Count communities. The `level>=1` scope is inherited, not load-bearing: no writer has
+        ever produced a level=0 row — `community.py` writes only level=1 — and the Phase-2
+        dir/file nodes the clause was added to exclude were deleted with them. Kept because the
+        SQL is harmless and a fleet-wide predicate change is not; the claim that it excludes a
+        "structural spine" is what was removed (2026-07-31), with SC3, since it described a
+        distinction the schema no longer draws."""
         return self._con.execute("SELECT COUNT(*) FROM communities WHERE level>=1").fetchone()[0]
 
     def list_symbols(self, limit: int = 5000) -> list[dict]:

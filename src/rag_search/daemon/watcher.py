@@ -70,10 +70,12 @@ class Watcher:
     def watch(self, project_path: str) -> None:
         self.sync(self._paths | {project_path})
 
-    def unwatch(self, project_path: str) -> None:
-        """Drop a root. Symmetric with `watch()` — without it a disabled project stays
-        watched for the daemon's whole lifetime, holding kernel watches nobody reads."""
-        self.sync(self._paths - {project_path})
+    # `unwatch()` was deleted 2026-07-31: zero callers since `sync()` landed. Its docstring
+    # claimed that without it a disabled project stays watched for the daemon's lifetime, and
+    # that is no longer how disabling works — the reconcile pass hands `sync()` the whole desired
+    # set (enabled, non-federation-excluded roots) and `sync()` computes `removed` itself, in one
+    # re-arm. A second, per-path path to the same state is the thing `sync()`'s own docstring
+    # warns about: each call tears the single watchfiles generator down and back up.
 
     def sync(self, paths: Iterable[str]) -> None:
         """Arm exactly `paths`, applying **one** re-arm for the whole diff.

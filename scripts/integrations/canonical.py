@@ -6,8 +6,6 @@ OpenCode and Codex integration removed.
 """
 from __future__ import annotations
 
-from pathlib import Path as _Path
-
 # ---------------------------------------------------------------------------
 # Canonical MCP entry (HTTP transport — daemon at :8765)
 # ---------------------------------------------------------------------------
