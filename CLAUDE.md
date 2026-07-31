@@ -67,6 +67,14 @@ GPU throughout; `previously_paused: false` on the manual re-pause is what proved
 rather than merely unreported. **Read `/healthz` before restarting, and re-`POST /api/sweeps/pause` if
 you cleared a lease** — nothing else will tell you, least of all the suite you disrupted.
 
+**After a stamp move: release the lease, then restart.** The reconcile pass is startup-once and then
+parks (periodic resync is off by default; steady state is watcher-driven, and moving `EXTRACTOR_REV`
+touches no file so fires no watcher event). A release is a permission, not a schedule — if that one
+pass already ran inside your lease window it logged `reconcile: abandoned before start` and parked,
+and the fleet stays stale behind a perfectly healthy `/healthz`. Verify by watching the stale count
+fall, never by the absence of errors. See
+`docs/decisions/2026-07-31-releasing-a-lease-schedules-nothing.md`.
+
 ## Invariants
 
 All governing laws live in `docs/world-model/model.yaml` — P0–P18, HR1–HR41 — and that file is
