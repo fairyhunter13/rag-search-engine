@@ -107,6 +107,100 @@ def test_ts0_same_file_calls_become_edges(safe_tmp_path):
     )
 
 
+def test_ts10_ambiguous_calls_emit_nothing_and_same_file_wins(safe_tmp_path):
+    """S10: the narrowest scope holding a candidate must hold exactly one, or no edge is emitted.
+
+    Restoring same-file edges (TS0 above) left the inverse defect: every candidate the family
+    held was emitted, so one call site bound to N definitions and `graph()` presented all N with
+    equal confidence. Measured 2026-07-31 over 155 stores — 2,220,234 of 2,320,130 edges were
+    ambiguous (95.7%), 70.2% of them in groups above 32, and `impact_narrative` answered "high"
+    for 50.6% of symbols. Under the one-true-callee model that table's precision was <= 8.0%.
+
+    Cap 1 is not a threshold picked off a curve. Each cap step to C admits groups of size C,
+    contributing one correct edge and C-1 wrong ones, so the marginal edge is correct with
+    probability 1/C: 0.887 precision at 2, 0.780 at 4. 1 is the only value at which an edge in
+    this table *means* a resolved call.
+
+    Paired per this module's convention: every drop assertion has a keep assertion over the
+    same run, because "the ambiguous edge is gone" also passes when resolution is broken flat.
+    """
+    from rag_search.daemon.sweeps import _MAX_CALLEE_FANOUT
+
+    root = safe_tmp_path / "s10"
+    # `handler` is defined twice at family scope and never in the caller's file -> ambiguous.
+    _write(root, "a.py", "def handler():\n    return 1\n")
+    _write(root, "b.py", "def handler():\n    return 2\n")
+    # `only_once` is unique, so the same caller must still resolve it.
+    _write(root, "c.py", "def only_once():\n    return 3\n")
+    _write(root, "app.py",
+           "from a import handler\nfrom c import only_once\n\n\n"
+           "def run():\n    return handler() + only_once()\n")
+    # `local` shadows a same-named sibling definition: same file is the preferred scope.
+    _write(root, "shadowed.py", "def local():\n    return 4\n")
+    _write(root, "owner.py",
+           "def local():\n    return 5\n\n\n"
+           "def use():\n    return local()\n")
+    gs, _ = _graph_for(root)
+    named = {(a, b) for a, b in gs._con.execute(
+        "SELECT a.name, b.name FROM edges e "
+        "JOIN symbols a ON a.sid=e.caller_sid JOIN symbols b ON b.sid=e.callee_sid"
+    )}
+    assert ("run", "handler") not in named, (
+        "a call with two family-scope candidates emitted an edge; the resolution is a guess and "
+        f"nothing downstream marks it as one; edges were {sorted(named)}"
+    )
+    assert ("run", "only_once") in named, (
+        "the cap dropped an unambiguous call — resolution is broken, not narrowed; "
+        f"edges were {sorted(named)}"
+    )
+    assert ("use", "local") in named, (
+        "same file is the preferred scope and resolves this to one candidate; "
+        f"edges were {sorted(named)}"
+    )
+    files = {(a, b) for a, b in gs._con.execute(
+        "SELECT a.file, b.file FROM edges e "
+        "JOIN symbols a ON a.sid=e.caller_sid JOIN symbols b ON b.sid=e.callee_sid"
+    )}
+    assert not any(a.endswith("owner.py") and b.endswith("shadowed.py") for a, b in files), (
+        "the same-file tier did not win: `use` bound to the sibling definition of `local` as "
+        f"well as its own; edges were {sorted(files)}"
+    )
+    # The invariant itself, not just its symptoms. Nothing asserted this before, which is how a
+    # 96%-ambiguous graph survived into a backlog while every existing test stayed green.
+    fanout = gs._con.execute(
+        "SELECT MAX(n) FROM (SELECT COUNT(*) AS n FROM edges e "
+        "JOIN symbols b ON b.sid=e.callee_sid GROUP BY e.caller_sid, b.name)"
+    ).fetchone()[0]
+    assert fanout is not None and fanout <= _MAX_CALLEE_FANOUT, (
+        f"a (caller, callee_name) group bound {fanout} definitions, over the cap of "
+        f"{_MAX_CALLEE_FANOUT}"
+    )
+
+
+def test_ts10b_recursion_does_not_fall_through_to_another_file(safe_tmp_path):
+    """S10: drop the caller from the tier that *won*, never before choosing the tier.
+
+    A recursive call in the only file defining that name has an empty tier once the caller is
+    removed. Removing it first instead makes the same-file tier look empty, falls through to the
+    family, and binds the recursion to a same-named definition in some other file — a
+    confidently wrong edge in a table whose invariant is that it holds none. Worth 996 edges
+    fleet-wide, and invisible to any test that does not put a recursive function next to a
+    homonym.
+    """
+    root = safe_tmp_path / "s10b"
+    _write(root, "mine.py", "def walk(n):\n    return walk(n - 1)\n")
+    _write(root, "theirs.py", "def walk(n):\n    return n\n")
+    gs, _ = _graph_for(root)
+    files = {(a, b) for a, b in gs._con.execute(
+        "SELECT a.file, b.file FROM edges e "
+        "JOIN symbols a ON a.sid=e.caller_sid JOIN symbols b ON b.sid=e.callee_sid"
+    )}
+    assert not any(a.endswith("mine.py") and b.endswith("theirs.py") for a, b in files), (
+        "a recursive call fell through the same-file tier and bound to another file's "
+        f"definition of the same name; edges were {sorted(files)}"
+    )
+
+
 def test_ts8b_family_table_only_widens(safe_tmp_path):
     """A language with no relatives is its own family, so the table can never over-merge."""
     assert language_family("typescript") == language_family("javascript")

@@ -51,7 +51,21 @@ from pathlib import Path
 #                    than `_is_name_text`, which recovers markdown headings whole instead of only
 #                    the one-word ones. Measured on one JS-dominated store: strictly additive —
 #                    0 symbols lost, 0 changed, 1,942 gained, and 55 of its 80 dark JS files lit.
-EXTRACTOR_REV = "e7"
+#   e8  2026-07-31  Call *resolution*, not extraction — and the only rev here that is subtractive.
+#                    `_extract_graph` emitted every same-family definition sharing the callee's
+#                    name, so 2,220,234 of 2,320,130 fleet edges bound one call site to N
+#                    definitions (95.7%; 70.2% of them in groups above 32) and `graph()` presented
+#                    all N with equal confidence. Now: prefer definitions in the caller's own file,
+#                    else the family, and emit only if that tier holds exactly one candidate after
+#                    dropping the caller (`_MAX_CALLEE_FANOUT` in `daemon/sweeps.py`). Measured
+#                    over 155 stores, 193,309 call-site groups: precision 0.182 -> 1.000 at recall
+#                    0.633; **fleet edges fall 2,320,130 -> ~122,324, a 19x drop, which is the
+#                    intended result and not a regression.** Median modularity_q rises 0.578 ->
+#                    0.769. `ALGO_VERSION` deliberately stays `fg3`: the partition changes because
+#                    its input did, not its algorithm. This rev is mandatory rather than
+#                    conventional — the resolution lives in `sweeps.py`, which S3 below explains is
+#                    deliberately outside `_code_fingerprint`, so nothing else would have noticed.
+EXTRACTOR_REV = "e8"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -692,6 +706,35 @@ def extract_symbols_with_stats(
         language=language, rung=rung, symbol_count=len(syms), anon_count=anon,
         has_error=_node_has_error(outer_root),
     )
+
+
+def extract_symbols_calls_with_stats(
+    path: Path, content: str, language: str
+) -> tuple[list[Symbol], ExtractionStats, list[tuple[str, int]]]:
+    """`extract_symbols_with_stats` plus the file's call sites, in one bounded-pool trip.
+
+    `_extract_graph` walked the tree twice and paid `run_bounded` twice per file because callee
+    resolution needs the whole symbol table, which does not exist until the first walk finishes.
+    That ordering constraint is real; a second *IPC round trip* was never part of it. The caller
+    now buffers the call sites instead (~11 MB on the largest project in the fleet: 2,516 files,
+    94,867 call sites) and resolves them after the symbol commit.
+
+    **Worth ~11%, not the ~28% this was filed as, and the spread is the useful part.** Measured
+    2026-07-31 against an otherwise-identical checkout over five trees, 2,319 files, 3 reps each:
+    java 13.90 -> 9.55 ms/file (-31%), php 28.54 -> 26.36 (-8%), ts -8%, js -4%, and **this repo
+    35.13 -> 35.18, i.e. nothing at all.** The filed figure came from "IPC is 3.9 of 13.7 ms/file",
+    which assumes the second trip costs what the first does — it does not. The second pass only
+    parsed calls and already skipped every file with no symbols, so the saving scales with how
+    cheap symbol extraction is *relative* to the call parse. Where files are large and
+    symbol-dense the second parse was never the cost. Don't quote a single number for this.
+
+    Deliberately a composition, not a shared parse tree: the two halves parse independently
+    today, and threading one tree through both would rewrite `_extract_symbols_from` and
+    `_collect_calls_with_lines` to buy a fraction of what the IPC and the second `read_text`
+    already give. Module-level and picklable, which `run_bounded` requires.
+    """
+    syms, stats = extract_symbols_with_stats(path, content, language)
+    return syms, stats, extract_calls_with_lines(content, language)
 
 
 def _node_has_error(root) -> bool:
