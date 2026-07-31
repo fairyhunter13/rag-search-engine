@@ -1,3 +1,8 @@
+---
+name: status
+description: "Comprehensive status audit of the rag-search-engine system — registry health, indexed projects, daemon and GPU state, metrics."
+---
+
 # status skill
 
 Comprehensive status audit of the rag-search-engine system.
@@ -42,7 +47,7 @@ Check all key routes return expected HTTP status:
 - Flag any error_by_intent entries (should be 0)
 
 ### 6. Fast test suite
-- Run `.venv/bin/pytest src/tests/live/ -m "live and not slow" -q --ignore=src/tests/live/test_browser.py`
+- Run `.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --ignore=src/tests/live/test_browser.py`
 - Must be 0 failed. The pass count is not pinned here — it moved with tier 3's deletion and
   pinning it turns every legitimate test addition into a false alarm
 

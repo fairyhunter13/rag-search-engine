@@ -21,8 +21,35 @@ def _load_info() -> str:
     return INFO.read_text()
 
 
+WM_DESC = (
+    "RSE governing laws — the P0–P18 / HR1–HR41 invariant IDs, the component map, and how to "
+    "check working-tree conformance. Read before changing indexing, extraction, GPU, or "
+    "CPU-budget behaviour."
+)
+IH_DESC = (
+    "RSE's DIKW doctrine ladder — how data climbs from data to wisdom, what each rung costs, "
+    "and the compute-spend doctrine. Read when deciding where a new derived artifact belongs."
+)
+
+
+def _frontmatter(name: str, description: str) -> list[str]:
+    """Claude Code discovers a skill by its frontmatter; without it the file never loads.
+
+    The description is always quoted: an unquoted value containing ': ' parses as a nested
+    mapping and the whole skill silently drops out of the listing.
+    """
+    return [
+        "---",
+        f"name: {name}",
+        'description: "' + description.replace('"', "'") + '"',
+        "---",
+        "",
+    ]
+
+
 def _render_world_model(yaml_raw: str) -> str:
     lines = [
+        *_frontmatter("world-model", WM_DESC),
         "# World Model",
         "",
         "RSE fulfills the four-layer world model defined in `docs/world-model/model.yaml`.",
@@ -79,6 +106,7 @@ def _render_world_model(yaml_raw: str) -> str:
 
 def _render_info_hierarchy(info_raw: str) -> str:
     header = [
+        *_frontmatter("info-hierarchy", IH_DESC),
         "# Info Hierarchy",
         "",
         "RSE's DIKW doctrine ladder — how data climbs to wisdom and what each rung costs.",
@@ -98,18 +126,18 @@ def main() -> None:
     if not INFO.exists():
         sys.exit(f"ERROR: {INFO} not found")
 
-    SKILLS.mkdir(parents=True, exist_ok=True)
-
     yaml_raw = _load_yaml_raw()
     info_raw = _load_info()
 
-    wm = SKILLS / "world-model.md"
-    wm.write_text(_render_world_model(yaml_raw))
-    print(f"wrote {wm.relative_to(ROOT)}")
-
-    ih = SKILLS / "info-hierarchy.md"
-    ih.write_text(_render_info_hierarchy(info_raw))
-    print(f"wrote {ih.relative_to(ROOT)}")
+    # One directory per skill with a SKILL.md inside — a flat <name>.md is never discovered.
+    for name, text in (
+        ("world-model", _render_world_model(yaml_raw)),
+        ("info-hierarchy", _render_info_hierarchy(info_raw)),
+    ):
+        out = SKILLS / name / "SKILL.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text)
+        print(f"wrote {out.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

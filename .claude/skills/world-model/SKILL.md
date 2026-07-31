@@ -1,3 +1,8 @@
+---
+name: world-model
+description: "RSE governing laws — the P0–P18 / HR1–HR41 invariant IDs, the component map, and how to check working-tree conformance. Read before changing indexing, extraction, GPU, or CPU-budget behaviour."
+---
+
 # World Model
 
 RSE fulfills the four-layer world model defined in `docs/world-model/model.yaml`.

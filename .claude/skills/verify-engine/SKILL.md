@@ -1,3 +1,8 @@
+---
+name: verify-engine
+description: "Full engine-feature coverage loop: probe every surface, fix any RED, then commit and push until green."
+---
+
 # verify-engine skill
 
 Full engine-feature coverage loop: probe every surface → fix any RED → commit → push → repeat until 100% green.

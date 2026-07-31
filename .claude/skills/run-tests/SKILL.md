@@ -1,10 +1,15 @@
+---
+name: run-tests
+description: "Run the fast live test suite and report pass/fail counts and timing."
+---
+
 # run-tests skill
 
 Run the fast test suite and report results.
 
 ## What this skill does
 
-1. Run `.venv/bin/pytest src/tests/live/ -m "live and not slow" -q --ignore=src/tests/live/test_browser.py`
+1. Run `.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --ignore=src/tests/live/test_browser.py`
 2. Report: total passed, failed, skipped, time taken
 3. If any failures: show the short traceback and identify root cause
 4. If all pass: confirm "N passed, 0 failed"
