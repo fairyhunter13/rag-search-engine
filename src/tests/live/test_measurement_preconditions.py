@@ -85,3 +85,50 @@ def test_mp2_a_shell_merely_naming_a_heavy_pass_is_not_counted_as_one() -> None:
     finally:
         decoy.kill()
         decoy.wait(timeout=10)
+
+
+def test_mp3_a_timeout_wrapped_pass_is_counted_once_not_twice() -> None:
+    """MP3 — `timeout N <pass>` is one heavy pass, not two.
+
+    MP2 removed the shell wrappers; `timeout` is the one that was left, and it is different in the
+    way that matters. Shells run a payload and can be recognised by `-c`; `timeout` **forks and
+    waits**, so it and the real interpreter are both live processes carrying the same fragment, and
+    one pass reads as two. Observed 2026-07-31 against a single run: `2 heavy pass(es) running`,
+    the first of them the `timeout` wrapper of the second.
+
+    Both halves are asserted, because skipping a wrapper is exactly how a scan starts missing the
+    thing it wraps: the supervisor must be dropped *and* the pass beneath it must still be found.
+    An assertion of "not two" alone is satisfied by a scan that has gone blind.
+
+    `env`/`nice`/`nohup`/`stdbuf` need no such handling — they exec into the target and are
+    replaced by it, so they never appear beside it.
+    """
+    import importlib.util
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "measure_preconditions.py"
+    spec = importlib.util.spec_from_file_location("_measure_preconditions_mp3", script)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # The heavy fragment rides in argv so the *child* is a genuine match under its own
+    # interpreter, while the `timeout` parent carries the identical text on its own command line.
+    decoy = subprocess.Popen(
+        ["timeout", "20", sys.executable, "-c", "import time; time.sleep(15)",
+         "MP3-DECOY", "bin/pytest"])
+    try:
+        time.sleep(0.5)  # let both pids land in /proc before scanning
+        found = [p for p in mod._heavy_processes() if "MP3-DECOY" in p]
+        assert len(found) == 1, (
+            f"a `timeout`-wrapped pass must count once — the supervisor and the interpreter "
+            f"beneath it both carry the fragment, so 2 means the wrapper is still counted and 0 "
+            f"means the scan lost the real pass: {found}")
+        assert Path(found[0].split()[0]).name != "timeout", (
+            f"the entry kept is the supervisor rather than the pass it launched: {found}")
+    finally:
+        decoy.kill()
+        decoy.wait(timeout=10)
