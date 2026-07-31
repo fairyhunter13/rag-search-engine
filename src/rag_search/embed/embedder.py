@@ -34,10 +34,34 @@ _GPU_INFER_LOCK = threading.RLock()
 # says so: N members embedding one short string separately are fast enough that latency hides it.
 _embed_stats: dict = {"calls": 0, "texts": 0}
 
+# The same count, attributed to the thread that spent it. The process-wide counter above cannot
+# answer "what did *this* call site spend", because embedding is not confined to the caller's
+# thread in either process that does it: `mcp.index()` hands a fleet-wide `reconcile_projects` to a
+# daemon thread, and the watcher's dispatch workers reach `_index_project` on theirs. A delta taken
+# around one search is therefore a delta around whatever else was in flight.
+#
+# Not hypothetical, and it is the live suite rather than the daemon that gets hurt: the suite runs
+# both of those in-process, and a reconcile started by one test outlives it. Instrumented over a
+# full fast run, a single leaked `Thread-N (reconcile_projects)` embedded 21 times spread across
+# later, unrelated tests. TK2 read the global counter and CI run 30611283020 failed there with
+# "2 query embeds for 4 members", having charged a neighbouring test's reconcile to its own search.
+#
+# A `threading.local` and not a dict keyed by thread id: ids are reused after a thread exits, so a
+# dict would both leak an entry per thread and hand a fresh thread its predecessor's count.
+_embed_local = threading.local()
+
 
 def embed_stats() -> dict:
-    """A copy of the process-lifetime embed counters."""
+    """A copy of the process-lifetime embed counters, summed over every thread."""
     return dict(_embed_stats)
+
+
+def embed_calls_here() -> int:
+    """Embed calls made by the calling thread. Monotonic for the life of that thread.
+
+    For a caller measuring one call site rather than the process — see `_embed_local`.
+    """
+    return getattr(_embed_local, "calls", 0)
 
 
 class Embedder:
@@ -110,6 +134,7 @@ class Embedder:
                 self._init()
             _embed_stats["calls"] += 1
             _embed_stats["texts"] += len(texts)
+            _embed_local.calls = getattr(_embed_local, "calls", 0) + 1
             raw = np.array(list(self._model.embed(texts, batch_size=batch_size)), dtype=np.float32)
         norms = np.linalg.norm(raw, axis=1, keepdims=True)
         norms[norms == 0] = 1.0

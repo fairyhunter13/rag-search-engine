@@ -54,15 +54,29 @@ def test_tk2_one_embed_for_a_whole_federation(federation_root_path):
 
     A latency assertion would not discriminate here — N embeds of one short string are fast
     enough to hide the defect — so this counts the real calls the GPU actually served.
+
+    Counted per *thread*, which is the correction of 2026-07-31. The process-wide `embed_stats`
+    this used to read is moved by every embed anywhere in the interpreter, and this suite runs
+    two fleet-scale embedders in-process on background threads: `mcp.index()` hands
+    `reconcile_projects` to a daemon thread that walks the whole registry, and the watcher's
+    dispatch workers reach `_index_project` on theirs. Neither is joined to the test that started
+    it. Instrumented over a full fast run, one leaked `Thread-N (reconcile_projects)` embedded 21
+    times spread across later, unrelated tests; CI run 30611283020 failed here with "2 query
+    embeds for 4 members" for exactly that reason, and the same run passed in isolation.
+
+    Attribution rather than a retry loop or a widened bound: the property under test is what one
+    call site spent, so the honest fix is to measure that and not to tolerate a second embed —
+    which is the defect itself. The leak it exposed is real and separate; the daemon has the same
+    background threads and it is only the suite that runs them beside a measurement.
     """
-    from rag_search.embed.embedder import embed_stats
+    from rag_search.embed.embedder import embed_calls_here
     from rag_search.server.mcp import _search_sync
 
-    before = embed_stats()["calls"]
+    before = embed_calls_here()
     payload = json.loads(
         _search_sync("checkout total", "all", [federation_root_path], _TOP_K, "compact")
     )
-    spent = embed_stats()["calls"] - before
+    spent = embed_calls_here() - before
     members = len(payload["projects_searched"])
     assert members >= 2, f"TK2 needs a multi-member federation to discriminate, got {members}"
     assert spent == 1, f"TK2: {spent} query embeds for {members} members — expected exactly 1"
