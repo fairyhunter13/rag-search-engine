@@ -538,11 +538,20 @@ def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
 
 
 def _extract_graph(gs, root, only: list | None = None) -> None:
-    """Extract symbols + call edges from source into gs (caller must gs.clear() first).
+    """Extract symbols + call edges from source into gs.
 
     `only` restricts both passes to those files (the watcher's incremental path); the callee
     resolution tables are still built from the whole symbol table, so calls into untouched
     files still resolve. Pass `only=None` for a full re-derive.
+
+    A full re-derive subtracts *after* it adds, and the caller must no longer `gs.clear()` first.
+    `upsert_symbol`/`upsert_edge` are keyed, so the pass writes straight into the live tables and
+    every concurrent reader sees `old | new` — a superset — until the prune below cuts it to
+    exactly `new`. Clearing up front committed an empty graph and served it for the length of the
+    extraction; see `docs/decisions/2026-07-31-atomic-graph-rederive.md`.
+
+    The incremental path prunes nothing here: it walked a subset, so "not re-recorded" would mean
+    "belongs to a file this pass never opened". `delete_file_symbols` is its subtraction, per file.
     """
     from pathlib import Path
 
@@ -559,6 +568,11 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     # answer "what grammar was this file written in". The path can, and deriving it here is
     # what S9 asks for without adding a column that would have to be kept in sync.
     fam_of: dict[str, str] = {}
+    # What this pass re-recorded, and so what survives the prune. Only populated for a full
+    # re-derive — `targets is not None` walks a subset and must not subtract on that basis.
+    seen_sids: set[str] = set()
+    seen_files: set[str] = set()
+    seen_edges: set[tuple[str, str]] = set()
 
     def _fam(fstr: str) -> str:
         f = fam_of.get(fstr)
@@ -572,6 +586,9 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         except OSError:
             continue
         lang = detect_language(fpath)
+        # Walked, so it keeps its `file_extraction` row whichever branch below records it — a file
+        # that yields no symbols is exactly what that table exists to account for.
+        seen_files.add(str(fpath))
         res = run_bounded(extract_symbols_with_stats, (fpath, content, lang),
                           path_for_log=str(fpath))
         # Recorded, never skipped silently — and recorded as the three *different* things they
@@ -592,9 +609,17 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             if not sym.name:
                 continue
             sid = symbol_id(sym.file, sym.name, sym.start_line)
+            seen_sids.add(sid)
             gs.upsert_symbol(sid, sym.name, sym.qualified_name, sym.kind,
                              sym.file, sym.start_line, sym.end_line, sym.language)
     gs.commit()
+    # Before the resolution tables are built, not after: they are read straight out of `symbols`
+    # below, so a stale row surviving to that point would resolve calls onto a definition this
+    # pass did not find. `purge_dangling_edges` then drops the edges those rows anchored; the
+    # edges retracted because their *call site* went are handled by `prune_edges_to` at the end.
+    if targets is None:
+        gs.prune_symbols_to(seen_sids, seen_files)
+        gs.purge_dangling_edges()
     gs.dedup_symbols()
     # S8: keyed by (family, name), not name. Keying on the bare name is what bound every
     # javascript `get()` to every PHP `get()` in the same repo — 1.09 M edges fleet-wide,
@@ -641,8 +666,11 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
                 # graph gate's seven misses were same-file. Restoring them grows ccw's graph ~43%.
                 # A self-edge is what the condition plausibly meant to stop, and that is this one.
                 if callee_sid != caller_sid:
+                    seen_edges.add((caller_sid, callee_sid))
                     gs.upsert_edge(caller_sid, callee_sid)
     gs.commit()
+    if targets is None:
+        gs.prune_edges_to(seen_edges)
 
 
 def _persist_partition_quality(gs) -> None:  # type: ignore[no-untyped-def]
@@ -667,7 +695,6 @@ def _rederive_graph(project_path: str) -> None:
     root = Path(project_path)
     gs = GraphStore(project_graph_db(project_path))
     try:
-        gs.clear()
         _extract_graph(gs, root)
         detect_communities(gs)
         gs._con.execute("DELETE FROM communities WHERE level>=2")
@@ -1240,7 +1267,6 @@ def _index_project(project_path: str) -> None:
     # 2. Tree-sitter extract + community detection → graph.db; stamp pipeline meta.
     gs = GraphStore(project_graph_db(project_path))
     try:
-        gs.clear()
         _extract_graph(gs, root)
         detect_communities(gs)
         gs.set_meta("algo_version", _pipeline_algo_version())
