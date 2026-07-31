@@ -57,8 +57,8 @@ Two transports serve the same 4 tools:
 ### 12.1 Config source-of-truth
 
 `scripts/integrations/canonical.py` + `scripts/configure_integrations.py` write MCP
-entries into each discovered client config (claude profile(s) + hermes; OpenCode and
-Codex are no longer configured). Canonical URL: `http://127.0.0.1:8765/mcp`.
+entries into each discovered client config (claude profile(s) + hermes; OpenCode is
+no longer configured). Canonical URL: `http://127.0.0.1:8765/mcp`.
 
 | Client family | Format |
 |---|---|
