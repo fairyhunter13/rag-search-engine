@@ -42,8 +42,8 @@ _LEGACY_TOKEN_PATTERNS = [
 # are regenerated from already-renamed sources via scripts/gen_world_model_skills.py).
 _LEGACY_TOKEN_ALLOWLIST_FILES = {
     f"src/tests/live/{_THIS_FILE}",
-    ".claude/skills/world-model.md",
-    ".claude/skills/info-hierarchy.md",
+    ".claude/skills/world-model/SKILL.md",
+    ".claude/skills/info-hierarchy/SKILL.md",
 }
 
 # Substrings that legitimately contain a legacy-looking token but are genuine external-product
@@ -85,6 +85,35 @@ def test_no_legacy_ose_opencode_tokens_reappear(pattern: str) -> None:
     assert not hits, (
         f"Legacy token pattern {pattern!r} found in tracked files "
         f"({len(hits)} occurrence(s)) — rename to the RSE brand:\n" + "\n".join(hits[:5])
+    )
+
+
+def _tracked_paths() -> list[str]:
+    return subprocess.run(
+        ["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True
+    ).stdout.splitlines()
+
+
+@pytest.mark.parametrize("pattern", _LEGACY_TOKEN_PATTERNS)
+def test_no_legacy_tokens_in_tracked_paths(pattern: str) -> None:
+    """The brand lock must cover file *paths*, not just file contents.
+
+    The content guard above runs `git grep`, which only ever inspects what is inside a file.
+    A directory or filename carrying a banned token passed it silently — `.opencode/skill/...`
+    sat in the tracked tree that way until the 2026-07-31 sweep. A path is as public as a
+    line of text: it shows up in the clone, the tarball, and every GitHub URL.
+    """
+    rx = re.compile(pattern)
+    hits = [
+        p for p in _tracked_paths()
+        if rx.search(p)
+        and p not in _LEGACY_TOKEN_ALLOWLIST_FILES
+        and not any(allowed in p for allowed in _EXTERNAL_PRODUCT_ALLOWLIST_SUBSTRINGS)
+        and not p.startswith("vendor/")
+    ]
+    assert not hits, (
+        f"Legacy token pattern {pattern!r} found in tracked PATHS "
+        f"({len(hits)}) — rename or untrack:\n" + "\n".join(hits[:5])
     )
 
 
@@ -154,7 +183,9 @@ def test_storage_paths_are_env_driven() -> None:
 _ENV_DRIVEN_CONFIG_NAMES = [
     "EMBED_MODEL", "RERANK_MODEL", "EMBED_DEVICE",
     "DAEMON_HOST", "DAEMON_PORT",
-    "QUERY_LLM_PROVIDER", "QUERY_LLM_MODEL",
+    # QUERY_LLM_PROVIDER left this list with the constant on 2026-07-31. It was the one name here
+    # that no production code read, so this guard was asserting that a dead knob stayed env-driven.
+    "QUERY_LLM_MODEL",
     "RSE_GPU_DEVICE",
 ]
 
@@ -172,4 +203,22 @@ def test_runtime_config_is_env_driven() -> None:
             missing.append(name)
     assert not missing, (
         f"Config name(s) not env-driven via os.environ.get(...) in core/config.py: {missing}"
+    )
+
+
+# CLAUDE.md is loaded verbatim into every agent session, so its size is a per-turn tax paid by
+# every profile. It grew 4.5 KB -> 23 KB between 2026-06-26 and 2026-07-30 because each change
+# appended its own post-mortem; the 2026-07-31 trim took it to ~5.5 KB by moving narrative to
+# docs/decisions/ and invariants to docs/world-model/model.yaml. This ceiling keeps it there.
+_CLAUDE_MD_MAX_BYTES = 8_000
+
+
+def test_claude_md_stays_an_instruction_file() -> None:
+    """CLAUDE.md must stay an instruction file, not drift back into a decision log."""
+    size = (_REPO_ROOT / "CLAUDE.md").stat().st_size
+    assert size <= _CLAUDE_MD_MAX_BYTES, (
+        f"CLAUDE.md is {size} bytes (ceiling {_CLAUDE_MD_MAX_BYTES}). It loads into every "
+        "session, so growth here is paid on every turn. Incident narrative and rationale belong "
+        "in docs/decisions/; invariants belong in docs/world-model/model.yaml. Raise this ceiling "
+        "only if the added text changes what an agent does next."
     )

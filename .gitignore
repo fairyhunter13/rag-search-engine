@@ -27,8 +27,14 @@ Thumbs.db
 .hpv_proof.*
 
 # Local scratch diagnostics (never commit; may contain local device paths)
-scratch_diag.py
 scratch_*.py
+
+# Deliberately NO ignore rule for other agent CLIs' config dirs. Naming one here reintroduces
+# the very token P18 bans, because .gitignore is itself tracked content — an ignore rule has to
+# spell out what it excludes, so the rule and the brand lock cannot both hold. Adding one failed
+# `test_no_legacy_ose_opencode_tokens_reappear` on 2026-07-31. The path guard beside it
+# (`test_no_legacy_tokens_in_tracked_paths`) is the stronger check anyway: it fails the suite if
+# such a directory is ever staged, where an ignore rule only shields it from `git add -A`.
 
 # Secrets / local env overrides (use ~/.config/rag-search/env instead)
 .env

@@ -62,6 +62,19 @@ def _replace_sentinel_block(text: str, start: str, end: str, new_body: str) -> s
     return text[:si] + start + "\n" + new_body + "\n" + end + text[ei + len(end):]
 
 
+def _remove_sentinel_block(text: str, start: str, end: str) -> str:
+    """Delete the sentinel block, its markers, and the blank line that separated it."""
+    si = text.find(start)
+    ei = text.find(end)
+    if si == -1 or ei == -1 or ei < si:
+        return text
+    head = text[:si].rstrip("\n")
+    tail = text[ei + len(end):].lstrip("\n")
+    if not head:
+        return tail
+    return head + "\n" + ("\n" + tail if tail else "")
+
+
 def _verify_sentinel_block(text: str, start: str, end: str, expected_body: str) -> bool:
     """Return True if the sentinel block body exactly matches expected_body."""
     si = text.find(start)
@@ -86,6 +99,18 @@ def _diff(old: str, new: str, label: str) -> str:
 # ---------------------------------------------------------------------------
 # CLAUDE.md targets (3 profiles)
 # ---------------------------------------------------------------------------
+#
+# These profiles must NOT carry the doctrine block. The daemon already serves the
+# identical text as MCP server instructions (daemon/global_prompt.py::_PROMPT ==
+# canonical.CANONICAL_BODY, asserted by test_p21_integration_parity.py), so a copy
+# in CLAUDE.md is the same ~500 tokens (measured via /context) paid twice in every
+# session of every profile.
+# The desired state is therefore *absence*, and this target repairs toward it: it
+# removes a stale block rather than installing one.
+#
+# The rules do become conditional on the MCP server being reachable — which is the
+# right coupling, since every rule in the block is an instruction about how to call
+# that server. With the daemon down there is nothing for them to govern.
 
 def _verify_claude_md(md_path: Path) -> ConfigResult:
     label = f"claude({md_path.parent.name})/CLAUDE.md"
@@ -93,31 +118,31 @@ def _verify_claude_md(md_path: Path) -> ConfigResult:
         return ConfigResult(tool=label, status="missing",
                             message=f"CLAUDE.md not found at {md_path}", path=str(md_path))
     text = md_path.read_text()
-    from integrations.canonical import CANONICAL_BODY
-    rse_ok = _verify_sentinel_block(text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
-    if rse_ok:
+    if SENTINEL_CLAUDE_START not in text and SENTINEL_CLAUDE_END not in text:
         return ConfigResult(tool=label, status="already_ok",
-                            message=f"System prompt in sync: {md_path}", path=str(md_path))
+                            message=f"No duplicated doctrine block (served over MCP): {md_path}",
+                            path=str(md_path))
     return ConfigResult(tool=label, status="missing",
-                        message=f"System prompt drifted or missing: {md_path}", path=str(md_path))
+                        message=f"Stale doctrine block duplicates the MCP server instructions: {md_path}",
+                        path=str(md_path))
 
 
 def _repair_claude_md(md_path: Path, dry_run: bool = False) -> ConfigResult:
     label = f"claude({md_path.parent.name})/CLAUDE.md"
-    from integrations.canonical import CANONICAL_BODY
     old_text = md_path.read_text() if md_path.exists() else ""
-    new_text = _replace_sentinel_block(old_text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END, CANONICAL_BODY)
+    new_text = _remove_sentinel_block(old_text, SENTINEL_CLAUDE_START, SENTINEL_CLAUDE_END)
     if old_text == new_text:
         return ConfigResult(tool=label, status="already_ok",
-                            message=f"Already in sync: {md_path}", path=str(md_path))
+                            message=f"Already free of the duplicated block: {md_path}", path=str(md_path))
     diff = _diff(old_text, new_text, str(md_path))
     if dry_run:
         return ConfigResult(tool=label, status="configured",
-                            message=f"[DRY-RUN] Would update {md_path}", path=str(md_path), diff=diff)
-    md_path.parent.mkdir(parents=True, exist_ok=True)
+                            message=f"[DRY-RUN] Would remove stale block from {md_path}",
+                            path=str(md_path), diff=diff)
     md_path.write_text(new_text)
     return ConfigResult(tool=label, status="configured",
-                        message=f"Updated system prompt: {md_path}", path=str(md_path), diff=diff)
+                        message=f"Removed duplicated doctrine block: {md_path}",
+                        path=str(md_path), diff=diff)
 
 
 # ---------------------------------------------------------------------------
