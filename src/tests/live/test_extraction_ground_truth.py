@@ -113,6 +113,34 @@ FIXTURES = [
        "<div>hi</div>\n",
        {("load", "function"), ("helper", "function")},
        rung="embedded", sym_lang="typescript"),
+
+    # e7's named-binding arm, stated as ground truth rather than as a count. Every form here is a
+    # function *value* that `process()` reports anonymously, and the two negatives carry the
+    # weight: `notFn: 3` is a pair whose value is not a function, and `conf` is a binding whose
+    # value is an object — GT1's exact-set equality is what makes their absence an assertion
+    # rather than a hope. `handler` takes no parameter on purpose: `process()` names an arrow
+    # after its sole parameter (`async (req) => req` yields a `function req`), which predates this
+    # arm and is not what this fixture is for.
+    GT("named-binding", "javascript", "a.js",
+       "const getUser = () => ({ id: 1 });\n"
+       "const helper = function () { return 2; };\n"
+       "export const handler = async () => 1;\n"
+       "const conf = { onClick: () => {}, notFn: 3 };\n"
+       "class K { m = () => {}; }\n"
+       "function named(q) { return q; }\n",
+       {("getUser", "function"), ("helper", "function"), ("handler", "function"),
+        ("onClick", "function"), ("m", "function"), ("K", "class"), ("named", "function")}),
+
+    # e7's markdown arm. The multi-word heading is the point: `_is_name_text` rejects all
+    # whitespace, so screening headings with it would have recovered `Title One` and dropped
+    # `A longer heading here`, leaving markdown looking covered while losing most of it.
+    GT("prose", "markdown", "a.md",
+       "# Title One\n"
+       "\n"
+       "Some prose that defines nothing.\n"
+       "\n"
+       "## A longer heading here\n",
+       {("Title One", "section"), ("A longer heading here", "section")}, rung="highlights"),
 ]
 
 # GT3: sources that define nothing. Every one of these is a *call* or a reference, and the whole

@@ -48,8 +48,16 @@ def test_extract_typescript_symbols():
 
 
 def test_extract_unsupported_returns_empty():
+    """A language the pack has no grammar for extracts nothing, and does not raise.
+
+    Markdown stood here as the stand-in for "unsupported" until e7, which gave it symbols — its
+    headings, at rung 4. The test was pinning the example rather than the property, so it went red
+    on a change that was the point. The property is unchanged and is what this now names: an
+    unknown language is a return value, not an exception, because `_extract_graph` walks whatever
+    `iter_files` hands it and one unrecognised extension must not end the pass.
+    """
     from rag_search.graph.extractor import extract_symbols
-    assert extract_symbols(Path("doc.md"), "# Title\ntext", "markdown") == []
+    assert extract_symbols(Path("a.xyz"), "# Title\ntext", "notalanguage") == []
 
 
 def test_symbol_start_end_lines():
