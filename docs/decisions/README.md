@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-07-31 | [A re-derive writes through the graph, it does not empty it first](2026-07-31-atomic-graph-rederive.md) |
 | 2026-07-31 | [The re-derive that never reached 89% of the fleet](2026-07-31-reconcile-walk-starvation.md) |
 | 2026-07-31 | [Paying for context once: the CLAUDE.md trim and the deduplicated MCP block](2026-07-31-context-budget.md) |
 | 2026-07-30 | [One live suite at a time, keyed on process not lock name](2026-07-30-one-live-suite-at-a-time.md) |

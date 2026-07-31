@@ -246,8 +246,75 @@ class GraphStore:
         )
         return cur.rowcount
 
+    def prune_symbols_to(self, sids: set[str], files: set[str]) -> tuple[int, int]:
+        """Drop symbols and `file_extraction` rows a full re-derive did not just re-record.
+
+        The subtraction half of a full re-derive, moved to *after* the pass. It used to be
+        `clear()` running before one, and that is what made a re-derive unreadable: `clear()`
+        commits, so the empty table was published to every other connection and stayed empty for
+        the whole extraction — minutes on a large project — during which `graph()` and
+        `overview(what="communities")` answered "no symbols" with full confidence. Measured
+        2026-07-31: a second connection reads 50 symbols before `clear()` and 0 immediately after,
+        with no extraction having run yet. See `docs/decisions/2026-07-31-atomic-graph-rederive.md`.
+
+        Doing it here inverts that: `upsert_symbol` is keyed on `sid`, so the pass writes into the
+        live table and readers see `old | new` throughout — a superset, never a hole — until this
+        prunes it to exactly `new`. The write lock is held for these two statements instead of for
+        the extraction, which is what keeps the watcher's incremental path (`timeout=30`) off the
+        floor on a store that takes minutes to walk.
+
+        Callers must pass what the pass *walked*, not what it *found*: a file that legitimately
+        yields no symbols still has a `file_extraction` row, and dropping it would shrink the
+        coverage denominator to the files that happened to succeed.
+        """
+        self._con.executescript(
+            "DROP TABLE IF EXISTS temp._keep_sid;"
+            "DROP TABLE IF EXISTS temp._keep_file;"
+            "CREATE TEMP TABLE _keep_sid (sid TEXT PRIMARY KEY);"
+            "CREATE TEMP TABLE _keep_file (file TEXT PRIMARY KEY);"
+        )
+        self._con.executemany("INSERT OR IGNORE INTO _keep_sid VALUES (?)", ((s,) for s in sids))
+        self._con.executemany("INSERT OR IGNORE INTO _keep_file VALUES (?)", ((f,) for f in files))
+        n_sym = self._con.execute(
+            "DELETE FROM symbols WHERE NOT EXISTS "
+            "(SELECT 1 FROM _keep_sid k WHERE k.sid = symbols.sid)"
+        ).rowcount
+        n_file = self._con.execute(
+            "DELETE FROM file_extraction WHERE NOT EXISTS "
+            "(SELECT 1 FROM _keep_file k WHERE k.file = file_extraction.file)"
+        ).rowcount
+        self._con.commit()
+        return n_sym, n_file
+
+    def prune_edges_to(self, edges: set[tuple[str, str]]) -> int:
+        """Drop edges a full re-derive did not just re-record. Returns how many went.
+
+        `purge_dangling_edges` is not enough on its own here: it only catches edges whose endpoints
+        are gone. The edge a full re-derive has to retract is the one whose endpoints both still
+        exist at the same lines — same `sid` — because the *call between them* was deleted from the
+        source. `clear()` used to catch those by wiping the table; without this they would survive
+        every future re-derive.
+        """
+        self._con.executescript(
+            "DROP TABLE IF EXISTS temp._keep_edge;"
+            "CREATE TEMP TABLE _keep_edge (caller_sid TEXT, callee_sid TEXT,"
+            " PRIMARY KEY (caller_sid, callee_sid));"
+        )
+        self._con.executemany("INSERT OR IGNORE INTO _keep_edge VALUES (?,?)", edges)
+        n = self._con.execute(
+            "DELETE FROM edges WHERE NOT EXISTS (SELECT 1 FROM _keep_edge k "
+            "WHERE k.caller_sid = edges.caller_sid AND k.callee_sid = edges.callee_sid)"
+        ).rowcount
+        self._con.commit()
+        return n
+
     def clear(self) -> None:
         """Wipe symbols/edges/communities before a full re-index so stale rows don't persist.
+
+        **No production caller since 2026-07-31** — the re-derive path prunes after the pass
+        (`prune_symbols_to`/`prune_edges_to`) precisely so it never publishes the empty table this
+        leaves behind. Kept for tests and for a deliberate wipe; do not reintroduce it into a
+        rebuild path without reading the decision doc those two methods cite.
 
         `file_extraction` goes too: a full re-derive re-records every file it walks, so keeping
         the old rows would leave entries for files the new pass never saw and make the coverage

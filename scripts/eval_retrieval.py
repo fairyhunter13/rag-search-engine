@@ -48,8 +48,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 # Excluded at both ends rather than truncated — truncating changes what is being asked.
 _MIN_QUERY_CHARS, _MAX_QUERY_CHARS = 40, 300
 _DEFAULT_QUERIES, _TOP_K = 40, 10
-# Kinds worth asking about. `data` is excluded: it is 53.7% of symbol rows fleet-wide and they are
-# config keys — "project.version" is not a question anyone puts to a code search.
+# Kinds worth asking about. `data` is excluded: 28.1% of symbol rows fleet-wide (62,449 of 222,483,
+# counted 2026-07-31) and they are config keys — "project.version" is not a question anyone puts to
+# a code search. The 53.7% this comment carried at first was wrong; the exclusion does not turn on
+# the size, so the decision is unchanged.
 _QUERY_KINDS = ("function", "method", "class")
 
 

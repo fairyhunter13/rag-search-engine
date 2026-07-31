@@ -145,13 +145,123 @@ def test_reconcile_triggers_reindex_when_communities_empty(tmp_path):
         gs.close()
 
 
-def test_index_project_clears_graph_before_rebuild():
-    """GH5: _index_project source-guard: gs.clear() must be called before upsert loop."""
-    import inspect
+def test_gh5_full_rederive_subtracts_what_the_source_no_longer_has(safe_tmp_path):
+    """GH5: a full re-derive drops symbols, edges and coverage rows the source lost.
 
-    from rag_search.daemon import sweeps
-    src = inspect.getsource(sweeps._index_project)
-    assert "gs.clear()" in src, "_index_project must call gs.clear() before upserting symbols"
+    This asserted `"gs.clear()" in _index_project` until 2026-07-31 — the mechanism, not the
+    property. The mechanism was wrong: `clear()` commits, so it published an empty graph for the
+    whole extraction. The property is what mattered and it is what is checked here, so the gate
+    survives the fix that removed the thing it used to name.
+
+    All three subtractions are distinct failures. A dropped *file* leaves symbols with no source;
+    a dropped *symbol* inside a surviving file leaves a row `upsert_symbol` can never overwrite,
+    because it is keyed on a `sid` the new pass no longer emits; a dropped *call* between two
+    symbols that both still exist at the same lines leaves an edge whose endpoints are perfectly
+    valid — the one case `purge_dangling_edges` cannot see, and the reason `prune_edges_to` exists.
+    """
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.sweeps import _rederive_graph
+    from rag_search.graph.store import GraphStore
+
+    proj = str(safe_tmp_path)
+    (safe_tmp_path / "keep.py").write_text(
+        "def caller():\n    return callee()\n\n\ndef callee():\n    return 1\n")
+    (safe_tmp_path / "gone.py").write_text("def vanishes():\n    return 0\n")
+    _rederive_graph(proj)
+    gs = GraphStore(project_graph_db(proj))
+    try:
+        before = {r[0] for r in gs._con.execute("SELECT name FROM symbols")}
+        edges_before = gs.edge_count()
+    finally:
+        gs.close()
+    assert {"caller", "callee", "vanishes"} <= before, f"GH5 setup: only extracted {before}"
+    assert edges_before > 0, "GH5 setup: caller->callee edge was never written"
+
+    # The file goes; `callee` survives at its exact line (so its sid is unchanged) but is no
+    # longer called — the edge must still be retracted.
+    (safe_tmp_path / "gone.py").unlink()
+    (safe_tmp_path / "keep.py").write_text(
+        "def caller():\n    return 2\n\n\ndef callee():\n    return 1\n")
+    _rederive_graph(proj)
+
+    gs = GraphStore(project_graph_db(proj))
+    try:
+        after = {r[0] for r in gs._con.execute("SELECT name FROM symbols")}
+        files = {r[0] for r in gs._con.execute("SELECT file FROM file_extraction")}
+        edges_after = gs.edge_count()
+    finally:
+        gs.close()
+    assert "vanishes" not in after, f"GH5: symbol of a deleted file survived: {sorted(after)}"
+    assert {"caller", "callee"} <= after, f"GH5: re-derive lost live symbols: {sorted(after)}"
+    assert not any(f.endswith("gone.py") for f in files), (
+        f"GH5: file_extraction kept a row for a deleted file — coverage denominator is inflated: "
+        f"{sorted(files)}")
+    assert edges_after == 0, (
+        f"GH5: {edges_after} edge(s) survived after the only call was deleted; both endpoints "
+        f"still exist, so purge_dangling_edges cannot catch this — prune_edges_to must")
+
+
+def test_gh6_a_rederive_is_never_observed_as_an_empty_graph(safe_tmp_path):
+    """GH6: no reader ever sees an empty graph while a full re-derive runs.
+
+    The regression this exists for is silent by construction: `clear()` committed the wipe, so a
+    concurrent `graph()` or `overview(what="communities")` answered "no symbols" — correctly
+    reporting what it read, and wrong about the repository. It cost CI run 30619058883, where
+    `test_pipeline_all_stages_rse_repo` read this repo's own store mid-re-derive and got 0.
+
+    One-sided on purpose: it fails only when a sample actually reads 0, and a re-derive too quick
+    to sample simply yields fewer observations. That trades detection rate for never failing
+    spuriously on a fast box — the alternative is a floor on sample count, which is a timing
+    assertion in disguise and the exact shape `test_watcher_graph_rederive` had to abandon.
+    """
+    import contextlib
+    import sqlite3
+    import threading
+    import time
+
+    from rag_search.core.config import project_graph_db
+    from rag_search.daemon.sweeps import _rederive_graph
+
+    proj = str(safe_tmp_path)
+    for i in range(40):
+        (safe_tmp_path / f"m{i}.py").write_text("\n".join(
+            f"def f{i}_{j}():\n    return h{i}_{j}()\n\n\ndef h{i}_{j}():\n    return {j}\n"
+            for j in range(4)))
+    _rederive_graph(proj)                      # populate, so there is something to wipe
+
+    db = project_graph_db(proj)
+    # `check_same_thread=False` is load-bearing, not boilerplate: the poller runs on another
+    # thread, and the ProgrammingError sqlite3 would otherwise raise there is a `sqlite3.Error` —
+    # it would be swallowed below, leaving `samples` empty and this test green without ever
+    # having looked at the database.
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, check_same_thread=False)
+    try:
+        assert con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "GH6 setup: empty"
+        samples: list[int] = []
+        stop = threading.Event()
+
+        def poll() -> None:
+            while not stop.is_set():
+                # A reader erroring is a different defect, not this one — swallow it and let the
+                # `assert samples` below catch the case where *every* read failed.
+                with contextlib.suppress(sqlite3.Error):
+                    samples.append(con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0])
+                time.sleep(0.002)          # sample densely, but not with a whole core (P16)
+
+        watcher = threading.Thread(target=poll, daemon=True)
+        watcher.start()
+        try:
+            _rederive_graph(proj)
+        finally:
+            stop.set()
+            watcher.join(timeout=30)
+        assert samples, "GH6: the poller read nothing — the assertion below would be vacuous"
+        assert 0 not in samples, (
+            f"GH6: a concurrent reader saw an empty symbols table during a re-derive "
+            f"({samples.count(0)} of {len(samples)} samples read 0) — the rebuild published a "
+            f"hole instead of writing through it")
+    finally:
+        con.close()
 
 
 _LABEL_SHAPE = [
