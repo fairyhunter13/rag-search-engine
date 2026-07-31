@@ -1,6 +1,6 @@
 # A re-derive writes through the graph, it does not empty it first
 
-**2026-07-31** · P3 · guard: `test_graph_health.py` GH5–GH6
+**2026-07-31** · P3 · guard: `test_graph_health.py` GH5, GH8
 
 A full graph re-derive used to begin with `GraphStore.clear()`. That is the obvious way to make a
 rebuild authoritative — wipe, then re-extract, and whatever the new pass does not produce is gone —
@@ -117,7 +117,7 @@ wipe. It has **no production caller**, and reintroducing one into a rebuild path
   that mechanism existed for: a full re-derive drops the symbols of a deleted file, the
   `file_extraction` row of a deleted file, and an edge whose call site was deleted while both
   endpoints survived unchanged.
-- **GH6** — a concurrent reader polling `COUNT(*)` across a real `_rederive_graph` must never
+- **GH8** — a concurrent reader polling `COUNT(*)` across a real `_rederive_graph` must never
   observe 0. One-sided by construction: it fails only on a sample that actually reads 0, so a
   re-derive too quick to sample yields fewer observations rather than a spurious failure. Falsified
   before landing — with `clear()` reinstated it reports **35 of 70 samples read 0**, i.e. half the
