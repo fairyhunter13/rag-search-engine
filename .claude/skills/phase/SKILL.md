@@ -1,3 +1,8 @@
+---
+name: phase
+description: "Execute a complete development phase loop: detect → fix → verify → commit → push."
+---
+
 # phase skill
 
 Execute a complete development phase loop: detect → fix → verify → commit → push.
@@ -31,7 +36,7 @@ Optionally pass a description of what to build or fix:
 - No mocks, no skips, no CPU fallback
 
 ### Step 4: Full verify
-- Run complete fast suite: `pytest src/tests/live/ -m "live and not slow" -q --ignore=src/tests/live/test_browser.py`
+- Run complete fast suite: `pytest src/tests/live/ -m "live and not costly and not exclusive" -q --ignore=src/tests/live/test_browser.py`
 - Must be 0 failures before proceeding
 
 ### Step 5: Commit & push

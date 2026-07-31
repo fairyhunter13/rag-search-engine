@@ -1,3 +1,8 @@
+---
+name: run-all-tests
+description: "Run the complete test suite — fast, full, and browser — and report comprehensive results."
+---
+
 # run-all-tests skill
 
 Run the complete test suite: fast + slow + browser. Report comprehensive results.
@@ -6,7 +11,7 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
 
 1. **Fast suite** (~380 tests, no LLM, ~5–7 min):
    ```
-   .venv/bin/pytest src/tests/live/ -m "live and not slow" -q --ignore=src/tests/live/test_browser.py
+   .venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --ignore=src/tests/live/test_browser.py
    ```
 
 2. **Slow suite** (~93 LLM-heavy tests, ~40 min). Prefer the whole non-browser
