@@ -75,6 +75,12 @@ and the fleet stays stale behind a perfectly healthy `/healthz`. Verify by watch
 fall, never by the absence of errors. See
 `docs/decisions/2026-07-31-releasing-a-lease-schedules-nothing.md`.
 
+**Take the lease before the first edit, not before the re-derive.** `_code_fingerprint` re-reads the
+fingerprinted modules off disk on every call, so a running daemon restamps the moment
+`graph/extractor.py` is *saved* — no commit needed, and a docstring counts. Measured 2026-07-31: one
+store re-derived with the daemon's old in-memory code and the new fingerprint. See
+`docs/decisions/2026-07-31-an-edge-is-a-resolved-call.md`.
+
 ## Invariants
 
 All governing laws live in `docs/world-model/model.yaml` — P0–P18, HR1–HR41 — and that file is
