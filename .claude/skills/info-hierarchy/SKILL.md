@@ -1,3 +1,8 @@
+---
+name: info-hierarchy
+description: "RSE's DIKW doctrine ladder — how data climbs from data to wisdom, what each rung costs, and the compute-spend doctrine. Read when deciding where a new derived artifact belongs."
+---
+
 # Info Hierarchy
 
 RSE's DIKW doctrine ladder — how data climbs to wisdom and what each rung costs.

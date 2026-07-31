@@ -1,3 +1,8 @@
+---
+name: pre-deploy
+description: "Pre-deploy verification for the local rag-search device — validates MCP surfaces, KB health, and system integrity before a change ships."
+---
+
 # Pre-Deploy Verification
 
 Run this skill before deploying any change to the local rag-search device.
@@ -23,7 +28,7 @@ GPU must be present. If embedding fails with "CPU fallback" — STOP, do not dep
 
 ### 3. Fast test suite (no slow LLM tests)
 ```bash
-.venv/bin/pytest src/tests/live/ -m "live and not slow" -q --tb=short 2>&1 | tail -20
+.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --tb=short 2>&1 | tail -20
 ```
 **All tests must pass. Zero failures, zero skips.**
 If any test fails — investigate and fix before proceeding.

@@ -1,3 +1,8 @@
+---
+name: issue-sweep
+description: "Autonomous discovery-and-fix loop for latent issues no test covers yet — log storms, CUBLAS thrash, WAL growth, stale index dirs, import cycles, silent fallbacks."
+---
+
 # issue-sweep skill
 
 Autonomous proactive discovery-and-fix loop: scan for latent issues (no test required) → root-cause → fix → verify signal gone → commit + push → repeat until 2 consecutive clean sweeps.
@@ -51,7 +56,7 @@ Flag if embedding-model reload count > 10 (indicates session eviction storm).
 
 ### 1b. Correctness (tests + static)
 ```bash
-.venv/bin/pytest src/tests/live/ -m "live and not slow" -q   # fast live suite
+.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q   # fast live suite
 .venv/bin/ruff check src/rag_search src/tests            # lint
 .venv/bin/python -m compileall -q src/rag_search         # syntax
 ```
