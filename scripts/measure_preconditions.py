@@ -44,6 +44,13 @@ def _load_1m() -> float:
 
 _SHELLS = ("bash", "sh", "dash", "zsh")
 
+# `timeout` is the only common wrapper that survives alongside the pass it launches: it forks and
+# waits, so both it and the real interpreter are live processes with the same fragment on their
+# command lines, and one pass reads as two. `env`/`nice`/`nohup`/`stdbuf` all *exec* into the
+# target, so they are replaced by it and were never double-counted to begin with — which is why
+# this list has one entry rather than the five that look like they belong.
+_SUPERVISORS = ("timeout",)
+
 
 def _heavy_processes() -> list[str]:
     """Repo-owned heavy passes currently running, by full command line.
@@ -76,6 +83,8 @@ def _heavy_processes() -> list[str]:
         if not argv:
             continue  # kernel thread
         if Path(argv[0]).name in _SHELLS and "-c" in argv[1:]:
+            continue
+        if Path(argv[0]).name in _SUPERVISORS:
             continue
         line = " ".join(argv)
         if any(frag in line for frag in _HEAVY):
