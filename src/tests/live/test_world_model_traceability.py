@@ -50,3 +50,29 @@ def test_l3_rtm_all_tests_resolve():
         "(test renamed or deleted without updating model.yaml):\n"
         + "\n".join(f"  {hr}: {name}" for hr, name in broken)
     )
+
+
+def test_l1_conformance_checker_reports_conforms():
+    """`check_world_model.py --all` must exit 0 — the L1 layer's own executable check.
+
+    The L3 guard above has had teeth since it was written; the L1 checker had none. It is not
+    run by CI, and it spent this week reporting a permanent false AT_RISK on P3 (a docstring
+    *explaining* the invariant matched the invariant's own anti-pattern). Nothing failed, so
+    nothing said so, and the natural reading of a checker that is always red is to stop running
+    it — which is the same outcome as not having one.
+
+    `--all` rather than the diff mode: the working tree is clean by the time this runs in CI, so
+    the diff scan would be empty and the assertion vacuous.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, str(_ROOT / "scripts" / "check_world_model.py"), "--all"],
+        cwd=_ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert proc.returncode == 0, (
+        "check_world_model.py reports an L1 invariant AT_RISK. Either the change under test "
+        "violates it, or the check's pattern matches prose rather than code — fix whichever it "
+        f"is; do not leave the checker red.\n{proc.stdout}\n{proc.stderr}"
+    )
