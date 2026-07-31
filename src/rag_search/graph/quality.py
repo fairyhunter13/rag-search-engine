@@ -17,7 +17,7 @@ def partition_quality(store: GraphStore) -> dict:
     """
     import igraph as ig
 
-    rows = store._con.execute(
+    rows = store.conn.execute(
         "SELECT sid, community_id FROM symbols WHERE community_id IS NOT NULL"
     ).fetchall()
     if not rows:
@@ -36,7 +36,7 @@ def partition_quality(store: GraphStore) -> dict:
     cid_map = {cid: i for i, cid in enumerate(unique_cids)}
     membership = [cid_map[cid] for cid in raw_cids]
 
-    edge_rows = store._con.execute("SELECT caller_sid, callee_sid FROM edges").fetchall()
+    edge_rows = store.conn.execute("SELECT caller_sid, callee_sid FROM edges").fetchall()
     edges_ig = [(idx[c], idx[e]) for c, e in edge_rows if c in idx and e in idx]
     g = ig.Graph(n=len(sids), edges=edges_ig, directed=True)
     ec = g.ecount()
@@ -53,16 +53,16 @@ def partition_quality(store: GraphStore) -> dict:
     else:
         coverage = 0.0
 
-    l1_total = store._con.execute(
+    l1_total = store.conn.execute(
         "SELECT COUNT(*) FROM communities WHERE level=1"
     ).fetchone()[0]
-    l1_singleton = store._con.execute(
+    l1_singleton = store.conn.execute(
         "SELECT COUNT(*) FROM communities WHERE level=1 AND member_count=1"
     ).fetchone()[0]
     singleton_ratio = (l1_singleton / l1_total) if l1_total > 0 else 0.0
 
     n_l1 = len(unique_cids)
-    level_max_row = store._con.execute(
+    level_max_row = store.conn.execute(
         "SELECT MAX(level) FROM communities"
     ).fetchone()[0]
     level_max = level_max_row if level_max_row else 1
