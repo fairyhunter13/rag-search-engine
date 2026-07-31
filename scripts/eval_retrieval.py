@@ -3,6 +3,7 @@
 
     python scripts/eval_retrieval.py --project /repo
     python scripts/eval_retrieval.py --project /repo --model X --build --out /tmp/rse-eval/x
+    ... --doc-prefix 'search_document: ' --query-prefix 'search_query: '   # asymmetric models
 
 Exists because `core/config.py` cites a "40-query golden set" as the evidence for `EMBED_MODEL`,
 `RERANK_MODEL` and `EMBED_MAX_TOKENS` — the last a four-point sweep quoted to four decimals — and
@@ -127,14 +128,41 @@ def _metrics(paths: list[str], gold: str) -> tuple[float, float, float, float]:
     return hit1, 0.0, 0.0, 0.0
 
 
-def _embedder(model: str | None):
+class _Prefixed:
+    """An embedder that prepends a task prefix to every text handed to it.
+
+    Asymmetric-prefix models are trained with two different strings — nomic's model card asks for
+    `search_document: ` on what is indexed and `search_query: ` on what is asked — and score below
+    their published numbers without them. **FastEmbed does not supply them**: `query_embed` and
+    `passage_embed` fall straight through to `embed` unchanged for every text model in 0.8.0, and
+    `Embedder.embed` passes its texts to the session verbatim. So a harness that never prefixes
+    measures such a model at a floor, which is what the first nomic arm was.
+
+    Lives here and not in `embed/embedder.py` on purpose: a prefix is a property of the model that
+    is configured, and adding one to production before a switch is decided would silently rewrite
+    every vector in the fleet under an unchanged `EMBED_MODEL`. Both prefixes are passed in as
+    literal strings — no model-to-prefix table to be wrong about a model nobody has run yet.
+    """
+
+    def __init__(self, inner, prefix: str) -> None:
+        self._inner, self._prefix = inner, prefix
+
+    def embed(self, texts: list[str], batch_size: int = 8):
+        return self._inner.embed([self._prefix + t for t in texts], batch_size=batch_size)
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+
+def _embedder(model: str | None, prefix: str = ""):
     from rag_search.embed.embedder import Embedder
     e = Embedder(model=model) if model else Embedder()
     e.warmup()
-    return e
+    return _Prefixed(e, prefix) if prefix else e
 
 
-def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: str) -> dict:
+def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: str,
+             query_prefix: str = "", doc_prefix: str = "") -> dict:
     from rag_search.index.store import VectorStore
     from rag_search.query.search import search
 
@@ -156,7 +184,7 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     if not queries:
         raise SystemExit(f"no query-shaped symbols in {graph_db} whose file is indexed in {db}")
 
-    embedder, store = _embedder(model), VectorStore(db, migrate=False)
+    embedder, store = _embedder(model, query_prefix), VectorStore(db, migrate=False)
     agg = [0.0, 0.0, 0.0, 0.0]
     for q, gold in queries:
         if lane == "dense":
@@ -173,6 +201,9 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     return {
         "project": str(project), "store": str(db), "model": model or "<configured>",
         "lane": lane, "queries": k,
+        # Reported even when empty: an arm's prefixes are half of what it measured, and a result
+        # file that does not carry them cannot be compared with one that used different ones.
+        "query_prefix": query_prefix, "doc_prefix": doc_prefix,
         # Reported, not just relied on: a set that has quietly collapsed to one language is the
         # exact failure this selector replaced, and it would otherwise look like a normal result.
         "query_languages": dict(sorted(spread.items(), key=lambda kv: -kv[1])),
@@ -181,14 +212,15 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     }
 
 
-def build(project: Path, out: Path, model: str | None) -> None:
+def build(project: Path, out: Path, model: str | None, doc_prefix: str = "") -> None:
     """Index `project` into a scratch store. Never touches the fleet's own index."""
     from rag_search.index.indexer import index_project
     from rag_search.index.store import VectorStore
 
     out.mkdir(parents=True, exist_ok=True)
     files, chunks = index_project(
-        str(project), _embedder(model), VectorStore(out / "vectors.db"), federation_mode=False)
+        str(project), _embedder(model, doc_prefix), VectorStore(out / "vectors.db"),
+        federation_mode=False)
     print(f"indexed {files} files / {chunks} chunks into {out/'vectors.db'}", file=sys.stderr)
 
 
@@ -202,6 +234,10 @@ def main() -> int:
     ap.add_argument("--queries", type=int, default=_DEFAULT_QUERIES)
     ap.add_argument("--lane", choices=("dense", "hybrid"), default="dense",
                     help="dense isolates the embedder; hybrid measures the whole pipeline")
+    ap.add_argument("--doc-prefix", default="",
+                    help="task prefix prepended to every indexed chunk (e.g. 'search_document: ')")
+    ap.add_argument("--query-prefix", default="",
+                    help="task prefix prepended to every query (e.g. 'search_query: ')")
     args = ap.parse_args()
 
     project = args.project.resolve()
@@ -213,9 +249,13 @@ def main() -> int:
     if args.build:
         if args.out is None:
             raise SystemExit("--build requires --out: refusing to rebuild the fleet's own store")
-        build(project, store_dir, args.model)
-    print(json.dumps(
-        evaluate(project, store_dir, args.model, args.queries, args.lane), indent=2))
+        build(project, store_dir, args.model, args.doc_prefix)
+    elif args.doc_prefix:
+        # The document prefix is baked into the vectors at index time; asserting one over a store
+        # somebody else built is a claim about bytes this run never wrote.
+        raise SystemExit("--doc-prefix only means something with --build: it changes what is indexed")
+    print(json.dumps(evaluate(project, store_dir, args.model, args.queries, args.lane,
+                              args.query_prefix, args.doc_prefix), indent=2))
     return 0
 
 
