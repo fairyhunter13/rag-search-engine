@@ -175,6 +175,35 @@ def _claude_binary() -> str | None:
     return shutil.which("claude")
 
 
+def _claude_json_path(config_dir: Path | None) -> Path:
+    """Where this profile's MCP definitions actually live -- see the home-root quirk above."""
+    return (config_dir / ".claude.json") if config_dir is not None else Path.home() / ".claude.json"
+
+
+def _shadowing_local_mcp(config_dir: Path | None) -> list[str]:
+    """Project paths whose *local* scope defines its own `rag-search` server.
+
+    Local scope outranks user scope, so each of these silently overrides the canonical
+    entry for that project -- typically a `claude mcp add` run inside the project, which
+    defaults to local scope and pins `?project=<cwd>` onto the URL. `claude mcp get` only
+    ever reports the entry effective for its own cwd, so it cannot see the other projects'
+    pins; observed across three profiles on 2026-07-31 while `--check` reported 9/9 ok.
+    Read-only: the CLI stays the only writer of this file.
+    """
+    try:
+        data = json.loads(_claude_json_path(config_dir).read_text())
+    except Exception:
+        return []
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        return []
+    return sorted(
+        path for path, cfg in projects.items()
+        if isinstance(cfg, dict) and isinstance(cfg.get("mcpServers"), dict)
+        and "rag-search" in cfg["mcpServers"]
+    )
+
+
 def _claude_mcp_env(config_dir: Path | None) -> dict:
     import os as _os
     env = _os.environ.copy()
@@ -199,11 +228,20 @@ def _verify_claude_mcp(config_dir: Path | None, label: str) -> ConfigResult:
     except Exception as exc:
         return ConfigResult(tool=label, status="error",
                             message=f"claude mcp get failed: {exc}", path=str(config_dir or "~"))
-    if result.returncode == 0 and CANONICAL_MCP_URL in result.stdout:
-        return ConfigResult(tool=label, status="already_ok",
-                            message="MCP entry in sync (claude mcp get)", path=str(config_dir or "~"))
-    return ConfigResult(tool=label, status="missing",
-                        message="rag-search MCP not registered or URL mismatch", path=str(config_dir or "~"))
+    # Exact, not substring: a `?project=` pin is a different URL that `in` would accept.
+    urls = [ln.split(":", 1)[1].strip() for ln in result.stdout.splitlines()
+            if ln.strip().startswith("URL:")]
+    if result.returncode != 0 or CANONICAL_MCP_URL not in urls:
+        return ConfigResult(tool=label, status="missing",
+                            message="rag-search MCP not registered or URL mismatch", path=str(config_dir or "~"))
+    shadowed = _shadowing_local_mcp(config_dir)
+    if shadowed:
+        shown = ", ".join(shadowed[:3]) + (f", +{len(shadowed) - 3} more" if len(shadowed) > 3 else "")
+        return ConfigResult(tool=label, status="missing",
+                            message=f"local-scope rag-search shadows the canonical entry in {len(shadowed)} project(s): {shown}",
+                            path=str(config_dir or "~"))
+    return ConfigResult(tool=label, status="already_ok",
+                        message="MCP entry in sync (claude mcp get)", path=str(config_dir or "~"))
 
 
 def _repair_claude_mcp(config_dir: Path | None, label: str, dry_run: bool = False) -> ConfigResult:
@@ -217,6 +255,13 @@ def _repair_claude_mcp(config_dir: Path | None, label: str, dry_run: bool = Fals
                             message=f"[DRY-RUN] Would run: claude mcp add --scope user --transport http rag-search {CANONICAL_MCP_URL}",
                             path=str(config_dir or "~"))
     env = _claude_mcp_env(config_dir)
+    # A local-scope entry outranks whatever we write at user scope, so clear those first --
+    # `--scope local` acts on the CLI's cwd, hence one call per shadowed project.
+    for project in _shadowing_local_mcp(config_dir):
+        if not Path(project).is_dir():
+            continue  # the project is gone; the stale entry is unreachable and harmless
+        subprocess.run([claude_bin, "mcp", "remove", "rag-search", "--scope", "local"],
+                       capture_output=True, text=True, timeout=15, env=env, cwd=project)
     # Idempotent: drop any stale entry first (add errors if one already exists).
     subprocess.run([claude_bin, "mcp", "remove", "rag-search", "--scope", "user"],
                     capture_output=True, text=True, timeout=15, env=env)
