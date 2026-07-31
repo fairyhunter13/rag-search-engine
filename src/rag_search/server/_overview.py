@@ -19,37 +19,56 @@ def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def
     low: dict[str, int] = {}
     on_stk: set[str] = set()
     stk: list[str] = []
-    cnt = [0]
+    cnt = 0
     cycles: list[list[str]] = []
 
-    def sc(v: str) -> None:
-        idx[v] = low[v] = cnt[0]
-        cnt[0] += 1
-        stk.append(v)
-        on_stk.add(v)
-        for w in adj.get(v, []):
-            if w not in idx:
-                sc(w)
-                low[v] = min(low[v], low[w])
-            elif w in on_stk:
-                low[v] = min(low[v], idx[w])
-        if low[v] == idx[v]:
-            scc: list[str] = []
-            while True:
-                w = stk.pop()
-                on_stk.discard(w)
-                scc.append(w)
-                if w == v:
-                    break
-            if len(scc) >= 2:
-                cycles.append(scc[:5])
-
-    try:
-        for v in list(adj):
-            if v not in idx:
-                sc(v)
-    except RecursionError:
-        pass
+    # D6, applied to Tarjan: an explicit stack, because the recursive form recursed once per
+    # *node* and its driver caught `RecursionError` and returned `cycles[:20]` anyway — a cycle
+    # list truncated at whatever depth CPython gave up on, served as if it were complete. The
+    # caller cannot tell those apart, and the one project most worth asking about cycles is the
+    # one with the deepest import chain. Depth here is bounded by the call graph of the repo
+    # under analysis, which this module does not control; 1000 files in a chain is not exotic.
+    #
+    # Frames carry an iterator rather than an index because a node's successor list is only ever
+    # walked forwards, once. `next(it, None)` is unambiguous: the query filters both endpoints
+    # `IS NOT NULL`, so no successor can be None.
+    for root in adj:
+        if root in idx:
+            continue
+        idx[root] = low[root] = cnt
+        cnt += 1
+        stk.append(root)
+        on_stk.add(root)
+        work: list[tuple[str, object]] = [(root, iter(adj[root]))]
+        while work:
+            v, it = work[-1]
+            w = next(it, None)  # type: ignore[call-overload]
+            if w is not None:
+                if w not in idx:
+                    idx[w] = low[w] = cnt
+                    cnt += 1
+                    stk.append(w)
+                    on_stk.add(w)
+                    work.append((w, iter(adj.get(w, ()))))
+                elif w in on_stk:
+                    low[v] = min(low[v], idx[w])
+                continue
+            # Successors exhausted: this is where the recursion used to return, so the
+            # parent's `low[v] = min(low[v], low[w])` update happens here instead.
+            work.pop()
+            if work:
+                par = work[-1][0]
+                low[par] = min(low[par], low[v])
+            if low[v] == idx[v]:
+                scc: list[str] = []
+                while True:
+                    x = stk.pop()
+                    on_stk.discard(x)
+                    scc.append(x)
+                    if x == v:
+                        break
+                if len(scc) >= 2:
+                    cycles.append(scc[:5])
     return cycles[:20]
 
 
