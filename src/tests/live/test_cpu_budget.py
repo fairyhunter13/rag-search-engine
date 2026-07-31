@@ -222,6 +222,53 @@ def test_cb3_idle_cpu_under_one_percent_core():
         )
 
 
+# --------------------------------------------------------------------------- CB7
+
+# The floor CB3's gate stands on, recorded so that losing it is a test failure rather than a
+# surprise. With sweeps paused and every watcher counter flat, this daemon idles at ~0.0090 of a
+# core against the 0.0100 gate above — about 10% headroom, and none of it is the daemon's own
+# logic doing anything wasteful. Roughly a fifth is uvicorn's unconditional 10 Hz `main_loop`
+# tick, measured at 0.0020 by a bare two-line ASGI app in the same interpreter. The two threads
+# that grow with the fleet are `notify-rs inotify` (0.0020) and the watcher reader (0.0023):
+# 0.0043 of the floor, spent on inotify bookkeeping across ~111,800 watches under these roots.
+# Per-thread method and the full decomposition: docs/decisions/2026-07-31-idle-gate-floor.md.
+#
+# So the term that erodes this gate is not in the repo's control flow at all — it is how many
+# roots the fleet grew to after the floor was measured. 0.0043 over _FLOOR_ROOTS is 2.7e-5 of a
+# core per root, and 0.0010 of headroom buys about 36 more of them. Past that, the 1% gate has
+# never been measured at the size it is being asserted at, and CB3 passing says only that the
+# window it happened to take was a lucky one.
+#
+# CB3 cannot carry this itself: it is `exclusive`, so it is deselected from the every-push
+# `live-fast` lane and would report the erosion months late. This one is free and runs there.
+_FLOOR_ROOTS = 157
+_FLOOR_IDLE_CORE = 0.0090
+_FLOOR_ROOTS_MAX = 193
+
+
+def test_cb7_the_idle_gate_still_has_the_headroom_it_was_measured_with():
+    """P16's 1% gate was calibrated on a fleet of a particular size; hold it to that size.
+
+    Deliberately not a CPU measurement. A second sampling window would cost 20 s, need a
+    quiescent daemon, and re-answer CB3's question. What CB3 structurally cannot answer is
+    whether its own result is still inside the range it was calibrated for — that is a property
+    of the fleet, is free to read, and is the one term the decision record names as growing
+    silently.
+    """
+    r = requests.get(f"{_BASE}/api/watcher", timeout=10)
+    assert r.status_code == 200, f"/api/watcher {r.status_code}: {r.text[:200]}"
+    roots = len(r.json().get("expected") or [])
+    assert roots, "CB7 is vacuous: the watcher reports no expected roots at all"
+    assert roots <= _FLOOR_ROOTS_MAX, (
+        f"CB7: {roots} watched roots against the {_FLOOR_ROOTS} the idle floor was measured on. "
+        f"Inotify bookkeeping costs ~2.7e-5 of a core per root, so a fleet this size has spent "
+        f"the ~0.0010 of headroom between that {_FLOOR_IDLE_CORE} floor and CB3's "
+        f"{_IDLE_THRESHOLD} gate. Re-measure the floor (the per-thread method is in "
+        f"docs/decisions/2026-07-31-idle-gate-floor.md) and record what P16 costs at this size. "
+        f"Do not raise the gate to fit the reading."
+    )
+
+
 # --------------------------------------------------------------------------- CB4
 
 # A single small synthetic project isn't enough to prove throttling: the pipeline is
