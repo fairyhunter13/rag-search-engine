@@ -176,19 +176,31 @@ def purge_rows_under(base: Path) -> list[str]:
     owns and nobody remembers. A row under the suite's own base is never a legitimate owner:
     `test_no_real_project_in_tests.py` is the invariant that nothing real may live there.
 
-    C1: "never a legitimate owner" means *this* run's rows, not another live run's. A row whose
-    path carries a live pytest owner tag is skipped — dropping it deregisters a project a
-    concurrent suite is actively asserting against, which is the registry half of the same
-    collision the directory purge caused.
+    C1: "never a legitimate owner" means *another* live run's rows, not this one's. A row carrying
+    another live pytest run's owner tag is skipped — dropping it deregisters a project a concurrent
+    suite is actively asserting against, which is the registry half of the same collision the
+    directory purge caused, and concurrent runs are normal here because three agent profiles share
+    `_SAFE_BASE`.
+
+    "Another" is the whole of it, and stating it as a bare `owner_is_live` — as this did between
+    a09eb2b and its repair — spares *this* run's rows too, which is every row the teardown call
+    exists to take. The function then returned `[]` for the only argument it is ever given and the
+    leak it was written for (3c9c3db) was silently back, with CO5 the one thing still saying so.
+
+    A row is this caller's own when its tag is this process's, or when the same tag appears in
+    `base` — a caller naming a tagged directory is saying that territory is its own, which is how
+    CO5 drives the teardown case from a subprocess whose pid is not the tag's. When `base` is the
+    shared untagged `_SAFE_BASE`, only the first clause applies and every other run is spared.
     """
     import os as _os
 
     from rag_search.core.registry import list_projects
-    from tests.live._projects import owner_is_live
+    from tests.live._projects import owner_is_live, owner_tag, owner_tags_in
     removed: list[str] = []
     base_str = str(base)
+    own = {owner_tag(), *owner_tags_in(base_str)}
     for e in list_projects():
-        if owner_is_live(e.path):
+        if owner_is_live(e.path) and not (owner_tags_in(e.path) & own):
             continue
         if e.path == base_str or e.path.startswith(base_str + _os.sep):
             purge_project(e.path)  # row *and* store: the row is the only handle on the dir name

@@ -47,6 +47,17 @@ def owner_tag() -> str:
     return f"rseown-{_boot_id()}-{os.getpid()}"
 
 
+def owner_tags_in(name: str) -> set[str]:
+    """Every owner tag embedded anywhere in `name`.
+
+    `owner_is_live` answers "is *a* live run using this"; this answers "*which* runs", which is
+    the question a caller has to ask before it can tell its own territory from a neighbour's.
+    Both halves of C1 need the first; only the registry half needs the second, because it is the
+    only one that ever purges something it owns on purpose.
+    """
+    return {f"rseown-{boot}-{pid}" for boot, pid in _OWNER_RE.findall(name)}
+
+
 def owner_is_live(name: str) -> bool:
     """True when `name` is owned by a *pytest* process alive on this boot.
 
