@@ -41,12 +41,26 @@ def test_gen1_is_generated_path_truth_table():
         "proto/user_pb2_grpc.py",
         "svc/user.pb.go",
         "model/user.freezed.dart",
+        # Build artifacts, added 2026-07-31: 70 files / 2,738 chunks. Each has its input
+        # versioned beside it, so indexing it stores the same information twice.
+        "composer.lock",
+        "Cargo.lock",
+        "go.sum",
+        "frontend/package-lock.json",
+        "public/js/app.min.js",
+        "public/css/style.min.css",
+        "public/js/bundle.js.map",
+        "public/css/style.css.map",
     ]
     hand_written = [
         "src/main.go",
         "src/handler.py",
         "wiki/src/lib/store.js",
         "generated_report.py",  # 'generated' in the stem, but no codegen marker
+        "src/sourcemap.py",     # 'map' in the stem; `.js.map`/`.css.map` are the whole marker
+        "internal/lockfile.go",
+        "frontend/package.json",  # only the -lock sibling is derived
+        "pkg/sum.go",             # `go.sum` is matched whole, never as a suffix
     ]
     for p in generated:
         assert is_generated_path(p), f"{p} should be generated"

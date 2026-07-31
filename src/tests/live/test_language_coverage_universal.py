@@ -95,7 +95,11 @@ def test_extract_symbols_bounded_parity(lang: str, ext: str, snippet: str) -> No
 def test_is_code_language_false_for_exclusions() -> None:
     """is_code_language must return False for text, data, and unknown/empty inputs."""
     from rag_search.index.discover import is_code_language
-    for lang in ("markdown", "rst", "text", "html", "css", "json", "yaml", "toml", "unknown", ""):
+    # csv and po joined the data langs on 2026-07-31. Both have grammars in the pack, so this
+    # answered True and they carried the 500 kB *code* cap and fed `_code_source_fingerprint` —
+    # a data export was waking the graph re-derive, which is what HR38 exists to prevent.
+    for lang in ("markdown", "rst", "text", "html", "css", "json", "yaml", "toml", "csv", "po",
+                 "unknown", ""):
         assert not is_code_language(lang), (
             f"is_code_language({lang!r}) must be False — "
             "text/data/unknown langs must not be treated as code"
@@ -113,6 +117,14 @@ _SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "rag_search"
 _ALLOWED_LANG_SETS = frozenset({
     "_TEXT_LANGS", "_DATA_LANGS",  # discover.py: exclusion lists
 })
+# Extension lists added to discover.py after this guard existed — `_GENERATED_SUFFIXES`,
+# `_GENERATED_NAMES`, `_IMAGE_SUFFIXES`, `_KEY_SUFFIXES` — are tuples, so `_EXT_SET_RE` does not
+# see them, and that is a decision rather than a container-type accident. They are the extension
+# bootstrap P6 names as exempt: the point where bytes first get a category, upstream of any
+# language question. What this guard protects is the other thing — that once a file *has* a
+# language, nothing gates on a hand-written list of which languages count as code. Any new set
+# here that answers a language question belongs in `_ALLOWED_LANG_SETS` only with that argument
+# made explicitly, and a frozenset of extensions still fails as it always did.
 _EXT_SET_RE = re.compile(
     r"""^\s*(_[A-Z_]+)\s*[=:]\s*frozenset\s*\(\s*\{[^}]*"\.[a-z]""", re.MULTILINE
 )

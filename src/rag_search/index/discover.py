@@ -162,6 +162,12 @@ def _should_drop(
     # silently would be the more surprising failure. Everything else drops.
     if not is_dir and is_secret_path(full.name):
         return True
+    # Third of the same species, same placement and the same `cfg.include` override: a text-encoded
+    # image is an image, and `_has_text_bytes` — the rule that drops every other image — cannot see
+    # that, because SVG really is text. Dropped here rather than by size, which lets the small ones
+    # through and is not the objection anyway.
+    if not is_dir and is_image_path(full.name):
+        return True
     if cfg.use_default_ignores:
         # Hidden-dir skip applies to directory segments only, never to a file's own name,
         # so tracked dotfiles (.gitignore, .eslintrc) below a visible dir still index.
@@ -226,7 +232,16 @@ def _should_drop(
 # H3: non-parseable text/data formats kept explicitly; code = any language
 # the pack can parse (detected via has_language() in _size_limit).
 _TEXT_LANGS: frozenset[str] = frozenset({"markdown", "rst", "text", "html", "css"})
-_DATA_LANGS: frozenset[str] = frozenset({"json", "yaml", "toml"})
+# `csv` and `po` joined 2026-07-31 as a *classification* fix, not an exclusion. The pack ships
+# grammars for both, so `is_code_language` answered True and they were taking the 500 kB code cap
+# and feeding `_code_source_fingerprint` — a data export was waking the graph re-derive, which is
+# the thing HR38 exists to prevent. Measured across the fleet: 107 csv files held 12,612 chunks
+# (2.97 % of the corpus) and 9 po files held 1,510, and at the 100 kB data cap 96 % of the csv
+# mass and 100 % of the po mass falls out. Reclassifying rather than excluding keeps the small
+# hand-written fixture — a 40-line test CSV is legitimately searchable — which an extension rule
+# would have lost. Knock-on, and it is a real one: 116 files leave H1's coverage denominator via
+# graph/store.py:212, so that ratio moves without the graph having changed.
+_DATA_LANGS: frozenset[str] = frozenset({"json", "yaml", "toml", "csv", "po"})
 
 _SIZE_LIMITS: dict[str, int] = {
     "code": 500_000,
@@ -305,10 +320,23 @@ def is_code_language(lang: str) -> bool:
 # (its `wiki/` directory — not the deleted kb/wiki.py) regenerated src/lib/*.generated.js on
 # every build and looped the reconstruct cascade. That cascade left with tier 3; the drift signal
 # it shared with the graph re-derive did not.
+#
+# Extended 2026-07-31 with three more species of the same thing, 70 files / 2,738 chunks: the
+# dependency lockfile (`.lock`, plus `go.sum` and `package-lock.json`, which carry no suffix that
+# would identify them), the minified bundle, and the sourcemap. Each is a build artifact whose
+# input is versioned beside it, so indexing it stores the same information twice and re-deriving
+# on its churn is work for nothing. `.js.map`/`.css.map` rather than a bare `.map`: all 22
+# sourcemaps in the fleet are one of those two, and `.map` alone is wider than the evidence.
+# Only `.min.js` moves HR38's fingerprint (javascript is code today, the others are not) — and
+# that is the half worth moving.
 _GENERATED_SUFFIXES: tuple[str, ...] = (
     "_pb2.py", "_pb2_grpc.py", ".pb.go", ".pb.gw.go", ".pb.cc", ".pb.h",
     ".g.dart", ".freezed.dart",
+    ".lock", ".min.js", ".min.css", ".js.map", ".css.map",
 )
+# Matched whole, because these two identify themselves by their entire name and `endswith` on a
+# bare `sum`/`json` would take real source with it.
+_GENERATED_NAMES: tuple[str, ...] = ("go.sum", "package-lock.json")
 
 
 def is_generated_path(rel: str | os.PathLike) -> bool:
@@ -329,11 +357,41 @@ def is_generated_path(rel: str | os.PathLike) -> bool:
     name = os.path.basename(str(rel))
     if ".generated." in name or ".gen." in name:
         return True
-    return name.endswith(_GENERATED_SUFFIXES)
+    return name in _GENERATED_NAMES or name.endswith(_GENERATED_SUFFIXES)
+
+
+# Text-encoded images. `.svg` and `.drawio` are XML, so `_has_text_bytes` waves them through as
+# text and a grammar parses them, but their content is geometry — path data, transforms, base64
+# blobs — and nothing in it answers a question about code. They are the single largest bucket in
+# the corpus after HTML: 9,173 files, 21,059 chunks, 4.96 % of the fleet, measured 2026-07-31.
+#
+# A tuple, deliberately: `test_no_new_hardcoded_lang_or_ext_allowlist_in_core` fails on any new
+# module-level `frozenset({".x"…})` in this file, and that guard is right to. This is the
+# extension bootstrap P6 names as exempt — the point at which bytes first get a category — and
+# not a language gate, which is what the guard is protecting `is_code_language()` from becoming.
+_IMAGE_SUFFIXES: tuple[str, ...] = (".svg", ".drawio", ".drawio.xml")
+
+
+def is_image_path(rel: str | os.PathLike) -> bool:
+    """True iff rel names a text-encoded image — an image that happens to be spelled in XML."""
+    return os.path.basename(str(rel)).lower().endswith(_IMAGE_SUFFIXES)
+
+
+# Key material and credential stores, added 2026-07-31 on the same evidence standard the
+# docstring below sets for the dotenv family. A live PEM *private* key was in the vector store —
+# `certs/privkey.pem`, whose first line is `-----BEGIN` — together with three `htpasswd` files:
+# 5 files, 12 chunks. Small mass, and mass is not the argument; a private key in a store that
+# `search` returns from and the dashboard pastes into a chat prompt is the argument.
+#
+# `.pem` and `htpasswd` are the measured instances. The rest are formats *defined* to carry key
+# material, so a file with one of these names has nothing else it could be. `.crt`, `.cer` and
+# `.pub` are deliberately absent: those are the public halves, published on purpose, and dropping
+# them would be exclusion by association with the word "certificate".
+_KEY_SUFFIXES: tuple[str, ...] = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 
 
 def is_secret_path(rel: str | os.PathLike) -> bool:
-    """True iff rel names a dotenv-family file, which holds credentials by convention.
+    """True iff rel names a file that holds credentials or key material by convention.
 
     Measured 2026-07-31: 509 chunks from these files were in the vector store across the fleet,
     including `mysql-credentials.env` and `instance-secrets.env`. Being in the store means being
@@ -355,7 +413,12 @@ def is_secret_path(rel: str | os.PathLike) -> bool:
     instance of it, the same standard `_GENERATED_SUFFIXES` is held to.
     """
     name = os.path.basename(str(rel))
-    return name == ".env" or name.startswith(".env.") or name.endswith(".env")
+    if name == ".env" or name.startswith(".env.") or name.endswith(".env"):
+        return True
+    low = name.lower()
+    # `lstrip(".")` because the canonical Apache spelling is `.htpasswd` and the three found on
+    # this fleet were bare `htpasswd`; a prefix test anchored on either one alone misses the other.
+    return low.endswith(_KEY_SUFFIXES) or low.lstrip(".").startswith("htpasswd")
 
 
 def _size_limit(lang: str) -> int:
