@@ -65,6 +65,15 @@ BIN_OVERSAMPLE = 4
 # off the lane, which it does. Deleting the lane is not supported either — nothing measured shows
 # it costing anything, and removal would re-expose the next >100k store. Revisit only when a store
 # in the 100k range comes back, which is the regime the 152ms-vs-24ms figure above describes.
+#
+# Re-checked 2026-07-31 after the corpus-hygiene purge took 56,978 chunks out (13.42% of the
+# fleet), which looked like grounds to re-derive the threshold a fourth time. It is not: the purge
+# landed the fleet on 367,718 chunks against the 376,672 the paragraph above was measured at — 2.4%
+# apart — with the largest store at 28,251 against 27,974, 1.0% apart, and still nothing above 100k.
+# 8 stores sit above the threshold and 11 in the 6k-12k band. The distribution the numbers were
+# taken on is the distribution we still have, so re-running the sweep would spend an hour
+# reproducing the documented "no claim" above. Checking where the stores *are* is the cheap
+# question; re-measuring the crossover is only worth it once one of them moves.
 BIN_MIN_CHUNKS = 12_000
 
 # Stores already reported as lexically unavailable, so the warning is one line per store per
