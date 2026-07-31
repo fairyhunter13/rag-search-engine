@@ -127,6 +127,26 @@ def pause_lease_remaining_s(now: float | None = None) -> float:
 
 _FINGERPRINT_MODULES = ("graph/extractor.py", "graph/community.py")
 
+# Emit a call edge only when the narrowest scope holding a candidate holds exactly one. Raising
+# this admits groups of size C, which contribute one correct edge and C-1 wrong ones — the marginal
+# edge is correct with probability 1/C. Measured over 155 stores, 193,309 call-site groups:
+#
+#   cap    edges emitted   precision   recall
+#     1         122,324       1.000     0.633
+#     2         157,854       0.887     0.725
+#     4         193,176       0.780     0.779
+#   none      1,021,043       0.182     0.960     <- 2,320,130 before the scope tiers below
+#
+# 1 is the only value at which an edge in this table *means* a resolved call, and `graph_handler`
+# has no confidence column, no `ORDER BY` and no other way to tell a resolution from a guess.
+#
+# This constant sits here for edit locality only. `sweeps.py` is deliberately NOT in
+# `_FINGERPRINT_MODULES` above, and `_pipeline_algo_version`'s S3 note says what that costs: a
+# resolution change here is invisible to `_code_fingerprint` and would serve stale edges forever.
+# **Changing this value, or the tiers that feed it, requires an `EXTRACTOR_REV` bump in the same
+# commit.** Nothing will tell you otherwise.
+_MAX_CALLEE_FANOUT = 1
+
 
 def _fingerprint_paths(paths) -> str:
     """4-char SHA over the concatenated bytes of `paths`, in order. Missing files contribute none."""
@@ -540,9 +560,15 @@ def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
 def _extract_graph(gs, root, only: list | None = None) -> None:
     """Extract symbols + call edges from source into gs.
 
-    `only` restricts both passes to those files (the watcher's incremental path); the callee
+    `only` restricts the walk to those files (the watcher's incremental path); the callee
     resolution tables are still built from the whole symbol table, so calls into untouched
     files still resolve. Pass `only=None` for a full re-derive.
+
+    S10, stated because it is a real gap and not worth papering over: emission now depends on how
+    many definitions share a name *globally*, so on the incremental path a newly added definition
+    can turn a resolved call ambiguous for call sites in files that pass never re-walks, and the
+    now-wrong edge survives until the next full re-derive. The unconditional fan-out had the same
+    shape of gap for the same reason; the repair is reconcile, not a wider walk here.
 
     A full re-derive subtracts *after* it adds, and the caller must no longer `gs.clear()` first.
     `upsert_symbol`/`upsert_edge` are keyed, so the pass writes straight into the live tables and
@@ -556,8 +582,7 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     from pathlib import Path
 
     from rag_search.graph.extractor import (
-        extract_calls_with_lines,
-        extract_symbols_with_stats,
+        extract_symbols_calls_with_stats,
         symbol_id,
     )
     from rag_search.index.bounded_parse import PARSE_CRASHED, PARSE_TIMEOUT, run_bounded
@@ -573,6 +598,12 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     seen_sids: set[str] = set()
     seen_files: set[str] = set()
     seen_edges: set[tuple[str, str]] = set()
+    # S11: call sites, held between the two halves below. Resolution needs the whole symbol
+    # table, which does not exist until the walk finishes — that ordering is why there were two
+    # passes. It never required a second walk, a second `read_text` or a second `run_bounded`
+    # round trip. Measured at ~11 MB for the largest project in the fleet (2,516 files, 94,867
+    # call sites), against a daemon already resident at ~1 GB.
+    calls_by_file: dict[str, list[tuple[str, int]]] = {}
 
     def _fam(fstr: str) -> str:
         f = fam_of.get(fstr)
@@ -589,7 +620,7 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         # Walked, so it keeps its `file_extraction` row whichever branch below records it — a file
         # that yields no symbols is exactly what that table exists to account for.
         seen_files.add(str(fpath))
-        res = run_bounded(extract_symbols_with_stats, (fpath, content, lang),
+        res = run_bounded(extract_symbols_calls_with_stats, (fpath, content, lang),
                           path_for_log=str(fpath))
         # Recorded, never skipped silently — and recorded as the three *different* things they
         # are. A worker that ran past its deadline is load-dependent and may pass next sweep; a
@@ -602,9 +633,11 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             rung = {PARSE_TIMEOUT: "timeout", PARSE_CRASHED: "crashed"}.get(res, "error")
             gs.record_extraction(str(fpath), lang, rung, 0, 0, 1)
             continue
-        syms, st = res
+        syms, st, call_sites = res
         gs.record_extraction(str(fpath), lang, st.rung, st.symbol_count,
                              st.anon_count, int(st.has_error))
+        if call_sites:
+            calls_by_file[str(fpath)] = call_sites
         for sym in syms:
             if not sym.name:
                 continue
@@ -635,18 +668,9 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
     for spans in file_to_sym_spans.values():
         spans.sort()
-    for fpath in (targets if targets is not None else iter_files(root, federation_mode=True)):
-        fstr = str(fpath)
+    for fstr, call_sites in calls_by_file.items():
         sym_spans = file_to_sym_spans.get(fstr)
         if not sym_spans:
-            continue
-        try:
-            content = fpath.read_text(errors="replace") if fpath.exists() else ""
-        except OSError:
-            continue
-        call_sites = run_bounded(extract_calls_with_lines, (content, detect_language(fpath)),
-                                  path_for_log=fstr)
-        if not call_sites or call_sites in (PARSE_TIMEOUT, PARSE_CRASHED):
             continue
         for callee_name, call_line in call_sites:
             caller_sid, best_span = "", -1
@@ -657,17 +681,33 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
                         best_span, caller_sid = span, sid
             if not caller_sid:
                 continue
-            for (callee_sid, _callee_file) in name_to_entries.get((_fam(fstr), callee_name), []):
-                # S0 rung 0: this read `callee_file != fstr`, which discarded every call whose
-                # target was defined in the same file. Measured 2026-07-29 — ccw's stored graph
-                # held **0 same-file edges out of 1,934**, so `callers`/`callees` could not answer
-                # any relation that stays inside one file: `run_and_log` showed 8 callers and 0
-                # callees, `evaluate_recall` 7 callees and 0 callers, and five of the twelve-query
-                # graph gate's seven misses were same-file. Restoring them grows ccw's graph ~43%.
-                # A self-edge is what the condition plausibly meant to stop, and that is this one.
-                if callee_sid != caller_sid:
-                    seen_edges.add((caller_sid, callee_sid))
-                    gs.upsert_edge(caller_sid, callee_sid)
+            cands = name_to_entries.get((_fam(fstr), callee_name), [])
+            # S0 rung 0: this read `callee_file != fstr`, which discarded every call whose target
+            # was defined in the same file. Measured 2026-07-29 — ccw's stored graph held **0
+            # same-file edges out of 1,934**, so `callers`/`callees` could not answer any relation
+            # that stays inside one file: `run_and_log` showed 8 callers and 0 callees,
+            # `evaluate_recall` 7 callees and 0 callers, and five of the twelve-query graph gate's
+            # seven misses were same-file. Restoring them grew ccw's graph ~43%.
+            #
+            # S10: that restoration was right and left the *inverse* defect — every candidate the
+            # family held was emitted, so one call site bound to N definitions and `graph()`
+            # presented all N with equal confidence. 2,220,234 of 2,320,130 fleet edges were
+            # ambiguous (95.7%), 70.2% of them in groups above 32. Same file is not an exclusion
+            # and not merely a restoration: it is the *preferred scope*, which is what every
+            # language's scoping rules actually do. Past it there is no evidence here to choose
+            # with, so emit nothing rather than N-1 wrong edges.
+            same_file = [sid for sid, cfile in cands if cfile == fstr]
+            # The self-drop comes after the tier is chosen, never before. Choosing first means a
+            # recursive call in the only file defining that name finds an empty tier and falls
+            # through to a same-named definition in some other file — a confidently wrong edge.
+            # Worth 996 edges fleet-wide.
+            pool = [sid for sid in (same_file or [sid for sid, _ in cands])
+                    if sid != caller_sid]
+            if len(pool) > _MAX_CALLEE_FANOUT:
+                continue
+            for callee_sid in pool:
+                seen_edges.add((caller_sid, callee_sid))
+                gs.upsert_edge(caller_sid, callee_sid)
     gs.commit()
     if targets is None:
         gs.prune_edges_to(seen_edges)
