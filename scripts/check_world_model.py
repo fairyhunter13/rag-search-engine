@@ -7,7 +7,7 @@ against the working tree (default) or a specific git diff.
 Exit codes: 0=CONFORMS, 1=AT_RISK, 2=error.
 """
 from __future__ import annotations
-import argparse, re, subprocess, sys
+import argparse, ast, re, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,11 +51,45 @@ def _git_changed_files(base: str | None, head: str | None) -> list[str]:
     return out.stdout.splitlines()
 
 
-def _strip_comments(text: str) -> str:
-    """Remove whole-line Python comments so they don't trigger pattern matches."""
-    return "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
-    )
+def _strip_prose(text: str) -> str:
+    """Remove comments and docstrings: every check here greps for source tokens, and prose is not one.
+
+    Whole-line `#` comments have been stripped since this file was written. Docstrings were not —
+    and in this codebase that is where nearly all the prose lives, including the prose that
+    *explains the invariants*. P3 (`cross.*repo.*edge`) had been reporting AT_RISK against
+    `sweeps._graph_reconcile_action`'s docstring, a sentence stating what HR4 forbids, which made
+    a green run impossible for anyone who did not already know the match was spurious. A
+    conformance checker that is permanently red is one nobody reads, so the false positive costs
+    more than the invariant it protects.
+
+    Fixed here rather than by narrowing P3's pattern, because this is the class and not the
+    instance: any check whose tokens someone might one day *write about* has the same failure
+    waiting, and P6's own principle string already records the last time one had to be widened
+    around an accidental match.
+
+    `ast` rather than a regex: a line-oriented pattern cannot find the end of a triple-quoted
+    string, and a stripper that guesses wrong hides real violations instead of false ones. The
+    original text is parsed — `ast` ignores comments already — so removing the `#` lines
+    afterwards cannot disturb the line numbers the walk returns. A file that does not parse is
+    scanned with its docstrings intact: unparseable is a reason to look harder, not less.
+    """
+    lines = text.splitlines()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                     ast.AsyncFunctionDef)) or not body:
+                continue
+            first = body[0]
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                for i in range(first.lineno - 1, first.end_lineno or first.lineno):
+                    lines[i] = ""
+    return "\n".join(line for line in lines if not line.lstrip().startswith("#"))
 
 
 def _check_one(inv: dict, changed_files: list[str]) -> tuple[str, str | None]:
@@ -85,7 +119,7 @@ def _check_one(inv: dict, changed_files: list[str]) -> tuple[str, str | None]:
         if not fpath.exists():
             continue
         try:
-            text = _strip_comments(fpath.read_text(errors="replace"))
+            text = _strip_prose(fpath.read_text(errors="replace"))
         except OSError:
             continue
         if re.search(pattern, text):
