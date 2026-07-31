@@ -88,6 +88,30 @@ code. A frozenset of extensions still fails there, as it always did.
 graph having changed. More honest, and worth saying out loud rather than discovering later as a
 regression.
 
+## The knock-on nobody predicted: changing what counts as code re-derives the whole fleet
+
+`_code_source_fingerprint` (HR38) is a pure function of the *code* file set. Reclassifying csv and
+po therefore changes the fingerprint of **every project that contains one**, and the purge moved
+file sets besides — so the daemon woke into a fleet-wide graph re-derive, one project every 20-30 s,
+pegged at its full 1-core quota (`percent_core 0.9995`, 2,174 throttled periods) for roughly an hour.
+
+Nothing is wrong. The pool's own counters say so: `parse_timeout_count 0`, `parse_crash_count 0` —
+every parse completed, and the single long-lived worker looked stuck only because the pool is
+*persistent* by design and was running back-to-back tasks. The work is also largely redundant in
+content: csv and po almost never yield symbols, so most of those graphs re-derived to what they
+already were. Special-casing the fingerprint to avoid it would be worse than paying it — a
+fingerprint that is not a pure function of its inputs is the failure HR38 names.
+
+Two things follow, and they are the transferable part:
+
+- **Price the re-derive into any future edit of `_DATA_LANGS` or `is_code_language`.** The one-word
+  change is one word; its cost is a fleet-wide re-extraction. Schedule it accordingly.
+- **P16's idle gate cannot be measured while it runs.** CB3 read 0.9967 of a core and asserted, and
+  it was *right* to: sweeps were paused, but pausing prevents new passes rather than stopping one in
+  flight, and CB3's contamination probe reads `/api/watcher` only — so sweeps-driven work is
+  invisible to it. That is a real gap in the probe, distinct from the watcher-side one. Re-take the
+  window after the wave drains; do not touch the threshold.
+
 ## Per-project exclusion beats an extension rule
 
 The generated-XML bucket is one project's test tooling, which keeps three trees of machine-written
