@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-07-31 | [An edge is a resolved call, or it is not an edge](2026-07-31-an-edge-is-a-resolved-call.md) |
 | 2026-07-31 | [The challenger's margin was the prefixes](2026-07-31-the-prefix-is-a-precondition-not-a-tuning-knob.md) |
 | 2026-07-31 | [87.8% of the `.html` corpus is byte-identical copies](2026-07-31-html-duplication-is-within-project.md) |
 | 2026-07-31 | [Releasing a pause lease schedules nothing](2026-07-31-releasing-a-lease-schedules-nothing.md) |
