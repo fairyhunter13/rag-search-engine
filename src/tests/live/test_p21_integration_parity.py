@@ -51,22 +51,39 @@ def test_no_installed_tree_is_missing_or_error():
     )
 
 
-def test_canonical_body_in_main_claude_md():
-    """drift guard: canonical.CANONICAL_BODY must be present in the main ~/.claude/CLAUDE.md."""
+def test_canonical_body_is_served_over_mcp_not_copied_into_claude_md():
+    """The doctrine reaches an agent exactly once: as MCP server instructions, not as a
+    CLAUDE.md copy.
+
+    global_prompt._PROMPT and canonical.CANONICAL_BODY must stay identical — configure_
+    integrations.py removes the CLAUDE.md block on the strength of the daemon serving the
+    same text, so if the two drift, deleting the copy would silently drop real rules.
+
+    Inverted 2026-07-31 (was: assert CANONICAL_BODY present in ~/.claude/CLAUDE.md). The
+    block was loaded verbatim into every session of every profile *and* served over MCP —
+    ~500 tokens (measured via /context) billed twice per turn for one set of rules.
+    """
     sys.path.insert(0, _SCRIPTS_SRC)
     try:
         from integrations.canonical import CANONICAL_BODY
     finally:
         if _SCRIPTS_SRC in sys.path:
             sys.path.remove(_SCRIPTS_SRC)
+    from rag_search.daemon.global_prompt import _PROMPT
+
+    assert _PROMPT.strip() == CANONICAL_BODY.strip(), (
+        "daemon/global_prompt.py::_PROMPT has drifted from canonical.CANONICAL_BODY — the "
+        "MCP server is no longer serving what configure_integrations.py assumes it serves"
+    )
 
     claude_md = Path.home() / ".claude" / "CLAUDE.md"
     assert claude_md.exists(), (
         "~/.claude/CLAUDE.md not found — Claude Code CLI must be installed in live+GPU environment"
     )
     text = claude_md.read_text()
-    assert CANONICAL_BODY.strip() in text, (
-        "CANONICAL_BODY not found verbatim in ~/.claude/CLAUDE.md — drift detected"
+    assert CANONICAL_BODY.strip() not in text, (
+        "CANONICAL_BODY is duplicated in ~/.claude/CLAUDE.md — the MCP server already serves "
+        "it. Run: .venv/bin/python scripts/configure_integrations.py --apply-all"
     )
 
 
