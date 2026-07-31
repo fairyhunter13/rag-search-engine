@@ -125,20 +125,35 @@ _IDLE_THRESHOLD = 0.01  # < 1% of one core
 _IDLE_ATTEMPTS = 5
 
 
-def _watcher_activity() -> tuple[int, int, int]:
-    """(completed passes, projects in flight, files queued) — the window's contamination probe.
+def _watcher_activity() -> tuple[int, int, int, int]:
+    """(completed passes, events rejected, projects in flight, files queued) — the contamination probe.
 
-    All three, because completions alone do not describe a busy watcher: `dispatched` ticks when a
+    All four, because completions alone do not describe a busy watcher: `dispatched` ticks when a
     pass *ends*, so a 20 s window falling entirely inside one long pass shows a delta of zero. That
     is not a corner case — the first pass after an idle unload loads the ONNX embedder, which is
     exactly the multi-second work worth excluding, and it was measured reading as "quiet" at 2.9%
     of a core.
+
+    `filtered` joined them on 2026-07-31 because the other three describe only work the watcher
+    *accepted*. An event `_filter` rejects still cost the kernel a delivery and `_filter` a full
+    `is_ignored_path` — so a root churning entirely inside an ignored subtree burns CPU while all
+    three read exactly idle, and this gate then charges a neighbour's writes to "the daemon burning
+    CPU with nothing to do". Measured over this test's own five windows while a neighbouring
+    profile wrote into a `.claude/worktrees/` subtree of a watched root: `filtered` deltas of 1,
+    124, 166, 156 and 52 cost 0.0211, 0.1033, 0.1410, 0.1409 and 0.0541 of a core — near-linear —
+    while `dispatched` moved by at most 4 and `inflight`/`pending` never left zero. Every one of
+    those windows read as quiet on the old three-counter probe.
+
+    A lower bound, not a census: watchfiles coalesces each batch by path in Rust before anything
+    crosses into Python, so a tight rewrite of one file arrives as one event. Enough for a
+    contamination probe, which must answer "was anything happening", not "how much".
     """
     r = requests.get(f"{_BASE}/api/watcher", timeout=5)
     assert r.status_code == 200, f"/api/watcher {r.status_code}: {r.text[:200]}"
     body = r.json()
     return (
         int(body.get("dispatched", -1)),
+        int(body.get("filtered", -1)),
         len(body.get("inflight") or []),
         sum((body.get("pending") or {}).values()),
     )
@@ -152,14 +167,27 @@ def test_cb3_idle_cpu_under_one_percent_core():
     sweeps for the whole run, and this file sorts 7th of 76, so an unconditional resume here
     left ~70 files' worth of tests racing the daemon for the GPU.
 
-    A window in which the watcher ran a pass is **discarded, not reported**. Pausing sweeps
-    quiesces the daemon's own timers but says nothing about the 139 watched repos: on
-    2026-07-30 this read 0.0783 of a core while another profile's session was editing
-    redacted-name-10-project, and 0.4424 while a second live suite shared the cgroup. Both were true
+    A window in which the watcher ran a pass **or rejected an event** is discarded, not reported.
+    Pausing sweeps quiesces the daemon's own timers but says nothing about the 152 watched repos:
+    on 2026-07-30 this read 0.0783 of a core while another profile's session was editing a
+    neighbouring repo, and 0.4424 while a second live suite shared the cgroup. Both were true
     measurements of a daemon doing the work it exists to do, and neither says anything about
     idle cost. Re-taking the window is the only honest way to separate them — raising the
     threshold to swallow them would retire the gate instead ([[perf numbers warm and quiet]]).
     A quiet window is still held to the original 1%.
+
+    The `filtered` half of that discard is the 2026-07-31 correction, and it is a fix to the
+    *probe*, never to the threshold. Until then only accepted work was visible here, so churn
+    inside an ignored subtree — the common case on a box three agent profiles share — produced a
+    window that looked perfectly idle while costing up to 0.1410 of a core — fourteen times the
+    gate — and this gate reported it as the daemon burning CPU with nothing to do. It was not: the
+    same daemon measured with the neighbour quiet ran its reader thread at 0.0010 of a core over
+    60 s against 24 delivered events. The engine met P16 the whole time; what failed was this
+    test's ability to say so.
+
+    Note the honest consequence: where that churn never stops, the five attempts now run out and
+    the failure below reports "no quiet window" instead of a bogus CPU figure. That is the gate
+    still red, which is correct — it means the measurement could not be taken, not that it passed.
     """
     with sweeps_state(paused=True):
         busy: list[str] = []
@@ -172,7 +200,7 @@ def test_cb3_idle_cpu_under_one_percent_core():
             wall_s = time.monotonic() - t0
             delta_cpu_s = (after["usage_nsec"] - before["usage_nsec"]) / 1_000_000_000
             frac = delta_cpu_s / wall_s
-            if act_after != act_before or any(a[1:] != (0, 0) for a in (act_before, act_after)):
+            if act_after != act_before or any(a[2:] != (0, 0) for a in (act_before, act_after)):
                 busy.append(f"watcher {act_before} -> {act_after}, {frac:.4f} core")
                 continue
             assert frac < _IDLE_THRESHOLD, (
@@ -183,11 +211,14 @@ def test_cb3_idle_cpu_under_one_percent_core():
             )
             return
         pytest.fail(
-            f"no quiet window in {_IDLE_ATTEMPTS} attempts of {_IDLE_WINDOW_S:.0f}s: "
+            f"no quiet window in {_IDLE_ATTEMPTS} attempts of {_IDLE_WINDOW_S:.0f}s "
+            f"(dispatched, filtered, inflight, pending): "
             + "; ".join(busy)
-            + ". Something is writing continuously into a watched root (check "
-            "`GET /api/watcher` pending, and the journal's 'N changes detected' lines) -- the "
-            "idle cost of this daemon cannot be measured while that holds."
+            + ". Something is writing continuously into a watched root -- if only `filtered` is "
+            "moving it is churn inside an ignored subtree, which costs the daemon a full "
+            "`is_ignored_path` per event and reaches no index (check `GET /api/watcher`, and the "
+            "journal's 'N changes detected' lines). The idle cost of this daemon cannot be "
+            "measured while that holds."
         )
 
 
