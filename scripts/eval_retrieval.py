@@ -10,10 +10,17 @@ Exists because `core/config.py` cites a "40-query golden set" as the evidence fo
 challenger cannot be compared against them at all. The failure `measure_preconditions.py` was landed
 to end, one level up: a measurement whose *inputs* did not outlive the session that took them.
 
-Ground truth is derived, never hand-labelled, which is what makes it survive: queries are docstrings
-and positives the file carrying them (the CodeSearchNet protocol), selection is deterministic so two
-models are always asked the same questions, and nothing project-specific is committed — the set is
-regenerated from whatever `--project` names, so this file carries no real path and P18/HR34 holds.
+Ground truth is derived, never hand-labelled, which is what makes it survive: queries are tree-sitter
+symbols — qualified name plus the definition's own first line — and positives the file defining them,
+selection is deterministic so two models are always asked the same questions, and nothing
+project-specific is committed — the set is regenerated from whatever `--project` names, so this file
+carries no real path and P18/HR34 holds.
+
+Symbols, not Python docstrings, since 2026-07-31. The docstring selector read
+`WHERE language = 'python'` and matched `\"\"\"…\"\"\"`, so it could only ever ask about one language —
+and a single-language verdict cannot license an embedder switch across a fleet whose mass is
+javascript, php and html. It was also this script's only regex, against P6/HR15. **Levels moved
+when it changed**: compare arms measured by the same selector, never across this boundary.
 
 **The default lane is `dense`, and that is not a detail.** The docstring is still inside the chunk
 it identifies, so BM25 matches it verbatim: measured on a 1,278-chunk store, the lexical lane alone
@@ -31,7 +38,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -42,38 +48,70 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 # Excluded at both ends rather than truncated — truncating changes what is being asked.
 _MIN_QUERY_CHARS, _MAX_QUERY_CHARS = 40, 300
 _DEFAULT_QUERIES, _TOP_K = 40, 10
-_DOCSTRING = re.compile(r'"""(.*?)"""', re.DOTALL)
+# Kinds worth asking about. `data` is excluded: it is 53.7% of symbol rows fleet-wide and they are
+# config keys — "project.version" is not a question anyone puts to a code search.
+_QUERY_KINDS = ("function", "method", "class")
 
 
-def _query_from(text: str) -> str | None:
-    """First docstring in a chunk, collapsed to one line — or None if it isn't query-shaped."""
-    m = _DOCSTRING.search(text)
-    if m is None:
+def _signature_at(file: str, start_line: int) -> str | None:
+    """The definition's own first line, collapsed. Located by tree-sitter, so no pattern here.
+
+    Reading the line rather than storing it: `symbols` has no signature column, and adding one
+    would move `EXTRACTOR_REV` and re-derive 152 graphs to serve a script that runs by hand.
+    """
+    try:
+        with open(file, errors="ignore") as fh:
+            for i, line in enumerate(fh, start=1):
+                if i == start_line:
+                    return " ".join(line.split())
+    except OSError:
         return None
-    body = " ".join(m.group(1).split())
-    return body if _MIN_QUERY_CHARS <= len(body) <= _MAX_QUERY_CHARS else None
+    return None
 
 
-def build_query_set(db_path: Path, limit: int) -> list[tuple[str, str]]:
-    """(query, gold path) pairs, deterministic for a given store."""
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+def build_query_set(graph_db: Path, store_paths: set[str], limit: int) -> list[tuple[str, str]]:
+    """(query, gold path) pairs from the graph store — deterministic, language-stratified.
+
+    Drawn from tree-sitter symbols rather than Python docstrings, because the docstring selector
+    could only ever ask about one language and a single-language verdict cannot license an
+    embedder switch across a 152-store fleet where javascript, php and css carry most of the mass.
+
+    A second property falls out of the source: this set is built from symbols and files, never
+    from chunks, so it is **identical across chunking arms**. The `RSE_EMBED_MAX_TOKENS=512` arm
+    re-chunks the store, which under the old selector silently changed the questions along with
+    the answers; the confound is now confined to the index, where it belongs.
+    """
+    con = sqlite3.connect(f"file:{graph_db}?mode=ro", uri=True)
     try:
         rows = con.execute(
-            "SELECT path, content FROM chunks WHERE language = 'python' ORDER BY chunk_id"
+            "SELECT qualified_name, file, start_line, language FROM symbols "
+            f"WHERE kind IN ({','.join('?' * len(_QUERY_KINDS))}) ORDER BY sid", _QUERY_KINDS,
         ).fetchall()
     finally:
         con.close()
-    out: list[tuple[str, str]] = []
+    by_lang: dict[str, list[tuple[str, str]]] = {}
     seen: set[str] = set()
-    for path, content in rows:
-        q = _query_from(content or "")
-        # One query per file, so a single fat module cannot dominate the set.
-        if q is None or path in seen:
+    for qname, file, start, lang in rows:
+        # One query per file (a fat module cannot dominate), and only files the store actually
+        # holds — a gold path that was never indexed scores 0 for every arm and measures nothing.
+        # Discovery is model-independent, so this filter is the same set in every arm.
+        if file in seen or file not in store_paths:
             continue
-        seen.add(path)
-        out.append((q, path))
-        if len(out) >= limit:
-            break
+        sig = _signature_at(file, start)
+        if sig is None:
+            continue
+        q = f"{qname} {sig}"
+        if not _MIN_QUERY_CHARS <= len(q) <= _MAX_QUERY_CHARS:
+            continue
+        seen.add(file)
+        by_lang.setdefault(lang, []).append((q, file))
+    out: list[tuple[str, str]] = []
+    # Round-robin over languages in name order: with 1,542 python functions against a handful of
+    # css rules, taking the first N by id would rebuild the single-language set this replaces.
+    while len(out) < limit and any(by_lang.values()):
+        for lang in sorted(by_lang):
+            if by_lang[lang] and len(out) < limit:
+                out.append(by_lang[lang].pop(0))
     return out
 
 
@@ -98,12 +136,23 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     from rag_search.index.store import VectorStore
     from rag_search.query.search import search
 
+    from rag_search.core.config import project_graph_db
+
     db = store_dir / "vectors.db"
     if not db.exists():
         raise SystemExit(f"no vector store at {db}")
-    queries = build_query_set(db, n)
+    graph_db = Path(project_graph_db(str(project)))
+    if not graph_db.exists():
+        raise SystemExit(f"no graph store at {graph_db} — index {project} before evaluating it")
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        path_lang = dict(con.execute("SELECT DISTINCT path, language FROM chunks"))
+        store_paths = set(path_lang)
+    finally:
+        con.close()
+    queries = build_query_set(graph_db, store_paths, n)
     if not queries:
-        raise SystemExit(f"no query-shaped docstrings found in {db}")
+        raise SystemExit(f"no query-shaped symbols in {graph_db} whose file is indexed in {db}")
 
     embedder, store = _embedder(model), VectorStore(db, migrate=False)
     agg = [0.0, 0.0, 0.0, 0.0]
@@ -115,9 +164,17 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
         for i, v in enumerate(_metrics([h["path"] for h in hits], gold)):
             agg[i] += v
     k = len(queries)
+    spread: dict[str, int] = {}
+    for _q, gold in queries:
+        lang = path_lang.get(gold, "?")
+        spread[lang] = spread.get(lang, 0) + 1
     return {
         "project": str(project), "store": str(db), "model": model or "<configured>",
-        "lane": lane, "queries": k, "recall@1": round(agg[0] / k, 4), "MRR": round(agg[1] / k, 4),
+        "lane": lane, "queries": k,
+        # Reported, not just relied on: a set that has quietly collapsed to one language is the
+        # exact failure this selector replaced, and it would otherwise look like a normal result.
+        "query_languages": dict(sorted(spread.items(), key=lambda kv: -kv[1])),
+        "recall@1": round(agg[0] / k, 4), "MRR": round(agg[1] / k, 4),
         "nDCG@10": round(agg[2] / k, 4), "recall@10": round(agg[3] / k, 4),
     }
 
