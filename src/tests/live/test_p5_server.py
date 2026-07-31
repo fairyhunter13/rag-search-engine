@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.live._sample_workspace import SampleWorkspace
-from tests.live._sweeps import sweeps_state
+from tests.live._sweeps import local_sweeps_paused, sweeps_state
 
 pytestmark = pytest.mark.live
 
@@ -183,30 +183,62 @@ def test_index_tool_rejects_forbidden_root(safe_tmp_path):
 
 
 def test_index_tool_e2e(safe_tmp_path):
-    """P10.4b: enabled=True creates registry entry; enabled=False removes it + index dir."""
+    """P10.4b: enabled=True creates registry entry; enabled=False removes it + index dir.
+
+    Every `index()` here spawns `reconcile_projects` on an unjoined daemon thread. In production
+    that is harmless and intended: the MCP app is served by the daemon (`server/routes.py:91`), so
+    the thread runs *in* the daemon, reads the daemon's `_PAUSED`, and honours the pause lease.
+
+    Under pytest it is neither. The tool is imported and called in **this** process, where
+    `sweeps._PAUSED` is a different module global that the suite's HTTP pause never touches — so
+    the thread walks all ~210 registered projects at full speed, indexing and re-deriving, for the
+    rest of the session. It is structurally exempt from the one mechanism that exists to stop
+    exactly this, and it outlives the test that started it.
+
+    That has now cost two CI runs on two unrelated tests, each passing in isolation:
+    `test_pipeline_all_stages_rse_repo` read a graph store mid-re-derive, and
+    `test_e1_rerank_reorders_search_results` searched a sample project while the same walk was
+    re-indexing it. Neither names the cause; both look like flakes.
+
+    So: hold the in-process pause across the calls, and **join** the threads instead of trusting
+    them to lose a race. With the local pause set, `reconcile_projects` returns at its `is_paused()`
+    guard and the join is immediate — the fixed cost of not leaving a fleet-wide sweep running
+    inside a test process. See `docs/decisions/2026-07-31-atomic-graph-rederive.md`.
+    """
+    import threading
 
     from rag_search.core.config import index_dir
     from rag_search.core.registry import list_projects
     from rag_search.server.mcp import index as index_tool
 
+    def _index(path: str, *, enabled: bool) -> dict:
+        before = set(threading.enumerate())
+        with local_sweeps_paused(True):
+            out = json.loads(asyncio.run(index_tool(path, enabled=enabled)))
+            for t in set(threading.enumerate()) - before:
+                t.join(timeout=30)
+                assert not t.is_alive(), (
+                    f"index(enabled={enabled}) left {t.name!r} running past the test; a sweep that "
+                    f"outlives the pause it was started under corrupts whatever runs next")
+        return out
+
     p = str(safe_tmp_path)
-    reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
+    reg = _index(p, enabled=True)
     assert reg["status"] in ("flagged", "already_registered")
     assert any(proj.path == p for proj in list_projects()), "Project not in registry after register"
-    # index() spawns a reconcile_projects daemon thread that can briefly race the
-    # registry rewrite under load; "already_registered" is eventually consistent, so
-    # poll (bounded) rather than assert on the first re-register.
+    # Re-registering is still polled: `_index` joins the reconcile thread, but the registry has a
+    # second writer (the daemon), so "already_registered" remains eventually consistent.
     import time
     reg2 = {}
     for _ in range(50):
-        reg2 = json.loads(asyncio.run(index_tool(p, enabled=True)))
+        reg2 = _index(p, enabled=True)
         if reg2["status"] == "already_registered":
             break
         time.sleep(0.1)
     assert reg2["status"] == "already_registered"
     idx = index_dir(p)
     idx.mkdir(parents=True, exist_ok=True)
-    rem = json.loads(asyncio.run(index_tool(p, enabled=False)))
+    rem = _index(p, enabled=False)
     assert rem["status"] in ("removed", "not_found")
     assert not any(proj.path == p for proj in list_projects()), "Project still in registry after remove"
     assert not Path(idx).exists(), "Index dir not deleted after remove"
