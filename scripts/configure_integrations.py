@@ -3,7 +3,7 @@
 
 Writes/verifies system prompt blocks and MCP entries across the config trees.
 Adapts to whatever tool ecosystem is present (claude profiles, hermes).
-(OpenCode and Codex integration removed.)
+(OpenCode integration removed.)
 
 Usage:
     .venv/bin/python scripts/configure_integrations.py           # configure + verify

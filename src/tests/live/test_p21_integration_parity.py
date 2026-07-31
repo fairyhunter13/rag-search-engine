@@ -1,7 +1,7 @@
 """P21: Integration-parity tests — config drift guard.
 
-Puts the existing integration system (claude profiles + hermes; OpenCode and
-Codex are no longer configured) under the live test suite.
+Puts the existing integration system (claude profiles + hermes; OpenCode is no
+longer configured) under the live test suite.
 Reuses configure_integrations.py --check --json rather than reimplementing the logic.
 Skips gracefully if a target's config file does not exist (tool not installed).
 """

@@ -2,7 +2,7 @@
 
 The constants here are written into all detected config trees (claude profiles,
 hermes). configure_integrations.py uses this module to verify and repair drift.
-OpenCode and Codex integration removed.
+OpenCode integration removed.
 """
 from __future__ import annotations
 
