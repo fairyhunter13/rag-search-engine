@@ -31,8 +31,12 @@ _WORKER_MODULES = {"graph/extractor.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")
 _WORKER_FUNCS = (
     "extract_symbols(", "extract_symbols_with_stats(",
-    "extract_calls_with_lines(", "extract_calls(",
+    "extract_calls_with_lines(",
 )
+# `extract_calls(` left this tuple with the function on 2026-07-31 — deleted as dead *and* wrong
+# (it walked rung-1 injections, which enrols CSS `var()`/`rgba()` as code call edges). Removed
+# rather than left behind for the reason the comment below gives about `extract_call_sites(`: an
+# entry naming a function that no longer exists can never fire.
 # `extract_symbols_with_stats(` is listed separately because `extract_symbols(` does not match
 # it — the next character is `_`, not `(`. It became the real entry point when the per-file
 # extraction record landed (`extract_symbols` is now a thin delegate), so an allowlist naming

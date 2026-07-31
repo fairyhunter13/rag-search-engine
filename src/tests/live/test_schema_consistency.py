@@ -1,9 +1,18 @@
 """Phase 2.0 — schema-consistency static guards (runs at collection time, no GPU needed).
 
-SC3  community_count() is scoped to level>=1 (structural spine excluded)
 SC4  No unscoped FROM-communities read: known leaks are patched; allowlist enforced
-SC6  Producer↔consumer symmetry: no write-only symbols column beyond _KNOWN_DEAD allowlist
+SC6  Producer↔consumer symmetry, at two levels: no write-only symbols *column* (Part A) and no
+     Symbol dataclass *field* without a column (Part C), beyond _KNOWN_DEAD. Part C was added
+     2026-07-31 after `Symbol.signature`/`.docstring` survived Part A for months by never
+     becoming columns at all — the guard could not see what it did not start from.
 SC8  community detection is leidenalg-free and deterministic
+SC9  every RSE_* env knob in core/config.py has a consumer outside core/config.py
+
+  SC3  community_count() is scoped to level>=1, "excluding the level=0 structural spine".
+       Retired 2026-07-31: no writer ever produced a level=0 row. `community.py` writes only
+       level=1, and the Phase-2 dir/file nodes the clause was added to exclude were deleted
+       with them. The SQL is harmless and stays; pinning its text asserted a distinction the
+       schema no longer draws, so a reader trusted a spine that does not exist.
 
 Four guards left with tier 3, all four of them anchored on the semantic-type taxonomy that
 `graph/enrich.py` owned and `kb/wiki.py` mirrored. That taxonomy does not exist any more, and
@@ -36,17 +45,40 @@ pytestmark = pytest.mark.live
 
 
 # ---------------------------------------------------------------------------
-# SC3 — community_count() is scoped to semantic communities (level>=1)
+# SC9 — every RSE_* env knob in core/config.py is actually consumed somewhere
 # ---------------------------------------------------------------------------
 
-def test_sc3_community_count_excludes_structural_spine():
-    """SC3: community_count() SQL must carry WHERE level>=1 (excludes level=0 spine rows)."""
-    from rag_search.graph import store as store_mod
-    src = inspect.getsource(store_mod.GraphStore.community_count)
-    assert "level>=1" in src or "level >= 1" in src, (
-        "community_count() must filter WHERE level>=1 to exclude structural spine (level=0). "
-        "Without this, Phase-2 dir/file nodes inflate the count and cause functional bugs "
-        "(needs_idx false-positive, hollow-detection, community view)."
+def test_sc9_every_env_knob_has_a_consumer():
+    """SC9: a constant read from RSE_* env must be read by something outside core/config.py.
+
+    core/config.py is the retargeting contract P18 promises a fresh clone: set the variable,
+    change the behaviour. A knob that parses its env var and is then read by nothing breaks
+    that promise silently — no error, no effect. Thirteen had accumulated by 2026-07-31
+    (RSE_FINAL_TOP_K, RSE_MAX_BYTES, RSE_SCHEMA_VERSION, …), each outliving the call site it
+    was added for. This fails the build the moment a fourteenth appears.
+    """
+    root = Path(__file__).parents[3]
+    cfg = root / "src" / "rag_search" / "core" / "config.py"
+    src = cfg.read_text()
+
+    knobs = {
+        m.group(1)
+        for m in re.finditer(r"^([A-Z][A-Z0-9_]{2,})\s*(?::[^=]+)?=.*os\.environ\.get\(",
+                             src, re.MULTILINE)
+    }
+    assert knobs, "no env-backed constants found — the regex above stopped matching config.py"
+
+    searched = [
+        p for p in (*root.glob("src/rag_search/**/*.py"), *root.glob("scripts/**/*.py"))
+        if p != cfg
+    ]
+    corpus = "\n".join(p.read_text(errors="replace") for p in searched)
+
+    orphans = sorted(k for k in knobs if not re.search(rf"\b{re.escape(k)}\b", corpus))
+    assert not orphans, (
+        "env knob(s) in core/config.py with no consumer outside that file: "
+        f"{orphans}. Either wire each to the code that reads it, or delete it — a knob that "
+        "parses and does nothing is a broken public interface, not dead code."
     )
 
 
@@ -107,6 +139,22 @@ def test_sc6_no_dead_data_beyond_allowlist():
                 f"SC6: symbols.{col} written by upsert_symbol but absent from list_symbols — "
                 f"add a consumer or add 'symbols.{col}' to _KNOWN_DEAD"
             )
+
+    # Part C, added 2026-07-31. The column check above could not see `Symbol.signature` and
+    # `.docstring`, which were populated on every symbol the extractor emitted and read by
+    # nothing: they never became columns, so they were invisible to a guard that starts from the
+    # INSERT list. Same defect, one level up — a field written and never read is a claim the
+    # schema does not honour, and it reads as available data to the next person extending the
+    # extractor. The dataclass is the producer, so it is the right place to start from.
+    from rag_search.graph.extractor import Symbol
+    for field in Symbol.__dataclass_fields__:
+        if f"Symbol.{field}" in _KNOWN_DEAD:
+            continue
+        assert field in written, (
+            f"SC6: Symbol.{field} is populated by the extractor but is not among the columns "
+            f"upsert_symbol writes ({sorted(written)}) — give it a column and a consumer, or "
+            f"add 'Symbol.{field}' to _KNOWN_DEAD"
+        )
 
 
 _R2_DROPPED_COLS = ("semantic_type", "narrated", "kind", "path")

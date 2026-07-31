@@ -89,16 +89,15 @@ def test_gpu_module_has_no_ollama_guard():
     )
 
 
-def test_setup_llm_services_is_stub():
-    """R6c static: scripts/setup_llm_services.py is a tombstone — not a functional provisioner."""
-    stub = Path(__file__).parents[3] / "scripts" / "setup_llm_services.py"
-    assert stub.exists(), "scripts/setup_llm_services.py must exist (as a tombstone stub)"
-    text = stub.read_text()
-    assert "REMOVED" in text or "raise SystemExit" in text, (
-        "scripts/setup_llm_services.py must be a tombstone (not a functional ollama provisioner)"
-    )
-    assert "subprocess" not in text, "tombstone stub must not invoke subprocess"
-    assert "systemctl" not in text, "tombstone stub must not manage systemd services"
+# R6c's `test_setup_llm_services_is_stub` retired with its subject on 2026-07-31. It asserted that
+# `scripts/setup_llm_services.py` still existed as a tombstone, which made the pair circular: the
+# file's only reason to exist was the test, and the test's only subject was the file. A sweep of
+# every tracked .py for four reachability channels (import, entry point, mention in any tracked
+# non-.py file, pytest collection) found the script reached by exactly one — this test.
+#
+# What it was actually protecting is that no ollama provisioner comes back, and that is asserted
+# where it can still fail: B1 below greps the whole tree for the forbidden tokens, so a *new* file
+# under any name is caught, which a test naming one path never could.
 
 
 # ---------------------------------------------------------------------------

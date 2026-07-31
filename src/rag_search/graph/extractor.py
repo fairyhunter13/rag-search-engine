@@ -103,8 +103,13 @@ class Symbol:
     start_line: int
     end_line: int
     language: str
-    signature: str = ""
-    docstring: str = ""
+    # `signature` and `docstring` stood here until 2026-07-31, populated on every symbol and read
+    # by nothing. There was no producer worth the name (`process()` returns None for both on
+    # python/go/rust/typescript), no consumer (`upsert_symbol`, store.py:118, does not take them)
+    # and no column (the migration at store.py:80 drops it). This is the dataclass-level form of
+    # exactly what SC6 already bans for columns, which is why SC6 now covers the dataclass too:
+    # a field that is written and never read is a claim the schema does not honour, and it reads
+    # as available data to anyone extending the extractor.
 
 
 def symbol_id(file: str, name: str, start_line: int) -> str:
@@ -301,18 +306,6 @@ def _is_call_node(kind: str) -> bool:
     return "call" in parts or "invocation" in parts
 
 
-def _collect_call_names(node, code_bytes: bytes, out: list[str]) -> None:
-    """D6: stack, not recursion — see `_generic_walk`. Same pre-order."""
-    stack = [node]
-    while stack:
-        cur = stack.pop()
-        if _is_call_node(cur.kind()):
-            name = _unwrap_callee(_callee_node(cur), code_bytes)
-            if name:
-                out.append(name)
-        stack.extend(reversed(_named_children(cur)))
-
-
 def _get_parser_for(language: str):  # type: ignore[return]
     """Return (parser, True) for a pack-supported language; (None, False) on miss."""
     if not language or language == "unknown":
@@ -466,21 +459,19 @@ def _embedded_blocks(root, code_bytes: bytes, language: str) -> list[tuple[str, 
     return out
 
 
-def extract_calls(content: str, language: str) -> list[str]:
-    """Return called function/method names (H2: generic call-node detection, any language)."""
-    parser, ok = _get_parser_for(language)
-    if not ok:
-        return []
-    try:
-        root = parser.parse(content).root_node()
-    except Exception:
-        return []
-    code_bytes = content.encode("utf-8", errors="replace")
-    out: list[str] = []
-    _collect_call_names(root, code_bytes, out)
-    for inner_lang, inner_bytes, _offset in _embedded_blocks(root, code_bytes, language):
-        out.extend(extract_calls(inner_bytes.decode("utf-8", errors="replace"), inner_lang))
-    return out
+# `extract_calls` and its helper `_collect_call_names` were deleted 2026-07-31. Zero callers —
+# `sweeps._extract_graph` has always used `extract_calls_with_lines` — but they were removed for
+# being *wrong*, not merely unused, and the difference matters to whoever reads the two functions
+# side by side next. `extract_calls` recursed through `_embedded_blocks`, which includes rung-1
+# injections, and `extract_calls_with_lines` walks only `_iter_script_blocks`. That asymmetry
+# looks exactly like a one-line bug worth closing.
+#
+# It is not. Running both variants over all 17,945 host-language files in the fleet (2026-07-30):
+# html gains +191 call names and markdown +6, and **every one is CSS** — `var` ×158, `rgba` ×24,
+# `blur`, `linear-gradient` — because html's `injections.scm` statically injects css and
+# tree-sitter's css grammar reports `var(--x)` as a call node. php, rust, vue, svelte and nix gain
+# zero. Adopting the "fix" would enrol stylesheet functions as code call edges across the fleet.
+# Written up in docs/decisions/2026-07-31-call-extraction-skips-injections-deliberately.md.
 
 
 # Every value `graph.store.file_extraction.rung` may hold: the ladder rungs this module can
@@ -585,7 +576,7 @@ def extract_symbols_with_stats(
                 syms.append(Symbol(
                     file=s.file, name=s.name, qualified_name=s.qualified_name, kind=s.kind,
                     start_line=s.start_line + line_offset, end_line=s.end_line + line_offset,
-                    language=s.language, signature=s.signature, docstring=s.docstring,
+                    language=s.language,
                 ))
     return syms, ExtractionStats(
         language=language, rung=rung, symbol_count=len(syms), anon_count=anon,
@@ -722,7 +713,7 @@ def _extract_symbols_from(
             syms.append(Symbol(
                 file=file_str, name=s.name, qualified_name=s.name, kind=kind,
                 start_line=s.span.start_line + 1, end_line=s.span.end_line + 1,
-                language=language, signature=s.signature or "", docstring=s.doc_comment or "",
+                language=language,
             ))
         # process() may yield only class/module nodes (e.g. Java, Kotlin) with no methods.
         # Supplement via _generic_walk so method names enter the symbol table for call-edge resolution.
