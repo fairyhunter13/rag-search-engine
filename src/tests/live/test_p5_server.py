@@ -527,6 +527,19 @@ def test_e1_rerank_reorders_search_results(service_path):
     this gate's assertions go blind on it: `rerank_score` is absent, and comparing "top by
     score" against "first result" is comparing a list to itself, which finds lift always and
     a dead reranker never. Full is the only shape that still carries the two scores apart.
+
+    Lift is the *whole ranking*, compared by `chunk_id`, not the top-1 `path`. Top-1-by-path
+    was flaky and weak at the same time, for one reason: most results share a file, so a
+    rerank that reorders chunks *within* a file registered as no lift at all. That left the
+    signal resting on the few cross-file flips, whose vector-score gaps were measured at
+    0.0017 and ~0.0000 (a tie at four decimals) — and two builds of the same fixture, on
+    identical code, produced 2/4 and 1/4 lifting queries. A third yielding 0/4 turns CI red
+    with nothing regressed, which is what happened on 2026-07-31. Comparing full order gives
+    4/4 queries with 5-8 of 8 positions displaced, on the same builds.
+
+    It is also the stricter gate, not the looser one: a pass-through reranker returns vector
+    order, and `sorted` is stable, so ties can never manufacture a difference. Any reordering
+    at all now counts, including the within-file kind the old form could not see.
     """
     from rag_search.server.mcp import search as _mcp_search
     queries = [
@@ -545,11 +558,14 @@ def test_e1_rerank_reorders_search_results(service_path):
         rs = [r.get("rerank_score") for r in res]
         assert all(s is not None for s in rs), f"E1: missing rerank_score: {rs}"
         assert all(rs[i] >= rs[i+1] for i in range(len(rs)-1)), f"E1: unsorted: {rs}"
+        ids = [r.get("chunk_id") for r in res]
+        assert all(i is not None for i in ids), f"E1: missing chunk_id: {ids}"
         if len(res) > 1:
-            vec_top = max(res, key=lambda r: r.get("score", 0.0))
-            if vec_top.get("path") != res[0].get("path"):
+            vec_order = [r.get("chunk_id") for r in
+                         sorted(res, key=lambda r: r.get("score", 0.0), reverse=True)]
+            if vec_order != ids:
                 lift_found = True
-    assert lift_found, "E1: rerank never changed top-1 vs vector order (pass-through?)"
+    assert lift_found, "E1: rerank never reordered vs vector order (pass-through?)"
     src = (Path(__file__).parents[2] / "rag_search" / "server" / "mcp.py").read_text()
     assert 'sort(key=lambda r: r.get("score"' not in src, "E1 guard: bare score sort in mcp.py"
 
