@@ -99,17 +99,11 @@ Four stated inline because violating them fails silently rather than loudly:
 
 ## Project quick reference
 
-- Entry points: `server/mcp.py` (MCP server + routes), `daemon/`, `cli.py`,
-  `__main__.py` (bridge-stdio shim)
-- Packages under `src/rag_search/`: `core embed index graph kb query server daemon`.
-  `kb/` holds only `answer_cache.py`; `graph/` is `extractor / store / community / quality`
-- Registry: `~/.local/share/rag-search/projects.json` · Tests: `src/tests/live/`
 - LLM: GPU = FastEmbed/ONNX/CUDA for embed + rerank and nothing else; chat = `claude -p`,
   dashboard-only, no fallback (HR10). `RSE_QUERY_LLM_MODEL` (default `claude-haiku-4-5`,
   `core/config.py`) is the **only** LLM env var — `_PROVIDER`/`_NUM_CTX`/`_TIMEOUT` parsed and
   did nothing, and were deleted 2026-07-31. SC9 in `test_schema_consistency.py` now blocks a re-add
 - Metrics: `overview(what="metrics")` — includes `chat_stream.stream_error_count`,
   `error_by_intent`, `parse_timeout_count`, and the `cpu` block
-- Setup: `scripts/configure_integrations.py`, `scripts/check_system.py`
 - Architecture: `docs/architecture/federation-and-search-engine.md` +
   `docs/architecture/federation-ops-and-invariants.md`
