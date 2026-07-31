@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-07-31 | [The challenger's margin was the prefixes](2026-07-31-the-prefix-is-a-precondition-not-a-tuning-knob.md) |
 | 2026-07-31 | [87.8% of the `.html` corpus is byte-identical copies](2026-07-31-html-duplication-is-within-project.md) |
 | 2026-07-31 | [Releasing a pause lease schedules nothing](2026-07-31-releasing-a-lease-schedules-nothing.md) |
 | 2026-07-31 | [A function bound to a name is a definition, and a heading is not an identifier](2026-07-31-e7-named-bindings-and-headings.md) |
