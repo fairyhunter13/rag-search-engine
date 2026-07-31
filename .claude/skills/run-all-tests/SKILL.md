@@ -11,13 +11,13 @@ Run the complete test suite: fast + slow + browser. Report comprehensive results
 
 1. **Fast suite** (~380 tests, no LLM, ~5–7 min):
    ```
-   .venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --ignore=src/tests/live/test_browser.py
+   .venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q -ra --strict-markers --strict-config --ignore=src/tests/live/test_browser.py
    ```
 
 2. **Slow suite** (~93 LLM-heavy tests, ~40 min). Prefer the whole non-browser
    set so fast + slow share fixtures:
    ```
-   .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q -rfE
+   .venv/bin/pytest src/tests/live/ --ignore=src/tests/live/test_browser.py -q -rfE --strict-markers --strict-config
    ```
 
 3. **Browser suite** (Playwright/Chromium, ~20 min):
