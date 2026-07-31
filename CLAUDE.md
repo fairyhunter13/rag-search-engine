@@ -16,11 +16,11 @@ stale and untrustworthy.
 ## Running tests
 
 ```bash
-# Fast smoke (~5 min) — the default
+# Fast smoke (~7-8 min) — the default
 .venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" \
   --ignore=src/tests/live/test_browser.py -x --strict-markers --strict-config -ra -q
 
-# Full live suite (~40 min): drop the -m filter, keep the browser --ignore
+# Full live suite (~11 min): drop the -m filter, keep the browser --ignore
 # Browser (separate process — conflicts with pytest-asyncio mode=auto):
 #   .venv/bin/pytest src/tests/live/test_browser.py -v --browser chromium
 
