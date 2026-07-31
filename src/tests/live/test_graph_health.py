@@ -12,8 +12,13 @@ Tests:
        reconcile does not spin retrying it on unchanged source. symbol_hollow is a
        diagnostic signal for operators, not an automatic self-heal trigger. See the
        2026-07-09 root-federation audit for the confirmed root cause and rationale.
-  GH5: _index_project source-guard: calls gs.clear() before rebuild
+  GH5: a full re-derive subtracts what the source no longer has (symbols of a deleted file,
+       its coverage row, and an edge whose call site went while both endpoints survived).
+       Behavioural: it replaced a source-inspection guard that asserted `gs.clear()` was
+       called before a rebuild, which pinned the mechanism that turned out to be the bug.
   GH6: structural community labels stay distinct and deterministic
+  GH8: no reader ever observes an empty graph while a full re-derive runs. Numbered after
+       GH7 because GH6 was already taken by the label guard `community.py` cites by name.
   GH7: H1 — a federation root's symbol-arm exemption is evidence-based, not categorical. A root
        holding no code of its own stays exempt (it is empty by design); one that attempted code
        files and got zero symbols back is hollow like any member. The edge arm keeps its blanket
@@ -201,8 +206,8 @@ def test_gh5_full_rederive_subtracts_what_the_source_no_longer_has(safe_tmp_path
         f"still exist, so purge_dangling_edges cannot catch this — prune_edges_to must")
 
 
-def test_gh6_a_rederive_is_never_observed_as_an_empty_graph(safe_tmp_path):
-    """GH6: no reader ever sees an empty graph while a full re-derive runs.
+def test_gh8_a_rederive_is_never_observed_as_an_empty_graph(safe_tmp_path):
+    """GH8: no reader ever sees an empty graph while a full re-derive runs.
 
     The regression this exists for is silent by construction: `clear()` committed the wipe, so a
     concurrent `graph()` or `overview(what="communities")` answered "no symbols" — correctly
@@ -236,7 +241,7 @@ def test_gh6_a_rederive_is_never_observed_as_an_empty_graph(safe_tmp_path):
     # having looked at the database.
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, check_same_thread=False)
     try:
-        assert con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "GH6 setup: empty"
+        assert con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0, "GH8 setup: empty"
         samples: list[int] = []
         stop = threading.Event()
 
@@ -255,9 +260,9 @@ def test_gh6_a_rederive_is_never_observed_as_an_empty_graph(safe_tmp_path):
         finally:
             stop.set()
             watcher.join(timeout=30)
-        assert samples, "GH6: the poller read nothing — the assertion below would be vacuous"
+        assert samples, "GH8: the poller read nothing — the assertion below would be vacuous"
         assert 0 not in samples, (
-            f"GH6: a concurrent reader saw an empty symbols table during a re-derive "
+            f"GH8: a concurrent reader saw an empty symbols table during a re-derive "
             f"({samples.count(0)} of {len(samples)} samples read 0) — the rebuild published a "
             f"hole instead of writing through it")
     finally:
