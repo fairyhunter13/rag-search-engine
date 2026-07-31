@@ -54,6 +54,11 @@ Every metric moves the same way, and the direction held at a smaller sample (40 
 0.800). Fifteen more queries out of 130 land their gold file first. The code-specialised incumbent
 lost to a general-purpose model.
 
+**Superseded by [the prefix result](2026-07-31-the-prefix-is-a-precondition-not-a-tuning-knob.md):**
+the +0.115 below is roughly half selector. Under the symbol-derived set the same comparison reads
++0.008 unprefixed and +0.062 prefixed. The conclusion — do not switch on this — was right; the size
+of the gap was not.
+
 **No model change is being made on this.** One repo, Python-only queries, docstring-shaped
 questions; the fleet is 152 stores across many languages. `AUTO_MIGRATE_VECTORS` is off precisely
 because changing `EMBED_MODEL` invalidates every vector everywhere, so the bar is a multi-project,
