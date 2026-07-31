@@ -146,7 +146,20 @@ def test_mcp_resolves_via_claude_json_not_settings_json():
         [claude_bin, "mcp", "get", "rag-search"],
         capture_output=True, text=True, timeout=15,
     )
-    assert result.returncode == 0 and ci.CANONICAL_MCP_URL in result.stdout, (
+    urls = [ln.split(":", 1)[1].strip() for ln in result.stdout.splitlines()
+            if ln.strip().startswith("URL:")]
+    # Exact, not substring: a local-scope `?project=` pin is a *different* URL that a
+    # substring check accepts, which is how three profiles drifted while --check said 9/9.
+    assert result.returncode == 0 and ci.CANONICAL_MCP_URL in urls, (
         "claude mcp get rag-search (main profile) did not resolve the canonical MCP entry "
         f"from .claude.json: {result.stdout}\n{result.stderr}"
     )
+    _, mcp_targets = ci._build_targets()
+    for kind, config_dir, label in mcp_targets:
+        if kind != "claude_mcp":
+            continue
+        shadowed = ci._shadowing_local_mcp(config_dir)
+        assert not shadowed, (
+            f"profile {label}: local-scope rag-search shadows the canonical user-scope entry "
+            f"in {shadowed} — `claude mcp remove rag-search --scope local` from each"
+        )
