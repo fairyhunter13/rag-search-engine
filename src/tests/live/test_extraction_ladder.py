@@ -391,3 +391,106 @@ def test_au2_coverage_counts_files_not_groups(safe_tmp_path) -> None:
         f"{totals['files_with_symbols']} of {totals['files']}")
     assert totals["dark_files"] == 3, totals
     assert totals["coverage_pct"] == 25.0, totals
+
+
+def test_au3_rung_rollup_reports_symbols_not_just_occupancy(safe_tmp_path) -> None:
+    """AU3 — a rung's yield must be readable from the metrics block, not only its headcount.
+
+    `generic` means "parsed, nothing found". Counted by files it is one of the largest rungs in
+    the fleet; counted by symbols it produced 43 across 15,106 files (measured 2026-07-31 over
+    118 graphs). A reader with only `files` per rung therefore rates it a success, which is how
+    "84 % productive" and "48 % of files yield a symbol" can both be said of the same fleet.
+
+    The fixture makes `generic` the *majority* rung by files, spanning two languages, while
+    contributing zero symbols: a rung that is small, single-language, or that yields a little
+    cannot distinguish a rollup reporting yield from one reporting occupancy.
+    """
+    from rag_search.graph.store import GraphStore
+    from rag_search.server._overview import _extraction_totals
+
+    gs = GraphStore(safe_tmp_path / "au3" / "graph.db")
+    try:
+        gs.record_extraction("/x/a.go", "go", "structure", 7, 0, 0)
+        gs.record_extraction("/x/b.go", "go", "structure", 5, 0, 0)
+        gs.record_extraction("/x/c.groovy", "groovy", "generic", 0, 0, 0)
+        gs.record_extraction("/x/d.groovy", "groovy", "generic", 0, 0, 0)
+        gs.record_extraction("/x/e.make", "make", "generic", 0, 0, 0)
+        gs.commit()
+        totals = _extraction_totals(gs.extraction_summary())
+    finally:
+        gs.close()
+
+    assert totals["symbols"] == 12, (
+        f"the rollup dropped the per-group symbol total it was handed: {totals.get('symbols')!r}")
+    by_rung = {r["rung"]: r for r in totals["by_rung"]}
+    assert set(by_rung) == {"structure", "generic"}, by_rung
+    assert by_rung["generic"] == {"rung": "generic", "files": 3, "symbols": 0,
+                                  "files_with_symbols": 0, "dark_files": 3,
+                                  "coverage_pct": 0.0}, by_rung["generic"]
+    assert by_rung["structure"]["symbols"] == 12, by_rung["structure"]
+    # The biggest rung by files is the emptiest by symbols, both readable from one block.
+    assert by_rung["generic"]["files"] > by_rung["structure"]["files"]
+
+
+def test_au4_a_grammar_ceiling_is_reported_as_a_ceiling_not_a_coverage_gap(safe_tmp_path) -> None:
+    """AU4 — dark files rungs 4-5 cannot reach by construction must say so.
+
+    Rungs 4 and 5 begin by fetching the grammar's `highlights.scm` / `injections.scm` and return
+    `{}` on empty text, so a language whose pack ships neither has a *ceiling*. Measured against
+    the installed pack 2026-07-31: groovy and php ship neither — php being 20,014 fleet files.
+    Reading those as a coverage bug is how ladder work gets aimed where it cannot pay.
+
+    The fixture pairs a no-query language with one that has queries and one the pack does not know
+    at all, because the last is the trap: `get_highlights_query('unknown')` returns None just like
+    groovy's, so a check that only asks about queries files all 11,791 `no_language` files under
+    "the grammar ships no queries" — asserting a grammar where there is none.
+    """
+    from rag_search.graph.store import GraphStore
+    from rag_search.server._overview import _extraction_totals
+
+    gs = GraphStore(safe_tmp_path / "au4" / "graph.db")
+    try:
+        gs.record_extraction("/x/a.groovy", "groovy", "generic", 0, 0, 0)
+        gs.record_extraction("/x/b.groovy", "groovy", "structure", 3, 0, 0)
+        gs.record_extraction("/x/c.py", "python", "structure", 4, 0, 0)
+        gs.record_extraction("/x/d.bin", "unknown", "no_language", 0, 0, 0)
+        gs.commit()
+        ceilings = {r["language"]: r for r in _extraction_totals(
+            gs.extraction_summary())["grammar_ceilings"]}
+    finally:
+        gs.close()
+
+    assert set(ceilings) == {"groovy"}, (
+        f"expected only the no-query grammar to report a ceiling, got {sorted(ceilings)}")
+    assert ceilings["groovy"]["ceiling"] == "grammar_has_no_queries", ceilings["groovy"]
+    assert ceilings["groovy"]["files"] == 2, ceilings["groovy"]
+    # Dark, not total: one groovy file did reach rung 1, and a ceiling does not un-extract it.
+    assert ceilings["groovy"]["dark_files"] == 1, ceilings["groovy"]
+
+
+def test_au5_stale_pipeline_stores_are_countable_without_opening_a_graph_db() -> None:
+    """AU5 — the re-derive's own convergence must be readable from the metrics block.
+
+    The design compares each store's `meta.algo_version` against `_pipeline_algo_version()` and
+    re-derives on mismatch. The mechanism worked; nothing *reported* it, so a fleet that had
+    stopped converging was indistinguishable from one that had converged. Measured 2026-07-31 by
+    opening 144 stores by hand — 128 stale, 51 four extractor revisions behind — which is exactly
+    the external `mode=ro` read AU1 forbids, for exactly AU1's reason.
+
+    `(unstamped)` counts as stale, not as its own category: a store with no `meta` row has never
+    completed a derive, which is staler than an old stamp rather than exempt from the question.
+    """
+    from rag_search.daemon.sweeps import _pipeline_algo_version
+    from rag_search.server._overview import _pipeline_block
+
+    cur = _pipeline_algo_version()
+    block = _pipeline_block({cur: 16, "fg2+e2+2db7": 50, "(unstamped)": 2})
+
+    assert block["current"] == cur, block
+    assert block["stores"] == 68 and block["stores_current"] == 16, block
+    assert block["stale_stores"] == 52, (
+        f"an unstamped store was not counted as stale: {block}")
+    assert block["by_stamp"][0]["algo_version"] == "fg2+e2+2db7", (
+        f"by_stamp must lead with the largest population, not the current one: {block['by_stamp']}")
+    assert sum(r["stores"] for r in block["by_stamp"]) == block["stores"], block
+    assert _pipeline_block({})["stale_stores"] == 0, "an empty federation must not report drift"
