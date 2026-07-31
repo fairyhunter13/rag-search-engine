@@ -66,6 +66,23 @@ class Watcher:
         # answer "is it busy now" and cannot answer "did anything happen while I wasn't looking" —
         # which is the question an idle-CPU measurement has to ask about its own window.
         self._dispatched = 0
+        # Monotonic count of events `_filter` rejected. The other three counters describe work the
+        # watcher *accepted*, and an event that is dropped is still an event the kernel delivered
+        # and `_filter` paid Python and a full `is_ignored_path` to classify — so a root churning
+        # entirely inside an ignored subtree costs real CPU while leaving all three reading idle.
+        # Measured 2026-07-31 across CB3's own five 20 s windows, with a neighbouring profile
+        # writing into a `.claude/worktrees/` subtree of a watched root: `filtered` deltas of 1,
+        # 124, 166, 156 and 52 cost 0.0211, 0.1033, 0.1410, 0.1409 and 0.0541 of a core — while
+        # `dispatched` moved by at most 4 and `inflight`/`pending` never left zero. A 40 s capture
+        # put 414 of 416 delivered events in a single ignored directory; none reached an index.
+        # A lower bound, not a census: watchfiles coalesces each batch by path in Rust before
+        # anything crosses into Python, so a tight rewrite of one file arrives here as one event.
+        # That is enough for a contamination probe, which must answer "was anything happening"
+        # rather than "how much".
+        # Deliberately incremented without `_cv`: this is the per-event hot path on the reader
+        # thread, and taking the dispatch lock once per inotify event is the storm HR37 is about.
+        # A bare `int` increment is atomic under the GIL, which is all a monitoring counter needs.
+        self._filtered = 0
 
     def watch(self, project_path: str) -> None:
         self.sync(self._paths | {project_path})
@@ -152,8 +169,12 @@ class Watcher:
             if now - self._last_unattributed_log >= _UNATTRIBUTED_LOG_INTERVAL_S:
                 self._last_unattributed_log = now
                 log.debug("watcher: unattributed %s (no registered root owns it)", path)
+            self._filtered += 1
             return False
-        return not is_ignored_path(Path(path), Path(root))
+        if is_ignored_path(Path(path), Path(root)):
+            self._filtered += 1
+            return False
+        return True
 
     def status(self) -> dict[str, object]:
         """What this watcher is actually watching, right now.
@@ -172,6 +193,7 @@ class Watcher:
             "reader_alive": bool(self._thread is not None and self._thread.is_alive()),
             "workers_alive": sum(1 for t in self._workers if t.is_alive()),
             "dispatched": self._dispatched,
+            "filtered": self._filtered,
         }
 
     def _enqueue(self, root: str, files: list[Path]) -> None:

@@ -288,3 +288,41 @@ def test_hl6_status_counts_completed_passes(two_roots):
         )
     finally:
         w.stop(timeout=10.0)
+
+
+def test_hl7_status_counts_rejected_events(two_roots):
+    """HL7: a write `_filter` rejects must advance `filtered` and must not advance `dispatched`.
+
+    Same argument as HL6, for the counter added 2026-07-31. CB3 now discards a window in which
+    `filtered` moved; a counter stuck at 0 puts the gate back to charging churn inside an ignored
+    subtree — which costs a full `is_ignored_path` per event and reaches no index — to the daemon's
+    idle cost, and failing on it at 0.0100-0.0160 of a core against 0.0055-0.0060 when truly quiet.
+
+    The premise is asserted first: `filtered` staying flat is otherwise indistinguishable from this
+    path simply no longer being ignored.
+    """
+    from pathlib import Path
+
+    from rag_search.index.discover import is_ignored_path
+
+    a, _b = two_roots
+    ignored = Path(a, ".cache", "junk.py")
+    assert is_ignored_path(ignored, Path(a)), f"HL7: {ignored} is not ignored — wrong subject"
+
+    rec = _Recorder()
+    w = _start(rec, a)
+    try:
+        f0, d0 = int(w.status()["filtered"]), int(w.status()["dispatched"])
+        ignored.parent.mkdir(parents=True, exist_ok=True)
+        ignored.write_text("def junk():\n    return 1\n")
+        assert _wait_for(lambda: int(w.status()["filtered"]) > f0), (
+            f"HL7: an ignored write left filtered at {w.status()['filtered']} — CB3 cannot see the "
+            "churn that decides whether it passes"
+        )
+        time.sleep(_SETTLE_S)
+        assert int(w.status()["dispatched"]) == d0 and not rec.roots(), (
+            f"HL7: a rejected event still ran a pass (dispatched={w.status()['dispatched']}, "
+            f"roots={rec.roots()}) — the filter is not filtering"
+        )
+    finally:
+        w.stop(timeout=10.0)
