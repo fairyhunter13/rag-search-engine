@@ -70,13 +70,6 @@ GPU throughout; `previously_paused: false` on the manual re-pause is what proved
 rather than merely unreported. **Read `/healthz` before restarting, and re-`POST /api/sweeps/pause` if
 you cleared a lease** — nothing else will tell you, least of all the suite you disrupted.
 
-## CI
-
-`.github/workflows/ci.yml` — **owner-triggered only**: `push` to main and `workflow_dispatch`.
-Deliberately no `pull_request` (public repo, self-hosted GPU runner), no `schedule`, and no
-commit-message trigger. `live-fast` (`-m "live and not costly and not exclusive"`) runs on every
-push; `live-slow` (~15–30 min) is manual — `gh workflow run CI`.
-
 ## Invariants
 
 All governing laws live in `docs/world-model/model.yaml` — P0–P18, HR1–HR41 — and that file is
@@ -103,7 +96,6 @@ Four stated inline because violating them fails silently rather than loudly:
   dashboard-only, no fallback (HR10). `RSE_QUERY_LLM_MODEL` (default `claude-haiku-4-5`,
   `core/config.py`) is the **only** LLM env var — `_PROVIDER`/`_NUM_CTX`/`_TIMEOUT` parsed and
   did nothing, and were deleted 2026-07-31. SC9 in `test_schema_consistency.py` now blocks a re-add
-- Metrics: `overview(what="metrics")` — includes `chat_stream.stream_error_count`,
-  `error_by_intent`, `parse_timeout_count`, and the `cpu` block
+- Metrics: `overview(what="metrics")` — the live payload is the key list
 - Architecture: `docs/architecture/federation-and-search-engine.md` +
   `docs/architecture/federation-ops-and-invariants.md`
