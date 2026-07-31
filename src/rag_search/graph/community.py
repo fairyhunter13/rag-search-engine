@@ -84,7 +84,7 @@ def detect_communities(store: GraphStore) -> dict[str, int]:
         return {}
 
     idx: dict[str, int] = {s["sid"]: i for i, s in enumerate(symbols)}
-    all_edges = store._con.execute("SELECT caller_sid,callee_sid FROM edges").fetchall()
+    all_edges = store.conn.execute("SELECT caller_sid,callee_sid FROM edges").fetchall()
     edges_ig = [(idx[c], idx[e]) for c, e in all_edges if c in idx and e in idx]
 
     g = ig.Graph(n=len(symbols), edges=edges_ig, directed=True)
@@ -138,11 +138,11 @@ def detect_communities(store: GraphStore) -> dict[str, int]:
     for cid, (names, files) in cid_to_members.items():
         label = _label_from_names(names, files)
         if label:
-            store._con.execute(
+            store.conn.execute(
                 "UPDATE communities SET title=? WHERE id=? AND title IS NULL",
                 (label, cid),
             )
-    store._con.execute(
+    store.conn.execute(
         "DELETE FROM communities WHERE level=1 AND id NOT IN "
         "(SELECT DISTINCT community_id FROM symbols WHERE community_id IS NOT NULL)"
     )
@@ -164,13 +164,13 @@ def label_community_structural(store: GraphStore, cid: int) -> None:
     # title and the summary's kind/file lists could differ between two runs over identical data
     # — against this function's own "byte-identical on repeated runs" claim, and a stored title
     # that moves re-derives the fleet forever. Ordering by name makes the sample the same 30.
-    rows = store._con.execute(
+    rows = store.conn.execute(
         "SELECT name, kind, file FROM symbols WHERE community_id=? ORDER BY name LIMIT 30",
         (cid,),
     ).fetchall()
     if not rows:
         return
-    existing = store._con.execute(
+    existing = store.conn.execute(
         "SELECT title, member_count FROM communities WHERE id=?", (cid,)
     ).fetchone()
     title = (existing[0] if existing and existing[0] else None) or _label_from_names(
