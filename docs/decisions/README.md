@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-07-31 | [The two levers are additive, and the bill is a fleet rebuild](2026-07-31-two-levers-additive-and-the-bill.md) |
 | 2026-07-31 | [The span scan was never hot, and bisect does not answer the same question](2026-07-31-span-scan-is-neither-hot-nor-equivalent.md) |
 | 2026-07-31 | [An edge is a resolved call, or it is not an edge](2026-07-31-an-edge-is-a-resolved-call.md) |
 | 2026-07-31 | [The challenger's margin was the prefixes](2026-07-31-the-prefix-is-a-precondition-not-a-tuning-knob.md) |
