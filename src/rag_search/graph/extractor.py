@@ -42,7 +42,16 @@ from pathlib import Path
 #                    the identical file *without* an unrelated function extracted fine. Strictly
 #                    additive (a union with the old arm), but it changes files that already
 #                    extract, so it carries its own rev.
-EXTRACTOR_REV = "e6"
+#   e7  2026-07-31  Two arms, one rev, because one stamp move re-derives 151 graphs and four of
+#                    them would have cost four. S5 `_named_binding_walk`: a function *value* bound
+#                    to a name (`const getUser = () => {}`, `valueChange: function () {}`) is a
+#                    definition process() reports as anonymous, so it arrived `name=None` and was
+#                    dropped. Gated on `anon`, so a file process() named completely pays nothing.
+#                    And `text.title` -> `section` at rung 4, screened by `_is_title_text` rather
+#                    than `_is_name_text`, which recovers markdown headings whole instead of only
+#                    the one-word ones. Measured on one JS-dominated store: strictly additive —
+#                    0 symbols lost, 0 changed, 1,942 gained, and 55 of its 80 dark JS files lit.
+EXTRACTOR_REV = "e7"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -64,9 +73,16 @@ _GENERIC_DEF_SUFFIXES: tuple[str, ...] = (
 # identifier. Plain `type` is deliberately absent: in SQL it captures every `object_reference`,
 # so a table merely *selected from* would enter the symbol table as a definition. Mainstream
 # grammars reach rung 3 anyway, so excluding it costs nothing and avoids inventing symbols.
+#
+# `text.title` is the prose entry, and it is a *heading*, not a code definition: markdown reached
+# rung 4 and left empty-handed because nothing mapped the one capture its grammar emits. Measured
+# on this repo — 31 markdown files, rung `generic`, 0 symbols, 0.0% coverage. Its kind is
+# `section` rather than a borrowed `module`, because a heading names a region of a document and
+# call resolution must never mistake it for something a call could reach.
 _HIGHLIGHT_DEF_CAPTURES: dict[str, str] = {
     "function": "function", "function.method": "method", "method": "method",
     "constructor": "method", "class": "class", "type.definition": "class",
+    "text.title": "section",
 }
 
 # Rung 4's filter, and the whole reason it is safe: a highlights capture says "this token is a
@@ -76,8 +92,13 @@ _HIGHLIGHT_DEF_CAPTURES: dict[str, str] = {
 # kind carries one of these `_`-separated tokens, which is what `_GENERIC_DEF_SUFFIXES` already
 # encodes plus `statement` (scss spells them `mixin_statement` / `function_statement`). Call
 # parents are rejected outright via `_is_call_node`.
+#
+# `heading` covers markdown's `atx_heading` and `setext_heading` both. The plan that asked for
+# this also asked for `section`; it is deliberately absent — markdown's heading nodes are the
+# direct parent of the captured `inline`, so `heading` alone is sufficient here, and `section`
+# would additionally admit whatever `[section]`-shaped grammars name that way, on no evidence.
 _DEF_PARENT_TOKENS: frozenset[str] = frozenset({
-    "definition", "declaration", "item", "specification", "statement",
+    "definition", "declaration", "item", "specification", "statement", "heading",
 })
 
 # H2: member/attribute node kinds — unwrap to extract rightmost identifier
@@ -177,6 +198,75 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
 
 # H2 helpers: generic call-node detection (replaces the old per-language call-node table)
 
+# S5 (named-binding arm): a function value bound to a name. `const getUser = () => {}` is a
+# definition in every sense that matters to search — it has a name, a body and callers — but
+# `process()` reports the *function* node, which is genuinely anonymous, so it arrived as
+# `name=None` and was dropped. Measured: 3,823 javascript files fleet-wide with 0 symbols, of
+# which ~29.5% are dark for exactly this reason.
+#
+# The name lives on the binding, not the function, so it is read from the binding node's own name
+# field. These are node kinds and field names — the grammar's spelling of its own structure, the
+# same basis `_DEF_PARENT_TOKENS` and `_generic_walk`'s kind tests stand on — not a vocabulary
+# about source text (P6/HR15).
+# Several name fields per kind because the grammars disagree about the spelling of the same
+# construct: a class field is `public_field_definition`/`name` in typescript and
+# `field_definition`/`property` in javascript. Measured, not assumed — with only `name` listed,
+# `class K { m = () => {}; }` recovered under typescript and stayed dark under javascript.
+_BINDING_NAME_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("variable_declarator", ("name",)),               # const/let/var f = ...
+    ("assignment_expression", ("left",)),             # f = ...  (and `obj.f = ...`)
+    ("pair", ("key",)),                               # { f: () => {} }
+    ("public_field_definition", ("name", "property")),
+    ("field_definition", ("property", "name")),
+    ("property_signature", ("name",)),
+)
+_BINDING_VALUE_FIELDS: tuple[str, ...] = ("value", "right")
+# Function-shaped values. `function_declaration` is absent on purpose: it carries its own name and
+# `process()` already reports it, so including it here would only re-emit what is not missing.
+_FUNCTION_VALUE_KINDS: frozenset[str] = frozenset({
+    "arrow_function", "function_expression", "function", "generator_function",
+    "generator_function_declaration", "method_definition",
+})
+
+
+def _named_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
+    """Symbols for anonymous function values that are bound to a name.
+
+    Spans the *function*, names it from the *binding*: the symbol's lines have to be the body a
+    reader lands on, while the name is the one callers write. `symbol_id` keys on file+name+line,
+    so re-running this over a file `process()` already covered is idempotent — a binding whose
+    value was named anyway collides with the row that already exists rather than doubling it.
+    """
+    out: list[Symbol] = []
+    fields = dict(_BINDING_NAME_FIELDS)
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        name_fields = fields.get(cur.kind())
+        if name_fields is not None:
+            value = next(
+                (v for v in (cur.child_by_field_name(f) for f in _BINDING_VALUE_FIELDS)
+                 if v is not None), None)
+            name_node = next(
+                (n for n in (cur.child_by_field_name(f) for f in name_fields)
+                 if n is not None), None)
+            if (value is not None and name_node is not None
+                    and value.kind() in _FUNCTION_VALUE_KINDS):
+                # `_unwrap_callee` is the existing reader for "this node is, or ends in, a name":
+                # it takes the rightmost identifier of a member expression, which is what makes
+                # `obj.handler = () => {}` land on `handler` and not on the whole path.
+                name = _unwrap_callee(name_node, code_bytes)
+                if name:
+                    out.append(Symbol(
+                        file=file_str, name=name, qualified_name=name, kind="function",
+                        start_line=value.start_position().row + 1,
+                        end_line=value.end_position().row + 1,
+                        language=language,
+                    ))
+        stack.extend(reversed(_named_children(cur)))
+    return out
+
+
 def _is_name_text(name: str) -> bool:
     """S1: accept whatever the grammar handed back as a name, minus the impossible cases.
 
@@ -189,6 +279,21 @@ def _is_name_text(name: str) -> bool:
     is the signature of an unwrap that fell through to a whole expression.
     """
     return bool(name) and not any(c.isspace() for c in name)
+
+
+def _is_title_text(name: str) -> bool:
+    """The screen for a heading's name, which `_is_name_text` cannot be.
+
+    Headings are multi-word — "Public-release hardening and the runnable-by-anyone contract" is a
+    name a document gave a section of itself — and `_is_name_text` rejects all whitespace on
+    purpose, because in an *identifier* whitespace means an unwrap fell through to a whole
+    expression. Relaxing that predicate to admit headings would spend a code-wide guarantee on a
+    prose problem, so the two are separate tests and the caller picks by kind.
+
+    What survives from the original: a name must be non-blank, and it must not span lines. A
+    heading is one line by construction, so a multi-line hit is the same fell-through signal.
+    """
+    return bool(name.strip()) and "\n" not in name
 
 
 def _unwrap_callee(nn, code_bytes: bytes) -> str:
@@ -253,7 +358,12 @@ def _highlight_walk(code_bytes: bytes, file_str: str, language: str) -> list[Sym
                 continue
             name = code_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
             line = node.start_point[0] + 1
-            if not _is_name_text(name) or (name, line) in seen:
+            # A heading is screened as a title, everything else as an identifier — see
+            # `_is_title_text`. Stripped because the capture spans the heading's inline text and
+            # its surrounding spaces are the marker's, not the name's.
+            name = name.strip() if kind == "section" else name
+            ok = _is_title_text(name) if kind == "section" else _is_name_text(name)
+            if not ok or (name, line) in seen:
                 continue
             seen.add((name, line))
             out.append(Symbol(
@@ -715,6 +825,22 @@ def _extract_symbols_from(
                 start_line=s.span.start_line + 1, end_line=s.span.end_line + 1,
                 language=language,
             ))
+        # S5: recover the ones that were anonymous only as *values*. Gated on `anon` so a file
+        # process() named completely pays nothing, and keyed by (name, start_line) — the same
+        # identity `symbol_id` uses — so a recovered symbol can never shadow a structure entry.
+        if anon and outer_root is not None:
+            have = {(sym.name, sym.start_line) for sym in syms}
+            for sym in _named_binding_walk(outer_root, code_bytes, file_str, language):
+                if (sym.name, sym.start_line) not in have:
+                    have.add((sym.name, sym.start_line))
+                    syms.append(sym)
+        # `anon` is deliberately NOT decremented per recovery, though the first cut of this arm
+        # did. It counts *structure entries process() could not name*, and this is a different
+        # walk over the same tree: the two do not correspond one-to-one. Measured on the EL3
+        # fixture — process() drops one entry, the arm recovers two symbols — so subtracting
+        # reports a number that is neither the drop count nor the recovery count. Coverage is
+        # `symbol_count`; `anon_count` stays a measurement of what process() alone could do,
+        # which is what EL3/EL5 pin it as.
         # process() may yield only class/module nodes (e.g. Java, Kotlin) with no methods.
         # Supplement via _generic_walk so method names enter the symbol table for call-edge resolution.
         #
