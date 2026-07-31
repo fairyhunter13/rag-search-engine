@@ -170,6 +170,92 @@ def test_systemd_dropins_target_deployed_unit():
         assert "[Service]" in text, f"{name} has no [Service] section — systemd would reject it"
 
 
+def _versioned_dropin_directives() -> list[tuple[str, str]]:
+    """(conf name, directive line) for every non-comment `[Service]` line under scripts/systemd/."""
+    from pathlib import Path
+
+    from rag_search.daemon.systemd import UNIT_NAME
+    d = Path(__file__).resolve().parents[3] / "scripts" / "systemd" / f"{UNIT_NAME}.d"
+    return [(conf.name, ln.strip())
+            for conf in sorted(d.glob("*.conf"))
+            for ln in conf.read_text().splitlines()
+            if ln.strip() and not ln.strip().startswith(("#", "["))]
+
+
+def _systemctl(args: list[str]) -> str:
+    import subprocess
+
+    from rag_search.daemon.systemd import UNIT_NAME
+    p = subprocess.run(["systemctl", "--user", *args, UNIT_NAME],
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, f"systemctl --user {' '.join(args)} failed: {p.stderr.strip()}"
+    return p.stdout
+
+
+def test_systemd_dropin_contents_are_in_effect():
+    """Every directive the repo versions must be configured on the *running* unit.
+
+    The check above compares directory names only, so the versioned drop-ins could say anything
+    at all and the live ones could be deleted one at a time, and it stayed green. Delete
+    `indexing-throughput.conf` from the live dir and `RSE_EMBED_BATCH` falls from 32 to the code
+    default of 8, halving indexing throughput with nothing red. That is the failure mode drop-ins
+    have: their absence is indistinguishable from their presence.
+
+    Asserted against the running unit rather than by diffing the two directories, because the
+    file layout is not the contract — the effective configuration is. `cpu-budget.conf` settles
+    it: versioned here, not installed as a drop-in on this host, and both its directives are in
+    effect anyway because the base unit `unit_text()` writes already carries them. A
+    file-existence gate would have reported HR40 as unenforced. It is enforced —
+    `CPUQuotaPerSecUSec` is 1s, which is what CB2 proves.
+    """
+    for conf, line in _versioned_dropin_directives():
+        key, _, value = line.partition("=")
+        if key.strip() == "Environment":
+            _assert_env_in_effect(conf, value)
+        else:
+            _assert_directive_configured(conf, line)
+
+
+def _assert_directive_configured(conf: str, line: str) -> None:
+    """Presence in `systemctl cat` — base unit or drop-in, either satisfies the versioned intent.
+
+    `cat` rather than `show` to avoid a directive-to-property table (`RestartSec=` surfaces as
+    `RestartUSec`, `CPUQuota=` as `CPUQuotaPerSecUSec`) that would rot on its own.
+    """
+    live = {ln.strip() for ln in _systemctl(["cat"]).splitlines() if ln.strip()}
+    assert line in live, (
+        f"{conf} versions `{line}` and the running unit configures it nowhere — copy the "
+        "drop-in to ~/.config/systemd/user/ and `systemctl --user daemon-reload`."
+    )
+
+
+def _assert_env_in_effect(conf: str, value: str) -> None:
+    """The merged, effective environment — presence in *some* file is not enough here.
+
+    These are the knobs that regress to a code default when a drop-in goes missing, so they get
+    the stronger source. A live value may be *wider* when it is an `os.pathsep` list: this host
+    prepends an absolute repo path to `RSE_FEDERATION_EXCLUDE`'s versioned `*/_worktrees/*`
+    glob, and that path is device-specific and must not be versioned (P18/HR34). Written as a
+    rule about list-valued variables rather than an allowlist naming that file, so the exception
+    is a property of the value's shape and not a waiver.
+    """
+    import os
+    import shlex
+
+    live = dict(tok.partition("=")[::2]
+                for tok in shlex.split(_systemctl(["show", "-p", "Environment", "--value"])))
+    name, _, want = value.strip().strip('"').partition("=")
+    assert name in live, (
+        f"{conf} versions {name} and the running unit does not set it — the code default "
+        "applies instead, silently. Copy the drop-in and `systemctl --user daemon-reload`."
+    )
+    missing = [p for p in want.split(os.pathsep) if p and p not in live[name].split(os.pathsep)]
+    assert not missing, (
+        f"{conf} versions {name}={want!r}, running unit has {live[name]!r} — a live value may "
+        f"add os.pathsep entries but not drop the versioned ones: {missing}"
+    )
+
+
 def test_federation_discover_empty_dir(tmp_path):
     from rag_search.daemon.federation import discover_members
 
