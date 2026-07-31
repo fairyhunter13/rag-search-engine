@@ -36,8 +36,24 @@ def test_sec1_is_secret_path_truth_table():
         "misp-docker/template.env",
         "kubernetes/mysql-credentials.env",
         "kubernetes/instance-secrets.env",
+        # Key material, added 2026-07-31. `certs/privkey.pem` (first line `-----BEGIN`) and three
+        # htpasswd files were in the store: 5 files, 12 chunks. The mass is not the argument.
+        "infra/certs/privkey.pem",
+        "deploy/tls/server.key",
+        "certs/bundle.p12",
+        "certs/bundle.pfx",
+        "android/app/release.jks",
+        "android/app/upload.keystore",
+        "nginx/htpasswd",
+        "nginx/.htpasswd",       # the canonical Apache spelling; the fleet's three were bare
+        "nginx/htpasswd.users",
     ]
     ordinary = [
+        "certs/fullchain.crt",   # the public half, published on purpose
+        "certs/ca.cer",
+        "keys/id_rsa.pub",
+        "nginx/.htaccess",       # routing rules, not credentials
+        "docs/keystore.md",
         "src/main.go",
         "src/env.py",            # 'env' in the stem, not a dotenv file
         "config/environment.ts",
