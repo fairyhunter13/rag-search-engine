@@ -75,3 +75,39 @@ it is larger than the "extension rule" this was filed as.
 `_code_source_fingerprint` and buys a full re-derive of every store. The `e7`+`fg3` stamp move has
 just been paid for and converged; this one waits for the next stamp rather than triggering its own.
 The survey is committed so the numbers do not have to be re-derived when it does.
+
+## Addendum — 2026-08-01: retired by measurement
+
+Everything above was true when recorded and one day later the premise is gone. Re-measured over all
+150 stores:
+
+| | at the survey | today |
+|---|---:|---:|
+| `.html` files indexed | 6,494 | **605** |
+| `.html` chunks | 43,397 | **2,631** |
+| share of fleet corpus | 10.2% | **0.87%** — 13th extension, behind `.groovy` at 1.10% |
+| within-project reclaim | 5,546 files | **404 files / 459 chunks = 0.15%** |
+| projects with within-dupes | 12 | 11 |
+
+**The cause is the option this document proposed and then set aside.** The body says any rule
+"should be measured against the possibility of simply excluding that tree in its project config,
+which costs no code at all". That is what happened: the project holding 92.7% of the duplication now
+excludes the vendored trees in its `.rse-index.yaml`, deliberately keeping the part it authors. No
+code, no stamp, and the tax it was going to repay is gone.
+
+**The shape is gone too, not just the size.** The wall of *110 groups at exactly 25 copies* — the
+evidence that this was a vendored `examples/` tree — no longer exists. The histogram is now 42 groups
+of 2, a long thin tail, and two groups of 59 at the top. The bimodality that made a batch rule
+attractive was a property of the excluded trees.
+
+**And the trigger it was waiting for has already come and gone.** "Waits for the next stamp" was
+written against `e7`; the fleet is on `e8` as of `d392193`, and nothing here rode along with it.
+A future reader must not treat that sentence as a pending window.
+
+**Stream 4 is retired.** Not deferred — the work is a stateful rule inside the one function the
+watcher, the indexer and the drift gate must all agree on, and the case for paying that is
+**459 chunks, 0.15% of the corpus**. The two open design questions in the section above (deterministic
+survivor order; where the hash lives) are still the right questions and are still unanswered; they
+are simply not worth answering at this price. Same disposition `21d0880` used for T1/T2: anyone
+reviving this re-measures first, because this document has now been wrong about its own headline
+once.
