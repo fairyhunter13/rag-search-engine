@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-01 | [The lint gate stopped at `src/`, and naming the directory would not have fixed it](2026-08-01-the-lint-gate-stopped-at-src.md) |
 | 2026-08-01 | [The prefix-free escape hatch is not there, and two of the three backlog items were mis-founded](2026-08-01-the-prefix-free-escape-hatch-is-not-there.md) |
 | 2026-08-01 | [An exported edge must name an exported node, and a paired result must stay paired](2026-08-01-an-exported-edge-must-name-an-exported-node.md) |
 | 2026-08-01 | [What the `e8` bump actually owed, written after it shipped](2026-08-01-what-the-e8-bump-actually-owed.md) |

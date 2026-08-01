@@ -32,7 +32,7 @@ jobs:
         run: pip install ruff
 
       - name: Ruff lint
-        run: ruff check src/rag_search src/tests
+        run: ruff check src/rag_search src/tests scripts
 
       - name: Compile check
         run: python -m compileall -q src/rag_search

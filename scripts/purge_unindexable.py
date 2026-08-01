@@ -14,8 +14,16 @@ purged by the incremental indexer instead. Those are counted and reported, never
 Exit: 0 = clean, 1 = a store could not be purged, or the daemon would not pause.
 """
 from __future__ import annotations
-import argparse, collections, contextlib, json, sqlite3, sys, time
-import urllib.error, urllib.request
+
+import argparse
+import collections
+import contextlib
+import json
+import sqlite3
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from rag_search.core.config import ProjectEntry, index_dir
@@ -40,7 +48,7 @@ def _store_paths_with_mass(db: Path) -> tuple[dict[str, int], set[str]]:
     run never opens a store for writing or pays VectorStore's 128 MB write-path cache."""
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        mass = {p: n for p, n in con.execute("SELECT path, COUNT(*) FROM chunks GROUP BY path")}
+        mass = dict(con.execute("SELECT path, COUNT(*) FROM chunks GROUP BY path"))
         return mass, {p for (p,) in con.execute("SELECT path FROM file_hashes")}
     finally:
         con.close()

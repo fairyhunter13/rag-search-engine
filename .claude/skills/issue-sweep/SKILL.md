@@ -57,7 +57,7 @@ Flag if embedding-model reload count > 10 (indicates session eviction storm).
 ### 1b. Correctness (tests + static)
 ```bash
 .venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q   # fast live suite
-.venv/bin/ruff check src/rag_search src/tests            # lint
+.venv/bin/ruff check src/rag_search src/tests scripts    # lint
 .venv/bin/python -m compileall -q src/rag_search         # syntax
 ```
 Use `/run-all-tests` for the full live suite when investigating a known failure.

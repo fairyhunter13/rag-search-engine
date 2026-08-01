@@ -7,7 +7,12 @@ against the working tree (default) or a specific git diff.
 Exit codes: 0=CONFORMS, 1=AT_RISK, 2=error.
 """
 from __future__ import annotations
-import argparse, ast, re, subprocess, sys
+
+import argparse
+import ast
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,10 +113,7 @@ def _check_one(inv: dict, changed_files: list[str]) -> tuple[str, str | None]:
             continue
         for spec in path_specs:
             sp = Path(spec)
-            if sp.is_dir() and str(fp).startswith(str(sp)):
-                relevant.append(ROOT / fp)
-                break
-            elif fp == sp or fp.name == sp.name:
+            if (sp.is_dir() and str(fp).startswith(str(sp))) or fp == sp or fp.name == sp.name:
                 relevant.append(ROOT / fp)
                 break
 

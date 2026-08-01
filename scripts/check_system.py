@@ -163,7 +163,7 @@ def check_mcp_tools() -> None:
     print("\n### MCP tools (server/mcp.py)")
     try:
         from rag_search.server.mcp import mcp as _mcp
-        tool_names = set(t.name for t in asyncio.run(_mcp.list_tools()))
+        tool_names = {t.name for t in asyncio.run(_mcp.list_tools())}
         if tool_names == EXPECTED_MCP_TOOLS:
             _ok(f"Exactly {len(EXPECTED_MCP_TOOLS)} tools registered: {sorted(EXPECTED_MCP_TOOLS)}")
         else:
