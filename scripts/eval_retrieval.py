@@ -4,6 +4,13 @@
     python scripts/eval_retrieval.py --project /repo
     python scripts/eval_retrieval.py --project /repo --model X --build --out /tmp/rse-eval/x
     ... --doc-prefix 'search_document: ' --query-prefix 'search_query: '   # asymmetric models
+    python scripts/eval_retrieval.py --compare a.json b.json               # paired, McNemar
+
+**Compare two arms with `--compare`, never by eyeballing their means.** Arms run the same queries
+against the same corpus, so the results are paired; two means thrown at each other discard that and
+need a far larger margin to resolve. Each run now carries per-query ranks in `records` for exactly
+this. `nDCG@10` is no longer reported — with one gold document and binary relevance it was a
+deterministic transform of MRR at the same rank, never a second signal (see `_rank_of`).
 
 Exists because `core/config.py` cites a "40-query golden set" as the evidence for `EMBED_MODEL`,
 `RERANK_MODEL` and `EMBED_MAX_TOKENS` — the last a four-point sweep quoted to four decimals — and
@@ -37,6 +44,7 @@ from a hand-written set this cannot reconstruct. Read the delta between two arms
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sqlite3
@@ -118,14 +126,71 @@ def build_query_set(graph_db: Path, store_paths: set[str], limit: int) -> list[t
     return out
 
 
-def _metrics(paths: list[str], gold: str) -> tuple[float, float, float, float]:
-    """(recall@1, reciprocal rank, nDCG@10, recall@10) for one query with one relevant document."""
-    hit1 = 1.0 if paths[:1] == [gold] else 0.0
-    for i, p in enumerate(paths[:_TOP_K], start=1):
+def _rank_of(paths: list[str], gold: str) -> int:
+    """1-based rank of `gold` in `paths`, or 0 if absent. One relevant document per query.
+
+    Every metric this script reports is a function of this single number, which is why it is
+    what the per-query records carry: recall@1 is `rank == 1`, RR is `1/rank` inside the cutoff,
+    recall@k is `0 < rank <= k`. Keeping the rank rather than the derived floats is what makes a
+    *paired* comparison possible at all — see `mcnemar`.
+
+    **`nDCG@10` was reported here until 2026-08-01 and was never a second signal.** With one gold
+    document and binary relevance it is `1/log2(rank+1)` against RR's `1/rank` at the same rank —
+    a deterministic transform of a column already in the table, so per-query it carries no
+    information RR does not. The old docstring conceded the arithmetic (*"Ideal DCG is 1.0 … so
+    DCG is already normalised"*) while every table in the lineage still presented the two as
+    independent columns. Dropped rather than recomputed; the tables already on the record keep
+    theirs, and this is a retirement, not a restatement of them.
+    """
+    for i, p in enumerate(paths, start=1):
         if p == gold:
-            # Ideal DCG is 1.0 with a single relevant doc, so DCG is already normalised.
-            return hit1, 1.0 / i, 1.0 / math.log2(i + 1), 1.0
-    return hit1, 0.0, 0.0, 0.0
+            return i
+    return 0
+
+
+def mcnemar(a: list[dict], b: list[dict]) -> dict:
+    """McNemar's exact test on recall@1 over the queries two arms share.
+
+    Two arms run **the same queries against the same corpus**, so their scores are paired and
+    comparing two independent means throws away the pairing — the textbook case for McNemar on
+    the discordant pairs, which is materially more powerful. The harness used to accumulate
+    straight into a 4-element total and divide, discarding exactly the records this needs.
+
+    Exact two-sided binomial rather than the chi-square approximation: the discordant count is
+    routinely under 25 here, which is where the approximation is least trustworthy, and
+    `math.comb` costs nothing. There is no scipy in this venv and a hand-run script is not a
+    reason to add one.
+    """
+    ra = {r["qid"]: r["rank"] for r in a}
+    rb = {r["qid"]: r["rank"] for r in b}
+    shared = sorted(set(ra) & set(rb))
+    only_a = sum(1 for q in shared if ra[q] == 1 and rb[q] != 1)
+    only_b = sum(1 for q in shared if ra[q] != 1 and rb[q] == 1)
+    n = only_a + only_b
+    lo = min(only_a, only_b)
+    p = 1.0 if n == 0 else min(1.0, 2.0 * sum(math.comb(n, k) for k in range(lo + 1)) / 2**n)
+    return {
+        "shared_queries": len(shared), "a_only_hit1": only_a, "b_only_hit1": only_b,
+        "discordant": n, "p_value_exact": round(p, 6),
+        # Stated rather than left to the reader: a and b are the file order on the command line.
+        "reading": ("no discordant pairs" if n == 0 else
+                    f"{'A' if only_a > only_b else 'B'} wins {max(only_a, only_b)}-{lo}"),
+    }
+
+
+def compare(path_a: Path, path_b: Path) -> dict:
+    """Paired comparison of two result files written by `evaluate`."""
+    a, b = (json.loads(p.read_text()) for p in (path_a, path_b))
+    for name, arm in (("A", a), ("B", b)):
+        if not arm.get("records"):
+            raise SystemExit(f"{name} carries no per-query records — re-run that arm")
+    if a["lane"] != b["lane"]:
+        raise SystemExit(f"lanes differ ({a['lane']} vs {b['lane']}): not the same measurement")
+    return {
+        "A": {"model": a["model"], "recall@1": a["recall@1"], "queries": a["queries"]},
+        "B": {"model": b["model"], "recall@1": b["recall@1"], "queries": b["queries"]},
+        "mcnemar_recall@1": mcnemar(a["records"], b["records"]),
+    }
 
 
 class _Prefixed:
@@ -184,16 +249,31 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     if not queries:
         raise SystemExit(f"no query-shaped symbols in {graph_db} whose file is indexed in {db}")
 
+    # The pool depth the cross-encoder is actually given, imported rather than hard-coded so this
+    # cannot drift from production. `recall@` it is the reranker's ceiling: a gold chunk outside
+    # the pool is one no reranker can ever recover, which is the question `_MIN_POOL` answers and
+    # the aggregate metrics never could.
+    from rag_search.query.search import _MIN_POOL
+
     embedder, store = _embedder(model, query_prefix), VectorStore(db, migrate=False)
-    agg = [0.0, 0.0, 0.0, 0.0]
+    depth = max(_TOP_K, _MIN_POOL) if lane == "dense" else _TOP_K
+    records: list[dict] = []
     for q, gold in queries:
         if lane == "dense":
-            hits = store.search(embedder.embed([q], batch_size=1)[0].astype("float32"), top_k=_TOP_K)
+            hits = store.search(embedder.embed([q], batch_size=1)[0].astype("float32"), top_k=depth)
         else:
             hits = search(q, embedder, store, top_k=_TOP_K)
-        for i, v in enumerate(_metrics([h["path"] for h in hits], gold)):
-            agg[i] += v
+        records.append({
+            # A short digest of the query, never the gold path: the records only have to *align*
+            # two arms, and the set is deterministic so the same query hashes the same in both.
+            "qid": hashlib.sha1(q.encode()).hexdigest()[:12],
+            "rank": _rank_of([h["path"] for h in hits], gold),
+        })
     k = len(queries)
+    ranks = [r["rank"] for r in records]
+    # RR keeps the @10 cutoff it always had, even though the dense lane now retrieves deeper —
+    # changing it would silently rebase every MRR already on the record.
+    mrr = sum(1.0 / r for r in ranks if 0 < r <= _TOP_K) / k
     spread: dict[str, int] = {}
     for _q, gold in queries:
         lang = path_lang.get(gold, "?")
@@ -207,8 +287,16 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
         # Reported, not just relied on: a set that has quietly collapsed to one language is the
         # exact failure this selector replaced, and it would otherwise look like a normal result.
         "query_languages": dict(sorted(spread.items(), key=lambda kv: -kv[1])),
-        "recall@1": round(agg[0] / k, 4), "MRR": round(agg[1] / k, 4),
-        "nDCG@10": round(agg[2] / k, 4), "recall@10": round(agg[3] / k, 4),
+        "recall@1": round(sum(r == 1 for r in ranks) / k, 4), "MRR": round(mrr, 4),
+        "recall@10": round(sum(0 < r <= _TOP_K for r in ranks) / k, 4),
+        # Only the dense lane retrieves deep enough to answer this: `search()` returns its
+        # results already reranked, so a hybrid figure would mean duplicating production fusion
+        # here to reconstruct a pool this script never sees.
+        f"recall@{_MIN_POOL}": (round(sum(0 < r <= _MIN_POOL for r in ranks) / k, 4)
+                                if lane == "dense" else None),
+        # Per-query ranks, so two arms can be compared with `--compare` as the paired
+        # measurements they are rather than as two independent means.
+        "records": records,
     }
 
 
@@ -227,7 +315,9 @@ def build(project: Path, out: Path, model: str | None, doc_prefix: str = "") -> 
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--project", required=True, type=Path)
+    ap.add_argument("--project", type=Path, help="required unless --compare is given")
+    ap.add_argument("--compare", nargs=2, type=Path, metavar=("A", "B"),
+                    help="two result files: McNemar exact test on recall@1 over shared queries")
     ap.add_argument("--model", default=None, help="embedding model id (default: the configured one)")
     ap.add_argument("--build", action="store_true", help="index into --out first, using --model")
     ap.add_argument("--out", type=Path, default=None, help="scratch store (default: the fleet's)")
@@ -240,6 +330,11 @@ def main() -> int:
                     help="task prefix prepended to every query (e.g. 'search_query: ')")
     args = ap.parse_args()
 
+    if args.compare:
+        print(json.dumps(compare(*args.compare), indent=2))
+        return 0
+    if args.project is None:
+        raise SystemExit("--project is required unless --compare is given")
     project = args.project.resolve()
     if args.out is None:
         from rag_search.core.config import index_dir
