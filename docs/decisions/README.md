@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-01 | [What the `e8` bump actually owed, written after it shipped](2026-08-01-what-the-e8-bump-actually-owed.md) |
 | 2026-07-31 | [The two levers are additive, and the bill is a fleet rebuild](2026-07-31-two-levers-additive-and-the-bill.md) |
 | 2026-07-31 | [The span scan was never hot, and bisect does not answer the same question](2026-07-31-span-scan-is-neither-hot-nor-equivalent.md) |
 | 2026-07-31 | [An edge is a resolved call, or it is not an edge](2026-07-31-an-edge-is-a-resolved-call.md) |
