@@ -80,6 +80,51 @@ def test_api_graph_export(live_client, project):
     assert isinstance(data, dict), "graph_export must return JSON object"
 
 
+@pytest.mark.parametrize("max_nodes", [8, 5000])
+def test_graph_export_edges_are_induced_by_nodes(live_client, sample_workspace, max_nodes):
+    """Every exported edge must name two exported nodes, at any `max_nodes`.
+
+    The route selected `symbols LIMIT ?` and `edges LIMIT ?` independently, so nothing tied the
+    two together. Measured 2026-08-01 at the dashboard's `max_nodes=2000`: 51.3% of exported
+    edges dangled fleet-wide and **100%** on a 136-member federation, which returned 2,000 nodes
+    and 2,000 edges with not one edge joining two of them. The old assertion here — 200 and
+    `isinstance(dict)` — passes against an empty object and could not witness any of it.
+
+    The federation root is the subject on purpose: the per-member budget was applied and then the
+    concatenation was truncated a second time, so the multi-store path is where the rate hit 100%.
+    `max_nodes=8` forces that truncation; 5,000 checks the fixture is not merely too small to cap.
+
+    The uniqueness assertions are the second half of the same defect, and this fixture is the
+    reason they are here: `expand_federation` yields the root *and* its members, the root's
+    directory contains them, so every symbol under a member is indexed twice. First run returned
+    194 node rows for 98 symbols. `symbol_id` hashes the absolute path, so equal ids are the same
+    symbol — a duplicate row is a duplicate, never two symbols that collided.
+    """
+    r = live_client.get(
+        f"/api/graph_export?project={sample_workspace.fed_root}&max_nodes={max_nodes}")
+    assert r.status_code == 200, f"/api/graph_export: {r.status_code}"
+    data = r.json()
+    ids = [n["id"] for n in data["nodes"]]
+    assert len(ids) <= max_nodes, f"exported {len(ids)} nodes over the {max_nodes} cap"
+    assert len(set(ids)) == len(ids), (
+        f"{len(ids) - len(set(ids))} of {len(ids)} exported node rows repeat an id already "
+        f"exported by an overlapping federation member")
+    pairs = [(e["source_id"], e["target_id"]) for e in data["edges"]]
+    assert len(set(pairs)) == len(pairs), (
+        f"{len(pairs) - len(set(pairs))} of {len(pairs)} exported edges repeat a "
+        f"(source_id, target_id) already exported by an overlapping federation member")
+    # Non-vacuity: an empty edge list satisfies the induced property for free, and this fixture
+    # is three Go services that call across their own files. If this goes red the fixture stopped
+    # producing edges and the assertion below stopped meaning anything.
+    assert data["edges"], f"no edges exported at max_nodes={max_nodes} — assertion would be vacuous"
+    present = set(ids)
+    dangling = [e for e in data["edges"]
+                if e["source_id"] not in present or e["target_id"] not in present]
+    assert not dangling, (
+        f"{len(dangling)} of {len(data['edges'])} exported edges name a node that was not "
+        f"exported (max_nodes={max_nodes})")
+
+
 def test_api_storage_health(live_client):
     r = live_client.get("/api/storage_health")
     assert r.status_code == 200
