@@ -119,3 +119,35 @@ The `_Prefixed` wrapper stays in `scripts/eval_retrieval.py` and deliberately do
 `embed/embedder.py`. Putting it there would be the asymmetric-embed change, made without the call
 sites that give it its argument — a document-side prefix applied to a query, which is the exact
 failure mode the previous doc measured as the whole margin, inverted.
+
+## Addendum — 2026-08-01: what the two query sets were made of
+
+The arm result files carry a `query_languages` field that no table above reproduces. It is reported
+for a reason the harness states in place: *"a set that has quietly collapsed to one language is the
+exact failure this selector replaced, and it would otherwise look like a normal result."* Read back
+off the stored arms before they were deleted, and identical across every arm within each project:
+
+| | query set |
+|---|---|
+| this repo, 130 queries | `python 118, go 11, html 1` |
+| the larger project, 200 queries | `php 61, python 61, vue 32, javascript 30, scss 10, bash 4, sql 1, typescript 1` |
+
+**This repo's table is 91% a Python result.** It has not collapsed to one language, but 118 of 130 is
+most of the way there, and the engine supports nine. So the "wins 8 of 8 metrics on both projects"
+claim decomposes unevenly: the larger project's 200 queries are the multi-language evidence and the
+load-bearing half of the grid, and this repo's 130 are close to a single-language confirmation of it.
+That does not overturn the additivity result — the residual is computed within each project, not
+across them — but any future arm that wins here and loses there should be read with this in hand
+rather than treated as a tie.
+
+The two figures also explain the absolute-level gap the previous doc attributed to store size alone.
+Vue and SCSS are out-of-distribution for the code-embedder line (CodeSearchNet covers Go, Java,
+JavaScript, PHP, Python and Ruby), and they are 21% of the larger project's queries and 0% of this
+repo's.
+
+**The arm stores are gone.** All twenty arm `vectors.db` trees — the six in the first pass, the four
+on the larger project, the six re-runs, and four from an earlier round — were deleted on 2026-08-01,
+after every metric in both tables above was read back out of them and reconciled line by line. Their absence is not
+missing work: rebuilding any arm is one `scripts/eval_retrieval.py build` run, ~585 s for the larger
+project. Note also that the first-pass numbers this document corrects (jina@512 at 0.7385) came from
+a superseded corpus and were deliberately **not** carried forward.
