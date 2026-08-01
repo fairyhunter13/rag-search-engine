@@ -25,7 +25,7 @@ it because they are required to report every failure.
 #   .venv/bin/pytest $(.venv/bin/python scripts/affected_tests.py)
 # Never a CI gate: a missed edge would silently shrink it. CI always runs the whole suite.
 
-ruff check src/rag_search src/tests && python -m compileall -q src/rag_search
+ruff check src/rag_search src/tests scripts && python -m compileall -q src/rag_search
 ```
 
 **Markers**: `live` (daemon at :8765 + GPU) · `costly` (spends real Claude session quota via

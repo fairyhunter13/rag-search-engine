@@ -508,7 +508,7 @@ _SYSTEM_PROMPT_TARGETS, _MCP_TARGETS = _build_targets()
 
 def verify_all() -> list[ConfigResult]:
     results: list[ConfigResult] = []
-    for kind, path, label in _SYSTEM_PROMPT_TARGETS:
+    for kind, path, _label in _SYSTEM_PROMPT_TARGETS:
         if kind == "claude":
             results.append(_verify_claude_md(path))
         elif kind == "hermes_agent":
@@ -524,7 +524,7 @@ def verify_all() -> list[ConfigResult]:
 
 def repair_all(dry_run: bool = False) -> list[ConfigResult]:
     results: list[ConfigResult] = []
-    for kind, path, label in _SYSTEM_PROMPT_TARGETS:
+    for kind, path, _label in _SYSTEM_PROMPT_TARGETS:
         if kind == "claude":
             results.append(_repair_claude_md(path, dry_run=dry_run))
         elif kind == "hermes_agent":
@@ -550,10 +550,7 @@ def main() -> int:
                         help="Output results as JSON")
     args = parser.parse_args()
 
-    if args.apply_all:
-        results = repair_all(dry_run=args.dry_run)
-    else:
-        results = verify_all()
+    results = repair_all(dry_run=args.dry_run) if args.apply_all else verify_all()
 
     if args.json_out:
         import dataclasses

@@ -228,10 +228,9 @@ def _embedder(model: str | None, prefix: str = ""):
 
 def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: str,
              query_prefix: str = "", doc_prefix: str = "") -> dict:
+    from rag_search.core.config import project_graph_db
     from rag_search.index.store import VectorStore
     from rag_search.query.search import search
-
-    from rag_search.core.config import project_graph_db
 
     db = store_dir / "vectors.db"
     if not db.exists():
