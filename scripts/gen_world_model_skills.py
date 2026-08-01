@@ -4,6 +4,7 @@
 GPU-free, daemon-free.  Run after editing model.yaml or info-hierarchy.md.
 """
 from __future__ import annotations
+
 import sys
 from pathlib import Path
 

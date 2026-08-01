@@ -21,8 +21,10 @@ whitespace, parsing) measures a different one. Reports counts and ranks only, ne
 project name, so its output can be pasted into a public repo (P18/HR34).
 """
 from __future__ import annotations
+
 import argparse
 import collections
+import contextlib
 import hashlib
 import sys
 from pathlib import Path
@@ -47,10 +49,8 @@ def survey(ext: str) -> tuple[int, dict[str, list[str]]]:
             if Path(f).suffix.lower() != ext:
                 continue
             scanned += 1
-            try:
+            with contextlib.suppress(OSError):
                 by_hash[hashlib.sha256(Path(f).read_bytes()).hexdigest()].append(root.name)
-            except OSError:
-                pass
     return scanned, by_hash
 
 

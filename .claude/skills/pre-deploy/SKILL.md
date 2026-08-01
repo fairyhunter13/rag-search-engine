@@ -43,7 +43,7 @@ Run these 5 checks against your indexed project:
 
 ### 5. Lint check
 ```bash
-.venv/bin/ruff check src/rag_search src/tests --quiet 2>&1 | head -20
+.venv/bin/ruff check src/rag_search src/tests scripts --quiet 2>&1 | head -20
 ```
 Must be clean (or only pre-existing E501 lines ≤ 5).
 

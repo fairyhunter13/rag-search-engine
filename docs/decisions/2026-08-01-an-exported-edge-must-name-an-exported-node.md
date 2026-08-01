@@ -76,11 +76,13 @@ have it could witness the bug.
 ### The gate that did not exist
 
 `test_api_graph_export` asserted `status_code == 200` and `isinstance(data, dict)` — it passes against
-an empty object, and it stayed green through every measurement above. The replacement asserts the
-invariant itself over the *federation root*, at a cap tight enough to force truncation and again at
-one loose enough to prove the fixture is not merely too small to cap, and it is non-vacuous by
-construction: an empty edge list would satisfy "every edge is induced" for free, so a non-empty edge
-list is asserted first.
+an empty object, and it stayed green through every measurement above. The new test sits *beside* it
+rather than replacing it — the weak one is the only coverage of the single-project path, and a smoke
+test is worth keeping once it is no longer the only thing asserted. The new one asserts the invariant
+itself over the *federation root*, at a cap tight enough to force truncation and again at one loose
+enough to prove the fixture is not merely too small to cap, and it is non-vacuous by construction: an
+empty edge list would satisfy "every edge is induced" for free, so a non-empty edge list is asserted
+first.
 
 ## The eval harness threw away the records its own comparisons needed
 
@@ -117,8 +119,8 @@ have.
 - **Two independent `LIMIT`s over related tables do not sample a subgraph.** They sample two things
   that happen to have the same size. If one table references the other, one query has to be induced
   by the other.
-- **A test that asserts a 200 and a type cannot witness a content bug.** Both of the assertions this
-  replaced were true for the entire life of the defect — and the replacement went red on its first
+- **A test that asserts a 200 and a type cannot witness a content bug.** Both of the assertions it
+  sits beside were true for the entire life of the defect — and the new test went red on its first
   run against a bug in the fix itself, which is the only reason the overlap was found at all.
 - **"Ids are hashes, so they cannot clash" answers the wrong question.** The hash rules out
   *collisions*; it says nothing about the same row being read twice through two stores. The fleet
