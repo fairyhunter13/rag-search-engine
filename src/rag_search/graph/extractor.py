@@ -65,7 +65,21 @@ from pathlib import Path
 #                    its input did, not its algorithm. This rev is mandatory rather than
 #                    conventional — the resolution lives in `sweeps.py`, which S3 below explains is
 #                    deliberately outside `_code_fingerprint`, so nothing else would have noticed.
-EXTRACTOR_REV = "e8"
+#   e9  2026-08-03  No extractor code changed at all — the *grammars* did.
+#                    `tree-sitter-language-pack` 1.12.1 -> 1.14.0, and this is exactly the case S3
+#                    below warns about: a dependency version is invisible to `_code_fingerprint`,
+#                    which hashes source modules, so without this rev the fleet would keep serving
+#                    edges the installed pack no longer produces. Measured by regenerating
+#                    `docs/reference/grammar-capability-matrix.md` on both versions and diffing all
+#                    306 pre-existing rows: **0 regressions, 0 languages removed, 65 added, 36
+#                    gained capability.** The gains land on the fleet's dark mass rather than the
+#                    long tail — php gains highlights *and* injections (rung 6 -> rung 1), which is
+#                    the `injections.scm` absence §1g measured on 746 `*.tpl.php` templates;
+#                    typescript and tsx gain tags and locals (rung 6 -> rung 4); vue gains
+#                    highlights and static injections. Totals: languages 306 -> 371, highlights
+#                    237 -> 319, tags 48 -> 71, injections 110 -> 157 (static 75 -> 111), locals
+#                    81 -> 108, no query files 66 -> 51.
+EXTRACTOR_REV = "e9"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -153,7 +167,7 @@ def symbol_id(file: str, name: str, start_line: int) -> str:
 
 def _named_children(node) -> list:
     """`node`'s named children, left to right. One place, so the stack walks agree."""
-    return [node.named_child(i) for i in range(node.named_child_count())]
+    return [node.named_child(i) for i in range(node.named_child_count)]
 
 
 def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
@@ -176,13 +190,13 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
     stack: list[tuple] = [(node, parent)]
     while stack:
         cur, par = stack.pop()
-        k = cur.kind()
+        k = cur.type
         child_parent = par
         if any(k.endswith(s) for s in _GENERIC_DEF_SUFFIXES):
             name_node = cur.child_by_field_name("name")
             if name_node:
-                br = name_node.byte_range()
-                name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+                name = code_bytes[
+                    name_node.start_byte:name_node.end_byte].decode("utf-8", errors="replace")
                 if _is_name_text(name):
                     qname = f"{par}.{name}" if par else name
                     if "function" in k or "method" in k or "func" in k:
@@ -201,8 +215,8 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
                         sym_kind = "function"  # conservative default
                     result.append(Symbol(
                         file=file, name=name, qualified_name=qname, kind=sym_kind,
-                        start_line=cur.start_position().row + 1,
-                        end_line=cur.end_position().row + 1,
+                        start_line=cur.start_point[0] + 1,
+                        end_line=cur.end_point[0] + 1,
                         language=lang,
                     ))
                     child_parent = name
@@ -256,7 +270,7 @@ def _named_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -
     stack = [root]
     while stack:
         cur = stack.pop()
-        name_fields = fields.get(cur.kind())
+        name_fields = fields.get(cur.type)
         if name_fields is not None:
             value = next(
                 (v for v in (cur.child_by_field_name(f) for f in _BINDING_VALUE_FIELDS)
@@ -265,7 +279,7 @@ def _named_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -
                 (n for n in (cur.child_by_field_name(f) for f in name_fields)
                  if n is not None), None)
             if (value is not None and name_node is not None
-                    and value.kind() in _FUNCTION_VALUE_KINDS):
+                    and value.type in _FUNCTION_VALUE_KINDS):
                 # `_unwrap_callee` is the existing reader for "this node is, or ends in, a name":
                 # it takes the rightmost identifier of a member expression, which is what makes
                 # `obj.handler = () => {}` land on `handler` and not on the whole path.
@@ -273,8 +287,8 @@ def _named_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -
                 if name:
                     out.append(Symbol(
                         file=file_str, name=name, qualified_name=name, kind="function",
-                        start_line=value.start_position().row + 1,
-                        end_line=value.end_position().row + 1,
+                        start_line=value.start_point[0] + 1,
+                        end_line=value.end_point[0] + 1,
                         language=language,
                     ))
         stack.extend(reversed(_named_children(cur)))
@@ -314,16 +328,15 @@ def _unwrap_callee(nn, code_bytes: bytes) -> str:
     """Unwrap member/attribute node to rightmost identifier; '' if not a name."""
     if nn is None:
         return ""
-    if nn.kind() in _MEMBER_KINDS:
+    if nn.type in _MEMBER_KINDS:
         # "field"=Go/JS, "property"=TS/JS, "attribute"=Python, "name"=Java/Kotlin
         nn = (nn.child_by_field_name("field") or nn.child_by_field_name("property")
               or nn.child_by_field_name("attribute") or nn.child_by_field_name("name") or nn)
     # S1: a name is a leaf. If the node still has named children after unwrapping it is an
     # expression — `factory()()`, `arr[i]()` — and its text is not a callee name.
-    if nn.named_child_count():
+    if nn.named_child_count:
         return ""
-    br = nn.byte_range()
-    name = code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+    name = code_bytes[nn.start_byte:nn.end_byte].decode("utf-8", errors="replace")
     return name if _is_name_text(name) else ""
 
 
@@ -347,7 +360,7 @@ def _callee_node(node):  # type: ignore[return]
              or node.child_by_field_name("callee"))
     if named is not None:
         return named
-    return node.named_child(0) if node.named_child_count() else None
+    return node.named_child(0) if node.named_child_count else None
 
 
 def _highlight_walk(code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
@@ -395,10 +408,12 @@ def _is_definition_parent(kind: str) -> bool:
 def _highlight_captures(code_bytes: bytes, language: str):
     """`(capture_name -> [node])` from the grammar's own highlights.scm, or `{}`.
 
-    Parses a *second* time, with the raw `tree_sitter` binding rather than the pack's: the two
-    ship different node APIs (`.type` / `.start_byte` / `.root_node` here, `.kind()` /
-    `.byte_range()` / `.root_node()` there) and a `QueryCursor` only accepts nodes from its own
-    binding. The cost is paid only on the path where the alternative is zero symbols.
+    Parses a *second* time, with the raw `tree_sitter` binding rather than the pack's. The
+    original reason was that the two shipped different node APIs; as of pack 1.14.0 they do not
+    — `get_parser` now returns a real `tree_sitter.Parser` — so what is left is the narrower
+    rule that a `QueryCursor` only accepts nodes from the tree its own binding parsed. Keeping
+    the second parse is one `Parser` construction on a fallback path whose alternative is zero
+    symbols; unifying it is a separate change with its own re-derive, not a free simplification.
     """
     try:
         import tree_sitter as ts
@@ -447,8 +462,8 @@ def _get_parser_for(language: str):  # type: ignore[return]
 def _child_of_kind(node, kind: str):  # type: ignore[return]
     """First named child of node whose kind() == kind, else None."""
     return next(
-        (node.named_child(i) for i in range(node.named_child_count())
-         if node.named_child(i).kind() == kind), None,
+        (node.named_child(i) for i in range(node.named_child_count)
+         if node.named_child(i).type == kind), None,
     )
 
 
@@ -456,14 +471,13 @@ def _attr_value_text(attr_node, code_bytes: bytes) -> str:
     """Unquoted text of an HTML/SFC `attribute` node's value (e.g. lang="ts" -> "ts")."""
     vn = _child_of_kind(attr_node, "attribute_value")
     if vn is not None:
-        br = vn.byte_range()
-        return code_bytes[br.start:br.end].decode("utf-8", errors="replace")
+        return code_bytes[vn.start_byte:vn.end_byte].decode("utf-8", errors="replace")
     qvn = _child_of_kind(attr_node, "quoted_attribute_value")
     if qvn is not None:
         inner = _child_of_kind(qvn, "attribute_value")
         target = inner if inner is not None else qvn
-        br = target.byte_range()
-        return code_bytes[br.start:br.end].decode("utf-8", errors="replace").strip("\"'")
+        return code_bytes[
+            target.start_byte:target.end_byte].decode("utf-8", errors="replace").strip("\"'")
     return ""
 
 
@@ -482,7 +496,7 @@ def _iter_script_blocks(node, code_bytes: bytes) -> list[tuple[str, bytes, int]]
     stack = [node]
     while stack:
         cur = stack.pop()
-        if cur.kind() != "script_element":
+        if cur.type != "script_element":
             stack.extend(reversed(_named_children(cur)))
             continue
         start_tag = _child_of_kind(cur, "start_tag")
@@ -491,18 +505,17 @@ def _iter_script_blocks(node, code_bytes: bytes) -> list[tuple[str, bytes, int]]
             continue
         lang_attr = ""
         for attr in _named_children(start_tag) if start_tag else []:
-            if attr.kind() != "attribute":
+            if attr.type != "attribute":
                 continue
             name_node = _child_of_kind(attr, "attribute_name")
             if name_node is None:
                 continue
-            nbr = name_node.byte_range()
-            if code_bytes[nbr.start:nbr.end].decode("utf-8", "replace") == "lang":
+            if code_bytes[
+                    name_node.start_byte:name_node.end_byte].decode("utf-8", "replace") == "lang":
                 lang_attr = _attr_value_text(attr, code_bytes)
                 break
         inner_lang = _EMBEDDED_SCRIPT_LANG.get(lang_attr.lower(), "javascript")
-        br = raw.byte_range()
-        out.append((inner_lang, code_bytes[br.start:br.end], raw.start_position().row))
+        out.append((inner_lang, code_bytes[raw.start_byte:raw.end_byte], raw.start_point[0]))
     return out
 
 
@@ -672,7 +685,7 @@ def extract_symbols_with_stats(
     outer_root = None
     if outer_ok:
         try:
-            outer_root = outer_parser.parse(content).root_node()
+            outer_root = outer_parser.parse(code_bytes).root_node
         except Exception:
             outer_root = None
     try:
@@ -738,12 +751,16 @@ def extract_symbols_calls_with_stats(
 
 
 def _node_has_error(root) -> bool:
-    """`has_error` is a *method* on this binding's Node, not a property.
+    """`has_error` is a property on some bindings and a method on others, so neither shape is
+    assumed. Pack 1.12.1 exposed it as a method; 1.14.0 returns `tree_sitter.Node`, where it is
+    a property. This function predates that move and survived it unchanged, which is the reason
+    it is written this way.
 
-    `bool(getattr(root, "has_error", False))` therefore returns True for every parsed file —
-    it measures "the attribute exists", not "the parse failed". Measured: 43/43 svelte and
-    50/50 python files reported errors, which is the tell. Call it when callable, and treat a
-    binding that exposes neither shape as "unknown" rather than inventing a verdict.
+    `bool(getattr(root, "has_error", False))` is the trap: against the method shape it returns
+    True for every parsed file, measuring "the attribute exists" rather than "the parse failed".
+    Measured: 43/43 svelte and 50/50 python files reported errors, which is the tell. Call it
+    when callable, and treat a binding that exposes neither shape as "unknown" rather than
+    inventing a verdict.
     """
     attr = getattr(root, "has_error", None)
     if attr is None:
@@ -772,11 +789,10 @@ def _error_byte_ratio(root, total_bytes: int) -> float:
     while stack:
         node = stack.pop()
         try:
-            if node.kind() in ("ERROR", "MISSING"):
-                rng = node.byte_range()
-                bad += rng.end - rng.start
+            if node.type in ("ERROR", "MISSING"):
+                bad += node.end_byte - node.start_byte
                 continue
-            stack.extend(node.named_child(i) for i in range(node.named_child_count()))
+            stack.extend(node.named_child(i) for i in range(node.named_child_count))
         except Exception:
             return 0.0
     return bad / total_bytes
@@ -953,10 +969,10 @@ def _collect_calls_with_lines(node, code_bytes: bytes, out: list) -> None:
     stack = [node]
     while stack:
         cur = stack.pop()
-        if _is_call_node(cur.kind()):
+        if _is_call_node(cur.type):
             name = _unwrap_callee(_callee_node(cur), code_bytes)
             if name:
-                out.append((name, cur.start_position().row + 1))
+                out.append((name, cur.start_point[0] + 1))
         stack.extend(reversed(_named_children(cur)))
 
 
@@ -965,11 +981,11 @@ def extract_calls_with_lines(content: str, language: str) -> list[tuple[str, int
     parser, ok = _get_parser_for(language)
     if not ok:
         return []
+    code_bytes = content.encode("utf-8", errors="replace")
     try:
-        root = parser.parse(content).root_node()
+        root = parser.parse(code_bytes).root_node
     except Exception:
         return []
-    code_bytes = content.encode("utf-8", errors="replace")
     out: list[tuple[str, int]] = []
     _collect_calls_with_lines(root, code_bytes, out)
     for inner_lang, inner_bytes, line_offset in _iter_script_blocks(root, code_bytes):

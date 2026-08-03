@@ -71,7 +71,7 @@ dependencies = [
     # invalidate them — the fleet would keep serving edges no current code would produce.
     # Raise the pin and the REV together, deliberately.
     "tree-sitter>=0.23.0",
-    "tree-sitter-language-pack==1.12.1",
+    "tree-sitter-language-pack==1.14.0",
 
     # Community detection (k-core over igraph — see the leidenalg note above)
     "igraph>=0.11.0",
