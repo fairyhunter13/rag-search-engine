@@ -79,7 +79,7 @@ from pathlib import Path
 #                    highlights and static injections. Totals: languages 306 -> 371, highlights
 #                    237 -> 319, tags 48 -> 71, injections 110 -> 157 (static 75 -> 111), locals
 #                    81 -> 108, no query files 66 -> 51.
-EXTRACTOR_REV = "e9"
+EXTRACTOR_REV = "e10"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -694,6 +694,9 @@ def extract_symbols_with_stats(
         r = None
     syms, rung, anon = _extract_symbols_from(r, outer_root, code_bytes, file_str, language)
     if outer_root is not None:
+        # After every rung has spoken, and before embedded blocks are merged — those recurse
+        # through this same function and have already qualified themselves.
+        _qualify_by_receiver(syms, outer_root, code_bytes)
         host_produced = bool(syms)
         for inner_lang, inner_bytes, line_offset in _embedded_blocks(
                 outer_root, code_bytes, language):
@@ -771,6 +774,70 @@ def _node_has_error(root) -> bool:
         return False
 
 
+def _first_type_name(node, code_bytes: bytes) -> str:
+    """The first valid-name leaf under `node`'s nearest `type` field, breadth-first."""
+    queue = [node]
+    while queue:
+        cur = queue.pop(0)
+        typed = cur.child_by_field_name("type")
+        if typed is not None:
+            inner = [typed]
+            while inner:
+                x = inner.pop(0)
+                text = code_bytes[x.start_byte:x.end_byte].decode("utf-8", errors="replace")
+                if x.named_child_count == 0 and _is_name_text(text):
+                    return text
+                inner.extend(_named_children(x))
+        queue.extend(_named_children(cur))
+    return ""
+
+
+def _qualify_by_receiver(syms: list[Symbol], root, code_bytes: bytes) -> None:
+    """Name a method by the type it is declared *on*, where the grammar says so in a field.
+
+    §1d of the plan read `qualified_name == name` on the structure rung and concluded that no
+    container is ever recorded there. That was true when measured and is no longer: e7's
+    containment arm gives a member its enclosing class, and re-measuring the *proposed* span-nesting
+    fix found it recovers nothing further — **0 symbols gained across 18,766 in seven languages**,
+    because containment already reaches everything span nesting can reach.
+
+    What containment structurally cannot reach is a method declared *outside* its type. Go's
+    `func (s *Server) Start()` is a top-level declaration nested in nothing, so no enclosing span
+    exists to name it, and it is stored as `Start`. Measured on a 400-file Go corpus: **43.5% of
+    unqualified symbols (2,561 of 5,881) are that shape.** `query/graph_handler.py:15` resolves
+    `WHERE name = ? OR qualified_name = ?`, so `graph(symbol="Server.Start")` is wired and cannot
+    match today.
+
+    The receiver is a grammar *field*, exactly like the `name` field `_generic_walk` already reads,
+    so no vocabulary about source text is invented (P6/HR15) and any grammar spelling a receiver the
+    same way gets this for free — nothing here is keyed on the language being Go.
+
+    It reads the receiver's `type` **field** rather than its last identifier. The positional rule
+    was tried first and is right on 641/641 real receivers, but `(s *Stack[T])` ends in the type
+    *parameter*: it names `T` where the field-based rule names `Stack`.
+    """
+    if not any(s.qualified_name == s.name for s in syms):
+        return
+    by_line: dict[int, str] = {}
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        recv = cur.child_by_field_name("receiver")
+        if recv is not None:
+            owner = _first_type_name(recv, code_bytes)
+            if owner:
+                by_line[cur.start_point[0] + 1] = owner
+        stack.extend(_named_children(cur))
+    for sym in syms:
+        # Only fills a gap. `_generic_walk` tracks its own parent as it descends and its answer is
+        # the better one; overwriting it here would be a regression dressed as coverage.
+        if sym.qualified_name != sym.name:
+            continue
+        owner = by_line.get(sym.start_line)
+        if owner and owner != sym.name:
+            sym.qualified_name = f"{owner}.{sym.name}"
+
+
 def _error_byte_ratio(root, total_bytes: int) -> float:
     """Fraction of the file covered by ERROR/MISSING nodes — X2's evidence, and only that.
 
@@ -782,6 +849,31 @@ def _error_byte_ratio(root, total_bytes: int) -> float:
     claim that the *real* language was identified. It was not; nothing here guesses one.
 
     Nested errors are not double-counted: an ERROR node's subtree is not descended into.
+
+    **Plan item #10 proposed changing exactly that and it is costed and declined (2026-08-03).**
+    The proposal — credit an ERROR for the bytes its well-formed named descendants cover — is right
+    about the symptom: one PHP-5 `$_priv{PRIV_DELETE}` near the top of a `*.tpl.php` template makes
+    the *root* an ERROR spanning all 39,630 bytes, so 746 fleet files score 1.0 and are labelled
+    `language_mismatch` though 19,562 `function_call_expression` nodes parsed cleanly inside. It is
+    wrong that the credit separates that file from genuinely wrong-language bytes. Measured against
+    RB1's XML fixture under five claimed languages and 300 real `*.tpl.php`:
+
+    | credit rule | XML-as-go | XML-as-rust | tpl.php still flagged |
+    |---|---:|---:|---:|
+    | none (this code) | 0.907 | 1.000 | 110/300 |
+    | any named child | 0.113 | 0.134 | 0/300 |
+    | children with named children | 0.144 | 0.289 | 0/300 |
+    | children with >= 2 named children | 0.227 | 0.567 | 0/300 |
+
+    Every rule that rescues the templates also drops XML below the 0.85 threshold, because
+    tree-sitter's error recovery manufactures structurally plausible children out of garbage — so
+    "are this ERROR's descendants well-formed" does not discriminate. The only thing that would is
+    naming the node kinds real PHP produces, which is the mapping table P6/HR15 exists to forbid.
+
+    What is being bought is also small: `language_mismatch` vs `generic` is a **label**, on files
+    that legitimately define no symbols either way (§1g of the plan measured that re-parsing them as
+    an HTML host rescues 2% — 14 of 746). Trading a working wrong-language detector for a nicer name
+    on 1.8% of the fleet fails P10. RB1 and EL10 are the tests that said so, on the first run.
     """
     if root is None or total_bytes <= 0:
         return 0.0
