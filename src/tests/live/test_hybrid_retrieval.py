@@ -153,6 +153,41 @@ def _pre_idsplit_shape(path) -> None:
     con.close()
 
 
+def test_lx6_a_path_term_outranks_the_same_term_in_a_body(embedder, safe_tmp_path):
+    """LX6: `path` is a weighted fts5 field, not one line of body text among a few hundred.
+
+    Every chunk already carries its repo-relative path in a `# path\\n` header, so the terms are in
+    the index either way and a gate that only asserts "the file is found" passes without any
+    weight at all. What the weight buys is *rank*: the file the query names must beat a file that
+    merely talks about it. The distractor here mentions the target's path words repeatedly in its
+    body and never in its own path — remove `_PATH_WEIGHT` from the bm25() call and it wins.
+    """
+    from rag_search.index.store import VectorStore
+
+    texts = [
+        ("app/services/invoice/reconciliation_ledger.py",
+         "def run(entries):\n    return sum(e.amount for e in entries)\n"),
+        ("app/notes.py",
+         "# reconciliation ledger notes: the reconciliation ledger is the ledger we reconcile,\n"
+         "# see the reconciliation ledger docs for how the reconciliation ledger reconciles.\n"),
+    ]
+    vs = VectorStore(safe_tmp_path / "lx6.db")
+    try:
+        vecs = embedder.embed([f"# {p}\n{b}" for p, b in texts], batch_size=8)
+        for i, ((path, body), vec) in enumerate(zip(texts, vecs, strict=True)):
+            vs.insert(i, path, 1, 3, "python", f"# {path}\n{body}", vec)
+        vs.flush()
+        hits = vs.search_lexical("reconciliation ledger", top_k=5)
+        got = [h["path"] for h in hits]
+        assert len(got) == 2, f"LX6 is vacuous: the query matched {got}, not both chunks"
+        assert got[0] == texts[0][0], (
+            f"LX6: the file whose *path* names the query ranks {got.index(texts[0][0]) + 1}, "
+            f"behind a body that only mentions it. Order was {got}"
+        )
+    finally:
+        vs.close()
+
+
 def test_lx5_two_write_handles_migrating_one_store_do_not_race(embedder, safe_tmp_path):
     """LX5: concurrent write-path opens of an unmigrated store must serialize, not collide.
 
