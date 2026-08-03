@@ -5,12 +5,23 @@ import json
 
 
 def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def]
-    """Tarjan SCC on the file-level call graph; returns SCCs of size ≥ 2."""
+    """Tarjan SCC on the file-level import graph; returns SCCs of size ≥ 2.
+
+    Reads `file_imports`, which is what the name has always claimed. Until e11 there was no
+    import table, so this ran on the file-level projection of the *call* graph — a related but
+    different relation, and a strictly weaker answer to the question asked: a call cycle is
+    resolvable by moving one function, an import cycle is a module-structure defect. The two
+    also disagree in both directions, since a file can import another without calling into it
+    (the §8 measurement: 0% of redacted-name-9's import pairs were induced by calls) and a call can
+    cross files that import each other transitively rather than directly.
+
+    Falls back to nothing rather than to the call graph when the table is empty: an empty
+    answer is honest about a store predating e11, and silently substituting a different
+    relation is the failure this change exists to end.
+    """
     rows = conn.execute(
-        "SELECT DISTINCT s1.file,s2.file FROM edges e "
-        "JOIN symbols s1 ON e.caller_sid=s1.sid "
-        "JOIN symbols s2 ON e.callee_sid=s2.sid "
-        "WHERE s1.file!=s2.file AND s1.file IS NOT NULL AND s2.file IS NOT NULL LIMIT 20000"
+        "SELECT src_file,dst_file FROM file_imports "
+        "WHERE src_file!=dst_file LIMIT 20000"
     ).fetchall()
     adj: dict[str, list[str]] = {}
     for a, b in rows:
