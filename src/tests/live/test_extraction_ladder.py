@@ -198,6 +198,53 @@ def test_el9_a_data_file_yields_its_structure_instead_of_a_blank_row() -> None:
         assert all(s.start_line >= 1 for s in syms), [s.start_line for s in syms]
 
 
+_GO_RECV = """package p
+
+type Server struct{ addr string }
+
+func (s *Server) Start() error { return nil }
+func (s Server) Addr() string  { return s.addr }
+
+type Stack[T any] struct{ xs []T }
+
+func (st *Stack[T]) Push(v T) { st.xs = append(st.xs, v) }
+
+func Helper() int { return 1 }
+"""
+
+
+def test_el11_a_method_is_qualified_by_the_type_it_is_declared_on() -> None:
+    """EL11 — a receiver is a container, though no span encloses the method.
+
+    `graph_handler.py:15` resolves `WHERE name = ? OR qualified_name = ?`, so asking for
+    `Server.Start` when several types define `Start` only works if something wrote the dotted
+    name. On the structure rung nothing did, and the fix the plan specified — take the name from
+    the enclosing class span — recovers **zero** symbols here, because Go declares a method
+    *outside* its type: `func (s *Server) Start()` is top-level and nested in nothing.
+
+    So the container is read from the receiver **field**, which is grammar structure exactly like
+    the `name` field `_generic_walk` already reads — no vocabulary about source text (P6/HR15),
+    and nothing keyed on the language being Go.
+
+    `Stack[T]` is the case that fixed the rule rather than confirming it. Taking the receiver's
+    *last* identifier is right on 641 of 641 receivers in a real 400-file corpus and still wrong:
+    a generic receiver ends in the type **parameter**, so the positional rule yields `Stack[T]`'s
+    method under `T`. Reading the receiver's `type` field yields `Stack`. A corpus without generics
+    could not have caught it, which is why it is pinned here.
+
+    `Helper` is the negative half: a plain function has no receiver and must stay unqualified,
+    never acquire the type declared above it.
+    """
+    syms, st = _stats("srv.go", _GO_RECV, "go")
+    quals = {s.name: s.qualified_name for s in syms}
+    for name, want in [("Start", "Server.Start"), ("Addr", "Server.Addr"),
+                       ("Push", "Stack.Push")]:
+        assert quals.get(name) == want, f"{name}: got {quals.get(name)!r}, want {want!r}"
+    assert quals.get("Helper") == "Helper", (
+        f"a receiverless function was given a container: {quals.get('Helper')!r}")
+    assert st.rung in _KNOWN_RUNGS, st.rung
+
+
 def test_el10_bytes_that_contradict_the_extension_are_recorded_not_parsed_as_claimed() -> None:
     """EL10 (X2) — a `.rs` file that is actually XML must not read as an empty rust file.
 
