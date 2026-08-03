@@ -79,7 +79,28 @@ from pathlib import Path
 #                    highlights and static injections. Totals: languages 306 -> 371, highlights
 #                    237 -> 319, tags 48 -> 71, injections 110 -> 157 (static 75 -> 111), locals
 #                    81 -> 108, no query files 66 -> 51.
-EXTRACTOR_REV = "e11"
+#   e10 2026-08-03  `qualified_name` on the structure rung, as the *receiver* arm. The specified
+#                    span-nesting fix was measured before being built and gains 0 of 18,766
+#                    symbols — e6's containment arm already reaches everything span nesting can.
+#                    What containment structurally cannot reach is a method declared outside its
+#                    type, which is a grammar *field*, not a tree shape. Fleet-wide go 6.6% ->
+#                    40.0% qualified. Reads the receiver's `type` field rather than its last
+#                    identifier, because `(s *Stack[T])` ends in the type *parameter*.
+#   e11 2026-08-03  Import specifiers, as a fourth element of the extraction tuple. An import is a
+#                    declared fact and its target is falsifiable against the filesystem, so
+#                    resolving one is not code semantics — see
+#                    `docs/decisions/2026-08-03-an-import-is-a-declared-fact.md`. Emits no symbols
+#                    and rewrites no field, so the dark/anon/symbol census is unchanged across the
+#                    boundary; that invariance is the correctness check, not a disappointment.
+#   e12 2026-08-03  S13 `_module_binding_walk`: a module-scope binding, for files that reach the
+#                    generic rung and emit nothing. The other half of S5 — S5 names function
+#                    *values*, this names the rest (`const routes = [...]`). Scoped to module
+#                    level on measurement, not taste: unscoped, 79.5% of what it adds are locals.
+#                    The CSS arm the plan asked for alongside it was measured and **declined** —
+#                    172,470 symbols to rescue 1,365 files (126 per file, +35% on the fleet symbol
+#                    count) for selectors that have no graph and whose text is already in the
+#                    lexical lane. php's and groovy's dark mass is correctly dark.
+EXTRACTOR_REV = "e12"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -292,6 +313,63 @@ def _named_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -
                         language=language,
                     ))
         stack.extend(reversed(_named_children(cur)))
+    return out
+
+
+# S13: the scope test for `_module_binding_walk`. A binding counts as a definition when it sits at
+# the top of the file — its declaration's parent is the file root, or the `export` that wraps it.
+# Read structurally rather than by language (P6/HR15): java's field declarators sit under a class
+# and are excluded by the same test that admits javascript's top-level ones, with nothing here
+# naming a grammar.
+_MODULE_SCOPE_PARENTS: frozenset[str] = frozenset({"program", "export_statement"})
+
+
+def _module_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -> list[Symbol]:
+    """S13: module-scope bindings, for files the generic walk left with nothing at all.
+
+    The other half of S5. `_named_binding_walk` names a function *value* bound to a name; what
+    stays dark after it is the rest of the same construct — `const routes = [...]`,
+    `export const config = {...}` — in files that reach the generic rung and emit zero symbols.
+
+    Two limits, both measured 2026-08-03 rather than chosen:
+
+    * **Module scope only.** Over 400 sampled dark javascript files this arm rescues 53.8% of them
+      for 1.8 symbols each; unscoped it adds 1,489 further names of which **79.5% are locals**. A
+      local is not a definition anyone searches for, and every one of them would widen a
+      call-resolution candidate pool (`_MAX_CALLEE_FANOUT`) for nothing.
+    * **Only where nothing else spoke.** The caller runs this after `_generic_walk` returns empty,
+      so a file that extracts by any stronger rung pays neither the walk nor a duplicate symbol.
+
+    `kind` is `variable` and not a borrowed `function`: these bindings are overwhelmingly data, and
+    calling data a function is the confident wrong answer `_generic_walk`'s `field` branch already
+    exists to avoid. The name field per binding kind is `_BINDING_NAME_FIELDS` — S5's table, read
+    a second time rather than copied.
+    """
+    out: list[Symbol] = []
+    fields = dict(_BINDING_NAME_FIELDS)
+    stack = [root]                                   # D6: explicit stack, not recursion
+    while stack:
+        cur = stack.pop()
+        stack.extend(reversed(_named_children(cur)))
+        name_fields = fields.get(cur.type)
+        if name_fields is None:
+            continue
+        # declarator -> declaration -> program | export_statement
+        gp = cur.parent.parent if cur.parent is not None else None
+        if gp is None or gp.type not in _MODULE_SCOPE_PARENTS:
+            continue
+        name_node = next(
+            (n for n in (cur.child_by_field_name(f) for f in name_fields) if n is not None), None)
+        if name_node is None:
+            continue
+        name = _unwrap_callee(name_node, code_bytes)
+        if not name or not _is_name_text(name):
+            continue
+        out.append(Symbol(
+            file=file_str, name=name, qualified_name=name, kind="variable",
+            start_line=cur.start_point[0] + 1, end_line=cur.end_point[0] + 1,
+            language=language,
+        ))
     return out
 
 
@@ -1034,6 +1112,16 @@ def _extract_symbols_from(
     generic = _generic_walk(outer_root, code_bytes, file_str, language)
     if generic:
         return generic, "generic", 0
+    # S13 sits here, and the position is the whole design: it fires only for a file that reached
+    # the generic rung and emitted nothing, which is the population it was measured on. Ahead of
+    # rung 4 for the same reason rung 4 sits ahead of rung 5 — a module-scope binding is a
+    # *declaration* the grammar reports, while `highlights.scm` only says what a token is.
+    # The rung stays `generic` rather than gaining a name of its own, exactly as S5 supplements
+    # `structure` without renaming it: this is a supplement to the generic walk, and a new rung
+    # value would change what every census and every reader of `file_extraction.rung` is counting.
+    bindings = _module_binding_walk(outer_root, code_bytes, file_str, language)
+    if bindings:
+        return bindings, "generic", 0
     # Rung 4 before 5, because it is the weakest *code* evidence in the ladder: `highlights.scm`
     # says what a token *is*, never where it is defined, so it is trusted only where nothing
     # stronger spoke.
