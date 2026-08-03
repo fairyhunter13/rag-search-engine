@@ -21,6 +21,10 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-03 | [The embedding track: nomic + task prefixes shipped, the breadcrumb declined](2026-08-03-the-breadcrumb-writes-the-query-into-the-chunk.md) |
+| 2026-08-03 | [The extraction track is closed: the last two items were measured and declined](2026-08-03-the-extraction-track-is-closed.md) |
+| 2026-08-03 | [Most of the dark set is correctly dark](2026-08-03-most-of-the-dark-set-is-correctly-dark.md) |
+| 2026-08-03 | [An import is a declared fact, and a specifier is not code semantics](2026-08-03-an-import-is-a-declared-fact.md) |
 | 2026-08-03 | [A container the span cannot see, and an ERROR that was charged for its children](2026-08-03-a-container-the-span-cannot-see.md) |
 | 2026-08-03 | [The "zero new code" pack upgrade was an API migration, and only the tests said so](2026-08-03-the-pack-upgrade-was-an-api-migration.md) |
 | 2026-08-03 | [Personalized PageRank over the call graph: built, measured, reverted](2026-08-03-personalized-pagerank-was-built-and-reverted.md) |
