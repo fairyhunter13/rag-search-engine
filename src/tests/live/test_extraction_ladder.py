@@ -541,3 +541,74 @@ def test_au5_stale_pipeline_stores_are_countable_without_opening_a_graph_db() ->
         f"by_stamp must lead with the largest population, not the current one: {block['by_stamp']}")
     assert sum(r["stores"] for r in block["by_stamp"]) == block["stores"], block
     assert _pipeline_block({})["stale_stores"] == 0, "an empty federation must not report drift"
+
+
+# --- S13 (e12): module-scope bindings, the arm that empties part of the dark set -------------
+#
+# EL12-EL15 guard the two limits the arm was *measured* into rather than designed with, plus the
+# arm the same measurement declined. Each one is a number that would otherwise only exist in a
+# decision doc, and each failure mode is silent: an unscoped arm still passes "it extracts more".
+
+_DARK_JS = "const routes = ['/a', '/b'];\nexport const config = { retries: 3 };\n"
+
+
+def test_el12_a_file_of_module_scope_bindings_is_no_longer_dark() -> None:
+    """EL12 — the arm's whole purpose: a js file that declares only data used to yield nothing.
+
+    S5 covers a binding whose *value* is a function; this is the other half, and measured over
+    400 sampled dark javascript files it is 53.8% of them.
+    """
+    syms, st = _stats("a.js", _DARK_JS, "javascript")
+    assert {s.name for s in syms} == {"routes", "config"}, [s.name for s in syms]
+    assert {s.kind for s in syms} == {"variable"}, (
+        f"a data binding must not be reported as a function — that is the confident wrong answer "
+        f"the ladder's `field` branch already exists to avoid: {[(s.kind, s.name) for s in syms]}")
+    assert st.rung == "generic", (
+        f"S13 supplements the generic walk and must not invent a rung name, or every census over "
+        f"`file_extraction.rung` starts counting something else: {st.rung}")
+    assert st.symbol_count == len(syms), st
+
+
+def test_el13_a_local_binding_never_becomes_a_symbol() -> None:
+    """EL13 — the scope limit, and the reason it is not taste.
+
+    Unscoped, this arm adds 1,489 further names on the same 400-file sample of which **79.5% are
+    locals**. A local is not a definition anyone searches for, and each one widens a
+    call-resolution candidate pool (`_MAX_CALLEE_FANOUT`) — so an unscoped arm buys dark-file
+    coverage by making the call graph worse.
+    """
+    syms, st = _stats("b.js", "if (ready) {\n  const cached = compute();\n}\n", "javascript")
+    assert [s.name for s in syms] == [], (
+        f"a binding inside a block is not a module-scope definition: {[s.name for s in syms]}")
+    assert st.rung in EXTRACTION_RUNGS, st
+
+
+def test_el14_a_file_that_already_extracts_gains_nothing_from_s13() -> None:
+    """EL14 — the emptiness gate. S13 runs only where `_generic_walk` came back with nothing.
+
+    Without this, every javascript file in the fleet gains its module-scope constants, which is a
+    far larger and entirely unmeasured population than the dark set the arm was sized against.
+    """
+    src = "const routes = [1];\nfunction named() {\n  return routes;\n}\n"
+    syms, st = _stats("c.js", src, "javascript")
+    assert st.rung == "structure", st
+    assert "routes" not in {s.name for s in syms}, (
+        f"S13 fired on a file that already extracts: {[(s.kind, s.name) for s in syms]}")
+
+
+def test_el15_css_stays_dark_because_the_arm_for_it_was_declined() -> None:
+    """EL15 — the *declined* arm, pinned so it cannot be added later without a new measurement.
+
+    A css `rule_set` carries no fields at all and a selector (`.btn, .btn-primary`) is not an
+    identifier, so the only implementable form emits the grammar's `class_name`/`id_name` nodes.
+    Measured 2026-08-03: that rescues 1,365 fleet files for **172,470 symbols** — 126 per file,
+    +35% on the fleet symbol count — for names with no graph, no container, and whose text the
+    lexical lane already indexes from the chunk body. The ratio, not the possibility, is the
+    finding, and it is the opposite of S13's 1.8 symbols per rescued file.
+    """
+    syms, st = _stats("a.css", ".btn, .btn-primary { color: red; }\n#nav a { display: none }\n",
+                      "css")
+    assert [s.name for s in syms] == [], (
+        f"css gained symbols; if that is now wanted, re-measure the symbols-per-rescued-file "
+        f"ratio first — it was 126 against S13's 1.8: {[(s.kind, s.name) for s in syms]}")
+    assert st.rung in EXTRACTION_RUNGS, st
