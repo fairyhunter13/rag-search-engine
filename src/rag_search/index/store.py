@@ -480,18 +480,27 @@ class VectorStore:
         old = self._con.execute(
             "SELECT content, tokens, path FROM chunks WHERE chunk_id=?", (chunk_id,)
         ).fetchone()
-        if old is not None:
-            if self._lexical_ready:
-                self._con.execute(
-                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens, path)"
-                    " VALUES('delete',?,?,?,?)",
-                    (chunk_id, old[0], old[1], old[2]),
-                )
-            self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
-            if self._bin_ready:
-                self._con.execute(
-                    "DELETE FROM vec_chunks_bin WHERE chunk_id=?", (chunk_id,)
-                )
+        if old is not None and self._lexical_ready:
+            self._con.execute(
+                "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens, path)"
+                " VALUES('delete',?,?,?,?)",
+                (chunk_id, old[0], old[1], old[2]),
+            )
+        # The vec0 deletes are deliberately *not* gated on that probe, and the FTS one has to be.
+        # They differ in what they need: an external-content FTS5 delete needs the text that was
+        # indexed, which only `chunks` holds, while vec0 needs the key alone. Gating both on
+        # `chunks` made it the authority on what `vec_chunks` contains — and when the two diverge
+        # there is no path back. Measured 2026-08-04 on one store carrying 33 vec rows against 28
+        # chunks: the 5 orphans were unreachable by `delete_by_path` (which enumerates from
+        # `chunks`) and by this probe, so every re-embed of that store aborted on the same UNIQUE
+        # constraint, permanently. Reconcile logged a warning and walked on, which is how a store
+        # sat at the old embedder behind an otherwise-converged fleet. Unconditional, the delete
+        # is a no-op on the PK miss that is the normal case and self-heals the divergence.
+        self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
+        if self._bin_ready:
+            self._con.execute(
+                "DELETE FROM vec_chunks_bin WHERE chunk_id=?", (chunk_id,)
+            )
         tokens = identifier_tokens(content)
         self._con.execute(
             "INSERT OR REPLACE INTO chunks"

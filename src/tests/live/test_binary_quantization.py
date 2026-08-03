@@ -1,4 +1,5 @@
-"""BQ1-BQ6 — gates for the coarse bit lane that fronts the float32 KNN.
+"""BQ1-BQ7 — gates for the coarse bit lane that fronts the float32 KNN, and for the write path
+that has to keep it and `vec_chunks` reachable from `chunks` (BQ7).
 
 Its failure mode is silent, exactly like the external-content FTS index HY1 guards: nothing
 errors when `vec_chunks_bin` drifts from `vec_chunks`. A stale code keeps a deleted chunk in
@@ -214,3 +215,42 @@ def test_bq4_unquantized_store_still_answers(embedder, safe_tmp_path):
     hits = query.search(np.asarray(vecs[3], dtype=np.float32), top_k=5)
     assert hits and hits[0]["chunk_id"] == 3, "fallback to the exact scan did not answer"
     query.close()
+
+
+def test_bq7_a_vector_orphaned_from_chunks_does_not_wedge_the_store(embedder, safe_tmp_path):
+    """BQ7: `insert` heals a vec row whose `chunks` row is gone, instead of raising forever.
+
+    Not hypothetical. Measured 2026-08-04 during the nomic migration: one fleet store held 33
+    rows in `vec_chunks` against 28 in `chunks`, and every re-embed of it died on
+    `UNIQUE constraint failed on vec_chunks primary key` — reconcile logged a warning, walked
+    on, and left that store alone on the previous embedder while the other 207 converged.
+
+    The cause was that both the FTS delete and the vec0 deletes were gated on a probe of
+    `chunks`, which made `chunks` the authority on what `vec_chunks` contains. Only the FTS
+    delete needs that (it needs the text that was indexed); vec0 needs the key alone. The
+    orphan is unreachable by `delete_by_path` too, since that also enumerates from `chunks`,
+    so nothing short of `clear()` could ever remove it.
+
+    The orphan is manufactured the same way the real one must have arisen — a `chunks` row
+    removed with its vector left behind — because there is no supported call that produces it.
+    """
+    path = safe_tmp_path / "bq7.db"
+    vs, vecs = _store(embedder, path)
+
+    vs._con.execute("DELETE FROM chunks WHERE chunk_id=?", (11,))
+    vs.flush()
+    assert vs._con.execute(
+        "SELECT COUNT(*) FROM vec_chunks WHERE chunk_id=11"
+    ).fetchone()[0] == 1, "the orphan this test exists to heal was not created"
+
+    # The re-embed that used to abort: same chunk_id, new vector, no `chunks` row to probe.
+    vs.insert(11, "f11.py", 1, 3, "python", _TEXTS[11], vecs[11])
+    vs.flush()
+
+    assert vs._con.execute(
+        "SELECT COUNT(*) FROM vec_chunks WHERE chunk_id=11"
+    ).fetchone()[0] == 1, "the orphan was left beside the new vector rather than replaced"
+    _assert_bin_consistent(vs, "after healing an orphaned vector")
+    hits = vs.search(np.asarray(vecs[11], dtype=np.float32), top_k=3)
+    assert hits and hits[0]["chunk_id"] == 11, "the healed chunk is not searchable"
+    vs.close()
