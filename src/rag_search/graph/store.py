@@ -52,6 +52,17 @@ def _open(db_path: Path) -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_fx_lang ON file_extraction(language);
         CREATE INDEX IF NOT EXISTS idx_fx_rung ON file_extraction(rung);
+        -- S12: file-to-file import edges. Deliberately *not* rows in `edges`, which is
+        -- sid-to-sid and whose every consumer assumes both endpoints are symbols. An import
+        -- statement sits at file scope, inside no symbol, so it has no caller sid to name and
+        -- inventing a file-level pseudo-symbol to give it one would change what a graph node is
+        -- for every reader of `symbols`. A separate table costs one migration and no invariant.
+        CREATE TABLE IF NOT EXISTS file_imports (
+            src_file TEXT NOT NULL,
+            dst_file TEXT NOT NULL,
+            PRIMARY KEY (src_file, dst_file)
+        );
+        CREATE INDEX IF NOT EXISTS idx_imp_dst ON file_imports(dst_file);
     """)
     con.commit()
     # Schema migration: older DBs used node_count, new schema uses member_count.
@@ -308,6 +319,48 @@ class GraphStore:
         self._con.commit()
         return n
 
+    def upsert_import(self, src_file: str, dst_file: str) -> None:
+        self._con.execute(
+            "INSERT OR IGNORE INTO file_imports (src_file,dst_file) VALUES (?,?)",
+            (src_file, dst_file),
+        )
+
+    def list_imports(self) -> list[tuple[str, str]]:
+        """Every (src_file, dst_file) import pair. Read by `_find_import_cycles`."""
+        return [(r[0], r[1]) for r in
+                self._con.execute("SELECT src_file, dst_file FROM file_imports")]
+
+    def prune_imports_to(self, pairs: set[tuple[str, str]]) -> int:
+        """Drop import rows a full re-derive did not just re-record. `prune_edges_to`'s twin.
+
+        Same reason that one exists and `purge_dangling_edges` is not enough: the row a re-derive
+        has to retract is the one whose two files both still exist, because the `import` line
+        between them was deleted from the source.
+        """
+        self._con.executescript(
+            "DROP TABLE IF EXISTS temp._keep_import;"
+            "CREATE TEMP TABLE _keep_import (src_file TEXT, dst_file TEXT,"
+            " PRIMARY KEY (src_file, dst_file));"
+        )
+        self._con.executemany("INSERT OR IGNORE INTO _keep_import VALUES (?,?)", pairs)
+        n = self._con.execute(
+            "DELETE FROM file_imports WHERE NOT EXISTS (SELECT 1 FROM _keep_import k "
+            "WHERE k.src_file = file_imports.src_file AND k.dst_file = file_imports.dst_file)"
+        ).rowcount
+        self._con.commit()
+        return n
+
+    def delete_file_imports(self, file: str) -> int:
+        """Drop one file's outgoing imports (the watcher's incremental path).
+
+        Outgoing only, mirroring `delete_file_symbols`: the incoming rows were written by files
+        this pass is not re-scanning, and dropping them would strip an untouched importer's row
+        because its target happened to change.
+        """
+        return self._con.execute(
+            "DELETE FROM file_imports WHERE src_file=?", (file,)
+        ).rowcount
+
     def clear(self) -> None:
         """Wipe symbols/edges/communities before a full re-index so stale rows don't persist.
 
@@ -322,12 +375,15 @@ class GraphStore:
         """
         self._con.executescript(
             "DELETE FROM symbols; DELETE FROM edges; DELETE FROM communities; "
-            "DELETE FROM file_extraction;"
+            "DELETE FROM file_extraction; DELETE FROM file_imports;"
         )
         self._con.commit()
 
     def symbol_count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+
+    def import_count(self) -> int:
+        return self._con.execute("SELECT COUNT(*) FROM file_imports").fetchone()[0]
 
     def edge_count(self) -> int:
         return self._con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]

@@ -79,7 +79,7 @@ from pathlib import Path
 #                    highlights and static injections. Totals: languages 306 -> 371, highlights
 #                    237 -> 319, tags 48 -> 71, injections 110 -> 157 (static 75 -> 111), locals
 #                    81 -> 108, no query files 66 -> 51.
-EXTRACTOR_REV = "e10"
+EXTRACTOR_REV = "e11"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -726,7 +726,7 @@ def extract_symbols_with_stats(
 
 def extract_symbols_calls_with_stats(
     path: Path, content: str, language: str
-) -> tuple[list[Symbol], ExtractionStats, list[tuple[str, int]]]:
+) -> tuple[list[Symbol], ExtractionStats, list[tuple[str, int]], list[str]]:
     """`extract_symbols_with_stats` plus the file's call sites, in one bounded-pool trip.
 
     `_extract_graph` walked the tree twice and paid `run_bounded` twice per file because callee
@@ -748,9 +748,14 @@ def extract_symbols_calls_with_stats(
     today, and threading one tree through both would rewrite `_extract_symbols_from` and
     `_collect_calls_with_lines` to buy a fraction of what the IPC and the second `read_text`
     already give. Module-level and picklable, which `run_bounded` requires.
+
+    The fourth element is the file's import specifiers, added in e11 on the same argument that
+    justified folding in the third: the ordering constraint is that resolution needs a table the
+    walk has not built yet, and that has never required a second IPC round trip.
     """
     syms, stats = extract_symbols_with_stats(path, content, language)
-    return syms, stats, extract_calls_with_lines(content, language)
+    return (syms, stats, extract_calls_with_lines(content, language),
+            extract_import_specs(content, language))
 
 
 def _node_has_error(root) -> bool:
@@ -1066,6 +1071,94 @@ def _collect_calls_with_lines(node, code_bytes: bytes, out: list) -> None:
             if name:
                 out.append((name, cur.start_point[0] + 1))
         stack.extend(reversed(_named_children(cur)))
+
+
+def _is_import_node(kind: str) -> bool:
+    """S12: is this grammar node an import? Matched on node-type *tokens*, like `_is_call_node`.
+
+    Every import-ish node type in the pack spells it as its own `_`-separated token:
+    `import_statement` and `import_from_statement` (python, js/ts), `import_declaration` and
+    `import_spec` (go, java), `namespace_use_declaration` (php), `use_declaration` (rust).
+    Splitting on `_` keeps all of those without matching by accident, and — the point — without
+    a per-language table naming which one each grammar chose.
+    """
+    return bool(_IMPORT_TOKENS & set(kind.split("_")))
+
+
+# The grammar names the module path in a field, and where it does not, the path is the first
+# path-shaped child. Both are structural reads, the same standing as `_generic_walk` reading
+# `name` or e10's receiver arm reading `type`.
+_IMPORT_TOKENS: frozenset[str] = frozenset({"import", "use", "require"})
+_PATH_FIELDS: tuple[str, ...] = ("source", "module_name", "path", "name")
+# A module path is one token however deep the grammar nests it. python's `dotted_name` and php's
+# `namespace_name` have identifier children, and descending into them yields `rag_search`,
+# `graph`, `extractor` as three specifiers instead of one path — measured: it read 5,988
+# specifiers on this repo against the 2,155 imports actually there, and resolved none of them.
+_PATH_NODES: frozenset[str] = frozenset({
+    "string", "string_literal", "interpreted_string_literal", "raw_string_literal",
+    "encapsed_string", "dotted_name", "namespace_name", "qualified_name", "identifier", "name",
+})
+
+
+def _collect_import_specs(node, code_bytes: bytes, out: list) -> None:
+    """D6: stack, not recursion — see `_generic_walk`."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if not _is_import_node(cur.type):
+            stack.extend(_named_children(cur))
+            continue
+        inner = [cur]
+        while inner:
+            x = inner.pop()
+            got = None
+            for fld in _PATH_FIELDS:
+                n = x.child_by_field_name(fld)
+                if n is not None and n.type in _PATH_NODES:
+                    got = n
+                    break
+            if got is None:
+                # php names nothing: `namespace_use_clause` holds a bare `qualified_name` child.
+                # Taking the first path-shaped child is the same read as the field, for grammars
+                # that declare none. Without it php reads zero imports — measured on a 1,116-`use`
+                # store before this branch existed.
+                for c in _named_children(x):
+                    if c.type in _PATH_NODES:
+                        got = c
+                        break
+            if got is not None:
+                text = code_bytes[got.start_byte:got.end_byte].decode("utf-8", errors="replace")
+                spec = text.strip("\"'`")
+                if spec:
+                    out.append(spec)
+                continue
+            inner.extend(_named_children(x))
+
+
+def extract_import_specs(content: str, language: str) -> list[str]:
+    """Return the module specifier of each import (S12: generic, any language).
+
+    The *specifier*, not a resolved path: turning `./foo` or `App\\Models\\User` into a file is a
+    filesystem question needing the repo root and the manifest, neither of which this function
+    has and neither of which belongs in a per-file pure extractor. `_extract_graph` resolves.
+    """
+    parser, ok = _get_parser_for(language)
+    if not ok:
+        return []
+    code_bytes = content.encode("utf-8", errors="replace")
+    try:
+        root = parser.parse(code_bytes).root_node
+    except Exception:
+        return []
+    out: list[str] = []
+    _collect_import_specs(root, code_bytes, out)
+    for inner_lang, inner_bytes, _off in _iter_script_blocks(root, code_bytes):
+        # A .vue component imports its children from inside <script>, and those imports are the
+        # single largest gap this change closes: measured, *not one* of a vue store's import
+        # pairs was already in the call graph, because a component is used in the template and
+        # never called.
+        out.extend(extract_import_specs(inner_bytes.decode("utf-8", errors="replace"), inner_lang))
+    return out
 
 
 def extract_calls_with_lines(content: str, language: str) -> list[tuple[str, int]]:

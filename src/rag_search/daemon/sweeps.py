@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json as _json
 import logging
 import threading
 import time
@@ -557,6 +558,159 @@ def _graph_stale(path: str, gs) -> bool:  # gs: GraphStore
     )
 
 
+_JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte")
+
+
+class _ImportResolver:
+    """Turns a module specifier into the file it names, for one repo root.
+
+    Why this lives here and not in `extractor.py`: a specifier is a *string the source declares*
+    and the extractor's job ends at reading it, but resolving it needs the repo root, the
+    manifests, and the filesystem — none of which a per-file parse has. Same split as call
+    resolution, which is in `_extract_graph` for the same reason and not in the extractor either.
+
+    P6/HR15: nothing here infers code semantics. Each rule is a *published* path convention read
+    from a declarative file the repo checked in — `go.mod`'s module line, `composer.json`'s
+    `autoload.psr-4` map — or, for the JS family and python, path arithmetic whose answer is then
+    checked against the filesystem. A resolution either names a file that exists or it is dropped;
+    nothing is guessed and nothing falls back to a name match.
+    """
+
+    def __init__(self, root) -> None:
+        self.root = root
+        self._go_module = self._read_go_module()
+        # Read on first php specifier, not here: finding composer.json is an `rglob` over the
+        # whole tree, and the overwhelming majority of stores in the fleet hold no php at all.
+        self._psr4: list[tuple[str, list]] | None = None
+        # python's second anchor. `src/` layout is a packaging convention, not a guess: it is
+        # resolved against the filesystem like every other candidate below.
+        self._py_anchors = [root]
+        if (root / "src").is_dir():
+            self._py_anchors.append(root / "src")
+
+    def _read_go_module(self) -> str:
+        gomod = self.root / "go.mod"
+        if not gomod.is_file():
+            return ""
+        try:
+            for line in gomod.read_text(errors="replace").splitlines():
+                if line.startswith("module "):
+                    return line.split(None, 1)[1].strip()
+        except OSError:
+            pass
+        return ""
+
+    def _read_psr4(self) -> list[tuple[str, list]]:
+        """PSR-4 prefix -> directories, from every non-vendor composer.json under the root.
+
+        Longest prefix first, because PSR-4 resolves by longest match: a repo declaring both
+        `App\\` and `App\\Domain\\` means the second to win for `App\\Domain\\Order`.
+        """
+        from rag_search.index.discover import is_ignored_path
+        out: dict[str, list] = {}
+        try:
+            manifests = [p for p in self.root.rglob("composer.json")
+                         if not is_ignored_path(p, self.root)]
+        except OSError:
+            return []
+        for cj in manifests[:200]:
+            try:
+                data = _json.loads(cj.read_text(errors="replace"))
+            except (ValueError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            for block in ("autoload", "autoload-dev"):
+                psr4 = (data.get(block) or {}).get("psr-4") if isinstance(
+                    data.get(block), dict) else None
+                if not isinstance(psr4, dict):
+                    continue
+                for prefix, dirs in psr4.items():
+                    if isinstance(dirs, str):
+                        dirs = [dirs]
+                    if not isinstance(dirs, list):
+                        continue
+                    out.setdefault(prefix.rstrip("\\"), []).extend(
+                        cj.parent / d for d in dirs if isinstance(d, str))
+        return sorted(out.items(), key=lambda kv: -len(kv[0]))
+
+    def resolve(self, spec: str, src, family: str) -> str:
+        if family == "js":
+            return self._js(spec, src)
+        if family == "python":
+            return self._py(spec)
+        if family == "go":
+            return self._go(spec)
+        if family == "php":
+            return self._php(spec)
+        return ""
+
+    def _js(self, spec: str, src) -> str:
+        # Bare specifiers are package names, and a package resolves into `node_modules`, which is
+        # in IGNORED_DIRS and so holds no indexed file. Only relative paths can name one.
+        if not spec.startswith("."):
+            return ""
+        try:
+            base = (src.parent / spec).resolve()
+        except (OSError, ValueError):
+            return ""
+        for cand in (base, *(base.with_suffix(e) for e in _JS_EXT),
+                     *(base / f"index{e}" for e in _JS_EXT)):
+            if cand.is_file():
+                return str(cand)
+        return ""
+
+    def _py(self, spec: str) -> str:
+        parts = [p for p in spec.split(".") if p]
+        if not parts:
+            return ""
+        for anchor in self._py_anchors:
+            cand = anchor.joinpath(*parts)
+            if cand.with_suffix(".py").is_file():
+                return str(cand.with_suffix(".py"))
+            if (cand / "__init__.py").is_file():
+                return str(cand / "__init__.py")
+        return ""
+
+    def _go(self, spec: str) -> str:
+        """A go import names a *package*, which is a directory. Name its first file.
+
+        Directory-not-file is the one place this layer is lossy, and deliberately: a file-level
+        edge into a package's first file is a truthful statement that the importer depends on
+        that package, and fanning out to every file in it would multiply one declared fact into
+        N asserted ones.
+        """
+        if not self._go_module or not spec.startswith(self._go_module):
+            return ""
+        rel = spec[len(self._go_module):].lstrip("/")
+        d = self.root / rel if rel else self.root
+        if not d.is_dir():
+            return ""
+        try:
+            gos = sorted(p for p in d.glob("*.go") if not p.name.endswith("_test.go"))
+        except OSError:
+            return ""
+        return str(gos[0]) if gos else ""
+
+    def _php(self, spec: str) -> str:
+        spec = spec.lstrip("\\")
+        if "\\" not in spec:
+            return ""
+        if self._psr4 is None:
+            self._psr4 = self._read_psr4()
+        for prefix, dirs in self._psr4:
+            if not spec.startswith(prefix):
+                continue
+            rel = spec[len(prefix):].lstrip("\\").replace("\\", "/")
+            if not rel:
+                continue
+            for d in dirs:
+                cand = (d / rel).with_suffix(".php")
+                if cand.is_file():
+                    return str(cand)
+        return ""
+
+
 def _extract_graph(gs, root, only: list | None = None) -> None:
     """Extract symbols + call edges from source into gs.
 
@@ -604,6 +758,11 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     # round trip. Measured at ~11 MB for the largest project in the fleet (2,516 files, 94,867
     # call sites), against a daemon already resident at ~1 GB.
     calls_by_file: dict[str, list[tuple[str, int]]] = {}
+    # S12: import specifiers, held for the same reason as S11 — resolution has to check the
+    # target against the *indexed* file set, which is `seen_files` plus whatever the store
+    # already holds, and neither exists until the walk finishes.
+    specs_by_file: dict[str, list[str]] = {}
+    seen_imports: set[tuple[str, str]] = set()
 
     def _fam(fstr: str) -> str:
         f = fam_of.get(fstr)
@@ -633,11 +792,13 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             rung = {PARSE_TIMEOUT: "timeout", PARSE_CRASHED: "crashed"}.get(res, "error")
             gs.record_extraction(str(fpath), lang, rung, 0, 0, 1)
             continue
-        syms, st, call_sites = res
+        syms, st, call_sites, import_specs = res
         gs.record_extraction(str(fpath), lang, st.rung, st.symbol_count,
                              st.anon_count, int(st.has_error))
         if call_sites:
             calls_by_file[str(fpath)] = call_sites
+        if import_specs:
+            specs_by_file[str(fpath)] = import_specs
         for sym in syms:
             if not sym.name:
                 continue
@@ -708,9 +869,23 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             for callee_sid in pool:
                 seen_edges.add((caller_sid, callee_sid))
                 gs.upsert_edge(caller_sid, callee_sid)
+    # S12: import edges, resolved after the symbol pass for the same ordering reason the call
+    # resolution above has — the target has to be checked against the set of files this index
+    # actually holds, and a specifier naming a file outside it (a vendored package, the stdlib)
+    # is dropped rather than recorded as a dangling edge.
+    if specs_by_file:
+        indexed = {r[0] for r in gs._con.execute("SELECT file FROM file_extraction")}
+        resolver = _ImportResolver(root)
+        for fstr, specs in specs_by_file.items():
+            for spec in specs:
+                dst = resolver.resolve(spec, Path(fstr), _fam(fstr))
+                if dst and dst != fstr and dst in indexed:
+                    seen_imports.add((fstr, dst))
+                    gs.upsert_import(fstr, dst)
     gs.commit()
     if targets is None:
         gs.prune_edges_to(seen_edges)
+        gs.prune_imports_to(seen_imports)
 
 
 def _persist_partition_quality(gs) -> None:  # type: ignore[no-untyped-def]
@@ -838,6 +1013,7 @@ def _update_graph_files(project_path: str, files: list) -> None:
         if not owed:
             for fpath in changed:
                 gs.delete_file_symbols(str(fpath))
+                gs.delete_file_imports(str(fpath))
             gs.commit()
             if targets:
                 _extract_graph(gs, root, only=targets)
