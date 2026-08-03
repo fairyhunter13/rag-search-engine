@@ -30,8 +30,18 @@ EMBED_PREFIX_REV = "noprefix-1"
 # Identity of the *lexical* index, which is independent of the vector one: it holds no
 # embeddings, so changing it costs a re-tokenise and never a re-embed. Bump when the tokenizer
 # or column set changes; the guarded `rebuild` in `_open` then backfills each store once.
-FTS_REV = "fts5-unicode61-idsplit-1"
+FTS_REV = "fts5-unicode61-idsplit-pathf-1"
 BIN_REV = "vec0-bit-signbit-1"
+
+# BM25F: what a term match in the chunk's `path` is worth against one in its body. Every chunk
+# already carries its repo-relative path as a `# path\n` header (`chunker.chunk_file`), so the
+# terms are in the index either way — indexing `path` as its own fts5 column is what makes them
+# weightable instead of being one line of body text among a few hundred. Zoekt multiplies symbol
+# and filename term frequencies by 5 for "roughly 20% improvement across all key metrics" and
+# reports the result insensitive to the exact constant; 5.0 is that number, not a tuned one.
+# Only the filename half is reachable today: a symbol field needs a per-chunk enclosing symbol,
+# which the extractor does not yet record.
+_PATH_WEIGHT = 5.0
 # Candidates pulled from the coarse bit index per result finally returned. Measured against
 # exact float32 over 127,083 real vectors: recall@10 is 0.794 at 1x, 0.976 at 3x, 0.987 at 4x,
 # 0.993 at 8x — and 8x costs 34% more time for those 0.6 points. Flat at 0.794 for hamming
@@ -333,7 +343,7 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
     # recursive_triggers, and `clear()` would otherwise re-tokenise every row on its way out.
     con.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
-        "USING fts5(content, tokens, content='chunks', content_rowid='chunk_id')"
+        "USING fts5(content, tokens, path, content='chunks', content_rowid='chunk_id')"
     )
     # Creating the table leaves it EMPTY — an external-content table indexes nothing it did not
     # see written. `rebuild` is FTS5's own backfill and is the only thing that must run against
@@ -473,14 +483,14 @@ class VectorStore:
         # always aborted midway, after `chunks` was already overwritten. The probe is a PK miss
         # in the normal case, since both callers clear or purge the path before inserting.
         old = self._con.execute(
-            "SELECT content, tokens FROM chunks WHERE chunk_id=?", (chunk_id,)
+            "SELECT content, tokens, path FROM chunks WHERE chunk_id=?", (chunk_id,)
         ).fetchone()
         if old is not None:
             if self._lexical_ready:
                 self._con.execute(
-                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens)"
-                    " VALUES('delete',?,?,?)",
-                    (chunk_id, old[0], old[1]),
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens, path)"
+                    " VALUES('delete',?,?,?,?)",
+                    (chunk_id, old[0], old[1], old[2]),
                 )
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
             if self._bin_ready:
@@ -499,8 +509,8 @@ class VectorStore:
         # negative entry, and the next `rebuild` is what makes the store whole in one step.
         if self._lexical_ready:
             self._con.execute(
-                "INSERT INTO chunks_fts(rowid, content, tokens) VALUES (?,?,?)",
-                (chunk_id, content, tokens),
+                "INSERT INTO chunks_fts(rowid, content, tokens, path) VALUES (?,?,?,?)",
+                (chunk_id, content, tokens, path),
             )
         self._con.execute(
             "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?,?)", (chunk_id, v),
@@ -662,7 +672,8 @@ class VectorStore:
             # Joined to `chunks`, NOT `AND f.rowid IN (SELECT chunk_id FROM chunks WHERE ...)`.
             # That IN-list reads like the cheaper shape and is catastrophically slower, because
             # sqlite hands a rowid set to an FTS5 table as a *constraint FTS5 can serve* — the
-            # plan flips from `SCAN chunks_fts VIRTUAL TABLE INDEX 0:M1` to `0:=M1`, i.e. the
+            # plan flips from `SCAN chunks_fts VIRTUAL TABLE INDEX 0:M<n>` to `0:=M<n>` (the `=`
+            # is the discriminator; `<n>` is just the column count), i.e. the
             # full-text query is re-run once per candidate rowid instead of once. On a
             # 118 k-chunk member here that is 0.018 s against 17.0 s, and `scope="code"` names
             # 302 languages, so the candidate list is nearly the whole corpus. Across
@@ -689,7 +700,8 @@ class VectorStore:
             f"""
             SELECT c.chunk_id, c.path, c.start_line, c.end_line, c.language, c.content, t.rk
             FROM (
-                SELECT chunks_fts.rowid AS rid, bm25(chunks_fts) AS rk
+                SELECT chunks_fts.rowid AS rid,
+                       bm25(chunks_fts, 1.0, 1.0, {_PATH_WEIGHT}) AS rk
                 FROM chunks_fts{lang_join}
                 WHERE chunks_fts MATCH ?{lang_clause}
                 ORDER BY rk
@@ -736,17 +748,17 @@ class VectorStore:
     def delete_by_path(self, path: str) -> None:
         """Remove all chunks (metadata + vectors) for a single file path."""
         rows = self._con.execute(
-            "SELECT chunk_id, content, tokens FROM chunks WHERE path=?", (path,)
+            "SELECT chunk_id, content, tokens, path FROM chunks WHERE path=?", (path,)
         ).fetchall()
-        for cid, content, tokens in rows:
+        for cid, content, tokens, cpath in rows:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
             if self._bin_ready:
                 self._con.execute("DELETE FROM vec_chunks_bin WHERE chunk_id=?", (cid,))
             if self._lexical_ready:
                 self._con.execute(
-                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens)"
-                    " VALUES('delete',?,?,?)",
-                    (cid, content, tokens),
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens, path)"
+                    " VALUES('delete',?,?,?,?)",
+                    (cid, content, tokens, cpath),
                 )
         self._con.execute("DELETE FROM chunks WHERE path=?", (path,))
         self._con.execute("DELETE FROM file_hashes WHERE path=?", (path,))
