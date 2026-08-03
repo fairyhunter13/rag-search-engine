@@ -100,11 +100,11 @@ class _FailAfter:
     def __init__(self, inner, allow: int):
         self._inner, self._allow, self.calls = inner, allow, 0
 
-    def embed(self, texts, batch_size=None):
+    def embed(self, texts, batch_size=None, *, side="document"):
         self.calls += 1
         if self.calls > self._allow:
             raise RuntimeError("simulated crash mid-embed")
-        return self._inner.embed(texts, batch_size=batch_size)
+        return self._inner.embed(texts, batch_size=batch_size, side=side)
 
 
 def test_l3_interrupted_index_keeps_the_files_it_finished(embedder):

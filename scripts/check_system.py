@@ -90,8 +90,10 @@ def check_imports() -> None:
 # active", so a stale entry accuses a clean machine of a misconfiguration it does not have.
 # RERANK_MODEL read jinaai/jina-reranker-v1-turbo-en until 2026-07-31, four weeks after the
 # measured A/B moved the default to gte-reranker-modernbert-base — every clean setup run warned.
+# EMBED_MODEL repeated it in miniature on 2026-08-03: the nomic switch moved the default and this
+# table is the one place that has to be edited by hand in the same commit.
 EXPECTED_CONFIG: dict[str, str] = {
-    "EMBED_MODEL": "jinaai/jina-embeddings-v2-base-code",
+    "EMBED_MODEL": "nomic-ai/nomic-embed-text-v1.5",
     "RERANK_MODEL": "Alibaba-NLP/gte-reranker-modernbert-base",
     "QUERY_LLM_MODEL": "claude-haiku-4-5",
 }

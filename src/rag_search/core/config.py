@@ -11,7 +11,17 @@ _RSE_ROOT = _DATA_HOME / "rag-search"
 REGISTRY_PATH = Path(os.environ.get("RSE_REGISTRY_PATH", str(_RSE_ROOT / "projects.json")))
 INDEX_ROOT = Path(os.environ.get("RSE_INDEX_ROOT", str(_RSE_ROOT / "indexes")))
 
-EMBED_MODEL = os.environ.get("RSE_EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
+EMBED_MODEL = os.environ.get("RSE_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+# What this pipeline prepends before embedding, per flow. nomic's card asks for these two exact
+# strings and the model scores below its published numbers without them — FastEmbed supplies
+# neither (`query_embed`/`passage_embed` fall through to `embed` unchanged for every text model),
+# so the pipeline has to. Constants rather than env knobs, and deliberately not a model->prefix
+# table: HR15 bans the table, and a knob nobody sets is the shape of the 15 removed below. They
+# are the prefixes *this* configuration uses; an EMBED_MODEL override owns its own consequences.
+# Changing either shifts every stored vector — `store.EMBED_PREFIX_REV` is what makes that
+# invalidate the index rather than silently query a space the vectors were never embedded into.
+EMBED_DOC_PREFIX = "search_document: "
+EMBED_QUERY_PREFIX = "search_query: "
 # Measured against the 40-query golden set, A/B'd alone so the result is attributable and
 # re-run once bit-identical: recall@1 0.725 -> 0.800, MRR 0.783 -> 0.825, gnDCG@10 0.789 -> 0.824,
 # recall@10 flat at 0.850 (a reranker reorders the candidate set; it cannot add to it). The cost
@@ -24,14 +34,14 @@ EMBED_DEVICE = os.environ.get("RSE_EMBED_DEVICE", "cuda")  # "cpu" is forbidden
 # larger than the window that embeds it.  Was effectively 512 with 100-line
 # chunks, which silently truncated ~51% of all indexed code away.
 #
-# 768 is measured, not chosen: swept against the 40-query golden set on
-# claude-code-workflows (deterministic — 768 reproduced bit-identically), the
-# reranked gnDCG@10 curve is unimodal and peaks here, so bigger is NOT better.
-#     512 -> 0.9144   768 -> 0.9498   896 -> 0.9323   1024 -> 0.8979
-# vs 0.9160 for the old truncating pipeline. Past the peak, a chunk covers so
-# much unrelated code that any single concept in it is diluted out of the
-# embedding — the opposite failure from truncation, and just as costly.
-EMBED_MAX_TOKENS = int(os.environ.get("RSE_EMBED_MAX_TOKENS", "768"))
+# 512 is measured, and it is a property of the *model*, not a universal optimum. The 768 that
+# stood here was swept for jina-embeddings-v2-base-code (512 -> 0.9144, 768 -> 0.9498,
+# 896 -> 0.9323, 1024 -> 0.8979 on the reranked gnDCG@10 curve, unimodal at 768). The nomic
+# switch was A/B'd at 512 with the task prefixes above and won 8 of 8 metrics on two projects —
+# dense recall@1 0.5923 -> 0.8077 on this repo, 0.1900 -> 0.3000 on a real php/js/vue project —
+# so the budget ships as the arm measured it. Do not carry the old peak across the boundary: it
+# was measured on a different model and a different tokenizer.
+EMBED_MAX_TOKENS = int(os.environ.get("RSE_EMBED_MAX_TOKENS", "512"))
 # Off by default: changing EMBED_MODEL or EMBED_MAX_TOKENS invalidates every vector
 # in every project at once, so acting on that drift means reindexing the whole fleet.
 # Drift is always logged; opting in is what makes the fleet migrate itself.

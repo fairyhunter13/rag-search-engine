@@ -20,12 +20,12 @@ _log = logging.getLogger(__name__)
 CHUNKER_REV = "cast-1"
 
 
-# What this pipeline prepends to text before embedding, per flow. It prepends nothing: the
-# current model's own card says "Prefixes for queries/documents: not necessary". But "none" is a
-# choice and not an absence — an e5- or bge-style model needs `query: ` / `passage: `, and adding
-# one shifts every vector. Recording it is what makes that change invalidate the index instead of
-# silently querying a space the stored vectors were never embedded into. Bump by hand.
-EMBED_PREFIX_REV = "noprefix-1"
+# What this pipeline prepends to text before embedding, per flow — `search_document: ` on what is
+# indexed and `search_query: ` on what is asked (`config.EMBED_DOC_PREFIX`/`EMBED_QUERY_PREFIX`).
+# "none" was a choice and not an absence, and this is what makes the change from it invalidate the
+# index instead of silently querying a space the stored vectors were never embedded into. Bump by
+# hand whenever either prefix changes; the era clause below is what turns a bump into a re-embed.
+EMBED_PREFIX_REV = "nomic-task-1"
 
 # Identity of the *lexical* index, which is independent of the vector one: it holds no
 # embeddings, so changing it costs a re-tokenise and never a re-embed. Bump when the tokenizer
@@ -91,17 +91,6 @@ BIN_MIN_CHUNKS = 12_000
 _WARNED_UNMIGRATED: set[str] = set()
 _WARNED_UNQUANTIZED: set[str] = set()
 
-# The pooling and prefix every stored index in the fleet was built with. While the pipeline still
-# matches these the signature stays in its four-field form, byte-identical to what is stamped
-# today — because the two new fields *describe what those runs already did*, and re-deriving them
-# would recompute identical vectors at fleet scale for no change in any result. `embed_signature`
-# is also folded into `indexer._content_hash`, so a cosmetic change here would defeat the
-# byte-identical re-embed skip on every file at once. Change pooling or the prefix for real and
-# both fields appear, invalidating stamp and content hashes together — which is the whole job.
-_ERA_POOLING = "PooledNormalizedEmbedding"
-_ERA_PREFIX_REV = "noprefix-1"
-
-
 @lru_cache(maxsize=8)
 def pooling_id(model: str = EMBED_MODEL) -> str:
     """The pooling + normalisation actually in force, read off fastembed's implementation class.
@@ -124,16 +113,22 @@ def pooling_id(model: str = EMBED_MODEL) -> str:
 
 
 def _compose_signature(dim: int, pooling: str, prefix_rev: str) -> str:
-    """Assemble a signature from stated pipeline facts, era clause included.
+    """Assemble a signature from stated pipeline facts. Every field, unconditionally.
 
-    Split out from `embed_signature` so the expansion branch can be exercised with a real
-    alternative pooling id — read off fastembed's registry, not patched in — since the repo
-    bans monkeypatching and the branch is the one that must not be wrong: if it failed to
-    expand, an embedder swap would keep the legacy stamp and serve two vector spaces at once.
+    There used to be an era clause here: while pooling and prefix matched what the fleet was
+    already stamped with, both fields were suppressed and the signature kept its legacy
+    four-field form. That existed for exactly one reason — the two fields arrived *describing
+    what the existing runs already did*, and emitting them would have re-embedded 160 indexes
+    into identical vectors. The nomic switch discharged it: model and token budget both moved,
+    so every store is stale on the first four fields anyway and there is nothing left for the
+    clause to protect. Deleted rather than kept dormant, because a suppression rule that no
+    longer suppresses anything is a branch nobody will be thinking about the next time pooling
+    changes.
+
+    Still split out from `embed_signature` so the alternative-arm tests can compose a signature
+    from a real registry-resolved pooling id rather than monkeypatching one in.
     """
     sig = f"{EMBED_MODEL}|{EMBED_MAX_TOKENS}|{dim}|{CHUNKER_REV}"
-    if pooling == _ERA_POOLING and prefix_rev == _ERA_PREFIX_REV:
-        return sig
     return f"{sig}|{pooling}|{prefix_rev}"
 
 
