@@ -86,5 +86,55 @@ under `e9` is what repairs it, which is exactly what the stamp is for.
 - **A pack upgrade is a code change until the suite says otherwise.** The capability matrix stays as
   the grammar-churn detector it is good at being; it is not upgrade sign-off. Nothing here argues for
   a new gate — the existing suite caught it in one run, on the first try, with 43 named failures.
-- The plan's `#4` line — *"a dependency bump; zero new code"* — is corrected in place. The coverage
-  win it predicted is real and is now shipped; the cost estimate was wrong by one API migration.
+- The plan's `#4` line — *"a dependency bump; zero new code"* — is corrected in place. The cost
+  estimate was wrong by one API migration.
+
+## Postscript: the coverage win did not arrive
+
+An earlier version of this line read *"the coverage win it predicted is real and is now shipped"*.
+The fleet re-derive finished (`stale_stores` 133 → **0 / 136**, all on `fg3+e9+a914`), the §1i census
+was re-run on a fully current fleet, and **that sentence is false**.
+
+The fleet moved from 150 stores / 56,814 files to 136 / 57,315, so absolute counts are not
+comparable and the *rate* is the only sound reading:
+
+| language | dark % on e8 | dark % on e9 | Δpp |
+|---|---:|---:|---:|
+| php | 34.0 | 34.0 | **−0.0** |
+| javascript | 49.3 | 50.0 | +0.7 |
+| typescript | 40.0 | 40.2 | +0.2 |
+| html | 95.7 | 97.0 | +1.3 |
+| bash | 70.6 | 72.5 | +1.9 |
+| nginx | 71.4 | 71.7 | +0.3 |
+| scss | 60.9 | 60.9 | −0.0 |
+| groovy / css / vimdoc | 100 | 100 | 0 |
+
+**No language's dark rate improved.** Every apparent gain in the raw counts (php +0, javascript −54,
+typescript −131, css −38, html −37, bash −33) is the smaller store population. The three languages the
+matrix said would reach a new rung are the clearest cases: **php gained `injections.scm` and did not
+move at all; vimdoc reached rung 1 and is still 376 / 376 = 100% dark; vue reached rung 1 and its
+`anon_dropped` is unchanged to the unit (3,799 → 3,799).**
+
+The one real movement is in the TS family's `anon_dropped`: typescript 1,755 → 1,058 and tsx
+1,393 → 1,234, against an 18% smaller typescript population — a per-file drop of ~26%, which
+survives the population caveat where the dark counts do not. javascript's is flat (10,499 → 10,430
+on a similar population).
+
+**Why the matrix was wrong a second time, in a new way.** §1g had already argued the php answer and
+it was not read carefully enough when the prediction was written: those 746 `*.tpl.php` templates
+*legitimately define no symbols*. Giving the grammar an `injections.scm` lets the parser see the HTML
+in them; it does not create a function or class for the extractor to name. Dark counts files that
+reached a rung and emitted **zero symbols**, so a file with nothing to emit stays dark no matter how
+well it parses. vimdoc is the same shape: highlights now exist, but `_HIGHLIGHT_DEF_CAPTURES` finds
+no *definition* capture in what vimdoc's queries emit.
+
+So the general rule, which is the part worth carrying: **grammar capability is not extraction.** The
+matrix reports what query files a grammar ships. Between that and a symbol lie two more conditions —
+the query has to emit a capture this extractor recognises as a definition, and the file has to
+contain something worth defining. `tags 48 of 306` was already the plan's honest budget for the
+first; §1g was already the honest answer for the second. The prediction ignored both and read the
+capability table as if it were a coverage table.
+
+The upgrade is still correct to have shipped: 65 new languages, 0 regressions, and it is the version
+every subsequent query change is written against. It simply bought **reach, not coverage**, and the
+16,280 dark files are entirely still there for `#3` to attack.

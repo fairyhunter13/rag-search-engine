@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-03 | [A container the span cannot see, and an ERROR that was charged for its children](2026-08-03-a-container-the-span-cannot-see.md) |
 | 2026-08-03 | [The "zero new code" pack upgrade was an API migration, and only the tests said so](2026-08-03-the-pack-upgrade-was-an-api-migration.md) |
 | 2026-08-03 | [Personalized PageRank over the call graph: built, measured, reverted](2026-08-03-personalized-pagerank-was-built-and-reverted.md) |
 | 2026-08-03 | [A path is a field, not a line of body text — and only the third probe could see it](2026-08-03-a-path-is-a-field-not-a-line-of-body.md) |
