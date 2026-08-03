@@ -21,6 +21,7 @@ it — HR36 is gone, its rule about reuse stamps is not.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-03 | [A path is a field, not a line of body text — and only the third probe could see it](2026-08-03-a-path-is-a-field-not-a-line-of-body.md) |
 | 2026-08-03 | [The eval harness puts the identifier in the query, so it cannot see a tokenizer change](2026-08-03-the-eval-harness-cannot-see-a-tokenizer.md) |
 | 2026-08-01 | [The lint gate stopped at `src/`, and naming the directory would not have fixed it](2026-08-01-the-lint-gate-stopped-at-src.md) |
 | 2026-08-01 | [The prefix-free escape hatch is not there, and two of the three backlog items were mis-founded](2026-08-01-the-prefix-free-escape-hatch-is-not-there.md) |
