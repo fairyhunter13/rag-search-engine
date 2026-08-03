@@ -136,6 +136,69 @@ def _unmigrate(vs) -> None:
     vs._con.commit()
 
 
+def _pre_idsplit_shape(path) -> None:
+    """The shape a store has on disk from *before* the identifier-split revision: a `chunks` with
+    no `tokens` column and a one-column FTS table. `_unmigrate` cannot express this — it clears the
+    stamp but leaves the current schema — and the schema is the whole of what LX5 is about.
+    """
+    import sqlite3
+
+    con = sqlite3.connect(str(path))
+    con.execute("ALTER TABLE chunks DROP COLUMN tokens")
+    con.execute("DROP TABLE chunks_fts")
+    con.execute("CREATE VIRTUAL TABLE chunks_fts "
+                "USING fts5(content, content='chunks', content_rowid='chunk_id')")
+    con.execute("DELETE FROM meta WHERE key='fts_rev'")
+    con.commit()
+    con.close()
+
+
+def test_lx5_two_write_handles_migrating_one_store_do_not_race(embedder, safe_tmp_path):
+    """LX5: concurrent write-path opens of an unmigrated store must serialize, not collide.
+
+    The migration is check-then-act — read `fts_rev`, then ALTER/DROP/CREATE/backfill on the
+    strength of it — and two write handles on one store is the daemon's normal state, not a
+    contrived one: reconcile's staleness check opens one while an indexing run holds another.
+    Unserialised the loser re-runs the winner's `ALTER TABLE chunks ADD COLUMN tokens` and dies
+    on `duplicate column name`, and it dies *in a daemon thread*, where it surfaces as an
+    unhandled-exception warning next to a green suite. Observed exactly that way.
+
+    Both handles must come back migrated, because "the second one failed" and "the second one
+    found nothing left to do" are the two acceptable outcomes and only one of them is reachable
+    without the lock.
+    """
+    import threading
+
+    from rag_search.index.store import VectorStore
+
+    path = safe_tmp_path / "lx5.db"
+    vs, _ = _reconcile_store(embedder, path)
+    vs.close()
+    _pre_idsplit_shape(path)
+
+    start = threading.Barrier(2)
+    out: list = []
+
+    def open_and_migrate() -> None:
+        start.wait(timeout=30)
+        try:
+            handle = VectorStore(path, migrate=True)
+        except Exception as exc:  # the failure under test is what must be reported, not raised
+            out.append(exc)
+            return
+        try:
+            out.append(handle.lexical_ready)
+        finally:
+            handle.close()
+
+    threads = [threading.Thread(target=open_and_migrate) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=180)
+    assert out == [True, True], f"LX5: concurrent write-path opens did not both migrate: {out}"
+
+
 def test_lx1_backfill_never_runs_on_the_query_path(embedder, safe_tmp_path):
     """LX1: opening a store to *read* must not migrate it, and must degrade instead of stalling.
 
@@ -275,13 +338,21 @@ def _fts_scan_step(con, sql: str) -> tuple[str, list[str]]:
     return next(d for d in plan if "VIRTUAL TABLE INDEX" in d), plan
 
 
+# The whole of what distinguishes the two plans. fts5 builds the rest of `idxStr` from the
+# *column count* — a one-column index reads `0:=M1` and the two-column one `0:=M2` — so matching
+# the full string would make this gate fail the next time a column joins the lexical index, and
+# fail as a vacuity error naming the wrong cause. The `=` is the finding: it is fts5 announcing
+# that it will serve the rowid set itself, which is the re-run-per-candidate shape.
+_ROWID_SERVED = "VIRTUAL TABLE INDEX 0:="
+
+
 def test_lx4_scope_filter_never_becomes_an_fts_rowid_constraint(embedder, safe_tmp_path):
     """LX4: a language scope must not be pushed into the MATCH as a rowid set.
 
     `AND chunks_fts.rowid IN (SELECT chunk_id FROM chunks WHERE language IN (...))` reads like
     the cheap pre-filter and is the single most expensive line this engine has had. sqlite treats
-    a rowid set as a constraint FTS5 can serve, so the plan flips from `VIRTUAL TABLE INDEX 0:M1`
-    to `0:=M1` and the full-text query is re-run once per candidate rowid. Measured on a
+    a rowid set as a constraint FTS5 can serve, so the plan flips from `VIRTUAL TABLE INDEX 0:M`
+    to `0:=M` and the full-text query is re-run once per candidate rowid. Measured on a
     118 k-chunk member: 0.018 s unfiltered, 17.0 s filtered. `scope="code"` names 302 languages,
     so the candidate set is nearly the whole corpus, and across inosoft-project's 157 federation
     members that shape cost 700 s of a pinned core for one search — past the 300 s the MCP client
@@ -296,7 +367,7 @@ def test_lx4_scope_filter_never_becomes_an_fts_rowid_constraint(embedder, safe_t
     vs, _ = _reconcile_store(embedder, safe_tmp_path / "lx4.db")
     try:
         control, cplan = _fts_scan_step(vs._con, _ROWID_IN_SQL)
-        assert control.endswith(":=M1"), (
+        assert _ROWID_SERVED in control, (
             f"LX4 is vacuous: the rowid IN-list does not become an FTS5 equality constraint on "
             f"this sqlite, so the assertion below would pass without the join. Plan was {cplan}"
         )
@@ -311,7 +382,7 @@ def test_lx4_scope_filter_never_becomes_an_fts_rowid_constraint(embedder, safe_t
         )
         live, plan = _fts_scan_step(
             vs._con, next(s for s in seen if "chunks_fts" in s and "MATCH" in s))
-        assert not live.endswith(":=M1"), (
+        assert _ROWID_SERVED not in live, (
             f"LX4: the language scope reached FTS5 as a rowid constraint, so the match re-runs "
             f"per candidate row. Filter by joining `chunks` in phase 1 instead. Plan was {plan}"
         )

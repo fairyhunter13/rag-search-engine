@@ -30,7 +30,7 @@ EMBED_PREFIX_REV = "noprefix-1"
 # Identity of the *lexical* index, which is independent of the vector one: it holds no
 # embeddings, so changing it costs a re-tokenise and never a re-embed. Bump when the tokenizer
 # or column set changes; the guarded `rebuild` in `_open` then backfills each store once.
-FTS_REV = "fts5-unicode61-1"
+FTS_REV = "fts5-unicode61-idsplit-1"
 BIN_REV = "vec0-bit-signbit-1"
 # Candidates pulled from the coarse bit index per result finally returned. Measured against
 # exact float32 over 127,083 real vectors: recall@10 is 0.794 at 1x, 0.976 at 3x, 0.987 at 4x,
@@ -139,6 +139,55 @@ def embed_signature(dim: int = 768) -> str:
     return _compose_signature(dim, pooling_id(), EMBED_PREFIX_REV)
 
 
+def _split_identifier(word: str) -> list[str]:
+    """`getUserName` -> [get, User, Name]; `HTTPServer` -> [HTTP, Server]; `total` -> [total].
+
+    Case transitions only, walked character by character — no regex (P6 bans `re` in this
+    package) and no vocabulary of known prefixes or acronyms. A boundary opens before an
+    uppercase letter that either follows a non-uppercase character, or ends a run of uppercase
+    ones by being followed by a lowercase (the `HTTPServer` case). Digits are deliberately not
+    boundaries: `sha256` stays whole, which is how it is written when it is searched for.
+    """
+    parts: list[str] = []
+    cur: list[str] = []
+    for i, c in enumerate(word):
+        if c.isupper() and cur:
+            nxt = word[i + 1] if i + 1 < len(word) else ""
+            if not word[i - 1].isupper() or nxt.islower():
+                parts.append("".join(cur))
+                cur = []
+        cur.append(c)
+    if cur:
+        parts.append("".join(cur))
+    return parts
+
+
+def identifier_tokens(text: str) -> str:
+    """The camelCase sub-tokens of `text` — the second FTS5 column's content.
+
+    unicode61 splits on non-alphanumerics, so `_content_hash` already tokenises as `content` +
+    `hash`. camelCase has no non-alphanumeric to split on, so `getUserName` is one opaque token
+    and the words in it are unreachable from an English question. Measured over the fleet's
+    377,590 symbol names, that is **29.7%** of every identifier indexed — typescript 91.2%,
+    java 80.3%, go 75.8%, javascript 66.9%, php 53.6%, and python only 8.3%. Python is the one
+    language the current tokenizer serves well, and it is the language this engine benchmarks
+    itself on, which is why the gap went unmeasured until it was looked for.
+
+    Only words that actually split are emitted, so the column holds the missing half rather than
+    a second copy of the chunk: the whole identifier is already a token in `content`, and
+    snake_case is already split there. Adjacency across two neighbouring identifiers is not
+    suppressed — `getUser fooName` admits the phrase "user foo" — because FTS5 offers no way to
+    open a position gap, and a spurious phrase spanning two identifiers is both rare and cheap
+    against the recall it buys.
+    """
+    out: list[str] = []
+    for word in "".join(c if c.isalnum() else " " for c in text).split():
+        parts = _split_identifier(word)
+        if len(parts) > 1:
+            out.extend(parts)
+    return " ".join(out)
+
+
 def fts_query(text: str) -> str:
     """A user question rewritten as an FTS5 MATCH expression. Empty when nothing is searchable.
 
@@ -156,12 +205,22 @@ def fts_query(text: str) -> str:
     Split with `str.isalnum` rather than a regex, both because P6 forbids `re` in this package
     and because it is the closer match: unicode61 keeps unicode letters and digits, which a
     `[0-9A-Za-z]` class would drop from the query while the index still held them.
+
+    A camelCase word contributes a *second* phrase, its `_split_identifier` expansion, OR'd with
+    the first. The two are not interchangeable and both are needed: `getUserName` tokenises whole
+    in the `content` column, so the unsplit phrase is what reaches its own call sites, while the
+    split phrase is what reaches a `get_user_name` spelling of the same name and what matches the
+    `tokens` column. Emitted once when they agree, so an all-lowercase question is unchanged.
     """
-    phrases = [
-        '"' + " ".join(t) + '"'
-        for w in text.split()
-        if (t := "".join(c if c.isalnum() else " " for c in w).split())
-    ]
+    phrases: list[str] = []
+    for w in text.split():
+        runs = "".join(c if c.isalnum() else " " for c in w).split()
+        if not runs:
+            continue
+        phrases.append('"' + " ".join(runs) + '"')
+        split = '"' + " ".join(p for r in runs for p in _split_identifier(r)) + '"'
+        if split != phrases[-1]:
+            phrases.append(split)
     return " OR ".join(phrases)
 
 
@@ -235,13 +294,46 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
     # Without this index that subquery scans a table holding >100k rows on the larger repos,
     # on every query. Costs one lazy build per existing store; no reindex, no signature change.
     con.execute("CREATE INDEX IF NOT EXISTS idx_chunks_language ON chunks(language)")
+    if migrate:
+        # Both migrations below are check-then-act: read a `_rev` out of `meta`, then ALTER, DROP,
+        # CREATE and backfill on the strength of what it said. Two write handles on one store is
+        # not hypothetical — reconcile's staleness check opens one while an indexing run holds
+        # another — and unserialised the loser re-runs a step the winner already committed and
+        # dies on `duplicate column name: tokens`, inside a daemon thread where it surfaces as an
+        # unhandled-exception warning rather than as a failure. `BEGIN IMMEDIATE` takes sqlite's
+        # write lock before the read, so the second handle blocks here and then reads the `_rev`
+        # the winner wrote and owes nothing. The existing `con.commit()` at the end of this
+        # function is what releases it, so the whole migration is one transaction.
+        #
+        # The busy timeout has to cover a full backfill, not a statement: the blocked handle is
+        # waiting for the winner's `rebuild` + `optimize`, measured at 12.6 s on the fleet's
+        # largest store. Python's 5 s default would turn the race into `database is locked`, which
+        # is the same bug wearing a different message.
+        con.execute("PRAGMA busy_timeout=120000")
+        con.execute("BEGIN IMMEDIATE")
+    owed = con.execute("SELECT value FROM meta WHERE key='fts_rev'").fetchone() != (FTS_REV,)
+    # `tokens` holds `identifier_tokens(content)` — the camelCase sub-tokens `unicode61` cannot
+    # see. It is a real column rather than a derived one because FTS5's `delete` command needs
+    # the exact text that *was* indexed for every column, so recomputing it at delete time would
+    # make a change to the splitter corrupt every store built before it instead of merely
+    # re-tokenising them. Added only on a write handle: it is O(1), but a query-path open has no
+    # business writing schema, and a store still owing the backfill has its lexical lane off
+    # anyway, so nothing reads the column before the handle that creates it fills it.
+    if owed and migrate:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+        if "tokens" not in cols:
+            con.execute("ALTER TABLE chunks ADD COLUMN tokens TEXT")
+        # The column set of an fts5 table is fixed at creation, so a store carrying the previous
+        # single-column index has to be recreated rather than migrated. Free: `rebuild` below
+        # re-tokenises the whole store regardless, which is what an `FTS_REV` bump costs.
+        con.execute("DROP TABLE IF EXISTS chunks_fts")
     # The lexical lane. External content, so the text lives once in `chunks` and FTS5 stores
     # only the inverted index. `chunks` is maintained by hand at the three sites that write it
     # rather than by triggers: `INSERT OR REPLACE` fires delete triggers only under
     # recursive_triggers, and `clear()` would otherwise re-tokenise every row on its way out.
     con.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
-        "USING fts5(content, content='chunks', content_rowid='chunk_id')"
+        "USING fts5(content, tokens, content='chunks', content_rowid='chunk_id')"
     )
     # Creating the table leaves it EMPTY — an external-content table indexes nothing it did not
     # see written. `rebuild` is FTS5's own backfill and is the only thing that must run against
@@ -257,9 +349,17 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
     # maintained incrementally, since deleting a row that was never indexed writes a negative
     # entry. A forgotten call site must therefore land on "slow but correct", never on "fast
     # and silently corrupting".
-    owed = con.execute("SELECT value FROM meta WHERE key='fts_rev'").fetchone() != (FTS_REV,)
     if owed and migrate:
         t0 = time.monotonic()
+        # `tokens` is derived, so it is recomputed for every row rather than migrated: an
+        # `FTS_REV` bump is exactly the event that means "the old derivation is not the current
+        # one". Batched through executemany off a single read so the write is one statement's
+        # worth of round trips rather than one per chunk.
+        con.executemany(
+            "UPDATE chunks SET tokens=? WHERE chunk_id=?",
+            [(identifier_tokens(c), cid)
+             for cid, c in con.execute("SELECT chunk_id, content FROM chunks")],
+        )
         con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
         con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
         con.execute("INSERT OR REPLACE INTO meta VALUES ('fts_rev', ?)", (FTS_REV,))
@@ -373,29 +473,34 @@ class VectorStore:
         # always aborted midway, after `chunks` was already overwritten. The probe is a PK miss
         # in the normal case, since both callers clear or purge the path before inserting.
         old = self._con.execute(
-            "SELECT content FROM chunks WHERE chunk_id=?", (chunk_id,)
+            "SELECT content, tokens FROM chunks WHERE chunk_id=?", (chunk_id,)
         ).fetchone()
         if old is not None:
             if self._lexical_ready:
                 self._con.execute(
-                    "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
-                    (chunk_id, old[0]),
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens)"
+                    " VALUES('delete',?,?,?)",
+                    (chunk_id, old[0], old[1]),
                 )
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (chunk_id,))
             if self._bin_ready:
                 self._con.execute(
                     "DELETE FROM vec_chunks_bin WHERE chunk_id=?", (chunk_id,)
                 )
+        tokens = identifier_tokens(content)
         self._con.execute(
-            "INSERT OR REPLACE INTO chunks VALUES (?,?,?,?,?,?)",
-            (chunk_id, path, start, end, language, content),
+            "INSERT OR REPLACE INTO chunks"
+            " (chunk_id, path, start_line, end_line, language, content, tokens)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (chunk_id, path, start, end, language, content, tokens),
         )
         # An unbuilt index is left strictly empty rather than partially filled. Maintaining it
         # here would be worse than useless: `delete` against a row the index never saw writes a
         # negative entry, and the next `rebuild` is what makes the store whole in one step.
         if self._lexical_ready:
             self._con.execute(
-                "INSERT INTO chunks_fts(rowid, content) VALUES (?,?)", (chunk_id, content)
+                "INSERT INTO chunks_fts(rowid, content, tokens) VALUES (?,?,?)",
+                (chunk_id, content, tokens),
             )
         self._con.execute(
             "INSERT INTO vec_chunks(chunk_id, embedding) VALUES (?,?)", (chunk_id, v),
@@ -631,16 +736,17 @@ class VectorStore:
     def delete_by_path(self, path: str) -> None:
         """Remove all chunks (metadata + vectors) for a single file path."""
         rows = self._con.execute(
-            "SELECT chunk_id, content FROM chunks WHERE path=?", (path,)
+            "SELECT chunk_id, content, tokens FROM chunks WHERE path=?", (path,)
         ).fetchall()
-        for cid, content in rows:
+        for cid, content, tokens in rows:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
             if self._bin_ready:
                 self._con.execute("DELETE FROM vec_chunks_bin WHERE chunk_id=?", (cid,))
             if self._lexical_ready:
                 self._con.execute(
-                    "INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete',?,?)",
-                    (cid, content),
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, content, tokens)"
+                    " VALUES('delete',?,?,?)",
+                    (cid, content, tokens),
                 )
         self._con.execute("DELETE FROM chunks WHERE path=?", (path,))
         self._con.execute("DELETE FROM file_hashes WHERE path=?", (path,))
