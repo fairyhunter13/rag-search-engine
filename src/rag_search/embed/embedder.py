@@ -8,8 +8,10 @@ import numpy as np
 
 from rag_search.core.config import (
     EMBED_DEVICE,
+    EMBED_DOC_PREFIX,
     EMBED_MAX_TOKENS,
     EMBED_MODEL,
+    EMBED_QUERY_PREFIX,
     RERANK_MODEL,
 )
 from rag_search.core.gpu import (
@@ -121,14 +123,31 @@ class Embedder:
                 self._init()
             list(self._model.embed(["warmup"], batch_size=1))
 
-    def embed(self, texts: list[str], batch_size: int = 8) -> np.ndarray:
+    def embed(self, texts: list[str], batch_size: int = 8, *,
+              side: str = "document") -> np.ndarray:
         """Embed on GPU; returns normalized float32 array of shape (n, 768).
+
+        `side` names which end of the asymmetry these texts are: what is being *indexed* or what
+        is being *asked*. The configured model is trained with two different task prefixes and
+        scores below its published numbers without them, and FastEmbed supplies neither —
+        `query_embed`/`passage_embed` fall through to `embed` unchanged for every text model in
+        0.8.0 — so this is the only place the distinction can be made. There is no default that
+        is right for both, and `"document"` is the one that is right for the bulk of the calls;
+        an unknown side raises rather than quietly embedding a query into the document space,
+        which is a failure no metric would show as anything but slightly worse retrieval.
 
         Deliberately not float16. VectorStore stores FLOAT[768] and upcasts on the way in,
         so narrowing here bought no space at all — it only added quantisation error to every
         vector on the way to a float32 column. The cost of dropping it is transient: a bulk
         index holds n x 768 x 4 bytes, ~390 MB rather than ~195 MB on the largest repo here.
         """
+        if side == "document":
+            prefix = EMBED_DOC_PREFIX
+        elif side == "query":
+            prefix = EMBED_QUERY_PREFIX
+        else:
+            raise ValueError(f"side must be 'document' or 'query', not {side!r}")
+        texts = [prefix + t for t in texts]
         with _GPU_INFER_LOCK:
             if self._model is None:
                 self._init()
@@ -146,7 +165,13 @@ class Embedder:
             if self._model is None:
                 self._init()
         meta = self._model._get_model_description(self._model_name)
-        return int(meta.get("dim", 768))
+        # fastembed describes a built-in model with a `DenseModelDescription` dataclass and a
+        # custom-registered one with a plain dict, and which shape comes back is a property of
+        # how EMBED_MODEL got into the registry rather than of the model. Reading only the dict
+        # form raised AttributeError the moment the configured model became a built-in — a
+        # dimension the store already has to agree on, failing at the one call that asks for it.
+        dim = getattr(meta, "dim", None)
+        return int(dim if dim is not None else meta.get("dim", 768))
 
 
 # Rerankers fastembed has no built-in description for. Its registry is a curated list, not a

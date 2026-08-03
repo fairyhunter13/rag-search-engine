@@ -81,7 +81,7 @@ def index_project(
         while buf and (force or len(buf) >= batch):
             take = buf[:batch]
             del buf[:batch]
-            vecs = embedder.embed([c.content for c in take], batch_size=batch)
+            vecs = embedder.embed([c.content for c in take], batch_size=batch, side="document")
             for chunk, vec in zip(take, vecs, strict=True):
                 store.insert(
                     chunk_id=_chunk_id(chunk.path, inserted),
@@ -169,7 +169,7 @@ def index_files(
     texts = [c.content for c in chunks]
     vectors: list[np.ndarray] = []
     for i in range(0, len(texts), batch):
-        vecs = embedder.embed(texts[i : i + batch], batch_size=batch)
+        vecs = embedder.embed(texts[i : i + batch], batch_size=batch, side="document")
         vectors.extend(vecs)
     for pos, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
         store.insert(

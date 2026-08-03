@@ -111,7 +111,7 @@ def search(
     top_k: int = 10,
 ) -> list[dict]:
     """Embed query on GPU, scope-filtered hybrid (dense + BM25) search, then rerank."""
-    q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
+    q_vec = embedder.embed([query], batch_size=1, side="query")[0].astype("float32")
     pool = max(_MIN_POOL, top_k * 5)
     langs = scope_languages(scope)
     lanes = [store.search(q_vec, top_k=pool, languages=langs),
@@ -235,7 +235,7 @@ def search_federation(
     truncation was: a chunk in the global top-`pool` has at most `pool - 1` chunks above it
     anywhere, so it cannot be cut by its own batch, whose competitors are a subset.
     """
-    q_vec = embedder.embed([query], batch_size=1)[0].astype("float32")
+    q_vec = embedder.embed([query], batch_size=1, side="query")[0].astype("float32")
     langs = scope_languages(scope)
     pool = max(_MIN_POOL, top_k * 5)
     pooled: list[dict] = []
