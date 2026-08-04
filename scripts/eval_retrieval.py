@@ -298,7 +298,10 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     if queries_from == "commit":
         queries = build_commit_query_set(project, store_paths, n)
         if not queries:
-            raise SystemExit(f"no commit in {project} survived the filters with an indexed file")
+            raise SystemExit(
+            f"no commit in {project} survived the filters with an indexed file — check "
+            f"`git -C {project} rev-list --count --no-merges HEAD` first: several stores in this "
+            f"fleet are single-commit imports, where this mode is inapplicable rather than broken")
     else:
         queries = [(q, (gold,)) for q, gold in build_query_set(graph_db, store_paths, n)]
         if not queries:
