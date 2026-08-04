@@ -197,6 +197,15 @@ def _purge_leaked_test_state():
     purge_dead_owned_dirs(_SAFE_BASE)
     before = index_dir_names()
     yield
+    # Before anything is counted: the last writer must have stopped writing. `_drain_graph_lane`
+    # joins after every *test*, which cannot cover work scheduled by a *fixture* teardown — and
+    # `teardown_sample_workspace`'s own rmtree schedules exactly that. Measured 2026-08-05: the
+    # listing diff below reported one dir while five sample-workspace stores were written 1-3s
+    # later, by an in-process pass this join is the only thing that waits for.
+    sweeps = sys.modules.get("rag_search.daemon.sweeps")
+    if sweeps is not None:
+        with contextlib.suppress(Exception):
+            sweeps._graph_lane_join(timeout=300.0)
     # Again, before the listing diff: the daemon may have restored rows mid-run, and a restored row
     # would make the diff spare the very dirs it exists to take.
     purge_rows_under(_SAFE_BASE)

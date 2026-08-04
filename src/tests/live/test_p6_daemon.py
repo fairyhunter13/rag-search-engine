@@ -1204,7 +1204,7 @@ def test_p21_burst_label_federation(safe_tmp_path):
         remove_project(member_path)
 
 
-def test_p34_watcher_updates_vector_index(tmp_path):
+def test_p34_watcher_updates_vector_index(safe_tmp_path):
     """P34.1: watcher fires on_change → _index_files; new file found in vector search."""
     import time
 
@@ -1214,14 +1214,14 @@ def test_p34_watcher_updates_vector_index(tmp_path):
     from rag_search.embed.embedder import get_embedder
     from rag_search.index.store import VectorStore
     from rag_search.query.search import search
-    proj = str(tmp_path)
-    (tmp_path / "seed.py").write_text("def seed_func(): pass\n")
+    proj = str(safe_tmp_path)
+    (safe_tmp_path / "seed.py").write_text("def seed_func(): pass\n")
     _index_project(proj)
     w = Watcher(on_change=on_change)
     w.watch(proj)
     w.start()
     time.sleep(0.15)
-    (tmp_path / "probe.py").write_text("def zzqx_watcher_probe(): pass\n")
+    (safe_tmp_path / "probe.py").write_text("def zzqx_watcher_probe(): pass\n")
     embedder = get_embedder()
     vdb = project_vector_db(proj)
     found = False
@@ -1323,15 +1323,15 @@ def test_on_change_lane_debounce(safe_tmp_path):
         sweeps._last_lane_run.pop(proj, None)
 
 
-def test_watcher_labelling_e2e(tmp_path):
+def test_watcher_labelling_e2e(safe_tmp_path):
     """T5/HR2+HR3: on_change outside debounce runs the lane; existing summaries are not wiped."""
     from rag_search.core.config import project_graph_db
     from rag_search.daemon import sweeps
     from rag_search.daemon.sweeps import _index_project, on_change
     from rag_search.graph.store import GraphStore
 
-    proj = str(tmp_path)
-    (tmp_path / "seed.py").write_text("def seed_fn(): pass\n")
+    proj = str(safe_tmp_path)
+    (safe_tmp_path / "seed.py").write_text("def seed_fn(): pass\n")
     _index_project(proj)
 
     gdb = project_graph_db(proj)
@@ -1344,8 +1344,8 @@ def test_watcher_labelling_e2e(tmp_path):
 
     sweeps._last_lane_run.pop(proj, None)
     try:
-        (tmp_path / "new.py").write_text("def extra(): pass\n")
-        on_change(proj, [tmp_path / "new.py"])
+        (safe_tmp_path / "new.py").write_text("def extra(): pass\n")
+        on_change(proj, [safe_tmp_path / "new.py"])
         assert proj in sweeps._last_lane_run, (
             "on_change outside debounce must submit the graph lane (HR2 violation)"
         )
