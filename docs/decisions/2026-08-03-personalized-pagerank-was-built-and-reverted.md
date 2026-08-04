@@ -83,3 +83,27 @@ re-derived by anyone who reopens this:
   personalization vector PageRank degenerates to global popularity, which would reorder every query
   in the fleet on evidence about none of them. GR2 was the gate for exactly that, and it is the
   half of the design that was right.
+
+## Reopened on schedule, and re-closed — 2026-08-04
+
+This was left as "re-open after R1's edges land, if at all." R1's edges have landed: all 150 stores
+re-derived to `fg3+e13+5752`, PHP edges **+12.9%**, fleet **134,650** edges. So the precondition
+fired, and the answer is still no. It cost no GPU time to find out, which is the point of having
+written the reopen bar down.
+
+**More edges is not the thing this record asks for.** The bar above is *a mechanism that beats 25.3%,
+not another way to blend the same 25.3% in*. R1 supplied edges, not a mechanism; the finding it would
+have to overturn — that a call edge is a weak relevance signal even when correct, against a
+cross-encoder that read the actual text — is untouched by there being more of them.
+
+**And the coverage premise moved the wrong way, not the right one.** The second reason was that most
+fleet symbols live in languages with **zero edges**. Recounted across all 150 stores after R1:
+**289,031 of 471,446 symbols (61.3%)** are still in zero-edge languages. The bulk is `json` (242,656
+symbols, 0 edges), `markdown` (28,173, 0) and `yaml` (10,386, 0) — data, which no call-graph work
+reaches at any depth. R1 added edges only *within* PHP, a language that already had them: **no
+language moved from zero to non-zero**, so the share is unchanged by R1 on any denominator. (61.3%
+and the 52.9% above are not a like-for-like series — they are two counts with different symbol
+denominators — but the direction of R1's contribution to it is zero either way.)
+
+Reopen this on a mechanism, or on retrieval evidence. Not on edge count: that lever has now been
+pulled, measured, and it moved nothing here.

@@ -7,12 +7,12 @@ cut. This records the measurement it shipped on, because at the time there was *
 evidence for MMR or per-file caps in code retrieval in either direction**, so a local number was
 the only thing that could decide it.
 
-> **Amended 2026-08-05.** That last claim is no longer true, in this item's favour. `arXiv:2601.23254`
+> **Amended 2026-08-04.** That last claim is no longer true, in this item's favour. `arXiv:2601.23254`
 > reports 7.04–15.58% relative exact-match over its strongest baseline from identifier-weighted
 > reranking plus **structure-aware deduplication** — the same move, arrived at independently and
 > published before this shipped. It was still right to ship on the local number; the evidence was
 > found afterwards, and had it pointed the other way the number would still have decided.
-> See `2026-08-05-the-three-questions-the-search-budget-had-left-open.md`.
+> See `2026-08-04-the-three-questions-the-search-budget-had-left-open.md`.
 
 ## Where it runs, and why that position is the only correct one
 
