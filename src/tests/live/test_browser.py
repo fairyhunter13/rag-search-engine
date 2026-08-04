@@ -164,7 +164,13 @@ def test_pulse_indexing_queue_reports_sweep_state(page: Page, _sample_promo: str
     """
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
-    state = (page.locator("#sweeps-state").inner_text() or "").strip()
+    # Casefolded because `inner_text()` returns *rendered* text: the badge is a child of
+    # `.panel-hdr`, which sets `text-transform:uppercase`, so the DOM's "sweeps paused" reaches
+    # us as "SWEEPS PAUSED". Asserting the literal lowercase compared presentation against a
+    # value, and no run could ever have satisfied it. `inner_text()` is kept over
+    # `text_content()` on purpose — reading the rendered text is what proves the badge is
+    # actually displayed, which is the property this test exists to defend.
+    state = (page.locator("#sweeps-state").inner_text() or "").strip().lower()
     assert state in ("sweeps running", "sweeps paused"), (
         f"#sweeps-state must report a real /api/auto_pipeline_status `enabled`; got {state!r}"
     )
