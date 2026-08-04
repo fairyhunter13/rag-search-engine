@@ -14,11 +14,11 @@ import pytest
 pytestmark = pytest.mark.live
 
 
-def test_meta_round_trip(tmp_path):
+def test_meta_round_trip(safe_tmp_path):
     """T1a: get_meta/set_meta persist across close/reopen."""
     from rag_search.core.config import project_graph_db
     from rag_search.graph.store import GraphStore
-    db = project_graph_db(str(tmp_path))
+    db = project_graph_db(str(safe_tmp_path))
     gs = GraphStore(db)
     gs.set_meta("x", "hello")
     gs.commit()
@@ -29,11 +29,11 @@ def test_meta_round_trip(tmp_path):
     gs2.close()
 
 
-def test_meta_migration_on_existing_db(tmp_path):
+def test_meta_migration_on_existing_db(safe_tmp_path):
     """T1b: opening an old DB without the meta table triggers the schema migration."""
     from rag_search.core.config import project_graph_db
     from rag_search.graph.store import GraphStore
-    db = project_graph_db(str(tmp_path))
+    db = project_graph_db(str(safe_tmp_path))
     # Create a fully valid DB first, then drop meta to simulate a pre-M1 DB.
     gs = GraphStore(db)
     gs.close()
@@ -48,11 +48,11 @@ def test_meta_migration_on_existing_db(tmp_path):
     gs2.close()
 
 
-def test_meta_survives_clear(tmp_path):
+def test_meta_survives_clear(safe_tmp_path):
     """T1c: GraphStore.clear() wipes symbols/edges/communities but not meta."""
     from rag_search.core.config import project_graph_db
     from rag_search.graph.store import GraphStore
-    db = project_graph_db(str(tmp_path))
+    db = project_graph_db(str(safe_tmp_path))
     gs = GraphStore(db)
     gs.set_meta("version", "v1")
     gs.commit()
@@ -94,7 +94,7 @@ def test_source_fingerprint_changes_on_file_add(tmp_path):
     assert sig1 != sig2, "fingerprint must change when a file is added"
 
 
-def test_graph_stale_fires_on_poisoned_version(tmp_path):
+def test_graph_stale_fires_on_poisoned_version(safe_tmp_path):
     """T1f: _graph_stale returns True when meta[algo_version] is wrong."""
     from rag_search.core.config import project_graph_db
     from rag_search.daemon.sweeps import (
@@ -103,14 +103,14 @@ def test_graph_stale_fires_on_poisoned_version(tmp_path):
         _pipeline_algo_version,
     )
     from rag_search.graph.store import GraphStore
-    (tmp_path / "a.py").write_text("def f(): pass\n")
-    db = project_graph_db(str(tmp_path))
+    (safe_tmp_path / "a.py").write_text("def f(): pass\n")
+    db = project_graph_db(str(safe_tmp_path))
     gs = GraphStore(db)
     gs.set_meta("algo_version", _pipeline_algo_version())
-    gs.set_meta("source_sig", _code_source_fingerprint(str(tmp_path)))
+    gs.set_meta("source_sig", _code_source_fingerprint(str(safe_tmp_path)))
     gs.commit()
-    assert not _graph_stale(str(tmp_path), gs), "up-to-date stamps must not be stale"
+    assert not _graph_stale(str(safe_tmp_path), gs), "up-to-date stamps must not be stale"
     gs.set_meta("algo_version", "STALE")
     gs.commit()
-    assert _graph_stale(str(tmp_path), gs), "poisoned version must be stale"
+    assert _graph_stale(str(safe_tmp_path), gs), "poisoned version must be stale"
     gs.close()
