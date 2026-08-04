@@ -87,9 +87,26 @@ def _heavy_processes() -> list[str]:
         if Path(argv[0]).name in _SUPERVISORS:
             continue
         line = " ".join(argv)
-        if any(frag in line for frag in _HEAVY):
-            found.append(" ".join(line.split())[:120])
+        frag = next((f for f in _HEAVY if f in line), None)
+        if frag is not None:
+            found.append(_excerpt(" ".join(line.split()), frag))
     return found
+
+
+def _excerpt(line: str, frag: str, width: int = 120) -> str:
+    """A readable slice of `line` that is guaranteed to still contain `frag`.
+
+    The cap is for output that fits on a terminal; anchoring it is not cosmetic. A head-only cut
+    drops the evidence itself as soon as the checkout path is long enough — measured 2026-08-05,
+    MP1 refused correctly but reported the interpreter and the first half of a checkout path, the
+    `bin/pytest` in argv[1] falling past the 120th character. Whether the gate can say *why*
+    it refused then depends on how deep the reader happened to clone, which is not a property
+    anything should have.
+    """
+    if len(line) <= width:
+        return line
+    start = max(0, line.find(frag) - width // 3)
+    return ("…" if start else "") + line[start:start + width] + "…"
 
 
 def _gpu_used_mb() -> int | None:

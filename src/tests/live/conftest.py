@@ -207,9 +207,13 @@ def _purge_leaked_test_state():
         with contextlib.suppress(Exception):
             sweeps._graph_lane_join(timeout=300.0)
     # Again, before the listing diff: the daemon may have restored rows mid-run, and a restored row
-    # would make the diff spare the very dirs it exists to take.
+    # would make the diff spare the very dirs it exists to take. Passing `_SAFE_BASE` a second time
+    # is not belt-and-braces — the daemon restores from another process, so the purge only wins the
+    # races it is ahead of, and the diff has to be told outright that no row under this base owns
+    # anything. Measured 2026-08-05, without it: five stores leaked per run, twice running, with
+    # the diff reporting nothing taken.
     purge_rows_under(_SAFE_BASE)
-    leftover = purge_unowned_index_dirs_created_since(before)
+    leftover = purge_unowned_index_dirs_created_since(before, never_owners_under=_SAFE_BASE)
     if leftover:
         # Reported, not silent: this is the backstop, and a backstop that keeps quiet is how the
         # 19-dir residue went unnoticed. A name here means some earlier teardown missed it.
