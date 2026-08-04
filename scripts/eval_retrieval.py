@@ -47,6 +47,7 @@ import hashlib
 import json
 import math
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -125,8 +126,75 @@ def build_query_set(graph_db: Path, store_paths: set[str], limit: int) -> list[t
     return out
 
 
-def _rank_of(paths: list[str], gold: str) -> int:
-    """1-based rank of `gold` in `paths`, or 0 if absent. One relevant document per query.
+_MAX_COMMIT_FILES = 10
+_MIN_SUBJECT_CHARS = 20
+
+
+def build_commit_query_set(
+    project: Path, store_paths: set[str], limit: int,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """(commit message, files it changed) — a query population the corpus cannot leak the answer to.
+
+    `build_query_set` writes every query as `qualified_name signature`, so the identifier is
+    verbatim in both the query and the chunk it is supposed to find. That is not a hard retrieval
+    task, and it is why arms that read a real effect under their own probes read null here. A
+    commit message is written by a human describing intent, in the vocabulary of the problem rather
+    than of the code, and the files the commit touched are the answer — the join is recorded rather
+    than reconstructed, so nothing about it can be leaked by the embedder.
+
+    Three filters, each removing commits whose file list is not a statement about relevance:
+    merges (no content of their own), commits touching more than `_MAX_COMMIT_FILES` (bulk renames
+    and reformats, where the message describes none of the files individually), and subjects too
+    short to be a query. Files not in the store are dropped, and a commit that keeps none is
+    skipped — a gold path that was never indexed scores 0 in every arm and measures nothing.
+
+    **Not comparable to `build_query_set`'s numbers.** Different questions against the same corpus
+    are two instruments; a commit-mode MRR beside a symbol-mode MRR is a category error, and the
+    two must never be merged into one table. Neither of the papers that use this construction
+    publishes a label-quality validation, so **hand-read ~20 pairs before trusting an arm**.
+    """
+    # Two distinct markers, not one: `%b` routinely contains blank lines, so splitting the message
+    # from the file list on a blank line puts half a commit body into the gold set. `\x1e` starts a
+    # commit, `\x1f` ends its message — neither can occur in a git log.
+    rs, us = "\x1e", "\x1f"
+    proc = subprocess.run(
+        ["git", "-C", str(project), "log", "--no-merges", "--name-only",
+         f"--format={rs}%s %b{us}", "-n", str(limit * 20)],
+        capture_output=True, text=True, errors="replace", timeout=120, check=False)
+    if proc.returncode != 0:
+        raise SystemExit(f"git log failed in {project}: {proc.stderr.strip()[:200]}")
+
+    out: list[tuple[str, tuple[str, ...]]] = []
+    for block in proc.stdout.split(rs)[1:]:
+        if len(out) >= limit:
+            break
+        msg, _, files = block.partition(us)
+        msg = " ".join(msg.split())
+        if not _MIN_SUBJECT_CHARS <= len(msg) <= _MAX_QUERY_CHARS:
+            continue
+        named = [ln for ln in files.splitlines() if ln.strip()]
+        if not named or len(named) > _MAX_COMMIT_FILES:
+            continue
+        gold = tuple(dict.fromkeys(
+            p for ln in named if (p := str(project / ln)) in store_paths))
+        # A commit keeps its label only if the store holds most of what it touched. Found by
+        # hand-reading the first ten pairs: a commit about gitignore-aware *discovery* survived
+        # with one gold file, a test, because the module it actually changed was not indexed. The
+        # message then describes a file that is not in the answer, which is a mislabel rather than
+        # a hard query, and it is invisible in the aggregate. Half is a judgement, not a result.
+        if gold and len(gold) * 2 >= len(named):
+            out.append((msg, gold))
+    return out
+
+
+def _rank_of(paths: list[str], gold: tuple[str, ...]) -> int:
+    """1-based rank of the best-placed member of `gold` in `paths`, or 0 if none is present.
+
+    Symbol-mode queries carry exactly one gold path, so this is the single-gold behaviour it has
+    always had. Commit mode carries several, and the *first* one retrieved is the right summary:
+    the question a commit message asks is "where does this change live", and a searcher who lands
+    on any of the touched files has been answered. Requiring all of them would score a correct
+    top-1 as a failure whenever a commit happened to touch two files.
 
     Every metric this script reports is a function of this single number, which is why it is
     what the per-query records carry: recall@1 is `rank == 1`, RR is `1/rank` inside the cutoff,
@@ -142,7 +210,7 @@ def _rank_of(paths: list[str], gold: str) -> int:
     theirs, and this is a retirement, not a restatement of them.
     """
     for i, p in enumerate(paths, start=1):
-        if p == gold:
+        if p in gold:
             return i
     return 0
 
@@ -209,7 +277,8 @@ def _embedder(model: str | None):
     return e
 
 
-def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: str) -> dict:
+def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: str,
+             queries_from: str = "symbol") -> dict:
     from rag_search.core.config import project_graph_db
     from rag_search.index.store import VectorStore
     from rag_search.query.search import search
@@ -226,9 +295,14 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
         store_paths = set(path_lang)
     finally:
         con.close()
-    queries = build_query_set(graph_db, store_paths, n)
-    if not queries:
-        raise SystemExit(f"no query-shaped symbols in {graph_db} whose file is indexed in {db}")
+    if queries_from == "commit":
+        queries = build_commit_query_set(project, store_paths, n)
+        if not queries:
+            raise SystemExit(f"no commit in {project} survived the filters with an indexed file")
+    else:
+        queries = [(q, (gold,)) for q, gold in build_query_set(graph_db, store_paths, n)]
+        if not queries:
+            raise SystemExit(f"no query-shaped symbols in {graph_db} whose file is indexed in {db}")
 
     # The pool depth the cross-encoder is actually given, imported rather than hard-coded so this
     # cannot drift from production. `recall@` it is the reranker's ceiling: a gold chunk outside
@@ -258,11 +332,13 @@ def evaluate(project: Path, store_dir: Path, model: str | None, n: int, lane: st
     mrr = sum(1.0 / r for r in ranks if 0 < r <= _TOP_K) / k
     spread: dict[str, int] = {}
     for _q, gold in queries:
-        lang = path_lang.get(gold, "?")
+        # A commit-mode query has several gold files; the first names the language of the
+        # change well enough for a spread that exists to catch collapse to one language.
+        lang = path_lang.get(gold[0], "?")
         spread[lang] = spread.get(lang, 0) + 1
     return {
         "project": str(project), "store": str(db), "model": model or "<configured>",
-        "lane": lane, "queries": k,
+        "lane": lane, "queries_from": queries_from, "queries": k,
         # Reported, not just relied on: a set that has quietly collapsed to one language is the
         # exact failure this selector replaced, and it would otherwise look like a normal result.
         "query_languages": dict(sorted(spread.items(), key=lambda kv: -kv[1])),
@@ -303,6 +379,10 @@ def main() -> int:
     ap.add_argument("--queries", type=int, default=_DEFAULT_QUERIES)
     ap.add_argument("--lane", choices=("dense", "hybrid"), default="dense",
                     help="dense isolates the embedder; hybrid measures the whole pipeline")
+    ap.add_argument("--queries-from", choices=("symbol", "commit"), default="symbol",
+                    help="symbol: qualified_name + signature (the identifier is verbatim in "
+                         "the chunk); commit: message as query, files changed as gold. The "
+                         "two are different instruments — never merge their tables")
     args = ap.parse_args()
 
     if args.compare:
@@ -320,7 +400,8 @@ def main() -> int:
         if args.out is None:
             raise SystemExit("--build requires --out: refusing to rebuild the fleet's own store")
         build(project, store_dir, args.model)
-    print(json.dumps(evaluate(project, store_dir, args.model, args.queries, args.lane), indent=2))
+    print(json.dumps(evaluate(project, store_dir, args.model, args.queries, args.lane,
+                                 args.queries_from), indent=2))
     return 0
 
 
