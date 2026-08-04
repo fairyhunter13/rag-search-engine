@@ -75,6 +75,12 @@ and the fleet stays stale behind a perfectly healthy `/healthz`. Verify by watch
 fall, never by the absence of errors. See
 `docs/decisions/2026-07-31-releasing-a-lease-schedules-nothing.md`.
 
+**The stale count is read at `overview(what="metrics", project_path=…)` → `pipeline_version`**, whose
+`stale_stores` counts every store — including unstamped ones — whose `graph.db` `meta.algo_version`
+differs from `sweeps._pipeline_algo_version()`. Built by `_pipeline_block` (`server/_overview.py`),
+guarded by AU5 in `test_extraction_ladder.py`. Recorded here because an instruction to watch a number
+is useless without its source: one session lost it and reported the convergence as unverifiable.
+
 **Take the lease before the first edit, not before the re-derive.** `_code_fingerprint` re-reads the
 fingerprinted modules off disk on every call, so a running daemon restamps the moment
 `graph/extractor.py` is *saved* — no commit needed, and a docstring counts. Measured 2026-07-31: one

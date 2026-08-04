@@ -35,6 +35,15 @@ carried instead by the chain walk onto `CI_Controller`/`MY_Model`.
 
 P18/HR34: counts and rates only — a store appears as an index and a dialect label, never as a name
 or a path.
+
+**Kept by decision, not by inertia.** The plan that produced it said "promoted or deleted once it
+answers"; it answered, and it is kept, because R1's headline is only reproducible through it — no
+other artifact re-derives the 21.0% from source. It is also the worked example of the rule the same
+execution earned twice: *a probe that re-derives its own view of the code is measuring a different
+program.* An earlier draft re-read the tree-sitter grammar itself, silently mismeasured the call
+population by 45%, and looked healthy throughout. Any successor oracle must join on the shipped
+extractor's own output — `_callee_node`/`_is_call_node`/`_unwrap_callee`, imported, never re-read —
+and must run a positive control, a case the join *must* match, before its first real number.
 """
 from __future__ import annotations
 
