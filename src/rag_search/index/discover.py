@@ -231,7 +231,24 @@ def _should_drop(
 
 # H3: non-parseable text/data formats kept explicitly; code = any language
 # the pack can parse (detected via has_language() in _size_limit).
-_TEXT_LANGS: frozenset[str] = frozenset({"markdown", "rst", "text", "html", "css"})
+_TEXT_LANGS: frozenset[str] = frozenset({"markdown", "rst", "text", "html", "css", "vimdoc"})
+# `vimdoc` joined 2026-08-04, and it is the csv/po fix below recurring in a language that fix did
+# not cover — with one addition that makes it worse. The pack maps the **`.txt` extension** to
+# vimdoc, so `detect_language_from_path` answers `vimdoc` for `requirements.txt` and
+# `CMakeLists.txt` alike; `is_code_language` then answered True because the pack has the grammar.
+# Every `.txt` file in the fleet was therefore taking the 500 kB *code* cap and feeding
+# `_code_source_fingerprint`, so editing a `requirements.txt` could wake a graph re-derive.
+# Measured: 390 fleet files, 0 symbols between them — 354 at rung `generic`, 36 `language_mismatch`.
+# Nothing is lost by the move — it is prose, and it extracted nothing to begin with.
+#
+# The other 40 languages the fleet holds were audited in the same pass, and only this one moved.
+# `scss` (363 files) and `less` (54) were the tempting pair, since `css` sits above them here and
+# they are stylesheets in exactly the same sense — but scss is only 60.9 % dark and holds **673
+# symbols**, so reclassifying it would *delete* extraction that works. `properties` and `ini`
+# likewise extract. `diff` (6 files) and `mermaid` (9) are the honest remaining candidates and are
+# left alone deliberately: below every gate this repo applies, and each is a judgement call rather
+# than a defect. **100 % dark is not the criterion** — `groovy` is 2,065 files at 100 % dark and is
+# unambiguously code. The criterion is whether the language is prose or data, and vimdoc is prose.
 # `csv` and `po` joined 2026-07-31 as a *classification* fix, not an exclusion. The pack ships
 # grammars for both, so `is_code_language` answered True and they were taking the 500 kB code cap
 # and feeding `_code_source_fingerprint` — a data export was waking the graph re-derive, which is
