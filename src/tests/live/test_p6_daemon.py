@@ -136,18 +136,27 @@ def test_systemd_install_writes_file(tmp_path):
 
 
 def test_systemd_unit_matches_deployed_name():
-    """P29: installer produces the deployed unit name + explicit bind address."""
+    """P29: installer produces the deployed unit name + explicit bind address.
+
+    Derived from `config`, not from the literals 8765/127.0.0.1 that stood here. The property
+    is *explicit bind*, and pinning the default value asserted something weaker while hiding
+    something worse: the generator wrote both as literals, so on any machine that set
+    RSE_MCP_DAEMON_PORT the installed unit and every client disagreed, and this test — reading
+    the same literal the generator wrote — agreed with itself. Deriving makes exactly that
+    machine go red.
+    """
+    from rag_search.core import config
     from rag_search.daemon.systemd import install, unit_text
     text = unit_text("/usr/bin/rag-search")
-    assert "--port 8765" in text, "ExecStart must bind to explicit port"
-    assert "--host 127.0.0.1" in text, "ExecStart must bind to explicit host"
+    assert f"--port {config.DAEMON_PORT}" in text, "ExecStart must bind to the configured port"
+    assert f"--host {config.DAEMON_HOST}" in text, "ExecStart must bind to the configured host"
     assert "singleton MCP daemon" in text, "Description must match deployed unit"
     import tempfile
     from pathlib import Path
     with tempfile.TemporaryDirectory() as td:
         dest = install(dest=Path(td) / "rag-search-mcp-daemon.service")
         assert dest.name == "rag-search-mcp-daemon.service"
-        assert "--port 8765" in dest.read_text()
+        assert f"--port {config.DAEMON_PORT}" in dest.read_text()
 
 
 def test_systemd_dropins_target_deployed_unit():

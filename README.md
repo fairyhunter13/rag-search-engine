@@ -131,3 +131,7 @@ docs/      architecture, world-model, info-hierarchy, conformance
 - `docs/world-model/model.yaml` — governing laws P0–P18, requirements HR1–HR40 (both registers
   keep the ids of retired entries, so the numbering never gets reused)
 - `docs/info-hierarchy.md` — the DIKW doctrine, now covering the deterministic layers only
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

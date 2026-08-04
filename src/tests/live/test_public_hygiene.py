@@ -282,6 +282,42 @@ def test_runtime_config_is_env_driven() -> None:
 _CLAUDE_MD_MAX_BYTES = 8_000
 
 
+def test_the_repo_ships_the_license_its_metadata_declares() -> None:
+    """A public tree must carry the license text its package metadata claims.
+
+    Not a formality. `src/pyproject.toml` declared `license = { text = "MIT" }` from the start
+    and no LICENSE file was ever tracked — `git log --all -- LICENSE` was empty — so for the
+    whole life of this public repo the default applied instead: all rights reserved, nobody
+    permitted to use, fork or redistribute it. Metadata is a claim about rights; only the file
+    grants them, and nothing here could tell the two apart.
+
+    Checks agreement, not a fixed license: change the declaration and the file together and this
+    stays green, change either alone and it goes red. The SPDX identifier is read from the
+    metadata rather than pinned, so this guard has no opinion about which license is right.
+    """
+    pyproject = (_REPO_ROOT / "src" / "pyproject.toml").read_text(encoding="utf-8")
+    declared = re.search(r"^license\s*=\s*\{\s*text\s*=\s*\"([^\"]+)\"", pyproject, re.M)
+    assert declared, (
+        "src/pyproject.toml declares no license. A public repo without one grants no rights at "
+        "all, whatever the README says."
+    )
+    name = declared.group(1)
+    license_file = _REPO_ROOT / "LICENSE"
+    assert license_file.is_file(), (
+        f"src/pyproject.toml declares the {name} license but no LICENSE file is tracked. Until "
+        f"one is, default copyright applies and this repo is not usable by anyone."
+    )
+    body = license_file.read_text(encoding="utf-8")
+    assert name.lower() in body.lower(), (
+        f"LICENSE does not name the {name} license that src/pyproject.toml declares — the "
+        f"metadata and the grant disagree, and only the grant is binding."
+    )
+    assert re.search(r"Copyright \(c\) \d{4}", body), (
+        "LICENSE carries no copyright line, which most licenses (MIT included) require to be "
+        "reproduced in redistributions."
+    )
+
+
 def test_claude_md_stays_an_instruction_file() -> None:
     """CLAUDE.md must stay an instruction file, not drift back into a decision log."""
     size = (_REPO_ROOT / "CLAUDE.md").stat().st_size

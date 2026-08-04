@@ -247,7 +247,9 @@ def index_dir_names() -> set[str]:
     return {d.name for d in INDEX_ROOT.iterdir() if d.is_dir() and d.name != TRASH_DIRNAME}
 
 
-def purge_unowned_index_dirs_created_since(before: set[str]) -> list[str]:
+def purge_unowned_index_dirs_created_since(
+    before: set[str], never_owners_under: Path | None = None
+) -> list[str]:
     """Delete index dirs that appeared during this run and that no registry row owns.
 
     The two paths above need the path: `purge_project` needs a registry row to derive the dir name,
@@ -262,12 +264,27 @@ def purge_unowned_index_dirs_created_since(before: set[str]) -> list[str]:
     row" spares a fleet project indexed for the first time *during* the run. `clean-orphans` once
     matched a registry path against a dir name, which can never be equal, and so reported all 179
     dirs on this fleet as orphans; the same mistake here would run without a `--yes` to stop it.
+
+    `never_owners_under` is what makes "no registry row" a fact rather than a race. The daemon puts
+    the suite's own rows back — `purge_rows_under` above documents federation discovery re-upserting
+    a member seconds after this suite deleted it — and it does so from another process, so calling
+    the purge first only wins the races it happens to be ahead of. Measured 2026-08-05: five
+    sample-workspace stores survived two consecutive full runs with the diff reporting *nothing*
+    taken, the rows having come back in the gap between the purge and this listing. A row under the
+    suite's own base can never be a legitimate owner (`test_no_real_project_in_tests.py` is the
+    invariant that nothing real lives there), so excluding those rows from `owned` outright retires
+    the timing question instead of narrowing it.
     """
     from rag_search.core.config import INDEX_ROOT, index_dir
     from rag_search.core.registry import list_projects
     if not INDEX_ROOT.exists():
         return []
-    owned = {index_dir(e.path).name for e in list_projects()}
+    disowned = str(never_owners_under) + os.sep if never_owners_under is not None else None
+    owned = {
+        index_dir(e.path).name
+        for e in list_projects()
+        if not (disowned and e.path.startswith(disowned))
+    }
     removed: list[str] = []
     for d in sorted(INDEX_ROOT.iterdir()):
         if not d.is_dir() or d.name in before or d.name in owned or d.name == TRASH_DIRNAME:

@@ -7,10 +7,8 @@
       "description": "GPU-accelerated local semantic code search. Index your projects and search with natural language.",
       "alwaysAllow": [
         "search",
-        "ask",
         "graph",
-        "overview",
-        "index"
+        "overview"
       ]
     }
   }

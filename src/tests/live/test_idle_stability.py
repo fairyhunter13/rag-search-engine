@@ -491,6 +491,36 @@ def _wt_wait_for(pred, timeout: float = 6.0, step: float = 0.05) -> bool:
     return pred()
 
 
+def test_wt0_a_deleted_root_is_not_answered_by_creating_its_store(safe_tmp_path):
+    """WT0: `on_change` for a root that no longer exists must write nothing at all.
+
+    Deleting a project produces a change batch like any other, and the batch arrives after the
+    tree is gone. Indexing it opens a store, and opening one *creates* it — so the daemon's answer
+    to "this project was deleted" was a brand-new empty store that nothing can ever reach: the
+    registry row went with the tree, and the dir name is a hash of a path that no longer exists.
+
+    Measured 2026-08-05 against the live suite, which deletes a five-project workspace at teardown:
+    two such stores per run, written 0-3s *after* the suite's own sweep had already run and found
+    nothing. That timing is why the fix belongs here and not in the sweep — a cleanup pass racing
+    another process's writes can only ever win the races it happens to be ahead of.
+    """
+    import shutil
+
+    from rag_search.core.config import index_dir
+    from rag_search.daemon import sweeps
+
+    proj = safe_tmp_path / "deleted-project"
+    (proj / "src").mkdir(parents=True)
+    (proj / "src" / "main.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    shutil.rmtree(proj)
+
+    sweeps.on_change(str(proj), [str(proj / "src" / "main.py")])
+    sweeps._graph_lane_join(timeout=60.0)
+    assert not index_dir(str(proj)).exists(), (
+        f"a deleted root got a store written for it at {index_dir(str(proj))}; nothing will ever "
+        f"reach that dir again, and nothing but a listing diff can name it")
+
+
 def test_wt1_ignored_dir_churn_never_reaches_on_change():
     """WT1 (Phase 6): a burst of writes into a hidden dir + a gitignored dir must
     never invoke on_change — the exact 4th-root-cause regression (watchdog used to
