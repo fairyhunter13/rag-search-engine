@@ -158,9 +158,11 @@ def _diversify(chunks: list[dict], top_k: int) -> list[dict]:
 
     The cap is the weaker of the two claims. Overlap collapse removes text that is literally
     duplicated; a per-file cap asserts that a searcher would rather see three files than ten
-    windows of one, and **there is no published evidence for per-file caps or MMR in code
-    retrieval in either direction**. It ships on the local label-free number — distinct files in
-    the returned top-10 — or it does not ship.
+    windows of one. It shipped on the local label-free number — distinct files in the returned
+    top-10 — because at the time there was no published evidence for per-file caps or MMR in code
+    retrieval in either direction. There is now: arXiv:2601.23254 reports 7.04-15.58% relative EM
+    over its best baseline from identifier-weighted reranking plus **structure-aware
+    deduplication**. Found after the fact and it agrees; the local number is still what decides.
     """
     kept: list[dict] = []
     dropped: list[dict] = []
