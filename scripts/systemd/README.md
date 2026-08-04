@@ -15,6 +15,11 @@ cp scripts/systemd/rag-search-mcp-daemon.service.d/*.conf \
 systemctl --user daemon-reload && systemctl --user restart rag-search-mcp-daemon
 ```
 
+**Read `/healthz` as its own command before that restart.** `systemctl --user restart` bypasses the
+409 that `POST /api/reload` returns while a sweeps pause lease is held, and it clears the lease with
+no refusal and no log line naming the run it just unpaused. If `sweeps_pause_lease_s` was non-zero,
+re-`POST /api/sweeps/pause` afterwards — nothing else will tell you it is gone.
+
 Verify what the *running process* actually got — not what the unit says it would set on the
 next start — with `tr '\0' '\n' < /proc/$(systemctl --user show rag-search-mcp-daemon.service
 -p MainPID --value)/environ`. That distinction has produced a false alarm here before.
