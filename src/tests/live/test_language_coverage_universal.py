@@ -98,8 +98,10 @@ def test_is_code_language_false_for_exclusions() -> None:
     # csv and po joined the data langs on 2026-07-31. Both have grammars in the pack, so this
     # answered True and they carried the 500 kB *code* cap and fed `_code_source_fingerprint` —
     # a data export was waking the graph re-derive, which is what HR38 exists to prevent.
+    # vimdoc joined the text langs on 2026-08-04 for the same reason and one worse: the pack maps
+    # the `.txt` *extension* to vimdoc, so `requirements.txt` and `CMakeLists.txt` were code.
     for lang in ("markdown", "rst", "text", "html", "css", "json", "yaml", "toml", "csv", "po",
-                 "unknown", ""):
+                 "vimdoc", "unknown", ""):
         assert not is_code_language(lang), (
             f"is_code_language({lang!r}) must be False — "
             "text/data/unknown langs must not be treated as code"

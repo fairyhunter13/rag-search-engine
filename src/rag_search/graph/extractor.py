@@ -110,7 +110,23 @@ from pathlib import Path
 #                    was struck once on measurement from a CodeIgniter 3 store, which predates
 #                    every one of those constructs and was guaranteed to read zero — see
 #                    `docs/decisions/2026-08-04-a-receiver-type-dissolves-the-ambiguity.md`.
-EXTRACTOR_REV = "e13"
+#   e14 2026-08-04  `vimdoc` reclassified from code to text in `index/discover.py`. The pack maps
+#                    the `.txt` extension to vimdoc, so `requirements.txt` and `CMakeLists.txt`
+#                    were taking the 500 kB *code* cap and feeding `_code_source_fingerprint` —
+#                    editing a pip pin could wake a graph re-derive, the csv/po incident of
+#                    2026-07-31 recurring in a language that fix did not cover. 390 fleet files
+#                    (354 `generic`, 36 `language_mismatch`), 0 symbols between them. The rev
+#                    moves by hand because `index/discover.py` is
+#                    **not** in `_FINGERPRINT_MODULES` (`daemon/sweeps.py`), so a classification
+#                    change moves no stamp on its own — the same trap `_MAX_CALLEE_FANOUT`
+#                    documents. Note the graph itself does not change: those files extracted
+#                    nothing before and extract nothing now. What moves is the *denominator* —
+#                    390 files leave H1's coverage ratio via `graph/store.py`, so the ratio shifts
+#                    without the graph having shifted (`index/discover.py` carries the precedent
+#                    wording). The 40 other languages the fleet holds were audited in the same
+#                    pass and none moved; see
+#                    `docs/decisions/2026-08-04-the-language-axis-was-already-universal.md`.
+EXTRACTOR_REV = "e14"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
