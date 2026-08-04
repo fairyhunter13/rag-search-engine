@@ -45,6 +45,27 @@ were never ambiguous** — and is silent on the variable receivers that are the 
 on one line it emits occurrences for `self::formatData()` and `ucfirst()` and nothing whatever for two
 `$item->…()` calls on the same line; the receiver carries no type declaration anywhere in the file.
 
+## It replicated on a second root, chosen to falsify it
+
+One root decides nothing in this lineage, and the first result was one root. So the pilot was repeated
+on a second, larger root **picked specifically because it was the most likely to disprove the claim**:
+754 files, and `declare(strict_types=1)` in 83 of 300 sampled files against 0 and 1 in its neighbours —
+the most strictly typed Laravel root in the fleet.
+
+**It read 0 of 509.** The receiver split is cleaner there than on the first root, not weaker:
+
+| tree | ambiguous calls | scip named | on `$var->` receivers |
+|---|---:|---:|---:|
+| A | 672 | 23.2% | **0.0%** |
+| B | 650 | 31.2% | **0.0%** |
+| C | 229 | 54.6% | **0.0%** |
+| D | 42 | 100.0% | — |
+
+Across both pilots: **718 residual sites, zero recovered.** `strict_types` declares that *scalar
+arguments* are checked; it says nothing about whether a local variable's class is annotated, which is
+the fact resolution actually needs. Picking the corpus most favourable to the hypothesis and watching
+it read zero is what makes this a finding rather than one root's accident.
+
 ## Why this is not a tool defect
 
 It is a correct type resolver returning nothing because **there is no type to resolve**.
