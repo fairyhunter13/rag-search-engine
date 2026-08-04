@@ -154,7 +154,7 @@ def test_http_overview_unknown_what_returns_error_and_valid():
 
 def test_http_graph_no_project_path_no_roots_fails_loud():
     """Empty project_path from a client advertising no roots must FAIL LOUD with candidates —
-    never silently answer about the arbitrary first registry project (payment-gateway bug)."""
+    never silently answer about the arbitrary first registry project (the first-entry bug)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 11, "method": "tools/call",

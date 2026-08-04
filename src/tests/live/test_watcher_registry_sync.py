@@ -168,7 +168,7 @@ def test_wk1_a_write_is_retrievable_from_that_projects_own_store(wk1_projects):
             Path(p, "hot.py").write_text(f"def hot():\n    return {_RARE!r}\n")
         assert _wait_for(lambda: {subject, control} <= rec.roots()), (
             f"WK1: only {sorted(rec.roots())} delivered — a registered, armed root produced no "
-            "event, which is the cx-be / cx-sdui shape exactly"
+            "event, which is the two-sibling-members shape exactly"
         )
         assert _wait_for(lambda: _chunk_hits(subject, _RARE) > 0, timeout=180.0), (
             "WK1: the event was delivered but never reached the project's own vectors.db — the "
@@ -225,7 +225,7 @@ def test_wk2_the_armed_root_set_follows_the_registry(safe_tmp_path):
         upsert_project(ProjectEntry(path=p, enabled=False))
         assert p not in server.get_watcher().status()["roots"], (
             "WK2: a disabled project stayed armed — this is how the disabled "
-            "`_worktrees/mcsv-erp` still holds 400 kernel watches nobody reads"
+            "a disabled `_worktrees/<repo>` still holds 400 kernel watches nobody reads"
         )
         upsert_project(ProjectEntry(path=p, enabled=True))
         assert p in server.get_watcher().status()["roots"]
@@ -244,7 +244,7 @@ def test_wk2_http_the_daemon_reports_no_root_armed_for_a_disabled_project(live_c
     Asserts `extra == []`, not `missing == []`, on purpose: a live session registers temp
     projects the daemon never hears about, so `missing` is legitimately dirty mid-run, while
     `extra` means a root is armed for a project the registry has since disabled — the
-    `_worktrees/domain-lisi` state py-spy found.
+    `_worktrees/<repo>` state py-spy found.
 
     Convergence, not a snapshot: the registry has writers outside the daemon process (the CLI,
     and this suite), and those reach the armed set only through the `watcher_sync` scheduler
@@ -341,7 +341,7 @@ def test_wk3_an_unattributed_event_is_logged_and_rate_limited(safe_tmp_path):
 def test_wk4_reconcile_catches_a_file_the_watcher_never_delivered(safe_tmp_path, embedder):
     """WK4 (behavioural): a file written with no event must still be found by content freshness.
 
-    Reproduces cx-be exactly — index a project, then write to it WITHOUT calling `on_change`,
+    Reproduces the observed member shape exactly — index a project, then write to it WITHOUT calling `on_change`,
     which is what a lost watcher stream looks like from the store's side. Every pre-W3 trigger
     reports the project healthy: `_needs_index` is False (it completed), `_vectors_stale` is
     None (the signature matches), and `_graph_stale`'s mtime drift routes to `_rederive_graph`,

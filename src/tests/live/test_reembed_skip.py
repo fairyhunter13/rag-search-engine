@@ -3,7 +3,7 @@
 The watcher fires on writes, not on content changes: doc generators, formatters and
 `git checkout` routinely rewrite a file with the bytes it already had. index_files used to
 delete and re-embed every path it was handed, so those rewrites cost full GPU + tokenizer
-work for a bit-identical vector. Measured on inosoft-project's encyclopedia: one derive run
+work for a bit-identical vector. Measured on the largest workspace's encyclopedia: one derive run
 rewrote 136 files, of which exactly 1 had different content.
 
 RS1  a byte-identical rewrite must not touch the stored chunks at all

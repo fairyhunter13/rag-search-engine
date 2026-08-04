@@ -47,7 +47,7 @@ def index_project(
 
     It used to accumulate the whole project first — every chunk's text and every vector in
     memory, `clear()` then insert, one transaction committed at the very end. That made peak RSS
-    scale with the largest project (octg_inspection: 7,693 files) and made the unit of work the
+    scale with the fleet's largest project (7,693 files) and made the unit of work the
     *project*: a restart rolled the whole pass back. That is the property behind
     `_DRIFT_REPAIR_MAX = 500` and behind the fleet migration that discarded 104 of 202 projects
     when a pause landed mid-walk — not a cap chosen for throughput, a cap chosen because there

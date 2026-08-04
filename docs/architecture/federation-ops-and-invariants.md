@@ -327,7 +327,7 @@ which measurement withdrew:
 
 Widening it was checked against the whole fleet before shipping, not after: of **66,911** files
 walked across 139 projects, exactly **7** newly drop out — the 5 pickles plus two UTF-16LE files
-(`mcms/js/jscalendar/lang/calendar-hr.js`, `mcsv-archieve/README.md`) whose every second byte is
+(a vendored `jscalendar` locale file, a member `README.md`) whose every second byte is
 NUL. Zero collateral. The 7 files held 17 chunks, purged via `scripts/purge_unindexable.py`.
 
 **The two UTF-16 files are dropped deliberately, and this is the interesting half.** They are real

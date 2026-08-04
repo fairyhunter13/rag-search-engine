@@ -237,7 +237,7 @@ def test_lx5_two_write_handles_migrating_one_store_do_not_race(embedder, safe_tm
 def test_lx1_backfill_never_runs_on_the_query_path(embedder, safe_tmp_path):
     """LX1: opening a store to *read* must not migrate it, and must degrade instead of stalling.
 
-    Measured on the live fleet: opening `gims` (99 k chunks) inside a query cost 11.31 s to then
+    Measured on the live fleet: opening a 99 k-chunk member inside a query cost 11.31 s to then
     answer in 1.9 ms, and a federated search opens one store per member — so the first query
     against the 189-member federation would have paid that per member, serially, and timed out.
     The `fts_rev` assertion is the discriminating half: returning no lexical hits is also what a
@@ -389,7 +389,7 @@ def test_lx4_scope_filter_never_becomes_an_fts_rowid_constraint(embedder, safe_t
     a rowid set as a constraint FTS5 can serve, so the plan flips from `VIRTUAL TABLE INDEX 0:M`
     to `0:=M` and the full-text query is re-run once per candidate rowid. Measured on a
     118 k-chunk member: 0.018 s unfiltered, 17.0 s filtered. `scope="code"` names 302 languages,
-    so the candidate set is nearly the whole corpus, and across inosoft-project's 157 federation
+    so the candidate set is nearly the whole corpus, and across the largest workspace's 157 federation
     members that shape cost 700 s of a pinned core for one search — past the 300 s the MCP client
     waits, which is why every federated search "timed out". Joining `chunks` in phase 1 instead
     keeps the FTS index driving and probes by integer primary key per match: 0.049 s, same rows.

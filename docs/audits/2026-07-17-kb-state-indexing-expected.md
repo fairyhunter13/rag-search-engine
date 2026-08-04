@@ -145,7 +145,7 @@ pass1: head=27 narrated=0      pass2: head=27 narrated=20
 pass3: head=7  narrated=0      pass4: head=7  narrated=7  -> 67/67 READY
 ```
 
-Every parked project matched this shape (e.g. cx-be `head=51 enriched=40`, 11 silently dropped).
+Every parked project matched this shape (e.g. one member `head=51 enriched=40`, 11 silently dropped).
 
 **Fix (this change):**
 - `enrich_communities_batch` now re-attempts the still-unnarrated subset, bounded by **three
@@ -201,9 +201,9 @@ and runs regardless of how the prior session died. (2 orphaned dirs from Jul-14 
 **7c — Fleet convergence verified (read-only, was: "in progress in the background").**
 Confirmed via the daemon's own `overview(status)` that the deployed fix converges real
 previously-parked projects:
-- `payment-gateway` (105 communities): `kb_state=ready`, `enriched_pct=100.0` — **converged from
+- member A (105 communities): `kb_state=ready`, `enriched_pct=100.0` — **converged from
   parked**, the end-to-end proof on the live fleet.
 - `rag-search-engine` (this repo, 58 communities): `ready`, `100.0`.
-- `ts_fleet` (19 communities): `enriching`, `52.6%` — mid-convergence, awaiting its next daemon
+- member B (19 communities): `enriching`, `52.6%` — mid-convergence, awaiting its next daemon
   reconcile/enrich pass (daemon idle at check time); consistent with §6 resumability, not a
-  regression. Will converge when enrich next runs, as `payment-gateway` did.
+  regression. Will converge when enrich next runs, as member A did.

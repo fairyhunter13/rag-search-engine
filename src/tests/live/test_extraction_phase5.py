@@ -10,7 +10,7 @@ Measured provenance for S8, so a future reader can tell a regression from a re-b
 2026-07-28 the fleet held 18,301,489 resolved call edges across 151 projects with edges, of
 which 1,092,262 (5.968%) bound across language families — overwhelmingly javascript->php, a
 bare `get()` in one language reaching a `get()` in the other. Re-deriving one project
-(mcms-lp) with the family key dropped its edge count by exactly its cross-family count,
+(a vendored-JavaScript member) with the family key dropped its edge count by exactly its cross-family count,
 326,246 -> 287,528, and no same-family edge moved.
 """
 from __future__ import annotations

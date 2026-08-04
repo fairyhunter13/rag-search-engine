@@ -145,7 +145,7 @@ class _CannedStore:
 def test_t4_fanout_preserves_store_order():
     """T4: the parallel fan-out pools members in *input* order, not completion order.
 
-    `search_federation` fans out over a thread pool because inosoft-project's 157 priced members
+    `search_federation` fans out over a thread pool because the largest workspace's 157 priced members
     cost 36.68 s of sequential dense KNN. The speedup is only legitimate if the ranking cannot
     move, and what protects the ranking is subtle: `chunks.sort(key=_pool_key)` is *stable*, so
     two members whose chunks tie on RRF score break the tie by pooling position. Preserve input

@@ -183,7 +183,7 @@ def _should_drop(
     # It lived only in iter_files, so the watcher's screen (is_ignored_path) and discovery's
     # disagreed on exactly this one rule. A file past the cap was watched and indexed, then
     # reported orphaned by the set-drift check and purged, then re-indexed on its next write —
-    # a churn loop, caught live on inosoft's 143-172 kB diagram specs reappearing one reconcile
+    # a churn loop, caught live on the largest workspace's 143-172 kB diagram specs reappearing one reconcile
     # pass after being purged. Before the drift check existed the same disagreement simply
     # accumulated: 42,952 chunks the engine had decided were not indexable, still being searched.
     # Shared here for the reason is_generated_path was: the watcher, the indexer and the drift
@@ -333,7 +333,7 @@ def is_code_language(lang: str) -> bool:
 # Machine-generated code files: derived build/codegen output (protobuf stubs, dart codegen,
 # SvelteKit dashboards, *.generated.*). tree-sitter parses them as real code, but regenerating
 # them is NOT source drift — treating it as such re-derives the graph for nothing.
-# Provenance, kept because it is why the list exists: inosoft-project's own SvelteKit dashboard
+# Provenance, kept because it is why the list exists: the largest workspace's own SvelteKit dashboard
 # (its `wiki/` directory — not the deleted kb/wiki.py) regenerated src/lib/*.generated.js on
 # every build and looped the reconstruct cascade. That cascade left with tier 3; the drift signal
 # it shared with the graph re-derive did not.

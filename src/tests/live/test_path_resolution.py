@@ -254,7 +254,7 @@ def test_t2_unscoped_search_fails_loud_instead_of_scanning_the_fleet():
     Red twice, and the two are worth separating. Against the *deployed* daemon on 2026-07-29
     the same query reported `projects_searched` of ~160 in **164.78 s** unscoped versus **1**
     in **7.01 s** scoped, and its top hit for a question about *this* repo's reconcile loop was
-    `Tubestream/mcms-lp` JavaScript. Against the pre-change code in-process, this gate failed
+    a member's vendored JavaScript. Against the pre-change code in-process, this gate failed
     by *reaching the GPU at all* — an ONNX BFC arena OOM, because it genuinely set out to
     search the fleet while the repair held the card. Neither red is the assertion below
     tripping, so state it plainly: what this pins is that the unscoped path now returns before
