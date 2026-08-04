@@ -136,7 +136,58 @@ def _rank(query: str, chunks: list[dict], top_k: int) -> list[dict]:
     _rerank_stats["queries"] += 1
     if len(chunks) >= 2 and chunks[0].get("path") != retrieval_top1:
         _rerank_stats["top1_changed"] += 1
-    return chunks[:top_k]
+    return _diversify(chunks, top_k)
+
+
+# `chunker` emits windows with a 10-line overlap, so adjacent chunks of one file are near-duplicates
+# by construction — not a ranking error to correct, but a property of how the corpus was cut.
+_OVERLAP_SLACK = 10
+_MAX_PER_FILE = 3
+
+
+def _diversify(chunks: list[dict], top_k: int) -> list[dict]:
+    """Drop chunks that overlap one already kept, and cap how many can come from one file.
+
+    Runs **after** the cross-encoder and **before** the `top_k` cut, which is the only correct
+    place: the reranker still scores every candidate in the pool, so nothing is hidden from it,
+    and only the answer the caller sees is thinned. Filtering earlier would starve it.
+
+    Both rules keep the highest-reranked member of whatever they collapse, so this can only
+    reorder *within* what the reranker already preferred — it never promotes a chunk over a
+    better-scoring one from a different file.
+
+    The cap is the weaker of the two claims. Overlap collapse removes text that is literally
+    duplicated; a per-file cap asserts that a searcher would rather see three files than ten
+    windows of one, and **there is no published evidence for per-file caps or MMR in code
+    retrieval in either direction**. It ships on the local label-free number — distinct files in
+    the returned top-10 — or it does not ship.
+    """
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    per_file: dict[str, int] = {}
+    for c in chunks:
+        if len(kept) >= top_k:
+            break
+        path = c.get("path")
+        if per_file.get(path, 0) >= _MAX_PER_FILE:
+            dropped.append(c)
+            continue
+        start, end = c.get("start_line"), c.get("end_line")
+        if start is not None and end is not None and any(
+            k.get("path") == path and k.get("start_line") is not None
+            and start <= k["end_line"] + _OVERLAP_SLACK and k["start_line"] <= end + _OVERLAP_SLACK
+            for k in kept
+        ):
+            dropped.append(c)
+            continue
+        kept.append(c)
+        per_file[path] = per_file.get(path, 0) + 1
+    # A query whose whole pool is one file's windows must still return `top_k` results: backfill
+    # in rerank order rather than hand back three because the cap was met. Diversity is a
+    # preference between equally-good answers, never a reason to return fewer of them.
+    if len(kept) < top_k:
+        kept.extend(dropped[:top_k - len(kept)])
+    return kept[:top_k]
 
 
 def rerank_stats() -> dict:
