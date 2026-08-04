@@ -26,6 +26,7 @@ pytestmark = pytest.mark.live
 
 _TESTS_ROOT = Path(__file__).parents[1]   # src/tests/ — rglob covers any future subdirs
 _LIVE_DIR = Path(__file__).parent         # kept for per-file context in error messages
+_THIS_FILE_NAME = Path(__file__).name
 
 # Files exempt from the list_projects() check — they use it for registry mechanics,
 # not for picking arbitrary data projects.
@@ -242,4 +243,41 @@ def test_no_empty_project_path_daemon_call():
         "overview_tool('') / graph_tool(symbol_only) resolve to the first-enabled REAL registry "
         "project — use sample_workspace fixture paths instead, or add to _EMPTY_PROJ_ALLOWLIST "
         "with a justification comment:\n" + "\n".join(violations)
+    )
+
+
+# Guard 6 — resolvers that map a *project path* to a store under the shared RSE_INDEX_ROOT.
+# Handing one a bare pytest `tmp_path` writes a real store outside the temp tree; pytest then
+# deletes `tmp_path`, and with it the registry row that is the only handle on the store's
+# `<slug>-<sha16>` directory name. The store is unreachable from that moment and survives every
+# later run — six such dirs had accumulated when this guard was written (2026-08-04), each one
+# holding `pipeline_version.stale_stores` above zero for reasons no operator could trace back.
+# `safe_tmp_path` (conftest.py) is the fixture that cleans up: it purges the registry row and
+# then walks the tree with `purge_index_dirs_under`. A raw `tmp_path` cannot be retrofitted —
+# `purge_index_dirs_under` calls `assert_under_test_base`, which a pytest tmp dir fails.
+_INDEX_ROOT_RESOLVERS = ("project_graph_db", "project_vector_db", "index_dir", "_index_project")
+
+_BARE_TMP_PATH_RE = re.compile(
+    r"\b(?:" + "|".join(_INDEX_ROOT_RESOLVERS) + r")\(\s*(?:str\(\s*)?tmp_path\b"
+)
+
+
+def test_no_bare_tmp_path_reaches_the_shared_index_root():
+    """Guard 6: project-path→index-dir resolvers take safe_tmp_path, never a bare tmp_path.
+
+    A literal source-shape check, deliberately: it reads the call text and nothing else, so it
+    stays inside P6/HR15 (no inference about behaviour) and needs neither a daemon nor a GPU.
+    """
+    violations: list[str] = []
+    for f in _iter_py_files():
+        if f.name == _THIS_FILE_NAME:
+            continue
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if _BARE_TMP_PATH_RE.search(line):
+                violations.append(f"{f.name}:{i}: {line.strip()[:80]}")
+    assert not violations, (
+        "These calls hand a bare `tmp_path` to a resolver that writes under the shared "
+        "RSE_INDEX_ROOT — the store outlives the temp dir and becomes an unreachable orphan. "
+        "Use the `safe_tmp_path` fixture, which purges both the registry row and the index "
+        "dir on teardown:\n" + "\n".join(violations)
     )
