@@ -100,7 +100,17 @@ from pathlib import Path
 #                    172,470 symbols to rescue 1,365 files (126 per file, +35% on the fleet symbol
 #                    count) for selectors that have no graph and whose text is already in the
 #                    lexical lane. php's and groovy's dark mass is correctly dark.
-EXTRACTOR_REV = "e12"
+#   e13 2026-08-04  PHP receiver hints, as a fifth element (`graph/php_receivers.py`), so callee
+#                    resolution can narrow an ambiguous pool by the receiver's *declared* type
+#                    before `_MAX_CALLEE_FANOUT` drops it. The cap stays 1 and precision stays
+#                    1.000: every recovery still leaves exactly one candidate, which is the bar
+#                    the cap already enforces — the type does not overrule the ambiguity, it
+#                    dissolves it. A written type, a `use` clause, a PSR-4 prefix and an `extends`
+#                    edge are all declared facts, so no name is interpreted (P6/HR15). The tier
+#                    was struck once on measurement from a CodeIgniter 3 store, which predates
+#                    every one of those constructs and was guaranteed to read zero — see
+#                    `docs/decisions/2026-08-04-a-receiver-type-dissolves-the-ambiguity.md`.
+EXTRACTOR_REV = "e13"
 
 # H1: StructureKind (process() output) → our canonical kind string.
 # str(StructureKind.X) gives capitalised names e.g. "Function"; .lower() normalises.
@@ -804,7 +814,7 @@ def extract_symbols_with_stats(
 
 def extract_symbols_calls_with_stats(
     path: Path, content: str, language: str
-) -> tuple[list[Symbol], ExtractionStats, list[tuple[str, int]], list[str]]:
+) -> tuple[list[Symbol], ExtractionStats, list[tuple[str, int]], list[str], object | None]:
     """`extract_symbols_with_stats` plus the file's call sites, in one bounded-pool trip.
 
     `_extract_graph` walked the tree twice and paid `run_bounded` twice per file because callee
@@ -830,10 +840,27 @@ def extract_symbols_calls_with_stats(
     The fourth element is the file's import specifiers, added in e11 on the same argument that
     justified folding in the third: the ordering constraint is that resolution needs a table the
     walk has not built yet, and that has never required a second IPC round trip.
+
+    The fifth is the file's PHP receiver facts, added in e13 — third time the same argument, and
+    the reason it belongs *inside* this trip rather than beside it is sharper here than for the
+    other two: `php_receivers` reads the same tree-sitter grammar these do, so pulling it out
+    would mean a second bounded round trip for every PHP file in the fleet, and doing it unbounded
+    in the daemon would put a grammar segfault (measured: `process()` on a 10,000-deep expression)
+    inside the process that must not die. `None` for every other language.
+
+    The local import breaks a cycle, and the cycle points the right way: `php_receivers` imports
+    `_callee_node`/`_unwrap_callee` from here so that its hints key on exactly the `(name, line)`
+    pairs `extract_calls_with_lines` emits. Deriving that pair independently — the `name` field,
+    the name node's own line — dropped every bare `env(...)` in the fleet, because the field is
+    `function`, and every call whose name wrapped past its opening line. Measured at 44–87% of
+    call sites joining before, 100% on all 105 PHP roots after.
     """
+    from rag_search.graph.php_receivers import parse_facts
     syms, stats = extract_symbols_with_stats(path, content, language)
     return (syms, stats, extract_calls_with_lines(content, language),
-            extract_import_specs(content, language))
+            extract_import_specs(content, language),
+            parse_facts(content.encode("utf-8", errors="replace"))
+            if language == "php" else None)
 
 
 def _node_has_error(root) -> bool:

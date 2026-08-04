@@ -126,7 +126,7 @@ def pause_lease_remaining_s(now: float | None = None) -> float:
 # with no memo. Under an editable install that means a live daemon, no restart and no deploy: an
 # edit to extractor.py during a fleet repair puts a 160-graph re-derive in contention with it.
 
-_FINGERPRINT_MODULES = ("graph/extractor.py", "graph/community.py")
+_FINGERPRINT_MODULES = ("graph/extractor.py", "graph/community.py", "graph/php_receivers.py")
 
 # Emit a call edge only when the narrowest scope holding a candidate holds exactly one. Raising
 # this admits groups of size C, which contribute one correct edge and C-1 wrong ones — the marginal
@@ -733,12 +733,14 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     The incremental path prunes nothing here: it walked a subset, so "not re-recorded" would mean
     "belongs to a file this pass never opened". `delete_file_symbols` is its subtraction, per file.
     """
+    import collections
     from pathlib import Path
 
     from rag_search.graph.extractor import (
         extract_symbols_calls_with_stats,
         symbol_id,
     )
+    from rag_search.graph.php_receivers import FileFacts, Resolver
     from rag_search.index.bounded_parse import PARSE_CRASHED, PARSE_TIMEOUT, run_bounded
     from rag_search.index.discover import detect_language, iter_files, language_family
     targets = list(only) if only is not None else None
@@ -763,6 +765,11 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     # already holds, and neither exists until the walk finishes.
     specs_by_file: dict[str, list[str]] = {}
     seen_imports: set[tuple[str, str]] = set()
+    # S14: PHP receiver facts, held for the third instance of the same reason — narrowing a callee
+    # pool by the receiver's declared type needs the *fleet* of classes this root declares, which
+    # the walk has not finished collecting. Empty for a root with no PHP, and the whole tier below
+    # is skipped in that case, which is most of the fleet.
+    php_facts: dict[str, FileFacts] = {}
 
     def _fam(fstr: str) -> str:
         f = fam_of.get(fstr)
@@ -792,13 +799,15 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             rung = {PARSE_TIMEOUT: "timeout", PARSE_CRASHED: "crashed"}.get(res, "error")
             gs.record_extraction(str(fpath), lang, rung, 0, 0, 1)
             continue
-        syms, st, call_sites, import_specs = res
+        syms, st, call_sites, import_specs, facts = res
         gs.record_extraction(str(fpath), lang, st.rung, st.symbol_count,
                              st.anon_count, int(st.has_error))
         if call_sites:
             calls_by_file[str(fpath)] = call_sites
         if import_specs:
             specs_by_file[str(fpath)] = import_specs
+        if facts is not None:
+            php_facts[str(fpath)] = facts
         for sym in syms:
             if not sym.name:
                 continue
@@ -829,10 +838,16 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             file_to_sym_spans.setdefault(fstr, []).append((sl, el, sid))
     for spans in file_to_sym_spans.values():
         spans.sort()
+    # S14: built once per root, over every PHP file the walk parsed — a receiver's class is very
+    # often declared in a different file from the call, so a per-file resolver would resolve
+    # almost nothing. `None` when the root holds no PHP, which is the common case.
+    php = Resolver(_ImportResolver(root)._read_psr4(), php_facts) if php_facts else None
     for fstr, call_sites in calls_by_file.items():
         sym_spans = file_to_sym_spans.get(fstr)
         if not sym_spans:
             continue
+        facts = php_facts.get(fstr)
+        hints = facts.hints() if facts is not None else {}
         for callee_name, call_line in call_sites:
             caller_sid, best_span = "", -1
             for sl, el, sid in sym_spans:
@@ -864,6 +879,18 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             # Worth 996 edges fleet-wide.
             pool = [sid for sid in (same_file or [sid for sid, _ in cands])
                     if sid != caller_sid]
+            # S14: narrowing happens *before* the cap, never after, and it does not raise the cap.
+            # A pool of five that the receiver's declared type cuts to one is not the cap being
+            # relaxed to five — it is a pool of one, qualified by evidence the name-only tier
+            # never looked at, and it clears the existing bar on its own terms. Above the cap and
+            # unnarrowed, the edge is still dropped; that is why precision does not move.
+            if php is not None and facts is not None and len(pool) > _MAX_CALLEE_FANOUT:
+                won = php.narrow(facts, hints.get((callee_name, call_line), ""),
+                                 collections.Counter(
+                                     cfile for sid, cfile in cands if sid != caller_sid))
+                if won:
+                    pool = [sid for sid, cfile in cands
+                            if cfile == won and sid != caller_sid]
             if len(pool) > _MAX_CALLEE_FANOUT:
                 continue
             for callee_sid in pool:
