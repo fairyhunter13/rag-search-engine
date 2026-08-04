@@ -1716,9 +1716,20 @@ def _graph_lane_pass(project_path: str, sig: str, pending: set) -> None:
 
 def on_change(project_path: str, files: list) -> None:
     """Watcher callback: incremental reindex; then the graph pass (debounced) if not recent."""
+    import os
     import time
 
     if is_paused():
+        return
+    if not os.path.isdir(project_path):
+        # The root is gone, so this batch *is* the deletion. Indexing it anyway opens a store, and
+        # opening one creates it — the daemon answers "this project was deleted" by writing a fresh
+        # empty store for it, which nothing can ever reach again: the registry row went with the
+        # tree, and the dir name is a hash of a path that no longer exists. Measured 2026-08-05 —
+        # the live suite's workspace rmtree left two such stores per run, written 0-3s after the
+        # suite's own teardown had already swept, and every earlier fix aimed at the sweep rather
+        # than at the write. A missed event costs nothing here: a root that comes back is a change
+        # of its own.
         return
     now = time.monotonic()
     if now - _last_index_fail.get(project_path, 0.0) < _INDEX_BACKOFF_S:

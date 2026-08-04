@@ -799,6 +799,46 @@ def test_e8_global_prompt_tool_accuracy():
     assert mcp.instructions == _PROMPT, "E8: mcp.instructions diverged from _PROMPT"
 
 
+def test_e8b_shipped_mcp_configs_advertise_the_registered_tools():
+    """E8b: the tool names in mcp-config/*.json equal the live registry.
+
+    Same subject as E8 above and the same reason for deriving, one register further out: these
+    two files are what a stranger copies to wire the server up, so a name here that the server
+    does not expose is a broken install for someone who never sees this repo's tests.
+
+    They drifted exactly as `mcp.py`'s docstring predicts of any mirror nobody consults — both
+    still listed `ask` long after it was retired in favour of `overview(what="communities")`,
+    and the 2026-07-13 audit had already pulled a phantom env var out of these same two files.
+    Deriving from `list_tools()` is what stops the third occurrence.
+    """
+    from rag_search.server.mcp import mcp as _mcp
+
+    registered = {t.name for t in asyncio.run(_mcp.list_tools())}
+    config_dir = Path(__file__).parents[3] / "mcp-config"
+
+    claude_cfg = json.loads((config_dir / "claude-code.json").read_text(encoding="utf-8"))
+    advertised = set(claude_cfg["mcpServers"]["rag-search"]["alwaysAllow"])
+    # `index` is described but never auto-allowed: it writes, and `index(enabled=False)` deletes.
+    # hermes.json has always said so via `always_allowed: false` (asserted below); claude-code.json
+    # allow-listed it anyway until 2026-08-05, contradicting both that file and the server's own
+    # "NEVER auto-index" instruction. An allow-list is the one place the two must not differ.
+    assert advertised == registered - {"index"}, (
+        f"mcp-config/claude-code.json allow-lists {sorted(advertised)}; the server registers "
+        f"{sorted(registered)}. A name in one and not the other is a config that configures "
+        f"nothing, shipped to whoever clones this."
+    )
+
+    hermes_cfg = json.loads((config_dir / "hermes.json").read_text(encoding="utf-8"))
+    assert set(hermes_cfg["tools"]) == registered, (
+        f"mcp-config/hermes.json describes {sorted(hermes_cfg['tools'])}; the server registers "
+        f"{sorted(registered)}."
+    )
+    assert hermes_cfg["tools"]["index"]["always_allowed"] is False, (
+        "hermes.json auto-allows `index`; nothing that deletes a project's data may be "
+        "pre-approved in a config we ship."
+    )
+
+
 # ── Chat quality: comprehensive question coverage ─────────────────────────────
 
 

@@ -140,11 +140,23 @@ for p in (owned, unowned):
     Path(p).mkdir(parents=True)
     index_dir(p).mkdir(parents=True)
 upsert_project(ProjectEntry(path=owned, enabled=True))   # still registered at teardown
+
+# A row the daemon put back under the suite's own base, after the suite deleted it.
+suite = base / "suite"
+restored = str(suite / "proj")
+Path(restored).mkdir(parents=True)
+index_dir(restored).mkdir(parents=True)
+upsert_project(ProjectEntry(path=restored, enabled=True))
+
 purge_unowned_index_dirs_created_since(before)
+spared_by_default = index_dir(restored).exists()
+purge_unowned_index_dirs_created_since(before, never_owners_under=suite)
 print(json.dumps({
     "preexisting": (INDEX_ROOT / "preexisting-0123456789abcdef").exists(),
     "owned": index_dir(owned).exists(),
     "unowned": index_dir(unowned).exists(),
+    "spared_by_default": spared_by_default,
+    "restored": index_dir(restored).exists(),
 }))
 """
 
@@ -188,6 +200,13 @@ def test_co4_the_final_backstop_takes_only_new_unowned_dirs(safe_tmp_path):
     All three arms are asserted because each names a different way of being wrong: drop the snapshot
     and it deletes 139 fleet stores, drop the registry check and it deletes a project indexed for the
     first time during the run, and a sweep that does nothing at all satisfies both of those alone.
+
+    The fourth and fifth arms are the `never_owners_under` escape from that registry check, and they
+    are asserted as a *pair* on purpose: `spared_by_default` proves the default still protects a
+    registered dir wherever it lives, and `restored` proves a row under the suite's own base stops
+    protecting anything once the caller disowns that base. Without the escape the daemon wins by
+    timing alone — it re-upserts the row from another process, so the suite's purge only wins the
+    races it is ahead of, and five stores per run leaked through a diff that reported nothing.
     """
     tmp = safe_tmp_path / "co4"
     (tmp / "ws").mkdir(parents=True)
@@ -198,7 +217,8 @@ def test_co4_the_final_backstop_takes_only_new_unowned_dirs(safe_tmp_path):
                        capture_output=True, text=True, env=env, timeout=180)
     assert r.returncode == 0, f"child exit {r.returncode}: {r.stdout}\n{r.stderr}"
     got = json.loads(r.stdout.strip().splitlines()[-1])
-    assert got == {"preexisting": True, "owned": True, "unowned": False}, (
+    assert got == {"preexisting": True, "owned": True, "unowned": False,
+                   "spared_by_default": True, "restored": False}, (
         f"the backstop took the wrong dirs: {got}")
 
 
