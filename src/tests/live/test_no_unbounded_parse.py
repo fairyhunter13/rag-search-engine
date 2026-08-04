@@ -27,11 +27,21 @@ _ROOT = Path(__file__).resolve().parents[2] / "rag_search"
 # test_worker_modules_are_exhaustive *reads* each whitelisted path, so a deleted module fails
 # with FileNotFoundError rather than passing an empty check. That is the shape an allowlist
 # guard has to have — assert the exception still describes something real, don't just skip it.
-_WORKER_MODULES = {"graph/extractor.py"}
+# `graph/php_receivers.py` joined on 2026-08-04 (e13). Its parse is not an exception to HR39 —
+# it is *inside* the bound: `parse_facts` is called only from `extract_all`, which is what
+# `run_bounded` executes, so the segfault this guard exists to contain still happens in the
+# subprocess and not in the daemon. Whitelisting the module is the honest fix; routing it through
+# `run_bounded` would mean a second IPC round trip per PHP file to re-parse a tree the worker is
+# already holding. `test_worker_modules_are_exhaustive` keeps the entry truthful.
+_WORKER_MODULES = {"graph/extractor.py", "graph/php_receivers.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")
 _WORKER_FUNCS = (
     "extract_symbols(", "extract_symbols_with_stats(",
     "extract_calls_with_lines(",
+    # `parse_facts(` is listed for the same reason `extract_symbols_with_stats(` is: it is the
+    # function that actually parses, so a new production call-site invoking it directly would be
+    # an unbounded parse in whatever process made the call. Nothing calls it that way today.
+    "parse_facts(",
 )
 # `extract_calls(` left this tuple with the function on 2026-07-31 — deleted as dead *and* wrong
 # (it walked rung-1 injections, which enrols CSS `var()`/`rgba()` as code call edges). Removed
