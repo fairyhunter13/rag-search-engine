@@ -145,7 +145,7 @@ def test_sd6_an_unreadable_file_is_not_reported_forever(safe_tmp_path, embedder)
 def test_sd5_chunks_without_a_hash_row_are_still_purgeable(safe_tmp_path, embedder):
     """SD5: the orphan side reads `file_hashes` UNION `chunks`, not `file_hashes` alone.
 
-    A chunk row can outlive its hash row — 2,091 of redacted-name-10's 5,242 indexed paths had no hash row
+    A chunk row can outlive its hash row — 2,091 of the largest workspace's 5,242 indexed paths had no hash row
     at all, written by an index generation pre-dating the table. What keeps retrieving is the
     chunk, so keying orphans on `file_hashes` would leave every one of those unpurgeable the
     moment discovery stopped yielding it. Dropping the hash row here reproduces that generation

@@ -431,7 +431,7 @@ def test_is_ignored_path_agrees_with_iter_files():
             "rootgen/out.txt": "x\n",
             # The size rule is the one these two screens disagreed on in production: it lived in
             # iter_files alone, so the watcher indexed a file past the cap and the drift check
-            # then purged it, every write. Measured on redacted-name-10's 143-172 kB diagram specs.
+            # then purged it, every write. Measured on the largest workspace's 143-172 kB diagram specs.
             "spec/oversize.yaml": "a: 1\n" * 30_000,   # ~180 kB, data cap is 100 kB
             "spec/under.yaml": "a: 1\n",
             "src/empty.py": "",                        # zero bytes is also a discovery rule

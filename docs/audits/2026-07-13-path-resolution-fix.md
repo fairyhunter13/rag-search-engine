@@ -5,8 +5,8 @@
 > the project registry) across `search`, `ask`, `graph`, `overview`, `index`, and the
 > `/api/suggested_questions` HTTP route. Also covers a phantom-security-feature removal
 > (`RSE_BRIDGE_WORKSPACE_ROOT`) found during the same sweep.
-> **Trigger:** live use — querying the actually-indexed `redacted-name-10-project` root and its
-> federated `go-monorepo` member via symlink paths returned `"no project available"` even though
+> **Trigger:** live use — querying the actually-indexed federation root and its
+> federated `<member>` via symlink paths returned `"no project available"` even though
 > both were fully indexed.
 > **Method:** live reproduction via the MCP tools first (not a code-only review), root-cause
 > read of every path-accepting entrypoint, a single shared-resolver fix applied consistently,
@@ -120,13 +120,13 @@ same registry-mechanics category as the already-allowlisted `test_index_validity
 `_LIST_PROJECTS_ALLOWLIST` with a comment explaining why. Guard re-run → **5 passed**.
 
 **Manual live re-probe** (the exact 3 paths that failed pre-fix this session, against the
-reloaded daemon, using the real `redacted-name-10-project` → `go-monorepo` federation):
+reloaded daemon, using the real `<root>` → `<member>` federation):
 
 | Probe | Pre-fix | Post-fix |
 |---|---|---|
-| `overview(status, <root>/repositories/go-monorepo/)` (trailing slash, symlink) | `"no project available"` | `resolved_project=<go-monorepo real path>`, `kb_state="ready"` |
-| `overview(status, <go-monorepo real path>/internal/billing)` (subdir) | `"no project available"` | `resolved_project=<go-monorepo real path>`, `kb_state="ready"` |
-| `search(..., [<root>/repositories/go-monorepo])` (symlink, no fan-out) | 66s, whole ~189-project federation | 5.3s, `projects_searched=[<go-monorepo real path>]` only |
+| `overview(status, <root>/repositories/<member>/)` (trailing slash, symlink) | `"no project available"` | `resolved_project=<member real path>`, `kb_state="ready"` |
+| `overview(status, <member real path>/internal/billing)` (subdir) | `"no project available"` | `resolved_project=<member real path>`, `kb_state="ready"` |
+| `search(..., [<root>/repositories/<member>])` (symlink, no fan-out) | 66s, whole ~189-project federation | 5.3s, `projects_searched=[<member real path>]` only |
 
 ---
 

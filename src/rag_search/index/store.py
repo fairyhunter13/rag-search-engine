@@ -346,7 +346,7 @@ def _open(db_path: Path, dim: int, migrate: bool) -> tuple[sqlite3.Connection, b
     # every segment) from running on each of 160 stores at every daemon start.
     #
     # `migrate` is what keeps it off the query path, and that is not a tuning knob. Measured on
-    # the live fleet: opening `redacted-name-12` (99 k chunks) inside a query cost 11.31 s before returning
+    # the live fleet: opening a 99 k-chunk member inside a query cost 11.31 s before returning
     # a 1.9 ms result, and a federated search opens one store per member — 189 of them on the
     # largest federation, 137 of which still owed a backfill, so the first such query would have
     # paid roughly two minutes serially and timed out. It defaults True because the dangerous
@@ -681,7 +681,7 @@ class VectorStore:
             # full-text query is re-run once per candidate rowid instead of once. On a
             # 118 k-chunk member here that is 0.018 s against 17.0 s, and `scope="code"` names
             # 302 languages, so the candidate list is nearly the whole corpus. Across
-            # redacted-name-10-project's 157 members it was the difference between a search that answers
+            # the largest workspace's 157 members it was the difference between a search that answers
             # and one that spent 700 s of a pinned core and was abandoned by the client at 300.
             #
             # Narrowing the language list does not fix it — what costs is the *rowid* count, not
