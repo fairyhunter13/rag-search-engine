@@ -4,8 +4,13 @@ Permanent brand-lock (P18/HR34): the pre-2026-07-09 OSE/OPENCODE/ocs branding wa
 in favor of RSE. This guard bans every legacy self-reference token from ever reappearing in the
 tracked tree, with a narrow allowlist for genuine external-product references (the external
 "OpenCode" CLI product, and the retired ose-docgen package as named in dated audit records) that
-must never be renamed. Device-specific name bans (company names, project codenames, device ids)
-live in the private rse-live-audit repo to avoid shipping the ban-list in the public tree.
+must never be renamed.
+
+Device-specific name bans (company names, project codenames, device ids) are enforced here too,
+but the *mechanism* is all that ships: the token list arrives via the RSE_NAME_BAN environment
+variable, never as a literal in this tree. P18/HR34 forbid shipping the ban-list itself, because
+a list of the names you must not publish publishes them. This mirrors RSE_FEDERATION_EXCLUDE
+exactly — mechanism in the repo, values in the environment.
 
 Runs git grep over the tracked tree and fails on any match.
 This guard file is allowlisted automatically. The repo has no submodules since docgen's deletion
@@ -13,6 +18,7 @@ This guard file is allowlisted automatically. The repo has no submodules since d
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -143,6 +149,69 @@ def test_no_absolute_home_paths() -> None:
     assert not hits, (
         f"Absolute home paths found in tracked files ({len(hits)} occurrence(s)):\n"
         + "\n".join(hits[:5])
+    )
+
+
+def _banned_name_tokens() -> list[str]:
+    """Device/company/project name tokens to ban, from RSE_NAME_BAN (os.pathsep-separated).
+
+    Deliberately env-driven and empty by default. A fresh clone has no company names to ban, so
+    an unset variable asserting nothing is the correct behaviour, not a gap — and it is not a
+    skip, so test_no_skip_markers_in_live_suite stays satisfied. The private rse-live-audit repo
+    owns the list and asserts the variable is actually set on a device that has one.
+    """
+    raw = os.environ.get("RSE_NAME_BAN", "")
+    return [t.strip() for t in raw.split(os.pathsep) if t.strip()]
+
+
+def test_no_banned_device_names() -> None:
+    """No company/project/device name from RSE_NAME_BAN may appear in the tracked tree.
+
+    P18 says the tracked tree carries "no company/project names", but its machine check in
+    model.yaml is a *path* regex — it cannot see a name written into a comment. That gap is not
+    theoretical: 48 such sites across 24 files sat in this tree under a green `[CONFORMS] P18`
+    until the 2026-08-04 sweep, every one of them a provenance note written from a live
+    measurement. This is the guard that makes the invariant's own claim testable.
+
+    Matching is case-insensitive and fixed-string (-iF), so a token needs no escaping; the tokens
+    are substrings, so `foo` also catches `foo-project` and `foo_ledger`.
+    """
+    tokens = _banned_name_tokens()
+    hits: list[str] = []
+    for token in tokens:
+        result = subprocess.run(
+            [
+                "git", "grep", "-inF", token,
+                "--", ".",
+                ":(exclude)vendor",
+                f":(exclude)src/tests/live/{_THIS_FILE}",
+            ],
+            cwd=_REPO_ROOT, capture_output=True, text=True,
+        )
+        hits += [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert not hits, (
+        f"Banned device/company/project name(s) found in {len(hits)} tracked line(s) — "
+        f"genericize them (the fleet / the largest workspace / <repo>) and keep the numbers:\n"
+        + "\n".join(hits[:10])
+    )
+
+
+def test_banned_name_tokens_also_absent_from_tracked_paths() -> None:
+    """The name ban must cover file *paths* too, for the reason the brand lock already learned.
+
+    `git grep` only inspects file contents; a directory or filename carrying a customer name is
+    just as public, and shows up in the clone, the tarball and every GitHub URL.
+    """
+    tokens = [t.lower() for t in _banned_name_tokens()]
+    hits = [
+        p for p in _tracked_paths()
+        if any(t in p.lower() for t in tokens)
+        and p != f"src/tests/live/{_THIS_FILE}"
+        and not p.startswith("vendor/")
+    ]
+    assert not hits, (
+        f"Banned name(s) found in tracked PATHS ({len(hits)}) — rename or untrack:\n"
+        + "\n".join(hits[:10])
     )
 
 

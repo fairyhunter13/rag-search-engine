@@ -281,7 +281,7 @@ def _code_scan(path: str) -> tuple[str, float]:
     # memoising: a directory's mtime moves only when its *direct* entries change, so every edit
     # nested below the project root left the key identical and returned a frozen fingerprint and
     # a frozen watermark. Measured on the live fleet before this changed — rag-search-engine's key
-    # was 9.1 hours older than its newest file, redacted-name-10's 1.5 hours — and since the baseline
+    # was 9.1 hours older than its newest file, the largest workspace's 1.5 hours — and since the baseline
     # `_vectors_content_stale` compares against keeps advancing, a frozen watermark reads "clean"
     # permanently. `_graph_stale` was frozen by the same key.
     #
@@ -445,7 +445,7 @@ def _index_set_drift(path: str) -> tuple[list, list[str]]:
 
     The two sides are deliberately asymmetric. Orphans come from `file_hashes` UNION `chunks`,
     because what keeps retrieving is a *chunk*, and a chunk row can outlive its hash row: 2,091 of
-    redacted-name-10's 5,242 indexed paths had no hash row at all, written by an index generation that
+    the largest workspace's 5,242 indexed paths had no hash row at all, written by an index generation that
     pre-dates the table. Keying the orphan side on `file_hashes` alone would leave every one of
     those permanently unpurgeable the moment discovery stopped yielding it — the exact defect this
     function exists to close, reintroduced through the other door.
@@ -476,8 +476,8 @@ def _index_set_drift(path: str) -> tuple[list, list[str]]:
     # An empty `known` with a non-empty `charted` is NOT an unindexed project — it is a store
     # written before file_hashes existed, and deferring it to `_needs_index` (as this did) meant
     # deferring it to a predicate that returns False for it, since the store has chunks and
-    # communities and looks healthy. Measured: redacted-name-0 3,066 of 3,066 live files unhashed,
-    # redacted-name-1 7,697 of 7,697, both invisible to all four triggers. Repairing them is the
+    # communities and looks healthy. Measured: one member 3,066 of 3,066 live files unhashed,
+    # the fleet's largest project 7,697 of 7,697, both invisible to all four triggers. Repairing them is the
     # whole point; skipping them is the escape hatch this function exists to remove.
     live_set = set(live)
     return (

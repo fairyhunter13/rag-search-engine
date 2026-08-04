@@ -12,7 +12,7 @@ def _find_import_cycles(conn) -> list[list[str]]:  # type: ignore[no-untyped-def
     different relation, and a strictly weaker answer to the question asked: a call cycle is
     resolvable by moving one function, an import cycle is a module-structure defect. The two
     also disagree in both directions, since a file can import another without calling into it
-    (the §8 measurement: 0% of redacted-name-9's import pairs were induced by calls) and a call can
+    (the §8 measurement: 0% of one member's import pairs were induced by calls) and a call can
     cross files that import each other transitively rather than directly.
 
     Falls back to nothing rather than to the call graph when the table is empty: an empty
@@ -380,7 +380,7 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
             """(path, GraphStore) pairs, with at most `_FANOUT_WORKERS` open at any moment.
 
             The predecessor opened the whole federation before touching any of it. Each SQLite
-            WAL connection is three descriptors (db + -wal + -shm), so on redacted-name-10-project's 157
+            WAL connection is three descriptors (db + -wal + -shm), so on the largest workspace's 157
             graph-bearing members that is a peak of ~471 for the length of the request, and a
             federated `search` — which fans out over the same members — can be doing it at the
             same time. That is the descriptor shortage behind the 2026-07-29 wedge; capping the
@@ -413,7 +413,7 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
             # Current practice is the opposite — consolidate into a parameterised tool, and
             # return structured rows the caller can act on rather than assembled context.
             # The cap is global, not per store. `LIMIT 50` inside the loop bounds each
-            # federation *member* — redacted-name-10 has 194, so the payload would have been up to
+            # federation *member* — the largest workspace has 194, so the payload would have been up to
             # 9,700 rows and the rerank below would have scored every one of them. Sorting
             # after the concatenation is required for the same reason: each store returns its
             # own descending run, and concatenated descending runs are not descending.

@@ -1,6 +1,6 @@
 """Live tests: machine-generated code files never wake the enrich/wiki/BPRE cascade.
 
-Regression for the redacted-name-10-project idle-CPU loop: its SvelteKit dashboard rewrites
+Regression for the largest workspace's idle-CPU loop: its SvelteKit dashboard rewrites
 `wiki/src/lib/*.generated.js` every ~45-78s. tree-sitter parses those as `javascript`
 (= code), which used to flip both code-drift signals and force a full 190-repo BPRE
 rebuild each cycle. `is_generated_path()` now excludes them from the drift signals.

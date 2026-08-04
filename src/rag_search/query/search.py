@@ -31,7 +31,7 @@ _RRF_K = 60
 # each member already holds its own connection opened `check_same_thread=False`, and no two
 # workers ever touch the same one.
 #
-# Sized against the measurement that motivated this: redacted-name-10-project's 157 priced members cost
+# Sized against the measurement that motivated this: the largest workspace's 157 priced members cost
 # 36.68 s of sequential dense KNN (mean 233.6 ms, worst 3.28 s) against 3.00 s of lexical.
 _FANOUT_WORKERS = 8
 
@@ -253,7 +253,7 @@ def search_federation(
     Takes *paths* and owns the store lifecycle, rather than taking stores the caller opened.
     That is a file-descriptor bound, not a style preference. A SQLite WAL connection costs three
     descriptors (db + `-wal` + `-shm`), so the previous shape — every caller opening all 157 of
-    redacted-name-10-project's priced members before calling in — held 471 of them for the length of one
+    the largest workspace's priced members before calling in — held 471 of them for the length of one
     question, against systemd's default `LimitNOFILESoft` of 1024. Two federated operations
     overlapping (a `search` and an `overview(what="communities")`, which opens a GraphStore per
     member) exhausted the table, and the resulting EMFILE surfaced as `unable to open database

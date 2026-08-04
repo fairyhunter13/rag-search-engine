@@ -47,7 +47,7 @@ def test_edge_free_graph_not_degenerate(tmp_path):
             gs.upsert_symbol(f"s{i}", f"fn{i}", f"fn{i}", "function", "a.py", i+1, i+2, "python")
             gs.upsert_community(i, level=1, title=f"C{i}", summary="", member_count=1)
             gs._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (i, f"s{i}"))
-        # NO edges — exactly like redacted-name-2 (7 symbols, 0 edges)
+        # NO edges — exactly like the smallest observed member (7 symbols, 0 edges)
         gs.commit()
         q = partition_quality(gs)
     finally:

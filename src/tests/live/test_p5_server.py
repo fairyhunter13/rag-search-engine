@@ -424,7 +424,7 @@ def test_overview_unknown_what_returns_error():
 def test_graph_no_project_path_no_roots_fails_loud(sample_workspace):
     """G5 (updated 2026-07-14): graph(symbol) with no project_path and no client roots must FAIL
     LOUD with candidates — never silently resolve to the arbitrary first enabled project (that
-    silent fallback mis-answered about unrelated projects, e.g. redacted-name-0). Correct
+    silent fallback mis-answered about unrelated projects). Correct
     cwd-aware auto-resolution now comes from MCP client roots — see test_roots_default_project.py.
     """
     from rag_search.core.registry import list_projects
@@ -444,7 +444,7 @@ def test_graph_and_overview_no_project_path_fail_loud(sample_workspace):
     """G5b (updated 2026-07-14): a tool called with an empty project_path and no client roots
     must fail loud (listing candidates), not silently answer about an arbitrary first-enabled
     project. This closes the transparency gap the old disclosure-prefix only papered over: a
-    silent projects[0] pick mis-answered about unrelated projects (e.g. redacted-name-0). Correct
+    silent projects[0] pick mis-answered about unrelated projects. Correct
     cwd-aware auto-resolution now comes from MCP client roots — see test_roots_default_project.py.
 
     `ask` was the second witness until 2026-07-29. `graph` replaces it rather than the case being

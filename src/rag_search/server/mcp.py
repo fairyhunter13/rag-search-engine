@@ -203,7 +203,7 @@ def _scope_from_request(ctx: Context | None) -> tuple[str, str | None]:
     target = resolve_registered_root(unquote(raw))
     enabled = [p.path for p in list_projects() if p.enabled]
     # Enabled *or* holding a store: a federation member is a legitimate scope even when it is
-    # not a registry entry in its own right — 157 of redacted-name-10's 194 members are enabled, and the
+    # not a registry entry in its own right — 157 of the largest workspace's 194 members are enabled, and the
     # rest are still searched when the root is the scope.
     if target not in enabled and not project_vector_db(target).exists():
         return "", json.dumps({
@@ -272,7 +272,7 @@ async def search(
         # Same ladder as every other tool, and the same fail-loud ending. This used to fall
         # through to "search all enabled projects", which measured 164.78 s against 7.01 s for
         # the same query scoped to one — and answered a question about *this* repo with
-        # redacted-name-13-lp JavaScript. Breadth was not free and it was not "never misleading".
+        # a member's vendored JavaScript. Breadth was not free and it was not "never misleading".
         chosen, err = await _default_or_error(ctx, "")
         if err:
             return err

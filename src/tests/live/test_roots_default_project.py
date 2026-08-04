@@ -1,5 +1,5 @@
 """Live: an unscoped tool call resolves to the project the MCP client is actually in — advertised
-via the MCP *roots* capability — instead of the arbitrary first registry entry (the redacted-name-0
+via the MCP *roots* capability — instead of the arbitrary first registry entry (the first-entry
 bug). No mocks: a real `mcp` SDK client session that declares roots and answers the server's
 `roots/list` request over the live streamable-HTTP /mcp transport.
 """
