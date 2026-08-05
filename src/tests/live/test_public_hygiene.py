@@ -316,16 +316,29 @@ def test_nb4_failure_output_is_redacted_under_public_ci() -> None:
     pytest's warning summary, which is how the surface was found.
     """
     sample = ["some/private/path.py:42:a line containing a banned name"]
-    orig = os.environ.get("GITHUB_ACTIONS")
-    os.environ["GITHUB_ACTIONS"] = "true"
-    try:
-        content = _safe_content_hits(sample)
-        paths = _safe_path_hits(["some/private/path.py"])
-    finally:
-        if orig is None:
-            os.environ.pop("GITHUB_ACTIONS", None)
+
+    def _render(*, publishing: bool) -> tuple[str, str]:
+        """Render both arms with GITHUB_ACTIONS forced on or off.
+
+        Forcing it *off* matters as much as forcing it on: under real CI the variable is already
+        set, so a version of this test that only set it saw redacted output for both arms and
+        failed on the local-mode assertion — in CI only, which is the one place it had no local
+        run to catch it.
+        """
+        orig = os.environ.get("GITHUB_ACTIONS")
+        if publishing:
+            os.environ["GITHUB_ACTIONS"] = "true"
         else:
-            os.environ["GITHUB_ACTIONS"] = orig
+            os.environ.pop("GITHUB_ACTIONS", None)
+        try:
+            return _safe_content_hits(sample), _safe_path_hits(["some/private/path.py"])
+        finally:
+            if orig is None:
+                os.environ.pop("GITHUB_ACTIONS", None)
+            else:
+                os.environ["GITHUB_ACTIONS"] = orig
+
+    content, paths = _render(publishing=True)
 
     for rendered in (content, paths):
         assert "private" not in rendered and "banned name" not in rendered, (
@@ -338,7 +351,9 @@ def test_nb4_failure_output_is_redacted_under_public_ci() -> None:
     assert ":42" in content, "the line number is not sensitive and must survive redaction"
     # And the local path stays legible: redaction that also fires locally would make every real
     # fix a two-step hash lookup, and the operator's own terminal is not a publication.
-    assert "a line containing a banned name" in _safe_content_hits(sample)
+    local_content, local_paths = _render(publishing=False)
+    assert "a line containing a banned name" in local_content
+    assert "some/private/path.py" in local_paths
 
 
 def test_no_banned_device_names() -> None:

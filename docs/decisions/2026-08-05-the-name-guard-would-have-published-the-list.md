@@ -48,6 +48,17 @@ evidence is withheld.
 NB4 asserts the redaction, because a redaction nobody tests is the same shape of claim as a ban
 list nobody sets.
 
+## The redaction test failed in the one place it was about
+
+NB4 passed locally and failed in CI on the first push. It set `GITHUB_ACTIONS=true` to check the
+redacted arm, then checked the *local* arm without unsetting it — and under real CI the variable is
+already set, so the local arm was redacted too. A test that forces a destination on must also force
+the other one off: on a developer machine the second state is the ambient one and the bug is
+invisible, while in CI it is the first. `_render(publishing=…)` now sets both explicitly.
+
+Worth stating because the fix is not "remember to unset": it is that a destination-aware assertion
+has two destinations, and the ambient one is whichever machine you happen to be on.
+
 ## What is deliberately not fixed
 
 The home path in the log. It comes from pytest printing absolute source paths for a tree that
