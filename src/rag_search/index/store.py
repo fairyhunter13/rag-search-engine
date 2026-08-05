@@ -767,5 +767,30 @@ class VectorStore:
         self._con.execute("DELETE FROM chunks WHERE path=?", (path,))
         self._con.execute("DELETE FROM file_hashes WHERE path=?", (path,))
 
+    def orphan_vector_ids(self) -> list[int]:
+        """Vector rows whose `chunks` row is gone — the residue BQ7's write path cannot reach.
+
+        BQ7 heals a stranded row when the same `chunk_id` is re-inserted, and that is the only
+        path to it: `delete_by_path` enumerates from `chunks`, so a row `chunks` has forgotten is
+        invisible to it, and `clear()` is a full wipe. Four fleet stores held 3-8 such rows on
+        2026-08-05 and had to be repaired by hand, because the state the validator calls INVALID
+        was the one state the engine had no supported repair for. This names them.
+        """
+        return [cid for (cid,) in self._con.execute(
+            "SELECT v.chunk_id FROM vec_chunks v LEFT JOIN chunks c USING(chunk_id)"
+            " WHERE c.chunk_id IS NULL"
+        )]
+
+    def prune_orphan_vectors(self) -> int:
+        """Delete every row `orphan_vector_ids` names; returns how many. Idempotent."""
+        ids = self.orphan_vector_ids()
+        for cid in ids:
+            self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
+            if self._bin_ready:
+                self._con.execute("DELETE FROM vec_chunks_bin WHERE chunk_id=?", (cid,))
+        if ids:
+            self._con.commit()
+        return len(ids)
+
     def close(self) -> None:
         self._con.close()

@@ -11,6 +11,27 @@ from pathlib import Path
 from typing import Any
 
 
+def vector_row_health(con: sqlite3.Connection) -> dict[str, int]:
+    """The two ways `chunks` and `vec_chunks` can disagree, counted as set differences.
+
+    `abs(chunk_count - vec_count)` stood here and is a cardinality proxy: one stranded vector
+    against one missing one cancels to zero, on the single check that calls this state INVALID.
+    It also cannot name a row, so `VectorStore.prune_orphan_vectors` — the repair — had nothing
+    to act on. `orphan_count` keeps its name and its meaning of "rows that should not exist as
+    they are"; it is now a sum of two disjoint sets rather than a difference of two totals.
+    """
+    stranded = con.execute(
+        "SELECT COUNT(*) FROM vec_chunks v LEFT JOIN chunks c USING(chunk_id)"
+        " WHERE c.chunk_id IS NULL"
+    ).fetchone()[0]
+    missing = con.execute(
+        "SELECT COUNT(*) FROM chunks c LEFT JOIN vec_chunks v USING(chunk_id)"
+        " WHERE v.chunk_id IS NULL"
+    ).fetchone()[0]
+    return {"stranded_vectors": stranded, "missing_vectors": missing,
+            "orphan_count": stranded + missing}
+
+
 def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
     import sqlite_vec  # type: ignore[import-untyped]
 
@@ -31,10 +52,8 @@ def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
         sqlite_vec.load(con)
         con.enable_load_extension(False)
         try:
-            cc = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-            vc = con.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
-            out["chunk_count"] = cc
-            out["orphan_count"] = abs(cc - vc)
+            out["chunk_count"] = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            out.update(vector_row_health(con))
         finally:
             con.close()
     except Exception as exc:
@@ -111,6 +130,9 @@ def validate_index(project_path: str) -> dict:
     t = lambda k: sum(r["checks"].get(k, 0) for r in reports)  # noqa: E731
     agg: dict[str, Any] = {
         "chunk_count": t("chunk_count"), "orphan_count": t("orphan_count"),
+        # Beside the total, because the repair differs: a stranded vector is removable
+        # (`rag-search clean-orphans`), a missing one is only fixed by re-indexing the file.
+        "stranded_vectors": t("stranded_vectors"), "missing_vectors": t("missing_vectors"),
         "embedding_dim": 768, "dangling_edges": t("dangling_edges"),
         "bad_community_refs": t("bad_community_refs"),
         "placeholder_communities": t("placeholder_communities"),
