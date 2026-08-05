@@ -126,6 +126,18 @@ it is registered and carried by three tests, and deleting the term would have si
 LLM-heavy tests to a nightly. A marker's retirement is per-suite, and "dead term" is a claim worth
 checking in the suite that uses it.
 
+**What the first run then found.** Making the workflow execute is what surfaced the rest, which is
+the argument for the heartbeat in one line. The guards themselves passed — the first time any of
+them had run in CI. The GPU job beside them did not: it aborted claiming its federation had
+collapsed to zero indexed members, on a machine where the same code counts 137. The job passes a
+root path from a repository secret that had never been created, and **an undefined secret is
+injected as the empty string, not left unset** — which satisfies `os.environ.get(name, default)`
+and then resolves to nothing at all. Coalesce with `or` when an empty value is as meaningless as an
+absent one. Separately, the new heartbeat asked the forge for a *completed successful* run, and the
+run it executes in is by definition not one yet: it demanded a predecessor only it could create.
+Both are the same error as the one above, one turn further in — **a check is not in force until
+something has watched it pass**, and neither of these could have been found by reading it.
+
 ## Related
 
 - Build logs join commit history as a public surface no `git grep` guard reaches. GitHub's own
