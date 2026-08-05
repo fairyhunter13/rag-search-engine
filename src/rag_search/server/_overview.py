@@ -266,15 +266,12 @@ def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untype
         # must never say when it simply was not asked.
         return json.loads(_err) if _err else {"error": "no project available"}
     agg: dict[tuple[str, str], dict] = {}
-    stamps: dict[str, int] = {}
     for _p in expand_federation(project_path):
         _db = project_graph_db(_p)
         if not _db.exists():
             continue
         _gs = GraphStore(_db)
         try:
-            _stamp = _gs.get_meta("algo_version") or "(unstamped)"
-            stamps[_stamp] = stamps.get(_stamp, 0) + 1
             for row in _gs.extraction_summary():
                 key = (row.get("language") or "unknown", row.get("rung") or "unknown")
                 acc = agg.setdefault(key, {"language": key[0], "rung": key[1], "files": 0,
@@ -287,8 +284,55 @@ def _extraction_block(project_path, projects) -> dict:  # type: ignore[no-untype
                     acc[_f] += row.get(_f) or 0
         finally:
             _gs.close()
-    return {**_extraction_totals(sorted(agg.values(), key=lambda r: r["files"], reverse=True)),
-            "pipeline_version": _pipeline_block(stamps)}
+    return _extraction_totals(sorted(agg.values(), key=lambda r: r["files"], reverse=True))
+
+
+def _fleet_pipeline_block() -> dict:
+    """`_pipeline_block` over the whole registered fleet, independent of any `project_path`.
+
+    This lives beside `extraction` rather than inside it, and that placement is the whole point.
+    `pipeline_version` answers a fleet question — *has the re-derive converged?* — but it was
+    computed at the tail of `_extraction_block`, which is project-scoped and early-returns when
+    no project can be inferred. With 150 projects enabled `_require_project` refuses on **every**
+    unscoped call, so the key was absent from exactly the call an operator makes to ask the
+    fleet-wide question, and present-but-scoped-to-one-federation on the other. Measured
+    2026-08-05: unscoped had no `pipeline_version` at all; scoped reported `stores: 1`.
+
+    Two individually-correct changes a day apart combined into that silence — EL13 (2026-07-30)
+    made the unscoped case return an `error` dict instead of a bare `{}`, and `_pipeline_block`
+    (2026-07-31) was added underneath that new early return. AU5 kept passing throughout because
+    it calls `_pipeline_block` with a hand-built dict and never traverses `handle_overview`.
+
+    Always fleet-wide, never scope-dependent: one key with two meanings is a number that gets
+    misread, and a stale count over a one-member federation was never what anyone wanted.
+
+    Cost, measured 2026-08-05 over 150 stores: **89 ms** total, 0.6 ms/store — one indexed `meta`
+    lookup each. (A bare `sqlite3.connect` does the same walk in 24 ms; the difference is
+    `GraphStore`'s own setup, and it is the price of reading through the writer rather than
+    around it. Quoted here so a later reader does not "optimise" it back to a raw handle.)
+    Stores are opened and closed one at a time, as `_extraction_block` does and for
+    the reason `_each_store` documents: each WAL connection is three descriptors, and holding a
+    federation open at once is the 2026-07-29 descriptor wedge. In-process `GraphStore`, never an
+    external `mode=ro` handle — the daemon is these stores' writer, and an outside reader can be
+    served a pre-checkpoint snapshot (AU1).
+    """
+    from rag_search.core.config import project_graph_db
+    from rag_search.core.registry import list_projects
+    from rag_search.daemon.federation import searchable_stores
+    from rag_search.graph.store import GraphStore
+
+    stamps: dict[str, int] = {}
+    for _p in searchable_stores(list_projects()):
+        _db = project_graph_db(_p)
+        if not _db.exists():
+            continue
+        _gs = GraphStore(_db)
+        try:
+            _stamp = _gs.get_meta("algo_version") or "(unstamped)"
+        finally:
+            _gs.close()
+        stamps[_stamp] = stamps.get(_stamp, 0) + 1
+    return _pipeline_block(stamps)
 
 
 def _pipeline_block(stamps: dict[str, int]) -> dict:
@@ -302,9 +346,10 @@ def _pipeline_block(stamps: dict[str, int]) -> dict:
     That is the gap this closes; the walk fix that makes the number move lives in
     `sweeps.reconcile_order` / `reconcile_projects`.
 
-    Free here: `_extraction_block` already holds each store open for `extraction_summary()`, so
-    this is one indexed `meta` lookup on a connection in hand — no extra open, no schema change,
-    and no re-derive of its own.
+    Pure arithmetic over a `{stamp: count}` tally — the walk that produces the tally is
+    `_fleet_pipeline_block`. Kept separate so the counting rules stay unit-testable against a
+    hand-built dict (AU5) while reachability is guarded at the surface (AU6); AU5 alone passing
+    while the block was unreachable is the reason both exist.
 
     `stale_stores` is the number to watch: it must fall pass over pass. It counts `(unstamped)`
     too — a store with no `meta` row has never completed a derive, which is staler, not exempt.
@@ -351,8 +396,11 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
         ]})
     if what == "metrics":
         from rag_search.server.routes_ops import _snapshot
+        # `pipeline_version` is a sibling of `extraction`, not a member of it: it is fleet-scoped
+        # and must survive the project-scoped refusal `extraction` returns on an unscoped call.
         return json.dumps({**_snapshot(),
-                           "extraction": _extraction_block(project_path, list_projects())})
+                           "extraction": _extraction_block(project_path, list_projects()),
+                           "pipeline_version": _fleet_pipeline_block()})
     if what == "validate":
         if not project_path:
             project_path, _verr = _require_project(list_projects())
