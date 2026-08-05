@@ -107,13 +107,53 @@ def mcp() -> None:
     daemon_bridge_stdio()
 
 
+def _prune_stranded_vectors(yes: bool) -> None:
+    """Vector rows whose `chunks` row is gone, across every registered store.
+
+    The other kind of orphan this command sweeps, and the one that had no repair at all: the
+    validator reports it as INVALID (`overview(what="validate")` → `stranded_vectors`) and
+    nothing short of `clear()` could reach it. It lives here rather than in a command of its own
+    because "orphan" is already the word the validator uses for it and one confirmation is
+    enough for both sweeps.
+    """
+    from rag_search.core.config import project_vector_db
+    from rag_search.core.registry import list_projects
+    from rag_search.index.store import VectorStore
+    for p in list_projects():
+        if not p.enabled:
+            continue
+        vdb = project_vector_db(p.path)
+        # Opening a store creates it — the same way the daemon once answered a deleted root by
+        # writing a brand-new empty store. A path with no vector db is not a store to repair.
+        if not vdb.exists():
+            continue
+        try:
+            vs = VectorStore(vdb, migrate=False)
+        except Exception as exc:
+            # A store this phase cannot read is very likely one the *dir* sweep below exists to
+            # take. Raising here would abort the command before it ever got there — the repair
+            # for one kind of orphan killing the repair for the other.
+            typer.echo(f"unreadable vector store, skipped: {vdb} ({exc})", err=True)
+            continue
+        try:
+            n = len(vs.orphan_vector_ids())
+            if not n:
+                continue
+            if yes:
+                typer.echo(f"pruned {vs.prune_orphan_vectors()} stranded vector row(s): {p.path}")
+            else:
+                typer.echo(f"stranded vectors: {n} in {p.path}")
+        finally:
+            vs.close()
+
+
 @app.command("clean-orphans")
 def clean_orphans(
     yes: bool = typer.Option(False, "--yes", "-y"),
     force: bool = typer.Option(False, "--force",
                                help="Proceed even when the sweep would take most of the tree."),
 ) -> None:
-    """Remove orphan index dirs (dry-run by default)."""
+    """Remove orphan index dirs and stranded vector rows (dry-run by default)."""
     from rag_search.core.config import INDEX_ROOT
     from rag_search.core.orphans import (
         TRASH_DIRNAME,
@@ -128,6 +168,9 @@ def clean_orphans(
     # A dry run is refused too. Printing 179 orphan lines and leaving the operator to notice would
     # make the refusal message — the single most useful thing this command can say in that state —
     # the one output it withholds right up until `--yes`.
+    # Row orphans first, and unconditionally: the dir sweep below can refuse and exit, and a
+    # refusal about whole stores is no reason to withhold the one repair for stranded rows.
+    _prune_stranded_vectors(yes)
     try:
         orphans = orphan_dirs(allow_bulk=force)
     except OrphanSweepRefusedError as exc:
