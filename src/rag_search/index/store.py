@@ -640,8 +640,14 @@ class VectorStore:
         for r in rows:
             blob = self._con.execute(
                 "SELECT embedding FROM vec_chunks WHERE chunk_id=?", (r[0],)
-            ).fetchone()[0]
-            vec = np.frombuffer(blob, dtype=np.float32)
+            ).fetchone()
+            # A candidate the bit lane proposed, `chunks` confirmed, and `vec_chunks` has lost.
+            # `.fetchone()[0]` raised a TypeError here, which is the one way this store fails
+            # *loudly* — and it takes the whole query with it rather than the one chunk. The
+            # state is reachable: it is what a direct DELETE against `vec_chunks` leaves behind.
+            if blob is None:
+                continue
+            vec = np.frombuffer(blob[0], dtype=np.float32)
             scored.append((float(np.linalg.norm(q - vec)), r))
         scored.sort(key=lambda t: t[0])
         return [
@@ -782,12 +788,48 @@ class VectorStore:
         )]
 
     def prune_orphan_vectors(self) -> int:
-        """Delete every row `orphan_vector_ids` names; returns how many. Idempotent."""
+        """Delete every row `orphan_vector_ids` names, and its code; returns how many. Idempotent."""
         ids = self.orphan_vector_ids()
         for cid in ids:
             self._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (cid,))
-            if self._bin_ready:
+            if self._has_bin_table():
                 self._con.execute("DELETE FROM vec_chunks_bin WHERE chunk_id=?", (cid,))
+        if ids:
+            self._con.commit()
+        return len(ids)
+
+    def _has_bin_table(self) -> bool:
+        """Whether the bit lane's table exists at all — deliberately not `bin_ready`.
+
+        `bin_ready` is False on a store that merely owes the backfill, and a repair pass opens
+        `migrate=False`, so gating the delete on it would leave a stale code behind on exactly the
+        stores that are not maintaining their codes. The table is what the DELETE needs.
+        """
+        return bool(self._con.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='vec_chunks_bin'").fetchone())
+
+    def orphan_code_ids(self) -> list[int]:
+        """Bit-lane codes whose vector is gone — the other half of the same residue.
+
+        BQ1 asserts the two id sets are identical because the drift is silent both ways: a code
+        with no vector spends a slot of the Hamming shortlist on a chunk that cannot be ranked.
+        Found on four fleet stores 2026-08-05, 25 codes in total, and they were left there by the
+        hand-written DELETE that removed the stranded *vectors* the day before — which is the
+        argument for a supported repair restated one level down: an ad-hoc fix reaches exactly
+        the table its author was thinking about.
+        """
+        if not self._has_bin_table():
+            return []
+        return [cid for (cid,) in self._con.execute(
+            "SELECT b.chunk_id FROM vec_chunks_bin b LEFT JOIN vec_chunks v USING(chunk_id)"
+            " WHERE v.chunk_id IS NULL"
+        )]
+
+    def prune_orphan_codes(self) -> int:
+        """Delete every code `orphan_code_ids` names; returns how many. Idempotent."""
+        ids = self.orphan_code_ids()
+        for cid in ids:
+            self._con.execute("DELETE FROM vec_chunks_bin WHERE chunk_id=?", (cid,))
         if ids:
             self._con.commit()
         return len(ids)
