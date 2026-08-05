@@ -90,6 +90,42 @@ identical coverage in the tree, in paths and in history, two fewer things to kee
 exposure was 964 before and after, which is also the standing evidence that pruning the list is not
 a route to shrinking it.
 
+## The private half was written, pushed, and had never run
+
+An audit of this work the same day found the mechanism correct and its execution absent. Three
+things, all of the same shape: something was *declared* and nothing checked that it was *in force*.
+
+**The private nightly had never executed.** The companion repo's guards — the only ones that can
+assert what the ban list contains — live behind a scheduled workflow that requested a runner label
+no runner had, in a repository with no runner registered at all. A runner belongs to exactly one
+repo or org, and a personal account has no account-level pool, so the public repo's runner could
+never serve it. The job queued, and GitHub cancelled it at the 24-hour limit, four consecutive
+nights. A queued run emits no failure and ages out silently; `timeout-minutes` never fires, because
+queue time is not job time. So every assertion in that file was green and none had ever run.
+
+The fix that mattered was not the runner. Those checks read a token file, an environment variable
+and `git log` — they call no daemon and touch no GPU — but the suite's `conftest` aborted every
+session when the daemon was unreachable, so they could only be scheduled somewhere expensive. They
+now carry their own marker and run daemon-free in seconds. **A precondition that costs more than
+the test it guards gets scheduled where it will not run**, and that, not the label, is why this
+went unnoticed. A new check asserts a successful run of that workflow exists and is recent: a
+workflow cannot notice that it did not run.
+
+**One of the three environment scopes was written but never loaded.** `environment.d` is read when
+the systemd user manager starts. The file had been correct for hours while
+`systemctl --user show-environment` carried nothing, so every user service and every
+non-interactive shell — including agent sessions — ran the guards here against an empty list.
+Only interactive shells were covered, by a separate `.bashrc` block. The private scope check reads
+the three *files*, deliberately, because a process can only ever observe the one scope it
+inherited; it therefore could not see this, and a second check now covers it.
+`systemctl --user daemon-reload` is enough to apply it — no re-login.
+
+**And one correction.** The note handed forward from this work said the private CI still selected
+on the retired `slow` marker and could be cleaned up. `slow` is retired *here*. In the private repo
+it is registered and carried by three tests, and deleting the term would have silently added three
+LLM-heavy tests to a nightly. A marker's retirement is per-suite, and "dead term" is a claim worth
+checking in the suite that uses it.
+
 ## Related
 
 - Build logs join commit history as a public surface no `git grep` guard reaches. GitHub's own
