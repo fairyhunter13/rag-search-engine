@@ -12,12 +12,19 @@ variable, never as a literal in this tree. P18/HR34 forbid shipping the ban-list
 a list of the names you must not publish publishes them. This mirrors RSE_FEDERATION_EXCLUDE
 exactly — mechanism in the repo, values in the environment.
 
+That split leaves the mechanism able to pass while enforcing nothing, in two ways, and NB1-NB3
+close both: NB1 requires the variable to be *declared* (a machine with nothing to ban says
+`RSE_NAME_BAN=none`, which is a statement; unset is silence), and NB2/NB3 are positive controls,
+because a correct ban list matches nothing and so a broken search is indistinguishable from a
+clean tree.
+
 Runs git grep over the tracked tree and fails on any match.
 This guard file is allowlisted automatically. The repo has no submodules since docgen's deletion
 (2026-07-28), so there is no .gitmodules to exempt.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -152,16 +159,186 @@ def test_no_absolute_home_paths() -> None:
     )
 
 
+_NAME_BAN_VAR = "RSE_NAME_BAN"
+
+# An operator with nothing to ban says so with this value. It is not a synonym for "unset": the
+# whole failure mode here is silence, and a declaration of "none" is a statement while an absent
+# variable is the absence of one.
+_NAME_BAN_NONE = "none"
+
+# No absolute home path here on purpose (P18/HR34) — `~` and the runner's own config file read the
+# same on every machine. Mirrors _REINSTALL_HINT in test_federation_exclude.py.
+_NAME_BAN_HINT = (
+    f"{_NAME_BAN_VAR} is not set, so the two name guards in this file assert nothing and report "
+    f"green. Set it (os.pathsep-separated substrings, case-insensitive) where every runner of the "
+    f"live suite will see it — for this project that is ~/.config/environment.d/ for the user "
+    f"session AND the CI runner's own .env, which is a separate scope and does not read the "
+    f"former. A machine with no company/project/device names to ban declares that explicitly with "
+    f"{_NAME_BAN_VAR}={_NAME_BAN_NONE}; the list itself must never enter this public tree."
+)
+
+
 def _banned_name_tokens() -> list[str]:
     """Device/company/project name tokens to ban, from RSE_NAME_BAN (os.pathsep-separated).
 
-    Deliberately env-driven and empty by default. A fresh clone has no company names to ban, so
-    an unset variable asserting nothing is the correct behaviour, not a gap — and it is not a
-    skip, so test_no_skip_markers_in_live_suite stays satisfied. The private rse-live-audit repo
-    owns the list and asserts the variable is actually set on a device that has one.
+    Env-driven because the list itself must never enter this public tree (P18/HR34) — a list of
+    the names you must not publish publishes them. The private rse-live-audit repo owns the values
+    and asserts this device's list is complete.
+
+    `none` parses to zero tokens, and so does an unset variable — but only the first is a legal
+    state. See NB1: "no names to ban" is a declaration an operator makes, not the default they
+    fall into by doing nothing.
     """
-    raw = os.environ.get("RSE_NAME_BAN", "")
+    raw = os.environ.get(_NAME_BAN_VAR, "")
+    if raw.strip().lower() == _NAME_BAN_NONE:
+        return []
     return [t.strip() for t in raw.split(os.pathsep) if t.strip()]
+
+
+def _grep_tracked_fixed(token: str) -> list[str]:
+    """Tracked lines containing `token`, case-insensitive fixed-string (so no escaping needed)."""
+    result = subprocess.run(
+        [
+            "git", "grep", "-inF", token,
+            "--", ".",
+            ":(exclude)vendor",
+            f":(exclude)src/tests/live/{_THIS_FILE}",
+        ],
+        cwd=_REPO_ROOT, capture_output=True, text=True,
+    )
+    return [ln for ln in result.stdout.splitlines() if ln.strip()]
+
+
+def _tracked_paths_containing(token: str) -> list[str]:
+    """Tracked paths containing `token` as a case-insensitive substring."""
+    lowered = token.lower()
+    return [
+        p for p in _tracked_paths()
+        if lowered in p.lower()
+        and p != f"src/tests/live/{_THIS_FILE}"
+        and not p.startswith("vendor/")
+    ]
+
+
+def _path_hash(path: str) -> str:
+    """Non-reversible id for a path, so a failure can be located without naming it.
+
+    Same device as index/bounded_parse.py's `_path_hash` and for the same reason (HR34): the
+    identifier goes somewhere public, the path does not.
+    """
+    return hashlib.sha256(path.encode()).hexdigest()[:12]
+
+
+def _redacting() -> bool:
+    """True when this run's output is published — GitHub Actions logs on a public repo are world
+    readable, permanently, and are not reached by any history rewrite."""
+    return bool(os.environ.get("GITHUB_ACTIONS"))
+
+
+def _safe_content_hits(hits: list[str]) -> str:
+    """Render `git grep` hits for an assertion message that may be read in public.
+
+    Locally the hits print in full — that is the whole value of the message, and the terminal is
+    the operator's. Under CI they collapse to `<path-hash>:<lineno>`: the guard exists to keep
+    these names off the internet, and printing them into a public build log on the one event it is
+    designed to catch would publish exactly the list RSE_NAME_BAN is kept out of the tree to
+    protect. The assertion fails identically either way; only the evidence is withheld.
+    """
+    if not _redacting():
+        return "\n".join(hits[:10])
+    located = []
+    for ln in hits[:10]:
+        path, _, rest = ln.partition(":")
+        lineno, _, _content = rest.partition(":")
+        located.append(f"  {_path_hash(path)}:{lineno or '?'}")
+    return (
+        "(redacted — this run's log is public; re-run locally for the lines)\n" + "\n".join(located)
+    )
+
+
+def _safe_path_hits(hits: list[str]) -> str:
+    """As _safe_content_hits, for the arm whose hits *are* paths — the path is the leak here."""
+    if not _redacting():
+        return "\n".join(hits[:10])
+    return (
+        "(redacted — this run's log is public; re-run locally for the paths)\n"
+        + "\n".join(f"  {_path_hash(p)}" for p in hits[:10])
+    )
+
+
+def test_nb1_name_ban_variable_is_declared() -> None:
+    """NB1: RSE_NAME_BAN must be *present* in the environment running this suite.
+
+    The two guards below are the only enforcement P18's name facet has (its model.yaml `check` is
+    a path regex and cannot see a name in a comment). With the variable unset they iterate an
+    empty token list and pass — which is exactly how the 48 name sites cleared on 2026-08-04 lived
+    for months under a green `[CONFORMS] P18`. A guard that stands down when its input is missing
+    reports the same green either way, so the input's absence is what has to go red.
+
+    This is the FE8 shape from test_federation_exclude.py, minus its device-coupling: no daemon,
+    no /proc, no host path, and no token value is asserted here — only that a declaration exists.
+    """
+    assert _NAME_BAN_VAR in os.environ and os.environ[_NAME_BAN_VAR].strip(), _NAME_BAN_HINT
+
+
+def test_nb2_content_guard_actually_matches() -> None:
+    """NB2: positive control for _grep_tracked_fixed — a correct ban list matches nothing.
+
+    Green therefore proves nothing about the machinery: a bad flag, a renamed helper or a pathspec
+    typo produces the same empty result as a clean tree. FE11 one file over exists for this reason
+    ("FE8-FE10 would ALL stay green with the drop-in deleted"). So assert the search finds a token
+    that is certainly present, using the same helper the ban runs through.
+    """
+    hits = _grep_tracked_fixed("RAG_search")  # mixed case on purpose: -i must be in force
+    assert hits, (
+        "the fixed-string tracked-tree search found no hit for a token that is certainly present "
+        "and certainly not case-matched — the name ban is searching nothing, and would pass on a "
+        "tree full of banned names"
+    )
+
+
+def test_nb3_path_guard_actually_matches() -> None:
+    """NB3: positive control for _tracked_paths_containing, for NB2's reason on the path arm."""
+    hits = _tracked_paths_containing("CONFtest")  # mixed case on purpose
+    assert hits, (
+        "the tracked-path search found no hit for a filename that is certainly present — the "
+        "path arm of the name ban is inspecting nothing"
+    )
+
+
+def test_nb4_failure_output_is_redacted_under_public_ci() -> None:
+    """NB4: the ban's own failure message must not publish the names, and does not, only when
+    something checks — this is the arm NB2/NB3 are to the search itself.
+
+    Measured 2026-08-05: the live-fast job runs this file on every push, and its log is public and
+    permanent (GitHub's own guidance is that a history rewrite does not reach build logs or cached
+    views — those need Support). The same run's log already carries the maintainer's home path via
+    pytest's warning summary, which is how the surface was found.
+    """
+    sample = ["some/private/path.py:42:a line containing a banned name"]
+    orig = os.environ.get("GITHUB_ACTIONS")
+    os.environ["GITHUB_ACTIONS"] = "true"
+    try:
+        content = _safe_content_hits(sample)
+        paths = _safe_path_hits(["some/private/path.py"])
+    finally:
+        if orig is None:
+            os.environ.pop("GITHUB_ACTIONS", None)
+        else:
+            os.environ["GITHUB_ACTIONS"] = orig
+
+    for rendered in (content, paths):
+        assert "private" not in rendered and "banned name" not in rendered, (
+            f"redacted output still carries the evidence it is redacting: {rendered!r}"
+        )
+    assert _path_hash("some/private/path.py")[:8] in content, (
+        "redacted output must still locate the hit — an unlocatable failure is a failure nobody "
+        "can act on, which is how a guard gets disabled instead of fixed"
+    )
+    assert ":42" in content, "the line number is not sensitive and must survive redaction"
+    # And the local path stays legible: redaction that also fires locally would make every real
+    # fix a two-step hash lookup, and the operator's own terminal is not a publication.
+    assert "a line containing a banned name" in _safe_content_hits(sample)
 
 
 def test_no_banned_device_names() -> None:
@@ -176,23 +353,13 @@ def test_no_banned_device_names() -> None:
     Matching is case-insensitive and fixed-string (-iF), so a token needs no escaping; the tokens
     are substrings, so `foo` also catches `foo-project` and `foo_ledger`.
     """
-    tokens = _banned_name_tokens()
     hits: list[str] = []
-    for token in tokens:
-        result = subprocess.run(
-            [
-                "git", "grep", "-inF", token,
-                "--", ".",
-                ":(exclude)vendor",
-                f":(exclude)src/tests/live/{_THIS_FILE}",
-            ],
-            cwd=_REPO_ROOT, capture_output=True, text=True,
-        )
-        hits += [ln for ln in result.stdout.splitlines() if ln.strip()]
+    for token in _banned_name_tokens():
+        hits += _grep_tracked_fixed(token)
     assert not hits, (
         f"Banned device/company/project name(s) found in {len(hits)} tracked line(s) — "
         f"genericize them (the fleet / the largest workspace / <repo>) and keep the numbers:\n"
-        + "\n".join(hits[:10])
+        + _safe_content_hits(hits)
     )
 
 
@@ -202,16 +369,12 @@ def test_banned_name_tokens_also_absent_from_tracked_paths() -> None:
     `git grep` only inspects file contents; a directory or filename carrying a customer name is
     just as public, and shows up in the clone, the tarball and every GitHub URL.
     """
-    tokens = [t.lower() for t in _banned_name_tokens()]
-    hits = [
-        p for p in _tracked_paths()
-        if any(t in p.lower() for t in tokens)
-        and p != f"src/tests/live/{_THIS_FILE}"
-        and not p.startswith("vendor/")
-    ]
+    hits: list[str] = []
+    for token in _banned_name_tokens():
+        hits += _tracked_paths_containing(token)
     assert not hits, (
         f"Banned name(s) found in tracked PATHS ({len(hits)}) — rename or untrack:\n"
-        + "\n".join(hits[:10])
+        + _safe_path_hits(hits)
     )
 
 
