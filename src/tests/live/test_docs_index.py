@@ -113,15 +113,27 @@ def test_gg3_scope_purity(safe_tmp_path, embedder):
         vs.close()
 
 
-def test_gg4_docs_move_the_source_fingerprint(safe_tmp_path):
-    """GG4: docs are source now — adding one moves _source_fingerprint.
+def test_gg4_docs_only_change_still_reaches_the_index_step(safe_tmp_path):
+    """GG4: a docs-only on_change must still reach the index step — else prose never re-embeds.
 
-    This gate used to assert the opposite (a generated docs tree had to stay invisible to
-    the drift signal). With the generated-docs guard deleted, docs/ is ordinary source and
-    the property worth pinning is that a prose change is *seen* — otherwise it would never
-    be re-embedded.
+    Asserted at `on_change`, not at a fingerprint helper. Until 2026-08-05 this gate called
+    `_source_fingerprint` and asserted a docs write moved it. That was true and proved nothing:
+    HR38 had repointed every live gate to the code-only `_code_source_fingerprint` and left
+    `_source_fingerprint` with no production caller at all, so GG4 was green against a function
+    the daemon never ran.
+
+    The property HR28 actually needs is an *ordering* one, and it lives in `on_change`:
+    `_index_files` runs unconditionally, above the code-only sig gate. It has to, because that
+    gate filters docs out by construction (`_code_scan` skips anything failing
+    `is_code_language`) — so a docs edit reaches the gate as "no drift" every time, and if the
+    gate ever moved above the index call, prose would stop being re-embedded with every existing
+    test still green. That is the regression this pins.
+
+    FCG1 (`test_idle_stability.py`) is the mirror image and deliberately stubs `_index_files`
+    away to assert the *negative* — docs churn must not wake the graph lane. Between them the
+    two halves of HR38's docs behaviour are both watched; before this, only the negative was.
     """
-    from rag_search.daemon.sweeps import _fingerprint_cache, _source_fingerprint
+    from rag_search.daemon import sweeps
 
     root = safe_tmp_path / "proj4"
     root.mkdir()
@@ -129,14 +141,37 @@ def test_gg4_docs_move_the_source_fingerprint(safe_tmp_path):
     docs = root / "docs"
     _seed_docs(docs)
 
-    sig_before = _source_fingerprint(str(root))
-    (docs / "new_page.md").write_text("# New page\n\nAdded after the first fingerprint.\n")
-    # A write under docs/ leaves the ROOT dir mtime alone, so the coarse pre-gate would
-    # serve the cached sig and this gate would assert nothing. Drop the entry to force
-    # the real stat-walk — the property under test is what the walk sees, not the cache.
-    _fingerprint_cache.pop(str(root), None)
-    sig_after = _source_fingerprint(str(root))
+    indexed: list[tuple[str, list]] = []
+    orig_index, orig_label = sweeps._index_files, sweeps._label_project
+    sweeps._index_files = lambda p, f: indexed.append((p, list(f)))  # type: ignore[assignment]
+    sweeps._label_project = lambda *a, **kw: None  # type: ignore[assignment]
+    for d in (sweeps._last_labelled_sig, sweeps._last_lane_run, sweeps._last_index_fail):
+        d.pop(str(root), None)
+    try:
+        # Baseline first, and it is the whole test. The hoisted-gate regression cannot fire on a
+        # project the gate has never seen — `_last_labelled_sig` is unset, so any sig differs and
+        # indexing proceeds. It bites on the *second* event for an unchanged code tree, which is
+        # exactly what a docs edit is. Without this baseline pass the assertion below passes
+        # against the very regression it exists to catch (confirmed by injection, 2026-08-05).
+        sweeps.on_change(str(root), [str(root / "main.py")])
+        assert sweeps._graph_lane_join(timeout=180.0), "baseline lane pass did not finish"
+        assert sweeps._last_labelled_sig.get(str(root)), "baseline must stamp the drift gate"
+        indexed.clear()
+        sweeps._last_lane_run.pop(str(root), None)  # bypass the lane debounce, not the sig gate
 
-    assert sig_before != sig_after, (
-        f"_source_fingerprint must move when a docs file is added: {sig_before!r}"
+        new_page = docs / "new_page.md"
+        new_page.write_text("# New page\n\nAdded after the first index pass.\n")
+        sweeps.on_change(str(root), [str(new_page)])
+    finally:
+        sweeps._graph_lane_join(timeout=180.0)
+        sweeps._index_files, sweeps._label_project = orig_index, orig_label
+        for d in (sweeps._last_labelled_sig, sweeps._last_lane_run, sweeps._last_index_fail):
+            d.pop(str(root), None)
+
+    assert indexed, (
+        "a docs-only on_change must still call _index_files — otherwise a prose edit is "
+        "never re-embedded. The index step must stay above on_change's code-only sig gate."
+    )
+    assert str(new_page) in indexed[0][1], (
+        f"the docs file must be in the batch handed to _index_files: {indexed[0][1]}"
     )

@@ -85,12 +85,20 @@ def test_pipeline_algo_version_reflects_all_three_constants():
 
 
 def test_source_fingerprint_changes_on_file_add(tmp_path):
-    """T1e: _source_fingerprint changes when a new file is added."""
-    from rag_search.daemon.sweeps import _source_fingerprint
+    """T1e: the drift gate's fingerprint changes when a new code file is added.
+
+    Repointed 2026-08-05 from the orphaned `_source_fingerprint` to `_code_source_fingerprint`.
+    Its memo is TTL-keyed, so it must be dropped between the two calls — otherwise this asserts
+    the memo's patience rather than the walk's honesty, and would pass on a gate that had gone
+    completely blind.
+    """
+    from rag_search.daemon import sweeps
     (tmp_path / "a.py").write_text("def f(): pass\n")
-    sig1 = _source_fingerprint(str(tmp_path))
+    sweeps._code_fingerprint_cache.pop(str(tmp_path), None)
+    sig1 = sweeps._code_source_fingerprint(str(tmp_path))
     (tmp_path / "b.py").write_text("def g(): pass\n")
-    sig2 = _source_fingerprint(str(tmp_path))
+    sweeps._code_fingerprint_cache.pop(str(tmp_path), None)
+    sig2 = sweeps._code_source_fingerprint(str(tmp_path))
     assert sig1 != sig2, "fingerprint must change when a file is added"
 
 

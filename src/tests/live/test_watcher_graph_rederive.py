@@ -123,13 +123,13 @@ def test_wg2_docs_only_churn_does_not_re_extract(safe_tmp_path):
 def _forget_sig(proj: str) -> None:
     """Drop the fingerprint memo, exactly as on_change does before it judges drift.
 
-    Rewriting a file in place leaves the root dir mtime alone, and that mtime is the memo's
-    coarse pre-gate — without this a direct _graph_needs_update call reads a stale sig and
-    reports "fresh" for a project that just changed.
+    The memo is TTL-keyed, so a rewrite within the window reads a stale sig and reports "fresh"
+    for a project that just changed — without this, a direct _graph_needs_update call is timing
+    off the memo rather than the tree. (It popped a second, all-files memo until 2026-08-05;
+    that one belonged to `_source_fingerprint`, which no production path had called since HR38.)
     """
     from rag_search.daemon import sweeps
     sweeps._code_fingerprint_cache.pop(proj, None)
-    sweeps._fingerprint_cache.pop(proj, None)
 
 
 def test_wg3_federation_root_is_maintained_like_any_member(safe_tmp_path):

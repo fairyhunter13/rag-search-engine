@@ -7,19 +7,30 @@ pytestmark = pytest.mark.live
 
 
 def test_source_fingerprint_is_memoized():
-    """FP1: second call for a quiescent path must use the cache, not re-walk."""
+    """FP1: second call for a quiescent path must use the memo, not re-walk.
+
+    Was written against `_source_fingerprint`, which HR38 orphaned and 2026-08-05 deleted.
+    The live memo is keyed on *elapsed time* rather than the root dir's mtime — deliberately,
+    because a dir mtime cannot observe edits nested below it and froze the fingerprint for
+    hours on the real fleet. So the expiry here is forced by TTL, not by poisoning a key.
+    """
     import os
 
     from rag_search.daemon import sweeps
 
     tmp_dir = os.path.dirname(__file__)
-    sig1 = sweeps._source_fingerprint(tmp_dir)
-    assert tmp_dir in sweeps._fingerprint_cache
-    coarse, cached_sig = sweeps._fingerprint_cache[tmp_dir]
-    assert cached_sig == sig1
-    # Stale coarse → re-walk, result must match.
-    sweeps._fingerprint_cache[tmp_dir] = (coarse + 1.0, "stale")
-    assert sweeps._source_fingerprint(tmp_dir) == sig1
+    sweeps._code_fingerprint_cache.pop(tmp_dir, None)
+    sig1 = sweeps._code_source_fingerprint(tmp_dir)
+    assert tmp_dir in sweeps._code_fingerprint_cache, "a walk must populate the memo"
+    assert sweeps._code_fingerprint_cache[tmp_dir][1] == sig1
+    # Memo hit: the cached sig is returned even when it disagrees with the tree.
+    stamped, _sig, newest, seen = sweeps._code_fingerprint_cache[tmp_dir]
+    sweeps._code_fingerprint_cache[tmp_dir] = (stamped, "memo-hit", newest, seen)
+    assert sweeps._code_source_fingerprint(tmp_dir) == "memo-hit", "within TTL must not re-walk"
+    # Expired: the walk runs again and reproduces the real sig.
+    sweeps._code_fingerprint_cache[tmp_dir] = (
+        stamped - sweeps._code_scan_ttl() - 1.0, "memo-hit", newest, seen)
+    assert sweeps._code_source_fingerprint(tmp_dir) == sig1, "past TTL must re-walk"
 
 
 # FP2 and FP2b are gone with tier 3: both gated the _BPRE_CASCADE_DEBOUNCE_S window around
@@ -398,18 +409,25 @@ def test_respect_gitignore_false_disables_gitignore_only():
 
 def test_drift_gate_quiescent_under_tool_cache_churn():
     """DIS5: the exact regression this fix targets — writing into a git-ignored,
-    hidden tool-cache dir (.svelte-kit) must NOT change _source_fingerprint, so on_change
-    does not retrigger the graph-lane pass for churn that isn't real source drift."""
+    hidden tool-cache dir (.svelte-kit) must NOT change the drift gate's fingerprint, so
+    on_change does not retrigger the graph-lane pass for churn that isn't real source drift.
+
+    Repointed 2026-08-05 from `_source_fingerprint` to `_code_source_fingerprint`, the gate
+    `on_change` actually consults. Both route through the same HR35 `_should_drop` resolver, so
+    the property is unchanged — but it is now asserted about the function the daemon runs. The
+    memo must be dropped between calls or the TTL, not the walk, decides the answer.
+    """
     import tempfile
 
     from rag_search.daemon import sweeps
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_tree(tmp, {"src/main.py": "print(1)\n", ".svelte-kit/generated.js": "x\n"})
-        sig1 = sweeps._source_fingerprint(tmp)
-        sweeps._fingerprint_cache.pop(tmp, None)
+        sweeps._code_fingerprint_cache.pop(tmp, None)
+        sig1 = sweeps._code_source_fingerprint(tmp)
+        sweeps._code_fingerprint_cache.pop(tmp, None)
         _write_tree(tmp, {".svelte-kit/generated.js": "x\nx\nx\n" * 50})
-        sig2 = sweeps._source_fingerprint(tmp)
+        sig2 = sweeps._code_source_fingerprint(tmp)
         assert sig1 == sig2, "tool-cache churn under a hidden dir must not flip the drift gate"
 
 

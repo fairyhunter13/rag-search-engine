@@ -33,8 +33,6 @@ _last_index_fail: dict[str, float] = {}
 # recovers it. Measured live: a delete 26s behind an add left a symbol for a deleted file while
 # the stored sig matched the tree exactly.
 _pending_graph_files: dict[str, set[str]] = {}
-# Source-fingerprint memo: path → (coarse_dir_mtime, sig). Avoids re-walking unchanged projects.
-_fingerprint_cache: dict[str, tuple[float, str]] = {}
 # Drift gate: path → sig at last successful _label_project. Skips the heavy pass when unchanged.
 _last_labelled_sig: dict[str, str] = {}
 # Serializes CPU-bound graph work (symbol extraction / community recompute / labelling) across
@@ -187,44 +185,17 @@ def _pipeline_algo_version() -> str:
     return f"{ALGO_VERSION}+{EXTRACTOR_REV}+{_code_fingerprint()}"
 
 
-def _source_fingerprint(path: str) -> str:
-    """SHA-1 over sorted 'relpath:mtime' for every project file — stat-only, GPU-free.
+# The all-files `_source_fingerprint` and its `_fingerprint_cache` lived here until 2026-08-05.
+# HR38 repointed every gate to the code-only fingerprint below on 2026-07-01, and the last
+# non-test caller left with tier 3 on 2026-07-28 — but the function stayed, and four guards across
+# three files went on asserting its behaviour. Two of them were the *named* guards for live
+# invariants (HR35's hidden-dir case, HR28's docs case), so those invariants were pinned to code
+# nothing ran. Repointed and the function deleted; see
+# docs/decisions/2026-08-05-guards-on-a-function-nothing-calls.md.
 
-    Coarse pre-gate: if the project root dir mtime and file-count are unchanged since the
-    last call, return the cached sig (avoids the full stat-walk for quiescent projects).
-    """
-    from pathlib import Path
-
-    from rag_search.index.discover import iter_files
-    root = Path(path)
-    # Coarse check: root dir mtime as a fast pre-gate before the full stat-walk.
-    try:
-        coarse = root.stat().st_mtime
-    except OSError:
-        coarse = 0.0
-    cached = _fingerprint_cache.get(path)
-    if cached is not None and cached[0] == coarse:
-        return cached[1]
-    parts: list[str] = []
-    try:
-        for f in iter_files(root, federation_mode=True):
-            try:
-                rel = str(f.relative_to(root))
-                mtime = int(f.stat().st_mtime)
-                parts.append(f"{rel}:{mtime}")
-            except (OSError, ValueError):
-                pass
-    except Exception:
-        pass
-    parts.sort()
-    sig = hashlib.sha1("\n".join(parts).encode()).hexdigest()
-    _fingerprint_cache[path] = (coarse, sig)
-    return sig
-
-
-# Code-only fingerprint memo (HR38): same 'relpath:mtime' shape as _fingerprint_cache but
-# filtered to is_code_language files only, so the labelling gate and the graph re-derive gate
-# are both code-only — non-code churn (docs/config/images) never wakes either.
+# Code-only fingerprint memo (HR38): 'relpath:mtime' filtered to is_code_language files only,
+# so the labelling gate and the graph re-derive gate are both code-only — non-code churn
+# (docs/config/images) never wakes either.
 _code_fingerprint_cache: dict[str, tuple[float, str, float, list[str]]] = {}
 
 # How long a scan's fingerprint, watermark and discoverable-file set may be reused before the
@@ -1734,9 +1705,12 @@ def on_change(project_path: str, files: list) -> None:
     now = time.monotonic()
     if now - _last_index_fail.get(project_path, 0.0) < _INDEX_BACKOFF_S:
         return  # in backoff window after a previous failure; skip this event
-    # Invalidate fingerprint caches so the next reconcile pass re-walks this project.
-    _fingerprint_cache.pop(project_path, None)
+    # Invalidate the fingerprint memo so the next reconcile pass re-walks this project.
     _code_fingerprint_cache.pop(project_path, None)
+    # The index step is deliberately ABOVE the code-only gate below, and unconditional: it is the
+    # only thing that re-embeds a docs/prose edit (HR28 — docs are ordinary source), and the gate
+    # is code-only by construction, so a docs write never reaches it. Hoisting the gate above this
+    # call would silently stop docs from ever being re-indexed. Guarded by GG4.
     try:
         if files:
             _index_files(project_path, files)
