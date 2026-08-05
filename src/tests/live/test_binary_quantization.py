@@ -286,7 +286,8 @@ def test_bq8_a_stranded_vector_is_both_named_and_removable(embedder, safe_tmp_pa
     assert counts[0] == counts[1], "the cancellation this test is about was not set up"
 
     health = vector_row_health(vs._con)
-    assert health == {"stranded_vectors": 1, "missing_vectors": 1, "orphan_count": 2}, (
+    assert health == {"stranded_vectors": 1, "missing_vectors": 1, "orphan_count": 2,
+                      "stranded_codes": 0}, (
         f"the two faults cancelled instead of being counted: {health}")
     assert vs.orphan_vector_ids() == [11], (
         f"the stranded row was not named: {vs.orphan_vector_ids()}")
@@ -301,4 +302,52 @@ def test_bq8_a_stranded_vector_is_both_named_and_removable(embedder, safe_tmp_pa
     _assert_bin_consistent(vs, "after pruning a stranded vector")
     hits = vs.search(np.asarray(vecs[12], dtype=np.float32), top_k=3)
     assert hits and hits[0]["chunk_id"] == 12, "the store stopped searching after the repair"
+    vs.close()
+
+
+def test_bq9_a_code_outliving_its_vector_is_swept_and_cannot_wedge_a_query(embedder, safe_tmp_path):
+    """BQ9: the residue a raw DELETE against `vec_chunks` leaves — and the query it can kill.
+
+    Measured 2026-08-05 across 153 fleet stores: 0 stranded vectors and **25 stranded codes**,
+    3-8 on each of the four stores repaired by hand the day before. The hand-written DELETE
+    reached `vec_chunks` and not `vec_chunks_bin`, which is BQ8's lesson one level down — an
+    ad-hoc repair reaches exactly the table its author had in mind, and only a supported call
+    reaches the rest.
+
+    The second half is why it is not merely untidy. With the code still present the bit lane
+    proposes that chunk_id, and if `chunks` still holds the row too, `_search_two_stage` looked
+    up its vector and indexed `.fetchone()[0]` — a TypeError that takes the whole query down,
+    not just the one candidate.
+    """
+    path = safe_tmp_path / "bq9.db"
+    vs, vecs = _store(embedder, path)
+
+    vs._con.execute("DELETE FROM vec_chunks WHERE chunk_id=?", (7,))  # chunks + code survive
+    vs.flush()
+    assert vs.orphan_code_ids() == [7], f"the stranded code was not named: {vs.orphan_code_ids()}"
+
+    # The bit lane must actually propose the vectorless chunk, or the query below never reaches
+    # the lookup and this test passes without discriminating anything.
+    q = np.asarray(vecs[7], dtype=np.float32)
+    proposed = [r[0] for r in vs._con.execute(
+        "SELECT chunk_id FROM vec_chunks_bin WHERE code MATCH vec_quantize_binary(?) AND k = ?",
+        (q.tobytes(), 10))]
+    assert 7 in proposed, f"the stranded code was not in the shortlist: {proposed}"
+
+    # The two-stage lane is asked for by configuration — this corpus is far below BIN_MIN_CHUNKS.
+    from rag_search.index.store import VectorStore
+    two_stage = VectorStore(path, migrate=False, min_two_stage=1)
+    try:
+        hits = two_stage.search(q, top_k=5)
+    except TypeError as exc:  # pragma: no cover - the regression this pins
+        raise AssertionError(f"a candidate with no vector killed the whole query: {exc}") from None
+    assert all(h["chunk_id"] != 7 for h in hits), "a chunk with no vector was ranked and returned"
+    assert hits, "the shortlist collapsed instead of dropping the one unrankable candidate"
+    two_stage.close()
+
+    from rag_search.index.validate import vector_row_health
+    assert vector_row_health(vs._con)["stranded_codes"] == 1, "the drift was not reported"
+    assert vs.prune_orphan_codes() == 1, "the stranded code was not removed"
+    assert vs.prune_orphan_codes() == 0, "prune is not idempotent"
+    assert vector_row_health(vs._con)["stranded_codes"] == 0, "the code outlived its prune"
     vs.close()

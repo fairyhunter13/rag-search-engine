@@ -136,13 +136,18 @@ def _prune_stranded_vectors(yes: bool) -> None:
             typer.echo(f"unreadable vector store, skipped: {vdb} ({exc})", err=True)
             continue
         try:
-            n = len(vs.orphan_vector_ids())
-            if not n:
-                continue
-            if yes:
+            # Vectors first: pruning one takes its code with it, so the code sweep that follows
+            # only ever sees the codes whose vector was removed by something else.
+            nv, nc = len(vs.orphan_vector_ids()), 0
+            if yes and nv:
                 typer.echo(f"pruned {vs.prune_orphan_vectors()} stranded vector row(s): {p.path}")
-            else:
-                typer.echo(f"stranded vectors: {n} in {p.path}")
+            elif nv:
+                typer.echo(f"stranded vectors: {nv} in {p.path}")
+            nc = len(vs.orphan_code_ids())
+            if yes and nc:
+                typer.echo(f"pruned {vs.prune_orphan_codes()} stranded bit-lane code(s): {p.path}")
+            elif nc:
+                typer.echo(f"stranded codes: {nc} in {p.path}")
         finally:
             vs.close()
 
