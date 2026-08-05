@@ -9,8 +9,8 @@ the fix itself.
 ## 1. The bit lane held 25 codes whose vector was gone
 
 A fleet scan of all 153 registered stores found **0 stranded vectors and 25 stranded bit-lane
-codes**, on exactly the four stores that had been hand-repaired the day before: domain-bms 8,
-domain-listing 3, redacted-name-10-web-automation 8, go-monorepo 6.
+codes**, on exactly the four stores that had been hand-repaired the day before, and on no others:
+8 + 8 + 6 + 3.
 
 The hand-written `DELETE FROM vec_chunks` reached the float32 table and not `vec_chunks_bin` —
 the author had one table in mind and the store has two. That is forgivable in a one-off. What is
