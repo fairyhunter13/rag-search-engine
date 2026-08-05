@@ -138,6 +138,41 @@ run it executes in is by definition not one yet: it demanded a predecessor only 
 Both are the same error as the one above, one turn further in — **a check is not in force until
 something has watched it pass**, and neither of these could have been found by reading it.
 
+**And then the suite itself.** With the workflow finally executing, the audit half of it reported
+30 failed, 548 errors and 3 skips out of 1181. Almost none of that was a defect in the engine —
+it was a private suite still auditing surfaces this repo had deliberately removed. `/api/kb_health`
+went with the tier-3 trim, and one session fixture hitting it once per federation member accounted
+for **every one of the 548 errors**. The wiki routes went the same way, and that file `skip`s on a
+non-200, so a deleted endpoint made it silently inert rather than red. The retired `ask` tool took
+fifteen more with it. Roughly **half the suite was testing things that no longer exist**, and the
+only reason that was survivable is that it was never running to be believed.
+
+What the deletions uncovered is the part worth keeping. A reachability matrix listed fourteen
+`overview` `what` values, six of them retired, and **passed for all fourteen** — a retired variant
+answers HTTP 200 with `{"error": "unknown what=…"}`, and the matrix only checked for 200. The graph
+matrix had the same shape from the other direction: its `status != "error"` assertion sat behind
+`if "status" in data`, and the tool reports a bad relation as a bare `{"error": …}` with no status
+key, so `semantic_trace` passed long after it was removed. **A reachability check that cannot
+distinguish a live surface from a deleted one is a green light wired to nothing**, and it is the
+failure this whole entry is about, one level down: not a guard that never ran, but a guard that ran
+and could only ever say yes. The fix in both cases was to stop retyping the list and derive it —
+the server will name its own valid set if you ask it for a bogus one.
+
+Two more of the same family. A test asserted a federation root has zero symbols of its own, which
+is the belief WG3 measured and rejected; and another asserted that an *unscoped* search fans out to
+a federation, which cannot be observed from a caller that is not an MCP client with roots — it was
+measuring the harness. Both deleted rather than repaired: the properties they claimed are not
+properties the system has.
+
+Only one finding was about the data. Four stores carried 3–8 `vec_chunks` rows whose `chunks` rows
+were gone — the exact residue BQ7 was written for, from the write path that gated the vec0 delete
+on a probe of `chunks`. That defect is fixed, but the fix heals a stranded row when the same
+`chunk_id` is re-inserted, and these ids will never be re-inserted; as BQ7's own docstring notes,
+`delete_by_path` enumerates from `chunks` too, so **nothing short of `clear()` can reach them**.
+Which is worth recording as a gap: the engine has no supported repair for the one artifact its own
+validator calls INVALID. They were removed directly, after a backup, and all four stores search
+normally. **602 passed, 0 failed, 0 errors, 0 skipped.**
+
 ## Related
 
 - Build logs join commit history as a public surface no `git grep` guard reaches. GitHub's own
