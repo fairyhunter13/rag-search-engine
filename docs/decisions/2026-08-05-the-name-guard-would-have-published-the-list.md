@@ -66,6 +66,30 @@ genuinely lives under `$HOME` on a self-hosted runner; removing it means relocat
 a neutral path or filtering every step's output, and a username is a far weaker disclosure than a
 customer name. It is recorded here so the next person finds it already weighed rather than missed.
 
+## The ban matches by substring, so short tokens will eventually fire on innocent prose
+
+Matching is `git grep -inF` plus a path substring test, and that is deliberate: a token needs no
+escaping, and banning a name also bans every compound built from it. The cost is that a short
+enough token stops being a name and starts being a string. Two of the shortest entries were
+measured against corpora that contain no project of ours — a 104k-word system dictionary and the
+whole of the virtualenv's third-party sources: one is an ordinary English word, and one already
+occurs inside a vendored file. Neither is in the tracked tree, so nothing is red; both would go red
+the day a doc paragraph or a vendored dependency happens to spell them.
+
+Recorded rather than acted on. Narrowing those two entries to compound-only forms would trade a
+protection that is certain — the bare token also catches compounds nobody has thought of yet, which
+is the whole reason the granularity was chosen — for one that is hypothetical. The reason to write
+it down anyway is that this guard's CI failure is *redacted*: it reports `<path-hash>:<lineno>` and
+no text, so a future red run on an English word looks identical to a real leak. This paragraph is
+what makes that five-minute diagnosis instead of an afternoon.
+
+The same measurement retired two entries. Because matching is by substring, a token that contains
+another token in the list can never fail on its own, and over an exact scan of all 1048 reachable
+commits the two such entries' commit sets were strict subsets of their parents'. They were dropped:
+identical coverage in the tree, in paths and in history, two fewer things to keep true. History
+exposure was 964 before and after, which is also the standing evidence that pruning the list is not
+a route to shrinking it.
+
 ## Related
 
 - Build logs join commit history as a public surface no `git grep` guard reaches. GitHub's own
