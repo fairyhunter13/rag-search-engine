@@ -99,6 +99,20 @@ rag-search index /path/to/project
 
 All three should exit 0 with no `[ ]` failures.
 
+## Name ban (`RSE_NAME_BAN`)
+
+The live suite refuses to run until this is declared, because it has no useful default. It holds
+`os.pathsep`-separated substrings — company names, project codenames, device ids — that must never
+appear in the tracked tree; `test_public_hygiene.py` fails on any tracked line or path containing
+one, case-insensitively. The values stay in your environment and never in the repo: a list of the
+names you must not publish publishes them. **A clone with nothing to ban declares that explicitly
+with `RSE_NAME_BAN=none`** — an unset variable is the one state that fails, since a guard that
+stands down when its input is missing reports the same green as a clean tree.
+
+Set it where every process that runs the suite will see it. `~/.config/rag-search/env` is *not*
+enough on its own: the systemd unit reads that file, and pytest is not the daemon. On a machine
+with a self-hosted CI runner, the runner's own environment is a third scope again.
+
 ## Health monitoring
 
 `journalctl --user -u rag-search-mcp-daemon` and `systemctl --user status` are the supervision
