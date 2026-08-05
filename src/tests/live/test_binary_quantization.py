@@ -254,3 +254,51 @@ def test_bq7_a_vector_orphaned_from_chunks_does_not_wedge_the_store(embedder, sa
     hits = vs.search(np.asarray(vecs[11], dtype=np.float32), top_k=3)
     assert hits and hits[0]["chunk_id"] == 11, "the healed chunk is not searchable"
     vs.close()
+
+
+def test_bq8_a_stranded_vector_is_both_named_and_removable(embedder, safe_tmp_path):
+    """BQ8: the state the validator calls INVALID has a repair, and a count that cannot hide it.
+
+    BQ7 heals a stranded row only when the same `chunk_id` is re-inserted, and on a chunk that
+    no longer exists in the source it never will be. Four fleet stores carried 3-8 such rows on
+    2026-08-05 and were repaired by hand with a direct DELETE, because the engine had no call
+    that could reach them.
+
+    The second half is the counting. `orphan_count` was `abs(chunks - vec_chunks)`, so this
+    store — one vector with no chunk, one chunk with no vector — read as **zero orphans** on the
+    one check whose verdict is INVALID. The two faults are manufactured together for exactly
+    that reason: either alone passes the old arithmetic too.
+    """
+    from rag_search.index.validate import vector_row_health
+
+    path = safe_tmp_path / "bq8.db"
+    vs, vecs = _store(embedder, path)
+
+    vs._con.execute("DELETE FROM chunks WHERE chunk_id=?", (11,))  # a vector with no chunk
+    vs._con.execute(  # and a chunk with no vector, to make the totals equal again
+        "INSERT INTO chunks (chunk_id, path, start_line, end_line, language, content, tokens)"
+        " VALUES (?,?,?,?,?,?,?)", (9001, "f9001.py", 1, 3, "python", "def unembedded(): ...", ""),
+    )
+    vs.flush()
+    counts = vs._con.execute(
+        "SELECT (SELECT COUNT(*) FROM chunks), (SELECT COUNT(*) FROM vec_chunks)"
+    ).fetchone()
+    assert counts[0] == counts[1], "the cancellation this test is about was not set up"
+
+    health = vector_row_health(vs._con)
+    assert health == {"stranded_vectors": 1, "missing_vectors": 1, "orphan_count": 2}, (
+        f"the two faults cancelled instead of being counted: {health}")
+    assert vs.orphan_vector_ids() == [11], (
+        f"the stranded row was not named: {vs.orphan_vector_ids()}")
+
+    assert vs.prune_orphan_vectors() == 1, "the stranded row was not removed"
+    assert vs.prune_orphan_vectors() == 0, "prune is not idempotent"
+    after = vector_row_health(vs._con)
+    assert after["stranded_vectors"] == 0, "the vector outlived its prune"
+    assert after["missing_vectors"] == 1, (
+        "prune deleted a live chunk's row — it must only ever remove vectors `chunks` has forgotten")
+
+    _assert_bin_consistent(vs, "after pruning a stranded vector")
+    hits = vs.search(np.asarray(vecs[12], dtype=np.float32), top_k=3)
+    assert hits and hits[0]["chunk_id"] == 12, "the store stopped searching after the repair"
+    vs.close()
