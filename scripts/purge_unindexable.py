@@ -26,21 +26,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from rag_search.core.config import ProjectEntry, index_dir
+from rag_search.core.config import index_dir
 from rag_search.core.index_config import ProjectConfig, effective_config
 from rag_search.core.registry import list_projects
+from rag_search.daemon.federation import searchable_stores
 from rag_search.index.discover import gitignore_chain_for_dir, is_ignored_path
 from rag_search.index.store import VectorStore
 
 DAEMON = "http://127.0.0.1:8765"
-
-
-def searchable_stores(entries: list[ProjectEntry]) -> list[str]:
-    """Enabled roots plus every federation member — what a query can actually reach. A
-    disabled member is still searched when a root federates to it (`expand_federation` never
-    re-checks `enabled`), so filtering on that flag would miss the largest stores."""
-    roots = {e.path for e in entries if e.enabled}
-    return sorted(roots | {m for e in entries for m in (e.federation or [])})
 
 
 def _store_paths_with_mass(db: Path) -> tuple[dict[str, int], set[str]]:

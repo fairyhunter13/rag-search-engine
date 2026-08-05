@@ -128,6 +128,22 @@ def expand_federation(path: str) -> list[str]:
     return list(dict.fromkeys([path, *members]))
 
 
+def searchable_stores(entries: list) -> list[str]:  # type: ignore[type-arg]
+    """Every store a query can actually reach: enabled roots plus every federation member.
+
+    A *disabled* member is still searched when a root federates to it — `expand_federation`
+    never re-checks `enabled` — so filtering on that flag would miss the largest stores.
+
+    Registry-driven by construction, which is the boundary to keep in mind when this feeds a
+    fleet-wide count: an index dir with no registry row is invisible here. That is deliberate.
+    Orphaned store dirs are Guard 6's problem (`test_no_real_project_in_tests.py`) and the
+    `safe_tmp_path` fixture's, not a convergence signal — conflating the two is what once left
+    orphan dirs holding `stale_stores` above zero for reasons no operator could trace back.
+    """
+    roots = {e.path for e in entries if e.enabled}
+    return sorted(roots | {m for e in entries for m in (e.federation or [])})
+
+
 def federated_map(project_path: str, fn):  # type: ignore[no-untyped-def]
     """Run fn(GraphStore) on each member's graph.db (root first); return [(path, result)].
 

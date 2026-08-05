@@ -12,6 +12,7 @@ identically as "0 symbols", which is why the gap was never measurable.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -541,6 +542,56 @@ def test_au5_stale_pipeline_stores_are_countable_without_opening_a_graph_db() ->
         f"by_stamp must lead with the largest population, not the current one: {block['by_stamp']}")
     assert sum(r["stores"] for r in block["by_stamp"]) == block["stores"], block
     assert _pipeline_block({})["stale_stores"] == 0, "an empty federation must not report drift"
+
+
+def test_au6_the_fleet_stale_count_is_reachable_from_the_unscoped_metrics_call() -> None:
+    """AU6 — AU5's arithmetic is worthless if nothing can reach it. This asserts reachability.
+
+    AU5 calls `_pipeline_block` with a hand-built dict, so it passed for five days while the
+    block was unreachable from the only call that asks its question. `pipeline_version` was
+    computed at the tail of `_extraction_block`, which is project-scoped and early-returns when
+    no project can be inferred; with 150 projects enabled that refusal fires on **every**
+    unscoped call. Measured 2026-08-05: `overview(what="metrics")` had no `pipeline_version` key
+    at all, and the scoped call reported `stores: 1` — one federation, not the fleet. The number
+    CLAUDE.md instructs an operator to watch could not be obtained by any sanctioned call.
+
+    So this test goes through `handle_overview`, the surface, and not through the helper. That
+    distinction is the entire lesson: a guard on a helper cannot see the helper being orphaned.
+
+    Shape only — no store count and no stamp string. Both move with every re-derive, and a test
+    that pins them goes red on the fleet converging, which is the event it exists to confirm.
+    EL13's discipline, for EL13's reason.
+    """
+    from rag_search.server._overview import handle_overview
+
+    unscoped = json.loads(handle_overview("", "metrics"))
+    assert "pipeline_version" in unscoped, (
+        "the fleet stale count is unreachable from the unscoped call — this is the AU6 defect "
+        f"itself, not a test failure downstream of it: {sorted(unscoped)}")
+
+    pv = unscoped["pipeline_version"]
+    for key in ("stores", "stores_current", "stale_stores"):
+        assert isinstance(pv[key], int), f"{key} must be an int, got {pv[key]!r}"
+    assert pv["stores"] >= 1, f"a registered fleet reported no stores at all: {pv}"
+    assert pv["stores_current"] + pv["stale_stores"] == pv["stores"], (
+        f"every store is either current or stale; the two must partition the fleet: {pv}")
+
+    # The regression itself, stated directly: on this call `extraction` *refused* — it could not
+    # infer a project — and `pipeline_version` answered anyway. Those two facts holding
+    # simultaneously is exactly what was impossible before, because the count was computed at the
+    # tail of the block that did the refusing.
+    assert "error" in unscoped["extraction"], (
+        "this assertion assumes the unscoped call is ambiguous (>1 enabled project); with a "
+        f"single registered project it cannot prove anything: {unscoped['extraction']}")
+    assert pv["stores"] >= 1, "extraction refused and took the fleet count down with it"
+
+    # Re-nesting guard. A future refactor folding this key back under the project-scoped block
+    # would restore the 2026-08-05 defect silently — the payload would still parse, and AU5 would
+    # still pass. No real project path is passed to do this: `_RSE_SRC` is source-reads-only by
+    # convention, and the property is structural, so it needs no second scoped call.
+    assert "pipeline_version" not in unscoped["extraction"], (
+        "pipeline_version is nested under the project-scoped extraction block again — that is "
+        "the original defect, and it is unreachable on every unscoped call in this fleet")
 
 
 # --- S13 (e12): module-scope bindings, the arm that empties part of the dark set -------------
