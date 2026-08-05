@@ -28,8 +28,18 @@ def vector_row_health(con: sqlite3.Connection) -> dict[str, int]:
         "SELECT COUNT(*) FROM chunks c LEFT JOIN vec_chunks v USING(chunk_id)"
         " WHERE v.chunk_id IS NULL"
     ).fetchone()[0]
+    # The bit lane drifts silently in both directions (BQ1), and nothing reported it: 25 codes
+    # across four stores outlived their vectors for a day because the repair that removed those
+    # vectors was a hand-written DELETE against the one table its author had in mind. Counted
+    # separately from `orphan_count` because its repair is separate too.
+    has_bin = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='vec_chunks_bin'").fetchone()
+    codes = con.execute(
+        "SELECT COUNT(*) FROM vec_chunks_bin b LEFT JOIN vec_chunks v USING(chunk_id)"
+        " WHERE v.chunk_id IS NULL"
+    ).fetchone()[0] if has_bin else 0
     return {"stranded_vectors": stranded, "missing_vectors": missing,
-            "orphan_count": stranded + missing}
+            "orphan_count": stranded + missing, "stranded_codes": codes}
 
 
 def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
@@ -105,7 +115,7 @@ def _is_member_valid(c: dict[str, Any]) -> bool:
     if c.get("embedding_dim", 768) != 768:
         return False
     return not any(c.get(k, 0) != 0 for k in (
-        "orphan_count", "dangling_edges", "bad_community_refs",
+        "orphan_count", "stranded_codes", "dangling_edges", "bad_community_refs",
         "placeholder_communities", "path_leakage",
     ))
 
@@ -133,6 +143,7 @@ def validate_index(project_path: str) -> dict:
         # Beside the total, because the repair differs: a stranded vector is removable
         # (`rag-search clean-orphans`), a missing one is only fixed by re-indexing the file.
         "stranded_vectors": t("stranded_vectors"), "missing_vectors": t("missing_vectors"),
+        "stranded_codes": t("stranded_codes"),
         "embedding_dim": 768, "dangling_edges": t("dangling_edges"),
         "bad_community_refs": t("bad_community_refs"),
         "placeholder_communities": t("placeholder_communities"),
