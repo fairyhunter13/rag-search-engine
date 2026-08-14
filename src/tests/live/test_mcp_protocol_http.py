@@ -1,4 +1,4 @@
-"""P15.3b: MCP streamable-HTTP /mcp transport round-trip — no asyncio.run(tool()) calls.
+"""MCP streamable-HTTP /mcp transport round-trip — no asyncio.run(tool()) calls.
 
 Sends real JSON-RPC requests to the live daemon's /mcp endpoint (SSE response
 format; Accept: application/json, text/event-stream). Also asserts parity with
@@ -49,7 +49,7 @@ def _http_session() -> tuple[dict, str]:
 
 
 def test_http_mcp_initialize_returns_4_tool_serverinfo():
-    """P15.3b: /mcp initialize — server name + 4-tool instructions (SSE)."""
+    """/mcp initialize — server name + 4-tool instructions (SSE)."""
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05", "capabilities": {},
@@ -65,7 +65,7 @@ def test_http_mcp_initialize_returns_4_tool_serverinfo():
 
 
 def test_http_mcp_tools_list_returns_exactly_4():
-    """P15.3b: /mcp tools/list returns exactly the 4 expected tools (SSE)."""
+    """/mcp tools/list returns exactly the 4 expected tools (SSE)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
                       headers=h, timeout=10)
@@ -75,7 +75,7 @@ def test_http_mcp_tools_list_returns_exactly_4():
 
 
 def test_http_mcp_overview_projects_returns_indexed_sample_projects(sample_proj_path):
-    """P15.3b: /mcp tools/call overview(projects) — >=2 sample projects indexed (SSE)."""
+    """/mcp tools/call overview(projects) — >=2 sample projects indexed (SSE)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -87,7 +87,7 @@ def test_http_mcp_overview_projects_returns_indexed_sample_projects(sample_proj_
 
 
 def test_http_mcp_search_returns_sample_ranked_results(sample_proj_path):
-    """P15.3b: /mcp tools/call search — ranked results from sample promo-svc (SSE)."""
+    """/mcp tools/call search — ranked results from sample promo-svc (SSE)."""
     h, _ = _http_session()
     r = requests.post(_MCP_URL, json={
         "jsonrpc": "2.0", "id": 4, "method": "tools/call",
@@ -104,7 +104,7 @@ def test_http_mcp_search_returns_sample_ranked_results(sample_proj_path):
 
 
 def test_stdio_and_http_return_same_tool_set():
-    """P15.3: parity — stdio and /mcp streamable-HTTP expose the exact same 4 tools."""
+    """parity — stdio and /mcp streamable-HTTP expose the exact same 4 tools."""
     # stdio
     proc = subprocess.Popen(
         [sys.executable, "-m", "rag_search", "daemon", "bridge-stdio"],

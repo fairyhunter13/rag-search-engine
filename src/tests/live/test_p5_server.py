@@ -1,4 +1,4 @@
-"""P5 server tests: MCP tools, HTTP routes, dashboard (no mocks)."""
+"""server tests: MCP tools, HTTP routes, dashboard (no mocks)."""
 import asyncio
 import json
 import re
@@ -41,7 +41,7 @@ def test_mcp_graph_nonexistent_returns_error():
 
 
 def test_mcp_overview_projects_returns_list():
-    """P15.4: overview(what='projects') returns ≥1 real registered project."""
+    """overview(what='projects') returns ≥1 real registered project."""
     from rag_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool("", "projects"))
     data = json.loads(result)
@@ -50,7 +50,7 @@ def test_mcp_overview_projects_returns_list():
 
 
 def test_mcp_overview_metrics():
-    """P20.3: overview(what='metrics') returns chat_stream metrics dict."""
+    """overview(what='metrics') returns chat_stream metrics dict."""
     from rag_search.server.mcp import overview as overview_tool
     result = asyncio.run(overview_tool("", "metrics"))
     data = json.loads(result)
@@ -69,7 +69,7 @@ def test_mcp_index_register_remove(safe_tmp_path):
 
 
 def test_healthz(live_client):
-    """P15.2: /healthz on the REAL daemon (production create_app)."""
+    """/healthz on the REAL daemon (production create_app)."""
     r = live_client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["ok"] is True
@@ -113,7 +113,7 @@ def test_healthz_reports_how_long_sweeps_have_been_paused(live_client):
 
 
 def test_dashboard_views_present(live_client):
-    """P15.2: /dashboard on the REAL daemon — every nav view is wired.
+    """/dashboard on the REAL daemon — every nav view is wired.
 
     `wiki` left with tier 3 and `docs` took its place. The assertion moved from a bare substring
     to the `vbtn-` nav id because a bare `"docs" in body` matches the word anywhere in the page
@@ -131,7 +131,7 @@ def test_dashboard_views_present(live_client):
 
 
 def test_api_projects_returns_list(live_client):
-    """P15.2/P15.4: /api/projects returns ≥1 real registered project."""
+    """/api/projects returns ≥1 real registered project."""
     r = live_client.get("/api/projects")
     assert r.status_code == 200
     data = r.json()
@@ -140,7 +140,7 @@ def test_api_projects_returns_list(live_client):
 
 
 def test_api_overview_projects(live_client):
-    """P15.2/P15.4: /api/overview?what=projects returns ≥1 real project."""
+    """/api/overview?what=projects returns ≥1 real project."""
     r = live_client.post("/api/overview", json={"what": "projects"})
     assert r.status_code == 200
     data = r.json()
@@ -149,7 +149,7 @@ def test_api_overview_projects(live_client):
 
 
 def test_live_daemon_has_mcp_route(live_client):
-    """P15.2 parity: production create_app() mounts /mcp (FastMCP streamable-HTTP).
+    """parity: production create_app() mounts /mcp (FastMCP streamable-HTTP).
     The test-only in-process app lacks this route; driving the live daemon proves
     tests exercise the real served surface, not a stripped-down variant.
     """
@@ -161,14 +161,14 @@ def test_live_daemon_has_mcp_route(live_client):
 
 
 
-# P9.2 asserted that detect_patterns() named ≥1 framework via the LLM rather than a static dict.
+# A retired test asserted that detect_patterns() named ≥1 framework via the LLM rather than a static dict.
 # It was the runtime half of the same pair as test_p14_mcp_readonly's A3 source-guard, and both
 # died with kb/patterns.py — the module behind overview(what="patterns"), the one synchronous
 # DeepSeek round trip that ever sat on a query path.
 
 
 def test_index_tool_rejects_forbidden_root(safe_tmp_path):
-    """P24.3: index(/tmp/...) must return status='forbidden' and NOT register the path."""
+    """index(/tmp/...) must return status='forbidden' and NOT register the path."""
     from rag_search.core.registry import get_project
     from rag_search.server.mcp import index as index_tool
 
@@ -184,7 +184,7 @@ def test_index_tool_rejects_forbidden_root(safe_tmp_path):
 
 
 def test_index_tool_e2e(safe_tmp_path):
-    """P10.4b: enabled=True creates registry entry; enabled=False removes it + index dir.
+    """enabled=True creates registry entry; enabled=False removes it + index dir.
 
     Every `index()` here spawns `reconcile_projects` on an unjoined daemon thread. In production
     that is harmless and intended: the MCP app is served by the daemon (`server/routes.py:91`), so
@@ -246,7 +246,7 @@ def test_index_tool_e2e(safe_tmp_path):
 
 
 def test_overview_all_whats_real_federation_root(sample_workspace):
-    """P10.4: every what= value returns parseable non-empty data on the real federation root."""
+    """every what= value returns parseable non-empty data on the real federation root."""
     from rag_search.server.mcp import overview as overview_tool
     from tests.live._projects import federation_root
 
@@ -273,7 +273,7 @@ def test_overview_all_whats_real_federation_root(sample_workspace):
 
 
 def test_community_read_orders_by_member_count_no_operationalerror(service_path):
-    """P23.2: ORDER BY member_count (not node_count) — no OperationalError on real graph DBs.
+    """ORDER BY member_count (not node_count) — no OperationalError on real graph DBs.
 
     The regression this guards is a column that does not exist in the communities table, and it
     was originally caught through /api/suggested_questions. That route is gone; the same SQL is
@@ -289,7 +289,7 @@ def test_community_read_orders_by_member_count_no_operationalerror(service_path)
 
 
 def test_mcp_search_subdir_resolves_to_root(service_path):
-    """P23.1: search with a non-root project_paths resolves to the enclosing registered root."""
+    """search with a non-root project_paths resolves to the enclosing registered root."""
 
     from rag_search.server.mcp import search as search_tool
 
@@ -312,7 +312,7 @@ def test_mcp_search_subdir_resolves_to_root(service_path):
 
 
 def test_auto_pipeline_status_real(live_client, safe_tmp_path):
-    """P19.6: /api/auto_pipeline_status returns real enabled/pending — not canned data.
+    """/api/auto_pipeline_status returns real enabled/pending — not canned data.
 
     Register an un-indexed tmp project → it must appear in pending.
     Pause sweeps → enabled must flip to False.
@@ -348,15 +348,15 @@ def test_auto_pipeline_status_real(live_client, safe_tmp_path):
             remove_project(proj_path)
 
 
-# P25.1 is gone with tier 3. It asserted /api/kb_health's enriched_pct counted communities with a
+# The kb_health enriched_pct test is gone with tier 3. It asserted /api/kb_health's enriched_pct counted communities with a
 # DeepSeek *summary* rather than merely a title. Structural labelling writes a templated summary for
 # every community it labels, so the ratio it measured is now a permanent 100% by construction — a
-# gate that can only ever read one value is not a gate. P27 below still covers the property that
+# gate that can only ever read one value is not a gate. The test below still covers the property that
 # survived: the labelling pass keys on summary, not title.
 
 
 def test_label_project_uses_summary_gate(safe_tmp_path):
-    """P27: _label_project labels titled-but-unsummarized communities."""
+    """_label_project labels titled-but-unsummarized communities."""
     import sqlite3  # noqa: I001
     from rag_search.core.config import project_graph_db
     from rag_search.daemon.sweeps import _label_project
@@ -378,7 +378,7 @@ def test_label_project_uses_summary_gate(safe_tmp_path):
         titled = gs._con.execute(
             "SELECT COUNT(*) FROM communities WHERE title IS NOT NULL AND title != ''"
         ).fetchone()[0]
-        assert titled > 0, "P21 must set structural labels before the summary pass"
+        assert titled > 0, "the structural labeller must set titles before the summary pass"
     finally:
         gs.close()
     _label_project(proj)
@@ -389,12 +389,12 @@ def test_label_project_uses_summary_gate(safe_tmp_path):
     assert post > 0, "the labelling gate must use summary IS NULL, not title IS NULL"
 
 
-# P28.1 and P28.2 are gone with tier 3: both POSTed /api/build_wiki, a route R0a deleted along with
+# The two build_wiki tests are gone with tier 3: both POSTed /api/build_wiki, a route R0a deleted along with
 # the wiki generator behind it.
 
 
 def test_overview_status_has_index_state(service_path):
-    """P25.2: overview(what='status') returns index_state in the 3-value ladder.
+    """overview(what='status') returns index_state in the 3-value ladder.
 
     The old ladder had a fourth rung, `enriching`, and a companion `enriched_pct`. Both keyed on
     DeepSeek narration, so they left with it; the surviving states are the ones a keyless box can

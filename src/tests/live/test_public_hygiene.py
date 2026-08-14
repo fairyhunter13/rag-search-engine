@@ -1,6 +1,6 @@
 """Public-repo hygiene guard: legacy brand tokens and absolute home paths must not reappear.
 
-Permanent brand-lock (P18/HR34): the pre-2026-07-09 OSE/OPENCODE/ocs branding was fully retired
+Permanent brand-lock (HR34): the pre-2026-07-09 OSE/OPENCODE/ocs branding was fully retired
 in favor of RSE. This guard bans every legacy self-reference token from ever reappearing in the
 tracked tree, with a narrow allowlist for genuine external-product references (the external
 "OpenCode" CLI product, and the retired ose-docgen package as named in dated audit records) that
@@ -8,7 +8,7 @@ must never be renamed.
 
 Device-specific name bans (company names, project codenames, device ids) are enforced here too,
 but the *mechanism* is all that ships: the token list arrives via the RSE_NAME_BAN environment
-variable, never as a literal in this tree. P18/HR34 forbid shipping the ban-list itself, because
+variable, never as a literal in this tree. HR34 forbid shipping the ban-list itself, because
 a list of the names you must not publish publishes them. This mirrors RSE_FEDERATION_EXCLUDE
 exactly — mechanism in the repo, values in the environment.
 
@@ -167,7 +167,7 @@ _NAME_BAN_VAR = "RSE_NAME_BAN"
 # variable is the absence of one.
 _NAME_BAN_NONE = "none"
 
-# No absolute home path here on purpose (P18/HR34) — `~` and the runner's own config file read the
+# No absolute home path here on purpose (HR34) — `~` and the runner's own config file read the
 # same on every machine. Mirrors _REINSTALL_HINT in test_federation_exclude.py.
 _NAME_BAN_HINT = (
     f"{_NAME_BAN_VAR} is not set, so the two name guards in this file assert nothing and report "
@@ -182,7 +182,7 @@ _NAME_BAN_HINT = (
 def _banned_name_tokens() -> list[str]:
     """Device/company/project name tokens to ban, from RSE_NAME_BAN (os.pathsep-separated).
 
-    Env-driven because the list itself must never enter this public tree (P18/HR34) — a list of
+    Env-driven because the list itself must never enter this public tree (HR34) — a list of
     the names you must not publish publishes them. The private rse-live-audit repo owns the values
     and asserts this device's list is complete.
 
@@ -270,10 +270,10 @@ def _safe_path_hits(hits: list[str]) -> str:
 def test_nb1_name_ban_variable_is_declared() -> None:
     """NB1: RSE_NAME_BAN must be *present* in the environment running this suite.
 
-    The two guards below are the only enforcement P18's name facet has (its model.yaml `check` is
+    The two guards below are the only enforcement HR34's name facet has (the retired register's `check` was
     a path regex and cannot see a name in a comment). With the variable unset they iterate an
     empty token list and pass — which is exactly how the 48 name sites cleared on 2026-08-04 lived
-    for months under a green `[CONFORMS] P18`. A guard that stands down when its input is missing
+    for months under a green `[CONFORMS]`. A guard that stands down when its input is missing
     reports the same green either way, so the input's absence is what has to go red.
 
     This is the FE8 shape from test_federation_exclude.py, minus its device-coupling: no daemon,
@@ -360,9 +360,9 @@ def test_nb4_failure_output_is_redacted_under_public_ci() -> None:
 def test_no_banned_device_names() -> None:
     """No company/project/device name from RSE_NAME_BAN may appear in the tracked tree.
 
-    P18 says the tracked tree carries "no company/project names", but its machine check in
+    HR34 says the tracked tree carries "no company/project names", but the retired register's check in
     model.yaml is a *path* regex — it cannot see a name written into a comment. That gap is not
-    theoretical: 48 such sites across 24 files sat in this tree under a green `[CONFORMS] P18`
+    theoretical: 48 such sites across 24 files sat in this tree under a green `[CONFORMS]`
     until the 2026-08-04 sweep, every one of them a provenance note written from a live
     measurement. This is the guard that makes the invariant's own claim testable.
 
@@ -400,7 +400,7 @@ _PATH_LITERAL_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*\s*(?::\s*\S+)?\s*=\s*Pat
 def test_storage_paths_are_env_driven() -> None:
     """Module-level Path(...) storage-root constants in core/ and daemon/ must derive from
     os.environ.get(...) (XDG_DATA_HOME / RSE_*) — never a hardcoded machine-specific literal
-    (P18/HR34 device-neutrality). Paths built from other already-derived names (e.g. REGISTRY_PATH)
+    (HR34 device-neutrality). Paths built from other already-derived names (e.g. REGISTRY_PATH)
     are allowed."""
     targets = [
         _REPO_ROOT / "src/rag_search/core/config.py",
@@ -425,7 +425,7 @@ def test_storage_paths_are_env_driven() -> None:
     )
 
 
-# Runnable-by-anyone contract (P18/HR34): every one of these module-level config.py names is a
+# Runnable-by-anyone contract (HR34): every one of these module-level config.py names is a
 # machine/deployment-specific value (model, host, port, device, timeout) that a fresh clone must be
 # able to override without a source edit — each must be produced by an `os.environ.get(...)` call.
 _ENV_DRIVEN_CONFIG_NAMES = [
@@ -441,7 +441,7 @@ _ENV_DRIVEN_CONFIG_NAMES = [
 def test_runtime_config_is_env_driven() -> None:
     """Model/host/port/device constants in core/config.py must derive from os.environ.get(...) —
     a fresh clone should need zero source edits to point at a different model, host, port, or GPU
-    (P18/HR34 runnable-by-anyone contract)."""
+    (HR34 runnable-by-anyone contract)."""
     src = (_REPO_ROOT / "src/rag_search/core/config.py").read_text()
     lines = src.splitlines()
     missing: list[str] = []

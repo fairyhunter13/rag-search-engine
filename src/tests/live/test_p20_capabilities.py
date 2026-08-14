@@ -1,4 +1,4 @@
-"""P20.6: E2E proof that all 5 wired capabilities work together (no mocks).
+"""E2E proof that all 5 wired capabilities work together (no mocks).
 
 The five are A-E below, not the MCP tool count — worth saying now that the tool count is 4.
 """

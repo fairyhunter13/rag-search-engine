@@ -122,7 +122,7 @@ _ALLOWED_LANG_SETS = frozenset({
 # Extension lists added to discover.py after this guard existed — `_GENERATED_SUFFIXES`,
 # `_GENERATED_NAMES`, `_IMAGE_SUFFIXES`, `_KEY_SUFFIXES` — are tuples, so `_EXT_SET_RE` does not
 # see them, and that is a decision rather than a container-type accident. They are the extension
-# bootstrap P6 names as exempt: the point where bytes first get a category, upstream of any
+# bootstrap HR15 names as exempt: the point where bytes first get a category, upstream of any
 # language question. What this guard protects is the other thing — that once a file *has* a
 # language, nothing gates on a hand-written list of which languages count as code. Any new set
 # here that answers a language question belongs in `_ALLOWED_LANG_SETS` only with that argument

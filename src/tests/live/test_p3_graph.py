@@ -1,4 +1,4 @@
-"""P3 graph layer: extractor, store, community detection, LLM client, enrichment."""
+"""graph layer: extractor, store, community detection, LLM client, enrichment."""
 import tempfile
 from pathlib import Path
 

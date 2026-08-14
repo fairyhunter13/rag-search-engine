@@ -1,4 +1,4 @@
-"""P21: Integration-parity tests — config drift guard.
+"""Integration-parity tests — config drift guard.
 
 Puts the existing integration system (claude profiles + hermes; OpenCode is no
 longer configured) under the live test suite.

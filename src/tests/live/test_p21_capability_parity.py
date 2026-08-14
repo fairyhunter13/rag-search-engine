@@ -1,4 +1,4 @@
-"""P21: Capability-parity tests — docstring↔handler parity + round-trips + check_system smoke.
+"""Capability-parity tests — docstring↔handler parity + round-trips + check_system smoke.
 
 These guard against:
   A1: overview docstring advertising fewer what= values than _overview._VALID

@@ -540,7 +540,7 @@ class _ImportResolver:
     manifests, and the filesystem — none of which a per-file parse has. Same split as call
     resolution, which is in `_extract_graph` for the same reason and not in the extractor either.
 
-    P6/HR15: nothing here infers code semantics. Each rule is a *published* path convention read
+    HR15: nothing here infers code semantics. Each rule is a *published* path convention read
     from a declarative file the repo checked in — `go.mod`'s module line, `composer.json`'s
     `autoload.psr-4` map — or, for the JS family and python, path arithmetic whose answer is then
     checked against the filesystem. A resolution either names a file that exists or it is dropped;

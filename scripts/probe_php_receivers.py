@@ -33,7 +33,7 @@ declarations and so was guaranteed to read zero. The dialect table is the self-c
 CI3 recovers 510 of 40,576 drops through the type hops (1.3%) against Laravel's 3,490, and is
 carried instead by the chain walk onto `CI_Controller`/`MY_Model`.
 
-P18/HR34: counts and rates only — a store appears as an index and a dialect label, never as a name
+HR34: counts and rates only — a store appears as an index and a dialect label, never as a name
 or a path.
 
 **Kept by decision, not by inertia.** The plan that produced it said "promoted or deleted once it

@@ -168,7 +168,7 @@ class BoundedParsePool:
                     why, _path_hash(path_for_log), exitcode)
 
     def idle_shutdown(self, idle_s: float = _IDLE_SHUTDOWN_S) -> None:
-        """Free workers after inactivity (P16/P17); no-op if a task is in flight."""
+        """Free workers after inactivity (HR40); no-op if a task is in flight."""
         if self._slots[0] is None or time.monotonic() - self._last_used < idle_s:
             return
         with self._lock:

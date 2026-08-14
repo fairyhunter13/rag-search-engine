@@ -1,4 +1,4 @@
-"""P4 query/ tests: search, graph_handler, chat_stream (slow)."""
+"""query/ tests: search, graph_handler, chat_stream (slow)."""
 import pytest
 
 pytestmark = pytest.mark.live
@@ -62,7 +62,7 @@ def test_graph_impact_returns_list(mini_stores):
 
 
 def test_graph_callees_real_be(sample_workspace):
-    """P10.3: callees() on sample service member graph returns ≥1 result for an edge-connected fn."""
+    """callees() on sample service member graph returns ≥1 result for an edge-connected fn."""
     import sqlite3
 
     from rag_search.core.config import project_graph_db
@@ -84,7 +84,7 @@ def test_graph_callees_real_be(sample_workspace):
 
 @pytest.mark.costly
 def test_chat_stream_sse_sends_done(live_client):
-    """P10.5/P15.2: /api/chat_stream SSE sends tokens and ends with done:true (LIVE daemon)."""
+    """/api/chat_stream SSE sends tokens and ends with done:true (LIVE daemon)."""
     import json as _json
     r = live_client.post(
         "/api/chat_stream",

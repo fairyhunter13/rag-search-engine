@@ -1,4 +1,4 @@
-"""P14.4: MCP tool actions are read/query-only — NO inline LLM generation.
+"""MCP tool actions are read/query-only — NO inline LLM generation.
 
 Static guard: mcp.py must not reference the synthesis/LLM-generation functions
 (chat, _ask synthesis, impact_narrative LLM call, semantic_trace LLM call).
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.live
 
 
 def test_mcp_handlers_have_no_llm_generation():
-    """P14.4 static: server/mcp.py tool handlers must not call LLM generation."""
+    """server/mcp.py tool handlers must not call LLM generation."""
     mcp_path = Path(__file__).parents[2] / "rag_search" / "server" / "mcp.py"
     text = mcp_path.read_text()
 
@@ -34,11 +34,11 @@ def test_mcp_handlers_have_no_llm_generation():
     # The LLM-backed helpers from graph_handler must not be called in mcp.py
     assert "gh.impact_narrative(" not in text, (
         "server/mcp.py calls gh.impact_narrative() — this calls LLM; "
-        "use gh.impact() + structured JSON instead (P14.2)"
+        "use gh.impact() + structured JSON instead"
     )
     assert "gh.semantic_trace(" not in text, (
         "server/mcp.py calls gh.semantic_trace() — this calls LLM; "
-        "use gh.path_between() + structured JSON instead (P14.2)"
+        "use gh.path_between() + structured JSON instead"
     )
     # `assert "run_ask" in text` stood here, and in E5. Its intent was "the MCP ask handler must
     # delegate to the LLM-free helper rather than inlining generation". The `ask` tool is gone from
@@ -63,7 +63,7 @@ def test_mcp_handlers_have_no_llm_generation():
 
 
 def test_run_ask_is_llm_free():
-    """P14.4: run_ask() assembles context from DB artifacts and never generates.
+    """run_ask() assembles context from DB artifacts and never generates.
 
     Split out of the mcp.py guard above, where it rode along because `ask` was an MCP tool. It is
     not vestigial now that it is off the MCP surface — it matters *more*. run_ask()'s two remaining
@@ -82,7 +82,7 @@ def test_run_ask_is_llm_free():
 
 
 def test_overview_communities_carries_the_architecture_axis():
-    """P14.4 runtime: overview(what='communities') is what `ask`'s architecture scope used to be.
+    """overview(what='communities') is what `ask`'s architecture scope used to be.
 
     This replaces test_ask_mcp_returns_structured_context, which asserted only that the retired
     `ask` tool returned a string longer than 20 characters — true of every error message it could
@@ -120,7 +120,7 @@ def test_overview_communities_carries_the_architecture_axis():
 
 
 def test_impact_narrative_returns_structured_json():
-    """P14.4 runtime: graph(impact_narrative) returns JSON with risk/affected_count, no LLM prose."""
+    """graph(impact_narrative) returns JSON with risk/affected_count, no LLM prose."""
     from rag_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
     svc_member = service_member()  # sample promo-svc, not a real project
@@ -132,7 +132,7 @@ def test_impact_narrative_returns_structured_json():
 
 
 def test_path_returns_structured_json():
-    """P14.4 runtime: graph(path) returns JSON with path data, no LLM prose.
+    """graph(path) returns JSON with path data, no LLM prose.
 
     This test was written against `semantic_trace` and passed by calling it with a `to_symbol`,
     which the old fallthrough handed straight to the `path` branch — so it asserted the `path`

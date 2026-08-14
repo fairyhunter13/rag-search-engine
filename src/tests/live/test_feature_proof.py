@@ -201,13 +201,13 @@ def test_fp16_no_level2_query_in_quality():
 
 
 def test_fp17_no_llm_in_graph_handler():
-    """Gap-B guard: impact_narrative + semantic_trace deleted (P2 violation — LLM in query path)."""
+    """Gap-B guard: impact_narrative + semantic_trace deleted (HR9 violation — LLM in query path)."""
     import importlib
     mod = importlib.import_module("rag_search.query.graph_handler")
     assert not hasattr(mod, "impact_narrative"), \
-        "impact_narrative re-introduced in query/graph_handler (P2 violation: LLM in query path)"
+        "impact_narrative re-introduced in query/graph_handler (HR9 violation: LLM in query path)"
     assert not hasattr(mod, "semantic_trace"), \
-        "semantic_trace re-introduced in query/graph_handler (P2 violation: LLM in query path)"
+        "semantic_trace re-introduced in query/graph_handler (HR9 violation: LLM in query path)"
 
 
 # fp18 asserted /api/build_wiki had *replaced* /api/build_hierarchy — a Phase-1b succession

@@ -51,7 +51,7 @@ pytestmark = pytest.mark.live
 def test_sc9_every_env_knob_has_a_consumer():
     """SC9: a constant read from RSE_* env must be read by something outside core/config.py.
 
-    core/config.py is the retargeting contract P18 promises a fresh clone: set the variable,
+    core/config.py is the retargeting contract HR34 promises a fresh clone: set the variable,
     change the behaviour. A knob that parses its env var and is then read by nothing breaks
     that promise silently — no error, no effect. Thirteen had accumulated by 2026-07-31
     (RSE_FINAL_TOP_K, RSE_MAX_BYTES, RSE_SCHEMA_VERSION, …), each outliving the call site it

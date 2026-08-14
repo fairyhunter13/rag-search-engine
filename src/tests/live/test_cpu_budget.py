@@ -182,7 +182,7 @@ def test_cb3_idle_cpu_under_one_percent_core():
     window that looked perfectly idle while costing up to 0.1410 of a core — fourteen times the
     gate — and this gate reported it as the daemon burning CPU with nothing to do. It was not: the
     same daemon measured with the neighbour quiet ran its reader thread at 0.0010 of a core over
-    60 s against 24 delivered events. The engine met P16 the whole time; what failed was this
+    60 s against 24 delivered events. The engine met the idle budget the whole time; what failed was this
     test's ability to say so.
 
     Note the honest consequence: where that churn never stops, the five attempts now run out and
@@ -247,7 +247,7 @@ _FLOOR_ROOTS_MAX = 193
 
 
 def test_cb7_the_idle_gate_still_has_the_headroom_it_was_measured_with():
-    """P16's 1% gate was calibrated on a fleet of a particular size; hold it to that size.
+    """The 1% idle-CPU gate was calibrated on a fleet of a particular size; hold it to that size.
 
     Deliberately not a CPU measurement. A second sampling window would cost 20 s, need a
     quiescent daemon, and re-answer CB3's question. What CB3 structurally cannot answer is
@@ -264,7 +264,7 @@ def test_cb7_the_idle_gate_still_has_the_headroom_it_was_measured_with():
         f"Inotify bookkeeping costs ~2.7e-5 of a core per root, so a fleet this size has spent "
         f"the ~0.0010 of headroom between that {_FLOOR_IDLE_CORE} floor and CB3's "
         f"{_IDLE_THRESHOLD} gate. Re-measure the floor (the per-thread method is in "
-        f"docs/decisions/2026-07-31-idle-gate-floor.md) and record what P16 costs at this size. "
+        f"docs/decisions/2026-07-31-idle-gate-floor.md) and record what the idle budget costs at this size. "
         f"Do not raise the gate to fit the reading."
     )
 

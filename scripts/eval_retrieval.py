@@ -21,12 +21,12 @@ Ground truth is derived, never hand-labelled, which is what makes it survive: qu
 symbols — qualified name plus the definition's own first line — and positives the file defining them,
 selection is deterministic so two models are always asked the same questions, and nothing
 project-specific is committed — the set is regenerated from whatever `--project` names, so this file
-carries no real path and P18/HR34 holds.
+carries no real path and HR34 holds.
 
 Symbols, not Python docstrings, since 2026-07-31. The docstring selector read
 `WHERE language = 'python'` and matched `\"\"\"…\"\"\"`, so it could only ever ask about one language —
 and a single-language verdict cannot license an embedder switch across a fleet whose mass is
-javascript, php and html. It was also this script's only regex, against P6/HR15. **Levels moved
+javascript, php and html. It was also this script's only regex, against HR15. **Levels moved
 when it changed**: compare arms measured by the same selector, never across this boundary.
 
 **The default lane is `dense`, and that is not a detail.** The docstring is still inside the chunk

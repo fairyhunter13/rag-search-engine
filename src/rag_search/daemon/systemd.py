@@ -43,11 +43,11 @@ def unit_text(exec_path: str | None = None) -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
-        # Bind explicitly (P29), but to the *configured* address rather than a literal. The two
+        # Bind explicitly, but to the *configured* address rather than a literal. The two
         # were literals here while every client resolved DAEMON_HOST/DAEMON_PORT from
         # RSE_MCP_DAEMON_HOST/_PORT, so setting the port env var and running `install-systemd`
         # produced a unit serving 8765 that nothing was looking at — a misconfiguration with no
-        # error anywhere, on the one contract P18 states as "a fresh clone needs zero source
+        # error anywhere, on the one contract HR34 states as "a fresh clone needs zero source
         # edits to retarget any of them".
         f"ExecStart={exec_path} daemon serve "
         f"--host {config.DAEMON_HOST} --port {config.DAEMON_PORT}\n"

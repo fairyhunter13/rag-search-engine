@@ -12,13 +12,13 @@ directories vendored per repo (110 groups at exactly 25 copies).
 
 **The split is the point.** A within-project rule needs no state beyond the project it is indexing.
 A cross-fleet rule makes one federation member's results depend on what another member indexed,
-which is the independence P3 buys, so it has to earn the coupling. This reports both reclaims so
+which is the independence a per-project store buys, so it has to earn the coupling. This reports both reclaims so
 that trade is priced instead of argued.
 
 Read-only: hashes file bodies, opens no store, needs no daemon and no GPU. Deliberately no
 normalisation — "byte-copy of a file in another repo" is the claim, and anything cleverer (stripping
 whitespace, parsing) measures a different one. Reports counts and ranks only, never a path or a
-project name, so its output can be pasted into a public repo (P18/HR34).
+project name, so its output can be pasted into a public repo (HR34).
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def main() -> int:
     print(f"cross-fleet reclaim         : {cross}  ({cross / scanned:.1%})")
     print(f"extra bought by going cross : {cross - within}")
     print(f"projects with within-dupes  : {len(per_project)}")
-    print("\nwithin-project reclaim by project (ranked; names withheld — P18):")
+    print("\nwithin-project reclaim by project (ranked; names withheld — HR34):")
     for i, (_proj, n) in enumerate(per_project.most_common(10), start=1):
         print(f"  #{i:<3d} {n:6d}")
     print("\ngroup-size histogram (copies per identical content):")

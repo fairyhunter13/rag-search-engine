@@ -266,7 +266,7 @@ def test_no_bare_tmp_path_reaches_the_shared_index_root():
     """Guard 6: project-path→index-dir resolvers take safe_tmp_path, never a bare tmp_path.
 
     A literal source-shape check, deliberately: it reads the call text and nothing else, so it
-    stays inside P6/HR15 (no inference about behaviour) and needs neither a daemon nor a GPU.
+    stays inside HR15 (no inference about behaviour) and needs neither a daemon nor a GPU.
     """
     violations: list[str] = []
     for f in _iter_py_files():
