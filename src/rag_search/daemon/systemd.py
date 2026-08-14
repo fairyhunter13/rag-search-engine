@@ -12,12 +12,10 @@ from rag_search.core import config
 # real name was doing the work. test_systemd_dropins_target_deployed_unit ties them together.
 UNIT_NAME = "rag-search-mcp-daemon.service"
 
-# The unit systemd activates when the daemon lands in `failed`. It existed on this host for months
-# as a `static` unit that nothing could ever start: `unit_text()` emitted no `OnFailure=` and neither
-# did any drop-in, and the repo's copy was deleted in 18aca54 for having the wrong name without one
-# being put back. With `Restart=always` against `StartLimitBurst=20`, the daemon can exhaust its
-# restarts, enter `failed` and sit there — which is precisely what the notifier was written for and
-# precisely when it was unreachable. Named here so the unit, the `OnFailure=` and the test that
+# The unit systemd activates when the daemon lands in `failed`. With `Restart=always` against
+# `StartLimitBurst=20` the daemon can exhaust its restarts, enter `failed` and sit there, which is
+# the state this notifier exists for — and a notifier with no `OnFailure=` pointing at it is a
+# `static` unit nothing can ever start. Named here so the unit, the `OnFailure=` and the test that
 # proves it fires all derive from one string.
 NOTIFY_UNIT = "rag-search-mcp-failure-notify.service"
 

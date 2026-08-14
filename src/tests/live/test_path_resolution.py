@@ -84,11 +84,10 @@ def test_migrate_rekeys_raw_symlink_registration(safe_tmp_path):
     try:
         raw = str(root / "link")  # symlink path, deliberately not canonicalized
         upsert_project(ProjectEntry(path=raw, enabled=True))
-        # A `get_project(raw) is not None` precondition stood here and went red intermittently:
-        # the registry is one shared file and the live daemon's reconcile calls list_projects()
-        # on its own schedule, so it can re-key the entry before this process looks. That is the
-        # self-heal working, not failing. The end state below is the contract, and it can only
-        # hold if the seeding landed — nothing else in this test registers `canon`.
+        # Deliberately no `get_project(raw) is not None` precondition: the registry is one shared
+        # file and the live daemon's reconcile can re-key the entry before this process looks,
+        # which is the self-heal working rather than failing. The end state below is the contract,
+        # and it can only hold if the seeding landed — nothing else here registers `canon`.
         list_projects()  # triggers _migrate()'s self-heal, if the daemon has not already
         canon = canonicalize_path(raw)
         assert canon == str(member)

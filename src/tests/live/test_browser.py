@@ -358,14 +358,9 @@ def test_p12_completeness_guard() -> None:
         "storage-health-body", "pending-list", "sweeps-state", "daemon-dot",
         "kpi-files", "kpi-communities", "theme-btn",
     }
-    # wiki-pages/wiki-content/wiki-lint-panel/wiki-lint-count/kpi-enrichment/op-log/admin-job-chips
-    # left with tier 3 — the last two because their writers (opLog, the SSE job feed) did.
-    # docs-pages/docs-content/docs-search and admin-autopipeline-log left with the operator-console
-    # pass, and activity-list/suggested-list with the two Pulse panels the Indexing Queue replaced;
-    # pending-list and sweeps-state are that panel's ids. Keeping a deleted id in this list would
-    # fail the guard forever; dropping one that still exists would let it go untested — so this
-    # list has to track dashboard.html on both sides, which is what the `tagged` scan above does
-    # automatically for onclick-bearing elements.
+    # This list has to track dashboard.html on both sides: a deleted id left here fails the guard
+    # forever, and a live id missing from it goes untested. Only onclick-bearing elements are
+    # tracked automatically, by the `tagged` scan above — everything else is maintained by hand.
     # vbtn-* ids are covered by the f-string f"#vbtn-{view}" parametrize pattern
     pattern_covered = {f"vbtn-{v}" for v in _VIEWS}
     all_ids = tagged | key_ids
@@ -375,9 +370,8 @@ def test_p12_completeness_guard() -> None:
     # Every interactive id must be exercised with an action verb within 5 lines of its reference.
     interactive_ids = {
         "send-btn", "chat-in", "graph-filter-sel", "project-sel",
-        # wiki-lint-items left with tier 3 and docs-search, which took its slot, left with the docs
-        # pane. The Indexing Queue that replaced it has no interactive control — it is a readout —
-        # so it belongs in key_ids above and not here.
+        # A readout panel with no control belongs in key_ids above, not here — the Indexing Queue
+        # is one.
         "graph-canvas",
     }
     action_verbs = (".click(", ".fill(", ".select_option(", ".press(", "page.mouse.click", ".evaluate(")
@@ -545,9 +539,8 @@ def test_chat_debug_question_via_browser(page: Page) -> None:
     )
     history = page.locator("#chat-history").inner_text().lower()
     assert "error" not in history[:100], f"Error in chat response: {history[:200]!r}"
-    # Re-pointed off community enrichment, which was DeepSeek's job and left with tier 3. Staleness
-    # is the surviving equivalent — embed_signature vs. the store's stamp — and the keywords are
-    # still terms the answer has to reach for rather than words echoed back from the question.
+    # The keywords must be terms the answer has to reach for — here, the staleness the debug view
+    # reports (embed_signature vs. the store's stamp) — never words echoed back from the question.
     assert any(k in history for k in ("index", "stale", "chunk", "embed")), (
         f"Debug answer must mention domain keywords: {history[:300]!r}"
     )

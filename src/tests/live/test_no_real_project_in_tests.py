@@ -55,11 +55,9 @@ _LIST_PROJECTS_ALLOWLIST = {
 # Files exempt from the _RSE-as-data-arg check — they use _RSE/_RSE_SRC only for
 # source-file reads (vendor/, source inspect, scripts/).
 # Every allowlist in this module is keyed on a bare filename and consulted with
-# `if f.name in ...: continue`, so an entry naming a deleted file is a silent no-op rather
-# than a failure — the exact hole R0 has now found eight times. test_okf.py's entry
-# ("_RSE_SRC for vendor/okf + sweeps.py source reads") left with tier 3 and is dropped here;
-# there is no exhaustiveness test to catch the next one, which is why they are pruned by
-# hand alongside each deletion.
+# `if f.name in ...: continue`, so an entry naming a deleted file is a silent no-op rather than a
+# failure. There is no exhaustiveness test to catch that, so prune these by hand whenever an
+# allowlisted test file is deleted or renamed.
 _RSE_DATA_ALLOWLIST = {
     "_sample_workspace.py",  # _REPO_ROOT for vendor source reads
     "test_browser.py",       # reads dashboard.html from repo

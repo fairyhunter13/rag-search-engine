@@ -328,7 +328,6 @@ def build_sample_workspace() -> SampleWorkspace:
     _index_members([fed_root, *member_paths, ledger])
     for p in [*member_paths, ledger]:
         label_member(p)
-    # reconstruct_processes (BPRE) and build_federated_index (wiki) ran here; both left with tier 3.
     return SampleWorkspace(
         base=base,
         fed_root=fed_root,

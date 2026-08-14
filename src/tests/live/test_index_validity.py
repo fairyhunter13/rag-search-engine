@@ -98,10 +98,7 @@ class TestIndexValidity:
     def test_indexed_at_fresh(self, key: str, validate_reports: dict) -> None:
         assert _chk(validate_reports, key).get("indexed_at_fresh") is True
 
-    # Four process_graph checks stood here until 2026-07-28 — one red, three vacuous. The
-    # `process_graph` block in a validate report was written by BPRE, which left with tier 3, so
-    # the key is now absent everywhere: "federation root has one" fails, and the two edge checks
-    # read `.get("process_graph", {})` and then assert `.get(k, 0) == 0` against that empty dict,
-    # which no defect can disturb. `test_standalone_no_process_graph` went the other way — it
-    # asserted absence, and absence is now unconditional. test_feature_proof.py is where tier-3
-    # reintroduction is guarded; these were validity checks with no subject left.
+    # Every check here must read a key some writer still produces. `.get(block, {}).get(k, 0) == 0`
+    # against a block nothing writes is a pass no defect can disturb, and asserting a key's absence
+    # once it is unconditional tests nothing. Guarding that a retired block stays retired is
+    # test_feature_proof.py's job, not this file's.

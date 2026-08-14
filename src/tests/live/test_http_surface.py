@@ -66,12 +66,6 @@ def test_api_sweeps_pause_resume(live_client):
             )
 
 
-# /api/events/stream left with tier 3. Its only publisher was the pipeline job runner
-# (build_wiki / docgen / okf), so `publish_event` had no callers after R0 and the bus could only
-# emit its own "connected"/"keepalive" frames — this test would have kept asserting the
-# content-type of an empty stream. The route now joins the `deleted` list in
-# test_server.py::test_e7_trimmed_http_surface, which demands a hard 404/405 for it.
-
 
 def test_api_graph_export(live_client, project):
     r = live_client.get(f"/api/graph_export?project={project}")
@@ -131,11 +125,7 @@ def test_api_storage_health(live_client):
     assert isinstance(r.json(), dict)
 
 
-# Six route tests left with tier 3: /api/wiki, /api/wiki/page, /api/wiki/export, /api/kb_health,
-# /api/build_wiki and /api/process/bpmn (BPRE's process graph, whose `root_process_db` went with
-# it). Five of the six accepted `in (200, 404)` or `in (400, 404)`, which is the shape of a guard
-# that cannot witness its own subject: they stayed green whether the route existed or not, and
-# they stayed green after R0a deleted it. Only kb_health demanded a hard 200, and that one was
-# simply red. So the property is not re-pointed here — it moves to
-# test_server.py::test_e7_trimmed_http_surface, whose `deleted` list names all six and requires
-# a hard 404/405. The `fed_root` fixture goes with process/bpmn, its only consumer.
+# Assert one status code, never `in (200, 404)`. Six route tests here accepted a pair like that
+# and so stayed green whether their route existed or not — including after it was deleted. A
+# route's absence is asserted in test_server.py::test_e7_trimmed_http_surface, which requires a
+# hard 404/405; a route's presence is asserted here, with a hard 200.
