@@ -1,4 +1,4 @@
-"""MCP tool matrix — all 4 tools × all variants not already in test_p5_server.
+"""MCP tool matrix — all 4 tools × all variants not already in test_server.
 
 Covers (no duplication of test_p5 or test_p21):
   - graph: all 6 relations (definition/callers/callees/impact/impact_narrative/path)
