@@ -210,9 +210,6 @@ def test_fp17_no_llm_in_graph_handler():
         "semantic_trace re-introduced in query/graph_handler (HR9 violation: LLM in query path)"
 
 
-# fp18 asserted /api/build_wiki had *replaced* /api/build_hierarchy — a Phase-1b succession
-# guard whose winning side R0a then deleted. It could not simply be inverted here: its
-# `in (400, 404)` acceptance means it stayed green against a route that no longer exists,
-# which is the shape of a guard that has quietly stopped discriminating. The surviving
-# statement lives in test_server.py::test_e7_trimmed_http_surface, whose `deleted` list
-# now names /api/build_wiki, /api/wiki and /api/kb_health and demands a hard 404/405.
+# A route that must stay gone is asserted in test_server.py::test_e7_trimmed_http_surface, whose
+# `deleted` list demands a hard 404/405. Not here, and never as `in (400, 404)` — that acceptance
+# is green whether the route exists or not, which is a guard that has stopped discriminating.

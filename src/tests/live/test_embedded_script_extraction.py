@@ -66,11 +66,6 @@ def test_vue_script_calls_have_correct_line_offset():
     assert calls.get("fetch") == 12
 
 
-# test_vue_call_sites_continue_order_index left with tier 3 alongside extract_call_sites.
-# The property it protected — a <script> block's calls continue the outer counter rather than
-# restarting — is still covered for the live path by the line-offset test above, which asserts
-# the same traversal through extract_calls_with_lines.
-
 
 def test_svelte_script_symbols_and_calls():
     from rag_search.graph.extractor import extract_calls_with_lines, extract_symbols

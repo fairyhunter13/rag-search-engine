@@ -40,11 +40,6 @@ def test_mcp_handlers_have_no_llm_generation():
         "server/mcp.py calls gh.semantic_trace() — this calls LLM; "
         "use gh.path_between() + structured JSON instead"
     )
-    # `assert "run_ask" in text` stood here, and in E5. Its intent was "the MCP ask handler must
-    # delegate to the LLM-free helper rather than inlining generation". The `ask` tool is gone from
-    # MCP, so that subject no longer exists and the assertion would now demand mcp.py import a
-    # module it has no reason to touch. The invariant it was protecting outlives it and is stated
-    # directly below: mcp.py reaches no context-assembly path at all.
     assert "query.ask" not in text and "run_ask" not in text, (
         "server/mcp.py references query/ask.py — `ask` was retired from the MCP surface; "
         "the architecture axis is overview(what='communities'), and ask.py is now reachable only "

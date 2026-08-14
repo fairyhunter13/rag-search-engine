@@ -21,18 +21,15 @@ pytestmark = pytest.mark.live
 
 _ROOT = Path(__file__).resolve().parents[2] / "rag_search"
 
-# kb/bpre_ast.py left with tier 3, taking `scan_file` and `_scan_pb_go_file` — the only two
-# _WORKER_FUNCS entries it owned — with it. Unlike the seven stale-allowlist holes this
-# deletion has turned up elsewhere, this entry could not have gone silent:
-# test_worker_modules_are_exhaustive *reads* each whitelisted path, so a deleted module fails
-# with FileNotFoundError rather than passing an empty check. That is the shape an allowlist
-# guard has to have — assert the exception still describes something real, don't just skip it.
-# `graph/php_receivers.py` joined on 2026-08-04 (e13). Its parse is not an exception to HR39 —
-# it is *inside* the bound: `parse_facts` is called only from `extract_all`, which is what
-# `run_bounded` executes, so the segfault this guard exists to contain still happens in the
-# subprocess and not in the daemon. Whitelisting the module is the honest fix; routing it through
-# `run_bounded` would mean a second IPC round trip per PHP file to re-parse a tree the worker is
-# already holding. `test_worker_modules_are_exhaustive` keeps the entry truthful.
+# An allowlist entry naming something that no longer exists can never fire, so both lists below
+# must stay pruned. `test_worker_modules_are_exhaustive` enforces that for the modules by *reading*
+# each whitelisted path: a deleted module fails with FileNotFoundError rather than passing an
+# empty check, which is the shape an allowlist guard has to have.
+# `graph/php_receivers.py` is whitelisted rather than routed through `run_bounded`: its
+# `parse_facts` is called only from `extract_all`, which is what `run_bounded` already executes,
+# so the segfault this guard contains still happens in the subprocess and not in the daemon.
+# Routing it separately would mean a second IPC round trip per PHP file to re-parse a tree the
+# worker is already holding.
 _WORKER_MODULES = {"graph/extractor.py", "graph/php_receivers.py"}
 _PARSE_CALL_RE = re.compile(r"get_parser\([^)]*\)\.parse\(|\bparser\.parse\(")
 _WORKER_FUNCS = (
@@ -43,18 +40,10 @@ _WORKER_FUNCS = (
     # an unbounded parse in whatever process made the call. Nothing calls it that way today.
     "parse_facts(",
 )
-# `extract_calls(` left this tuple with the function on 2026-07-31 — deleted as dead *and* wrong
-# (it walked rung-1 injections, which enrols CSS `var()`/`rgba()` as code call edges). Removed
-# rather than left behind for the reason the comment below gives about `extract_call_sites(`: an
-# entry naming a function that no longer exists can never fire.
 # `extract_symbols_with_stats(` is listed separately because `extract_symbols(` does not match
-# it — the next character is `_`, not `(`. It became the real entry point when the per-file
-# extraction record landed (`extract_symbols` is now a thin delegate), so an allowlist naming
-# only the delegate would let the function that actually parses be called unbounded. This is
-# the same stale-allowlist shape the comment above warns about, caught while adding it.
-# extract_call_sites( was the fourth entry and left with tier 3 (BPRE was its only caller).
-# Dropped rather than kept: an entry naming a function that no longer exists can never fire,
-# which is the stale-allowlist hole the comment above is about.
+# it — the next character is `_`, not `(`. It is the real entry point (`extract_symbols` is a thin
+# delegate), so an allowlist naming only the delegate would let the function that actually parses
+# be called unbounded.
 
 
 def _all_py_files() -> list[Path]:

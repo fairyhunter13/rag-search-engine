@@ -166,10 +166,8 @@ def test_no_local_llm_tokens_anywhere_in_src():
 # Canonical allowlist: the ONLY files permitted to use rerank_passages.
 # query/search.py    — defines rerank_passages (GPU cross-encoder)
 # query/ask.py       — calls it for AXIS-B community context ranking
-# kb/resolve_rerank.py was the third entry — BPRE's Tier-1.75 bridge, the one place kb/ was
-# allowed to reach the cross-encoder. It left with tier 3, and the entry has to leave with it:
-# the loop below asserts every allowlisted file *exists*, so a stale entry fails outright rather
-# than quietly exempting whatever later takes that path.
+# An entry leaves when its file does: the loop below asserts every allowlisted file *exists*, so a
+# stale entry fails outright rather than quietly exempting whatever later takes that path.
 _RERANK_ALLOWLIST = frozenset({
     "query/search.py",
     "query/ask.py",

@@ -50,11 +50,8 @@ def _collect_chat_events(live_client, project: str, msg: str, timeout: int = 60)
     return events
 
 
-# The two /api/events/stream tests left with tier 3 along with the route. Its only publisher was
-# the pipeline job runner (build_wiki/docgen/okf); with that gone the stream could only ever emit
-# its own "connected" and "keepalive" frames, so both tests would have kept passing over a bus with
-# nothing on it — an assertion that survives the thing it was written to observe. chat_stream is
-# the surviving SSE surface and the rest of this module covers it.
+# A stream test must assert on a frame some producer wrote, not on the transport's own
+# "connected"/"keepalive" frames — those keep passing over a bus with nothing on it.
 
 
 @pytest.fixture(scope="module")
