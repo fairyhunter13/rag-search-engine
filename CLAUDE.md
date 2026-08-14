@@ -1,7 +1,7 @@
 # rag-search-engine — Claude Code Instructions
 
-Instructions only. Rationale and incident history live in `docs/decisions/`; the machine-checked
-invariants live in `docs/world-model/model.yaml`. Don't restate either here.
+Instructions only. Rationale and incident history live in `docs/decisions/`; the write-path spec
+lives in `docs/architecture/`. Don't restate either here.
 
 ## Mandatory tool-use protocol (no exceptions)
 
@@ -92,23 +92,21 @@ store re-derived with the daemon's old in-memory code and the new fingerprint. S
 
 ## Invariants
 
-All governing laws live in `docs/world-model/model.yaml` — P0–P18, HR1–HR41 — and that file is
-the single source of truth. Do not restate them here.
-
-- Check the working tree: `python scripts/check_world_model.py` (GPU-free, daemon-free)
-- Read them: the `world-model` skill · doctrine ladder: the `info-hierarchy` skill
-- Regenerate those skills after editing `model.yaml`: `python scripts/gen_world_model_skills.py`
-- Why a rule exists, and what it cost to learn: `docs/decisions/`
+Every rule is enforced by a test, and the test is the rule's definition. The write-path spec is
+`docs/architecture/federation-ops-and-invariants.md`, whose §14 map names the guard for each and
+is itself gated by `test_coverage_map_names_resolve`. Why a rule exists, and what it cost to
+learn: `docs/decisions/`.
 
 Four stated inline because violating them fails silently rather than loudly:
 
-- **GPU-only** (P0) — all inference on CUDA. CPU fallback must raise fatally, never degrade
-  quietly. Exactly two residents: the embedder and the cross-encoder reranker.
-- **No regex, keyword lists, or mapping tables for code semantics** (P6, HR15) — tree-sitter
-  structure only, with no LLM escape hatch to fall through to.
-- **No mocks** (P8) — real daemon, real GPU, real embedder.
-- **Public repo** (P18, HR34) — no secrets, real device paths, usernames, or company names; every
-  machine-specific value is `os.environ.get(...)` in `core/config.py`.
+- **GPU-only** — all inference on CUDA. CPU fallback must raise fatally, never degrade quietly.
+  Exactly two residents: the embedder and the cross-encoder reranker. (`core/gpu.py`,
+  `test_gpu_autodetect.py`)
+- **No regex, keyword lists, or mapping tables for code semantics** — tree-sitter structure only,
+  with no LLM escape hatch to fall through to. (`test_no_code_semantic_regex.py`)
+- **No mocks** — real daemon, real GPU, real embedder. (`test_no_mocks_or_fakes.py`)
+- **Public repo** — no secrets, real device paths, usernames, or company names; every
+  machine-specific value is `os.environ.get(...)` in `core/config.py`. (`test_public_hygiene.py`)
 
 ## Project quick reference
 
