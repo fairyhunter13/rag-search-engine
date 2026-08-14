@@ -185,9 +185,9 @@ def run_graph(
                 f"{', '.join(names[:5])}{'...' if len(names) > 5 else ''}."
             ),
         })
-    # Everything above returned; only `path` is left. It used to be the fallthrough, which is how
-    # `semantic_trace` outlived its implementation (deleted in 3fe4b29): the name stayed advertised
-    # in the tool docstrings and quietly answered with path semantics instead of erroring.
+    # Everything above returned; only `path` is left — and it must reject rather than absorb an
+    # unknown relation. As a fallthrough it once answered for a retired relation with `path`
+    # semantics, so the retired name stayed advertised in the tool docstrings and never errored.
     if relation != "path":
         return _dump({"error": f"unknown relation={relation!r}", "valid": sorted(_RELATIONS)})
     _note = "call paths are per-member; cross-repo paths are not represented"

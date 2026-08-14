@@ -166,9 +166,9 @@ def clean_orphans(
         orphan_dirs,
         quarantine,
     )
-    # The ownership test and its floor both live in `core.orphans`: this command deleted the whole
-    # fleet's index once by comparing a registry path against a dir name, and the corrected
-    # comparison then lived here while `maintenance()` kept the broken one. One copy, one fix.
+    # The ownership test and its floor both live in `core.orphans`, and must stay there: a
+    # second copy of that comparison deleted the whole fleet's index once, because only one of
+    # the two copies got fixed.
     #
     # A dry run is refused too. Printing 179 orphan lines and leaving the operator to notice would
     # make the refusal message — the single most useful thing this command can say in that state —

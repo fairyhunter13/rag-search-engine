@@ -172,11 +172,8 @@ async def _api_gpu_release(request: Request) -> JSONResponse:
     })
 
 
-# The /api/events/stream job bus left with tier 3. Its only producer was the pipeline job runner
-# (build_wiki / docgen / okf), so after R0 `publish_event` had no callers and the stream could only
-# ever emit its own "connected" and "keepalive" frames. The dashboard's job chips, which were its
-# only consumer, went with it. Indexing progress is reported by `overview(what="status")`, not by a
-# pushed event — nothing else in the daemon ever published here.
+# Indexing progress is reported by `overview(what="status")`, never by a pushed event: the daemon
+# has no event bus and nothing has ever published to one.
 
 
 def register(app) -> None:
