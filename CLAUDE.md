@@ -29,7 +29,7 @@ ruff check src/rag_search src/tests scripts && python -m compileall -q src/rag_s
 ```
 
 **Markers**: `live` (daemon at :8765 + GPU) · `costly` (spends real Claude session quota via
-`claude -p`; 13 tests) · `exclusive` (needs a quiescent daemon to measure it — CB3/CB4/CB6;
+`claude -p`; 19 tests) · `exclusive` (needs a quiescent daemon to measure it — CB3/CB4/CB6;
 3 tests). `slow` is retired. **Skipping is forbidden** — `test_no_skip_markers_in_live_suite`; a
 marker chooses which suite a test belongs to, it never lets one pass without running.
 
