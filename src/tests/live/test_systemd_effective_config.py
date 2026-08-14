@@ -1,11 +1,11 @@
 """SE1-SE2: the versioned systemd drop-ins are the configuration actually in force.
 
-Residue N1 from the 07-30 federation-exclusion work. Five operator drop-ins are versioned under
-`scripts/systemd/`, and nothing compared them to the host — so the repo copy is a template people
-reach for as a backup while being free to drift from it. Delete `indexing-throughput.conf` from the
-live drop-in dir and `RSE_EMBED_BATCH` falls 32 -> 8 and `MemoryHigh` 4G -> 3G: a ~4x indexing
-throughput regression with nothing red anywhere. `test_systemd_dropins_target_deployed_unit` checks
-only the *directory name*; FE8 checks only that one env var is non-empty.
+Five operator drop-ins are versioned under `scripts/systemd/`, and without this file nothing
+compares them to the host — the repo copy reads as a backup while being free to drift from it.
+Delete `indexing-throughput.conf` from the live drop-in dir and `RSE_EMBED_BATCH` falls 32 -> 8,
+`MemoryHigh` 4G -> 3G: a ~4x indexing throughput regression with nothing else red anywhere
+(`test_systemd_dropins_target_deployed_unit` checks only the directory name, FE8 only that one
+env var is non-empty).
 
 ## What is compared against what, and why not the files
 

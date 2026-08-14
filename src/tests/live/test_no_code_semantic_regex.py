@@ -1,46 +1,23 @@
 r"""Engine-wide guard: no code-semantic regex anywhere outside two intrinsic-mechanism files.
 
-HR15 bans regex AND static/dynamic keyword-list / mapping-table heuristics for semantic
-inference (surface-text guessing). The doctrine outlives tier 3; what changed is that the
-guard no longer needs two categories to express it.
+No regex, and no static or dynamic keyword-list / mapping-table heuristic, may be used for
+semantic inference — surface-text guessing about what code *means*. Structure comes from
+tree-sitter or it does not come at all.
 
 Category-B — intrinsic mechanism, explicitly exempt:
   core/registry.py            — tier-suffix strip on registry keys (_re.compile)
   core/config.py              — project-name slug plumbing (re.sub)
 
-`graph/extractor.py` and `index/discover.py` left the list 2026-07-28: neither imports `re` at
-all any more, and an exemption for a module that does not use the thing exempted is a hole — a
-future regex added to either would inherit the pass. The dead-entry test below is what found it.
+An exemption for a module that does not use the thing exempted is a hole: a regex added there
+later inherits the pass. `test_category_b_allowlist_has_no_dead_entries` below is what keeps the list honest.
 
-**The detector is alias-aware, and was not.** `core/registry.py` writes `import re as _re`, so
-the old `\bre\.(…)` pattern could not see its `_re.compile` — the entry read as dead while the
-module was using regex, and any module could have gone invisible the same way by renaming the
-import. Binding names are now read off the import statement (`_re_hits`).
+**The detector is alias-aware.** `core/registry.py` writes `import re as _re`, and a `\bre\.(…)`
+pattern cannot see its `_re.compile` — so any module could go invisible by renaming the import.
+Binding names are read off the import statement instead (`_re_hits`).
 
-Category-A was the list of modules that had *eliminated* their regex and had to stay that
-way: the five kb/bpre*.py files, kb/patterns.py, and server/_overview.py's service
-detection. Every one of them left with tier 3, and with them the docstring's long
-justification of which closed vocabularies counted as ground truth rather than heuristics
-(`_V`, `_SCHEMES`, `_GRP_SFXS`, the protoc/Spring codegen-contract naming) — none of those
-tables exist any more.
-
-**The guard got stronger, not weaker.** With Category-A empty, every module in the package
-except the two above is now checked, and checked against the *wide* pattern set
-(compile/finditer/findall/search/match/fullmatch/sub/subn) that only Category-A used to
-face — the tree-wide sweep previously screened compile/finditer alone. Measured at the
-deletion: zero hits outside the exempt files, re-measured 2026-07-28 with the alias-aware
-detector and the two-entry list.
-
-`_SEMANTIC_HEURISTIC_DEBT` — the registry of surviving heuristics, pinned by exact source
-substring — went with them. It had been **empty since 2026-07-01**, so its guard iterated
-nothing and could not fail; every entry it had ever held named a bpre_spec.py table.
-
-test_extraction_doctrine_e2e.py's E4 used to import this module and re-invoke four of its
-tests by name, so the ratchet ran "in the same run as the extraction proof". That file left
-with tier 3 (its fixtures read BPRE's process_graph.db) and the re-invocation is not
-re-pointed: all four names it called had already been deleted by the rewrite above, so E4
-was raising AttributeError rather than ratcheting anything. The tests below carry the
-doctrine on their own — they are `live`-marked and collected directly.
+Every module in the package except those two is checked, against the wide pattern set
+(compile/finditer/findall/search/match/fullmatch/sub/subn). Measured zero hits outside the
+exempt files, re-measured 2026-07-28 with the alias-aware detector.
 """
 from __future__ import annotations
 
@@ -84,12 +61,10 @@ def _source(mod_name: str) -> str:
 
 
 def test_no_code_semantic_regex_outside_allowlist() -> None:
-    """Every module but the four Category-B files must be free of the wide `re` surface.
+    """Every module but the Category-B files must be free of the wide `re` surface.
 
-    Replaces the Category-A/Category-B pair. The old split existed because the seven
-    Category-A modules were held to the wide pattern set while the tree-wide sweep only
-    screened compile/finditer; with Category-A gone there is no reason to screen the rest
-    of the package less strictly than the modules that left.
+    One list, one strictness: screening most of the package for compile/finditer alone, and only
+    a named few for the wide set, means the modules nobody thought to name are the least guarded.
     """
     violations: list[str] = []
     for py in _ROOT.rglob("*.py"):
@@ -117,8 +92,7 @@ def test_category_b_allowlist_has_no_dead_entries() -> None:
     """Every allowlisted module must exist and actually use `re` — else it is stale.
 
     Without this, an allowlist entry for a deleted module is a silent hole: the exemption
-    survives, and a future file at that import path inherits it. That is precisely how the
-    seven Category-A entries would have failed once kb/ left.
+    survives, and a future file at that import path inherits it.
     """
     dead = [m for m in sorted(_CATEGORY_B_ALLOWLIST) if not _re_hits(_source(m))]
     assert not dead, (
