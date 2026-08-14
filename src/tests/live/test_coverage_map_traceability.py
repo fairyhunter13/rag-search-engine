@@ -4,6 +4,8 @@
 dated record cites. Both are held to the same standard: a citation must resolve, and the escape
 hatch is the table's own strikethrough notation. Since 2026-08-15 the pair is also held to each
 other: every id §13b still holds must reach §14, which is what §14's first line has always claimed.
+§14's File column is held to the same standard as its test names, because a citation to a module is
+a claim about a path and a renamed file breaks it while every `def` it holds still resolves.
 GPU-free, daemon-free, import-free.
 
 Retargeted 2026-08-14 from `docs/world-model/model.yaml`'s L3 register, deleted with the world
@@ -34,16 +36,48 @@ _STRUCK = re.compile(r"~~.*?~~", re.DOTALL)
 _HR_ID = re.compile(r"\bHR(\d+)\b")
 
 
-def _cited_test_names() -> list[str]:
+def _section_rows(heading: str) -> list[str]:
+    """Every data row of the table under `heading`, whole, in document order.
+
+    Stop at the next heading of any depth: §13c follows §13b at h3 and carries its own numbered
+    table (`#1`–`#8`); reading it there would make an id defined by the wrong table.
+    """
     body = _DOC.read_text(encoding="utf-8")
-    section = body.split("## 14. Test coverage map", 1)
-    assert len(section) == 2, f"{_DOC.name} has no '## 14. Test coverage map' section."
-    table = section[1].split("\n## ", 1)[0]
-    rows = [ln for ln in table.splitlines() if ln.startswith("|") and not ln.startswith("|---")]
+    section = body.split(heading, 1)
+    assert len(section) == 2, f"{_DOC.name} has no '{heading}' section."
+    table = re.split(r"\n#{2,3} ", section[1], maxsplit=1)[0]
+    return [
+        ln for ln in table.splitlines() if ln.startswith("|") and not ln.startswith("|---")
+    ]
+
+
+def _cited_test_names() -> list[str]:
     names: list[str] = []
-    for row in rows:
+    for row in _section_rows("## 14. Test coverage map"):
         names += re.findall(r"`(test_\w+)`", _STRUCK.sub("", row))
     return names
+
+
+def _cited_test_modules() -> list[str]:
+    """The modules §14's File column names, unstruck.
+
+    The last cell only, deliberately. Prose in the other two cells legitimately names modules that
+    are gone — "`test_bpre.py` is deleted" is a true sentence, and a scan of the whole row would
+    read eleven such sentences as broken citations. The File column is the one cell that *asserts*
+    a file exists, so it is the one cell that can be held to it.
+    """
+    rows = _section_rows("## 14. Test coverage map")
+    names: list[str] = []
+    for row in rows:
+        cells = row.split("|")
+        if len(cells) < 4:
+            continue
+        names += re.findall(r"`(test_\w+\.py)`", _STRUCK.sub("", cells[-2]))
+    return names
+
+
+def _all_test_modules() -> set[str]:
+    return {p.name for p in _TESTS_DIR.rglob("test_*.py")}
 
 
 def _all_test_names() -> set[str]:
@@ -55,21 +89,8 @@ def _all_test_names() -> set[str]:
 
 
 def _first_cells(heading: str) -> list[str]:
-    """The first cell of every data row under `heading`, in document order.
-
-    Both normative tables key their rows in column one, so both id scans read the same shape.
-    Stop at the next heading of any depth: §13c follows §13b at h3 and carries its own numbered
-    table (`#1`–`#8`); reading it there would make an id defined by the wrong table.
-    """
-    body = _DOC.read_text(encoding="utf-8")
-    section = body.split(heading, 1)
-    assert len(section) == 2, f"{_DOC.name} has no '{heading}' section."
-    table = re.split(r"\n#{2,3} ", section[1], maxsplit=1)[0]
-    return [
-        ln.split("|")[1]
-        for ln in table.splitlines()
-        if ln.startswith("|") and not ln.startswith("|---")
-    ]
+    """The first cell of every data row under `heading`. Both tables key their rows in column one."""
+    return [row.split("|")[1] for row in _section_rows(heading)]
 
 
 def _defined_hr_ids() -> set[str]:
@@ -181,6 +202,34 @@ def test_every_defined_hr_id_is_mapped():
         "§13b row through if the requirement retired — naming a guard inline in §13b does not put "
         "it on the map, which is exactly how HR31, HR34 and HR41 went unmapped:\n"
         + "\n".join(f"  HR{i}" for i in unmapped)
+    )
+
+
+def test_coverage_map_files_resolve():
+    """Every unstruck module §14's File column names must exist under src/tests/.
+
+    The sibling of the test below, and the half it cannot reach. `test_coverage_map_names_resolve`
+    catches a renamed or deleted `def test_…`; it says nothing about the file that holds it. Split a
+    module, move it, rename it and keep the defs — the ordinary shape of a test-file refactor — and
+    the map goes on naming a path that is gone with every guard green.
+
+    Measured when this was written: 60 unstruck refs, 59 resolving, and the one that did not was
+    HR27 — the same row that was the lone retired row in §13b announcing its retirement in prose
+    instead of strikethrough. Every other retired row already writes ``~~`test_bpre.py`~~``. So this
+    needs no allowlist: strikethrough is the escape hatch here as everywhere in these two tables.
+    """
+    cited = _cited_test_modules()
+    assert len(cited) > 40, (
+        f"Only {len(cited)} module names parsed out of §14's File column — the table's shape "
+        "probably changed, and a guard that reads nothing reports the same green as a clean map."
+    )
+    on_disk = _all_test_modules()
+    broken = sorted({m for m in cited if m not in on_disk})
+    assert not broken, (
+        "§14's File column names test modules that do not exist under src/tests/ (a file renamed, "
+        "split or moved without updating the map). Re-point the row at the file that holds the "
+        "proof now, or strike the cell through with `~~…~~` if the proof genuinely left:\n"
+        + "\n".join(f"  {m}" for m in broken)
     )
 
 
