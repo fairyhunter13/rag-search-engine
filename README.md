@@ -1,6 +1,6 @@
 # rag-search-engine (RSE)
 
-Semantic code-search, knowledge-graph, and AI-assistant integration via a 5-tool MCP API
+Semantic code-search, knowledge-graph, and AI-assistant integration via a 4-tool MCP API
 (search / graph / overview / index). Backed by GPU-accelerated embeddings, a GPU
 reranker, and a deterministic tree-sitter call-graph store.
 
@@ -84,9 +84,8 @@ rag-search index /path/to/project
 | Tool | Purpose |
 |---|---|
 | `search` | Semantic code/docs search with GPU-reranked results |
-| `ask` | Assemble architecture context for a codebase question |
 | `graph` | Call-graph analysis (definition / callers / callees / impact) |
-| `overview` | Project metrics, structure, communities, index state |
+| `overview` | Project metrics, structure, communities, index state — `what="communities"` answers the architecture question the retired `ask` tool used to |
 | `index` | Register or remove a project |
 
 ## Verify health
@@ -94,10 +93,10 @@ rag-search index /path/to/project
 ```bash
 .venv/bin/python scripts/check_system.py                    # GPU + deps + daemon
 .venv/bin/python scripts/configure_integrations.py --check  # MCP wiring
-.venv/bin/python scripts/check_world_model.py               # architecture invariants (GPU-free)
 ```
 
-All three should exit 0 with no `[ ]` failures.
+Both should exit 0 with no `[ ]` failures. The architecture invariants are not a separate
+checker — each is enforced by a live test, mapped in `docs/architecture/federation-ops-and-invariants.md` §14.
 
 ## Name ban (`RSE_NAME_BAN`)
 
@@ -130,21 +129,21 @@ src/rag_search/
   embed/   FastEmbed/ONNX GPU embedder + reranker
   index/   file discovery, chunking, sqlite-vec store
   graph/   tree-sitter symbols, call edges, fastgreedy communities
-  kb/      answer_cache (deterministic; all that survives the 2026-07-28 tier-3 deletion)
-  query/   search, ask, reranking pipeline
+  query/   search + reranking pipeline, answer_cache (deterministic; all that survives the
+           2026-07-28 tier-3 deletion), ask.py (context assembly for the dashboard chat and
+           the CLI — retired from the MCP surface, still live behind those two)
   server/  MCP tools, HTTP routes, dashboard
   daemon/  server lifecycle, watcher, sweeps, systemd, federation
-scripts/   check_system.py, configure_integrations.py, check_world_model.py
-docs/      architecture, world-model, info-hierarchy, conformance
+scripts/   check_system.py, configure_integrations.py
+docs/      architecture, decisions, reference
 ```
 
 ## Architecture docs
 
-- `docs/architecture/federation-and-search-engine.md`
-- `docs/architecture/federation-ops-and-invariants.md`
-- `docs/world-model/model.yaml` — governing laws P0–P18, requirements HR1–HR40 (both registers
-  keep the ids of retired entries, so the numbering never gets reused)
-- `docs/info-hierarchy.md` — the DIKW doctrine, now covering the deterministic layers only
+- `docs/architecture/federation-and-search-engine.md` — how the engine and federation work
+- `docs/architecture/federation-ops-and-invariants.md` — the write-path spec, plus the §14 map
+  from each invariant to the live test that proves it
+- `docs/decisions/` — why a rule exists and what it cost to learn
 
 ## License
 

@@ -51,23 +51,24 @@ _LEGACY_TOKEN_PATTERNS = [
     r"opencode-index",
 ]
 
-# Files exempt from the legacy-token ban entirely (this guard file + generated skills, which
-# are regenerated from already-renamed sources via scripts/gen_world_model_skills.py).
+# Files exempt from the legacy-token ban entirely. Only this guard file, which has to spell the
+# banned tokens out to ban them. The two generated skills that used to sit here left with the
+# world model on 2026-08-14; nothing else has ever needed an exemption, and each one added
+# narrows the guard by exactly one file.
 _LEGACY_TOKEN_ALLOWLIST_FILES = {
     f"src/tests/live/{_THIS_FILE}",
-    ".claude/skills/world-model/SKILL.md",
-    ".claude/skills/info-hierarchy/SKILL.md",
 }
 
 # Substrings that legitimately contain a legacy-looking token but are genuine external-product
 # references, not this project's own branding — any matching line is exempt from the ban.
 _EXTERNAL_PRODUCT_ALLOWLIST_SUBSTRINGS = [
     "OpenCode",    # Title-case: the external OpenCode CLI product (integration removed, still named in prose/tests)
-    # The docgen vendor package was deleted 2026-07-28. These two survive only as the package's
-    # real name inside dated audit records (docs/CONFORMANCE_EVALUATION.md §5), which are kept as
-    # written — renaming history to match a later decision loses the trail of why it changed.
-    "ose_docgen",  # retired package import, named in dated audit records only
-    "ose-docgen",  # retired repo/dir name, named in dated audit records only
+    # The docgen vendor package was deleted 2026-07-28; `ose_docgen` survives as the package's
+    # real name in one provenance line (core/claude_profiles.py:3), kept as written — renaming
+    # history to match a later decision loses the trail of why it changed. The `ose-docgen`
+    # entry beside it was dropped 2026-08-14 with its last occurrence: an allowlist entry that
+    # matches nothing still widens the hole it opens.
+    "ose_docgen",  # retired package import, named in one provenance note
 ]
 
 
@@ -456,7 +457,7 @@ def test_runtime_config_is_env_driven() -> None:
 # CLAUDE.md is loaded verbatim into every agent session, so its size is a per-turn tax paid by
 # every profile. It grew 4.5 KB -> 23 KB between 2026-06-26 and 2026-07-30 because each change
 # appended its own post-mortem; the 2026-07-31 trim took it to ~5.5 KB by moving narrative to
-# docs/decisions/ and invariants to docs/world-model/model.yaml. This ceiling keeps it there.
+# docs/decisions/ and invariants to the architecture spec. This ceiling keeps it there.
 _CLAUDE_MD_MAX_BYTES = 8_000
 
 
@@ -502,6 +503,6 @@ def test_claude_md_stays_an_instruction_file() -> None:
     assert size <= _CLAUDE_MD_MAX_BYTES, (
         f"CLAUDE.md is {size} bytes (ceiling {_CLAUDE_MD_MAX_BYTES}). It loads into every "
         "session, so growth here is paid on every turn. Incident narrative and rationale belong "
-        "in docs/decisions/; invariants belong in docs/world-model/model.yaml. Raise this ceiling "
+        "in docs/decisions/; invariants belong in docs/architecture/. Raise this ceiling "
         "only if the added text changes what an agent does next."
     )

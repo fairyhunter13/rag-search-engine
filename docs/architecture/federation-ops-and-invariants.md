@@ -203,9 +203,10 @@ resolve**. Every row below now either names a test that exists or is struck thro
 Two shapes recur and are worth telling apart: a row whose *invariant* retired (HR11, HR13, HR14,
 HR16–HR19, HR23, HR36) is struck through, while a row whose invariant is live but whose *test file*
 left (#6, #7, HR2, HR4, HR7, HR12, HR15, HR20, HR29, §16, both HR32 rows) is **re-pointed at its
-successor** — the invariant never lapsed, only its proof moved. `test_l3_rtm_all_tests_resolve`
-enforces the same property for `model.yaml`'s L3 register; this table has no such gate, which is how
-it drifted, and rebuilding one is the standing follow-up.
+successor** — the invariant never lapsed, only its proof moved. **Gated since 2026-08-14**:
+`test_coverage_map_names_resolve` reads this table and fails if any name it cites in backticks is
+not a live `def test_…`. Strikethrough is the escape hatch, and the only one — a proof that leaves
+must be struck in the same edit, which is how the drift above became invisible for so long.
 
 | Invariant | Test | File |
 |---|---|---|
@@ -213,13 +214,13 @@ it drifted, and rebuilding one is the standing follow-up.
 | #2 members first-class | `test_inv2_members_first_class` | `test_federation_architecture.py` |
 | #3 federation authoritative | `test_inv3_federation_authoritative` | `test_federation_architecture.py` |
 | #4 logical-repo coverage | `test_inv4_root_scoped_search_fanout` | `test_federation_logical_entity.py` |
-| #6 forbidden root | `test_inv6_forbidden_root` + `test_index_tool_rejects_forbidden_root` *(re-pointed 2026-07-28 — `test_upsert_project_rejects_forbidden_root` left with `test_p22_kb_e2e.py`)* | `test_federation_architecture.py` / `test_p5_server.py` |
+| #6 forbidden root | `test_inv6_forbidden_root` + `test_index_tool_rejects_forbidden_root` *(re-pointed 2026-07-28 — ~~`test_upsert_project_rejects_forbidden_root`~~ left with `test_p22_kb_e2e.py`)* | `test_federation_architecture.py` / `test_p5_server.py` |
 | #7 idempotency | `test_p22_incremental_reindex_idempotent`, `test_p21_community_count_stable_on_redetect`, `test_needs_labels_clears_after_a_labelling_pass` *(re-pointed 2026-07-28 — labelling is the successor property, and it is held more strongly than enrichment held it)* | `test_p6_daemon.py` |
 | #8 cascade remove | `test_inv8_cascade_remove` | `test_federation_architecture.py` |
 | HR1 watcher→index | `test_p34_watcher_updates_vector_index` | `test_p6_daemon.py` |
 | HR2 watcher→graph / event-driven *(was "watcher→KB", 2026-07-28)* | `test_watcher_labelling_e2e`, `test_on_change_wires_graph_labelling` | `test_p6_daemon.py` |
 | HR3 labelling idempotence *(was "enrichment", 2026-07-28)* | `test_detect_communities_idempotent` | `test_p3_graph.py` |
-| HR4 federation fan-out | `test_inv4_root_scoped_search_fanout` + `test_p20_index_members_discovers_federation_members` *(re-pointed 2026-07-28 — `test_real_federation_fanout` left with `test_p22_kb_e2e.py`; the surviving pair still covers both halves, discovery and query fan-out)* | `test_federation_logical_entity.py` / `test_p6_daemon.py` |
+| HR4 federation fan-out | `test_inv4_root_scoped_search_fanout` + `test_p20_index_members_discovers_federation_members` *(re-pointed 2026-07-28 — ~~`test_real_federation_fanout`~~ left with `test_p22_kb_e2e.py`; the surviving pair still covers both halves, discovery and query fan-out)* | `test_federation_logical_entity.py` / `test_p6_daemon.py` |
 | HR5 one path → one index | `test_inv2_members_first_class` + `test_inv8_cascade_remove` | `test_federation_architecture.py` |
 | HR6 GPU-only | `test_no_cpu_fallback`, `test_embedder_bound_to_gpu` | `test_p1_smoke.py` |
 | HR7 index_state → ready *(renamed with the HR7 row, 2026-07-28)* | `test_overview_status_has_index_state`, `test_index_state_demoted_when_degenerate` | `test_p5_server.py` / `test_hierarchy_quality.py` |
@@ -249,7 +250,7 @@ it drifted, and rebuilding one is the standing follow-up.
 | HR29 config universality — every enumerator | `test_hh1_full_index_baseline`, `test_hh2_on_change_filters_excluded`, `test_hh3_code_walk_honours_exclude`, `test_hh4_code_walk_universal_discovery`, `test_hh5_is_code_language_contract` *(re-pointed 2026-07-28 — HH3's "cross-surface" pair was the spine and BPRE walks; the surviving cross-surface claim is that every enumerator routes through HR35's `_should_drop`)* | `test_config_universality.py` |
 | HR30 MCP surface integrity | `test_mcp_has_four_tools` | `test_p5_server.py` |
 | HR32 idle-efficiency (source-drift gate + idle-unload) | `test_drift_gate_skips_labelling_when_sig_unchanged`, `test_drift_gate_triggers_labelling_when_sig_changes` *(renamed with the gate's payload, 2026-07-28)*; idle-unload: `test_p22_idle_unload_clears_embed_singleton`, `test_idle_unload_gc_and_malloc_trim_present`, `test_idle_unload_then_cuda_reload` | `test_idle_stability.py`, `test_p6_daemon.py` |
-| HR32 single-flight heavy work *(was "reconcile bulkification (Part D)", 2026-07-28)* | `test_heavy_lock_serializes_concurrent_passes` — **the one assertion of that row that must not leave**, renamed with `_KB_HEAVY_LOCK` → `_HEAVY_LOCK`. The other three (`test_reconcile_active_flag_lifecycle`, `test_reconcile_bpre_root_pass_unconditional`, `test_bulk_reconcile_suppresses_member_bpre_fanout`) are deleted: `_reconcile_active` and the BPRE fan-out they guarded no longer exist, and a suppression test for a cascade that cannot fire would pass on a dead path. | `test_idle_stability.py` |
+| HR32 single-flight heavy work *(was "reconcile bulkification (Part D)", 2026-07-28)* | `test_heavy_lock_serializes_concurrent_passes` — **the one assertion of that row that must not leave**, renamed with `_KB_HEAVY_LOCK` → `_HEAVY_LOCK`. The other three (~~`test_reconcile_active_flag_lifecycle`~~, ~~`test_reconcile_bpre_root_pass_unconditional`~~, ~~`test_bulk_reconcile_suppresses_member_bpre_fanout`~~) are deleted: `_reconcile_active` and the BPRE fan-out they guarded no longer exist, and a suppression test for a cascade that cannot fire would pass on a dead path. | `test_idle_stability.py` |
 | HR33 notification-first watcher contract | `test_watcher_prefers_inotify_over_poll` | `test_idle_stability.py` |
 | HR37 watchfiles watcher: ignore-filter/coalescing/dynamic-add/root-boundary | `test_wt1_ignored_dir_churn_never_reaches_on_change`, `test_wt2_real_edit_fires_once`, `test_wt3_batch_coalescing_single_call_per_burst`, `test_wt4_dynamic_add_restart_delivers_new_root`, `test_wt5_prefix_sibling_roots_no_misattribution` | `test_idle_stability.py` |
 | HR35 gitignore/hidden-dir-aware discovery with RSE-config precedence | `test_gitignore_respected_root_and_nested`, `test_hidden_dir_skip_tool_caches`, `test_include_overrides_gitignore_exclude_beats_include`, `test_respect_gitignore_false_disables_gitignore_only`, `test_drift_gate_quiescent_under_tool_cache_churn`, `test_is_ignored_path_agrees_with_iter_files` | `test_idle_stability.py` |
@@ -264,7 +265,7 @@ it drifted, and rebuilding one is the standing follow-up.
 | Deletion is authorised at the point of deletion, not by its caller (§15.5) | `test_co6_purging_a_path_outside_the_test_base_is_refused` — `purge_project`/`purge_index_dirs_under` re-derive authority from the path itself via `assert_under_test_base`, and **raise** rather than skip. Written after a red demo of `purge_rows_under` ran a deliberately-broken predicate in-process, through the session fixture that calls it against the *real* registry, deleting 198 fleet rows and 138 stores with no backup and no filesystem snapshot. Every guard above this one lived in the caller, which was the thing that was wrong. Both arms asserted: a guard that refuses everything protects the fleet and breaks the suite. | `test_clean_orphans.py` |
 | A live run never overlaps another live run | `test_sc1_no_contender_is_reported_for_our_own_process_tree`, `test_sc2_a_real_pytest_process_in_this_checkout_is_reported` — the gate had already produced two false positives, including seeing its own process tree, so both directions are pinned | `test_suite_concurrency_gate.py` |
 | Watcher activity is observable, so an idle measurement can validate its own window | `test_hl6_status_counts_completed_passes` (`dispatched` rises once per completed pass and only then); consumed by `test_cb3_idle_cpu_under_one_percent_core`, which discards contaminated windows instead of relaxing its 1% threshold. `pending`/`inflight` are instantaneous and answer "busy now"; they cannot answer "did anything happen while I wasn't looking", and keying on `dispatched` alone let a window falling entirely inside one long pass read as quiet at 2.9% of a core — hence all three, both ends. | `test_watcher_dispatch.py`, `test_cpu_budget.py` |
-| L3 traceability guard | `test_l3_rtm_all_tests_resolve` — machine-verifies every `model.yaml` L3 `test:` name resolves to a live `def test_…` | `test_world_model_traceability.py` |
+| This map is itself gated | `test_coverage_map_names_resolve` — machine-verifies every unstruck name cited above resolves to a live `def test_…` | `test_coverage_map_traceability.py` |
 
 ## 15. Design rationale
 

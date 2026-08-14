@@ -1,6 +1,7 @@
 """P5 server tests: MCP tools, HTTP routes, dashboard (no mocks)."""
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 
@@ -836,6 +837,25 @@ def test_e8b_shipped_mcp_configs_advertise_the_registered_tools():
     assert hermes_cfg["tools"]["index"]["always_allowed"] is False, (
         "hermes.json auto-allows `index`; nothing that deletes a project's data may be "
         "pre-approved in a config we ship."
+    )
+
+    # README is the third mirror, and it drifted for the same reason the two above did: nothing
+    # derived it. It advertised a "5-tool MCP API" over a four-row table that still listed `ask`,
+    # retired in favour of overview(what="communities"). A stranger reads the README before
+    # either JSON file, so it is the copy that must not lie.
+    readme = (Path(__file__).parents[3] / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## MCP tool reference", 1)
+    assert len(section) == 2, "README.md has no '## MCP tool reference' section to check."
+    table = section[1].split("\n## ", 1)[0]
+    documented = set(re.findall(r"^\|\s*`([a-z_]+)`\s*\|", table, re.M))
+    assert documented == registered, (
+        f"README.md documents MCP tools {sorted(documented)}; the server registers "
+        f"{sorted(registered)}. Fix the table, not this assertion."
+    )
+    count_claim = re.search(r"(\d+)-tool MCP API", readme)
+    assert count_claim and int(count_claim.group(1)) == len(registered), (
+        f"README.md's tool-count claim ({count_claim.group(1) if count_claim else 'missing'}) "
+        f"disagrees with the {len(registered)} tools the server registers."
     )
 
 
