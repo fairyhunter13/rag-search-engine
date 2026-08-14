@@ -53,7 +53,7 @@ marker chooses which suite a test belongs to, it never lets one pass without run
 Both paths refuse with **409** while a sweeps pause lease is held (a live suite or
 `scripts/purge_unindexable.py` owns the daemon). The reply carries `lease_remaining_s`;
 `?force=true` overrides; the lease self-expires after 30 min. Guarded by RL1/RL2 in
-`test_p6_daemon.py` — see `docs/decisions/2026-07-29-reload-under-a-sweeps-lease.md`.
+`test_daemon.py` — see `docs/decisions/2026-07-29-reload-under-a-sweeps-lease.md`.
 
 **`systemctl --user restart` bypasses that 409, and the damage is silent and permanent for the run
 (measured 2026-07-31).** `_PAUSED`/`_PAUSE_DEADLINE` are module globals, so a restart clears the lease

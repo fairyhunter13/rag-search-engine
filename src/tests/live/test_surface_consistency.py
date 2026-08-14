@@ -6,7 +6,7 @@ and a skill file that *instructed* agents to call it — answering the whole tim
 semantics, because `path` was the fallthrough. Both its tests passed: one asserted the response was
 a dict, the other asserted the `path` contract. Neither would have failed if it were named `banana`.
 
-`test_p21_capability_parity.py` already ties the `graph`/`overview` MCP docstrings to the
+`test_capability_parity.py` already ties the `graph`/`overview` MCP docstrings to the
 implementation's own constants. Added here: SC1/SC2 the CLI help, SC3 the callers, and — the
 two that matter — SC4 every advertised relation reaches a branch, SC5 every advertised scope is a
 distinct assembly. SC4/SC5 fail on the two shapes these surfaces actually had: a name with no

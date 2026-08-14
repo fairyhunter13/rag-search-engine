@@ -13,7 +13,7 @@ pytestmark = pytest.mark.live
 
 
 @pytest.mark.costly
-def test_p20_capabilities_e2e(safe_tmp_path, federation_root_path):
+def test_capabilities_e2e(safe_tmp_path, federation_root_path):
     """A+B+C+D+E: federation-register, indexed_at stamp, metrics, check, context assembly."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import get_project, remove_project, upsert_project

@@ -20,7 +20,16 @@ it — HR36 is gone, its rule about reuse stamps is not.
 **On the `P#`/`HR#` ids in these records:** they refer to a `docs/world-model/model.yaml`
 register retired on 2026-08-14, which had become a sixth restatement of rules stated and enforced
 elsewhere. The records are kept as written — renaming history to match a later decision loses the
-trail of why it changed — so the ids are read as the labels they were at the time.
+trail of why it changed — so the ids are read as the labels they were at the time. `HR#` still
+resolves: §13b of `docs/architecture/federation-ops-and-invariants.md` is now its one definition
+table. `P#` does not, and did not mean one thing even before — the register's invariants, a
+development phase counter, and an issue-priority ladder all used it.
+
+Same rule for the test files these records cite. Eleven were named for invariants
+(`test_p5_server.py`, `test_p6_daemon.py`, …) and were renamed for what they test
+(`test_server.py`, `test_daemon.py`, …) on 2026-08-14; strip the `p<N>_` to read an older
+citation. Test *function* names still carry phase numbers and were left alone — they are
+identifiers, and §14's coverage map resolves them under a guard.
 
 ## Index
 

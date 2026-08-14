@@ -181,7 +181,7 @@ def test_rerank_passages_only_in_gpu_lane():
 
     Proves 'local GPU = embedding + reranking ONLY' structurally: no module outside
     the allowlist may call the cross-encoder, so it can never become a generative path.
-    Complements test_p5_server.py::test_reranking_is_query_time_only (index/+kb/ only).
+    Complements test_server.py::test_reranking_is_query_time_only (index/+kb/ only).
     """
     base = Path(__file__).parents[2] / "rag_search"
     violations: list[str] = []

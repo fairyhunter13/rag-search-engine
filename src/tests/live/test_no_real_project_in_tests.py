@@ -34,8 +34,8 @@ _LIST_PROJECTS_ALLOWLIST = {
     "_projects.py",            # resolver module (hard-fails now, no registry fallback)
     "_sample_workspace.py",    # stale-workspace cleanup + safe_tmp_path teardown
     "conftest.py",             # sample_workspace builder + safe_tmp_path teardown
-    "test_p5_server.py",       # register/remove round-trip + G5 default-resolution
-    "test_p6_daemon.py",       # registry filter mechanics (test_tg2_unknown_key)
+    "test_server.py",       # register/remove round-trip + G5 default-resolution
+    "test_daemon.py",       # registry filter mechanics (test_tg2_unknown_key)
     "test_index_validity.py",  # registry precondition check (verifies sample paths are registered)
     "test_idle_stability.py",  # IS2: registry health check — must see all entries to find junk
     "test_path_resolution.py",  # self-heal test: list_projects() triggers _migrate() re-keying
@@ -65,9 +65,9 @@ _RSE_DATA_ALLOWLIST = {
     "test_browser.py",       # reads dashboard.html from repo
     "test_no_code_semantic_regex.py",  # scans rag_search source tree
     "test_inference_lanes.py",         # reads scripts/*.py source
-    "test_p20_capabilities.py",        # reads scripts/*.py source
+    "test_capabilities.py",        # reads scripts/*.py source
     "test_feature_proof.py",           # _RSE_SRC for quality.py inspect read (fp16)
-    "test_p5_server.py",               # _RSE_SRC for mcp.py/ask.py/routes_chat.py source reads
+    "test_server.py",               # _RSE_SRC for mcp.py/ask.py/routes_chat.py source reads
     "test_no_real_project_in_tests.py",  # this file
 }
 
@@ -77,10 +77,10 @@ _PROJECTS_PICKER_ALLOWLIST = {
     "test_mcp_protocol_stdio.py",    # counts ≥2, no path extraction
     "test_mcp_protocol_http.py",     # counts ≥2, no path extraction
     "test_golden_parity.py",         # presence check (overview key names)
-    "test_p21_capability_parity.py", # what= coverage check
+    "test_capability_parity.py", # what= coverage check
     "test_http_surface.py",          # /api/projects route status-code check
     "test_mcp_tool_matrix.py",       # overview(metrics/projects) key presence check
-    "test_p5_server.py",             # G5 registry-mechanics: proves first-enabled-project rule
+    "test_server.py",             # G5 registry-mechanics: proves first-enabled-project rule
     "conftest.py",
     "test_no_real_project_in_tests.py",
 }
@@ -110,7 +110,7 @@ _RESULTS_ASSERT_RE = re.compile(r"""assert.*(?:results|total)\b""")
 # Files allowed to call overview_tool("") or graph_tool("symbol_only") because they
 # deliberately test the G5 first-enabled-project resolution rule (registry mechanics).
 _EMPTY_PROJ_ALLOWLIST = {
-    "test_p5_server.py",               # G5: empty project_path resolution mechanics
+    "test_server.py",               # G5: empty project_path resolution mechanics
     "test_no_real_project_in_tests.py",
 }
 # overview_tool("") / ask_tool("","") / graph_tool("symbol") with no project_path arg
@@ -229,7 +229,7 @@ def test_no_empty_project_path_daemon_call():
 
     overview_tool("") and graph_tool(symbol_only) both resolve to the first-enabled registry
     project — a real device project.  Only the deliberate G5 resolution-mechanics tests in
-    test_p5_server.py are permitted to use this pattern.
+    test_server.py are permitted to use this pattern.
     """
     violations: list[str] = []
     for f in _iter_py_files():

@@ -162,7 +162,7 @@ def test_live_daemon_has_mcp_route(live_client):
 
 
 # A retired test asserted that detect_patterns() named ≥1 framework via the LLM rather than a static dict.
-# It was the runtime half of the same pair as test_p14_mcp_readonly's A3 source-guard, and both
+# It was the runtime half of the same pair as test_mcp_readonly's A3 source-guard, and both
 # died with kb/patterns.py — the module behind overview(what="patterns"), the one synchronous
 # DeepSeek round trip that ever sat on a query path.
 
@@ -647,7 +647,7 @@ def test_e5_mcp_query_path_no_generation():
     # `assert "run_ask" in mcp_src` stood here. It guarded "the MCP ask handler delegates rather
     # than inlining generation"; `ask` is off the MCP surface, so the subject is gone and the
     # assertion now points at an import mcp.py should not have. run_ask()'s own LLM-freedom is
-    # guarded at its new home in test_p14_mcp_readonly.test_run_ask_is_llm_free.
+    # guarded at its new home in test_mcp_readonly.test_run_ask_is_llm_free.
     assert "run_graph" in mcp_src, "E5: mcp.py must delegate to run_graph() (DB-reads helper)"
     assert "graph.llm" not in ask_src, "E5: ask.py imports graph.llm (HR9 violation)"
     assert "def ask(" not in ask_src, "E5: ask.py must not have ask() (was LLM-generative)"

@@ -102,7 +102,7 @@ def _diff(old: str, new: str, label: str) -> str:
 #
 # These profiles must NOT carry the doctrine block. The daemon already serves the
 # identical text as MCP server instructions (daemon/global_prompt.py::_PROMPT ==
-# canonical.CANONICAL_BODY, asserted by test_p21_integration_parity.py), so a copy
+# canonical.CANONICAL_BODY, asserted by test_integration_parity.py), so a copy
 # in CLAUDE.md is the same ~500 tokens (measured via /context) paid twice in every
 # session of every profile.
 # The desired state is therefore *absence*, and this target repairs toward it: it
