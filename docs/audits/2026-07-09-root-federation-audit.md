@@ -22,6 +22,12 @@
 > **Device neutrality:** Per P18/HR34 this report contains no real company/project names,
 > home paths, hostnames, or GPU device identifiers. Example paths use placeholders
 > (`<root>`, `member-a`, `member-b`, `foo`/`foo-bar`).
+>
+> **Reading this today:** the conformance checker and invariant register this audit runs and cites
+> were deleted on 2026-08-14 — see `docs/decisions/2026-08-14-the-register-was-a-sixth-copy.md`.
+> The commands below are the record of what was run that day, not instructions; they no longer
+> resolve. `P#` ids do not resolve either. `HR#` still does, at §13b of
+> `docs/architecture/federation-ops-and-invariants.md`.
 
 ---
 

@@ -26,6 +26,13 @@
 > Part D below.
 > **Device neutrality:** Per P18/HR34 this report contains no real company/project names,
 > home paths, hostnames, or GPU device identifiers.
+>
+> **Reading this today:** the conformance checker and invariant register this audit runs and cites
+> were deleted on 2026-08-14 — see `docs/decisions/2026-08-14-the-register-was-a-sixth-copy.md`.
+> The commands below are the record of what was run that day, not instructions; they no longer
+> resolve. `P#` ids do not resolve either. `HR#` still does, at §13b of
+> `docs/architecture/federation-ops-and-invariants.md`. Test files named `test_p<N>_*.py` were
+> renamed the same day; strip the `p<N>_` to read a citation here.
 
 ---
 

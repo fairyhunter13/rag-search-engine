@@ -10,6 +10,12 @@
 > `.gitmodules`/CI repo-identity refs audited — already fork-safe, no change needed. New
 > runnable-by-anyone guard test added.
 > **Device neutrality:** no real names/paths/hostnames/device IDs in this report (P18/HR34).
+>
+> **Reading this today:** the conformance checker and invariant register this audit runs and cites
+> were deleted on 2026-08-14 — see `docs/decisions/2026-08-14-the-register-was-a-sixth-copy.md`.
+> The commands below are the record of what was run that day, not instructions; they no longer
+> resolve. `P#` ids do not resolve either. `HR#` still does, at §13b of
+> `docs/architecture/federation-ops-and-invariants.md`.
 
 ---
 
