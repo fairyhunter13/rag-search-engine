@@ -1,11 +1,11 @@
-"""HTTP surface matrix — all mounted routes not covered by test_p5_server.
+"""HTTP surface matrix — all mounted routes not covered by test_server.
 
 Routes excluded (already in test_p5): /healthz, /dashboard, /api/projects,
 /api/overview, /api/auto_pipeline_status, /mcp. (/api/suggested_questions was on this list and
 is now on test_p5's `deleted` one.)
 
 Routes verified here — this is the *surviving* half after R0; the tier-3 rows this
-docstring used to list are asserted absent by test_p5_server.py::test_e7_trimmed_http_surface:
+docstring used to list are asserted absent by test_server.py::test_e7_trimmed_http_surface:
   GET /               → 200 or redirect
   GET /api/metrics    → 200, and no LLM token accounting
   POST /api/sweeps/*  → 200
@@ -70,7 +70,7 @@ def test_api_sweeps_pause_resume(live_client):
 # (build_wiki / docgen / okf), so `publish_event` had no callers after R0 and the bus could only
 # emit its own "connected"/"keepalive" frames — this test would have kept asserting the
 # content-type of an empty stream. The route now joins the `deleted` list in
-# test_p5_server.py::test_e7_trimmed_http_surface, which demands a hard 404/405 for it.
+# test_server.py::test_e7_trimmed_http_surface, which demands a hard 404/405 for it.
 
 
 def test_api_graph_export(live_client, project):
@@ -137,5 +137,5 @@ def test_api_storage_health(live_client):
 # that cannot witness its own subject: they stayed green whether the route existed or not, and
 # they stayed green after R0a deleted it. Only kb_health demanded a hard 200, and that one was
 # simply red. So the property is not re-pointed here — it moves to
-# test_p5_server.py::test_e7_trimmed_http_surface, whose `deleted` list names all six and requires
+# test_server.py::test_e7_trimmed_http_surface, whose `deleted` list names all six and requires
 # a hard 404/405. The `fed_root` fixture goes with process/bpmn, its only consumer.
