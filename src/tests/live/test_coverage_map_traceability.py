@@ -1,7 +1,10 @@
-"""§14 test-coverage-map traceability guard.
+"""Traceability guards for the two normative tables in `federation-ops-and-invariants.md`.
 
-Every test name the map cites must resolve to a real `def test_…` in src/tests/, unless the
-map itself strikes it through. GPU-free, daemon-free, import-free.
+§14 cites test names; §13b defines the hard-requirement ids that every other table, comment and
+dated record cites. Both are held to the same standard: a citation must resolve, and the escape
+hatch is the table's own strikethrough notation. Since 2026-08-15 the pair is also held to each
+other: every id §13b still holds must reach §14, which is what §14's first line has always claimed.
+GPU-free, daemon-free, import-free.
 
 Retargeted 2026-08-14 from `docs/world-model/model.yaml`'s L3 register, deleted with the world
 model. The mechanism moved rather than retiring with its old subject: the ops doc records at
@@ -11,6 +14,7 @@ register had a gate and this table did not, and that building one was the standi
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +29,9 @@ _TESTS_DIR = _ROOT / "src" / "tests"
 # is also the escape hatch here, and the only one: a test whose proof moved must be struck in the
 # same edit that moves it, which is a visible claim rather than an allowlist nobody rereads.
 _STRUCK = re.compile(r"~~.*?~~", re.DOTALL)
+
+# The hard-requirement id, written the one way §13b's rows write it and every citation spells it.
+_HR_ID = re.compile(r"\bHR(\d+)\b")
 
 
 def _cited_test_names() -> list[str]:
@@ -45,6 +52,136 @@ def _all_test_names() -> set[str]:
         for m in re.finditer(r"def (test_\w+)", py.read_text(errors="replace")):
             names.add(m.group(1))
     return names
+
+
+def _first_cells(heading: str) -> list[str]:
+    """The first cell of every data row under `heading`, in document order.
+
+    Both normative tables key their rows in column one, so both id scans read the same shape.
+    Stop at the next heading of any depth: §13c follows §13b at h3 and carries its own numbered
+    table (`#1`–`#8`); reading it there would make an id defined by the wrong table.
+    """
+    body = _DOC.read_text(encoding="utf-8")
+    section = body.split(heading, 1)
+    assert len(section) == 2, f"{_DOC.name} has no '{heading}' section."
+    table = re.split(r"\n#{2,3} ", section[1], maxsplit=1)[0]
+    return [
+        ln.split("|")[1]
+        for ln in table.splitlines()
+        if ln.startswith("|") and not ln.startswith("|---")
+    ]
+
+
+def _defined_hr_ids() -> set[str]:
+    """The ids §13b defines, struck rows included.
+
+    Strikethrough means the opposite of what it means in §14, and the difference is the whole
+    reason both tables can share this file. A struck §14 row says "this proof left, stop looking
+    for it". A struck §13b row says "this requirement retired" — but its id must go on resolving,
+    because the dated records that cite it are kept as written and cannot be renamed to match a
+    later decision (`docs/decisions/README.md`). Retired is still defined.
+    """
+    ids: set[str] = set()
+    for cell in _first_cells("## 13b."):
+        ids |= {m.group(1) for m in _HR_ID.finditer(cell)}
+    return ids
+
+
+def _live_hr_ids() -> set[str]:
+    """The ids §13b defines and has *not* struck: the requirements still in force.
+
+    Struck ids are dropped here for the same reason they are kept in `_defined_hr_ids` — the two
+    tables read strikethrough oppositely. A retired requirement must stay defined so its dated
+    records resolve, and must not be required to have a live proof in §14.
+    """
+    ids: set[str] = set()
+    for cell in _first_cells("## 13b."):
+        ids |= {m.group(1) for m in _HR_ID.finditer(_STRUCK.sub("", cell))}
+    return ids
+
+
+def _mapped_hr_ids() -> set[str]:
+    """The ids §14 keys a row on. Its other rows are keyed by prose (`#1 no-inlining`, `§15.4`)."""
+    ids: set[str] = set()
+    for cell in _first_cells("## 14. Test coverage map"):
+        ids |= {m.group(1) for m in _HR_ID.finditer(cell)}
+    return ids
+
+
+def _citation_sites() -> list[Path]:
+    """Every tracked file, because a scan set written by hand is a scan set that drifts.
+
+    The first draft of this guard listed `docs/**/*.md`, `src/**/*.py`, `CLAUDE.md` and
+    `README.md`, and missed nine files under `scripts/` that cite these ids — including four
+    systemd drop-ins that are not `.py` at all. That is the same defect as the checker this
+    overhaul deleted, which declared coverage of `docs/` and then enumerated `rglob("*.py")`.
+    `git ls-files` cannot develop that gap: a citation in a directory nobody has created yet is
+    still inside it. 284 tracked files, 2.5 MB, all text.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=_ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    return [_ROOT / p for p in tracked]
+
+
+def test_hr_ids_resolve_in_the_definition_table():
+    """Every hard-requirement id cited anywhere in the tree must have a row in §13b.
+
+    §13b is that table because the 2026-08-14 overhaul's Stage B1 — replace the id column with
+    each rule's name — was reversed on contact: it was written against a `test:` column §13b does
+    not have (guards are named in §14, whose own first column is the id), and the same plan
+    exempted 51 dated records *because* they cite these ids, which only holds while the ids still
+    resolve somewhere. The reversal made §13b the one definition table. This is the gate that
+    keeps it one, so the property stops depending on a check somebody remembered to run by hand.
+    """
+    defined = _defined_hr_ids()
+    assert len(defined) > 30, (
+        f"Only {len(defined)} ids parsed out of §13b — the table's shape probably changed, and a "
+        "guard that reads nothing reports the same green as a table with no dangling citations."
+    )
+    dangling: dict[str, list[str]] = {}
+    for path in _citation_sites():
+        if not path.exists():
+            continue
+        for m in _HR_ID.finditer(path.read_text(errors="replace")):
+            if m.group(1) not in defined:
+                dangling.setdefault(m.group(0), []).append(str(path.relative_to(_ROOT)))
+    assert not dangling, (
+        "These hard-requirement ids are cited but have no row in §13b of "
+        f"{_DOC.name}. Add the row, or re-point the citation at the id that replaced it — a "
+        "citation nobody can follow is how the six drifted copies this table replaced began:\n"
+        + "\n".join(f"  {i} — {', '.join(sorted(set(f)))}" for i, f in sorted(dangling.items()))
+    )
+
+
+def test_every_defined_hr_id_is_mapped():
+    """Every requirement §13b still holds must have a row in the §14 coverage map.
+
+    The mirror of the guard above, and the half that was missing. §14 opens by asserting "Each §13
+    invariant has a corresponding live test that proves it without mocks", and on 2026-08-15 that
+    sentence was false for three ids — HR31, HR34 and HR41, the rows restated into §13b on
+    2026-08-14 when the register was deleted. All three carried their guards inline in the
+    requirement prose and never got a map row, so the entire public-hygiene family and the VRAM
+    release proof were absent from the map while being fully proven in `src/tests/`. Coverage was
+    never the gap; the map was, and an unchecked claim of completeness is the drift shape that
+    overhaul existed to delete.
+
+    Struck §13b rows are exempt: a retired requirement needs no live proof. That is the same
+    strikethrough contract both other tests use, read the way §13b reads it.
+    """
+    live_ids = _live_hr_ids()
+    assert len(live_ids) > 20, (
+        f"Only {len(live_ids)} unstruck ids parsed out of §13b — the table's shape probably "
+        "changed, and a guard that reads nothing reports the same green as a complete map."
+    )
+    unmapped = sorted(live_ids - _mapped_hr_ids(), key=int)
+    assert not unmapped, (
+        "These requirements are defined and in force in §13b but have no row in the §14 test "
+        f"coverage map of {_DOC.name}. Add the row naming the guard that proves it, or strike the "
+        "§13b row through if the requirement retired — naming a guard inline in §13b does not put "
+        "it on the map, which is exactly how HR31, HR34 and HR41 went unmapped:\n"
+        + "\n".join(f"  HR{i}" for i in unmapped)
+    )
 
 
 def test_coverage_map_names_resolve():
