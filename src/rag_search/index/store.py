@@ -49,41 +49,13 @@ _PATH_WEIGHT = 5.0
 # constant rather than a literal so the gate can be re-run against a different value.
 BIN_OVERSAMPLE = 4
 
-# Below this many chunks the two-stage costs more than the scan it replaces, so `search` stays on
-# the float32 lane. The rescore is priced per candidate and is near-constant in store size — vec0
-# fetches each shortlisted vector by rowid, and one batched statement measured identical to 40
-# point queries (13.6 ms either way), so it cannot be amortised — while the exact scan grows with
-# the store: 3.0 ms exact vs 8.5 ms two-stage at 2,536 chunks, 152 ms vs 24 ms at 111,918.
-# Ignoring that made a 193-member federated query 36% *slower* even as its largest member got
-# 1.20x faster, because 97 of 139 stores were paying the overhead to lose. Set above the
-# 6k-12k band, where repeated runs put the two lanes within +-30% of each other in both
-# directions — the crossover is real but not sharp, and the wrong side of it costs ~5 ms.
-#
-# Re-validated 2026-07-30 after the fleet shrank from 2,203,331 chunks to 376,672, which retired
-# every store the numbers above were taken on (largest is now 27,974, was 106,685). ABA over a
-# real 193-member federated query, medians of 5, drift-adjudicated:
-#   - The gate is load-bearing. Ungated (bit lane on all 139 stores) measured 7.24s against
-#     4.12s gated — 1.85x slower, a gap 26x the A-to-A' drift. This is the same regression
-#     `ba1bc86` was written for, and it is still live if the threshold goes away.
-#   - The lane itself is now unmeasurable. Gated vs exact-only came back "no claim" on 3 of 4
-#     queries (gap under drift), and on the one member store above the threshold all four arms
-#     tied on medians (0.598/0.595/0.597/0.634). A first pass reporting min-of-5 on one query
-#     looked like a clean 0.91x win for exact; four queries showed that as the session's warming
-#     trend — A' beat B on 3 of 4 — so it was withdrawn, not shipped.
-# So 12,000 is kept and is *not* re-tuned: with no store big enough to make two-stage win, there
-# is no signal left to tune against, and the value's only remaining job is to keep small stores
-# off the lane, which it does. Deleting the lane is not supported either — nothing measured shows
-# it costing anything, and removal would re-expose the next >100k store. Revisit only when a store
-# in the 100k range comes back, which is the regime the 152ms-vs-24ms figure above describes.
-#
-# Re-checked 2026-07-31 after the corpus-hygiene purge took 56,978 chunks out (13.42% of the
-# fleet), which looked like grounds to re-derive the threshold a fourth time. It is not: the purge
-# landed the fleet on 367,718 chunks against the 376,672 the paragraph above was measured at — 2.4%
-# apart — with the largest store at 28,251 against 27,974, 1.0% apart, and still nothing above 100k.
-# 8 stores sit above the threshold and 11 in the 6k-12k band. The distribution the numbers were
-# taken on is the distribution we still have, so re-running the sweep would spend an hour
-# reproducing the documented "no claim" above. Checking where the stores *are* is the cheap
-# question; re-measuring the crossover is only worth it once one of them moves.
+# Below this many chunks the two-stage costs more than the exact scan it replaces, so `search`
+# stays on the float32 lane. The rescore is near-constant in store size and the scan is not:
+# 3.0 ms exact vs 8.5 ms two-stage at 2,536 chunks, 152 ms vs 24 ms at 111,918. Ungating it made a
+# 193-member federated query 1.85x slower. Do not re-tune this against the current fleet — no store
+# is large enough for two-stage to win, so there is no signal, and the value's remaining job is to
+# keep small stores off the lane. Revisit when a store in the 100k range comes back.
+# Evidence, three validations: docs/decisions/2026-08-14-the-bit-lane-threshold-was-validated-three-times.md
 BIN_MIN_CHUNKS = 12_000
 
 # Stores already reported as lexically unavailable, so the warning is one line per store per
