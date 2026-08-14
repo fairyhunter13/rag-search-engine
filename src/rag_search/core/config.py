@@ -121,7 +121,8 @@ def project_graph_db(project_path: str) -> Path:
 
 
 # Deleting a path builder does not delete what it wrote: retiring the `wiki`/`process_graph.db`
-# writers left 9,016 orphaned files across 161 index dirs, purged separately on 2026-07-29. Not
+# writers left 9,016 orphaned files (97.1 MB) across 161 index dirs, purged separately on
+# 2026-07-29 — the size is here because the files are gone, so nothing can re-measure it. Not
 # residue, despite the era: `index_dir/ask_cache` is live on routes_chat.py and query/ask.py.
 def federation_exclude_paths() -> frozenset[str]:
     """Resolved absolute paths excluded from federation discovery + reconcile indexing.
