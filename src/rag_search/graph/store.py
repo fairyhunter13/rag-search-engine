@@ -93,15 +93,10 @@ def _open(db_path: Path) -> sqlite3.Connection:
             con.execute(f"ALTER TABLE symbols DROP COLUMN {_dead_col}")
     if any(c in _sym_cols for c in ("signature", "docstring", "intent")):
         con.commit()
-    # Schema migration R2: drop the four dead community columns, same DROP COLUMN precedent
-    # as the symbols sweep above. `semantic_type` and `narrated` belonged to the LLM narrator
-    # and its abstention doctrine, both deleted with tier 3 — `semantic_type`'s last writer was
-    # community.py's explicit NULL clobber, and nothing has set `narrated=1` since the narrator
-    # went. `kind` and `path` belonged to the DIKW information spine, whose writers left in the
-    # same deletion: a census over all 160 fleet graphs found `kind` holding exactly one value
-    # ('community', 8793 rows) and `path` never written at all. The Phase-2/3/4D migrations that
-    # added and backfilled them are gone with them; a DB that never saw those migrations has
-    # nothing to drop, which is what the `in _cols` test is for.
+    # Schema migration R2: drop four community columns whose writers left with tier 3, same
+    # DROP COLUMN precedent as the symbols sweep above. Each was censused across all 160 fleet
+    # graphs before being dropped — `kind` held one value in 8,793 rows, `path` was never written.
+    # A DB that never saw the migrations that added them has nothing to drop, hence `in _cols`.
     _dead_community_cols = ("semantic_type", "narrated", "kind", "path")
     for _dead_col in _dead_community_cols:
         if _dead_col in _cols:
@@ -158,8 +153,6 @@ class GraphStore:
     def assign_community(self, sid: str, community_id: int) -> None:
         self._con.execute("UPDATE symbols SET community_id=? WHERE sid=?", (community_id, sid))
 
-    # `summary: str` until 2026-07-31, while `community.py:129` has always passed None on the
-    # first pass and filled it in later. The annotation described a contract no caller kept.
     def upsert_community(self, cid: int, level: int, title: str | None, summary: str | None,
                          member_count: int) -> None:
         self._con.execute(
