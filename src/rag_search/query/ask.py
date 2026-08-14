@@ -3,12 +3,9 @@ from __future__ import annotations
 
 _MAX_CTX = 3000
 
-# The two assemblies `ask` actually has. Five scope names stood here; `wiki` left with tier 3, and
-# `global`/`feature`/`business` were names for orderings of the same two ingredients. Every scope
-# runs the identical chunk search — see run_ask's one _search_fed call, which takes no scope — so a
-# scope only ever chose how the community map was selected and which half came first. `business`
-# was distinguished by a semantic_type filter and `feature` by the unranked selector; both writers
-# left with the narrator, and what remained were aliases advertised as capabilities.
+# The two assemblies `ask` actually has. Every scope runs the identical chunk search — run_ask
+# makes one `_search_fed` call and it takes no scope — so a scope can only choose how the community
+# map is selected. A third name here would be an alias advertised as a capability.
 _SCOPES = ("all", "architecture")
 
 
