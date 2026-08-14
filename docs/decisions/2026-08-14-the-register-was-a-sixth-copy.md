@@ -48,12 +48,56 @@ and `gen_world_model_skills.py`: one retired, two deleted here.
 2026-07-28, amended again since, and still misdescribed three subsystems on the day it was deleted.
 The cost was never the 118 lines — it was that a reader who trusted them was misinformed.
 
-## One reversal, recorded rather than silent
+## Two reversals, recorded rather than silent
 
 `docs/reference/world-model.md` carries an explicit **"Kept, not deleted, on 2026-07-28"** ruling.
 That ruling turned on RSE's own world model being "tier-2 governance machinery that survives
 whole", which stopped being true here. A repo-agnostic essay on what a world model is, in a repo
 that has none, documents nothing this tree contains.
+
+The second reversal is the larger one, and it went unrecorded until 2026-08-15. The plan's stage B
+called for replacing §13b's `HR#` id column with each rule's name, on the reasoning that "a row
+that names its guard needs no number". **§13b names no guards.** It is two columns wide — id and
+requirement — and the guards are named in §14, a different table whose own first column is the id.
+Executing the instruction would have keyed §14 to nothing. The same plan also exempted the 51 dated
+records in `docs/decisions/` and `docs/audits/` *because* they cite these ids as they stood, which
+is an exemption that only holds while the ids still resolve somewhere; stage B would have removed
+the last place they do. So §13b keeps its ids and becomes the one definition table — stated as
+policy in `README.md` here, and gated since 2026-08-15 by
+`test_hr_ids_resolve_in_the_definition_table`, which fails on any id cited in the tree that no row
+defines. A retired requirement's row is struck through and still counts as defined: the records
+citing it are kept as written, so its id must go on resolving.
+
+Two consequences of that reversal, both deliberate, neither obvious from the tree alone:
+
+- **The plan's `git grep -InE '\b(P[0-9]+|HR[0-9]+)\b' -- src docs/architecture README.md CLAUDE.md`
+  → 0 criterion is retired, not failed.** Its `P#` half passed and holds: zero `P` ids remain in
+  those paths. Its `HR#` half now reads 235 and never can read 0, because the definition table and
+  the coverage map are required to be keyed by id. The guard above replaces it, and asks the
+  stronger question — not *are the ids absent* but *do the ids resolve*.
+- **§13b gets no name column; the ten rows that lacked a name got one inline.** Stage B1's
+  readability intent survives its reversal, and the obvious way to honour it — a third column
+  holding each rule's name — was measured against the table and declined. **30 of the 41 rows
+  already open with their name in bold** (`**Tree-sitter only.**`, `**GPU execution provider
+  auto-detect**`, `**Two-tier CPU budget…**`); a column would restate that text three words to its
+  left, on rows running to 3,111 characters, and would add 41 hand-written strings that no test can
+  hold to the requirement beside them. What was actually missing was the convention, not a column:
+  HR1–HR10 predate it and opened as plain prose. Each now bolds the naming clause it already had,
+  so the id column keeps its one job and the name is where the other 30 rows put it. HR27 was
+  struck through in the same pass — it was the only one of the ten retired rows announcing its
+  retirement in prose without the strikethrough the other nine use, and strikethrough is what the
+  guards read.
+- **Gating cited-but-undefined exposed its mirror, defined-but-unmapped.** §14 opens by claiming
+  "Each §13 invariant has a corresponding live test", and on 2026-08-15 that was false for HR31,
+  HR34 and HR41 — the three rows this overhaul restated into §13b, which carried their guards
+  inline in the requirement prose and never reached the map. The whole public-hygiene family and
+  the VRAM-release proof were absent from it while being fully proven in `src/tests/`. Coverage was
+  never the gap; the map was. Rows added, and `test_every_defined_hr_id_is_mapped` now holds §14 to
+  its own first sentence. Struck §13b rows are exempt — a retired requirement needs no live proof,
+  which is the same strikethrough contract read the way each table reads it.
+- **The 31 bare `(HR38)`-style tags left in `src/` were kept on purpose.** The instruction to
+  strip them assumed the ids were about to become meaningless. They did not, so each tag is now a
+  one-hop reference to a definition that exists and is machine-checked.
 
 ## What was kept, and made stronger
 
