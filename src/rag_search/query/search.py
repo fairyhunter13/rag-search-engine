@@ -296,10 +296,9 @@ def search_federation(
         with ExitStack() as es:
             # migrate=False: a query must never pay a store's one-time FTS backfill. Measured at
             # 11.3 s for a single 99 k-chunk member, and this loop opens every federation member.
-            # Reconcile opens stores writable and so does migrate them, but it is not the
-            # convergence path it looks like: measured across the hours after that shipped it
-            # moved 137 owed stores to 136, because its walk is spent on real indexing work and
-            # every live test run pauses it. The backfill is an explicit one-time fleet migration.
+            # Reconcile opens stores writable and does migrate them, but it is not the
+            # convergence path it looks like — measured, it moved 137 owed stores to 136 over
+            # hours. The backfill is an explicit one-time fleet migration.
             #
             # `closing` rather than `with VectorStore(...)`: the class exposes close() and no
             # __enter__/__exit__, and a bare pair of dunders added only to satisfy this call site
