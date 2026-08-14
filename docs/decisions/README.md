@@ -67,6 +67,7 @@ identifiers, and §14's coverage map resolves them under a guard.
 | 2026-08-01 | [The prefix-free escape hatch is not there, and two of the three backlog items were mis-founded](2026-08-01-the-prefix-free-escape-hatch-is-not-there.md) |
 | 2026-08-01 | [An exported edge must name an exported node, and a paired result must stay paired](2026-08-01-an-exported-edge-must-name-an-exported-node.md) |
 | 2026-08-01 | [What the `e8` bump actually owed, written after it shipped](2026-08-01-what-the-e8-bump-actually-owed.md) |
+| 2026-07-31 | [The fast lane's cost baseline, and the fixture-scope lever it refuted](2026-07-31-the-fast-lane-cost-baseline.md) |
 | 2026-07-31 | [The evidence for `EMBED_MODEL` was not in the repo, and the obvious way to measure it saturates](2026-07-31-retrieval-eval-harness.md) |
 | 2026-07-31 | [The idle gate was measuring a neighbour, and underneath that it has almost no headroom](2026-07-31-idle-gate-floor.md) |
 | 2026-07-31 | [A private key was searchable, and a CSV export was waking the graph](2026-07-31-corpus-hygiene.md) |
