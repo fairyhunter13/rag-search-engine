@@ -644,11 +644,9 @@ def test_e5_mcp_query_path_no_generation():
     ask_src = (base / "query" / "ask.py").read_text()
     assert "graph.llm" not in mcp_src, "E5: mcp.py imports graph.llm (HR9 violation)"
     assert "import chat" not in mcp_src, "E5: mcp.py imports chat"
-    # `assert "run_ask" in mcp_src` stood here. It guarded "the MCP ask handler delegates rather
-    # than inlining generation"; `ask` is off the MCP surface, so the subject is gone and the
-    # assertion now points at an import mcp.py should not have. run_ask()'s own LLM-freedom is
-    # guarded at its new home in test_mcp_readonly.test_run_ask_is_llm_free.
-    assert "run_graph" in mcp_src, "E5: mcp.py must delegate to run_graph() (DB-reads helper)"
+    # `ask` is off the MCP surface, so mcp.py must not reference run_ask at all — that direction is
+    # asserted in test_mcp_readonly.py, along with run_ask()'s own LLM-freedom.
+    assert "run_graph" in mcp_src,"E5: mcp.py must delegate to run_graph() (DB-reads helper)"
     assert "graph.llm" not in ask_src, "E5: ask.py imports graph.llm (HR9 violation)"
     assert "def ask(" not in ask_src, "E5: ask.py must not have ask() (was LLM-generative)"
 
@@ -820,9 +818,9 @@ def test_e8b_shipped_mcp_configs_advertise_the_registered_tools():
     claude_cfg = json.loads((config_dir / "claude-code.json").read_text(encoding="utf-8"))
     advertised = set(claude_cfg["mcpServers"]["rag-search"]["alwaysAllow"])
     # `index` is described but never auto-allowed: it writes, and `index(enabled=False)` deletes.
-    # hermes.json has always said so via `always_allowed: false` (asserted below); claude-code.json
-    # allow-listed it anyway until 2026-08-05, contradicting both that file and the server's own
-    # "NEVER auto-index" instruction. An allow-list is the one place the two must not differ.
+    # hermes.json says so via `always_allowed: false` (asserted below) and claude-code.json must
+    # agree — an allow-list is the one place the two configs must not differ, and one that
+    # contradicts the server's own "NEVER auto-index" instruction ships to whoever clones this.
     assert advertised == registered - {"index"}, (
         f"mcp-config/claude-code.json allow-lists {sorted(advertised)}; the server registers "
         f"{sorted(registered)}. A name in one and not the other is a config that configures "

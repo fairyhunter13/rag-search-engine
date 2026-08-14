@@ -93,9 +93,9 @@ def _open(db_path: Path) -> sqlite3.Connection:
             con.execute(f"ALTER TABLE symbols DROP COLUMN {_dead_col}")
     if any(c in _sym_cols for c in ("signature", "docstring", "intent")):
         con.commit()
-    # Schema migration R2: drop four community columns whose writers left with tier 3, same
-    # DROP COLUMN precedent as the symbols sweep above. Each was censused across all 160 fleet
-    # graphs before being dropped — `kind` held one value in 8,793 rows, `path` was never written.
+    # Schema migration R2: drop four community columns whose writers are gone, same DROP COLUMN
+    # precedent as the symbols sweep above. Each was censused across all 160 fleet graphs before
+    # being dropped — `kind` held one value in 8,793 rows, `path` was never written.
     # A DB that never saw the migrations that added them has nothing to drop, hence `in _cols`.
     _dead_community_cols = ("semantic_type", "narrated", "kind", "path")
     for _dead_col in _dead_community_cols:

@@ -63,10 +63,9 @@ _LEGACY_TOKEN_ALLOWLIST_FILES = {
 # references, not this project's own branding — any matching line is exempt from the ban.
 _EXTERNAL_PRODUCT_ALLOWLIST_SUBSTRINGS = [
     "OpenCode",    # Title-case: the external OpenCode CLI product (integration removed, still named in prose/tests)
-    # The docgen vendor package was deleted 2026-07-28; `ose_docgen` survives as the package's
-    # real name in one provenance line (core/claude_profiles.py:3), kept as written — renaming
-    # history to match a later decision loses the trail of why it changed. The `ose-docgen`
-    # entry beside it was dropped 2026-08-14 with its last occurrence: an allowlist entry that
+    # `ose_docgen` is a retired vendor package's real name, kept as written in one provenance line
+    # (core/claude_profiles.py:3) — renaming history to match a later decision loses the trail of
+    # why it changed. Drop an entry as soon as its last occurrence goes: an allowlist entry that
     # matches nothing still widens the hole it opens.
     "ose_docgen",  # retired package import, named in one provenance note
 ]

@@ -140,10 +140,7 @@ class TestOverviewNewWhats:
         assert isinstance(data, dict), f"overview(what={what!r}) must return JSON object"
         assert data, f"overview(what={what!r}) must not return empty dict"
 
-    # `overview(what="patterns")` left with tier 3 — it was the last synchronous DeepSeek round
-    # trip on a query path (kb/patterns.py::_llm_frameworks via _overview.py). Its test is not
-    # re-pointed, and it is worth naming why it did not go red on its own: it asserted
-    # `isinstance(data, dict) and data`, and the rejection handle_overview now returns —
-    # {"error": "unknown what='patterns'"} — is a non-empty dict, so it stayed green whether the
-    # variant existed or not. The discriminating form is test_feature_proof.py::test_fp1, which
-    # requires the word "unknown" in the error.
+    # `isinstance(data, dict) and data` above is a liveness check, not an existence one:
+    # handle_overview rejects an unknown `what` with {"error": ...}, which is itself a non-empty
+    # dict. Whether a variant exists is asserted by test_feature_proof.py::test_fp1, which
+    # requires the word "unknown" in that error.

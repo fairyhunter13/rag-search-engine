@@ -59,9 +59,8 @@ def test_capabilities_e2e(safe_tmp_path, federation_root_path):
         assert r.returncode == 0, f"D: --check failed:\n{r.stdout}\n{r.stderr}"
 
         # E: context assembly returns non-empty composed context from the indexed project.
-        # Was the MCP `ask` tool until 2026-07-29; `run_ask` is the same call one layer down and
-        # still has two consumers (the CLI and the dashboard chat), so the capability is intact.
-        # Taken as a fixture, not by calling `federation_root()` here: the resolver only finds a
+        # `run_ask` is the assembly itself, one layer below the CLI and the dashboard chat that
+        # call it. Taken as a fixture, not by calling `federation_root()` here: the resolver only finds a
         # workspace some *other* file's fixture already built, so this file passed in a full run and
         # failed when run alone — an ordering dependency, not a capability gap.
         from rag_search.query.ask import run_ask

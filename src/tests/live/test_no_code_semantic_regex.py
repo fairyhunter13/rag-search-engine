@@ -128,13 +128,9 @@ def test_category_b_allowlist_has_no_dead_entries() -> None:
     )
 
 
-# Seven guards left with tier 3, each of which read a deleted module's source directly:
-# bpre.py's hardcoded-gRPC-constructor check, the _SEMANTIC_HEURISTIC_DEBT registry pair
-# (empty since 2026-07-01, so it iterated nothing), bpre_ast's pack-native-parser check,
-# _overview's delegate-to-bpre_ast check, patterns.py's "no static _KNOWN framework map"
-# check, bpre's HR23 token-accounting check, and the valueflow/resolve_rerank/bpre
-# no-import-re trio. The HR23 one is worth naming: it gated that _llm_link_resolve fed
-# llm_token_stats() — there is no DeepSeek call left in the repo to account for.
+# A guard that names one module's source can only outlive that module as a vacuous pass or an
+# import error. Prefer the tree-wide scans above, which find the next offender rather than the
+# last one; name a module only when the property really is that module's alone.
 
 
 def test_extractor_has_no_hardcoded_lang_dicts() -> None:

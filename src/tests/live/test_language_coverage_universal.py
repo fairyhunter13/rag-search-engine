@@ -111,11 +111,8 @@ def test_is_code_language_false_for_exclusions() -> None:
 # ── Static anti-regression: no new hardcoded extension/language allowlist ─────────────────────
 
 _SRC_ROOT = Path(__file__).resolve().parents[3] / "src" / "rag_search"
-# Variable names that are permitted to hold language-name sets in the core discovery/BPRE files.
+# Variable names that are permitted to hold language-name sets in the core discovery files.
 # Any NEW name indicates a new gate was added — this guard fails, preventing regression.
-# The nine bpre_spec.py names this set used to carry (_FIRST_CLASS, _CALL_KINDS, _NEW_KINDS,
-# _NOT_CALL, _PARADIGM_KINDS, _GRP_SFXS, _STR_KINDS, _HANDLER_KINDS, _V, _SCHEMES) left with tier 3
-# along with the file that defined them.
 _ALLOWED_LANG_SETS = frozenset({
     "_TEXT_LANGS", "_DATA_LANGS",  # discover.py: exclusion lists
 })

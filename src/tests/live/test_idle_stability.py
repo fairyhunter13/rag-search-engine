@@ -263,13 +263,8 @@ def test_watcher_prefers_inotify_over_poll():
     assert not w._thread.is_alive(), "watcher thread must stop cleanly"
 
 
-# FP7/FP8/FP9 are gone with tier 3, and FP7 is the one worth explaining. It asserted that
-# reconcile_projects() sets and always clears _reconcile_active — a flag whose sole reader was
-# _enrich_project's BPRE bulk-suppression gate. With the fan-out deleted the flag had no reader
-# left, so it was deleted from sweeps.py in this same commit rather than kept under test: a
-# lifecycle gate on state nothing consults proves only that the gate still runs.
-# FP8 (the reconcile root-pass calls reconstruct_processes every pass) and FP9 (that same call
-# is suppressed during a bulk pass) were both assertions about BPRE, which no longer exists.
+# Don't test the lifecycle of a flag nothing reads: set-and-always-cleared proves only that the
+# gate still runs. When the last reader goes, the flag goes — it does not become a test subject.
 
 
 def test_heavy_lock_serializes_concurrent_passes():

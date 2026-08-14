@@ -29,9 +29,9 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# An event under no registered root is dropped — correct, but it used to be silent, which is
-# how a project can stop being watched without anything anywhere saying so. Rate-limited
-# because a single unregistered churn storm would otherwise be the loudest thing in the journal.
+# An event under no registered root is dropped, and the drop must be logged: silent, it is how a
+# project stops being watched without anything anywhere saying so. Rate-limited because a single
+# unregistered churn storm would otherwise be the loudest thing in the journal.
 _UNATTRIBUTED_LOG_INTERVAL_S = 30.0
 
 

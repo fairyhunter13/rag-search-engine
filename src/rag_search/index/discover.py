@@ -316,10 +316,8 @@ def is_code_language(lang: str) -> bool:
 # Machine-generated code files: derived build/codegen output (protobuf stubs, dart codegen,
 # SvelteKit dashboards, *.generated.*). tree-sitter parses them as real code, but regenerating
 # them is NOT source drift — treating it as such re-derives the graph for nothing.
-# Provenance, kept because it is why the list exists: the largest workspace's own SvelteKit dashboard
-# (its `wiki/` directory — not the deleted kb/wiki.py) regenerated src/lib/*.generated.js on
-# every build and looped the reconstruct cascade. That cascade left with tier 3; the drift signal
-# it shared with the graph re-derive did not.
+# Why the list exists: one workspace's SvelteKit dashboard regenerated src/lib/*.generated.js on
+# every build, and the drift signal that fires from it is the same one that drives graph re-derive.
 #
 # Extended 2026-07-31 with three more species of the same thing, 70 files / 2,738 chunks: the
 # dependency lockfile (`.lock`, plus `go.sum` and `package-lock.json`, which carry no suffix that
