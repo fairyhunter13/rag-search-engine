@@ -89,18 +89,11 @@ def _search_sync(
     # Resolve to db paths only — `search_federation` opens and closes the stores, a batch at a
     # time. Nothing here holds a connection, which is the point.
     #
-    # This used to open every member up front. Two separate defects lived in that shape and both
-    # bit on 2026-07-29. The first is volume: one search over the 194-member root opens 157 stores
-    # at ~3 fds each under WAL, so a single question held 471 descriptors against systemd's
-    # default `LimitNOFILESoft` of 1024, and a concurrent `overview(what="communities")` (a
-    # GraphStore per member) put it over. The second is that the opening loop sat *above* the
-    # try/finally, so the EMFILE that volume produced orphaned every store already opened — the
-    # list was still local, nothing closed it, and the fds were held until the process died. The
-    # daemon ended up holding 957 fds with `/healthz` returning 500 because `accept()` itself
-    # could no longer get one, and every project's search failed with `unable to open database
-    # file` until it was restarted. Moving the loop inside the try fixed the leak but left the
-    # 471-descriptor peak; batching inside `search_federation` removes the peak too, and a
-    # failure to open now costs one query rather than the daemon.
+    # Opening every member up front costs 471 descriptors for one search over the 194-member root
+    # (~3 fds per store under WAL) against systemd's default `LimitNOFILESoft` of 1024, and a
+    # concurrent `overview(what="communities")` puts it over. The resulting EMFILE took the whole
+    # daemon down rather than the query: `accept()` could no longer get a descriptor either.
+    # Batching inside `search_federation` removes the peak, so a failed open costs one query.
     searched: list[str] = []
     dbs = []
     for path in paths:

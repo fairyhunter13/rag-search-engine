@@ -54,15 +54,12 @@ DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
 # RSE_MODEL_IDLE_UNLOAD_S is *not* declared here. It is a daemon-local timing knob and lives with
 # its siblings (RSE_RECONCILE_INITIAL_DELAY_S, _RESYNC_S) in `daemon/server.py:12`, which is the
 # only reader and what HR40 and docs/decisions/2026-07-01-idle-cpu-root-causes.md both cite. A
-# second parse stood here until 2026-07-31 with the same var and the same 300 s default and no
-# reader, so editing this file's default silently did nothing.
+# second parse of the same variable here would read to every caller as the place to change it.
 
-# Dashboard chat: claude-haiku-4-5 only. No fallback of any kind, no local generative LLM.
-# ("No DeepSeek fallback" until 2026-07-28 — there is no DeepSeek left to fall back to, and the
-# narrower wording would read as permitting some other one. Matches routes_chat.py:1 and HR10.)
-# There is deliberately no provider knob: HR10 makes `claude -p` the only path, so a
-# RSE_QUERY_LLM_PROVIDER (removed 2026-07-31, never read by anything) advertised a choice the
-# invariant forbids. The model is the only part that varies.
+# Dashboard chat: claude-haiku-4-5 only. No fallback of any kind, no local generative LLM —
+# stated that widely on purpose, since naming one banned fallback reads as permitting the others.
+# Matches routes_chat.py:1 and HR10. There is deliberately no provider knob: HR10 makes `claude -p`
+# the only path, so one would advertise a choice the invariant forbids. Only the model varies.
 QUERY_LLM_MODEL = os.environ.get("RSE_QUERY_LLM_MODEL", "claude-haiku-4-5")
 
 # Removed 2026-07-31: RSE_MCP_CLIENT_STALE_S, RSE_QUERY_LLM_NUM_CTX, RSE_QUERY_LLM_TIMEOUT,
