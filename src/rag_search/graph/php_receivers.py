@@ -8,7 +8,7 @@ module adds is the evidence: a receiver's declared type, the file's own `namespa
 is only resolved when that narrows the pool to **exactly one** symbol, which is the standard the cap
 already enforces — so recall rises and the cap stays 1.
 
-P6/HR15: nothing here infers semantics from a name, a keyword list, or a mapping table. Every type
+HR15: nothing here infers semantics from a name, a keyword list, or a mapping table. Every type
 read is one the source *declares* — a typed property, a typed parameter, `new X()`, `$this`,
 `self`/`static`/`parent` — and every name-to-file step is either a PSR-4 prefix the repo checked
 into `composer.json` or a class this index already parsed. A step that names no file resolves to

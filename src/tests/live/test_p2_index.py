@@ -1,4 +1,4 @@
-"""P2 index layer: discover, chunker, indexer, search (GPU)."""
+"""index layer: discover, chunker, indexer, search (GPU)."""
 import tempfile
 from pathlib import Path
 
@@ -191,7 +191,7 @@ def test_l3_empty_walk_never_purges_a_healthy_store(embedder):
         store.close()
 
 
-# ── P10.1: search scopes on sample indexed repos ─────────────────────────────
+# ── search scopes on sample indexed repos ─────────────────────────────
 
 def test_search_code_scope_sample_federation_root(embedder):
     from tree_sitter_language_pack import has_language

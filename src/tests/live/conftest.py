@@ -126,7 +126,7 @@ def live_client():
     """Thin HTTP client targeting the live daemon at :8765.
 
     HARD-FAILS (never skips) if the daemon is not reachable — skipping is
-    forbidden by the P15 real-integration invariant.  Every happy-path HTTP
+    forbidden by the no-mocks real-integration invariant.  Every happy-path HTTP
     test must drive the production create_app() surface through this fixture.
     """
     class _C:
@@ -342,7 +342,7 @@ def pause_sweeps():
 # bottomed out at 7,401 MiB, i.e. ~8.4 GB for its own in-process embedder + reranker on top of
 # whatever the daemon holds. The gate sits above that with room to spare, because the failure
 # it prevents is not a clean shortfall message — it is ~60 tests dying inside onnxruntime with
-# CUBLAS/BFCArena errors that name neither the GPU nor the daemon. Env-driven per P18/HR34.
+# CUBLAS/BFCArena errors that name neither the GPU nor the daemon. Env-driven per HR34.
 _MIN_FREE_VRAM_MB = float(os.environ.get("RSE_TEST_MIN_VRAM_MB", "10000"))
 
 
@@ -441,7 +441,7 @@ def safe_tmp_path():
 
 @pytest.fixture(scope="session")
 def mini_stores(embedder, tmp_path_factory):
-    """Vector + graph store over a 3-file Python mini-project for P4 tests."""
+    """Vector + graph store over a 3-file Python mini-project."""
     from rag_search.graph.community import detect_communities
     from rag_search.graph.extractor import extract_symbols, symbol_id
     from rag_search.graph.store import GraphStore

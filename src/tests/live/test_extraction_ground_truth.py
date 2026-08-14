@@ -195,7 +195,7 @@ def test_gt2_every_symbol_is_named_on_the_line_it_claims(fx: GT) -> None:
     Restricted to plain-word names because the composite ones are not literal source text: hcl
     spells `resource."aws_s3_bucket"."b"` with quotes the file does not repeat in that order.
     Whether a name is a plain word is a question about this fixture's expectations, not an
-    inference about source semantics — no P6 surface here.
+    inference about source semantics — no HR15 surface here.
     """
     lines = fx.src.splitlines()
     for s in _extract(fx)[0]:

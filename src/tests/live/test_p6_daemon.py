@@ -1,4 +1,4 @@
-"""P6 daemon tests: scheduler, watcher, sweeps, federation, systemd, CLI (no mocks)."""
+"""daemon tests: scheduler, watcher, sweeps, federation, systemd, CLI (no mocks)."""
 import logging
 import threading
 import time
@@ -136,7 +136,7 @@ def test_systemd_install_writes_file(tmp_path):
 
 
 def test_systemd_unit_matches_deployed_name():
-    """P29: installer produces the deployed unit name + explicit bind address.
+    """installer produces the deployed unit name + explicit bind address.
 
     Derived from `config`, not from the literals 8765/127.0.0.1 that stood here. The property
     is *explicit bind*, and pinning the default value asserted something weaker while hiding
@@ -244,7 +244,7 @@ def _assert_env_in_effect(conf: str, value: str) -> None:
     These are the knobs that regress to a code default when a drop-in goes missing, so they get
     the stronger source. A live value may be *wider* when it is an `os.pathsep` list: this host
     prepends an absolute repo path to `RSE_FEDERATION_EXCLUDE`'s versioned `*/_worktrees/*`
-    glob, and that path is device-specific and must not be versioned (P18/HR34). Written as a
+    glob, and that path is device-specific and must not be versioned (HR34). Written as a
     rule about list-valued variables rather than an allowlist naming that file, so the exception
     is a property of the value's shape and not a waiver.
     """
@@ -350,7 +350,7 @@ def test_sweeps_reconcile_skips_complete_project(safe_tmp_path):
 
 
 def test_sweeps_paused_skips_reconcile(safe_tmp_path):
-    """P18.2: a paused reconcile_projects must not create the vector DB."""
+    """a paused reconcile_projects must not create the vector DB."""
     from rag_search.core.config import ProjectEntry, project_vector_db
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon import sweeps
@@ -489,7 +489,7 @@ def test_global_prompt_inject_remove(tmp_path):
 
 
 def test_bare_home_claude_md_not_written_by_daemon(tmp_path):
-    """P8 guard: daemon startup path does NOT create/write bare ~/CLAUDE.md."""
+    """daemon startup path does NOT create/write bare ~/CLAUDE.md."""
     from pathlib import Path
 
     from typer.testing import CliRunner
@@ -505,7 +505,7 @@ def test_bare_home_claude_md_not_written_by_daemon(tmp_path):
     if not existed_before:
         runner.invoke(daemon_app, ["install-global"])
         assert not bare.exists(), (
-            "P8: daemon install-global recreated bare ~/CLAUDE.md — decommission incomplete"
+            "daemon install-global recreated bare ~/CLAUDE.md — decommission incomplete"
         )
 
 
@@ -516,7 +516,7 @@ def test_ensure_running_false_for_wrong_port():
 
 
 def test_cli_has_expected_commands():
-    """P10.8: all 15 top-level commands + 7 daemon subcommands present.
+    """all 15 top-level commands + 7 daemon subcommands present.
 
     `kb-status` (which GET'd /api/kb_health), `docgen` and `okf` were the three commands
     R0a deleted, and this list is the only place the CLI surface is asserted — so it went
@@ -546,7 +546,7 @@ def test_cli_has_expected_commands():
 
 
 def test_cli_safe_invocations():
-    """P10.8: safe read-only CLI invocations return exit 0 with real output."""
+    """safe read-only CLI invocations return exit 0 with real output."""
     from typer.testing import CliRunner
 
     from rag_search.cli import app
@@ -567,7 +567,7 @@ def test_cli_safe_invocations():
 
 
 def test_pipeline_all_stages_rse_repo():
-    """P10.6: per-stage output traces on a real large indexed project.
+    """per-stage output traces on a real large indexed project.
 
     Validates: chunk+embed → tree-sitter symbols → call edges → Leiden
     communities → community labels.
@@ -599,7 +599,7 @@ def test_pipeline_all_stages_rse_repo():
 
 
 def test_maintenance_vacuums_orphan():
-    """P10.7: maintenance() removes orphan index dirs not in the registry.
+    """maintenance() removes orphan index dirs not in the registry.
 
     This one runs against the *real* INDEX_ROOT, so it now also depends on the sweep's blast cap
     (`core.orphans`) not tripping: if this host's orphans ever exceed half its stores, the sweep
@@ -617,7 +617,7 @@ def test_maintenance_vacuums_orphan():
 
 
 def test_federation_index_members_registers(safe_tmp_path):
-    """P10.7: index_members() registers symlinked sub-repos into the registry."""
+    """index_members() registers symlinked sub-repos into the registry."""
     from rag_search.core.registry import get_project, remove_project
     from rag_search.daemon.federation import index_members
 
@@ -635,7 +635,7 @@ def test_federation_index_members_registers(safe_tmp_path):
 
 
 def test_reload_exit_code_split():
-    """P10.7 unit: reload requests a non-zero exit (systemd restarts); stop requests 0 (stays down).
+    """unit: reload requests a non-zero exit (systemd restarts); stop requests 0 (stays down).
 
     GPU-free, in-process — no SIGTERM sent, no daemon killed. Proves the exit-code split that
     makes Restart=on-failure distinguish reload from daemon-stop under the same SIGTERM signal.
@@ -650,7 +650,7 @@ def test_reload_exit_code_split():
 
 
 def test_parse_restart_param():
-    """P10.7 unit: ?restart= query-param parsing (default true; only 'false' means stop)."""
+    """unit: ?restart= query-param parsing (default true; only 'false' means stop)."""
     from rag_search.server.routes_ops import _parse_restart_param
 
     assert _parse_restart_param(None) is True  # no query param -> reload (documented default)
@@ -712,7 +712,7 @@ def test_rl2_api_reload_refuses_while_this_suite_holds_the_lease():
 
 
 def test_api_reload_returns_reloading():
-    """P10.7/P15.2: POST /api/reload on the LIVE daemon — handler sends SIGTERM
+    """POST /api/reload on the LIVE daemon — handler sends SIGTERM
     to os.getpid() so in-process TestClient would kill the test process.
     Systemd restarts the daemon within ~1s; we wait for readiness before finishing.
 
@@ -791,10 +791,10 @@ def test_api_reload_returns_reloading():
 
 
 def test_no_heuristic_regression():
-    """P10.9: grep-guard — _FW dict, keyword MAP, and CamelCase heuristic must
+    """grep-guard — _FW dict, keyword MAP, and CamelCase heuristic must
     not be reintroduced in production src/rag_search/ code.
 
-    These were removed in P9.1-P9.4; this test makes the removal permanent.
+    These were removed with the pattern-detection lane; this test makes the removal permanent.
     """
     import re
     from pathlib import Path
@@ -819,7 +819,7 @@ def test_no_heuristic_regression():
 
 
 def test_p22_embedder_singleton_no_leak():
-    """P22.1: get_embedder() is identity-stable; _index_project no longer bypasses it."""
+    """get_embedder() is identity-stable; _index_project no longer bypasses it."""
     from rag_search.embed.embedder import get_embedder
 
     # Multiple calls return the SAME object — no fresh ONNX session per call.
@@ -835,7 +835,7 @@ def test_p22_embedder_singleton_no_leak():
 
 
 def test_p22_idle_unload_clears_embed_singleton():
-    """P22.1: the idle path must null embed.embedder._default so VRAM frees when idle.
+    """the idle path must null embed.embedder._default so VRAM frees when idle.
 
     Split in two because the null-out moved into `release_models()` — the substance is asserted
     where it lives, and the wiring is asserted separately, so this cannot pass on a daemon that
@@ -880,7 +880,7 @@ def test_daemon_shutdown_exit_frees_models_and_hard_exits():
 
 
 def test_p22_watcher_ignores_cache_dirs(tmp_path):
-    """P22.2: inotify must NOT fire on writes under IGNORED_DIRS (__pycache__, .ruff_cache, etc.)."""
+    """inotify must NOT fire on writes under IGNORED_DIRS (__pycache__, .ruff_cache, etc.)."""
     import time
 
     from rag_search.daemon.watcher import Watcher
@@ -906,7 +906,7 @@ def test_p22_watcher_ignores_cache_dirs(tmp_path):
 
 
 def test_p22_is_ignored_path():
-    """P22.2: is_ignored_path() filters __pycache__, .ruff_cache, .git, etc."""
+    """is_ignored_path() filters __pycache__, .ruff_cache, .git, etc."""
     from pathlib import Path
 
     from rag_search.index.discover import is_ignored_path
@@ -919,7 +919,7 @@ def test_p22_is_ignored_path():
 
 
 def test_p20_index_members_discovers_federation_members(safe_tmp_path):
-    """P20.1: index_members() registers symlinked sub-repos."""
+    """index_members() registers symlinked sub-repos."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import get_project, remove_project, upsert_project
     from rag_search.daemon.federation import index_members
@@ -942,7 +942,7 @@ def test_p20_index_members_discovers_federation_members(safe_tmp_path):
 
 
 def test_p20_indexed_at_stamped(safe_tmp_path):
-    """P20.2: _index_project() stamps indexed_at + file_count on the registry entry."""
+    """_index_project() stamps indexed_at + file_count on the registry entry."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import get_project, remove_project, upsert_project
     from rag_search.daemon.sweeps import _index_project
@@ -962,11 +962,11 @@ def test_p20_indexed_at_stamped(safe_tmp_path):
 
 
 def test_p22_daemon_rss_bounded():
-    """P22.4: daemon RSS < 16 GB and not crash-looping (uptime > 30s) after leak fixes.
+    """daemon RSS < 16 GB and not crash-looping (uptime > 30s) after leak fixes.
 
     Threshold raised from 4 GB → 16 GB: with 28+ projects being actively embedded by the
     watcher at startup, peak RSS reaches 8-15 GB (ONNX batch buffers, 28 WAL connections).
-    The original P32 BFC regression pre-allocated >24 GB instantly — this guard still catches
+    The original BFC regression pre-allocated >24 GB instantly — this guard still catches
     that while allowing the current 28-project workload.
 
     RSS is read from /healthz (rss_mb field) — launcher-independent, works under systemd,
@@ -988,11 +988,11 @@ def test_p22_daemon_rss_bounded():
         except Exception:
             pass
         time.sleep(1)
-    assert data.get("ok") is True, f"daemon not healthy after P22 fixes: {data}"
+    assert data.get("ok") is True, f"daemon not healthy: {data}"
     uptime_s = data.get("uptime_s", 0)
     assert uptime_s > 15, f"daemon restarted recently (uptime_s={uptime_s:.1f}), may be crash-looping"
     rss_mb = data.get("rss_mb", 0)
-    assert rss_mb < 16384, f"daemon RSS {rss_mb} MB > 16 GB (P22 memory fix must hold)"
+    assert rss_mb < 16384, f"daemon RSS {rss_mb} MB > 16 GB (the embedder-identity memory fix must hold)"
 
 
 def test_daemon_startup_imports_resolve():
@@ -1012,7 +1012,7 @@ def test_daemon_startup_imports_resolve():
 
 
 def test_p22_incremental_reindex_idempotent(safe_tmp_path):
-    """P22.3: incremental reindex is idempotent — chunk count stable, no UNIQUE constraint error."""
+    """incremental reindex is idempotent — chunk count stable, no UNIQUE constraint error."""
     from rag_search.core.config import ProjectEntry, project_vector_db
     from rag_search.core.registry import get_project, upsert_project
     from rag_search.daemon.sweeps import _index_files, _index_project
@@ -1047,7 +1047,7 @@ def test_p22_incremental_reindex_idempotent(safe_tmp_path):
 
 
 def test_graph_no_duplicate_symbols(sample_workspace: SampleWorkspace):
-    """P16.9: sample project graphs must have zero duplicate (name,file,kind) symbol groups."""
+    """sample project graphs must have zero duplicate (name,file,kind) symbol groups."""
     from rag_search.core.config import project_graph_db
     from rag_search.graph.store import GraphStore
     from tests.live._projects import sample_project_paths
@@ -1069,7 +1069,7 @@ def test_graph_no_duplicate_symbols(sample_workspace: SampleWorkspace):
 
 
 def test_p21_community_count_stable_on_redetect(tmp_path):
-    """P21.1: running detect_communities twice must not grow community count (no orphan rows)."""
+    """running detect_communities twice must not grow community count (no orphan rows)."""
     from rag_search.graph.community import detect_communities
     from rag_search.graph.extractor import extract_symbols, symbol_id
     from rag_search.graph.store import GraphStore
@@ -1105,7 +1105,7 @@ def test_p21_community_count_stable_on_redetect(tmp_path):
 
 
 def test_p21_community_labels_set_without_llm(tmp_path):
-    """P21.2: every community has a non-empty title from detect_communities alone.
+    """every community has a non-empty title from detect_communities alone.
 
     This was written as a race guard — titles must exist *before* the DeepSeek pass
     overwrote them — and R0 turned it into the whole contract: there is no second pass, so
@@ -1137,14 +1137,14 @@ def test_p21_community_labels_set_without_llm(tmp_path):
         assert rows, "no communities detected"
         for cid, title in rows:
             assert title and title.strip(), (
-                f"P21.2: community {cid} has no title (structural labeller is the only labeller)"
+                f"community {cid} has no title (structural labeller is the only labeller)"
             )
     finally:
         gs.close()
 
 
 def test_p21_burst_labels_all_communities(safe_tmp_path):
-    """P21.3: _label_project labels ALL title IS NULL communities (no LIMIT 20 cap)."""
+    """_label_project labels ALL title IS NULL communities (no LIMIT 20 cap)."""
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon.sweeps import _label_project
@@ -1170,14 +1170,14 @@ def test_p21_burst_labels_all_communities(safe_tmp_path):
         ).fetchone()[0]
         gs2.close()
         assert null_count == 0, (
-            f"P21.3: {null_count}/25 communities still title IS NULL after burst (LIMIT 20 cap?)"
+            f"{null_count}/25 communities still title IS NULL after burst (LIMIT 20 cap?)"
         )
     finally:
         remove_project(proj)
 
 
 def test_p21_burst_label_federation(safe_tmp_path):
-    """P21.4: burst_label_federation labels root + member, reports aggregate totals."""
+    """burst_label_federation labels root + member, reports aggregate totals."""
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon.sweeps import burst_label_federation
@@ -1214,7 +1214,7 @@ def test_p21_burst_label_federation(safe_tmp_path):
 
 
 def test_p34_watcher_updates_vector_index(safe_tmp_path):
-    """P34.1: watcher fires on_change → _index_files; new file found in vector search."""
+    """watcher fires on_change → _index_files; new file found in vector search."""
     import time
 
     from rag_search.core.config import project_vector_db
@@ -1371,7 +1371,7 @@ def test_watcher_labelling_e2e(safe_tmp_path):
 
 
 def test_p35_label_project_prunes_orphan_communities(safe_tmp_path):
-    """P35: _label_project prunes L1 communities with 0 symbols before labelling.
+    """_label_project prunes L1 communities with 0 symbols before labelling.
 
     Load-bearing beyond hygiene: label_community_structural writes nothing for a
     symbol-less community, so an un-pruned orphan would hold _needs_labels True forever
@@ -1518,7 +1518,7 @@ def test_symbol_free_graph_does_not_force_a_full_reindex(safe_tmp_path):
 
 
 def test_p34_start_watcher_wires_enabled_projects(safe_tmp_path):
-    """P34.3: start_watcher() registers all enabled projects and excludes disabled ones."""
+    """start_watcher() registers all enabled projects and excludes disabled ones."""
     from rag_search.core.config import ProjectEntry
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.daemon.server import start_watcher

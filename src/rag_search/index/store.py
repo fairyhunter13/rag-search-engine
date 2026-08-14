@@ -147,7 +147,7 @@ def embed_signature(dim: int = 768) -> str:
 def _split_identifier(word: str) -> list[str]:
     """`getUserName` -> [get, User, Name]; `HTTPServer` -> [HTTP, Server]; `total` -> [total].
 
-    Case transitions only, walked character by character — no regex (P6 bans `re` in this
+    Case transitions only, walked character by character — no regex (HR15 bans `re` in this
     package) and no vocabulary of known prefixes or acronyms. A boundary opens before an
     uppercase letter that either follows a non-uppercase character, or ends a run of uppercase
     ones by being followed by a lowercase (the `HTTPServer` case). Digits are deliberately not
@@ -207,7 +207,7 @@ def fts_query(text: str) -> str:
     the identifier itself, and its call sites. Splitting is still the right tokenizer: it is what
     lets an English question reach a snake_case name it does not spell exactly.
 
-    Split with `str.isalnum` rather than a regex, both because P6 forbids `re` in this package
+    Split with `str.isalnum` rather than a regex, both because HR15 forbids `re` in this package
     and because it is the closer match: unicode61 keeps unicode letters and digits, which a
     `[0-9A-Za-z]` class would drop from the query while the index still held them.
 

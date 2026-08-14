@@ -384,7 +384,7 @@ def is_generated_path(rel: str | os.PathLike) -> bool:
 #
 # A tuple, deliberately: `test_no_new_hardcoded_lang_or_ext_allowlist_in_core` fails on any new
 # module-level `frozenset({".x"…})` in this file, and that guard is right to. This is the
-# extension bootstrap P6 names as exempt — the point at which bytes first get a category — and
+# extension bootstrap HR15 names as exempt — the point at which bytes first get a category — and
 # not a language gate, which is what the guard is protecting `is_code_language()` from becoming.
 _IMAGE_SUFFIXES: tuple[str, ...] = (".svg", ".drawio", ".drawio.xml")
 

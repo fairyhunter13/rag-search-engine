@@ -6,7 +6,7 @@ This is the extraction ladder's **ceiling**, published rather than rediscovered.
 
 `best rung` is the **query-derived** ceiling only. Rung 3 (`process()` structure) and rung 5 (`data_extraction`) come from the pack's own Rust code, not from query files, so a language listed `6 recorded` here may still reach rung 3, 4 or 5 in practice — the column bounds what rungs 1 and 4 can do, and nothing else.
 
-`injections(static)` counts only grammars declaring the inner language with `#set!`. Rung 1 ignores dynamic `@injection.language` captures on purpose: taking the language from the document's own text (a markdown fence's info string) reads a token to choose a grammar, which P6 forbids, and would enrol every fenced README example as a definition.
+`injections(static)` counts only grammars declaring the inner language with `#set!`. Rung 1 ignores dynamic `@injection.language` captures on purpose: taking the language from the document's own text (a markdown fence's info string) reads a token to choose a grammar, which HR15 forbids, and would enrol every fenced README example as a definition.
 
 ## Totals
 

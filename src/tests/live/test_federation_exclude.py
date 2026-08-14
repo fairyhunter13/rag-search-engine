@@ -200,7 +200,7 @@ def test_fe7_is_federation_excluded_unit_table(tmp_path):
 
 # ------------------------------------------------- FE8-FE10: the live daemon's own exclusion
 
-# No absolute home path here on purpose (HR34/P18): systemd expands %h itself, so this text
+# No absolute home path here on purpose (HR34): systemd expands %h itself, so this text
 # reads the same on every machine and can live in the tracked tree.
 _REINSTALL_HINT = (
     f"{_VAR} is not in the running daemon's environment. It is configured by a systemd "

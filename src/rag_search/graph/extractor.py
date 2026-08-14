@@ -106,7 +106,7 @@ from pathlib import Path
 #                    1.000: every recovery still leaves exactly one candidate, which is the bar
 #                    the cap already enforces — the type does not overrule the ambiguity, it
 #                    dissolves it. A written type, a `use` clause, a PSR-4 prefix and an `extends`
-#                    edge are all declared facts, so no name is interpreted (P6/HR15). The tier
+#                    edge are all declared facts, so no name is interpreted (HR15). The tier
 #                    was struck once on measurement from a CodeIgniter 3 store, which predates
 #                    every one of those constructs and was guaranteed to read zero — see
 #                    `docs/decisions/2026-08-04-a-receiver-type-dissolves-the-ambiguity.md`.
@@ -256,7 +256,7 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
                         # `type Point struct { X int }` yielded `X` with kind `function`, which
                         # is exactly what W1-A part 5 exists to catch. These tokens are the
                         # grammar's own node-kind spelling, like `struct`/`trait` above, so no
-                        # vocabulary about source text is being invented (P6/HR15).
+                        # vocabulary about source text is being invented (HR15).
                         sym_kind = "field"
                     else:
                         sym_kind = "function"  # conservative default
@@ -282,7 +282,7 @@ def _generic_walk(node, code_bytes: bytes, file: str, lang: str,
 # The name lives on the binding, not the function, so it is read from the binding node's own name
 # field. These are node kinds and field names — the grammar's spelling of its own structure, the
 # same basis `_DEF_PARENT_TOKENS` and `_generic_walk`'s kind tests stand on — not a vocabulary
-# about source text (P6/HR15).
+# about source text (HR15).
 # Several name fields per kind because the grammars disagree about the spelling of the same
 # construct: a class field is `public_field_definition`/`name` in typescript and
 # `field_definition`/`property` in javascript. Measured, not assumed — with only `name` listed,
@@ -344,7 +344,7 @@ def _named_binding_walk(root, code_bytes: bytes, file_str: str, language: str) -
 
 # S13: the scope test for `_module_binding_walk`. A binding counts as a definition when it sits at
 # the top of the file — its declaration's parent is the file root, or the `export` that wraps it.
-# Read structurally rather than by language (P6/HR15): java's field declarators sit under a class
+# Read structurally rather than by language (HR15): java's field declarators sit under a class
 # and are excluded by the same test that admits javascript's top-level ones, with nothing here
 # naming a grammar.
 _MODULE_SCOPE_PARENTS: frozenset[str] = frozenset({"program", "export_statement"})
@@ -652,7 +652,7 @@ def _injection_blocks(code_bytes: bytes, language: str) -> list[tuple[str, bytes
     A `(#set! injection.language "php")` is the grammar author stating that this region is always
     php — a property of the host grammar, same species as `_STRUCTURE_KIND_MAP`. A dynamic
     `@injection.language` *capture* instead takes the language from the document's own text (a
-    markdown fence's info string), which is reading a token to choose a grammar: the thing P6
+    markdown fence's info string), which is reading a token to choose a grammar: the thing HR15
     forbids, and it would enrol every fenced example in a README as a project definition.
 
     Measured across the pack's 110 injection-capable languages: **64 declare statically**, 12
@@ -935,7 +935,7 @@ def _qualify_by_receiver(syms: list[Symbol], root, code_bytes: bytes) -> None:
     match today.
 
     The receiver is a grammar *field*, exactly like the `name` field `_generic_walk` already reads,
-    so no vocabulary about source text is invented (P6/HR15) and any grammar spelling a receiver the
+    so no vocabulary about source text is invented (HR15) and any grammar spelling a receiver the
     same way gets this for free — nothing here is keyed on the language being Go.
 
     It reads the receiver's `type` **field** rather than its last identifier. The positional rule
@@ -994,12 +994,12 @@ def _error_byte_ratio(root, total_bytes: int) -> float:
     Every rule that rescues the templates also drops XML below the 0.85 threshold, because
     tree-sitter's error recovery manufactures structurally plausible children out of garbage — so
     "are this ERROR's descendants well-formed" does not discriminate. The only thing that would is
-    naming the node kinds real PHP produces, which is the mapping table P6/HR15 exists to forbid.
+    naming the node kinds real PHP produces, which is the mapping table HR15 exists to forbid.
 
     What is being bought is also small: `language_mismatch` vs `generic` is a **label**, on files
     that legitimately define no symbols either way (§1g of the plan measured that re-parsing them as
     an HTML host rescues 2% — 14 of 746). Trading a working wrong-language detector for a nicer name
-    on 1.8% of the fleet fails P10. RB1 and EL10 are the tests that said so, on the first run.
+    on 1.8% of the fleet is not worth the code it costs. RB1 and EL10 are the tests that said so, on the first run.
     """
     if root is None or total_bytes <= 0:
         return 0.0

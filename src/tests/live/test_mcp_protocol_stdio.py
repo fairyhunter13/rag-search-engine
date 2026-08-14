@@ -1,4 +1,4 @@
-"""P15.3a: MCP stdio transport round-trip — protocol only, no direct tool calls.
+"""MCP stdio transport round-trip — protocol only, no direct tool calls.
 
 Speaks real JSON-RPC over bridge-stdio: initialize → notifications/initialized
 → tools/list → tools/call each tool against the sample workspace.
@@ -77,14 +77,14 @@ def stdio_mcp():
 
 
 def test_stdio_initialize_returns_4_tool_serverinfo(stdio_mcp):
-    """P15.3a: bridge-stdio initialize — server name + 4-tool instructions."""
+    """bridge-stdio initialize — server name + 4-tool instructions."""
     r = stdio_mcp._init_result
     assert r["result"]["serverInfo"]["name"] == "rag-search"
     assert "4-tool" in r["result"].get("instructions", "")
 
 
 def test_stdio_tools_list_returns_exactly_4(stdio_mcp):
-    """P15.3a: tools/list over stdio returns exactly the 4 expected tools."""
+    """tools/list over stdio returns exactly the 4 expected tools."""
     r = stdio_mcp.request("tools/list")
     names = {t["name"] for t in r["result"]["tools"]}
     assert names == _EXPECTED_TOOLS, f"wrong tool set: {names}"
@@ -111,7 +111,7 @@ def _payload(r: dict) -> dict:
 
 
 def test_stdio_overview_projects_returns_indexed_sample_projects(stdio_mcp, sample_proj_path):
-    """P15.3a: tools/call overview(projects) over stdio — >=2 sample projects indexed."""
+    """tools/call overview(projects) over stdio — >=2 sample projects indexed."""
     r = stdio_mcp.request("tools/call", {"name": "overview", "arguments": {"what": "projects"}})
     data = _payload(r)
     projects = data.get("projects", [])
@@ -119,7 +119,7 @@ def test_stdio_overview_projects_returns_indexed_sample_projects(stdio_mcp, samp
 
 
 def test_stdio_search_returns_sample_ranked_results(stdio_mcp, sample_proj_path):
-    """P15.3a: tools/call search over stdio — ranked results from sample index."""
+    """tools/call search over stdio — ranked results from sample index."""
     r = stdio_mcp.request("tools/call", {"name": "search", "arguments": {
         "query": "promo apply discount",
         "project_paths": [sample_proj_path],
@@ -131,7 +131,7 @@ def test_stdio_search_returns_sample_ranked_results(stdio_mcp, sample_proj_path)
 
 
 def test_no_direct_tool_calls_in_protocol_tests():
-    """P15.3 guard: protocol test files must not bypass the MCP protocol layer."""
+    """protocol test files must not bypass the MCP protocol layer."""
     import re
     from pathlib import Path
 

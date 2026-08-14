@@ -1,4 +1,4 @@
-"""P12 dashboard browser tests — Playwright, real chromium, live daemon at :8765.
+"""dashboard browser tests — Playwright, real chromium, live daemon at :8765.
 
 Run separately (Playwright conflicts with asyncio_mode=auto):
   .venv/bin/pytest src/tests/live/test_browser.py --browser chromium -q
@@ -61,10 +61,10 @@ def _select_project(page: Page, project_path: str, wait_ms: int = 2500) -> None:
     page.wait_for_timeout(wait_ms)
 
 
-# ── P12.1: load + view presence ───────────────────────────────────────────────
+# ── load + view presence ───────────────────────────────────────────────
 
 def test_dashboard_loads_without_console_errors(page: Page) -> None:
-    """P12.1: /dashboard loads; every view div present; no JS errors on load."""
+    """/dashboard loads; every view div present; no JS errors on load."""
     errors: list[str] = []
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -75,7 +75,7 @@ def test_dashboard_loads_without_console_errors(page: Page) -> None:
 
 
 def test_dashboard_default_view_is_pulse(page: Page) -> None:
-    """P12.1: pulse view is active on load; others are hidden."""
+    """pulse view is active on load; others are hidden."""
     page.goto(_DASH, wait_until="networkidle")
     expect(page.locator("#view-pulse")).to_be_visible()
     for v in _VIEWS:
@@ -83,11 +83,11 @@ def test_dashboard_default_view_is_pulse(page: Page) -> None:
             expect(page.locator(f"#view-{v}")).to_be_hidden()
 
 
-# ── P12.2: view switching ────────────────────────────────────────────────────
+# ── view switching ────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("view", _VIEWS)
 def test_view_switching(page: Page, view: str) -> None:
-    """P12.2: clicking each nav button shows that view and hides the others."""
+    """clicking each nav button shows that view and hides the others."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator(f"#vbtn-{view}").click()
     page.wait_for_timeout(200)
@@ -97,10 +97,10 @@ def test_view_switching(page: Page, view: str) -> None:
             expect(page.locator(f"#view-{other}")).to_be_hidden()
 
 
-# ── P12.3: command palette ────────────────────────────────────────────────────
+# ── command palette ────────────────────────────────────────────────────
 
 def test_cmd_palette_opens_with_ctrl_k(page: Page) -> None:
-    """P12.3: Ctrl+K opens the command palette overlay."""
+    """Ctrl+K opens the command palette overlay."""
     page.goto(_DASH, wait_until="networkidle")
     expect(page.locator("#cmd-overlay")).to_be_hidden()
     page.keyboard.press("Control+k")
@@ -109,7 +109,7 @@ def test_cmd_palette_opens_with_ctrl_k(page: Page) -> None:
 
 
 def test_cmd_palette_closes_with_esc(page: Page) -> None:
-    """P12.3: Escape closes the command palette."""
+    """Escape closes the command palette."""
     page.goto(_DASH, wait_until="networkidle")
     page.keyboard.press("Control+k")
     page.wait_for_timeout(150)
@@ -120,7 +120,7 @@ def test_cmd_palette_closes_with_esc(page: Page) -> None:
 
 
 def test_theme_button_toggles_theme(page: Page) -> None:
-    """P12.3: theme button flips its icon text (☀ ↔ 🌙) and changes CSS vars."""
+    """theme button flips its icon text (☀ ↔ 🌙) and changes CSS vars."""
     page.goto(_DASH, wait_until="networkidle")
     before = page.locator("#theme-btn").text_content()
     page.locator("#theme-btn").click()
@@ -129,10 +129,10 @@ def test_theme_button_toggles_theme(page: Page) -> None:
     assert before != after, f"theme icon did not change: {before!r} → {after!r}"
 
 
-# ── P12.4: pulse data ─────────────────────────────────────────────────────────
+# ── pulse data ─────────────────────────────────────────────────────────
 
 def test_pulse_kpi_tiles_show_sample_data(page: Page, _sample_promo: str) -> None:
-    """P12.4: files + communities KPI tiles are non-zero on sample indexed data."""
+    """files + communities KPI tiles are non-zero on sample indexed data."""
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
     files = page.locator("#kpi-files").text_content() or ""
@@ -142,7 +142,7 @@ def test_pulse_kpi_tiles_show_sample_data(page: Page, _sample_promo: str) -> Non
 
 
 def test_project_selector_populated(page: Page) -> None:
-    """P12.4: #project-sel has >=1 sample project option after loadProjects()."""
+    """#project-sel has >=1 sample project option after loadProjects()."""
     page.goto(_DASH, wait_until="networkidle")
     page.wait_for_timeout(2000)
     opts = page.evaluate("document.querySelectorAll('#project-sel option').length")
@@ -150,7 +150,7 @@ def test_project_selector_populated(page: Page) -> None:
 
 
 def test_pulse_indexing_queue_reports_sweep_state(page: Page, _sample_promo: str) -> None:
-    """P12.4: the Indexing Queue panel reports a real sweep state, not the unread-fetch fallback.
+    """the Indexing Queue panel reports a real sweep state, not the unread-fetch fallback.
 
     Replaces test_pulse_suggested_questions_populated. That panel is gone, and the assertion it
     carried had a second problem worth recording: it required >=1 `.sq-btn`, which
@@ -179,18 +179,18 @@ def test_pulse_indexing_queue_reports_sweep_state(page: Page, _sample_promo: str
     )
 
 
-# ── P12.5: SSE live feed / daemon dot ────────────────────────────────────────
+# ── SSE live feed / daemon dot ────────────────────────────────────────
 
 def test_daemon_dot_is_visible(page: Page) -> None:
-    """P12.5: #daemon-dot is rendered in the nav bar and visible."""
+    """#daemon-dot is rendered in the nav bar and visible."""
     page.goto(_DASH, wait_until="networkidle")
     expect(page.locator("#daemon-dot")).to_be_visible()
 
 
-# ── P12.6-P12.8: chat streaming, graph render, admin ─────────────────────────
+# ── chat streaming, graph render, admin ─────────────────────────
 
 def test_chat_streaming_produces_response(page: Page) -> None:
-    """P12.6: chat message streams non-empty response into #chat-history via SSE."""
+    """chat message streams non-empty response into #chat-history via SSE."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-chat").click()
     page.locator("#chat-in").fill("What does this project do?")
@@ -204,7 +204,7 @@ def test_chat_streaming_produces_response(page: Page) -> None:
 
 
 def test_graph_renders_on_reload(page: Page) -> None:
-    """P12.7: loadGraph() renders sigma.js nodes; #graph-node-count is non-empty."""
+    """loadGraph() renders sigma.js nodes; #graph-node-count is non-empty."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-graph").click()
     page.locator("button[onclick='loadGraph()']").click()
@@ -216,12 +216,12 @@ def test_graph_renders_on_reload(page: Page) -> None:
     assert cnt.strip(), f"#graph-node-count empty after reload: {cnt!r}"
 
 
-# P12.8 (Re-index → #op-log) left with tier 3. runReindex() and runWiki() were byte-identical
+# The Re-index → #op-log pair left with tier 3. runReindex() and runWiki() were byte-identical
 # apart from their log strings — both POSTed /api/build_wiki?action=wiki — so the "Re-index"
 # button never re-indexed anything, and there is no live route to re-point the test at.
 
 
-# ── P12.3: every _CMD_ITEMS entry dispatches ──────────────────────────────
+# ── every _CMD_ITEMS entry dispatches ──────────────────────────────
 
 _CMD_VIEW_ITEMS = [
     ("Pulse — KPI", "pulse"),
@@ -233,7 +233,7 @@ _CMD_VIEW_ITEMS = [
 
 @pytest.mark.parametrize("prefix,view", _CMD_VIEW_ITEMS)
 def test_cmd_palette_dispatches_view_entry(page: Page, prefix: str, view: str) -> None:
-    """P12.3: each view _CMD_ITEMS entry switches the correct view via palette."""
+    """each view _CMD_ITEMS entry switches the correct view via palette."""
     page.goto(_DASH, wait_until="networkidle")
     page.keyboard.press("Control+k")
     page.wait_for_timeout(150)
@@ -245,7 +245,7 @@ def test_cmd_palette_dispatches_view_entry(page: Page, prefix: str, view: str) -
 
 
 def test_cmd_palette_refresh_pulse_op(page: Page, _sample_promo: str) -> None:
-    """P12.3: 'Refresh Pulse' palette op executes loadPulse; kpi-files stays populated."""
+    """'Refresh Pulse' palette op executes loadPulse; kpi-files stays populated."""
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
     page.keyboard.press("Control+k")
@@ -263,7 +263,7 @@ def test_cmd_palette_refresh_pulse_op(page: Page, _sample_promo: str) -> None:
 # entries ("Refresh Admin", "Refresh Pulse") are covered by the Refresh-Pulse test above.
 
 
-# ── P12.4 extended: admin panels ──────────────────────────────────────────
+# ── admin panels ──────────────────────────────────────────
 
 # The #kpi-enrichment tile left with tier 3: it read /api/kb_health's enrichment_pct, which
 # measured DeepSeek narration coverage over community summaries. Structural labelling now fills
@@ -272,7 +272,7 @@ def test_cmd_palette_refresh_pulse_op(page: Page, _sample_promo: str) -> None:
 
 
 def test_admin_projects_body_populated(page: Page) -> None:
-    """P12.4: #projects-body has rows after admin view loads."""
+    """#projects-body has rows after admin view loads."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-admin").click()
     page.wait_for_timeout(2000)
@@ -281,7 +281,7 @@ def test_admin_projects_body_populated(page: Page) -> None:
 
 
 def test_admin_storage_health_populated(page: Page) -> None:
-    """P12.4: #storage-health-body shows storage data (not 'Loading…')."""
+    """#storage-health-body shows storage data (not 'Loading…')."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-admin").click()
     page.wait_for_timeout(2000)
@@ -289,7 +289,7 @@ def test_admin_storage_health_populated(page: Page) -> None:
     assert text.strip() not in ("", "Loading…"), f"storage-health not populated: {text!r}"
 
 
-# ── P12.5: SSE live feed elements ─────────────────────────────────────────
+# ── SSE live feed elements ─────────────────────────────────────────
 #
 # test_activity_list_element_present stood here, asserting #activity-list was attached. Its
 # publisher — /api/kb_health's last_pipeline_event — left with tier 3, and its docstring's premise
@@ -298,10 +298,10 @@ def test_admin_storage_health_populated(page: Page) -> None:
 # covered by test_pulse_indexing_queue_reports_sweep_state on content rather than attachment.
 
 
-# ── P12.7: graph interactions ─────────────────────────────────────────────
+# ── graph interactions ─────────────────────────────────────────────
 
 def test_graph_search_accepts_text(page: Page) -> None:
-    """P12.7: #graph-search input accepts text; searchGraphNode fires."""
+    """#graph-search input accepts text; searchGraphNode fires."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-graph").click()
     page.locator("#graph-search").fill("main")
@@ -310,7 +310,7 @@ def test_graph_search_accepts_text(page: Page) -> None:
 
 
 def test_graph_filter_sel_has_options(page: Page) -> None:
-    """P12.7: #graph-filter-sel is present and has ≥1 option."""
+    """#graph-filter-sel is present and has ≥1 option."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-graph").click()
     opts = page.locator("#graph-filter-sel option").count()
@@ -318,7 +318,7 @@ def test_graph_filter_sel_has_options(page: Page) -> None:
 
 
 def test_graph_layout_sel_change_no_crash(page: Page) -> None:
-    """P12.7: changing #graph-layout-sel after graph load doesn't crash."""
+    """changing #graph-layout-sel after graph load doesn't crash."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-graph").click()
     page.locator("button[onclick='loadGraph()']").click()
@@ -332,7 +332,7 @@ def test_graph_layout_sel_change_no_crash(page: Page) -> None:
     assert cnt.strip(), f"#graph-node-count empty after layout change: {cnt!r}"
 
 
-# The Wiki-generate half of P12.8 left with tier 3 along with its button and runWiki(). #op-log
+# The Wiki-generate half of that pair left with tier 3 along with its button and runWiki(). #op-log
 # went with it too — I claimed here that opLog() survived via the Reload-config and Pause/Resume
 # ops, and that was wrong: `git grep opLog` found the definition and nothing else. The same trace
 # killed #admin-job-chips, whose /api/events/stream feed had no publisher left once the pipeline
@@ -347,14 +347,14 @@ def test_graph_layout_sel_change_no_crash(page: Page) -> None:
 # covered by test_pulse_indexing_queue_reports_sweep_state, which asserts on content.
 
 
-# The P12.8b docs-view block stood here — three tests over #docs-pages / #docs-content /
+# The docs-view block stood here — three tests over #docs-pages / #docs-content /
 # #docs-search, themselves re-pointed from the wiki view when kb/wiki.py left. The pane is gone
 # with the operator-console pass, and there is nothing to re-point them at a third time: the
 # surface they exercised was a markdown reader for files already on disk.
 
 
 def test_graph_detail_present_after_load(page: Page) -> None:
-    """P12.7: #graph-detail is present and non-empty after graph view loads."""
+    """#graph-detail is present and non-empty after graph view loads."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-graph").click()
     detail = page.locator("#graph-detail")
@@ -363,10 +363,10 @@ def test_graph_detail_present_after_load(page: Page) -> None:
     assert text.strip(), f"#graph-detail empty: {text!r}"
 
 
-# ── P12.10: completeness guard ────────────────────────────────────────────
+# ── completeness guard ────────────────────────────────────────────
 
 def test_p12_completeness_guard() -> None:
-    """P12.10: every key interactive element id from dashboard.html appears in >=1 test."""
+    """every key interactive element id from dashboard.html appears in >=1 test."""
     import re
     from pathlib import Path
 
@@ -421,10 +421,10 @@ def test_p12_completeness_guard() -> None:
     assert not undriven, f"Interactive ids only presence-asserted, not driven: {undriven}"
 
 
-# ── P35 behavioral e2e: drive interactive elements to real outcomes ───────────
+# ── behavioral e2e: drive interactive elements to real outcomes ───────────
 
 def test_chat_input_routes_to_a_streamed_answer(page: Page) -> None:
-    """P35 DB2: a question typed into the chat bar produces a streamed answer.
+    """DB2: a question typed into the chat bar produces a streamed answer.
 
     Was test_suggested_question_click_routes_to_chat, which clicked a `.sq-btn` from the deleted
     "Ask the Codebase" panel. Two things were bundled in that click — the panel's routing into the
@@ -446,7 +446,7 @@ def test_chat_input_routes_to_a_streamed_answer(page: Page) -> None:
 
 
 def test_graph_node_click_updates_detail(page: Page) -> None:
-    """P35 DB3: clicking the sigma canvas updates #graph-detail."""
+    """DB3: clicking the sigma canvas updates #graph-detail."""
     page.goto(_DASH, wait_until="networkidle")
     page.locator("#vbtn-graph").click()
     page.locator("button[onclick='loadGraph()']").click()
@@ -464,7 +464,7 @@ def test_graph_node_click_updates_detail(page: Page) -> None:
 
 
 def test_project_selector_change_reloads_data(page: Page, _sample_promo: str, _sample_cart: str) -> None:
-    """P35 DB4: switching #project-sel between 2 sample projects; KPI tiles stay populated."""
+    """DB4: switching #project-sel between 2 sample projects; KPI tiles stay populated."""
     page.goto(_DASH, wait_until="networkidle")
     _select_project(page, _sample_promo)
     files_first = page.locator("#kpi-files").text_content() or ""
