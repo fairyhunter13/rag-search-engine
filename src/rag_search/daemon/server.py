@@ -118,10 +118,9 @@ def serve(host: str | None = None, port: int | None = None) -> None:
     _shutdown_exit(_REQUESTED_EXIT_CODE)  # reload -> 3 (systemd restarts); stop -> 0 (stays down)
 
 
-# The live watcher. Held at module scope because `start_watcher()`'s return value used to be
-# discarded, which meant roots were armed exactly once at boot: a project registered afterwards
-# was never watched, and one disabled afterwards was watched forever. Nothing could re-arm,
-# because nothing held the handle.
+# The live watcher, held at module scope so it can be re-armed. Discard the handle and roots are
+# armed exactly once at boot: a project registered afterwards is never watched, and one disabled
+# afterwards is watched forever.
 _WATCHER = None
 
 

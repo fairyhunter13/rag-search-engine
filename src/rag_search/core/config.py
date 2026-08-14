@@ -97,9 +97,8 @@ class ProjectEntry:
     file_count: int = 0
     chunk_count: int = 0
     dims: int = 768
-    # `last_active` lived here until 2026-07-31 with no reader and no writer. Registries written
-    # before then still carry the key; `registry.py:_load` filters to known fields, so the stale
-    # key is dropped on read rather than raising.
+    # Registries on disk may carry keys this dataclass no longer declares; `registry.py:_load`
+    # filters to known fields, so a removed field is dropped on read rather than raising.
     last_change_seen: str | None = None
     federation: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
@@ -121,15 +120,9 @@ def project_graph_db(project_path: str) -> Path:
     return index_dir(project_path) / "graph.db"
 
 
-# project_wiki_dir and root_process_db stood here and left with tier 3. Both were
-# pure path builders, so neither had a test of its own — their only callers were
-# kb/wiki.py and kb/bpre.py, and with those deleted a surviving helper would just be
-# a path nothing ever opens. The data they named outlived them by a day: deleting a
-# writer does not delete what it wrote, and a census found index_dir/wiki and
-# index_dir/process_graph.db still on disk across 161 index dirs — 9,016 files, 97.1 MB.
-# Purged 2026-07-29. The population is closed (no writer survives), so this was a
-# one-off removal and not a recurring sweep. Note what is NOT residue despite the
-# tier-3-era name: index_dir/ask_cache is live on routes_chat.py and query/ask.py.
+# Deleting a path builder does not delete what it wrote: retiring the `wiki`/`process_graph.db`
+# writers left 9,016 orphaned files across 161 index dirs, purged separately on 2026-07-29. Not
+# residue, despite the era: `index_dir/ask_cache` is live on routes_chat.py and query/ask.py.
 def federation_exclude_paths() -> frozenset[str]:
     """Resolved absolute paths excluded from federation discovery + reconcile indexing.
 
