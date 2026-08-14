@@ -75,3 +75,44 @@ would pass with no weight at all — the terms are in the index either way. So t
 count and the index now has three, so the comment was already stale from the `tokens` column and
 would go stale again. It now reads `0:M<n>` / `0:=M<n>` with the `=` called out as the whole of the
 finding — the same correction `_ROWID_SERVED` got in LX4, for the same reason.
+
+## Follow-up 2026-08-14: a downstream python corpus, and the reranker's shadow
+
+A consumer of this engine runs a nightly text→code recall gate over its own hand-labelled golden
+set — 32 intent queries against a ~1,500-chunk **python** repo, hand-verified owners, graded
+relevance. Its gnDCG@10 fell 0.9334 → 0.8917 the day after this change shipped, and `885c274` was
+its leading suspect: the drop was global where the consumer's own commit that day reached only two
+of the eight files involved. This record's revert condition — *"had the hybrid harness moved against
+it at any significance, the path field would have gone"* — made that worth resolving rather than
+assuming, and the note above about python being the weakest language in the third probe
+(recall@1 0.143 → 0.254) made it worth resolving **here**.
+
+**The suspicion was wrong, and the field stays.** Arms are `_PATH_WEIGHT` 5.0 vs 1.0 — which needs
+no re-index: the weight is interpolated into the `bm25()` call at query time and `path` is already
+a stored, populated fts5 column, so an arm is one constant plus a daemon restart. Measured at both
+levels of the consumer's pipeline, n=32, with 5.0 replicated bit-identically after the revert:
+
+| level | 5.0 vs 1.0 |
+|---|---|
+| reranked (what its gate scores) | every aggregate identical to 4 dp; **0** discordant recall@1 pairs; only 2 of 32 queries differ at all, in tail positions 6–10 |
+| fused, pre-rerank | 31 of 32 orderings change, 8 top-1s change; recall@1 **0.656 vs 0.562**, MRR 0.712 vs 0.655, gnDCG@10 0.736 vs 0.709; recall@10 alone prefers 1.0 (0.844 vs 0.906). McNemar 5-2, p = 0.45 |
+
+So on a real python corpus the path field is **directionally positive and not significant** — the
+same verdict shape this record already recorded for the hybrid harness, now on the language the
+third probe was weakest in. Nothing here moves against it, and lowering the weight would if anything
+cost that consumer retrieval quality.
+
+**The instrument was checked, not assumed.** LX6 goes red at 1.0 exactly as this record promises,
+and a paired probe of `search_lexical` over the same 32 queries moves 26 of 32 top-10 orderings.
+The weight reaches the corpus and reorders the lexical lane hard; **the cross-encoder then absorbs
+a 0.094 recall@1 gap down to exactly 0.000.**
+
+That last number is the transferable finding, and it is a warning about how this engine is
+evaluated. A downstream gate reading `search()` output cannot see a lexical-lane parameter at all —
+not weakly, but with literally zero discordant pairs. `eval_retrieval.py --lane hybrid` is the same
+shape (it scores already-reranked `search()` results), which is the mechanical reason its row in the
+table above came back **1-0, p = 1.0**: with one discordant pair, McNemar cannot return a signal
+regardless of which way the pair falls. That null was correctly read here as "no harm", and it
+should keep being read that way — but it is not evidence of "no effect", and no future ranking-lane
+parameter should be judged on that harness alone. The sensitive instruments are `search_lexical`
+directly, which is what LX6 already asserts on, and any consumer's pre-rerank order.
