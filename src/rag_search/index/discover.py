@@ -10,11 +10,8 @@ import pathspec
 from rag_search.core.config import IGNORED_DIRS
 from rag_search.core.index_config import ProjectConfig, effective_config, is_excluded
 
+# One name for one rule: an alias here is how two callers come to believe they filter differently.
 _EXCLUDE: frozenset[str] = IGNORED_DIRS | frozenset({"site-packages"})
-# `_REGISTRY_EXCLUDE_SEGMENTS = _EXCLUDE` stood here until 2026-07-31, commented "public alias
-# used by registry path filtering". It was a pure alias, read by nothing — including the registry.
-# A second name for one frozenset is how two callers come to believe they are filtering on
-# different rules; there is one rule and it is `_EXCLUDE`.
 
 _RSE_CFG_NAMES = (".rse-index.yaml", ".rse-index.yml")
 
@@ -232,32 +229,18 @@ def _should_drop(
 # H3: non-parseable text/data formats kept explicitly; code = any language
 # the pack can parse (detected via has_language() in _size_limit).
 _TEXT_LANGS: frozenset[str] = frozenset({"markdown", "rst", "text", "html", "css", "vimdoc"})
-# `vimdoc` joined 2026-08-04, and it is the csv/po fix below recurring in a language that fix did
-# not cover — with one addition that makes it worse. The pack maps the **`.txt` extension** to
-# vimdoc, so `detect_language_from_path` answers `vimdoc` for `requirements.txt` and
-# `CMakeLists.txt` alike; `is_code_language` then answered True because the pack has the grammar.
-# Every `.txt` file in the fleet was therefore taking the 500 kB *code* cap and feeding
-# `_code_source_fingerprint`, so editing a `requirements.txt` could wake a graph re-derive.
-# Measured: 390 fleet files, 0 symbols between them — 354 at rung `generic`, 36 `language_mismatch`.
-# Nothing is lost by the move — it is prose, and it extracted nothing to begin with.
+# The pack ships a grammar for prose and data formats too, so `is_code_language` answered True for
+# them and they took the 500 kB *code* cap and fed `_code_source_fingerprint` — editing a
+# `requirements.txt` (the pack maps `.txt` to vimdoc) or a CSV export could wake a graph re-derive,
+# which is what HR38 exists to prevent. Listing them here reclassifies rather than excludes, so a
+# 40-line hand-written test CSV stays searchable under the data cap.
 #
-# The other 40 languages the fleet holds were audited in the same pass, and only this one moved.
-# `scss` (363 files) and `less` (54) were the tempting pair, since `css` sits above them here and
-# they are stylesheets in exactly the same sense — but scss is only 60.9 % dark and holds **673
-# symbols**, so reclassifying it would *delete* extraction that works. `properties` and `ini`
-# likewise extract. `diff` (6 files) and `mermaid` (9) are the honest remaining candidates and are
-# left alone deliberately: below every gate this repo applies, and each is a judgement call rather
-# than a defect. **100 % dark is not the criterion** — `groovy` is 2,065 files at 100 % dark and is
-# unambiguously code. The criterion is whether the language is prose or data, and vimdoc is prose.
-# `csv` and `po` joined 2026-07-31 as a *classification* fix, not an exclusion. The pack ships
-# grammars for both, so `is_code_language` answered True and they were taking the 500 kB code cap
-# and feeding `_code_source_fingerprint` — a data export was waking the graph re-derive, which is
-# the thing HR38 exists to prevent. Measured across the fleet: 107 csv files held 12,612 chunks
-# (2.97 % of the corpus) and 9 po files held 1,510, and at the 100 kB data cap 96 % of the csv
-# mass and 100 % of the po mass falls out. Reclassifying rather than excluding keeps the small
-# hand-written fixture — a 40-line test CSV is legitimately searchable — which an extension rule
-# would have lost. Knock-on, and it is a real one: 116 files leave H1's coverage denominator via
-# graph/store.py:212, so that ratio moves without the graph having changed.
+# The criterion for joining this set is prose-or-data, **never** "100 % dark": groovy is 2,065
+# files at 100 % dark and is unambiguously code, while scss holds 673 symbols and reclassifying it
+# would delete extraction that works. All 40 fleet languages were audited on that criterion and
+# only vimdoc moved — docs/decisions/2026-08-04-the-language-axis-was-already-universal.md, and
+# docs/decisions/2026-07-31-corpus-hygiene.md for csv/po. Adding one moves H1's coverage
+# denominator (`graph/store.py`), so the ratio shifts without the graph having changed.
 _DATA_LANGS: frozenset[str] = frozenset({"json", "yaml", "toml", "csv", "po"})
 
 _SIZE_LIMITS: dict[str, int] = {
