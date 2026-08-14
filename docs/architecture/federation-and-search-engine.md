@@ -38,7 +38,7 @@ an independent unit.
 
 The governing principle is **P0: most efficient + most effective, for *everything* in RSE**. Every component, lane, and algorithm is chosen and tuned for maximum efficiency *and* effectiveness; all principles below are corollaries (§9b per-workload engine assignment, no cross-lane bleed; HR6, HR9, HR10, HR12, HR26).
 
-1. ~~**DeepSeek = least/minimum token usage (DIKW token economy).**~~ *Retired 2026-07-28 with tier 3.* It governed the cloud generative lane — significance-gated head, prefix caching, tail abstention, child-reuse roll-ups, HR22–HR24's budget accounting. That lane no longer exists, so the principle has no subject; its **stronger** successor is stated in `docs/info-hierarchy.md`: the DIKW climb is now deterministic at every rung and costs `$0`, not "the fewest possible tokens". The id is kept rather than reused, per `docs/world-model/README.md`.
+1. ~~**DeepSeek = least/minimum token usage (DIKW token economy).**~~ *Retired 2026-07-28 with tier 3.* It governed the cloud generative lane — significance-gated head, prefix caching, tail abstention, child-reuse roll-ups, HR22–HR24's budget accounting. That lane no longer exists, so the principle has no subject; its **stronger** successor is that the whole climb from source chunks to invariants is deterministic at every rung and costs `$0`, rather than "the fewest possible tokens". (`docs/info-hierarchy.md`, which spelled that out at length, was deleted 2026-08-14: a spend doctrine whose every rung reads `$0` no longer allocates anything.) The id is kept rather than reused.
 2. **tree-sitter, and nothing beneath it — no dynamic or static mapping, no keyword, no regex.** The only code that classifies *what the user's code means* uses tree-sitter (structural facts). **The "then LLM" half retired 2026-07-28**: the semantic/linkage tier that used to catch what tree-sitter could not statically reach lived entirely in `kb/bpre*.py` + `kb/resolve_rerank.py` and left with tier 3. That makes the prohibition load-bearing rather than tidy — a heuristic added here would be the *only* answer, not a first guess. No regex, no static/dynamic keyword list, no mapping table may substitute for structural analysis of user code, **package-wide over `src/rag_search/`** outside the four intrinsic-mechanism files (P6, §7a; HR14/HR15 survive, HR16–HR19's ladder does not).
 3. **GPU-only inference; CPU fallback fatal; maximize GPU, minimize CPU & RAM** (HR6, HR26, HR32, P16). Idle target: < 1 % CPU, constant RAM floor (models unload after `RSE_MODEL_IDLE_UNLOAD_S`). The heavy pass — graph re-derive + structural community labelling — runs only on real source-fingerprint drift (`_code_source_fingerprint` gate in `on_change`; the `_last_enriched_sig` gate it replaced went with the enrich/wiki/BPRE cascade on 2026-07-28, and the gate survived because the re-derive it protects is the expensive half that did). File-watching is event-driven via `watchfiles`/Rust `notify` — one thread + one inotify instance for all roots, `watch_filter` ignore-aware via the same HR35 resolver as the drift gate (P17, HR33, HR37); polling, if ever needed, is the Rust library's own `force_polling` path, never a hand-rolled loop.
 4. **No local generative LLM, and since 2026-07-28 no cloud one either except chat** — `claude -p` at claude-haiku-4-5 on the dashboard chat route is the *whole* generative surface, and `routes_chat.py` is its only caller. The cloud DeepSeek KB lane and the doc-tooling lane both left with tier 3 (HR12, P1/P14).
@@ -50,17 +50,20 @@ The governing principle is **P0: most efficient + most effective, for *everythin
 10. **Public-repo hygiene, now whole-tree.** RSE emits no artifacts at all since 2026-07-28 — wiki `community_*.md`/`domain_*.md`, `federation.md`, BPMN and citations all left with tier 3 — so the artifact-scoped rule (P7/HR13) is **retired** and its whole-repo widening (P18) is the entire principle: every tracked file must be safe to publish, with no secrets, no real device paths and no company/device names. The mechanism the old rule protected still exists and still matters: `symbols.file` stores **absolute** paths, so anything that ever renders one must strip it to root-relative first.
 11. **Engineering doctrine** — every line of code is a liability (prefer no change → deletion → smallest sufficient diff); correctness before speed; live suite uses no mocks (real embedder + GPU). Machine-verified Concept→Spec→Impl→Test traceability closes the V&V loop (HR30).
 
-## 1b. World model & governance/spec WM *(updated Phase 1 2026-06-26)*
+## 1b. Where the rules live *(rewritten 2026-08-14)*
 
-RSE's world model is a **governance/spec WM** (see `docs/world-model/` + `docs/reference/world-model.md`):
-- **State** = codebase + invariants/laws (P0–P18 in §1a + `model.yaml`; P7/P12/P13/P15 retired 2026-07-28, ids kept so numbering is never reused)
-- **Action** = a diff/change
-- **Guard** = does the diff satisfy the preconditions?
-- **Planner/validator** = `scripts/check_world_model.py` (GPU-free; emits CONFORMS/AT_RISK)
+A rule's definition is the test that enforces it. The chain is: §1a principles → the ops
+document's §13b write-path spec → its §14 map from each invariant to the live test that proves
+it, and that map is itself gated by `test_coverage_map_names_resolve` — a cited test that stops
+existing turns the suite red. `test_feature_proof.py` guards non-import of deleted modules.
 
-The old `kb/world_model.py` Requirements Traceability Matrix (`overview(what='world_model')`, HR30) was **deleted** (WS-B 2026-06-26) along with `FEATURES.md`. The governance/spec WM in `docs/world-model/model.yaml` (L1–L4 layers) **replaces** it as the normative source of truth. `scripts/check_world_model.py` provides the executable conformance check.
-
-RTM: §1a principles → §13b HRs → §14 test map (three layers). L3 traceability is machine-verified by `test_world_model_traceability.py` (asserts every `model.yaml` L3_specs `test:` resolves to a live `def test_…`). `test_feature_proof.py` guards non-import of deleted modules.
+Two registers used to sit alongside that chain and were deleted on 2026-08-14: `kb/world_model.py`'s
+Requirements Traceability Matrix (`overview(what='world_model')`, gone with WS-B 2026-06-26 along
+with `FEATURES.md`), and its replacement `docs/world-model/model.yaml` plus the GPU-free
+`check_world_model.py` conformance checker. The register restated in six places what §13b/§14
+already state once, its copies had drifted apart, and its checker's full scan enumerated `*.py`
+only — so the `docs/`/`scripts/` markdown coverage it claimed was never read. See
+`docs/decisions/2026-08-14-the-register-was-a-sixth-copy.md`.
 
 ## 2. Vocabulary
 

@@ -11,16 +11,38 @@ The split is by *what the reader does with it*:
 - **`CLAUDE.md`** — what changes an agent's next action. A rule, a command, a hazard.
 - **`docs/decisions/`** — why the rule exists, what it cost to learn, what was tried and rejected.
   Read on demand, linked from the one-line rule.
-- **`docs/world-model/model.yaml`** — the machine-checked invariants (P0–P18, HR1–HR41).
-  Single source of truth, verified by `scripts/check_world_model.py`. Never restated elsewhere.
+- **`docs/architecture/federation-ops-and-invariants.md`** — the write-path spec, and §14's map
+  from each invariant to the live test that proves it. A rule's definition is its test.
 
 Nothing here is deleted when a subsystem retires. A retired mechanism's lesson usually outlives
 it — HR36 is gone, its rule about reuse stamps is not.
+
+**On the `P#`/`HR#` ids in these records:** they refer to a `docs/world-model/model.yaml`
+register retired on 2026-08-14, which had become a sixth restatement of rules stated and enforced
+elsewhere. The records are kept as written — renaming history to match a later decision loses the
+trail of why it changed — so the ids are read as the labels they were at the time.
 
 ## Index
 
 | Date | Decision |
 |------|----------|
+| 2026-08-14 | [The invariant register was a sixth copy, and its checker read fewer files than it printed](2026-08-14-the-register-was-a-sixth-copy.md) |
+| 2026-08-05 | [The repair inherited the blind spot it was fixing](2026-08-05-the-repair-inherited-the-blind-spot-it-was-fixing.md) |
+| 2026-08-05 | [The name guard would have published the list](2026-08-05-the-name-guard-would-have-published-the-list.md) |
+| 2026-08-05 | [The INVALID nothing could repair, and the count that could hide it](2026-08-05-the-invalid-nothing-could-repair.md) |
+| 2026-08-05 | [The full suite was red in the record and green in fact](2026-08-05-the-full-suite-was-red-in-the-record-only.md) |
+| 2026-08-05 | [Guards on a function nothing calls](2026-08-05-guards-on-a-function-nothing-calls.md) |
+| 2026-08-05 | [A fleet number behind a project-scoped gate](2026-08-05-a-fleet-number-behind-a-project-scoped-gate.md) |
+| 2026-08-05 | [A deleted root is not a reindex](2026-08-05-a-deleted-root-is-not-a-reindex.md) |
+| 2026-08-04 | [Zero symbols is not the same as unreachable](2026-08-04-zero-symbols-is-not-unreachable.md) |
+| 2026-08-04 | [Two diversity rules in the result path, and what each one is worth](2026-08-04-two-diversity-rules-that-cost-no-recall.md) |
+| 2026-08-04 | [The vendor prize buys edges nobody reads](2026-08-04-the-vendor-prize-buys-edges-nobody-reads.md) |
+| 2026-08-04 | [The three questions the search budget had left open](2026-08-04-the-three-questions-the-search-budget-had-left-open.md) |
+| 2026-08-04 | [The residual has no types to resolve](2026-08-04-the-residual-has-no-types-to-resolve.md) |
+| 2026-08-04 | [The language axis was already universal](2026-08-04-the-language-axis-was-already-universal.md) |
+| 2026-08-04 | [Denying the daemon swap](2026-08-04-denying-the-daemon-swap.md) |
+| 2026-08-04 | [A receiver type dissolves the ambiguity rather than trading precision for it](2026-08-04-a-receiver-type-dissolves-the-ambiguity.md) |
+| 2026-08-04 | [A failed store is one warning line](2026-08-04-a-failed-store-is-one-warning-line.md) |
 | 2026-08-03 | [The embedding track: nomic + task prefixes shipped, the breadcrumb declined](2026-08-03-the-breadcrumb-writes-the-query-into-the-chunk.md) |
 | 2026-08-03 | [The extraction track is closed: the last two items were measured and declined](2026-08-03-the-extraction-track-is-closed.md) |
 | 2026-08-03 | [Most of the dark set is correctly dark](2026-08-03-most-of-the-dark-set-is-correctly-dark.md) |
@@ -34,6 +56,10 @@ it — HR36 is gone, its rule about reuse stamps is not.
 | 2026-08-01 | [The prefix-free escape hatch is not there, and two of the three backlog items were mis-founded](2026-08-01-the-prefix-free-escape-hatch-is-not-there.md) |
 | 2026-08-01 | [An exported edge must name an exported node, and a paired result must stay paired](2026-08-01-an-exported-edge-must-name-an-exported-node.md) |
 | 2026-08-01 | [What the `e8` bump actually owed, written after it shipped](2026-08-01-what-the-e8-bump-actually-owed.md) |
+| 2026-07-31 | [The evidence for `EMBED_MODEL` was not in the repo, and the obvious way to measure it saturates](2026-07-31-retrieval-eval-harness.md) |
+| 2026-07-31 | [The idle gate was measuring a neighbour, and underneath that it has almost no headroom](2026-07-31-idle-gate-floor.md) |
+| 2026-07-31 | [A private key was searchable, and a CSV export was waking the graph](2026-07-31-corpus-hygiene.md) |
+| 2026-07-31 | [Call extraction skips tree-sitter injections deliberately](2026-07-31-call-extraction-skips-injections-deliberately.md) |
 | 2026-07-31 | [The two levers are additive, and the bill is a fleet rebuild](2026-07-31-two-levers-additive-and-the-bill.md) |
 | 2026-07-31 | [The span scan was never hot, and bisect does not answer the same question](2026-07-31-span-scan-is-neither-hot-nor-equivalent.md) |
 | 2026-07-31 | [An edge is a resolved call, or it is not an edge](2026-07-31-an-edge-is-a-resolved-call.md) |
