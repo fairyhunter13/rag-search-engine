@@ -35,6 +35,7 @@ identifiers, and §14's coverage map resolves them under a guard.
 
 | Date | Decision |
 |------|----------|
+| 2026-08-14 | [The extractor revision log](2026-08-14-the-extractor-rev-log.md) |
 | 2026-08-14 | [The invariant register was a sixth copy, and its checker read fewer files than it printed](2026-08-14-the-register-was-a-sixth-copy.md) |
 | 2026-08-05 | [The repair inherited the blind spot it was fixing](2026-08-05-the-repair-inherited-the-blind-spot-it-was-fixing.md) |
 | 2026-08-05 | [The name guard would have published the list](2026-08-05-the-name-guard-would-have-published-the-list.md) |
