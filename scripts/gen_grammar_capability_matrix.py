@@ -103,7 +103,7 @@ def main() -> int:
         "`injections(static)` counts only grammars declaring the inner language with `#set!`. "
         "Rung 1 ignores dynamic `@injection.language` captures on purpose: taking the language "
         "from the document's own text (a markdown fence's info string) reads a token to choose a "
-        "grammar, which P6 forbids, and would enrol every fenced README example as a definition.",
+        "grammar, which HR15 forbids, and would enrol every fenced README example as a definition.",
         "",
         "## Totals",
         "",

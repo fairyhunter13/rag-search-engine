@@ -53,7 +53,7 @@ DAEMON_HOST = os.environ.get("RSE_MCP_DAEMON_HOST", "127.0.0.1")
 DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
 # RSE_MODEL_IDLE_UNLOAD_S is *not* declared here. It is a daemon-local timing knob and lives with
 # its siblings (RSE_RECONCILE_INITIAL_DELAY_S, _RESYNC_S) in `daemon/server.py:12`, which is the
-# only reader and what P16 and docs/decisions/2026-07-01-idle-cpu-root-causes.md both cite. A
+# only reader and what HR40 and docs/decisions/2026-07-01-idle-cpu-root-causes.md both cite. A
 # second parse stood here until 2026-07-31 with the same var and the same 300 s default and no
 # reader, so editing this file's default silently did nothing.
 
@@ -70,7 +70,7 @@ QUERY_LLM_MODEL = os.environ.get("RSE_QUERY_LLM_MODEL", "claude-haiku-4-5")
 # RSE_EMBED_PASSAGES_MAX_TEXTS, RSE_MAX_INLINE_BYTES, RSE_MAX_BYTES, RSE_SCHEMA_VERSION —
 # plus RSE_QUERY_LLM_PROVIDER and this file's duplicate RSE_MODEL_IDLE_UNLOAD_S (see above).
 # All 15 were read from the environment and then read by nothing — each outlived the call site it
-# was added for. Under P18 this file *is* the retargeting contract for a fresh clone, so a knob
+# was added for. Under HR34 this file *is* the retargeting contract for a fresh clone, so a knob
 # that parses and silently does nothing is worse than an absent one: it fails without an error.
 # A knob comes back only together with the code that consumes it; test_sc9 in
 # test_schema_consistency.py now fails the build if one is added without a consumer.

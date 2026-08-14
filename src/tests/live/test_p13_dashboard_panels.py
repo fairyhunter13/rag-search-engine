@@ -1,4 +1,4 @@
-"""P13.4 — Dashboard metrics endpoint E2E (no mocks, real daemon)."""
+"""— Dashboard metrics endpoint E2E (no mocks, real daemon)."""
 from __future__ import annotations
 
 import pytest

@@ -224,7 +224,7 @@ def test_el11_a_method_is_qualified_by_the_type_it_is_declared_on() -> None:
     *outside* its type: `func (s *Server) Start()` is top-level and nested in nothing.
 
     So the container is read from the receiver **field**, which is grammar structure exactly like
-    the `name` field `_generic_walk` already reads — no vocabulary about source text (P6/HR15),
+    the `name` field `_generic_walk` already reads — no vocabulary about source text (HR15),
     and nothing keyed on the language being Go.
 
     `Stack[T]` is the case that fixed the rule rather than confirming it. Taking the receiver's
@@ -339,7 +339,7 @@ def test_el12_a_documentation_fence_does_not_become_a_project_definition() -> No
     A `(#set! injection.language "php")` is the grammar author stating a property of the host
     grammar. A dynamic `@injection.language` capture takes the language from the document's own
     text — a markdown fence's info string — which is reading a token to choose a grammar, the
-    thing P6 forbids. It is also simply wrong: an example in a README is not a definition in the
+    thing HR15 forbids. It is also simply wrong: an example in a README is not a definition in the
     project, and enrolling one makes `graph(relation="definition")` answer with documentation.
 
     Measured across the pack's 110 injection-capable languages: 64 declare statically, 12 capture

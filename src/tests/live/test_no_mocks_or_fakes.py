@@ -1,8 +1,8 @@
-"""P15.1: Blocking anti-mock guard — makes the 'no mocks / real integration' invariant mechanical.
+"""Blocking anti-mock guard — makes the 'no mocks / real integration' invariant mechanical.
 
 Scans every *.py under src/tests/ and FAILS if:
   (a) any mock/fake/stub/patch symbol appears, OR
-  (b) any test uses build_test_app (zero-tolerance: P15.2 migration is complete).
+  (b) any test uses build_test_app (zero-tolerance: the migration is complete).
 
 All tests must drive real integrations through live_client at :8765 or direct MCP tool imports.
 build_test_app() has been deleted from routes.py; any attempt to re-introduce it is caught here.
@@ -34,7 +34,7 @@ _MOCK_PATTERNS = [
 _MOCK_RE = re.compile("|".join(_MOCK_PATTERNS))
 
 # ── (b) build_test_app allowlist ──────────────────────────────────────────────
-# P15.2 migration complete: build_test_app() deleted from routes.py; allowlist is empty.
+# Migration complete: build_test_app() deleted from routes.py; allowlist is empty.
 # Any future re-introduction of build_test_app in a test FAILS this guard immediately.
 _BUILD_TEST_APP_ALLOWLIST: frozenset[str] = frozenset()
 
@@ -92,7 +92,7 @@ def test_build_test_app_only_in_allowlist():
                     violations.append(
                         f"{rel}:{lineno} [{key}]: {line.strip()[:80]}\n"
                         f"  → Add to _BUILD_TEST_APP_ALLOWLIST (permanent negative test)\n"
-                        f"    OR convert to live_client at :8765 (P15.2 pattern)."
+                        f"    OR convert to live_client at :8765 (the live_client pattern)."
                     )
     assert not violations, (
         "build_test_app used outside allowlist (use live daemon at :8765 for happy paths):\n"

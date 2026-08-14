@@ -251,7 +251,7 @@ def test_gh8_a_rederive_is_never_observed_as_an_empty_graph(safe_tmp_path):
                 # `assert samples` below catch the case where *every* read failed.
                 with contextlib.suppress(sqlite3.Error):
                     samples.append(con.execute("SELECT COUNT(*) FROM symbols").fetchone()[0])
-                time.sleep(0.002)          # sample densely, but not with a whole core (P16)
+                time.sleep(0.002)          # sample densely, but not with a whole core
 
         watcher = threading.Thread(target=poll, daemon=True)
         watcher.start()

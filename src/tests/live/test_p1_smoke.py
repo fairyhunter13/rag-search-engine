@@ -1,4 +1,4 @@
-"""P1 GPU smoke: embed on GPU, store in sqlite-vec, search with exact recall."""
+"""GPU smoke: embed on GPU, store in sqlite-vec, search with exact recall."""
 import tempfile
 from pathlib import Path
 
@@ -15,7 +15,7 @@ def test_no_cpu_fallback(cuda_ep):
 
 
 def test_embedder_bound_to_gpu(embedder):
-    """P32.3: verify the real ONNX session bound to a GPU EP (not just compiled in), not CPU."""
+    """verify the real ONNX session bound to a GPU EP (not just compiled in), not CPU."""
     from rag_search.core.gpu import GPU_EP_NAMES
     providers = embedder._model.model.model.get_providers()
     assert providers[0] in GPU_EP_NAMES, f"Embedder not on GPU: {providers}"
@@ -25,7 +25,7 @@ def test_embedder_bound_to_gpu(embedder):
 
 
 def test_reranker_bound_to_gpu(embedder):
-    """P32.4: Reranker ONNX session must have a GPU EP as primary (position-0)."""
+    """Reranker ONNX session must have a GPU EP as primary (position-0)."""
     from rag_search.core.gpu import GPU_EP_NAMES
     from rag_search.embed.embedder import Reranker
     r = Reranker()
