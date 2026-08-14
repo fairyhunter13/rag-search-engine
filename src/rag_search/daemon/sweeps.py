@@ -115,11 +115,10 @@ def pause_lease_remaining_s(now: float | None = None) -> float:
 
 # Composite pipeline algorithm version — bump either component constant to trigger re-derive.
 # Also folds a SHA-4 of key pipeline modules so code-only changes self-heal without a manual bump.
-# The modules whose bytes determine graph output, relative to src/rag_search/. `graph/enrich.py`
-# stood here until 2026-07-28; it was deleted with tier 3 and the suppress() below meant a missing
-# file contributed nothing — so dropping it leaves the hash bit-identical and re-derives nothing.
-# test_self_heal_code_fp.py::SH2b now asserts every entry exists, so the next one can't go dead
-# unnoticed. Editing this tuple, or any file it names, re-derives all fleet graphs — and it takes
+# The modules whose bytes determine graph output, relative to src/rag_search/. A missing file
+# contributes nothing to the hash, so a stale entry would go dead silently — SH2b in
+# test_self_heal_code_fp.py asserts every entry exists.
+# Editing this tuple, or any file it names, re-derives all fleet graphs — and it takes
 # effect the moment the bytes change on disk, because `_fingerprint_paths` re-reads them per call
 # with no memo. Under an editable install that means a live daemon, no restart and no deploy: an
 # edit to extractor.py during a fleet repair puts a 160-graph re-derive in contention with it.
@@ -185,14 +184,6 @@ def _pipeline_algo_version() -> str:
     return f"{ALGO_VERSION}+{EXTRACTOR_REV}+{_code_fingerprint()}"
 
 
-# The all-files `_source_fingerprint` and its `_fingerprint_cache` lived here until 2026-08-05.
-# HR38 repointed every gate to the code-only fingerprint below on 2026-07-01, and the last
-# non-test caller left with tier 3 on 2026-07-28 — but the function stayed, and four guards across
-# three files went on asserting its behaviour. Two of them were the *named* guards for live
-# invariants (HR35's hidden-dir case, HR28's docs case), so those invariants were pinned to code
-# nothing ran. Repointed and the function deleted; see
-# docs/decisions/2026-08-05-guards-on-a-function-nothing-calls.md.
-
 # Code-only fingerprint memo (HR38): 'relpath:mtime' filtered to is_code_language files only,
 # so the labelling gate and the graph re-derive gate are both code-only — non-code churn
 # (docs/config/images) never wakes either.
@@ -248,13 +239,11 @@ def _code_scan(path: str) -> tuple[str, float]:
     root = Path(path)
     # The memo is keyed on elapsed time, NOT on the root directory's mtime.
     #
-    # It used to be keyed on `root.stat().st_mtime`, which cannot observe the changes it is
-    # memoising: a directory's mtime moves only when its *direct* entries change, so every edit
-    # nested below the project root left the key identical and returned a frozen fingerprint and
-    # a frozen watermark. Measured on the live fleet before this changed — rag-search-engine's key
-    # was 9.1 hours older than its newest file, the largest workspace's 1.5 hours — and since the baseline
-    # `_vectors_content_stale` compares against keeps advancing, a frozen watermark reads "clean"
-    # permanently. `_graph_stale` was frozen by the same key.
+    # Not `root.stat().st_mtime`: a directory's mtime moves only when its *direct* entries
+    # change, so every edit nested below the root leaves that key identical and returns a frozen
+    # fingerprint and watermark — and since the baseline `_vectors_content_stale` compares against
+    # keeps advancing, a frozen watermark reads "clean" permanently. Measured on the live fleet
+    # before this changed: keys 1.5 to 9.1 hours older than the project's newest file.
     #
     # A walk is the only thing that can answer this honestly, so the cache now just bounds how
     # often we pay for one: 43 s of stat-walking for all 160 projects, against a reconcile cadence
@@ -829,20 +818,12 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
             if not caller_sid:
                 continue
             cands = name_to_entries.get((_fam(fstr), callee_name), [])
-            # S0 rung 0: this read `callee_file != fstr`, which discarded every call whose target
-            # was defined in the same file. Measured 2026-07-29 — ccw's stored graph held **0
-            # same-file edges out of 1,934**, so `callers`/`callees` could not answer any relation
-            # that stays inside one file: `run_and_log` showed 8 callers and 0 callees,
-            # `evaluate_recall` 7 callees and 0 callers, and five of the twelve-query graph gate's
-            # seven misses were same-file. Restoring them grew ccw's graph ~43%.
-            #
-            # S10: that restoration was right and left the *inverse* defect — every candidate the
-            # family held was emitted, so one call site bound to N definitions and `graph()`
-            # presented all N with equal confidence. 2,220,234 of 2,320,130 fleet edges were
-            # ambiguous (95.7%), 70.2% of them in groups above 32. Same file is not an exclusion
-            # and not merely a restoration: it is the *preferred scope*, which is what every
-            # language's scoping rules actually do. Past it there is no evidence here to choose
-            # with, so emit nothing rather than N-1 wrong edges.
+            # Same file is the *preferred scope*, which is what every language's scoping rules
+            # do — neither an exclusion (excluding it left `callers`/`callees` unable to answer
+            # any relation inside one file) nor a mere inclusion (including the whole family
+            # bound one call site to N definitions, 95.7% of fleet edges). Past the preferred
+            # scope there is no evidence here to choose with, so emit nothing rather than N-1
+            # wrong edges. See docs/decisions/2026-07-31-an-edge-is-a-resolved-call.md.
             same_file = [sid for sid, cfile in cands if cfile == fstr]
             # The self-drop comes after the tier is chosen, never before. Choosing first means a
             # recursive call in the only file defining that name finds an empty tier and falls
