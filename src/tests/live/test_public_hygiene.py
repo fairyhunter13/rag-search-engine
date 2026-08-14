@@ -505,3 +505,27 @@ def test_claude_md_stays_an_instruction_file() -> None:
         "in docs/decisions/; invariants belong in docs/architecture/. Raise this ceiling "
         "only if the added text changes what an agent does next."
     )
+
+
+# Same shape one level up: 8,414 lines of tracked markdown after the 2026-08-14 prune, which
+# removed a duplicated invariant register, a doctrine ladder and three orphaned records. Prose
+# grows back the way it grew the first time — a paragraph at a time, each one defensible.
+_TRACKED_MD_MAX_LINES = 8_800
+
+
+def test_tracked_markdown_stays_within_its_ceiling() -> None:
+    """The repo's prose budget, enforced the same way CLAUDE.md's is."""
+    files = subprocess.run(
+        ["git", "ls-files", "-z", "*.md"],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
+    total = sum(
+        len((_REPO_ROOT / f).read_text(encoding="utf-8", errors="replace").splitlines())
+        for f in files if f
+    )
+    assert total <= _TRACKED_MD_MAX_LINES, (
+        f"tracked markdown is {total} lines (ceiling {_TRACKED_MD_MAX_LINES}). New narrative "
+        "belongs in docs/decisions/ as its own dated record, not appended to a doc a reader "
+        "consults for the current rule. This ceiling may be raised deliberately — say so in the "
+        "commit — but never silently, which is how the last register reached six copies."
+    )
