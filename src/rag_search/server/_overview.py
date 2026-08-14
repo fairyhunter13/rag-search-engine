@@ -455,11 +455,8 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                     ], strict=False)
 
         if what == "communities":
-            # Carries `summary` and `member_count`, and ranks by `query` when one is given.
-            # This is the architecture axis the `ask` tool used to reach: `ask` re-ran a whole
-            # federated chunk search to get here, then returned it as a 3000-char prose blob.
-            # Current practice is the opposite — consolidate into a parameterised tool, and
-            # return structured rows the caller can act on rather than assembled context.
+            # Carries `summary` and `member_count`, and ranks by `query` when one is given —
+            # structured rows the caller can act on, not assembled prose context.
             # The cap is global, not per store. `LIMIT 50` inside the loop bounds each
             # federation *member* — the largest workspace has 194, so the payload would have been up to
             # 9,700 rows and the rerank below would have scored every one of them. Sorting
@@ -489,11 +486,9 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
             tot_sym, tot_comm, tot_fc = 0, 0, 0
             members_info: list = []
             worst_state = "ready"
-            # Three reachable states. The old ladder had a fourth, `enriching`, keyed on the
-            # level-1 summary fill rate — meaningless now that structural labelling fills every
-            # summary deterministically, which would have pinned every project at a permanent
-            # `ready`. What still discriminates is whether the index exists and whether the
-            # partition is degenerate.
+            # Three reachable states: what discriminates is whether the index exists and
+            # whether the partition is degenerate. A fill-rate rung is not a fourth — structural
+            # labelling fills every summary deterministically, so it would pin every project.
             _rank = {"indexing": 0, "degraded": 1, "ready": 2}
             for p, gs in _each_store():
                 ep = _by_path.get(p)  # §2a: cached lookup, not a fresh file read
@@ -506,15 +501,11 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                 tot_fc += ep.file_count if ep else 0
                 # Federation roots legitimately have 0 edges (HR4: synthesis L3 rows only).
                 _is_fedroot = bool(ep and ep.federation)
-                # H1. The exemption used to be `and not _is_fedroot` across *both* arms, while
-                # the comment above it justified only the edge arm. So a federation root that
-                # held its own code and extracted none of it reported healthy — the one store
-                # in the fleet where "0 symbols" is ambiguous was the one store that could
-                # never say so. The edge arm keeps its exemption, because HR4 really does mean
-                # a root's L3 synthesis rows carry no edges. The symbol arm now asks for
-                # evidence instead: a root with no code files of its own is empty by design and
-                # stays exempt; one that attempted code files and got nothing back is hollow
-                # like any member. That question is only answerable since `file_extraction`.
+                # H1. The fedroot exemption belongs to the edge arm only, and the symbol arm
+                # asks for evidence instead: a root with no code files of its own is empty by
+                # design, one that attempted code files and got nothing back is hollow like any
+                # member. Exempting both arms made the one store where "0 symbols" is ambiguous
+                # the one store that could never report it.
                 _code_files = gs.code_files_extracted()[0] if _is_fedroot else 0
                 _hollow = ((s == 0 and cm > 0 and (not _is_fedroot or _code_files > 0))
                            or (ec == 0 and cm > 0 and not _is_fedroot))
@@ -527,9 +518,6 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                 else:
                     hq = partition_quality(gs)
                 # Degenerate partition demotes index_state below ready (HR20, user choice).
-                # The gate was written against the field's old name, `kb_state`; that name is
-                # gone from src/ with tier 3 and the partition check itself is tier 2 (igraph
-                # + SQL, no LLM), so only the label changed here.
                 if hq.get("degenerate") and _ks == "ready":
                     _ks = "degraded"
                 members_info.append({"path": p, "index_state": _ks, "symbols": s,
@@ -581,12 +569,8 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                 ).fetchall())
             return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]],
                                 "resolved_project": project_path})
-        # `suggested_questions` stood here. It rendered f"How does {title} work?" over the top
-        # 5 communities by member_count, and `_label_from_names` gives ccw 22 communities
-        # called `Test` — so the dashboard offered "How does Test work?" five times. It
-        # existed to seed a chat box, which no longer prompts for questions.
         # default: structure
-        # One pass for all three totals; three comprehensions stood here and each re-opened the
+        # One pass for all three totals — a comprehension per total re-opens the
         # whole federation.
         fc = _sym = _com = 0
         for _, gs in _each_store():
