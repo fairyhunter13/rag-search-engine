@@ -12,6 +12,11 @@ pane read BPRE. The `docs` pane (the surviving human-authored half of the old wi
 `hierarchy` pane went next, when the dashboard became an operator console — reading a repo's own
 markdown is the editor's job, and the hierarchy loader had been calling a `what` value that does
 not exist. Four views remain.
+
+Assert on content, never on attachment. Three tests here outlived their publisher and stayed green
+for weeks, because a panel with no writer is still attached and `#admin-autopipeline-log` read a
+key its route has never returned. An attachment assertion cannot tell a fed panel from an empty
+div, which is the one thing these tests exist to tell.
 """
 from __future__ import annotations
 
@@ -216,9 +221,6 @@ def test_graph_renders_on_reload(page: Page) -> None:
     assert cnt.strip(), f"#graph-node-count empty after reload: {cnt!r}"
 
 
-# The Re-index → #op-log pair left with tier 3. runReindex() and runWiki() were byte-identical
-# apart from their log strings — both POSTed /api/build_wiki?action=wiki — so the "Re-index"
-# button never re-indexed anything, and there is no live route to re-point the test at.
 
 
 # ── every _CMD_ITEMS entry dispatches ──────────────────────────────
@@ -258,17 +260,10 @@ def test_cmd_palette_refresh_pulse_op(page: Page, _sample_promo: str) -> None:
     assert files not in ("", "—"), f"kpi-files empty after Refresh Pulse cmd: {files!r}"
 
 
-# The two op entries this exercised — "Re-index project" and "Generate wiki" — left the palette
-# with tier 3, along with the runReindex()/runWiki() functions behind them. The surviving op
-# entries ("Refresh Admin", "Refresh Pulse") are covered by the Refresh-Pulse test above.
 
 
 # ── admin panels ──────────────────────────────────────────
 
-# The #kpi-enrichment tile left with tier 3: it read /api/kb_health's enrichment_pct, which
-# measured DeepSeek narration coverage over community summaries. Structural labelling now fills
-# every summary, so the number would be a permanent, meaningless 100%. #kpi-communities is the
-# surviving KPI over that same table, and it is asserted in the id-coverage test below.
 
 
 def test_admin_projects_body_populated(page: Page) -> None:
@@ -290,12 +285,6 @@ def test_admin_storage_health_populated(page: Page) -> None:
 
 
 # ── SSE live feed elements ─────────────────────────────────────────
-#
-# test_activity_list_element_present stood here, asserting #activity-list was attached. Its
-# publisher — /api/kb_health's last_pipeline_event — left with tier 3, and its docstring's premise
-# ("SSE events append here") stopped being true then; the panel was still attached, so the test
-# kept passing over a feed with no writer. The pane it belonged to is now the Indexing Queue,
-# covered by test_pulse_indexing_queue_reports_sweep_state on content rather than attachment.
 
 
 # ── graph interactions ─────────────────────────────────────────────
@@ -332,25 +321,10 @@ def test_graph_layout_sel_change_no_crash(page: Page) -> None:
     assert cnt.strip(), f"#graph-node-count empty after layout change: {cnt!r}"
 
 
-# The Wiki-generate half of that pair left with tier 3 along with its button and runWiki(). #op-log
-# went with it too — I claimed here that opLog() survived via the Reload-config and Pause/Resume
-# ops, and that was wrong: `git grep opLog` found the definition and nothing else. The same trace
-# killed #admin-job-chips, whose /api/events/stream feed had no publisher left once the pipeline
-# job runner was deleted, so the route, the chips and the sink are all gone.
 
 
-# test_admin_autopipeline_present stood here and asserted only that #admin-autopipeline-log was
-# *attached*. The panel read `d.events` from /api/auto_pipeline_status, which returns
-# {enabled, pending} and has no `events` key — so it was permanently empty and the test was green
-# throughout. An attachment assertion cannot see the difference between a fed panel and an empty
-# div, which is why the defect survived every run. The route's real payload is on Pulse now and is
-# covered by test_pulse_indexing_queue_reports_sweep_state, which asserts on content.
 
 
-# The docs-view block stood here — three tests over #docs-pages / #docs-content /
-# #docs-search, themselves re-pointed from the wiki view when kb/wiki.py left. The pane is gone
-# with the operator-console pass, and there is nothing to re-point them at a third time: the
-# surface they exercised was a markdown reader for files already on disk.
 
 
 def test_graph_detail_present_after_load(page: Page) -> None:
@@ -495,10 +469,6 @@ def test_journey_user_empty_chat_is_ignored(page: Page) -> None:
     assert page.locator("#send-btn").is_enabled(), "#send-btn must not be disabled on empty submit"
 
 
-# DB6b (the wiki-lint disclosure) left with tier 3 along with toggleWikiLint() and the lint panel
-# itself. The lint ran over kb/wiki.py's generated pages — broken links between generated pages,
-# citations into a KB that no longer exists. Its reader journey moved to the docs pane, which has
-# since gone too, so the journey has no successor: reading documents is not what this console does.
 
 
 def test_journey_analyst_filters_graph_to_files(page: Page) -> None:
@@ -536,11 +506,6 @@ def test_journey_structure_tile_shows_files_with_symbols(page: Page) -> None:
     )
 
 
-# DB5 and DB1 (the operator's Re-index journey) left with tier 3. Both drove the same button, which
-# POSTed /api/build_wiki: DB5 read the completion line out of #op-log, DB1 read the SSE job chip the
-# same POST published. The button, the log sink, the publisher and the stream are all gone, and the
-# operator journey that replaces them is not a click at all — indexing is driven by the reconcile
-# sweep, whose result the operator reads in the admin table (test_admin_projects_body_populated).
 
 
 def test_journey_user_asks_and_gets_progressive_answer(page: Page) -> None:
@@ -588,7 +553,3 @@ def test_chat_debug_question_via_browser(page: Page) -> None:
     )
 
 
-# The Processes view and the Wiki Docs group both left with tier 3, so their tests are deleted
-# rather than re-pointed. #view-processes rendered kb/bpre.py's reconstructed process flows, which
-# no longer exist in any form. #vbtn-wiki/#wiki-pages/#wiki-content listed kb/wiki.py's generated
-# pages; the docs view carried their assertions for one release and has now gone the same way.
