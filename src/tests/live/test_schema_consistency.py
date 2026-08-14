@@ -7,30 +7,6 @@ SC6  Producer↔consumer symmetry, at two levels: no write-only symbols *column*
      becoming columns at all — the guard could not see what it did not start from.
 SC8  community detection is leidenalg-free and deterministic
 SC9  every RSE_* env knob in core/config.py has a consumer outside core/config.py
-
-  SC3  community_count() is scoped to level>=1, "excluding the level=0 structural spine".
-       Retired 2026-07-31: no writer ever produced a level=0 row. `community.py` writes only
-       level=1, and the Phase-2 dir/file nodes the clause was added to exclude were deleted
-       with them. The SQL is harmless and stays; pinning its text asserted a distinction the
-       schema no longer draws, so a reader trusted a spine that does not exist.
-
-Four guards left with tier 3, all four of them anchored on the semantic-type taxonomy that
-`graph/enrich.py` owned and `kb/wiki.py` mirrored. That taxonomy does not exist any more, and
-as of R2 neither does the column: `communities.semantic_type` was dropped along with
-`narrated`, `kind` and `path` once the census showed no writer and no reader left. These
-guards were not re-pointed at a new subject; they had none.
-
-  SC1  every `semantic_type NOT IN (…)` literal in ask.py ∈ enrich._TYPE_ORDER. Its subject
-       went first: R0b removed ask.py's semantic-type scope, so by the time enrich.py left
-       the loop was already iterating zero clauses and could not fail.
-  SC2  EXCLUDED_FROM_RETRIEVAL ⊆ _TYPE_ORDER — both constants lived in enrich.py.
-  SC5  the taxonomy's single-source binding: enrich._TYPE_ORDER == wiki._TYPE_ORDER ==
-       wiki._TYPE_LABEL.keys(). It existed because `wiki._render_index` iterated its own
-       copy and silently dropped any type missing from it, so a type added to enrich alone
-       would vanish from the wiki index. Two of the three sources are deleted files.
-  SC7  the semantic_type three-state contract (NULL=abstained, ''=L2-default, <type>=head),
-       read out of `_overview.py`'s `feature_map` SQL. `feature_map` is one of the five
-       overview variants R0a deleted, so this guard has been red since that commit.
 """
 from __future__ import annotations
 

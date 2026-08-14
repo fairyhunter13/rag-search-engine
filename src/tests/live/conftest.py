@@ -159,20 +159,15 @@ def _purge_leaked_test_state():
     still exists on disk. The next session's IS2 guard
     (test_no_junk_paths_in_live_registry) then fails on that leaked junk.
 
-    C1, 2026-07-30 — the premise this docstring used to assert is false, and asserting it is
-    what made the bug invisible. It read "at session START the current run hasn't built its own
-    workspace yet, so anything under rse-test-dirs belongs to a dead prior session". That holds
-    only when runs never overlap, and in this checkout they routinely do: three agent profiles
+    **Purge by ownership, never by existence.** "Nothing under rse-test-dirs can belong to this
+    run yet" holds only when runs never overlap, and here they routinely do — three agent profiles
     share one tree, and the pytest-vs-pytest gate catches a *concurrent start* but not a run that
-    began while another was already mid-suite. Purging on existence then deleted a live run's
-    workspace out from under it, and the damage surfaced downstream as unrelated assertion
-    errors — never as "someone deleted my files".
-
-    So the purge now asks who owns each child (`owner_is_live`, `_projects.py`): dirs owned by a
-    pytest process alive on this boot are left alone, everything else is purged exactly as
-    before. Untagged dirs still count as dead, so the self-heal keeps working for the state a
-    killed session actually leaks — which is what this fixture was built for. Idempotent, and it
-    still runs regardless of how the prior session died.
+    began while another was already mid-suite. Purging on existence deleted a live run's workspace
+    out from under it, surfacing downstream as unrelated assertion errors and never as "someone
+    deleted my files". So each child is asked who owns it (`owner_is_live`, `_projects.py`): dirs
+    owned by a pytest process alive on this boot are left alone. Untagged dirs still count as dead,
+    which is what makes the self-heal work for the state a killed session actually leaks.
+    Idempotent, and it runs regardless of how the prior session died.
 
     It is also the *last* teardown in the session (first session autouse to set up, so last to
     finalize), which is the only point at which every store this run created is already written.
