@@ -20,12 +20,20 @@ def vector_row_health(con: sqlite3.Connection) -> dict[str, int]:
     to act on. `orphan_count` keeps its name and its meaning of "rows that should not exist as
     they are"; it is now a sum of two disjoint sets rather than a difference of two totals.
     """
+    # `vec_chunks` is a sqlite-vec virtual table, which has no index to probe: a join that drives
+    # *into* it costs one full virtual-table scan per outer row. Scanning it once into an ordinary
+    # keyed table makes all three joins below O(n) instead. Measured on a 62k-chunk store:
+    # 29.5s to 0.17s, same counts, and the whole 224-member federation went from over 6 min — past
+    # every caller's timeout, which is why the nightly audit had not answered since 2026-08-05.
+    con.execute("DROP TABLE IF EXISTS temp._vec_ids")
+    con.execute("CREATE TEMP TABLE _vec_ids(chunk_id INTEGER PRIMARY KEY)")
+    con.execute("INSERT OR IGNORE INTO _vec_ids SELECT chunk_id FROM vec_chunks")
     stranded = con.execute(
-        "SELECT COUNT(*) FROM vec_chunks v LEFT JOIN chunks c USING(chunk_id)"
+        "SELECT COUNT(*) FROM _vec_ids v LEFT JOIN chunks c USING(chunk_id)"
         " WHERE c.chunk_id IS NULL"
     ).fetchone()[0]
     missing = con.execute(
-        "SELECT COUNT(*) FROM chunks c LEFT JOIN vec_chunks v USING(chunk_id)"
+        "SELECT COUNT(*) FROM chunks c LEFT JOIN _vec_ids v USING(chunk_id)"
         " WHERE v.chunk_id IS NULL"
     ).fetchone()[0]
     # The bit lane drifts silently in both directions (BQ1), and nothing reported it: 25 codes
@@ -35,14 +43,15 @@ def vector_row_health(con: sqlite3.Connection) -> dict[str, int]:
     has_bin = con.execute(
         "SELECT 1 FROM sqlite_master WHERE name='vec_chunks_bin'").fetchone()
     codes = con.execute(
-        "SELECT COUNT(*) FROM vec_chunks_bin b LEFT JOIN vec_chunks v USING(chunk_id)"
+        "SELECT COUNT(*) FROM vec_chunks_bin b LEFT JOIN _vec_ids v USING(chunk_id)"
         " WHERE v.chunk_id IS NULL"
     ).fetchone()[0] if has_bin else 0
+    con.execute("DROP TABLE temp._vec_ids")
     return {"stranded_vectors": stranded, "missing_vectors": missing,
             "orphan_count": stranded + missing, "stranded_codes": codes}
 
 
-def _check_member(member_path: str, root_path: str) -> dict[str, Any]:
+def _check_member(member_path: str) -> dict[str, Any]:
     import sqlite_vec  # type: ignore[import-untyped]
 
     from rag_search.core.config import project_graph_db, project_vector_db
@@ -132,7 +141,7 @@ def validate_index(project_path: str) -> dict:
     reports: list[dict] = []
     all_valid = True
     for mp in members:
-        chk = _check_member(mp, project_path)
+        chk = _check_member(mp)
         ok = _is_member_valid(chk)
         if not ok:
             all_valid = False
