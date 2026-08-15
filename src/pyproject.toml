@@ -169,7 +169,11 @@ ignore_errors = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["src/tests"]
+testpaths = ["tests"]
+# The sample projects are indexing corpus, not suites. Collecting them imported
+# ledger-standalone/tests as `tests`, which shadowed the real package and made
+# `tests.live` unresolvable — the whole live suite vanished behind one import error.
+norecursedirs = ["sample_projects"]
 markers = [
     "live: requires daemon at :8765, CUDA GPU — hard-fails if daemon/GPU absent (never skipped)",
     # `slow` used to mean both of the below at once, and that conflation is what rotted gates.
