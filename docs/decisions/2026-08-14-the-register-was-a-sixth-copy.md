@@ -95,6 +95,14 @@ Two consequences of that reversal, both deliberate, neither obvious from the tre
   never the gap; the map was. Rows added, and `test_every_defined_hr_id_is_mapped` now holds §14 to
   its own first sentence. Struck §13b rows are exempt — a retired requirement needs no live proof,
   which is the same strikethrough contract read the way each table reads it.
+- **§14 cites files as well as test names, and only the names were read.** The retargeted guard
+  below resolves `def test_…` citations; nothing read the File column, so renaming a module while
+  keeping its defs — the ordinary shape of a split or move — left the map naming a path that is
+  gone with every guard green. Measured before the gate: 60 unstruck refs, 59 resolving. The one
+  that did not was HR27's, the same lone retired row announcing its retirement in prose; struck to
+  match the other eleven, so `test_coverage_map_files_resolve` needs no allowlist. The File column
+  is read alone — prose in the other two cells legitimately names modules that are gone, and
+  "`test_bpre.py` is deleted" is a true sentence.
 - **The 31 bare `(HR38)`-style tags left in `src/` were kept on purpose.** The instruction to
   strip them assumed the ids were about to become meaningless. They did not, so each tag is now a
   one-hop reference to a definition that exists and is machine-checked.

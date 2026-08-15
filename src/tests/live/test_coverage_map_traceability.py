@@ -41,14 +41,31 @@ def _section_rows(heading: str) -> list[str]:
 
     Stop at the next heading of any depth: §13c follows §13b at h3 and carries its own numbered
     table (`#1`–`#8`); reading it there would make an id defined by the wrong table.
+
+    Data starts after the separator row, not after a prefix test on each line. Everything above the
+    separator is header by definition, in any of the spellings a formatter emits (`|---|`,
+    `| --- |`, `|:---:|`) — a `startswith("|---")` filter reads two of those three as data.
     """
     body = _DOC.read_text(encoding="utf-8")
     section = body.split(heading, 1)
     assert len(section) == 2, f"{_DOC.name} has no '{heading}' section."
     table = re.split(r"\n#{2,3} ", section[1], maxsplit=1)[0]
-    return [
-        ln for ln in table.splitlines() if ln.startswith("|") and not ln.startswith("|---")
-    ]
+    lines = [ln for ln in table.splitlines() if ln.startswith("|")]
+    sep = next((i for i, ln in enumerate(lines) if set(ln) <= set("|-: ")), None)
+    assert sep is not None, f"'{heading}' has no table separator row."
+    return lines[sep + 1:]
+
+
+def _cells(row: str) -> list[str]:
+    """A row's cells, without the empties its leading and trailing pipes produce.
+
+    Indexed from the left, never from the right: a row that loses its trailing pipe renders
+    identically in markdown but shifts a right-indexed File column onto the Test cell, where the
+    module regex matches nothing — so the row goes unchecked and green, which is the failure this
+    file exists to prevent.
+    """
+    cells = row.split("|")[1:]
+    return cells[:-1] if cells and not cells[-1].strip() else cells
 
 
 def _cited_test_names() -> list[str]:
@@ -61,18 +78,17 @@ def _cited_test_names() -> list[str]:
 def _cited_test_modules() -> list[str]:
     """The modules §14's File column names, unstruck.
 
-    The last cell only, deliberately. Prose in the other two cells legitimately names modules that
+    The third cell only, deliberately. Prose in the other two legitimately names modules that
     are gone — "`test_bpre.py` is deleted" is a true sentence, and a scan of the whole row would
     read eleven such sentences as broken citations. The File column is the one cell that *asserts*
     a file exists, so it is the one cell that can be held to it.
     """
-    rows = _section_rows("## 14. Test coverage map")
     names: list[str] = []
-    for row in rows:
-        cells = row.split("|")
-        if len(cells) < 4:
+    for row in _section_rows("## 14. Test coverage map"):
+        cells = _cells(row)
+        if len(cells) < 3:
             continue
-        names += re.findall(r"`(test_\w+\.py)`", _STRUCK.sub("", cells[-2]))
+        names += re.findall(r"`(test_\w+\.py)`", _STRUCK.sub("", cells[2]))
     return names
 
 
@@ -90,7 +106,7 @@ def _all_test_names() -> set[str]:
 
 def _first_cells(heading: str) -> list[str]:
     """The first cell of every data row under `heading`. Both tables key their rows in column one."""
-    return [row.split("|")[1] for row in _section_rows(heading)]
+    return [_cells(row)[0] for row in _section_rows(heading) if _cells(row)]
 
 
 def _defined_hr_ids() -> set[str]:
