@@ -1,4 +1,8 @@
-"""Traceability guards for the two normative tables in `federation-ops-and-invariants.md`.
+"""Traceability guards for the repo's maps: a citation must resolve, and a map must be complete.
+
+Two of them are the normative tables in `federation-ops-and-invariants.md`; the third is
+`docs/decisions/README.md`, added 2026-08-15 for the same reason and with the weaker feedback loop
+(§14 is read constantly, an unlinked decision record is read by nobody).
 
 §14 cites test names; §13b defines the hard-requirement ids that every other table, comment and
 dated record cites. Both are held to the same standard: a citation must resolve, and the escape
@@ -246,6 +250,29 @@ def test_coverage_map_files_resolve():
         "split or moved without updating the map). Re-point the row at the file that holds the "
         "proof now, or strike the cell through with `~~…~~` if the proof genuinely left:\n"
         + "\n".join(f"  {m}" for m in broken)
+    )
+
+
+def test_decisions_index_is_complete_and_resolves():
+    """docs/decisions/README.md must link every record, and every link must exist.
+
+    The third map held to the same standard, and the one with the weakest natural feedback: a
+    record that never reaches the index is not missing from anywhere a reader looks, so nothing
+    reports it. CLAUDE.md points at this directory for every "why", which is only true while the
+    index is the whole directory.
+    """
+    d = _ROOT / "docs" / "decisions"
+    records = {p.name for p in d.glob("*.md")} - {"README.md"}
+    linked = set(re.findall(r"\]\(\.?/?([^)]+\.md)\)", (d / "README.md").read_text("utf-8")))
+
+    assert records, "no decision records found — this guard would pass vacuously"
+    assert not (dangling := sorted(linked - records - {"README.md"})), (
+        "docs/decisions/README.md links records that do not exist (renamed or deleted without "
+        "updating the index):\n" + "\n".join(f"  {n}" for n in dangling)
+    )
+    assert not (unlisted := sorted(records - linked)), (
+        "decision records exist that the index never links, so nothing points a reader at them. "
+        "Add a line to docs/decisions/README.md:\n" + "\n".join(f"  {n}" for n in unlisted)
     )
 
 
