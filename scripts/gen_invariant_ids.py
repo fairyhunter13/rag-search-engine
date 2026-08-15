@@ -11,11 +11,11 @@ them in no document at all.
 Generated for the reason `gen_grammar_capability_matrix.py` is: 448 entries maintained by hand
 describe the day they were written. `test_invariant_id_index_is_current` re-runs this and diffs.
 
-Three sections, because all three are what a reader hits. **defined**: one declaration site, a test
-docstring opening `ID: …` or a §13b row — the test is the rule's definition, so its claim is the
-meaning. **ambiguous**: two or more sites; worse than undefined, since `SC1` could be the
-suite-concurrency gate or the surface-consistency check and both exist. **undefined**: referred to,
-never introduced — listed so the absence is a fact rather than a failed search.
+Sections split by what a reader can do with the answer. **defined**: one declaration site — a test
+name, a docstring opener, a §13b row, or a source comment — and the claim there is the meaning.
+**ambiguous**: two sites in two files, worse than undefined, since `SC1` could be the
+suite-concurrency gate or the surface-consistency check and both exist. **cross-file, unanchored**:
+the real backlog. **file-local**: listed but not a backlog — one file, which is its definition.
 """
 from __future__ import annotations
 
@@ -95,6 +95,25 @@ def _declared_in_spec() -> dict[str, str]:
     return out
 
 
+def _comment_declarations() -> dict[str, tuple[str, int, str]]:
+    """id -> (path, line, claim) for the ids a source comment introduces.
+
+    Source uses the same opener a test docstring does — `# H1: StructureKind → our canonical kind`,
+    `# S8: the host language of a file, cached`. Not scanning for it reported those ids as
+    undefined while their definition sat one grep away, which is the confusion this file exists
+    to remove. Only the first site counts: a repeated `# S8:` restates one rule, it does not
+    declare a second.
+    """
+    out: dict[str, tuple[str, int, str]] = {}
+    for path in _sources():
+        rel = str(path.relative_to(REPO))
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            m = re.match(r'\s*(?:#|""")\s*([A-Z]{1,4}\d{1,2}[a-z]?)\b\s*[:—–-]\s*(.+)', line)
+            if m and m[1] not in NOT_IDS and m[1] not in out:
+                out[m[1]] = (rel, n, m[2].strip().rstrip('"').strip() or "—")
+    return out
+
+
 def _referenced() -> dict[str, set[str]]:
     out: dict[str, set[str]] = defaultdict(set)
     for path in _sources():
@@ -113,6 +132,7 @@ def _key(name: str) -> tuple[str, int, str]:
 
 def render() -> str:
     (tests, mismatched), spec, refs = _declarations(), _declared_in_spec(), _referenced()
+    comments = {k: v for k, v in _comment_declarations().items() if k not in tests and k not in spec}
     defined = {k: v[0] for k, v in tests.items() if len(v) == 1}
     # Several guards under one id is the normal case — the id names the rule and each guard proves
     # a facet of it. It is only ambiguous when the sites are in different files, because then the
@@ -120,7 +140,12 @@ def render() -> str:
     multi = {k: v for k, v in tests.items() if len(v) > 1}
     ambiguous = {k: v for k, v in multi.items() if len({s[0] for s in v}) > 1}
     facets = {k: v for k, v in multi.items() if k not in ambiguous}
-    undefined = sorted((k for k in refs if k not in tests and k not in spec), key=_key)
+    loose = [k for k in refs if k not in tests and k not in spec and k not in comments]
+    # An id used in one file is defined by that file for every reader who will ever meet it, and a
+    # global entry for it would be prose restating a comment. Only a cross-file id can strand
+    # someone, so that is the count worth acting on.
+    crossfile = sorted((k for k in loose if len(refs[k]) > 1), key=_key)
+    filelocal = sorted((k for k in loose if len(refs[k]) == 1), key=_key)
 
     L = [
         "# Invariant ids",
@@ -133,9 +158,10 @@ def render() -> str:
         "it; `HR*` is declared by a §13b row instead. The test is the rule's definition, so the "
         "claim column is the meaning, not a pointer to it.",
         "",
-        f"{len(defined)} defined by one guard · {len(facets)} by several · {len(ambiguous)} "
-        f"ambiguous · {len(undefined)} referenced but never introduced · {len(mismatched)} where "
-        "the name and the docstring disagree.",
+        f"{len(defined)} defined by one guard · {len(facets)} by several · {len(comments)} by a "
+        f"source comment · {len(ambiguous)} ambiguous · {len(crossfile)} cross-file and unanchored "
+        f"· {len(filelocal)} file-local shorthand · {len(mismatched)} where the name and the "
+        "docstring disagree.",
         "",
         "## Hard requirements (HR)",
         "",
@@ -206,21 +232,50 @@ def render() -> str:
 
     L += [
         "",
-        "## Referenced, never introduced",
+        "## Declared by a source comment",
         "",
-        "Mentioned in `src/` and declared nowhere this generator can see. Some are real gaps; some "
-        "belong to a test that never opened its docstring with them.",
+        "No guard carries these; a comment introduces them instead. The claim is that comment's "
+        "own first line, cut where it wraps — the site column is where to read the rest.",
+        "",
+        "| id | claim | site |",
+        "|---|---|---|",
+    ]
+    for name in sorted(comments, key=_key):
+        rel, line, claim = comments[name]
+        L.append(f"| `{name}` | {claim} | `{rel}:{line}` |")
+
+    L += [
+        "",
+        "## Cross-file, unanchored",
+        "",
+        "Used in more than one file and introduced in none of them. This is the list that costs a "
+        "reader something: the id crosses a file boundary, so no single file explains it, and "
+        "resolving one means reading every site and inferring the rule they share.",
         "",
         "| id | mentioned in |",
         "|---|---|",
     ]
-    for name in undefined:
-        files = sorted(refs[name])
-        shown = ", ".join(f"`{Path(f).name}`" for f in files[:3])
-        if len(files) > 3:
-            shown += f", +{len(files) - 3} more"
-        L.append(f"| `{name}` | {shown} |")
+    L += [f"| `{name}` | {_files(refs[name])} |" for name in crossfile]
+
+    L += [
+        "",
+        "## File-local shorthand",
+        "",
+        "Used in exactly one file and introduced nowhere. Listed for completeness, not as a "
+        "backlog: the file is the definition for everyone who will ever meet the id, and a global "
+        "entry would restate what its only reader already has open.",
+        "",
+        "| id | file |",
+        "|---|---|",
+    ]
+    L += [f"| `{name}` | {_files(refs[name])} |" for name in filelocal]
     return "\n".join(L) + "\n"
+
+
+def _files(paths: set[str]) -> str:
+    names = sorted(paths)
+    shown = ", ".join(f"`{Path(f).name}`" for f in names[:3])
+    return shown + (f", +{len(names) - 3} more" if len(names) > 3 else "")
 
 
 def main() -> int:

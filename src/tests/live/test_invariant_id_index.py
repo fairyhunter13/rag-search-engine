@@ -55,3 +55,9 @@ def test_invariant_id_index_indexes_something():
         "probably stopped matching the naming convention it reads"
     )
     assert text.count("\n| `") > 300, "the index's tables are near-empty"
+    # The count above is dominated by guard-declared ids, so a regression confined to the comment
+    # scanner leaves it green while twenty rows quietly become "unanchored" again.
+    commented = re.search(r"· (\d+) by a source comment\b", text)
+    assert commented and int(commented[1]) > 10, (
+        "the source-comment scanner stopped resolving ids introduced by a `# ID: …` line"
+    )
