@@ -805,9 +805,9 @@ No guard carries these; a comment introduces them instead. The claim is that com
 | `R6c` | Decommission local generative LLM (qwen3 / ollama) | `src/tests/live/test_inference_lanes.py:56` |
 | `S5` | recover the ones that were anonymous only as *values*. Gated on `anon` so a file | `src/rag_search/graph/extractor.py:976` |
 | `S7` | an extensionless file falls back to its shebang. `Makefile`, `Dockerfile`, `.env` and a | `src/rag_search/index/discover.py:257` |
-| `S8` | the host language of a file, cached. Symbols carry the *inner* language — a symbol | `src/rag_search/daemon/sweeps.py:707` |
-| `S11` | call sites, held between the two halves below. Resolution needs the whole symbol | `src/rag_search/daemon/sweeps.py:717` |
-| `S14` | PHP receiver facts, held for the third instance of the same reason — narrowing a callee | `src/rag_search/daemon/sweeps.py:728` |
+| `S8` | the host language of a file, cached. Symbols carry the *inner* language — a symbol | `src/rag_search/daemon/sweeps.py:706` |
+| `S11` | call sites, held between the two halves below. Resolution needs the whole symbol | `src/rag_search/daemon/sweeps.py:716` |
+| `S14` | PHP receiver facts, held for the third instance of the same reason — narrowing a callee | `src/rag_search/daemon/sweeps.py:727` |
 | `T3a` | search returns results for each named root across all scopes. | `src/tests/live/test_named_projects_features.py:50` |
 | `T3b` | the fast overview what= values return valid JSON for each named root. | `src/tests/live/test_named_projects_features.py:65` |
 | `T3c` | context assembly returns non-empty context for each named root. | `src/tests/live/test_named_projects_features.py:91` |
