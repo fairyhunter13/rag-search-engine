@@ -445,130 +445,152 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
                     ], strict=False)
 
         if what == "communities":
-            # Carries `summary` and `member_count`, and ranks by `query` when one is given —
-            # structured rows the caller can act on, not assembled prose context.
-            # The cap is global, not per store. `LIMIT 50` inside the loop bounds each
-            # federation *member* — the largest workspace has 194, so the payload would have been up to
-            # 9,700 rows and the rerank below would have scored every one of them. Sorting
-            # after the concatenation is required for the same reason: each store returns its
-            # own descending run, and concatenated descending runs are not descending.
-            _crows: list = []
-            for _, gs in _each_store():
-                _crows.extend(gs.conn.execute(
-                    "SELECT id,title,level,summary,member_count FROM communities "
-                    "WHERE level>=1 ORDER BY member_count DESC LIMIT 50").fetchall())
-            rows = sorted(_crows, key=lambda r: r[4] or 0, reverse=True)[:50]
-            if query:
-                # Same cross-encoder `_community_summaries` uses, reached through the query
-                # layer because B2 (test_inference_lanes.py) allows no other layer to touch it.
-                from rag_search.query.ask import rank_community_rows
-                rows = rank_community_rows(query, rows)
-            return json.dumps({"communities": [
-                {"id": r[0], "title": r[1], "level": r[2],
-                 "summary": r[3], "member_count": r[4]} for r in rows],
-                "resolved_project": project_path})
+            return _overview_communities(project_path, query, _each_store)
         if what == "status":
-            from rag_search.core.config import project_vector_db
-            from rag_search.graph.quality import partition_quality
-            # §2a: one registry read; reuse for all per-member get_project() calls below.
-            _by_path = {e_.path: e_ for e_ in list_projects()}
-            e = _by_path.get(project_path)
-            tot_sym, tot_comm, tot_fc = 0, 0, 0
-            members_info: list = []
-            worst_state = "ready"
-            # Three reachable states: what discriminates is whether the index exists and
-            # whether the partition is degenerate. A fill-rate rung is not a fourth — structural
-            # labelling fills every summary deterministically, so it would pin every project.
-            _rank = {"indexing": 0, "degraded": 1, "ready": 2}
-            for p, gs in _each_store():
-                ep = _by_path.get(p)  # §2a: cached lookup, not a fresh file read
-                _ks = ("indexing" if (ep is None or ep.indexed_at is None
-                                      or not project_vector_db(p).exists()) else "ready")
-                s, cm = gs.symbol_count(), gs.community_count()
-                ec = gs.edge_count()
-                tot_sym += s
-                tot_comm += cm
-                tot_fc += ep.file_count if ep else 0
-                # Federation roots legitimately have 0 edges (HR4: synthesis L3 rows only).
-                _is_fedroot = bool(ep and ep.federation)
-                # H1. The fedroot exemption belongs to the edge arm only, and the symbol arm
-                # asks for evidence instead: a root with no code files of its own is empty by
-                # design, one that attempted code files and got nothing back is hollow like any
-                # member. Exempting both arms made the one store where "0 symbols" is ambiguous
-                # the one store that could never report it.
-                _code_files = gs.code_files_extracted()[0] if _is_fedroot else 0
-                _hollow = ((s == 0 and cm > 0 and (not _is_fedroot or _code_files > 0))
-                           or (ec == 0 and cm > 0 and not _is_fedroot))
-                # §2b: read cached partition-quality verdict from meta; recompute only on miss/mismatch.
-                _pq_sig = f"{s}:{ec}:{cm}"
-                _pq_raw = gs.get_meta("partition_quality")
-                if _pq_raw:
-                    _pq_cached = json.loads(_pq_raw)
-                    hq = _pq_cached["q"] if _pq_cached.get("sig") == _pq_sig else partition_quality(gs)
-                else:
-                    hq = partition_quality(gs)
-                # Degenerate partition demotes index_state below ready (HR20, user choice).
-                if hq.get("degenerate") and _ks == "ready":
-                    _ks = "degraded"
-                members_info.append({"path": p, "index_state": _ks, "symbols": s,
-                                     "communities": cm, "edges": ec,
-                                     "symbol_hollow": _hollow,
-                                     "hierarchy_quality": hq})
-                if _rank.get(_ks, 2) < _rank.get(worst_state, 2):
-                    worst_state = _ks
-            from pathlib import Path as _P
-
-            from rag_search.core.index_config import _CONFIG_NAMES, effective_config
-            _ecfg = effective_config(project_path)
-            _pp = _P(project_path).resolve()
-            _has_own = any((_pp / n).is_file() for n in _CONFIG_NAMES)
-            _is_member = any(str(_pp) in (ep_.federation or []) for ep_ in _by_path.values())  # §2a
-            _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
-            _any_hollow = any(m.get("symbol_hollow") for m in members_info)
-            _any_degenerate = any(m.get("hierarchy_quality", {}).get("degenerate") for m in members_info)
-            return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
-                               "last_change_seen": e.last_change_seen if e else None,
-                               "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
-                               "symbols": tot_sym, "communities": tot_comm,
-                               "index_state": worst_state,
-                               "symbol_hollow": _any_hollow,
-                               "hierarchy_quality": {"degenerate": _any_degenerate},
-                               "members": members_info,
-                               "config": {"exclude": _ecfg.exclude,
-                                          "use_default_ignores": _ecfg.use_default_ignores,
-                                          "max_pending_files": _ecfg.max_pending_files,
-                                          "source": _cfg_src},
-                               "resolved_project": project_path})
+            return _overview_status(project_path, _each_store)
         if what == "import_cycles":
-            # One pass, both figures: a second walk would re-open every store to read a count.
-            _cycs: list = []
-            cnt = 0
-            for _, gs in _each_store():
-                _cycs.extend(_find_import_cycles(gs.conn))
-                cnt += gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-            cycs = _cycs[:20]
-            return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "has_cycles": bool(cycs),
-                                "edge_count": cnt, "resolved_project": project_path})
+            return _overview_import_cycles(project_path, _each_store)
         if what == "surprising_connections":
-            rows = []
-            for _, gs in _each_store():
-                rows.extend(gs.conn.execute(
-                    "SELECT s.name,t.name FROM edges e "
-                    "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
-                    "WHERE s.community_id != t.community_id LIMIT 20"
-                ).fetchall())
-            return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]],
-                                "resolved_project": project_path})
-        # default: structure
-        # One pass for all three totals — a comprehension per total re-opens the
-        # whole federation.
-        fc = _sym = _com = 0
-        for _, gs in _each_store():
-            fc += gs.conn.execute(
-                "SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0]
-            _sym += gs.symbol_count()
-            _com += gs.community_count()
-        return json.dumps({"path": project_path, "symbols": _sym,
-                           "communities": _com, "files_with_symbols": fc,
-                           "resolved_project": project_path})
+            return _overview_surprising_connections(project_path, _each_store)
+        return _overview_structure(project_path, _each_store)
     return json.dumps({"what": what, "status": "no project available"})
+
+
+def _overview_communities(project_path, query, each_store) -> str:  # type: ignore[no-untyped-def]
+    """Structured rows the caller can act on — `summary` and `member_count`, ranked by `query`
+    when one is given — not assembled prose context.
+
+    The cap is global, not per store. `LIMIT 50` inside the loop bounds each federation
+    *member* — the largest workspace has 194, so the payload would have been up to 9,700 rows
+    and the rerank would have scored every one of them. Sorting after the concatenation is
+    required for the same reason: each store returns its own descending run, and concatenated
+    descending runs are not descending.
+    """
+    _crows: list = []
+    for _, gs in each_store():
+        _crows.extend(gs.conn.execute(
+            "SELECT id,title,level,summary,member_count FROM communities "
+            "WHERE level>=1 ORDER BY member_count DESC LIMIT 50").fetchall())
+    rows = sorted(_crows, key=lambda r: r[4] or 0, reverse=True)[:50]
+    if query:
+        # Same cross-encoder `_community_summaries` uses, reached through the query
+        # layer because B2 (test_inference_lanes.py) allows no other layer to touch it.
+        from rag_search.query.ask import rank_community_rows
+        rows = rank_community_rows(query, rows)
+    return json.dumps({"communities": [
+        {"id": r[0], "title": r[1], "level": r[2],
+         "summary": r[3], "member_count": r[4]} for r in rows],
+        "resolved_project": project_path})
+
+
+def _overview_status(project_path, each_store) -> str:  # type: ignore[no-untyped-def]
+    from rag_search.core.config import project_vector_db
+    from rag_search.core.registry import list_projects
+    from rag_search.graph.quality import partition_quality
+    # §2a: one registry read; reuse for all per-member get_project() calls below.
+    _by_path = {e_.path: e_ for e_ in list_projects()}
+    e = _by_path.get(project_path)
+    tot_sym, tot_comm, tot_fc = 0, 0, 0
+    members_info: list = []
+    worst_state = "ready"
+    # Three reachable states: what discriminates is whether the index exists and
+    # whether the partition is degenerate. A fill-rate rung is not a fourth — structural
+    # labelling fills every summary deterministically, so it would pin every project.
+    _rank = {"indexing": 0, "degraded": 1, "ready": 2}
+    for p, gs in each_store():
+        ep = _by_path.get(p)  # §2a: cached lookup, not a fresh file read
+        _ks = ("indexing" if (ep is None or ep.indexed_at is None
+                              or not project_vector_db(p).exists()) else "ready")
+        s, cm = gs.symbol_count(), gs.community_count()
+        ec = gs.edge_count()
+        tot_sym += s
+        tot_comm += cm
+        tot_fc += ep.file_count if ep else 0
+        # Federation roots legitimately have 0 edges (HR4: synthesis L3 rows only).
+        _is_fedroot = bool(ep and ep.federation)
+        # H1. The fedroot exemption belongs to the edge arm only, and the symbol arm
+        # asks for evidence instead: a root with no code files of its own is empty by
+        # design, one that attempted code files and got nothing back is hollow like any
+        # member. Exempting both arms made the one store where "0 symbols" is ambiguous
+        # the one store that could never report it.
+        _code_files = gs.code_files_extracted()[0] if _is_fedroot else 0
+        _hollow = ((s == 0 and cm > 0 and (not _is_fedroot or _code_files > 0))
+                   or (ec == 0 and cm > 0 and not _is_fedroot))
+        # §2b: read cached partition-quality verdict from meta; recompute only on miss/mismatch.
+        _pq_sig = f"{s}:{ec}:{cm}"
+        _pq_raw = gs.get_meta("partition_quality")
+        if _pq_raw:
+            _pq_cached = json.loads(_pq_raw)
+            hq = _pq_cached["q"] if _pq_cached.get("sig") == _pq_sig else partition_quality(gs)
+        else:
+            hq = partition_quality(gs)
+        # Degenerate partition demotes index_state below ready (HR20, user choice).
+        if hq.get("degenerate") and _ks == "ready":
+            _ks = "degraded"
+        members_info.append({"path": p, "index_state": _ks, "symbols": s,
+                             "communities": cm, "edges": ec,
+                             "symbol_hollow": _hollow,
+                             "hierarchy_quality": hq})
+        if _rank.get(_ks, 2) < _rank.get(worst_state, 2):
+            worst_state = _ks
+    from pathlib import Path as _P
+
+    from rag_search.core.index_config import _CONFIG_NAMES, effective_config
+    _ecfg = effective_config(project_path)
+    _pp = _P(project_path).resolve()
+    _has_own = any((_pp / n).is_file() for n in _CONFIG_NAMES)
+    _is_member = any(str(_pp) in (ep_.federation or []) for ep_ in _by_path.values())  # §2a
+    _cfg_src = "own" if _has_own else "inherited" if _is_member else "default"
+    _any_hollow = any(m.get("symbol_hollow") for m in members_info)
+    _any_degenerate = any(m.get("hierarchy_quality", {}).get("degenerate") for m in members_info)
+    return json.dumps({"path": project_path, "indexed_at": e.indexed_at if e else None,
+                       "last_change_seen": e.last_change_seen if e else None,
+                       "file_count": e.file_count if e else 0, "total_file_count": tot_fc,
+                       "symbols": tot_sym, "communities": tot_comm,
+                       "index_state": worst_state,
+                       "symbol_hollow": _any_hollow,
+                       "hierarchy_quality": {"degenerate": _any_degenerate},
+                       "members": members_info,
+                       "config": {"exclude": _ecfg.exclude,
+                                  "use_default_ignores": _ecfg.use_default_ignores,
+                                  "max_pending_files": _ecfg.max_pending_files,
+                                  "source": _cfg_src},
+                       "resolved_project": project_path})
+
+
+def _overview_import_cycles(project_path, each_store) -> str:  # type: ignore[no-untyped-def]
+    # One pass, both figures: a second walk would re-open every store to read a count.
+    _cycs: list = []
+    cnt = 0
+    for _, gs in each_store():
+        _cycs.extend(_find_import_cycles(gs.conn))
+        cnt += gs.conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    cycs = _cycs[:20]
+    return json.dumps({"cycles": cycs, "cycle_count": len(cycs), "has_cycles": bool(cycs),
+                        "edge_count": cnt, "resolved_project": project_path})
+
+
+def _overview_surprising_connections(project_path, each_store) -> str:  # type: ignore[no-untyped-def]
+    rows = []
+    for _, gs in each_store():
+        rows.extend(gs.conn.execute(
+            "SELECT s.name,t.name FROM edges e "
+            "JOIN symbols s ON e.caller_sid=s.sid JOIN symbols t ON e.callee_sid=t.sid "
+            "WHERE s.community_id != t.community_id LIMIT 20"
+        ).fetchall())
+    return json.dumps({"connections": [{"src": r[0], "tgt": r[1]} for r in rows[:20]],
+                        "resolved_project": project_path})
+
+
+def _overview_structure(project_path, each_store) -> str:  # type: ignore[no-untyped-def]
+    # One pass for all three totals — a comprehension per total re-opens the
+    # whole federation.
+    fc = _sym = _com = 0
+    for _, gs in each_store():
+        fc += gs.conn.execute(
+            "SELECT COUNT(DISTINCT file) FROM symbols WHERE file IS NOT NULL").fetchone()[0]
+        _sym += gs.symbol_count()
+        _com += gs.community_count()
+    return json.dumps({"path": project_path, "symbols": _sym,
+                       "communities": _com, "files_with_symbols": fc,
+                       "resolved_project": project_path})
