@@ -55,8 +55,9 @@ echo "GPU OOM:          $(grep -ic 'out of memory\|OOM\|CUDA error' $LOG)"
 Flag if embedding-model reload count > 10 (indicates session eviction storm).
 
 ### 1b. Correctness (tests + static)
+Run the `run-tests` skill for the fast live suite — it owns the invocation, so the flags have one
+copy to keep correct. Then:
 ```bash
-.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q   # fast live suite
 .venv/bin/ruff check src/rag_search src/tests scripts    # lint
 .venv/bin/python -m compileall -q src/rag_search         # syntax
 ```
@@ -76,9 +77,8 @@ on 2026-07-28 along with the `/api/kb_health` endpoint it was a client for.
 ```
 overview(project_path, what='import_cycles')          # circular deps
 overview(project_path, what='surprising_connections')  # cross-layer edges
-overview(project_path, what='graph_diff')              # recently changed symbols
 graph(hot_symbol, project_path, relation='impact_narrative')  # blast radius
-ask('what is the most fragile or riskiest code right now?', project_path, scope='architecture')
+overview(project_path, what='communities', query='what is the most fragile code right now?')
 ```
 
 ### 1e. Code smell grep
@@ -88,11 +88,11 @@ grep -rn "except:\s*$\|except Exception:\s*pass\|# type: ignore\|TODO\|FIXME\|HA
 grep -rn "providers.*cpu\|CPUExecutionProvider\|device.*'cpu'" src/rag_search/ | grep -v test | head
 ```
 
-### 1f. MCP self-test (dogfood each of the 5 tools)
+### 1f. MCP self-test (dogfood each of the 4 tools)
 ```
 search('authentication handler', project_path)  → non-empty results
-ask('how does search work?', project_path)       → non-empty answer
 graph('embed_query', project_path, relation='callers')  → non-empty
+overview(project_path, what='communities')       → non-empty community map
 overview(project_path, what='structure')         → file_count > 0
 index(project_path, enabled=True)               → SKIP (write op — do not call in sweep)
 ```

@@ -178,5 +178,7 @@ markers = [
     # so a third of the suite ran only on a manual dispatch nobody dispatches. Six gates rotted in
     # one week behind that mark. Two narrow reasons replace one broad one.
     "costly: spends real Claude session quota (`claude -p` via /api/chat_stream) — dispatch only",
-    "exclusive: needs a quiescent daemon to measure it (CB3/CB4/CB6) — never beside other load",
+    # Both directions, because a test that *breaks* quiet has to be excluded by the same flag as
+    # one that needs it: the reload restart ran in the fast lane for want of a marker that said so.
+    "exclusive: must not run beside other load — either it measures a quiet daemon (CB3/CB4/CB6) or it destroys quiet (the reload restart)",
 ]

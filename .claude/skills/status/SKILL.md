@@ -19,9 +19,10 @@ Comprehensive status audit of the rag-search-engine system.
 ### 2. Canonical test target verification
 - `overview(project_path='<TEST_PROJECT_PATH>', what='status')` — confirm watching=true, communities>5000
 - `search(query='payment handler', project_paths=[test_path])` — confirm search returns real results
-- `ask(query='how does payment flow work', project_path=test_path, scope='all')` — confirm a
-  non-empty `## Code` / `## Architecture` assembly. (`scope='feature'` was retired 2026-07-28 along
-  with `global` and `business`; the `entry_points` field it once returned left with tier 3.)
+- `overview(project_path=test_path, what='communities', query='how does payment flow work')` —
+  confirm a non-empty community map. This is what `ask`'s architecture scope became; `ask` itself
+  is retired, and the note below it about `scope='feature'` was updated while the dead call above
+  it was left in place.
 - `graph(symbol='PaymentService', project_path=test_path, relation='impact_narrative')` — confirm graph works
 - The same `overview(what='status')` call carries `index_state` — confirm `ready`, not `indexing`
   or `degraded`. This replaces `GET /api/kb_health?project=…` (enrichment_pct=100.0), which left
@@ -47,7 +48,7 @@ Check all key routes return expected HTTP status:
 - Flag any error_by_intent entries (should be 0)
 
 ### 6. Fast test suite
-- Run `.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --ignore=src/tests/live/test_browser.py`
+- Run the `run-tests` skill — it owns the invocation, so the flags have one copy to keep correct
 - Must be 0 failed. The pass count is not pinned here — it moved with tier 3's deletion and
   pinning it turns every legitimate test addition into a false alarm
 

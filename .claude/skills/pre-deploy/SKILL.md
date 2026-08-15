@@ -26,18 +26,21 @@ nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=cs
 ```
 GPU must be present. If embedding fails with "CPU fallback" — STOP, do not deploy.
 
-### 3. Fast test suite (no slow LLM tests)
-```bash
-.venv/bin/pytest src/tests/live/ -m "live and not costly and not exclusive" -q --tb=short 2>&1 | tail -20
-```
+### 3. Fast test suite
+Run the `run-tests` skill. It owns the invocation, so there is one copy of the flags to keep
+correct — the copy that used to live here omitted `--ignore=src/tests/live/test_browser.py` and
+red-lined ~107 later tests with a bogus `asyncio.run()` error, i.e. this step reported FAIL on a
+healthy machine.
+
 **All tests must pass. Zero failures, zero skips.**
 If any test fails — investigate and fix before proceeding.
 
 ### 4. MCP tool surface check (use rag-search tools)
-Run these 5 checks against your indexed project:
-- `search("request handler")` → must return results
-- `ask("how does auth work", scope="all")` → must return non-empty answer
-- `graph("main", relation="callers")` → must return graph nodes
+Run these 4 checks against your indexed project:
+- `search(query="request handler")` → must return results
+- `graph(symbol="_section_rows", relation="callers")` → must return graph nodes. Pick a symbol
+  called from inside the repo. `main` returns zero *correctly* — it is a `console_scripts`
+  entrypoint, so a caller-less result there proves nothing about the graph.
 - `overview(what="structure")` → must show non-zero files and communities
 - `overview(what="status")` → must show index_state=ready (the field was `kb_state` until 2026-07-28)
 
@@ -68,7 +71,7 @@ Must output `active`.
 - [ ] Daemon healthy (healthz OK)
 - [ ] GPU active (CUDA, not CPU)
 - [ ] Fast tests: 0 failures, 0 skips
-- [ ] All 5 MCP tools return valid results
+- [ ] All 4 MCP checks return valid results
 - [ ] Lint clean
 - [ ] Zero unpushed commits
 - [ ] Systemd service active

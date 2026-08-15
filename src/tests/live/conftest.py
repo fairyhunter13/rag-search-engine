@@ -71,8 +71,9 @@ def _contending_live_runs() -> list[str]:
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "live: requires CUDA GPU + daemon at :8765")
-    config.addinivalue_line("markers", "slow: LLM-heavy (>30s)")
+    # No marker registrations here. `live` is defined in pyproject.toml and a second definition
+    # only drifts; `slow` was retired, and re-registering it kept `@pytest.mark.slow` legal, so
+    # --strict-markers could never catch a re-add — the one guard 01547a5 said it was installing.
     contenders = _contending_live_runs()
     if contenders:
         raise pytest.UsageError(

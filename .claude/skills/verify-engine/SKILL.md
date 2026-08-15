@@ -26,9 +26,11 @@ Every feature of rag-search-engine, end-to-end, against your registered indexed 
 
 ### Retrieval question categories
 Each must return a non-empty, grounded answer — not a "no data" fallback. Rewritten
-2026-07-28: the two questions that routed through `overview(what='process_flows')` and
-`overview(what='service_mesh')` had no surface left to answer them once tier 3 was deleted,
-so they now ask the same thing of the deterministic graph, which is what survived.
+2026-07-28: the two questions that routed through `overview`'s `process_flows` and `service_mesh`
+whats had no surface left to answer them once tier 3 was deleted, so they now ask the same thing of
+the deterministic graph, which is what survived. (Named without their call parentheses on purpose —
+E8c scans raw lines, so writing a retired call out in full trips it as readily as instructing one
+would. Same reason `test_query.py`'s docstring phrases around its own banned vocabulary.)
 1. "Which code is related to checkout / key feature?" → `search` + `graph(callers)`
 2. "How does service communication work?" → `search(scope='all')` + `graph(callers)`
 3. "What is the root cause of a bug?" → `search` + `graph(impact_narrative)`
