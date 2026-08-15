@@ -1,17 +1,8 @@
 """FastMCP server: 4 MCP tools — search, graph, overview, index.
 
-`ask` was the fifth. It returned assembled prose — chunk bodies and community summaries
-concatenated and hard-truncated at 3000 chars each — which is the shape an MCP tool should not
-return: the client is an agent that can call again, so it wants compact references it chooses to
-expand, not context someone else assembled and cut off mid-chunk. It was also the most expensive
-tool here (a GPU embed, the full federation fan-out, and *two* cross-encoder passes) and its code
-half duplicated `search` while returning a worse shape. The architecture half it uniquely reached
-now lives on `overview(what="communities", query=...)`, and `query/ask.py` survives as the context
-builder for the two callers that genuinely cannot loop: the CLI and the dashboard's chat.
-
-A static `_MCP_TOOLS` list stood here, described as "update when adding/removing @mcp.tool()
-handlers". Nothing read it. `mcp.list_tools()` is the registry, and a mirror nobody consults is a
-second source of truth that can only ever be wrong.
+`mcp.list_tools()` is the tool registry; do not add a static mirror of it here. A fifth tool,
+`ask`, was retired 2026-07-29 — see
+`docs/decisions/2026-07-29-the-fifth-tool-returned-assembled-prose.md`.
 """
 from __future__ import annotations
 

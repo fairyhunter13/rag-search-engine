@@ -85,6 +85,8 @@ identifiers, and §14's coverage map resolves them under a guard.
 | 2026-07-30 | [One live suite at a time, keyed on process not lock name](2026-07-30-one-live-suite-at-a-time.md) |
 | 2026-07-30 | [Splitting the `slow` marker into the two reasons it conflated](2026-07-30-slow-marker-split.md) |
 | 2026-07-29 | [Refusing to reload the daemon under a sweeps lease](2026-07-29-reload-under-a-sweeps-lease.md) |
+| 2026-07-29 | [The fifth MCP tool returned assembled prose](2026-07-29-the-fifth-tool-returned-assembled-prose.md) |
+| 2026-07-29 | [The descriptor wedge, and the leak that made it permanent](2026-07-29-descriptor-exhaustion-in-the-federation-fanout.md) |
 | 2026-07-29 | [Giving the GPU back before idle](2026-07-29-vram-starvation.md) |
 | 2026-07-28 | [What left with tier 3, recorded so it is not re-derived](2026-07-28-tier-3-retirement.md) |
 | 2026-07-09 | [Public-release hardening and the runnable-by-anyone contract](2026-07-09-public-release-hardening.md) |

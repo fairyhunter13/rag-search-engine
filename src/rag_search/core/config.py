@@ -62,15 +62,10 @@ DAEMON_PORT = int(os.environ.get("RSE_MCP_DAEMON_PORT", "8765"))
 # the only path, so one would advertise a choice the invariant forbids. Only the model varies.
 QUERY_LLM_MODEL = os.environ.get("RSE_QUERY_LLM_MODEL", "claude-haiku-4-5")
 
-# Removed 2026-07-31: RSE_MCP_CLIENT_STALE_S, RSE_QUERY_LLM_NUM_CTX, RSE_QUERY_LLM_TIMEOUT,
-# RSE_FINAL_TOP_K, RSE_DEBOUNCE_DELAY_MS, RSE_MIN_FLUSH_INTERVAL_S, RSE_DEFAULT_*_FILE_SIZE_KB,
-# RSE_EMBED_PASSAGES_MAX_TEXTS, RSE_MAX_INLINE_BYTES, RSE_MAX_BYTES, RSE_SCHEMA_VERSION —
-# plus RSE_QUERY_LLM_PROVIDER and this file's duplicate RSE_MODEL_IDLE_UNLOAD_S (see above).
-# All 15 were read from the environment and then read by nothing — each outlived the call site it
-# was added for. Under HR34 this file *is* the retargeting contract for a fresh clone, so a knob
-# that parses and silently does nothing is worse than an absent one: it fails without an error.
-# A knob comes back only together with the code that consumes it; test_sc9 in
-# test_schema_consistency.py now fails the build if one is added without a consumer.
+# Under HR34 this file *is* the retargeting contract a fresh clone reads, so a knob that parses
+# and then feeds nothing is worse than an absent one: it fails without an error. 15 such knobs
+# were removed 2026-07-31; test_sc9 in test_schema_consistency.py fails the build on any knob
+# added without a consumer.
 
 IGNORED_DIRS: frozenset[str] = frozenset({
     ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".ruff_cache",
