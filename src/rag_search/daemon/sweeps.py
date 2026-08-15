@@ -693,7 +693,6 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
     The incremental path prunes nothing here: it walked a subset, so "not re-recorded" would mean
     "belongs to a file this pass never opened". `delete_file_symbols` is its subtraction, per file.
     """
-    import collections
     from pathlib import Path
 
     from rag_search.graph.extractor import (
@@ -809,42 +808,12 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         facts = php_facts.get(fstr)
         hints = facts.hints() if facts is not None else {}
         for callee_name, call_line in call_sites:
-            caller_sid, best_span = "", -1
-            for sl, el, sid in sym_spans:
-                if sl <= call_line <= el:
-                    span = el - sl
-                    if caller_sid == "" or span < best_span:
-                        best_span, caller_sid = span, sid
+            caller_sid = _innermost_symbol(sym_spans, call_line)
             if not caller_sid:
                 continue
-            cands = name_to_entries.get((_fam(fstr), callee_name), [])
-            # Same file is the *preferred scope*, which is what every language's scoping rules
-            # do — neither an exclusion (excluding it left `callers`/`callees` unable to answer
-            # any relation inside one file) nor a mere inclusion (including the whole family
-            # bound one call site to N definitions, 95.7% of fleet edges). Past the preferred
-            # scope there is no evidence here to choose with, so emit nothing rather than N-1
-            # wrong edges. See docs/decisions/2026-07-31-an-edge-is-a-resolved-call.md.
-            same_file = [sid for sid, cfile in cands if cfile == fstr]
-            # The self-drop comes after the tier is chosen, never before. Choosing first means a
-            # recursive call in the only file defining that name finds an empty tier and falls
-            # through to a same-named definition in some other file — a confidently wrong edge.
-            # Worth 996 edges fleet-wide.
-            pool = [sid for sid in (same_file or [sid for sid, _ in cands])
-                    if sid != caller_sid]
-            # S14: narrowing happens *before* the cap, never after, and it does not raise the cap.
-            # A pool of five that the receiver's declared type cuts to one is not the cap being
-            # relaxed to five — it is a pool of one, qualified by evidence the name-only tier
-            # never looked at, and it clears the existing bar on its own terms. Above the cap and
-            # unnarrowed, the edge is still dropped; that is why precision does not move.
-            if php is not None and facts is not None and len(pool) > _MAX_CALLEE_FANOUT:
-                won = php.narrow(facts, hints.get((callee_name, call_line), ""),
-                                 collections.Counter(
-                                     cfile for sid, cfile in cands if sid != caller_sid))
-                if won:
-                    pool = [sid for sid, cfile in cands
-                            if cfile == won and sid != caller_sid]
-            if len(pool) > _MAX_CALLEE_FANOUT:
-                continue
+            pool = _callee_pool(name_to_entries.get((_fam(fstr), callee_name), []),
+                                caller_sid, fstr, php, facts,
+                                hints.get((callee_name, call_line), ""))
             for callee_sid in pool:
                 seen_edges.add((caller_sid, callee_sid))
                 gs.upsert_edge(caller_sid, callee_sid)
@@ -866,6 +835,52 @@ def _extract_graph(gs, root, only: list | None = None) -> None:
         gs.prune_edges_to(seen_edges)
         gs.prune_imports_to(seen_imports)
 
+
+
+def _innermost_symbol(sym_spans: list[tuple[int, int, str]], call_line: int) -> str:
+    """The tightest symbol span containing `call_line`, or "" — that is the caller.
+
+    Tightest, not first: spans nest, and the enclosing class would otherwise win over the method
+    the call is actually written in."""
+    caller_sid, best_span = "", -1
+    for sl, el, sid in sym_spans:
+        if sl <= call_line <= el:
+            span = el - sl
+            if caller_sid == "" or span < best_span:
+                best_span, caller_sid = span, sid
+    return caller_sid
+
+
+def _callee_pool(cands, caller_sid: str, fstr: str, php, facts, hint: str) -> list[str]:
+    """The definitions one call site resolves to — empty when the evidence does not single one out.
+
+    `cands` is every same-family definition of that name, as (sid, file)."""
+    import collections
+
+    # Same file is the *preferred scope*, which is what every language's scoping rules
+    # do — neither an exclusion (excluding it left `callers`/`callees` unable to answer
+    # any relation inside one file) nor a mere inclusion (including the whole family
+    # bound one call site to N definitions, 95.7% of fleet edges). Past the preferred
+    # scope there is no evidence here to choose with, so emit nothing rather than N-1
+    # wrong edges. See docs/decisions/2026-07-31-an-edge-is-a-resolved-call.md.
+    same_file = [sid for sid, cfile in cands if cfile == fstr]
+    # The self-drop comes after the tier is chosen, never before. Choosing first means a
+    # recursive call in the only file defining that name finds an empty tier and falls
+    # through to a same-named definition in some other file — a confidently wrong edge.
+    # Worth 996 edges fleet-wide.
+    pool = [sid for sid in (same_file or [sid for sid, _ in cands]) if sid != caller_sid]
+    # S14: narrowing happens *before* the cap, never after, and it does not raise the cap.
+    # A pool of five that the receiver's declared type cuts to one is not the cap being
+    # relaxed to five — it is a pool of one, qualified by evidence the name-only tier
+    # never looked at, and it clears the existing bar on its own terms. Above the cap and
+    # unnarrowed, the edge is still dropped; that is why precision does not move.
+    if php is not None and facts is not None and len(pool) > _MAX_CALLEE_FANOUT:
+        won = php.narrow(facts, hint,
+                         collections.Counter(
+                             cfile for sid, cfile in cands if sid != caller_sid))
+        if won:
+            pool = [sid for sid, cfile in cands if cfile == won and sid != caller_sid]
+    return [] if len(pool) > _MAX_CALLEE_FANOUT else pool
 
 def _persist_partition_quality(gs) -> None:  # type: ignore[no-untyped-def]
     """Persist partition-quality verdict to the meta table immediately after detect_communities.
