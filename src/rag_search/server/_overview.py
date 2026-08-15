@@ -432,24 +432,9 @@ def handle_overview(project_path: str, what: str, query: str = "") -> str:
         def _each_store():  # type: ignore[no-untyped-def]
             """(path, GraphStore) pairs, with at most `_FANOUT_WORKERS` open at any moment.
 
-            The predecessor opened the whole federation before touching any of it. Each SQLite
-            WAL connection is three descriptors (db + -wal + -shm), so on the largest workspace's 157
-            graph-bearing members that is a peak of ~471 for the length of the request, and a
-            federated `search` — which fans out over the same members — can be doing it at the
-            same time. That is the descriptor shortage behind the 2026-07-29 wedge; capping the
-            peak is what keeps it from being reachable at all, rather than merely survivable.
-
-            The leak half of that incident is fixed structurally here. It came from a
-            comprehension binding its list only after the last element, so an exception partway
-            through orphaned every store already opened; `enter_context` takes ownership of each
-            one the moment it exists, and unwinds the ones it holds on any exit.
-
-            `closing` rather than `with GraphStore(...)`: the class exposes `close()` and no
-            `__enter__`/`__exit__` — the same reason, and the same stdlib adapter, as the
-            federated search path in query/search.py.
-
-            Batch size is `search.py`'s `_FANOUT_WORKERS`, not a second constant: it is the same
-            federation fanned out over the same members, and two knobs for one property drift.
+            The batch cap, `enter_context` owning each store as it opens, and reusing
+            `search.py`'s constant rather than declaring a second one are all one incident:
+            `docs/decisions/2026-07-29-descriptor-exhaustion-in-the-federation-fanout.md`.
             """
             for _i in range(0, len(_paths), _FANOUT_WORKERS):
                 _chunk = _paths[_i:_i + _FANOUT_WORKERS]
