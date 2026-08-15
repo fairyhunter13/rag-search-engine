@@ -10,13 +10,14 @@ The static guard still names `semantic_trace` deliberately: the function is long
 the assertion matches nothing, which is the point — it is the reintroduction guard, not a
 description of a live call site.
 """
-import asyncio
 import inspect
 import json
 import re
 from pathlib import Path
 
 import pytest
+
+from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
@@ -97,7 +98,7 @@ def test_overview_communities_carries_the_architecture_axis():
     from tests.live._projects import federation_root
 
     fed_root = federation_root()
-    plain = json.loads(asyncio.run(overview_tool(fed_root, "communities")))["communities"]
+    plain = json.loads(run_tool(overview_tool(fed_root, "communities")))["communities"]
     assert plain, "overview(what='communities') returned no communities for the federation root"
     assert all("summary" in c and "member_count" in c for c in plain), (
         "communities rows must carry summary + member_count — the architecture axis `ask` reached"
@@ -108,7 +109,7 @@ def test_overview_communities_carries_the_architecture_axis():
     )
 
     _ids = lambda q: [c["id"] for c in json.loads(  # noqa: E731
-        asyncio.run(overview_tool(fed_root, "communities", q)))["communities"]]
+        run_tool(overview_tool(fed_root, "communities", q)))["communities"]]
     a = _ids("database storage and persistence")
     b = _ids("http request routing and handlers")
     assert a != b, "query= did not change the community ordering — the parameter is inert"
@@ -119,7 +120,7 @@ def test_impact_narrative_returns_structured_json():
     from rag_search.server.mcp import graph as graph_tool
     from tests.live._projects import service_member
     svc_member = service_member()  # sample promo-svc, not a real project
-    result = asyncio.run(graph_tool("Run", svc_member, "impact_narrative"))
+    result = run_tool(graph_tool("Run", svc_member, "impact_narrative"))
     data = json.loads(result)
     assert "risk" in data, f"impact_narrative must return JSON with 'risk' key; got: {result[:200]}"
     assert "affected_count" in data, "impact_narrative must include 'affected_count'"
@@ -138,7 +139,7 @@ def test_path_returns_structured_json():
     from tests.live._projects import service_member
 
     svc_member = service_member()  # sample promo-svc, not a real project
-    result = asyncio.run(graph_tool("NewService", svc_member, "path", "Run"))
+    result = run_tool(graph_tool("NewService", svc_member, "path", "Run"))
     data = json.loads(result)
     assert "from" in data and "to" in data, (
         f"path must return JSON with 'from' and 'to' keys; got: {result[:200]}"

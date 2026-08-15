@@ -30,6 +30,7 @@ import json
 
 import pytest
 
+from tests.live._run import run_tool
 from tests.live._sample_workspace import SampleWorkspace
 
 pytestmark = pytest.mark.live
@@ -64,8 +65,6 @@ def test_graph_store_clear_wipes_tables(safe_tmp_path):
 
 def test_symbol_hollow_flag_fires_on_edge_free_graph(safe_tmp_path):
     """GH2: communities>0 but edges=0 must set symbol_hollow=True in overview(status)."""
-    import asyncio
-
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import remove_project, upsert_project
     from rag_search.graph.store import GraphStore
@@ -89,7 +88,7 @@ def test_symbol_hollow_flag_fires_on_edge_free_graph(safe_tmp_path):
         finally:
             gs.close()
 
-        result = json.loads(asyncio.run(overview_tool(proj, "status")))
+        result = json.loads(run_tool(overview_tool(proj, "status")))
         assert result.get("symbol_hollow") is True, f"edge-free graph must have symbol_hollow=True; got {result}"
         member = next((m for m in result.get("members", []) if m["path"] == proj), None)
         assert member is not None and member.get("symbol_hollow") is True
@@ -104,11 +103,9 @@ def test_overview_status_includes_symbol_hollow_field(sample_workspace: SampleWo
     Uses sample promo-svc (7 L1 communities, edges present) — not a federation root from
     its own perspective, so hollow-member propagation does not apply.
     """
-    import asyncio
-
     from rag_search.server.mcp import overview as overview_tool
 
-    result = json.loads(asyncio.run(overview_tool(sample_workspace.promo, "status")))
+    result = json.loads(run_tool(overview_tool(sample_workspace.promo, "status")))
     assert "symbol_hollow" in result, f"symbol_hollow missing; keys={list(result)}"
     assert result["symbol_hollow"] is False, (
         f"promo-svc with edges must not be hollow; got {result}"
@@ -339,8 +336,6 @@ def _fedroot_status(proj: str, files: list[tuple[str, str]]) -> dict:
     path that is deliberately not registered: `expand_federation` still returns it, and the root's
     own entry in `members` is what both arms below assert on, exactly as GH2 does.
     """
-    import asyncio
-
     from rag_search.core.config import ProjectEntry, project_graph_db
     from rag_search.core.registry import upsert_project
     from rag_search.graph.store import GraphStore
@@ -355,7 +350,7 @@ def _fedroot_status(proj: str, files: list[tuple[str, str]]) -> dict:
         gs.commit()
     finally:
         gs.close()
-    result = json.loads(asyncio.run(overview_tool(proj, "status")))
+    result = json.loads(run_tool(overview_tool(proj, "status")))
     return next((m for m in result.get("members", []) if m["path"] == proj), {})
 
 
