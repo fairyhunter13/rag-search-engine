@@ -381,6 +381,11 @@ def _require_project(projects) -> tuple[str, str | None]:  # type: ignore[no-unt
 
 
 def handle_overview(project_path: str, what: str, query: str = "") -> str:
+    """Dispatch `overview(what=…)`; `_VALID` is the authority on which values exist.
+
+    Order is the contract: `projects` and `metrics` answer above the project gate, so an unscoped
+    call still gets them. Moving one below it turns a fleet-wide question into a refusal.
+    """
     from rag_search.core.registry import list_projects
 
     if what not in _VALID:
