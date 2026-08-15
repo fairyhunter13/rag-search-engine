@@ -22,7 +22,7 @@ import time
 from mcp.server.fastmcp import Context, FastMCP
 
 from rag_search.daemon.global_prompt import _PROMPT
-from rag_search.daemon.runtime_state import note_activity, note_query
+from rag_search.daemon.runtime_state import note_activity
 from rag_search.embed.embedder import get_embedder
 
 mcp = FastMCP("rag-search", instructions=_PROMPT)
@@ -248,7 +248,7 @@ async def search(
     Returns ranked locations — path, line range, score, and a short preview — to Read.
     Pass verbosity="full" when you need the whole chunk body inline instead.
     """
-    note_query(query)
+    note_activity()
     from rag_search.query.search import SCOPES
     if scope not in SCOPES:
         # The same rejection `graph` gives an unknown `relation` and `overview` an unknown `what`.

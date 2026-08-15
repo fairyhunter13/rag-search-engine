@@ -21,10 +21,6 @@ def note_activity() -> None:
         _last_activity = time.monotonic()
 
 
-def note_query(query: str) -> None:
-    note_activity()
-
-
 def seconds_since_activity() -> float:
     with _lock:
         return time.monotonic() - _last_activity
