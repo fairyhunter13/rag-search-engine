@@ -14,7 +14,6 @@ app.add_typer(daemon_app, name="daemon")
 @app.command()
 def init(
     path: str = typer.Argument(".", help="Project root to initialise (defaults to CWD)."),
-    watch: bool = typer.Option(False, help="Enable file watcher after indexing."),
 ) -> None:
     """Register a project and kick off indexing (one-shot onboarding)."""
     from rag_search.core.config import ProjectEntry
