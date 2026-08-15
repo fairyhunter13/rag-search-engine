@@ -6,13 +6,13 @@ safe_tmp_path keeps roots off /tmp/.cache.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 
 import pytest
 
 from rag_search.core.config import index_dir
+from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
@@ -129,7 +129,7 @@ def test_inv2_members_first_class(safe_tmp_path):
         # that resolve_registered_root then resolves against the cwd, so a run from inside a
         # registered repo answers confidently out of that repo instead.
         for label, scope_path in (("root union", str(root)), ("own path", str(member))):
-            data = json.loads(asyncio.run(mcp_search(marker, "code", [scope_path])))
+            data = json.loads(run_tool(mcp_search(marker, "code", [scope_path])))
             files = [r["path"] for r in data.get("results", [])]
             assert any(str(member) in f for f in files), \
                 f"member unreachable via {label}: {data.get('error') or files}"
@@ -160,7 +160,7 @@ def test_inv6_forbidden_root():
     """Invariant #6: registering a /tmp root must be rejected."""
     from rag_search.server.mcp import index as mcp_index
     path = "/tmp/rse-arch-forbid-test"
-    result = json.loads(asyncio.run(mcp_index(path, enabled=True)))
+    result = json.loads(run_tool(mcp_index(path, enabled=True)))
     assert result.get("status") == "forbidden", f"expected forbidden, got {result}"
     from rag_search.core.registry import get_project
     assert get_project(path) is None
@@ -181,7 +181,7 @@ def test_inv8_cascade_remove(safe_tmp_path):
         # confirm_members: the cascade is what this invariant is about, and removing a root now
         # previews the fan-out first. IR1/IR4 own that gate; passing it here keeps this test on its
         # own claim instead of silently becoming a second, weaker copy of the confirmation test.
-        result = json.loads(asyncio.run(mcp_index(str(root), enabled=False, confirm_members=True)))
+        result = json.loads(run_tool(mcp_index(str(root), enabled=False, confirm_members=True)))
         assert result.get("status") == "removed", f"unexpected: {result}"
         assert str(member) in result.get("members_removed", [])
         assert get_project(str(root)) is None

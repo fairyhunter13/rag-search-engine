@@ -1,10 +1,11 @@
 """golden-diff parity — live MCP overview outputs match expected shape."""
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
+
+from tests.live._run import run_tool
 
 pytestmark = pytest.mark.live
 
@@ -36,7 +37,7 @@ def test_overview_shape(what, required_keys, non_empty, fed_root):
     from rag_search.server.mcp import overview as overview_tool
 
     path = "" if what == "projects" else fed_root
-    result = asyncio.run(overview_tool(path, what))
+    result = run_tool(overview_tool(path, what))
     data = json.loads(result)
     missing = required_keys - set(data.keys())
     assert not missing, f"overview(what={what!r}) missing keys {missing}: {result[:200]}"

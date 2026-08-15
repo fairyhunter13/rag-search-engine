@@ -1,5 +1,4 @@
 """server tests: MCP tools, HTTP routes, dashboard (no mocks)."""
-import asyncio
 import json
 import re
 import time
@@ -7,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.live._run import run_tool
 from tests.live._sample_workspace import SampleWorkspace
 from tests.live._sweeps import local_sweeps_paused, sweeps_state
 
@@ -27,7 +27,7 @@ def test_mcp_has_four_tools():
     why nothing failed when the surface was meant to be closed. Equality is the claim.
     """
     from rag_search.server.mcp import mcp
-    tools = asyncio.run(mcp.list_tools())
+    tools = run_tool(mcp.list_tools())
     names = {t.name for t in tools}
     assert names == {"search", "graph", "overview", "index"}, f"unexpected MCP surface: {names}"
 
@@ -35,7 +35,7 @@ def test_mcp_has_four_tools():
 def test_mcp_graph_nonexistent_returns_error():
     """graph tool returns {error:...} JSON for an unindexed project."""
     from rag_search.server.mcp import graph as graph_tool
-    result = asyncio.run(graph_tool("authenticate", "/nonexistent/path", "definition"))
+    result = run_tool(graph_tool("authenticate", "/nonexistent/path", "definition"))
     data = json.loads(result)
     assert "error" in data
 
@@ -43,7 +43,7 @@ def test_mcp_graph_nonexistent_returns_error():
 def test_mcp_overview_projects_returns_list():
     """overview(what='projects') returns ≥1 real registered project."""
     from rag_search.server.mcp import overview as overview_tool
-    result = asyncio.run(overview_tool("", "projects"))
+    result = run_tool(overview_tool("", "projects"))
     data = json.loads(result)
     assert "projects" in data
     assert len(data["projects"]) >= 1, "daemon should have ≥1 registered project"
@@ -52,7 +52,7 @@ def test_mcp_overview_projects_returns_list():
 def test_mcp_overview_metrics():
     """overview(what='metrics') returns chat_stream metrics dict."""
     from rag_search.server.mcp import overview as overview_tool
-    result = asyncio.run(overview_tool("", "metrics"))
+    result = run_tool(overview_tool("", "metrics"))
     data = json.loads(result)
     assert "chat_stream" in data, f"metrics missing chat_stream key: {result}"
     assert "stream_error_count" in data["chat_stream"], f"chat_stream missing stream_error_count: {data}"
@@ -62,9 +62,9 @@ def test_mcp_index_register_remove(safe_tmp_path):
     """index tool registers then removes a project without crashing."""
     from rag_search.server.mcp import index as index_tool
     p = str(safe_tmp_path)
-    reg = json.loads(asyncio.run(index_tool(p, enabled=True)))
+    reg = json.loads(run_tool(index_tool(p, enabled=True)))
     assert reg["status"] in ("flagged", "already_registered")
-    rem = json.loads(asyncio.run(index_tool(p, enabled=False)))
+    rem = json.loads(run_tool(index_tool(p, enabled=False)))
     assert rem["status"] in ("removed", "not_found")
 
 
@@ -173,14 +173,14 @@ def test_index_tool_rejects_forbidden_root(safe_tmp_path):
     from rag_search.server.mcp import index as index_tool
 
     bad = "/tmp/rse-test-forbidden-registration-check"
-    result = json.loads(asyncio.run(index_tool(bad, enabled=True)))
+    result = json.loads(run_tool(index_tool(bad, enabled=True)))
     assert result["status"] == "forbidden", f"expected forbidden, got {result}"
     assert get_project(bad) is None, "forbidden path must NOT be registered"
 
     normal = str(safe_tmp_path)
-    ok = json.loads(asyncio.run(index_tool(normal, enabled=True)))
+    ok = json.loads(run_tool(index_tool(normal, enabled=True)))
     assert ok["status"] in ("flagged", "already_registered"), f"normal path failed: {ok}"
-    asyncio.run(index_tool(normal, enabled=False))  # cleanup
+    run_tool(index_tool(normal, enabled=False))  # cleanup
 
 
 def test_index_tool_e2e(safe_tmp_path):
@@ -215,7 +215,7 @@ def test_index_tool_e2e(safe_tmp_path):
     def _index(path: str, *, enabled: bool) -> dict:
         before = set(threading.enumerate())
         with local_sweeps_paused(True):
-            out = json.loads(asyncio.run(index_tool(path, enabled=enabled)))
+            out = json.loads(run_tool(index_tool(path, enabled=enabled)))
             for t in set(threading.enumerate()) - before:
                 t.join(timeout=30)
                 assert not t.is_alive(), (
@@ -261,7 +261,7 @@ def test_overview_all_whats_real_federation_root(sample_workspace):
         "surprising_connections",
     ]
     for what in whats:
-        result = asyncio.run(overview_tool(fed_root, what))
+        result = run_tool(overview_tool(fed_root, what))
         data = json.loads(result)
         assert data, f"overview(what={what!r}) returned empty dict: {result[:120]}"
 
@@ -283,7 +283,7 @@ def test_community_read_orders_by_member_count_no_operationalerror(service_path)
     `error` key rather than an exception, so the payload has to be inspected, not just the call.
     """
     from rag_search.server.mcp import overview as overview_tool
-    data = json.loads(asyncio.run(overview_tool(service_path, "communities")))
+    data = json.loads(run_tool(overview_tool(service_path, "communities")))
     assert "error" not in data, f"communities read failed (likely node_count bug): {data}"
     assert "communities" in data, f"communities payload missing its rows: {data}"
 
@@ -294,7 +294,7 @@ def test_mcp_search_subdir_resolves_to_root(service_path):
     from rag_search.server.mcp import search as search_tool
 
     subdir = str(Path(service_path) / "src")
-    result = json.loads(asyncio.run(search_tool("function definition", project_paths=[subdir])))
+    result = json.loads(run_tool(search_tool("function definition", project_paths=[subdir])))
     assert result["projects_searched"] == [service_path], (
         f"subdir {subdir!r} must resolve to root {service_path!r}; got {result['projects_searched']}"
     )
@@ -304,7 +304,7 @@ def test_mcp_search_subdir_resolves_to_root(service_path):
     # result set (cc3d208 / SU1). This arm used to assert `total == 0`, which is a statement about
     # the *query* standing in for one about the *index* — the two are indistinguishable at the call
     # site and only one of them means "look somewhere else".
-    outside = json.loads(asyncio.run(search_tool("function definition", project_paths=["/nonexistent/path"])))
+    outside = json.loads(run_tool(search_tool("function definition", project_paths=["/nonexistent/path"])))
     assert "error" in outside, f"a search that opened zero stores reported an ordinary miss: {outside}"
     assert "/nonexistent/path" in outside.get("unindexed", []), (
         f"the error must name the scope it could not read, or it cannot be acted on: {outside}")
@@ -402,7 +402,7 @@ def test_overview_status_has_index_state(service_path):
     """
     from rag_search.server.mcp import overview as overview_tool
 
-    data = json.loads(asyncio.run(overview_tool(service_path, "status")))
+    data = json.loads(run_tool(overview_tool(service_path, "status")))
     assert "index_state" in data, f"index_state missing from status: {data}"
     assert data["index_state"] in ("indexing", "degraded", "ready"), (
         f"index_state={data['index_state']!r} not in expected set"
@@ -415,7 +415,7 @@ def test_overview_status_has_index_state(service_path):
 def test_overview_unknown_what_returns_error():
     """G4: overview(what='bogus') returns {error, valid} instead of silently falling through."""
     from rag_search.server.mcp import overview as overview_tool
-    result = asyncio.run(overview_tool("", "bogus_unknown_what"))
+    result = run_tool(overview_tool("", "bogus_unknown_what"))
     data = json.loads(result)
     assert "error" in data, f"expected error key, got: {data}"
     assert "valid" in data, f"expected valid key, got: {data}"
@@ -434,7 +434,7 @@ def test_graph_no_project_path_no_roots_fails_loud(sample_workspace):
     assert len([p for p in list_projects() if p.enabled]) > 1, (
         "test presumes multiple enabled projects (sample_workspace + live registry)"
     )
-    data = json.loads(asyncio.run(graph_tool("own_fn")))  # ctx=None → no roots
+    data = json.loads(run_tool(graph_tool("own_fn")))  # ctx=None → no roots
     assert "project_path required" in data.get("error", ""), (
         f"G5: expected fail-loud on empty project_path, got: {data}"
     )
@@ -459,11 +459,11 @@ def test_graph_and_overview_no_project_path_fail_loud(sample_workspace):
     assert len([p for p in list_projects() if p.enabled]) > 1, (
         "test presumes multiple enabled projects (sample_workspace + live registry)"
     )
-    overview_data = json.loads(asyncio.run(overview_tool("", "structure")))  # ctx=None → no roots
+    overview_data = json.loads(run_tool(overview_tool("", "structure")))  # ctx=None → no roots
     assert "project_path required" in overview_data.get("error", ""), overview_data
     assert overview_data.get("candidates"), overview_data
 
-    graph_result = asyncio.run(graph_tool("anything", ""))
+    graph_result = run_tool(graph_tool("anything", ""))
     assert "project_path required" in graph_result, (
         f"graph() must fail loud on empty project_path, got: {graph_result[:200]!r}"
     )
@@ -552,7 +552,7 @@ def test_e1_rerank_reorders_search_results(service_path):
     lift_found = False
     for q in queries:
         data = json.loads(
-            asyncio.run(_mcp_search(q, project_paths=[service_path], verbosity="full"))
+            run_tool(_mcp_search(q, project_paths=[service_path], verbosity="full"))
         )
         res = data.get("results", [])
         assert res, f"E1: no results for {q!r}"
@@ -584,7 +584,7 @@ def test_e2_ask_context_is_rerank_ordered(service_path):
     q = "how does the promotion rule engine apply discounts"
     ctx = run_ask(q, service_path, "all")
     assert ctx and "[" in ctx, f"E2: empty or no path markers: {ctx[:80]}"
-    top = json.loads(asyncio.run(_mcp_search(q, project_paths=[service_path])))["results"]
+    top = json.loads(run_tool(_mcp_search(q, project_paths=[service_path])))["results"]
     assert top, "E2: search returned no results"
     assert top[0].get("path", "") in ctx, (
         f"E2: rerank top-1 {top[0].get('path')!r} not found in ask context"
@@ -632,7 +632,7 @@ def test_e4_rerank_lift_metric(live_client, service_path):
     before = rerank_stats()["queries"]
     N = 3
     for i in range(N):
-        asyncio.run(_mcp_search(f"discount rule {i}", project_paths=[service_path]))
+        run_tool(_mcp_search(f"discount rule {i}", project_paths=[service_path]))
     after = rerank_stats()["queries"]
     assert after >= before + N, f"E4: queries did not rise by {N}: {before} → {after}"
 
@@ -781,7 +781,7 @@ def test_e8_global_prompt_tool_accuracy():
     from rag_search.daemon.global_prompt import _PROMPT
     from rag_search.server.mcp import mcp as _mcp
 
-    names = sorted(t.name for t in asyncio.run(_mcp.list_tools()))
+    names = sorted(t.name for t in run_tool(_mcp.list_tools()))
     for tool in names:
         assert tool in _PROMPT, f"E8: _PROMPT does not mention registered tool '{tool}'"
     assert f"{len(names)}-tool" in _PROMPT, (
@@ -812,7 +812,7 @@ def test_e8b_shipped_mcp_configs_advertise_the_registered_tools():
     """
     from rag_search.server.mcp import mcp as _mcp
 
-    registered = {t.name for t in asyncio.run(_mcp.list_tools())}
+    registered = {t.name for t in run_tool(_mcp.list_tools())}
     config_dir = Path(__file__).parents[3] / "mcp-config"
 
     claude_cfg = json.loads((config_dir / "claude-code.json").read_text(encoding="utf-8"))
@@ -906,7 +906,7 @@ def test_e8c_claude_skills_call_only_registered_tools():
     from rag_search.server._overview import _VALID
     from rag_search.server.mcp import mcp as _mcp
 
-    tools = asyncio.run(_mcp.list_tools())
+    tools = run_tool(_mcp.list_tools())
     registered = {t.name for t in tools}
     params = {p for t in tools for p in t.inputSchema.get("properties", {})}
     param_used = re.compile(r"\b({})\s*=".format("|".join(sorted(params))))
